@@ -9,6 +9,7 @@ export const PERMISSION_KEYS = [
   'server:install',
   'server:update',
   'server:config:write',
+  'server:config:history',
 
   'player:view',
   'player:view_ips',
@@ -62,6 +63,7 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<RoleName, readonly PermissionKey[]>
     'server:install',
     'server:update',
     'server:config:write',
+    'server:config:history',
     'player:view',
     'player:view_ips',
     'player:view_eos_id',
@@ -77,6 +79,7 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<RoleName, readonly PermissionKey[]>
     'server:start',
     'server:stop',
     'server:restart',
+    'server:config:history',
     'player:view',
     'player:view_eos_id',
     'player:view_steam_id',
@@ -84,7 +87,14 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<RoleName, readonly PermissionKey[]>
     'host:metrics',
     'org:view',
   ],
-  Viewer: ['server:view', 'player:view', 'audit:view', 'host:view', 'org:view'],
+  Viewer: [
+    'server:view',
+    'server:config:history',
+    'player:view',
+    'audit:view',
+    'host:view',
+    'org:view',
+  ],
 };
 
 export const SYSTEM_ROLE_CLEARANCE: Record<RoleName, number> = {
