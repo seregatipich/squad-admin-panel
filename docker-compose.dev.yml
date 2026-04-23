@@ -1,0 +1,23 @@
+services:
+  api:
+    build:
+      args:
+        NODE_ENV: development
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: debug
+      COOKIE_SECURE: 'false'
+    command: ['pnpm', 'dev']
+    volumes:
+      - ./apps/api/src:/app/apps/api/src
+      - ./packages:/app/packages
+
+  web:
+    command: ['pnpm', 'dev']
+    volumes:
+      - ./apps/web:/app/apps/web
+      - ./packages:/app/packages
+
+  caddy:
+    environment:
+      TLS_ISSUER: internal
