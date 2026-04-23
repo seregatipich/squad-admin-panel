@@ -1,4 +1,5 @@
 export * from './audit-log.js';
+export * from './config-versions.js';
 export * from './events.js';
 export * from './organization-members.js';
 export * from './organizations.js';

@@ -1,10 +1,11 @@
 #!/bin/sh
 set -e
-# The depot volume is mounted read-only, so only chown the RW bind-mounts
-# that Docker may have auto-created as root when the host path didn't exist.
-for d in /squad/SquadGame/Saved /squad/SquadGame/ServerConfig; do
-  if [ -d "$d" ]; then
-    chown -R 1001:1001 "$d" 2>/dev/null || true
-  fi
-done
+# Saved/ is RW (Squad writes logs, workshop cache, persistent data).
+# ServerConfig/ is panel-owned: the bridge writes the .cfg files as root,
+# Squad only READS them at boot + during hot-reload polls. Re-owning
+# ServerConfig/ to uid 1001 would block the bridge (CAP_DAC_READ_SEARCH
+# is not in the bounding set), so we deliberately leave it alone.
+if [ -d /squad/SquadGame/Saved ]; then
+  chown -R 1001:1001 /squad/SquadGame/Saved 2>/dev/null || true
+fi
 exec runuser -u squad -- /squad/SquadGameServer.sh "$@"
