@@ -1,0 +1,34 @@
+import 'server-only';
+import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
+import { cache } from 'react';
+import { apiFetch } from './api.js';
+
+export const SESSION_COOKIE = '__Host-sid';
+
+export interface Me {
+  id: string;
+  email: string;
+  display_name: string | null;
+  permissions: string[];
+  clearance: number;
+}
+
+export const getSession = cache(async (): Promise<Me | null> => {
+  const jar = await cookies();
+  const token = jar.get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  try {
+    return await apiFetch<Me>('/api/v1/me', {
+      cookie: `${SESSION_COOKIE}=${token}`,
+    });
+  } catch {
+    return null;
+  }
+});
+
+export async function requireSession(): Promise<Me> {
+  const me = await getSession();
+  if (!me) redirect('/login');
+  return me;
+}

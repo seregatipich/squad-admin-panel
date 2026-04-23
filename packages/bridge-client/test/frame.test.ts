@@ -8,7 +8,9 @@ describe('frame codec', () => {
     const { frames, remainder } = decodeFrames(frame);
     expect(frames).toHaveLength(1);
     expect(remainder.byteLength).toBe(0);
-    expect(JSON.parse(frames[0]!.toString('utf-8'))).toEqual(payload);
+    const first = frames[0];
+    expect(first).toBeDefined();
+    if (first) expect(JSON.parse(first.toString('utf-8'))).toEqual(payload);
   });
 
   it('decodes two concatenated frames', () => {

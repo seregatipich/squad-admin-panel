@@ -14,7 +14,8 @@
       "!**/.turbo",
       "!**/coverage",
       "!**/drizzle",
-      "!packages/db/src/drizzle-client.ts"
+      "!packages/db/src/drizzle-client.ts",
+      "!apps/web/src/styles"
     ]
   },
   "formatter": {

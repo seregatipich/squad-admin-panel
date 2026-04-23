@@ -46,12 +46,10 @@ export async function generateBackupCodes(): Promise<BackupCodes> {
   const plainCodes: string[] = [];
   for (let i = 0; i < BACKUP_CODE_COUNT; i++) {
     const bytes = randomBytes(BACKUP_CODE_LEN);
-    plainCodes.push(
-      encodeBase32UpperCaseNoPadding(new Uint8Array(bytes))
-        .slice(0, 10)
-        .match(/.{1,5}/g)!
-        .join('-'),
-    );
+    const groups = encodeBase32UpperCaseNoPadding(new Uint8Array(bytes))
+      .slice(0, 10)
+      .match(/.{1,5}/g);
+    plainCodes.push(groups ? groups.join('-') : '');
   }
   const hashedCodes = await Promise.all(plainCodes.map((c) => hashPassword(c)));
   return { plainCodes, hashedCodes };
@@ -63,7 +61,8 @@ export async function consumeBackupCode(
 ): Promise<{ consumed: boolean; remaining: string[] }> {
   const normalized = candidate.trim().toUpperCase();
   for (let i = 0; i < remainingHashed.length; i++) {
-    const stored = remainingHashed[i]!;
+    const stored = remainingHashed[i];
+    if (!stored) continue;
     if (await verifyPassword(stored, normalized)) {
       return {
         consumed: true,
