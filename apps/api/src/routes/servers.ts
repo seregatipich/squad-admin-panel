@@ -6,7 +6,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { encrypt, serialize } from '../lib/crypto.js';
+import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
+import { rconSendOnce } from '../lib/rcon-send.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 
@@ -32,7 +33,39 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         })
         .from(servers)
         .orderBy(servers.displayName);
-      return { items: rows, total: rows.length };
+      // Enrich every row with the live RCON state / player count that
+      // worker-rcon publishes to rcon:status:{uuid}. Falling back to
+      // nulls so the UI can render the row even when no poll has
+      // happened yet.
+      const items = await Promise.all(
+        rows.map(async (r) => {
+          const raw = await app.redis.get(`rcon:status:${r.id}`);
+          let rconState: string | null = null;
+          let playerCount: number | null = null;
+          let lastPollAt: string | null = null;
+          if (raw) {
+            try {
+              const s = JSON.parse(raw) as {
+                state?: string;
+                player_count?: number;
+                last_poll_at?: string;
+              };
+              rconState = s.state ?? null;
+              playerCount = typeof s.player_count === 'number' ? s.player_count : null;
+              lastPollAt = s.last_poll_at ?? null;
+            } catch {
+              // ignore
+            }
+          }
+          return {
+            ...r,
+            rcon_state: rconState,
+            player_count: playerCount,
+            last_poll_at: lastPollAt,
+          };
+        }),
+      );
+      return { items, total: items.length };
     },
   );
 
@@ -110,10 +143,52 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
-      const settings = await app.db.query.serverSettings.findFirst({
+      const settingsRow = await app.db.query.serverSettings.findFirst({
         where: eq(serverSettings.serverId, req.params.id),
       });
-      return { server: row, settings };
+      const rconRaw = await app.redis.get(`rcon:status:${row.id}`);
+      // state='not_polled' is distinct from 'disconnected': the former
+      // means worker-rcon isn't watching this server (because DB says it
+      // isn't running); the latter means it IS watching but the socket
+      // failed. UI renders not_polled as '—' so it doesn't read as an
+      // error.
+      let rcon_status: unknown = { state: 'not_polled' };
+      if (rconRaw) {
+        try {
+          rcon_status = JSON.parse(rconRaw);
+        } catch {
+          rcon_status = { state: 'not_polled' };
+        }
+      }
+      return {
+        server: {
+          id: row.id,
+          org_id: row.orgId,
+          display_name: row.displayName,
+          slug: row.slug,
+          description: row.description,
+          status: row.status,
+          tags: row.tags,
+          timezone: row.timezone,
+          created_at: row.createdAt,
+          updated_at: row.updatedAt,
+        },
+        settings: settingsRow
+          ? {
+              server_id: settingsRow.serverId,
+              install_path: settingsRow.installPath,
+              game_port: settingsRow.gamePort,
+              query_port: settingsRow.queryPort,
+              beacon_port: settingsRow.beaconPort,
+              rcon_port: settingsRow.rconPort,
+              max_players: settingsRow.maxPlayers,
+              tickrate: settingsRow.tickrate,
+              multihome: settingsRow.multihome,
+              extra_args: settingsRow.extraArgs,
+            }
+          : null,
+        rcon_status,
+      };
     },
   );
 
@@ -159,6 +234,50 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+
+      const settings = await app.db.query.serverSettings.findFirst({
+        where: eq(serverSettings.serverId, s.id),
+      });
+      const creds = await app.db.query.serverCredentials.findFirst({
+        where: eq(serverCredentials.serverId, s.id),
+      });
+
+      // Graceful shutdown (TZ §17.7): broadcast → end match → systemctl stop.
+      // Any RCON failure is logged and we still fall through to systemctl stop
+      // so a broken RCON can never wedge a server admin trying to halt a host.
+      if (settings && creds) {
+        try {
+          const password = decryptString(
+            app.encryptionKey,
+            deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
+          );
+          const target = {
+            host: creds.rconHost ?? '127.0.0.1',
+            port: creds.rconPort,
+            password,
+          };
+          await rconSendOnce({
+            ...target,
+            command: 'AdminBroadcast Server is shutting down in 15 seconds',
+            connectTimeoutMs: 2000,
+            commandTimeoutMs: 3000,
+          }).catch((err) => {
+            req.log.warn({ err: (err as Error).message }, 'AdminBroadcast failed; continuing');
+          });
+          await new Promise((resolve) => setTimeout(resolve, 15_000));
+          await rconSendOnce({
+            ...target,
+            command: 'AdminEndMatch',
+            connectTimeoutMs: 2000,
+            commandTimeoutMs: 3000,
+          }).catch((err) => {
+            req.log.warn({ err: (err as Error).message }, 'AdminEndMatch failed; continuing');
+          });
+        } catch (err) {
+          req.log.warn({ err: (err as Error).message }, 'graceful stop RCON phase skipped');
+        }
+      }
+
       await app.bridge.systemctlAction({
         unit: `squad-server-${s.id}.service`,
         action: 'stop',
@@ -191,6 +310,59 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         action: 'restart',
       });
       return { status: 'restarting' };
+    },
+  );
+
+  fast.get(
+    '/api/v1/servers/:id/events',
+    {
+      config: { permissions: ['server:view'], audit: false },
+      schema: {
+        params: serverIdParams,
+        querystring: z.object({
+          limit: z.coerce.number().int().min(1).max(500).default(100),
+        }),
+      },
+    },
+    async (req) => {
+      // Pull the last N entries from the per-server Redis stream that
+      // worker-rcon and worker-log-ingest publish to. XREVRANGE gives
+      // newest-first for a direct UI render.
+      const stream = `events:server:${req.params.id}`;
+      const raw = (await app.redis.xrevrange(stream, '+', '-', 'COUNT', req.query.limit)) as Array<
+        [string, string[]]
+      >;
+      const items: Array<{
+        stream_id: string;
+        event_id: string;
+        type: string;
+        ts: string;
+        payload: unknown;
+      }> = [];
+      for (const [streamId, kv] of raw) {
+        const envIdx = kv.indexOf('envelope');
+        if (envIdx < 0 || envIdx + 1 >= kv.length) continue;
+        const rawEnv = kv[envIdx + 1];
+        if (!rawEnv) continue;
+        try {
+          const env = JSON.parse(rawEnv) as {
+            event_id: string;
+            type: string;
+            ts: string;
+            payload: unknown;
+          };
+          items.push({
+            stream_id: streamId,
+            event_id: env.event_id,
+            type: env.type,
+            ts: env.ts,
+            payload: env.payload,
+          });
+        } catch {
+          // ignore bad envelopes
+        }
+      }
+      return { items, total: items.length };
     },
   );
 

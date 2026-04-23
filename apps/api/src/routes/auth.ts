@@ -4,9 +4,15 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { verifyPassword } from '../lib/argon.js';
-import { decryptString, deserialize } from '../lib/crypto.js';
+import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
 import { createSession, revokeSession, tokenIdFromToken } from '../lib/sessions.js';
-import { consumeBackupCode, currentStep, verifyTotpCode } from '../lib/totp.js';
+import {
+  consumeBackupCode,
+  currentStep,
+  generateBackupCodes,
+  generateTotp,
+  verifyTotpCode,
+} from '../lib/totp.js';
 import { SESSION_COOKIE } from '../plugins/auth.js';
 
 const loginBody = z.object({
@@ -136,6 +142,100 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         permissions: Array.from(req.user.permissions.permissions),
         clearance: req.user.permissions.clearance,
       };
+    },
+  );
+
+  fast.post(
+    '/api/v1/me/totp/provision',
+    {
+      config: { audit: { action: 'user.2fa.provision', resource: 'user' } },
+    },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      const provision = generateTotp(req.user.email);
+      const backup = await generateBackupCodes();
+      const encrypted = encrypt(
+        app.encryptionKey,
+        Buffer.from(provision.secret).toString('base64'),
+      );
+      await app.db
+        .update(users)
+        .set({
+          totpSecretEncrypted: serialize(encrypted),
+          totpBackupCodesHash: backup.hashedCodes,
+          totpLastUsedStep: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, req.user.id));
+      return {
+        uri: provision.uri,
+        manual_entry: provision.manualEntry,
+        backup_codes: backup.plainCodes,
+      };
+    },
+  );
+
+  fast.post(
+    '/api/v1/me/totp/enable',
+    {
+      config: { audit: { action: 'user.2fa.enabled', resource: 'user' } },
+      schema: { body: z.object({ totp_code: z.string().length(6) }) },
+    },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      const rows = await app.db.select().from(users).where(eq(users.id, req.user.id)).limit(1);
+      const user = rows[0];
+      if (!user || !user.totpSecretEncrypted) {
+        reply.code(400);
+        return { error: 'totp_not_provisioned' };
+      }
+      const blob = deserialize(Buffer.from(user.totpSecretEncrypted as unknown as Buffer));
+      const secret = new Uint8Array(Buffer.from(decryptString(app.encryptionKey, blob), 'base64'));
+      if (!verifyTotpCode(secret, req.body.totp_code)) {
+        reply.code(401);
+        return { error: 'invalid_totp' };
+      }
+      return { ok: true };
+    },
+  );
+
+  fast.post(
+    '/api/v1/me/totp/disable',
+    {
+      config: { audit: { action: 'user.2fa.disabled', resource: 'user' } },
+      schema: { body: z.object({ password: z.string().min(1) }) },
+    },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      const rows = await app.db.select().from(users).where(eq(users.id, req.user.id)).limit(1);
+      const user = rows[0];
+      if (!user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      if (!(await verifyPassword(user.passwordHash, req.body.password))) {
+        reply.code(401);
+        return { error: 'invalid_password' };
+      }
+      await app.db
+        .update(users)
+        .set({
+          totpSecretEncrypted: null,
+          totpBackupCodesHash: null,
+          totpLastUsedStep: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, req.user.id));
+      return { ok: true };
     },
   );
 };

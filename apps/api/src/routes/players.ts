@@ -67,8 +67,21 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
           last_seen_at: row.lastSeenAt,
           total_time_played_seconds: Number(row.totalTimePlayedSeconds),
         },
-        names,
-        ips,
+        names: names.map((n) => ({
+          name: n.name,
+          name_normalized: n.nameNormalized,
+          first_seen_at: n.firstSeenAt,
+          last_seen_at: n.lastSeenAt,
+          observation_count: n.observationCount,
+        })),
+        ips: ipsVisible
+          ? ips.map((ip) => ({
+              ip: String(ip.ip),
+              first_seen_at: ip.firstSeenAt,
+              last_seen_at: ip.lastSeenAt,
+            }))
+          : [],
+        ips_visible: ipsVisible,
       };
     },
   );

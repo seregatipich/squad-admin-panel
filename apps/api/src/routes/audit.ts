@@ -21,14 +21,29 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
       const { page, page_size } = req.query;
       const offset = (page - 1) * page_size;
       const rows = await app.db
-        .select()
+        .select({
+          id: auditLog.id,
+          created_at: auditLog.createdAt,
+          actor_user_id: auditLog.actorUserId,
+          actor_ip: auditLog.actorIp,
+          actor_kind: auditLog.actorKind,
+          action_type: auditLog.actionType,
+          target_type: auditLog.targetType,
+          target_id: auditLog.targetId,
+          context: auditLog.context,
+          status_code: auditLog.statusCode,
+          duration_ms: auditLog.durationMs,
+        })
         .from(auditLog)
         .orderBy(desc(auditLog.id))
         .limit(page_size)
         .offset(offset);
+      // audit_log.id is bigserial → bigint in Drizzle → BigInt in JS.
+      // JSON.stringify chokes on BigInt, so we stringify it explicitly.
+      const items = rows.map((r) => ({ ...r, id: String(r.id) }));
       return {
-        items: rows,
-        total: rows.length,
+        items,
+        total: items.length,
         page,
         page_size,
       };

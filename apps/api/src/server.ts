@@ -3,6 +3,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
+import websocket from '@fastify/websocket';
 import Fastify from 'fastify';
 import {
   jsonSchemaTransform,
@@ -17,15 +18,19 @@ import authPlugin from './plugins/auth.js';
 import bridgePlugin from './plugins/bridge.js';
 import databasePlugin from './plugins/database.js';
 import healthPlugin from './plugins/health.js';
+import installProgressPlugin from './plugins/install-progress.js';
 import metricsPlugin from './plugins/metrics.js';
 import redisPlugin from './plugins/redis.js';
 import requestContextPlugin from './plugins/request-context.js';
+import statusReconcilerPlugin from './plugins/status-reconciler.js';
 import auditRoutes from './routes/audit.js';
 import authRoutes from './routes/auth.js';
 import discordRoutes from './routes/auth-discord.js';
 import steamRoutes from './routes/auth-steam.js';
 import hostRoutes from './routes/host.js';
 import playerRoutes from './routes/players.js';
+import serverInstallRoutes from './routes/server-install.js';
+import serverLogsRoutes from './routes/server-logs.js';
 import serverRoutes from './routes/servers.js';
 import setupRoutes from './routes/setup.js';
 
@@ -35,7 +40,7 @@ import './plugins/types.js';
 export async function buildServer(config: AppConfig) {
   const logger = buildLogger(config.LOG_LEVEL);
   const app = Fastify({
-    logger,
+    loggerInstance: logger,
     trustProxy: true,
     disableRequestLogging: false,
     genReqId: (req) =>
@@ -47,6 +52,7 @@ export async function buildServer(config: AppConfig) {
   app.setSerializerCompiler(serializerCompiler);
 
   app.decorate('encryptionKey', loadEncryptionKey(config.APP_ENCRYPTION_KEY));
+  app.decorate('config', config);
 
   await app.register(helmet, { global: true });
   await app.register(cookie, { secret: config.SESSION_SECRET });
@@ -66,6 +72,7 @@ export async function buildServer(config: AppConfig) {
     transform: jsonSchemaTransform,
   });
   await app.register(swaggerUi, { routePrefix: '/api/docs' });
+  await app.register(websocket);
 
   await app.register(requestContextPlugin);
   await app.register(databasePlugin, { config });
@@ -75,11 +82,15 @@ export async function buildServer(config: AppConfig) {
   await app.register(healthPlugin);
   await app.register(authPlugin);
   await app.register(auditPlugin);
+  await app.register(installProgressPlugin);
+  await app.register(statusReconcilerPlugin);
 
   await app.register(authRoutes);
   await app.register(setupRoutes);
   await app.register(hostRoutes);
   await app.register(serverRoutes);
+  await app.register(serverInstallRoutes);
+  await app.register(serverLogsRoutes);
   await app.register(playerRoutes);
   await app.register(auditRoutes);
   await app.register(steamRoutes);

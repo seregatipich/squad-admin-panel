@@ -8,8 +8,12 @@ import { z } from 'zod';
 import { hashPassword } from '../lib/argon.js';
 
 async function setupCompleted(app: import('fastify').FastifyInstance): Promise<boolean> {
-  const rows = await app.db.select({ id: organizations.id }).from(organizations).limit(1);
-  return rows.length > 0;
+  const rows = await app.db
+    .select({ settings: organizations.settings })
+    .from(organizations)
+    .limit(1);
+  const settings = rows[0]?.settings as Record<string, unknown> | undefined;
+  return settings?.setup_complete === true;
 }
 
 const createOrgBody = z.object({

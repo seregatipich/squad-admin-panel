@@ -1,6 +1,26 @@
+import {
+  PERMISSION_KEYS,
+  SYSTEM_ROLE_CLEARANCE,
+  SYSTEM_ROLE_PERMISSIONS,
+} from '@squad/shared-config';
 import type { FastifyPluginAsync } from 'fastify';
 
 const hostRoutes: FastifyPluginAsync = async (app) => {
+  app.get(
+    '/api/v1/permissions',
+    {
+      config: { audit: false },
+    },
+    async () => ({
+      permissions: PERMISSION_KEYS,
+      roles: Object.entries(SYSTEM_ROLE_PERMISSIONS).map(([name, keys]) => ({
+        name,
+        clearance: SYSTEM_ROLE_CLEARANCE[name as keyof typeof SYSTEM_ROLE_CLEARANCE],
+        permissions: keys,
+      })),
+    }),
+  );
+
   app.get(
     '/api/v1/host/info',
     {

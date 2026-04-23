@@ -8,6 +8,14 @@ export default fp<{ config: AppConfig }>(async (app, opts) => {
     onLog: (msg, meta) => app.log.info({ ...meta }, msg),
   });
   app.decorate('bridge', bridge);
+  app.decorate(
+    'makeBridgeClient',
+    () =>
+      new BridgeClient({
+        socketPath: opts.config.BRIDGE_SOCKET,
+        onLog: (msg, meta) => app.log.debug({ ...meta }, msg),
+      }),
+  );
   app.addHook('onClose', async () => {
     await bridge.close();
   });
