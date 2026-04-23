@@ -12,9 +12,9 @@ import (
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
 )
 
-// MaxReadBytes caps a single file_read. Matches the RPC MaxFrame
-// to keep response sizes bounded.
-const MaxReadBytes = 1 << 20
+// MaxReadBytes caps a single file_read. 10 MiB leaves headroom for
+// growing Squad logs while staying bounded.
+const MaxReadBytes = 10 << 20
 
 // Read returns the contents of p, subject to validation. Only files
 // under the allowed roots may be read.

@@ -69,7 +69,7 @@ export interface HostMetrics {
 
 export interface SystemctlActionParams {
   unit: string;
-  action: 'start' | 'stop' | 'restart' | 'status' | 'enable' | 'disable';
+  action: 'start' | 'stop' | 'restart' | 'status' | 'is-active' | 'enable' | 'disable';
 }
 
 export interface WriteUnitParams {

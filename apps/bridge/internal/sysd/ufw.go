@@ -27,8 +27,15 @@ func (u *UFW) Rule(ctx context.Context, action, proto string, port int, comment 
 		return "", err
 	}
 
-	// Canonical form: ufw <action> <port>/<proto> comment '<tag>'
-	args := []string{action, strconv.Itoa(port) + "/" + proto}
+	// Map panel-level action to ufw CLI verb: add → "allow", remove → "delete allow".
+	var args []string
+	switch action {
+	case "add":
+		args = []string{"allow"}
+	case "remove":
+		args = []string{"delete", "allow"}
+	}
+	args = append(args, strconv.Itoa(port)+"/"+proto)
 	if comment != "" {
 		args = append(args, "comment", comment)
 	}

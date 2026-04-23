@@ -30,7 +30,8 @@ describe('frame codec', () => {
   });
 
   it('rejects oversized encode', () => {
-    const big = 'x'.repeat(2 * 1024 * 1024);
+    // BRIDGE_MAX_FRAME_BYTES is 16 MiB; 17 MiB guarantees overflow.
+    const big = 'x'.repeat(17 * 1024 * 1024);
     expect(() => encodeFrame({ big })).toThrow(FrameTooLargeError);
   });
 });

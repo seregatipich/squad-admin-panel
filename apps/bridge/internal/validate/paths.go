@@ -44,12 +44,13 @@ func UnitName(name string) error {
 
 // SystemdAction lists every action we expose through systemctl_action.
 var SystemdAction = map[string]struct{}{
-	"start":   {},
-	"stop":    {},
-	"restart": {},
-	"status":  {},
-	"enable":  {},
-	"disable": {},
+	"start":     {},
+	"stop":      {},
+	"restart":   {},
+	"status":    {},
+	"is-active": {},
+	"enable":    {},
+	"disable":   {},
 }
 
 // Action validates a systemctl_action verb.

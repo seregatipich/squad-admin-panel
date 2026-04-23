@@ -168,8 +168,15 @@ func serveConn(ctx context.Context, log *slog.Logger, conn *net.UnixConn, disp *
 		_ = rpc.WriteFrame(conn, payload)
 	}
 
+	// Each request runs in its own goroutine so a long-running streaming
+	// method (journalctl_follow, steamcmd_run) cannot block other requests
+	// that arrive on the same connection while it streams. writeMu keeps
+	// the wire output frame-aligned when multiple calls interleave.
+	reader := bufio.NewReader(conn)
+	var inflight sync.WaitGroup
+	defer inflight.Wait()
 	for {
-		payload, err := rpc.ReadFrame(bufio.NewReader(conn))
+		payload, err := rpc.ReadFrame(reader)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return
@@ -182,8 +189,12 @@ func serveConn(ctx context.Context, log *slog.Logger, conn *net.UnixConn, disp *
 			writeError(conn, "", rpc.CodeInvalidArgs, "invalid JSON: "+err.Error())
 			continue
 		}
-		resp := disp.Handle(ctx, &req, writeStream)
-		writeResp(resp)
+		inflight.Add(1)
+		go func(req rpc.Request) {
+			defer inflight.Done()
+			resp := disp.Handle(ctx, &req, writeStream)
+			writeResp(resp)
+		}(req)
 	}
 }
 

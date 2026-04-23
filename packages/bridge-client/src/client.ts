@@ -43,6 +43,7 @@ export class BridgeClient {
   private buffer: Buffer = Buffer.alloc(0);
   private readonly pending = new Map<string, PendingCall>();
   private closed = false;
+  private connecting?: Promise<void>;
 
   constructor(opts: BridgeClientOptions = {}) {
     this.socketPath = opts.socketPath ?? BRIDGE_SOCKET_DEFAULT;
@@ -52,19 +53,27 @@ export class BridgeClient {
 
   async connect(): Promise<void> {
     if (this.socket) return;
-    await new Promise<void>((resolve, reject) => {
+    if (this.connecting) return this.connecting;
+    this.connecting = new Promise<void>((resolve, reject) => {
       const sock = createConnection({ path: this.socketPath });
-      sock.once('error', (err) => {
+      const onError = (err: Error) => {
+        sock.removeListener('connect', onConnect);
+        this.connecting = undefined;
         this.onLog('bridge connect failed', { err: err.message, path: this.socketPath });
         reject(err);
-      });
-      sock.once('connect', () => {
+      };
+      const onConnect = () => {
+        sock.removeListener('error', onError);
         this.socket = sock;
         this.attachHandlers(sock);
+        this.connecting = undefined;
         this.onLog('bridge connected', { path: this.socketPath });
         resolve();
-      });
+      };
+      sock.once('error', onError);
+      sock.once('connect', onConnect);
     });
+    return this.connecting;
   }
 
   async close(): Promise<void> {
@@ -159,8 +168,20 @@ export class BridgeClient {
       try {
         decoded = decodeFrames(this.buffer);
       } catch (err) {
-        this.onLog('bridge frame decode error', { err: (err as Error).message });
-        this.close().catch(() => undefined);
+        // A framing error means the stream is out-of-sync. Drop the
+        // socket so the next call reconnects; do NOT mark the client
+        // permanently closed (that would wedge every subsequent call).
+        this.onLog('bridge frame decode error; dropping socket', {
+          err: (err as Error).message,
+        });
+        this.buffer = Buffer.alloc(0);
+        for (const [, pending] of this.pending) {
+          if (pending.timer) clearTimeout(pending.timer);
+          pending.reject(new BridgeError('transport', (err as Error).message));
+        }
+        this.pending.clear();
+        sock.destroy();
+        this.socket = undefined;
         return;
       }
       this.buffer = decoded.remainder;

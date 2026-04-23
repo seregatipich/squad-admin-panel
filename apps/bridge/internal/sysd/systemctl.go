@@ -30,6 +30,12 @@ func (c *Client) Action(ctx context.Context, action, unit string) (string, error
 		return "", fmt.Errorf("systemctl: %w", err)
 	}
 	out := string(so) + string(se)
+	// `is-active` and `status` return non-zero exit codes when the unit is
+	// not active (1=inactive/dead, 3=failed, 4=not-found). Callers need the
+	// output verbatim to reason about state, so treat those as data-not-error.
+	if action == "is-active" || action == "status" {
+		return out, nil
+	}
 	if code != 0 {
 		return out, fmt.Errorf("systemctl exited %d: %s", code, out)
 	}

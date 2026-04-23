@@ -9,9 +9,9 @@ import (
 )
 
 // MaxFrame is the largest single payload we will send or accept.
-// One mebibyte gives plenty of room for file_write contents while still
-// keeping memory pressure bounded if a client misbehaves.
-const MaxFrame = 1 << 20
+// 16 MiB accommodates file_read of Squad server logs (up to 10 MiB) plus
+// envelope overhead, while keeping memory pressure bounded.
+const MaxFrame = 16 << 20
 
 // ErrFrameTooLarge is returned when a peer declares a length greater than MaxFrame.
 var ErrFrameTooLarge = errors.New("rpc: frame exceeds maximum size")

@@ -50,14 +50,10 @@ func ResolvePeer(conn *net.UnixConn) (*Peer, error) {
 		return nil, fmt.Errorf("getsockopt SO_PEERCRED: %w", sockErr)
 	}
 
-	u, err := user.LookupId(strconv.FormatUint(uint64(creds.Uid), 10))
-	if err != nil {
-		return nil, fmt.Errorf("lookup uid: %w", err)
-	}
-
-	groups, err := u.GroupIds()
-	if err != nil {
-		return nil, fmt.Errorf("group ids: %w", err)
+	var username string
+	u, lookupErr := user.LookupId(strconv.FormatUint(uint64(creds.Uid), 10))
+	if lookupErr == nil {
+		username = u.Username
 	}
 
 	target, err := user.LookupGroup(PeerGroup)
@@ -66,20 +62,34 @@ func ResolvePeer(conn *net.UnixConn) (*Peer, error) {
 				PID:  creds.Pid,
 				UID:  creds.Uid,
 				GID:  creds.Gid,
-				User: u.Username,
+				User: username,
 			},
 			fmt.Errorf("lookup group %q: %w", PeerGroup, err)
 	}
 
-	for _, gid := range groups {
-		if gid == target.Gid {
-			return &Peer{
-				PID:     creds.Pid,
-				UID:     creds.Uid,
-				GID:     creds.Gid,
-				User:    u.Username,
-				InGroup: true,
-			}, nil
+	if strconv.FormatUint(uint64(creds.Gid), 10) == target.Gid {
+		return &Peer{
+			PID:     creds.Pid,
+			UID:     creds.Uid,
+			GID:     creds.Gid,
+			User:    username,
+			InGroup: true,
+		}, nil
+	}
+
+	if u != nil {
+		if groups, err := u.GroupIds(); err == nil {
+			for _, gid := range groups {
+				if gid == target.Gid {
+					return &Peer{
+						PID:     creds.Pid,
+						UID:     creds.Uid,
+						GID:     creds.Gid,
+						User:    username,
+						InGroup: true,
+					}, nil
+				}
+			}
 		}
 	}
 
@@ -87,7 +97,7 @@ func ResolvePeer(conn *net.UnixConn) (*Peer, error) {
 			PID:  creds.Pid,
 			UID:  creds.Uid,
 			GID:  creds.Gid,
-			User: u.Username,
+			User: username,
 		},
 		ErrUntrustedPeer
 }
