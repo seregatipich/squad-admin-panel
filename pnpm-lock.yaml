@@ -84,9 +84,6 @@ importers:
       diff:
         specifier: ^9.0.0
         version: 9.0.0
-      drizzle-orm:
-        specifier: ^0.45.0
-        version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
       fastify:
         specifier: ^5.2.0
         version: 5.8.5
@@ -124,6 +121,12 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.9
       tsx:
         specifier: ^4.19.2
         version: 4.21.0
