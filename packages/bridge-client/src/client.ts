@@ -1,0 +1,209 @@
+import { createConnection, type Socket } from 'node:net';
+import { BRIDGE_SOCKET_DEFAULT } from '@squad/shared-config';
+import { v7 as uuidv7 } from 'uuid';
+import { decodeFrames, encodeFrame } from './frame.js';
+import {
+  type AptInstallParams,
+  BridgeError,
+  type BridgeRequest,
+  type BridgeResponse,
+  type BridgeStreamFrame,
+  type FileReadParams,
+  type FileWriteParams,
+  type HostInfo,
+  type HostMetrics,
+  type JournalFollowParams,
+  type PingResult,
+  type ProcessInfoParams,
+  type ProcessInfoResult,
+  type SteamcmdRunParams,
+  type SystemctlActionParams,
+  type UfwRuleParams,
+  type WriteUnitParams,
+} from './types.js';
+
+export interface BridgeClientOptions {
+  socketPath?: string;
+  defaultTimeoutMs?: number;
+  onLog?: (msg: string, meta?: Record<string, unknown>) => void;
+}
+
+interface PendingCall {
+  resolve: (value: unknown) => void;
+  reject: (err: Error) => void;
+  onStream?: (frame: BridgeStreamFrame) => void;
+  timer?: NodeJS.Timeout;
+}
+
+export class BridgeClient {
+  private readonly socketPath: string;
+  private readonly defaultTimeoutMs: number;
+  private readonly onLog: (msg: string, meta?: Record<string, unknown>) => void;
+  private socket?: Socket;
+  private buffer: Buffer = Buffer.alloc(0);
+  private readonly pending = new Map<string, PendingCall>();
+  private closed = false;
+
+  constructor(opts: BridgeClientOptions = {}) {
+    this.socketPath = opts.socketPath ?? BRIDGE_SOCKET_DEFAULT;
+    this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 15_000;
+    this.onLog = opts.onLog ?? (() => undefined);
+  }
+
+  async connect(): Promise<void> {
+    if (this.socket) return;
+    await new Promise<void>((resolve, reject) => {
+      const sock = createConnection({ path: this.socketPath });
+      sock.once('error', (err) => {
+        this.onLog('bridge connect failed', { err: err.message, path: this.socketPath });
+        reject(err);
+      });
+      sock.once('connect', () => {
+        this.socket = sock;
+        this.attachHandlers(sock);
+        this.onLog('bridge connected', { path: this.socketPath });
+        resolve();
+      });
+    });
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+    this.socket?.end();
+    this.socket = undefined;
+    for (const [, pending] of this.pending) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(new BridgeError('transport', 'client closed'));
+    }
+    this.pending.clear();
+  }
+
+  ping = () => this.call<PingResult>('ping');
+
+  hostInfo = () => this.call<HostInfo>('host_info');
+  hostMetrics = () => this.call<HostMetrics>('host_metrics');
+
+  systemctlAction = (p: SystemctlActionParams) =>
+    this.call<{ output: string; status: string }>('systemctl_action', p);
+
+  systemctlDaemonReload = () => this.call<{ status: string }>('systemctl_daemon_reload');
+
+  systemctlWriteUnit = (p: WriteUnitParams) =>
+    this.call<{ status: string }>('systemctl_write_unit', p);
+
+  systemctlReadUnit = (p: { path: string }) =>
+    this.call<{ content: string }>('systemctl_read_unit', p);
+
+  aptInstall = (p: AptInstallParams) =>
+    this.call<{ output: string; status: string }>('apt_install', p, { timeoutMs: 300_000 });
+
+  fileRead = (p: FileReadParams) => this.call<{ content: string }>('file_read', p);
+  fileWrite = (p: FileWriteParams) => this.call<{ status: string }>('file_write', p);
+  fileAtomicWrite = (p: FileWriteParams) => this.call<{ status: string }>('file_atomic_write', p);
+
+  ufwRule = (p: UfwRuleParams) => this.call<{ output: string; status: string }>('ufw_rule', p);
+
+  processInfo = (p: ProcessInfoParams) => this.call<ProcessInfoResult>('process_info', p);
+
+  steamcmdRun = (p: SteamcmdRunParams, onStream: (frame: BridgeStreamFrame) => void) =>
+    this.call<{ exit_code: number }>('steamcmd_run', p, { onStream, timeoutMs: 3_600_000 });
+
+  journalctlFollow = (p: JournalFollowParams, onStream: (frame: BridgeStreamFrame) => void) =>
+    this.call<{ exit_code: number }>('journalctl_follow', p, {
+      onStream,
+      timeoutMs: Number.POSITIVE_INFINITY,
+    });
+
+  private async call<Result, Params = unknown>(
+    method: BridgeRequest['method'],
+    params?: Params,
+    opts: { onStream?: (frame: BridgeStreamFrame) => void; timeoutMs?: number } = {},
+  ): Promise<Result> {
+    if (this.closed) throw new BridgeError('transport', 'client is closed');
+    if (!this.socket) await this.connect();
+    if (!this.socket) throw new BridgeError('transport', 'socket unavailable after connect');
+
+    const id = uuidv7();
+    const req: BridgeRequest = { id, method, params };
+
+    const timeoutMs = opts.timeoutMs ?? this.defaultTimeoutMs;
+    return await new Promise<Result>((resolve, reject) => {
+      const pending: PendingCall = {
+        resolve: (v) => resolve(v as Result),
+        reject,
+        onStream: opts.onStream,
+      };
+      if (Number.isFinite(timeoutMs)) {
+        pending.timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(
+            new BridgeError('timeout', `bridge call ${method} timed out after ${timeoutMs}ms`),
+          );
+        }, timeoutMs);
+      }
+      this.pending.set(id, pending);
+      this.socket?.write(encodeFrame(req), (err) => {
+        if (err) {
+          this.pending.delete(id);
+          if (pending.timer) clearTimeout(pending.timer);
+          reject(new BridgeError('transport', err.message));
+        }
+      });
+    });
+  }
+
+  private attachHandlers(sock: Socket) {
+    sock.on('data', (chunk) => {
+      this.buffer = Buffer.concat([this.buffer, chunk]);
+      let decoded: ReturnType<typeof decodeFrames>;
+      try {
+        decoded = decodeFrames(this.buffer);
+      } catch (err) {
+        this.onLog('bridge frame decode error', { err: (err as Error).message });
+        this.close().catch(() => undefined);
+        return;
+      }
+      this.buffer = decoded.remainder;
+      for (const f of decoded.frames) {
+        this.handleFrame(f);
+      }
+    });
+    sock.on('close', () => {
+      this.onLog('bridge socket closed');
+      for (const [, pending] of this.pending) {
+        if (pending.timer) clearTimeout(pending.timer);
+        pending.reject(new BridgeError('transport', 'socket closed'));
+      }
+      this.pending.clear();
+      this.socket = undefined;
+    });
+    sock.on('error', (err) => {
+      this.onLog('bridge socket error', { err: err.message });
+    });
+  }
+
+  private handleFrame(payload: Buffer) {
+    let obj: BridgeResponse | BridgeStreamFrame;
+    try {
+      obj = JSON.parse(payload.toString('utf-8'));
+    } catch {
+      this.onLog('bridge frame invalid JSON');
+      return;
+    }
+    if ('stream' in obj) {
+      const p = this.pending.get(obj.id);
+      p?.onStream?.(obj);
+      return;
+    }
+    const p = this.pending.get(obj.id);
+    if (!p) return;
+    this.pending.delete(obj.id);
+    if (p.timer) clearTimeout(p.timer);
+    if (obj.ok) {
+      p.resolve(obj.result);
+    } else {
+      const err = obj.error ?? { code: 'internal', message: 'no error object' };
+      p.reject(new BridgeError(err.code, err.message, err.detail));
+    }
+  }
+}
