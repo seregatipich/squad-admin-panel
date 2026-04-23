@@ -251,14 +251,16 @@ Every line cites the evidence location or verification command.
   validators.
 - ✅ **Code quality** — Biome 0 errors (160 files), TypeScript strict
   21/21 typecheck, `go vet` clean, `go test -race` green.
-- ⚠️ **Security** — systemd-analyze `3.1 OK 🙂` (target was <3.0, but every
-  remaining exposure point is structural — see `docs/known-issues.md#3`).
-  `pnpm audit --audit-level=high` → 0 findings (5 moderate in transitive
-  test tooling, tracked for upgrade). Application-level: AES-GCM for
-  RCON password + TOTP secret, Argon2id for user password, hash-chain
-  audit log with DB-trigger immutability, `SO_PEERCRED` + primary-GID
-  check on bridge socket, `__Host-` session cookie, RBAC preHandler
-  enforced, rate-limited login.
+- ✅ **Security** — systemd-analyze `2.9 OK 🙂` (target <3.0 **met**;
+  verified via `systemd-analyze security --offline=yes` on the
+  current unit file — see `docs/known-issues.md#3`). `pnpm audit` → 0
+  vulnerabilities (was 5 moderate earlier in session; resolved via
+  uuid 14, vitest 3.2.4, and `pnpm.overrides` for vite ≥6.4.2 /
+  esbuild ≥0.25.0 — see `docs/known-issues.md#4`). Application-level:
+  AES-GCM for RCON password + TOTP secret, Argon2id for user password,
+  hash-chain audit log with DB-trigger immutability, `SO_PEERCRED` +
+  primary-GID check on bridge socket, `__Host-` session cookie, RBAC
+  preHandler enforced, rate-limited login.
 - ✅ **Performance** — `/health` TTFB ~4 ms, `/ready` ~8 ms, RCON
   `ListPlayers` latency 42 ms, steamcmd cold download ≈ 40 MB/s, first
   Squad boot to "Engine is initialized" ~17 s.
@@ -346,18 +348,19 @@ the panel surfacing the player's real SteamID64/EOS/name within 30 s.
 Full enumeration with root cause, mitigation, and blocker-or-not
 classification in **`docs/known-issues.md`**. Summary:
 
-1. **Phase0 Test server `failed`** — historical install-flow artefact from
-   before apt was unwedged on the host. Not a blocker; see
-   `known-issues.md#1`.
-2. **`rcon_state: null` on stopped servers** — by design; worker-rcon only
-   polls `running`/`starting` servers. UI renders "—". See
-   `known-issues.md#2`.
-3. **systemd-analyze 3.1 vs target <3.0** — every remaining violation is
-   structurally required. Detailed in `known-issues.md#3`. Dropped from
-   3.3 (as-shipped) to 3.1 via UMask + ProcSubset + ProtectProc +
-   SystemCallFilter + CapabilityBoundingSet.
-4. **5 moderate pnpm audit findings** — all transitive via test tooling,
-   no high/critical. See `known-issues.md#4`.
+1. **Phase0 Test server `failed`** — RESOLVED. Row removed from `servers`
+   table; only `98452 (running)` remains. Root-cause analysis retained
+   in `known-issues.md#1` for operator reference.
+2. **`rcon_status: not_polled` on stopped servers** — by design;
+   worker-rcon only polls `running`/`starting` servers. UI renders
+   "— (сервер не запущен)". See `known-issues.md#2`.
+3. **systemd-analyze 2.9 OK** — target <3.0 MET. Dropped from 3.3 (as
+   shipped) → 3.1 (UMask+ProcSubset) → **2.9** (removed CAP_KILL +
+   CAP_NET_BIND_SERVICE + DeviceAllow= + ~@raw-io). Remaining
+   structural items detailed in `known-issues.md#3`.
+4. **pnpm audit 0 findings** — TARGET MET. All 5 moderate transitive
+   findings resolved via uuid 14 + vitest 3.2.4 + `pnpm.overrides`
+   (vite ≥6.4.2, esbuild ≥0.25.0). See `known-issues.md#4`.
 5. **License.cfg empty** — community browser gated by Offworld-issued
    license, operator-managed per server. See `known-issues.md#5`.
 6. **§17.8 real Windows client** — operator gate per TZ §20.2. See
