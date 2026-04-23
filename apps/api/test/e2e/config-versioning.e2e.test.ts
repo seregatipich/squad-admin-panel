@@ -73,12 +73,15 @@ describe.skipIf(skip.skip)('config versioning: history + diff + blame + restore'
     }
   });
 
-  it('empty history initially (fresh file has no version rows)', async () => {
+  it('install created initial baseline: every file has ≥1 version row', async () => {
     const r = await api.json<{ items: Version[] }>(
       `/api/v1/servers/${serverId}/configs/${filename}/history`,
     );
-    // May or may not be empty depending on prior tests; remember baseline.
-    expect(Array.isArray(r.items)).toBe(true);
+    expect(r.items.length).toBeGreaterThanOrEqual(1);
+    // The seeder's author is NULL + message mentions "initial install".
+    const baselineRow = r.items[r.items.length - 1];
+    expect(baselineRow?.author_user_id).toBeNull();
+    expect(baselineRow?.message).toMatch(/initial install/i);
   });
 
   let baseline = 0;

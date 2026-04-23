@@ -1,4 +1,5 @@
-import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
+import { createHash } from 'node:crypto';
+import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import {
   ALLOWED_CONFIG_FILES,
   DEPOT_VOLUME_NAME,
@@ -88,11 +89,24 @@ async function seedConfigs(
       content = rewriteServerCfg(content, displayName);
     }
     await app.bridge.fileAtomicWrite({ path: `${destDir}/${file}`, content });
+    // Create the initial config_versions row so History / Blame / Diff
+    // are meaningful from day one. author_user_id=NULL means "system"
+    // (installer, not a logged-in user). Next human PUT becomes v2.
+    await app.db.insert(configVersions).values({
+      serverId,
+      filename: file,
+      content,
+      sha256: createHash('sha256').update(content).digest(),
+      parentVersionId: null,
+      authorUserId: null,
+      authorIp: null,
+      message: `initial install — SteamCMD depot ${file === 'Rcon.cfg' || file === 'Server.cfg' ? '+ panel rewrite' : 'default'}`,
+    });
   }
   sink({
     ts: new Date().toISOString(),
     step: 'configs',
-    message: `seeded ${ALLOWED_CONFIG_FILES.length} files (saved/ auto-created by docker on container_run)`,
+    message: `seeded ${ALLOWED_CONFIG_FILES.length} files + initial version baseline (saved/ auto-created by docker on container_run)`,
   });
 }
 
