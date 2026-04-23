@@ -201,9 +201,9 @@ Every line cites the evidence location or verification command.
 
 ### §17.10 Audit
 - ✅ `/audit` shows all actions chronologically
-  **Verified:** this session, `/audit` shows 89 rows incl. setup.*, user.login (success + failed), user.2fa.enabled, server.create, server.install.started, server.start, server.stop, server.restart.
+  **Verified:** this session, `/audit` shows 94 rows incl. setup.*, user.login (success + failed), user.2fa.enabled, server.create, server.install.started, server.start, server.stop, server.restart.
 - ✅ `scripts/verify-audit-chain.ts` passes
-  **Verified:** current session `ok: audit chain intact (89 rows)`.
+  **Verified:** current session `ok: audit chain intact (94 rows)`.
 
 ### §17.11 Negative tests
 - ✅ Viewer `POST /api/v1/servers/{id}/start` → 403
