@@ -1,0 +1,35 @@
+import { z } from 'zod';
+
+const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  API_HOST: z.string().default('0.0.0.0'),
+  API_PORT: z.coerce.number().int().positive().default(3000),
+  DATABASE_URL: z.string().url(),
+  REDIS_URL: z.string().url(),
+  APP_ENCRYPTION_KEY: z
+    .string()
+    .min(32, 'APP_ENCRYPTION_KEY must be at least 32 bytes (base64 of 32 random bytes)'),
+  SESSION_SECRET: z.string().min(32),
+  BRIDGE_SOCKET: z.string().default('/run/panel-host-bridge.sock'),
+  COOKIE_SECURE: z.coerce.boolean().default(true),
+  APP_DOMAIN: z.string().default('admin.localhost'),
+  STEAM_API_KEY: z.string().optional(),
+  DISCORD_CLIENT_ID: z.string().optional(),
+  DISCORD_CLIENT_SECRET: z.string().optional(),
+  GLITCHTIP_DSN: z.string().optional(),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+});
+
+export type AppConfig = z.infer<typeof envSchema>;
+
+export function loadConfig(): AppConfig {
+  const parsed = envSchema.safeParse(process.env);
+  if (!parsed.success) {
+    console.error('Invalid environment variables:');
+    for (const issue of parsed.error.issues) {
+      console.error(`  ${issue.path.join('.')}: ${issue.message}`);
+    }
+    process.exit(1);
+  }
+  return parsed.data;
+}
