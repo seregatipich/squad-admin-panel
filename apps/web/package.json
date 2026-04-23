@@ -9,6 +9,7 @@
     "build": "next build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
+    "test:e2e": "playwright test",
     "clean": "rm -rf .next .turbo"
   },
   "dependencies": {
