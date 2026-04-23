@@ -89,16 +89,10 @@ async function seedConfigs(
     }
     await app.bridge.fileAtomicWrite({ path: `${destDir}/${file}`, content });
   }
-  // Ensure saved dir exists (bridge creates parent dirs on any write, so
-  // seed a placeholder marker that Squad will ignore).
-  await app.bridge.fileAtomicWrite({
-    path: `${PANEL_SAVED_ROOT}/${serverId}/.panel-created`,
-    content: new Date().toISOString(),
-  });
   sink({
     ts: new Date().toISOString(),
     step: 'configs',
-    message: `seeded ${ALLOWED_CONFIG_FILES.length} files`,
+    message: `seeded ${ALLOWED_CONFIG_FILES.length} files (saved/ auto-created by docker on container_run)`,
   });
 }
 

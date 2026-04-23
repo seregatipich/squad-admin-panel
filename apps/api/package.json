@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:integration": "vitest run --dir test/integration",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
@@ -50,6 +51,7 @@
     "@types/ws": "^8.18.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
+    "undici": "^8.1.0",
     "vitest": "^3.2.4",
     "ws": "^8.20.0"
   }

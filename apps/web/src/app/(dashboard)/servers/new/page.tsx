@@ -28,6 +28,7 @@ export default function NewServerWizard() {
   const [form, setForm] = useState({
     display_name: '',
     slug: '',
+    slug_touched: false,
     ...DEFAULT_PORTS,
     max_players: 20,
   });
@@ -38,14 +39,16 @@ export default function NewServerWizard() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    const { slug_touched: _slugTouched, ...payload } = form;
     const res = await fetch('/api/v1/servers', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify(form),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
-      setError(`Не удалось создать сервер (HTTP ${res.status})`);
+      const detail = await res.text().catch(() => '');
+      setError(`Не удалось создать сервер (HTTP ${res.status}) ${detail}`);
       return;
     }
     const created = (await res.json()) as CreateResponse;
@@ -101,14 +104,30 @@ export default function NewServerWizard() {
         <FieldText
           label="Название"
           value={form.display_name}
-          onChange={(v) => setForm({ ...form, display_name: v })}
+          onChange={(v) => {
+            const next: typeof form = { ...form, display_name: v };
+            if (!form.slug_touched) {
+              next.slug = v
+                .toLowerCase()
+                .replace(/[^a-z0-9-]+/g, '-')
+                .replace(/^-+|-+$/g, '')
+                .slice(0, 64);
+            }
+            setForm(next);
+          }}
           placeholder="My Squad Server"
           required
         />
         <FieldText
           label="Slug (только латиница, цифры, дефисы)"
           value={form.slug}
-          onChange={(v) => setForm({ ...form, slug: v })}
+          onChange={(v) =>
+            setForm({
+              ...form,
+              slug: v.toLowerCase().replace(/[^a-z0-9-]+/g, '-'),
+              slug_touched: true,
+            })
+          }
           placeholder="my-squad"
           pattern="^[a-z0-9][a-z0-9-]{0,63}$"
           required

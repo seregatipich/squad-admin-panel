@@ -68,14 +68,16 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	if spec.Tickrate <= 0 {
 		spec.Tickrate = 50
 	}
+	// The entrypoint needs to chown the bind-mount targets as root before
+	// dropping to uid 1001, so --user is set via the squad-server
+	// entrypoint itself (runuser), NOT the docker --user flag.
+	// Rootfs must be writable because runc creates mount points for the
+	// bind mounts inside it before the container process starts.
 	args := []string{
 		"run", "-d",
 		"--name", name,
 		"--restart", "unless-stopped",
 		"--network", "host",
-		"--user", "1001:1001",
-		"--read-only",
-		"--tmpfs", "/tmp:rw,size=512m",
 		"-v", spec.DepotVolume + ":/squad:ro",
 		"-v", spec.ConfigsHost + ":/squad/SquadGame/ServerConfig:rw",
 		"-v", spec.SavedHost + ":/squad/SquadGame/Saved:rw",
