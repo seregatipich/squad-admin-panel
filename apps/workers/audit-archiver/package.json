@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "ioredis": "^5.4.1",
-    "pino": "^9.5.0"
+    "pino": "^9.5.0",
+    "@squad/shared-config": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",

@@ -1,5 +1,6 @@
 import { BridgeClient } from '@squad/bridge-client';
 import { createDatabaseClient, serverSettings, servers } from '@squad/db';
+import { startHeartbeat } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -23,7 +24,13 @@ const requiredEnv = (name: string): string => {
 
 async function main() {
   const db = createDatabaseClient(requiredEnv('DATABASE_URL'));
-  const redis = new Redis(requiredEnv('REDIS_URL'));
+  const redis = new Redis(requiredEnv('REDIS_URL'), {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: true,
+    retryStrategy: (times: number) => Math.min(2000, 200 * 2 ** Math.min(times, 6)),
+  });
+  redis.on('error', (err: Error) => log.warn({ err: err.message }, 'redis error (will retry)'));
+  redis.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
   const bridge = new BridgeClient({
     socketPath: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge.sock',
     onLog: (m, meta) => log.info({ ...meta }, m),
@@ -81,8 +88,16 @@ async function main() {
     reconcile().catch((err) => log.error({ err: (err as Error).message }, 'reconcile failed'));
   }, 15_000);
 
+  const stopHeartbeat = startHeartbeat({
+    redis,
+    name: 'log-ingest',
+    statusFn: () => `tails=${aborters.size}`,
+    onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
+  });
+
   const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
+    stopHeartbeat();
     clearInterval(interval);
     for (const abort of aborters.values()) abort();
     aborters.clear();

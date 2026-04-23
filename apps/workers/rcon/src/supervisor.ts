@@ -55,6 +55,10 @@ export class RconSupervisor {
     this.supervisors.clear();
     this.targets.clear();
   }
+
+  size(): number {
+    return this.supervisors.size;
+  }
 }
 
 class PerServerSupervisor {
@@ -86,9 +90,24 @@ class PerServerSupervisor {
     this.client = undefined;
   }
 
+  private async writeStatus(
+    state: 'connected' | 'disconnected' | 'connecting',
+    extra: Record<string, unknown> = {},
+  ): Promise<void> {
+    const key = `rcon:status:${this.target.serverId}`;
+    const value = JSON.stringify({ state, ts: new Date().toISOString(), ...extra });
+    try {
+      // 5-minute TTL; a worker crash or network cut removes the stale key.
+      await this.opts.redis.set(key, value, 'EX', 300);
+    } catch {
+      // telemetry only; swallow
+    }
+  }
+
   private async connectLoop(): Promise<void> {
     while (!this.stopped) {
       try {
+        await this.writeStatus('connecting', { backoffMs: this.backoffMs });
         this.client = new RconClient({
           host: this.target.host,
           port: this.target.port,
@@ -99,6 +118,7 @@ class PerServerSupervisor {
         this.opts.log.info({ serverId: this.target.serverId }, 'rcon connected');
         this.backoffMs = this.opts.initialBackoffMs ?? 1000;
         await this.emitEvent('rcon.connected', {});
+        await this.writeStatus('connected');
         this.schedulePoll();
         await new Promise<void>((resolve) => {
           const check = setInterval(() => {
@@ -124,8 +144,17 @@ class PerServerSupervisor {
         await this.emitEvent('rcon.disconnected', {});
       }
       if (!this.stopped) {
+        // Stay in 'connecting' (not 'disconnected') during backoff so the
+        // panel UI shows the amber dot continuously instead of flashing red
+        // between retries. Retry attempts are expected transient.
+        await this.writeStatus('connecting', {
+          backoffMs: this.backoffMs,
+          reason: 'reconnect-backoff',
+        });
         await new Promise((r) => setTimeout(r, this.backoffMs));
         this.backoffMs = Math.min(this.backoffMs * 2, this.opts.maxBackoffMs ?? 60_000);
+      } else {
+        await this.writeStatus('disconnected', { reason: 'supervisor-stopped' });
       }
     }
   }
@@ -151,6 +180,12 @@ class PerServerSupervisor {
           })),
           polled_at: new Date().toISOString(),
           latency_ms: Date.now() - start,
+        });
+        // Refresh rcon:status key on every poll so the API's /servers list
+        // can surface an always-current player count + connection state.
+        await this.writeStatus('connected', {
+          player_count: players.length,
+          last_poll_at: new Date().toISOString(),
         });
       } catch (err) {
         this.opts.log.warn(

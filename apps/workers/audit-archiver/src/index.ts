@@ -1,3 +1,5 @@
+import { startHeartbeat } from '@squad/shared-config';
+import Redis from 'ioredis';
 import pino from 'pino';
 
 const log = pino({
@@ -6,17 +8,30 @@ const log = pino({
 });
 
 /**
- * Phase 0 stub. The archiver runs every 24 hours and exports a verified
- * hash-chain snapshot of audit_log to restic (same sidecar already used
- * for pg_dump backups). Phase 0 acceptance requires the scaffolding
- * only; real export logic lands in Phase 1 per TZ §5.
+ * Phase 0 stub. The archiver will export a verified hash-chain snapshot
+ * of audit_log to restic on a daily schedule in Phase 1. For P0 it still
+ * publishes a heartbeat so the panel's system-status card can see that
+ * the worker is alive, not just its container running.
  */
 async function main() {
+  const redisUrl = process.env.REDIS_URL;
+  const redis = redisUrl
+    ? new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false })
+    : null;
+  const stopHeartbeat = redis
+    ? startHeartbeat({
+        redis,
+        name: 'audit-archiver',
+        statusFn: () => 'idle (P1)',
+        onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
+      })
+    : () => {};
+
   log.info('worker-audit-archiver idle — Phase 1 functionality deferred');
-  const heartbeat = setInterval(() => log.debug('heartbeat'), 60_000);
-  const shutdown = (sig: NodeJS.Signals) => {
+  const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
-    clearInterval(heartbeat);
+    stopHeartbeat();
+    await redis?.quit().catch(() => undefined);
     process.exit(0);
   };
   process.once('SIGINT', shutdown);

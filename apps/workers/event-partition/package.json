@@ -14,7 +14,8 @@
   "dependencies": {
     "ioredis": "^5.4.1",
     "pino": "^9.5.0",
-    "postgres": "^3.4.5"
+    "postgres": "^3.4.5",
+    "@squad/shared-config": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",

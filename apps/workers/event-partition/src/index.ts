@@ -1,3 +1,5 @@
+import { startHeartbeat } from '@squad/shared-config';
+import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
 
@@ -18,6 +20,18 @@ async function main() {
     process.exit(1);
   }
   const sql = postgres(url, { max: 1 });
+  const redisUrl = process.env.REDIS_URL;
+  const redis = redisUrl
+    ? new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false })
+    : null;
+  const stopHeartbeat = redis
+    ? startHeartbeat({
+        redis,
+        name: 'event-partition',
+        statusFn: () => 'idle',
+        onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
+      })
+    : () => {};
 
   async function ensurePartitions() {
     const toCreate = 2; // current + next month (plus existing bootstraps from 0000_init.sql)
@@ -39,8 +53,10 @@ async function main() {
 
   const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
+    stopHeartbeat();
     clearInterval(interval);
     await sql.end({ timeout: 5 });
+    await redis?.quit().catch(() => undefined);
     process.exit(0);
   };
   process.once('SIGINT', shutdown);

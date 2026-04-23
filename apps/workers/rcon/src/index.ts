@@ -1,4 +1,5 @@
 import { createDatabaseClient, serverCredentials, serverSettings, servers } from '@squad/db';
+import { startHeartbeat } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -47,7 +48,13 @@ function decrypt(key: Buffer, blob: Blob): string {
 
 async function main() {
   const db = createDatabaseClient(requiredEnv('DATABASE_URL'));
-  const redis = new Redis(requiredEnv('REDIS_URL'));
+  const redis = new Redis(requiredEnv('REDIS_URL'), {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: true,
+    retryStrategy: (times: number) => Math.min(2000, 200 * 2 ** Math.min(times, 6)),
+  });
+  redis.on('error', (err: Error) => log.warn({ err: err.message }, 'redis error (will retry)'));
+  redis.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
   const key = Buffer.from(requiredEnv('APP_ENCRYPTION_KEY'), 'base64');
   if (key.byteLength !== 32) {
     log.fatal('APP_ENCRYPTION_KEY must decode to 32 bytes');
@@ -96,8 +103,16 @@ async function main() {
     reconcile().catch((err) => log.error({ err: (err as Error).message }, 'reconcile failed'));
   }, 15_000);
 
+  const stopHeartbeat = startHeartbeat({
+    redis,
+    name: 'rcon',
+    statusFn: () => `targets=${supervisor.size()}`,
+    onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
+  });
+
   const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
+    stopHeartbeat();
     clearInterval(interval);
     await supervisor.stop();
     await redis.quit().catch(() => undefined);

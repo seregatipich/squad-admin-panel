@@ -4,7 +4,11 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -14,6 +18,7 @@
     "clean": "rm -rf dist .turbo"
   },
   "devDependencies": {
+    "@types/node": "^22.10.1",
     "typescript": "^5.7.2",
     "vitest": "^2.1.9"
   }
