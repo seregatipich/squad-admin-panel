@@ -4,9 +4,21 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./events": "./src/events.ts",
-    "./api": "./src/api.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./events": {
+      "types": "./dist/events.d.ts",
+      "development": "./src/events.ts",
+      "default": "./dist/events.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "development": "./src/api.ts",
+      "default": "./dist/api.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

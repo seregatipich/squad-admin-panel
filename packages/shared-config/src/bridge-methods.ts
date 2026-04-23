@@ -43,7 +43,7 @@ export const BRIDGE_ALLOWED_APT_PACKAGES = [
 export type AllowedAptPackage = (typeof BRIDGE_ALLOWED_APT_PACKAGES)[number];
 
 export const BRIDGE_SOCKET_DEFAULT = '/run/panel-host-bridge.sock';
-export const BRIDGE_MAX_FRAME_BYTES = 1 * 1024 * 1024;
+export const BRIDGE_MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 export const SQUAD_APP_ID = 403240;
 export const SQUAD_SERVERS_ROOT = '/opt/squad-servers';

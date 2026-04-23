@@ -4,9 +4,21 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./schema": "./src/schema/index.ts",
-    "./seed": "./src/seed/system-roles.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema/index.d.ts",
+      "development": "./src/schema/index.ts",
+      "default": "./dist/schema/index.js"
+    },
+    "./seed": {
+      "types": "./dist/seed/system-roles.d.ts",
+      "development": "./src/seed/system-roles.ts",
+      "default": "./dist/seed/system-roles.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

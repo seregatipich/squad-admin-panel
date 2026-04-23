@@ -10,47 +10,56 @@ die() { printf '\033[31m[verify-bridge]\033[0m %s\n' "$*" >&2; exit 1; }
 log() { printf '\033[32m[verify-bridge]\033[0m %s\n' "$*"; }
 
 [[ -S "$SOCKET" ]] || die "socket $SOCKET not found — is panel-host-bridge running?"
-command -v nc >/dev/null || die "nc (netcat) required; install with: apt-get install -y netcat-openbsd"
 command -v python3 >/dev/null || die "python3 required for framing helper"
 
-frame() {
-  local json="$1"
-  python3 - "$json" <<'PY'
-import sys, struct
-payload = sys.argv[1].encode('utf-8')
-sys.stdout.buffer.write(struct.pack('>I', len(payload)) + payload)
-PY
-}
-
 call() {
-  local id="$1"; shift
-  local method="$1"; shift
-  local params="${1:-null}"
-  local req
-  req=$(python3 -c "import json,sys; print(json.dumps({'id': sys.argv[1], 'method': sys.argv[2], 'params': json.loads(sys.argv[3])}))" "$id" "$method" "$params")
+  local id="$1"
+  local method="$2"
+  local params="${3:-null}"
+  local timeout="${4:-10}"
   log "→ $method"
-  frame "$req" | nc -q 1 -U "$SOCKET" | python3 - <<'PY'
-import sys, struct, json
-buf = sys.stdin.buffer.read()
-offset = 0
-while offset + 4 <= len(buf):
-    size = struct.unpack('>I', buf[offset:offset+4])[0]
-    body = buf[offset+4:offset+4+size]
-    try:
-        obj = json.loads(body.decode('utf-8'))
-        print(json.dumps(obj, indent=2))
-    except Exception as e:
-        print(f"(decode failed: {e})")
-    offset += 4 + size
+  BRIDGE_SOCKET="$SOCKET" REQ_ID="$id" REQ_METHOD="$method" REQ_PARAMS="$params" REQ_TIMEOUT="$timeout" python3 - <<'PY'
+import json, os, socket, struct, sys
+
+sock_path = os.environ['BRIDGE_SOCKET']
+req = {'id': os.environ['REQ_ID'], 'method': os.environ['REQ_METHOD'], 'params': json.loads(os.environ['REQ_PARAMS'])}
+payload = json.dumps(req).encode('utf-8')
+
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(int(os.environ.get('REQ_TIMEOUT', '10')))
+s.connect(sock_path)
+s.sendall(struct.pack('>I', len(payload)) + payload)
+
+def recvn(n):
+    buf = b''
+    while len(buf) < n:
+        chunk = s.recv(n - len(buf))
+        if not chunk:
+            break
+        buf += chunk
+    return buf
+
+hdr = recvn(4)
+if len(hdr) < 4:
+    print('(no response)', file=sys.stderr)
+    sys.exit(1)
+size = struct.unpack('>I', hdr)[0]
+body = recvn(size)
+print(json.dumps(json.loads(body.decode('utf-8')), indent=2))
+s.close()
 PY
   echo
 }
 
 call 'verify-1' 'ping' 'null'
 call 'verify-2' 'host_info' 'null'
-call 'verify-3' 'systemctl_action' '{"unit": "nginx.service", "action": "start"}'     # must be forbidden
-call 'verify-4' 'apt_install' '{"packages": ["bash"]}'                                  # must be forbidden
-call 'verify-5' 'apt_install' '{"packages": ["curl"]}'
-call 'verify-6' 'file_read' '{"path": "/etc/shadow"}'                                   # must be forbidden
+call 'verify-3' 'host_metrics' 'null'
+call 'verify-4' 'systemctl_action' '{"unit": "nginx.service", "action": "start"}'     # must be forbidden
+call 'verify-5' 'apt_install' '{"packages": ["bash"]}'                                  # must be forbidden
+call 'verify-6' 'apt_install' '{"packages": ["curl"]}' 180
+call 'verify-7' 'file_read' '{"path": "/etc/shadow"}'                                   # must be forbidden
+call 'verify-8' 'file_atomic_write' '{"path": "/opt/squad-servers/verify-bridge.tmp", "content": "verify-bridge ok\n", "mode": 420}'
+call 'verify-9' 'file_read' '{"path": "/opt/squad-servers/verify-bridge.tmp"}'
+call 'verify-10' 'steamcmd_run' '{"args": ["+login", "admin123", "pass"]}'              # must be forbidden
 
 log "done."

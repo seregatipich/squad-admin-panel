@@ -18,7 +18,7 @@ interface Row {
   action_type: string;
   target_type: string | null;
   target_id: string | null;
-  context: Record<string, unknown>;
+  context_text: string;
   prev_hash: Buffer | null;
   row_hash: Buffer;
 }
@@ -28,7 +28,7 @@ function canonical(row: Row): string {
     row.action_type,
     row.target_type ?? '',
     row.target_id ?? '',
-    JSON.stringify(row.context),
+    row.context_text,
     row.created_at,
   ].join('|');
 }
@@ -45,28 +45,31 @@ async function main() {
 
   try {
     const rows = await sql<Row[]>`
-      SELECT id::text, created_at::text, action_type, target_type, target_id,
-             context, prev_hash, row_hash
+      SELECT id::text AS id, created_at::text, action_type, target_type, target_id,
+             context::text AS context_text, prev_hash, row_hash
         FROM audit_log
-        ORDER BY id ASC
+        ORDER BY audit_log.id ASC
     `;
 
     for (const row of rows) {
+      const currentRowHash = Buffer.from(row.row_hash);
       const expectedPrev = prevHash ?? Buffer.alloc(0);
-      const actualPrev = row.prev_hash ?? Buffer.alloc(0);
+      const actualPrev = row.prev_hash ? Buffer.from(row.prev_hash) : Buffer.alloc(0);
       if (!expectedPrev.equals(actualPrev)) {
         console.error(`Chain break at id=${row.id}: prev_hash mismatch`);
+        console.error(`  expected=${expectedPrev.toString('hex')}`);
+        console.error(`  actual  =${actualPrev.toString('hex')}`);
         process.exit(1);
       }
       const material = Buffer.concat([expectedPrev, Buffer.from(canonical(row), 'utf-8')]);
       const expected = createHash('sha256').update(material).digest();
-      if (!expected.equals(row.row_hash)) {
+      if (!expected.equals(currentRowHash)) {
         console.error(`Chain break at id=${row.id}: row_hash mismatch`);
         console.error(`  expected=${expected.toString('hex')}`);
-        console.error(`  actual  =${row.row_hash.toString('hex')}`);
+        console.error(`  actual  =${currentRowHash.toString('hex')}`);
         process.exit(1);
       }
-      prevHash = row.row_hash;
+      prevHash = currentRowHash;
       count++;
     }
     console.log(`ok: audit chain intact (${count} rows)`);

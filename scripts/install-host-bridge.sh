@@ -64,6 +64,13 @@ install -m 0644 "${REPO_DIR}/apps/bridge/deploy/panel-host-bridge.socket"  "$UNI
 mkdir -p /etc/squad-server
 chmod 0755 /etc/squad-server
 
+mkdir -p /var/log/panel-host-bridge
+chmod 0750 /var/log/panel-host-bridge
+
+# ReadWritePaths requires every listed path to exist, even if the feature
+# using it isn't actually installed on this host yet.
+mkdir -p /etc/ufw
+
 systemctl daemon-reload
 
 # -------- 5. enable + start the socket unit --------------------------------
