@@ -108,6 +108,20 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	return strings.TrimSpace(string(so)), nil
 }
 
+func (d *DockerRunner) Start(ctx context.Context, name string) error {
+	if err := validate.ContainerName(name); err != nil {
+		return err
+	}
+	_, se, exit, err := d.R.Run(ctx, d.Bin, []string{"start", name}, nil)
+	if err != nil {
+		return err
+	}
+	if exit != 0 {
+		return fmt.Errorf("docker start exit %d: %s", exit, strings.TrimSpace(string(se)))
+	}
+	return nil
+}
+
 func (d *DockerRunner) Stop(ctx context.Context, name string, timeout time.Duration) error {
 	if err := validate.ContainerName(name); err != nil {
 		return err

@@ -6,7 +6,7 @@ import Redis from 'ioredis';
 import pino from 'pino';
 import { LogIngestor } from './parser/ingest.js';
 import { publish } from './publish.js';
-import { tailJournal } from './tail.js';
+import { tailContainerLogs } from './tail.js';
 
 const log = pino({
   level: process.env.LOG_LEVEL ?? 'info',
@@ -67,10 +67,10 @@ async function main() {
   function attachTail(serverId: string, beaconPort: number) {
     log.info({ serverId, beaconPort }, 'attaching log tail');
     const ingestor = new LogIngestor({ serverId, beaconPort });
-    const abort = tailJournal({
+    const abort = tailContainerLogs({
       bridge,
       log,
-      unit: `squad-server-${serverId}.service`,
+      name: `squad-${serverId}`,
       onLine(line) {
         const events = ingestor.ingest(line);
         for (const e of events) {

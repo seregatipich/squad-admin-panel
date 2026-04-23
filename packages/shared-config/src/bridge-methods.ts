@@ -8,6 +8,7 @@ export const BRIDGE_METHODS = [
   'ufw_rule',
   'process_info',
   'container_run',
+  'container_start',
   'container_stop',
   'container_rm',
   'container_inspect',

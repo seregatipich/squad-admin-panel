@@ -8,6 +8,7 @@ export const PERMISSION_KEYS = [
   'server:restart',
   'server:install',
   'server:update',
+  'server:config:write',
 
   'player:view',
   'player:view_ips',
@@ -60,6 +61,7 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<RoleName, readonly PermissionKey[]>
     'server:restart',
     'server:install',
     'server:update',
+    'server:config:write',
     'player:view',
     'player:view_ips',
     'player:view_eos_id',

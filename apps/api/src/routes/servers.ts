@@ -1,5 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { organizations, serverCredentials, serverSettings, servers } from '@squad/db/schema';
+import {
+  DEPOT_VOLUME_NAME,
+  PANEL_CONFIGS_ROOT,
+  PANEL_SAVED_ROOT,
+  SERVER_IMAGE,
+} from '@squad/shared-config';
 import { serverCreateInput } from '@squad/shared-types';
 import { eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
@@ -10,6 +16,10 @@ import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js
 import { rconSendOnce } from '../lib/rcon-send.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
+
+function containerName(id: string) {
+  return `squad-${id}`;
+}
 
 const serverRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -27,16 +37,13 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           slug: servers.slug,
           description: servers.description,
           status: servers.status,
+          runtime: servers.runtime,
           tags: servers.tags,
           created_at: servers.createdAt,
           updated_at: servers.updatedAt,
         })
         .from(servers)
         .orderBy(servers.displayName);
-      // Enrich every row with the live RCON state / player count that
-      // worker-rcon publishes to rcon:status:{uuid}. Falling back to
-      // nulls so the UI can render the row even when no poll has
-      // happened yet.
       const items = await Promise.all(
         rows.map(async (r) => {
           const raw = await app.redis.get(`rcon:status:${r.id}`);
@@ -95,10 +102,11 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           slug: body.slug,
           description: body.description ?? null,
           status: 'pending',
+          runtime: 'container',
         });
         await tx.insert(serverSettings).values({
           serverId: id,
-          installPath: `/opt/squad-servers/${id}`,
+          installPath: `${PANEL_CONFIGS_ROOT}/${id}`,
           gamePort: body.game_port,
           queryPort: body.query_port,
           beaconPort: body.beacon_port,
@@ -147,11 +155,6 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         where: eq(serverSettings.serverId, req.params.id),
       });
       const rconRaw = await app.redis.get(`rcon:status:${row.id}`);
-      // state='not_polled' is distinct from 'disconnected': the former
-      // means worker-rcon isn't watching this server (because DB says it
-      // isn't running); the latter means it IS watching but the socket
-      // failed. UI renders not_polled as '—' so it doesn't read as an
-      // error.
       let rcon_status: unknown = { state: 'not_polled' };
       if (rconRaw) {
         try {
@@ -168,6 +171,8 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           slug: row.slug,
           description: row.description,
           status: row.status,
+          runtime: row.runtime,
+          container_id: row.containerId,
           tags: row.tags,
           timezone: row.timezone,
           created_at: row.createdAt,
@@ -207,10 +212,40 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
-      await app.bridge.systemctlAction({
-        unit: `squad-server-${s.id}.service`,
-        action: 'start',
+      const settings = await app.db.query.serverSettings.findFirst({
+        where: eq(serverSettings.serverId, s.id),
       });
+      if (!settings) {
+        reply.code(400);
+        return { error: 'server_not_installed' };
+      }
+      const name = containerName(s.id);
+      const inspect = await app.bridge.containerInspect({ name }).catch(() => null);
+      if (inspect?.running) {
+        await app.db
+          .update(servers)
+          .set({ status: 'running', updatedAt: new Date() })
+          .where(eq(servers.id, s.id));
+        return { status: 'running', note: 'already running' };
+      }
+      if (inspect && inspect.state !== 'not_found') {
+        await app.bridge.containerStart({ name });
+      } else {
+        await app.bridge.containerRun({
+          server_id: s.id,
+          image: SERVER_IMAGE,
+          game_port: settings.gamePort,
+          query_port: settings.queryPort,
+          beacon_port: settings.beaconPort,
+          rcon_port: settings.rconPort,
+          max_players: settings.maxPlayers,
+          tickrate: settings.tickrate,
+          multihome: settings.multihome,
+          configs_host: `${PANEL_CONFIGS_ROOT}/${s.id}/ServerConfig`,
+          saved_host: `${PANEL_SAVED_ROOT}/${s.id}`,
+          depot_volume: DEPOT_VOLUME_NAME,
+        });
+      }
       await app.db
         .update(servers)
         .set({ status: 'starting', updatedAt: new Date() })
@@ -242,9 +277,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         where: eq(serverCredentials.serverId, s.id),
       });
 
-      // Graceful shutdown (TZ §17.7): broadcast → end match → systemctl stop.
-      // Any RCON failure is logged and we still fall through to systemctl stop
-      // so a broken RCON can never wedge a server admin trying to halt a host.
+      // Graceful shutdown (TZ §17.7): broadcast → end match → stop container.
       if (settings && creds) {
         try {
           const password = decryptString(
@@ -278,10 +311,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
-      await app.bridge.systemctlAction({
-        unit: `squad-server-${s.id}.service`,
-        action: 'stop',
-      });
+      await app.bridge.containerStop({ name: containerName(s.id), timeout_sec: 60 });
       await app.db
         .update(servers)
         .set({ status: 'stopping', updatedAt: new Date() })
@@ -305,10 +335,13 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
-      await app.bridge.systemctlAction({
-        unit: `squad-server-${s.id}.service`,
-        action: 'restart',
-      });
+      const name = containerName(s.id);
+      await app.bridge.containerStop({ name, timeout_sec: 60 }).catch(() => {});
+      await app.bridge.containerStart({ name });
+      await app.db
+        .update(servers)
+        .set({ status: 'starting', updatedAt: new Date() })
+        .where(eq(servers.id, s.id));
       return { status: 'restarting' };
     },
   );
@@ -325,9 +358,6 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     async (req) => {
-      // Pull the last N entries from the per-server Redis stream that
-      // worker-rcon and worker-log-ingest publish to. XREVRANGE gives
-      // newest-first for a direct UI render.
       const stream = `events:server:${req.params.id}`;
       const raw = (await app.redis.xrevrange(stream, '+', '-', 'COUNT', req.query.limit)) as Array<
         [string, string[]]
@@ -381,6 +411,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+      await app.bridge.containerRm({ name: containerName(row.id) }).catch(() => {});
       await app.db.delete(servers).where(eq(servers.id, req.params.id));
       return { ok: true };
     },

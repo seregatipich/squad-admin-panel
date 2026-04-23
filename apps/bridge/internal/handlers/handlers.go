@@ -54,6 +54,8 @@ func (d *Dispatcher) Handle(
 		return d.processInfo(req)
 	case "container_run":
 		return d.containerRun(ctx, req)
+	case "container_start":
+		return d.containerStart(ctx, req)
 	case "container_stop":
 		return d.containerStop(ctx, req)
 	case "container_rm":
@@ -172,13 +174,18 @@ func (d *Dispatcher) fileAtomicWrite(req *rpc.Request) rpc.Response {
 	return rpc.NewSuccessResponse(req.ID, body)
 }
 
-// Accept: any config file under /var/lib/squad-panel/configs/{uuid}/ServerConfig/.
-// Saved-tree reads are also allowed so the UI can inspect Squad logs.
+// Accept: any config file under /var/lib/squad-panel/configs/{uuid}/ServerConfig/,
+// any file under /var/lib/squad-panel/saved/{uuid}/ (Squad logs etc.),
+// and read-only access to /var/lib/docker/volumes/squad-depot/ so the
+// install flow can seed a new server's configs from depot defaults.
 func validateReadablePath(p string) error {
 	if _, err := validate.PanelConfigFilePath(p); err == nil {
 		return nil
 	}
 	if _, err := validate.PanelSavedPath(p); err == nil {
+		return nil
+	}
+	if _, err := validate.Path(p, "/var/lib/docker/volumes/squad-depot"); err == nil {
 		return nil
 	}
 	return fmt.Errorf("%w: path %q not in readable allowlist", validate.ErrForbidden, p)
@@ -271,6 +278,22 @@ func (d *Dispatcher) containerRun(ctx context.Context, req *rpc.Request) rpc.Res
 type containerParams struct {
 	Name       string `json:"name"`
 	TimeoutSec int    `json:"timeout_sec,omitempty"`
+}
+
+func (d *Dispatcher) containerStart(ctx context.Context, req *rpc.Request) rpc.Response {
+	var p containerParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
+	}
+	if err := d.Docker.Start(ctx, p.Name); err != nil {
+		code := rpc.CodeRuntimeError
+		if isForbidden(err) {
+			code = rpc.CodeForbidden
+		}
+		return rpc.NewErrorResponse(req.ID, code, err.Error())
+	}
+	body, _ := json.Marshal(map[string]string{"status": "started"})
+	return rpc.NewSuccessResponse(req.ID, body)
 }
 
 func (d *Dispatcher) containerStop(ctx context.Context, req *rpc.Request) rpc.Response {

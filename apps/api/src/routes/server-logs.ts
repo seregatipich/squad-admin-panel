@@ -3,9 +3,9 @@ import { eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 
 /**
- * Live Squad-server journal stream. Opens `journalctl_follow` on the bridge
- * for the server's systemd unit and forwards each line as a JSON frame to
- * the WebSocket client.
+ * Live Squad-server log stream. Attaches to the server's Docker container
+ * via `container_logs_follow` on the bridge and forwards each line as a
+ * JSON frame to the WebSocket client.
  *
  * Protocol (server → client):
  *   {"ts": ISO, "stream": "stdout"|"stderr", "message": string}
@@ -36,12 +36,10 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
         ? Math.max(0, Math.min(5000, Math.trunc(requested)))
         : 200;
 
-      const unit = `squad-server-${id}.service`;
+      const name = `squad-${id}`;
       let closed = false;
       // Dedicated bridge connection so closing the WebSocket tears down
-      // the journalctl subprocess on the other side cleanly — otherwise
-      // the Go process lingers until it tries to write into a closed
-      // socket.
+      // the `docker logs -f` subprocess on the bridge side cleanly.
       const dedicatedBridge = app.makeBridgeClient();
 
       (async () => {
@@ -52,10 +50,8 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
           return;
         }
 
-        // journalctl_follow on a systemd unit that was never installed is a
-        // blackhole: it waits forever for messages that will never come and
-        // ties up a bridge RPC slot. Refuse upfront so the browser doesn't
-        // open a useless socket that only closes on timeout.
+        // Refuse upfront if the container was never created; otherwise
+        // `docker logs` errors are spammy and the user sees nothing useful.
         const installed =
           row.status === 'running' ||
           row.status === 'starting' ||
@@ -66,7 +62,7 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
           safeSend({
             ts: new Date().toISOString(),
             stream: 'stdout',
-            message: `[panel] сервер в состоянии "${row.status}" — журнал systemd ещё не создан. Запустите установку.`,
+            message: `[panel] сервер в состоянии "${row.status}" — контейнер ещё не создан. Запустите установку.`,
           });
           safeSend({ done: true });
           socket.close();
@@ -75,11 +71,9 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
 
         try {
           await dedicatedBridge.connect();
-          await dedicatedBridge.journalctlFollow({ unit, lines: backfillLines }, (frame) => {
+          await dedicatedBridge.containerLogsFollow({ name, tail: backfillLines }, (frame) => {
             if (closed) return;
             const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
-            // A single bridge frame may carry several newline-delimited journal
-            // lines; split so the UI renders one row per line.
             for (const line of text.split(/\r?\n/)) {
               if (line.length === 0) continue;
               safeSend({
@@ -100,8 +94,6 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
 
       socket.on('close', () => {
         closed = true;
-        // Close the dedicated bridge connection so the bridge's
-        // journalctl subprocess receives EOF and exits.
         dedicatedBridge.close().catch(() => undefined);
       });
 

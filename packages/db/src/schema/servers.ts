@@ -13,6 +13,8 @@ export const servers = pgTable(
     slug: text('slug').notNull(),
     description: text('description'),
     status: text('status').notNull().default('pending'),
+    runtime: text('runtime').notNull().default('container'),
+    containerId: text('container_id'),
     tags: text('tags').array().notNull().default([]),
     timezone: text('timezone').notNull().default('UTC'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
@@ -25,6 +27,7 @@ export const servers = pgTable(
       'servers_status_enum',
       sql`status IN ('pending','installing','ready','starting','running','stopping','stopped','failed')`,
     ),
+    runtimeCheck: check('servers_runtime_enum', sql`runtime IN ('container')`),
   }),
 );
 

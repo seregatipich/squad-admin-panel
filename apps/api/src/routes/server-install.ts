@@ -1,4 +1,11 @@
 import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
+import {
+  ALLOWED_CONFIG_FILES,
+  DEPOT_VOLUME_NAME,
+  PANEL_CONFIGS_ROOT,
+  PANEL_SAVED_ROOT,
+  SERVER_IMAGE,
+} from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -7,8 +14,8 @@ import { decryptString, deserialize } from '../lib/crypto.js';
 
 const paramsSchema = z.object({ id: z.string().uuid() });
 
-const SQUAD_APP_ID = '403240';
-const PREREQ_PACKAGES = ['ca-certificates', 'curl', 'tar'];
+const DEPOT_MARKER = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data/SquadGameServer.sh`;
+const DEPOT_CONFIG_DIR = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data/SquadGame/ServerConfig`;
 
 interface ProgressLine {
   ts: string;
@@ -18,6 +25,82 @@ interface ProgressLine {
 }
 
 type Sink = (line: ProgressLine) => void;
+
+async function depotPopulated(app: FastifyInstance): Promise<boolean> {
+  try {
+    const { content } = await app.bridge.fileRead({ path: DEPOT_MARKER });
+    return content.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureDepot(app: FastifyInstance, sink: Sink): Promise<void> {
+  if (await depotPopulated(app)) {
+    sink({
+      ts: new Date().toISOString(),
+      step: 'depot',
+      message: `depot volume ${DEPOT_VOLUME_NAME} already populated`,
+    });
+    return;
+  }
+  sink({
+    ts: new Date().toISOString(),
+    step: 'depot',
+    message: `populating ${DEPOT_VOLUME_NAME} via depot-init container`,
+  });
+  await app.bridge.depotUpdate((frame) => {
+    const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
+    sink({
+      ts: new Date().toISOString(),
+      step: 'depot',
+      message: text,
+      stream: frame.stream === 'stderr' ? 'stderr' : 'stdout',
+    });
+  });
+}
+
+async function seedConfigs(
+  app: FastifyInstance,
+  serverId: string,
+  displayName: string,
+  rconPort: number,
+  rconPassword: string,
+  sink: Sink,
+): Promise<void> {
+  const destDir = `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig`;
+  sink({ ts: new Date().toISOString(), step: 'configs', message: `seeding ${destDir}` });
+  for (const file of ALLOWED_CONFIG_FILES) {
+    let content = '';
+    try {
+      content = (await app.bridge.fileRead({ path: `${DEPOT_CONFIG_DIR}/${file}` })).content;
+    } catch (err) {
+      sink({
+        ts: new Date().toISOString(),
+        step: 'configs',
+        message: `default ${file} not in depot (${(err as Error).message}); creating empty`,
+        stream: 'stderr',
+      });
+    }
+    if (file === 'Rcon.cfg') {
+      content = rewriteRconCfg(content, { port: rconPort, password: rconPassword });
+    } else if (file === 'Server.cfg') {
+      content = rewriteServerCfg(content, displayName);
+    }
+    await app.bridge.fileAtomicWrite({ path: `${destDir}/${file}`, content });
+  }
+  // Ensure saved dir exists (bridge creates parent dirs on any write, so
+  // seed a placeholder marker that Squad will ignore).
+  await app.bridge.fileAtomicWrite({
+    path: `${PANEL_SAVED_ROOT}/${serverId}/.panel-created`,
+    content: new Date().toISOString(),
+  });
+  sink({
+    ts: new Date().toISOString(),
+    step: 'configs',
+    message: `seeded ${ALLOWED_CONFIG_FILES.length} files`,
+  });
+}
 
 async function runInstall(app: FastifyInstance, serverId: string, sink: Sink): Promise<void> {
   const emit = (step: string, message: string, stream?: 'stdout' | 'stderr') =>
@@ -34,103 +117,18 @@ async function runInstall(app: FastifyInstance, serverId: string, sink: Sink): P
   });
   if (!creds) throw new Error('server_credentials_missing');
 
-  const installPath = settings.installPath;
-  const unit = `squad-server-${serverId}.service`;
-  const unitPath = `/etc/systemd/system/${unit}`;
-
   await app.db
     .update(servers)
     .set({ status: 'installing', updatedAt: new Date() })
     .where(eq(servers.id, serverId));
 
-  emit('prereqs', `apt_install ${PREREQ_PACKAGES.join(', ')}`);
-  const apt = await app.bridge.aptInstall({ packages: PREREQ_PACKAGES });
-  emit('prereqs', apt.output, 'stdout');
+  await ensureDepot(app, sink);
 
-  emit('steamcmd', `downloading Squad depot ${SQUAD_APP_ID} to ${installPath}`);
-  await app.bridge.steamcmdRun(
-    {
-      args: [
-        '+@sSteamCmdForcePlatformType',
-        'linux',
-        `+force_install_dir ${installPath}/`,
-        '+login',
-        'anonymous',
-        '+app_update',
-        SQUAD_APP_ID,
-        'validate',
-        '+quit',
-      ],
-    },
-    (frame) => {
-      const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
-      emit('steamcmd', text, frame.stream === 'stderr' ? 'stderr' : 'stdout');
-    },
+  const rconPassword = decryptString(
+    app.encryptionKey,
+    deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
   );
-
-  emit('systemd-unit', `writing ${unitPath}`);
-  const envLines: string[] = [];
-  if (settings.cpuAffinity) envLines.push(`CPUAffinity=${settings.cpuAffinity}`);
-  if (settings.cpuWeight != null) envLines.push(`CPUWeight=${settings.cpuWeight}`);
-  if (settings.memoryHighMb != null) envLines.push(`MemoryHigh=${settings.memoryHighMb}M`);
-  if (settings.memoryMaxMb != null) envLines.push(`MemoryMax=${settings.memoryMaxMb}M`);
-  if (settings.ioWeight != null) envLines.push(`IOWeight=${settings.ioWeight}`);
-  if (settings.niceness != null) envLines.push(`Nice=${settings.niceness}`);
-
-  const launchArgs =
-    settings.launchArgsOverride ??
-    [
-      `Port=${settings.gamePort}`,
-      `QueryPort=${settings.queryPort}`,
-      `BeaconPort=${settings.beaconPort}`,
-      `RCONPort=${settings.rconPort}`,
-      `FIXEDMAXPLAYERS=${settings.maxPlayers}`,
-      `MULTIHOME=${settings.multihome}`,
-      'RANDOM=ALWAYS',
-      '-log',
-      settings.extraArgs,
-    ]
-      .filter(Boolean)
-      .join(' ');
-
-  const unitContent = `[Unit]
-Description=Squad dedicated server (${srv.displayName})
-Documentation=https://github.com/breaking-squad/squad-admin-panel
-After=network.target
-
-[Service]
-Type=simple
-User=squad
-Group=squad
-WorkingDirectory=${installPath}
-ExecStart=${installPath}/SquadGameServer.sh ${launchArgs}
-Restart=on-failure
-RestartSec=5s
-TimeoutStopSec=60
-StandardOutput=journal
-StandardError=journal
-${envLines.join('\n')}
-
-NoNewPrivileges=yes
-ProtectSystem=full
-ProtectHome=read-only
-PrivateTmp=yes
-PrivateDevices=yes
-ProtectKernelTunables=yes
-ProtectKernelLogs=yes
-ProtectControlGroups=yes
-LockPersonality=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-
-[Install]
-WantedBy=multi-user.target
-`;
-  await app.bridge.systemctlWriteUnit({ path: unitPath, content: unitContent });
-  emit('systemd-unit', 'written');
-
-  await app.bridge.systemctlDaemonReload();
-  emit('systemd-unit', 'daemon-reload');
+  await seedConfigs(app, serverId, srv.displayName, settings.rconPort, rconPassword, sink);
 
   emit(
     'ufw',
@@ -155,84 +153,32 @@ WantedBy=multi-user.target
     }
   }
 
-  emit('bootstrap-boot', `starting ${unit} to let Squad generate configs`);
-  await app.bridge.systemctlAction({ unit, action: 'start' });
-
-  const logPath = `${installPath}/SquadGame/Saved/Logs/SquadGame.log`;
-  const deadline = Date.now() + 180_000;
-  let ready = false;
-  while (Date.now() < deadline) {
-    try {
-      const { content } = await app.bridge.fileRead({ path: logPath });
-      if (
-        /LogInit: Engine is initialized|Server is ready for connections|LogNet: Server.+ready/.test(
-          content,
-        )
-      ) {
-        ready = true;
-        break;
-      }
-    } catch {
-      // log not yet created
-    }
-    await new Promise((r) => setTimeout(r, 3000));
-  }
-  emit(
-    'bootstrap-boot',
-    ready
-      ? 'initial boot reached ready'
-      : 'timed out waiting for ready (continuing; configs may already exist)',
-  );
-
-  emit('bootstrap-stop', `stopping ${unit}`);
-  try {
-    await app.bridge.systemctlAction({ unit, action: 'stop' });
-  } catch (err) {
-    emit('bootstrap-stop', `stop returned: ${(err as Error).message}`, 'stderr');
-  }
-
-  const cfgDir = `${installPath}/SquadGame/ServerConfig`;
-  const serverCfgPath = `${cfgDir}/Server.cfg`;
-  const rconCfgPath = `${cfgDir}/Rcon.cfg`;
-
-  emit('configure', `reading ${rconCfgPath}`);
-  let rconCfg = '';
-  try {
-    rconCfg = (await app.bridge.fileRead({ path: rconCfgPath })).content;
-  } catch (err) {
-    emit(
-      'configure',
-      `Rcon.cfg not found, generating minimal: ${(err as Error).message}`,
-      'stderr',
-    );
-  }
-  const rconPassword = decryptString(
-    app.encryptionKey,
-    deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
-  );
-  const rconContent = rewriteRconCfg(rconCfg, {
-    port: settings.rconPort,
-    password: rconPassword,
+  emit('container', `docker run --network host --name squad-${serverId} ${SERVER_IMAGE}`);
+  const res = await app.bridge.containerRun({
+    server_id: serverId,
+    image: SERVER_IMAGE,
+    game_port: settings.gamePort,
+    query_port: settings.queryPort,
+    beacon_port: settings.beaconPort,
+    rcon_port: settings.rconPort,
+    max_players: settings.maxPlayers,
+    tickrate: settings.tickrate,
+    multihome: settings.multihome,
+    configs_host: `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig`,
+    saved_host: `${PANEL_SAVED_ROOT}/${serverId}`,
+    depot_volume: DEPOT_VOLUME_NAME,
   });
-  await app.bridge.fileAtomicWrite({ path: rconCfgPath, content: rconContent });
-  emit('configure', 'Rcon.cfg written with panel-generated password');
-
-  emit('configure', `reading ${serverCfgPath}`);
-  let serverCfg = '';
-  try {
-    serverCfg = (await app.bridge.fileRead({ path: serverCfgPath })).content;
-  } catch {
-    serverCfg = '';
-  }
-  const serverContent = rewriteServerCfg(serverCfg, srv.displayName);
-  await app.bridge.fileAtomicWrite({ path: serverCfgPath, content: serverContent });
-  emit('configure', 'Server.cfg written');
+  emit('container', `started ${res.container_id}`);
 
   await app.db
     .update(servers)
-    .set({ status: 'ready', updatedAt: new Date() })
+    .set({
+      status: 'running',
+      containerId: res.container_id,
+      updatedAt: new Date(),
+    })
     .where(eq(servers.id, serverId));
-  emit('done', 'install complete; status=ready');
+  emit('done', 'install complete; container running');
 }
 
 export function rewriteRconCfg(existing: string, opts: { port: number; password: string }): string {
@@ -333,9 +279,6 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  // WebSocket live stream (TZ §17.6). Sends the full historical buffer on
-  // connect, then each new ProgressLine as it arrives, then a terminal
-  // {done:true} frame once the install reaches "done" or "error".
   app.get(
     '/api/v1/servers/:id/install/ws',
     {

@@ -2,23 +2,23 @@ import type { BridgeClient } from '@squad/bridge-client';
 import type { Logger } from 'pino';
 
 /**
- * Subscribe to the panel-host-bridge journalctl_follow stream for a
- * specific squad-server-{uuid} systemd unit and invoke `onLine` for
- * every line received on stdout. Returns a function to abort the tail.
+ * Subscribe to `docker logs -f` for the Squad server container via the
+ * panel-host-bridge. `name` is the container name (squad-{uuid}). Each
+ * complete line is delivered to `onLine`. Returns a function to abort.
  */
-export function tailJournal(params: {
+export function tailContainerLogs(params: {
   bridge: BridgeClient;
-  unit: string;
+  name: string;
   log: Logger;
   onLine: (line: string) => void;
 }): () => void {
-  const { bridge, unit, log, onLine } = params;
+  const { bridge, name, log, onLine } = params;
   let buffer = '';
   let aborted = false;
 
   (async () => {
     try {
-      await bridge.journalctlFollow({ unit, lines: 100 }, (frame) => {
+      await bridge.containerLogsFollow({ name, tail: 100 }, (frame) => {
         if (aborted) return;
         if (frame.stream !== 'stdout') return;
         const text = typeof frame.data === 'string' ? frame.data : String(frame.data ?? '');
@@ -32,7 +32,7 @@ export function tailJournal(params: {
       });
     } catch (err) {
       if (!aborted) {
-        log.error({ err: (err as Error).message, unit }, 'journalctl_follow ended');
+        log.error({ err: (err as Error).message, name }, 'container_logs_follow ended');
       }
     }
   })();

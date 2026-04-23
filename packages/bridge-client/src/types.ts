@@ -67,24 +67,6 @@ export interface HostMetrics {
   sampled_at: string;
 }
 
-export interface SystemctlActionParams {
-  unit: string;
-  action: 'start' | 'stop' | 'restart' | 'status' | 'is-active' | 'enable' | 'disable';
-}
-
-export interface WriteUnitParams {
-  path: string;
-  content: string;
-}
-
-export interface AptInstallParams {
-  packages: string[];
-}
-
-export interface SteamcmdRunParams {
-  args: string[];
-}
-
 export interface FileReadParams {
   path: string;
 }
@@ -106,12 +88,6 @@ export interface ProcessInfoParams {
   pid: number;
 }
 
-export interface JournalFollowParams {
-  unit: string;
-  since?: string;
-  lines?: number;
-}
-
 export interface ProcessInfoResult {
   pid: number;
   exists: boolean;
@@ -120,4 +96,49 @@ export interface ProcessInfoResult {
   cmdline?: string;
   state?: string;
   threads?: number;
+}
+
+export interface ContainerRunParams {
+  server_id: string;
+  image: string;
+  game_port: number;
+  query_port: number;
+  beacon_port: number;
+  rcon_port: number;
+  max_players?: number;
+  tickrate?: number;
+  multihome?: string | null;
+  extra_args?: string[];
+  configs_host: string;
+  saved_host: string;
+  depot_volume: string;
+  ulimit_nofile?: number;
+}
+
+export interface ContainerRunResult {
+  container_id: string;
+  status: 'started';
+}
+
+export interface ContainerControlParams {
+  name: string;
+  timeout_sec?: number;
+}
+
+export interface ContainerInspectResult {
+  name: string;
+  state: string;
+  running: boolean;
+  pid: number;
+  started_at: string;
+  finished_at: string;
+  exit_code: number;
+  image: string;
+  restart_count: number;
+  labels: Record<string, string>;
+}
+
+export interface ContainerLogsParams {
+  name: string;
+  tail?: number;
 }

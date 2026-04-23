@@ -39,7 +39,7 @@ beforeAll(async () => {
   const fakeBridge = {
     connect: async () => undefined,
     close: async () => undefined,
-    journalctlFollow: (
+    containerLogsFollow: (
       _params: unknown,
       onStream: (frame: { stream: string; data: string }) => void,
     ) => {

@@ -3,23 +3,23 @@ import { BRIDGE_SOCKET_DEFAULT } from '@squad/shared-config';
 import { v7 as uuidv7 } from 'uuid';
 import { decodeFrames, encodeFrame } from './frame.js';
 import {
-  type AptInstallParams,
   BridgeError,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStreamFrame,
+  type ContainerControlParams,
+  type ContainerInspectResult,
+  type ContainerLogsParams,
+  type ContainerRunParams,
+  type ContainerRunResult,
   type FileReadParams,
   type FileWriteParams,
   type HostInfo,
   type HostMetrics,
-  type JournalFollowParams,
   type PingResult,
   type ProcessInfoParams,
   type ProcessInfoResult,
-  type SteamcmdRunParams,
-  type SystemctlActionParams,
   type UfwRuleParams,
-  type WriteUnitParams,
 } from './types.js';
 
 export interface BridgeClientOptions {
@@ -92,20 +92,6 @@ export class BridgeClient {
   hostInfo = () => this.call<HostInfo>('host_info');
   hostMetrics = () => this.call<HostMetrics>('host_metrics');
 
-  systemctlAction = (p: SystemctlActionParams) =>
-    this.call<{ output: string; status: string }>('systemctl_action', p);
-
-  systemctlDaemonReload = () => this.call<{ status: string }>('systemctl_daemon_reload');
-
-  systemctlWriteUnit = (p: WriteUnitParams) =>
-    this.call<{ status: string }>('systemctl_write_unit', p);
-
-  systemctlReadUnit = (p: { path: string }) =>
-    this.call<{ content: string }>('systemctl_read_unit', p);
-
-  aptInstall = (p: AptInstallParams) =>
-    this.call<{ output: string; status: string }>('apt_install', p, { timeoutMs: 300_000 });
-
   fileRead = (p: FileReadParams) => this.call<{ content: string }>('file_read', p);
   fileWrite = (p: FileWriteParams) => this.call<{ status: string }>('file_write', p);
   fileAtomicWrite = (p: FileWriteParams) => this.call<{ status: string }>('file_atomic_write', p);
@@ -114,13 +100,31 @@ export class BridgeClient {
 
   processInfo = (p: ProcessInfoParams) => this.call<ProcessInfoResult>('process_info', p);
 
-  steamcmdRun = (p: SteamcmdRunParams, onStream: (frame: BridgeStreamFrame) => void) =>
-    this.call<{ exit_code: number }>('steamcmd_run', p, { onStream, timeoutMs: 3_600_000 });
+  containerRun = (p: ContainerRunParams) =>
+    this.call<ContainerRunResult>('container_run', p, { timeoutMs: 60_000 });
 
-  journalctlFollow = (p: JournalFollowParams, onStream: (frame: BridgeStreamFrame) => void) =>
-    this.call<{ exit_code: number }>('journalctl_follow', p, {
+  containerStart = (p: ContainerControlParams) =>
+    this.call<{ status: string }>('container_start', p, { timeoutMs: 30_000 });
+
+  containerStop = (p: ContainerControlParams) =>
+    this.call<{ status: string }>('container_stop', p, { timeoutMs: 120_000 });
+
+  containerRm = (p: ContainerControlParams) =>
+    this.call<{ status: string }>('container_rm', p, { timeoutMs: 30_000 });
+
+  containerInspect = (p: ContainerControlParams) =>
+    this.call<ContainerInspectResult>('container_inspect', p, { timeoutMs: 10_000 });
+
+  containerLogsFollow = (p: ContainerLogsParams, onStream: (frame: BridgeStreamFrame) => void) =>
+    this.call<{ exit_code: number }>('container_logs_follow', p, {
       onStream,
       timeoutMs: Number.POSITIVE_INFINITY,
+    });
+
+  depotUpdate = (onStream: (frame: BridgeStreamFrame) => void) =>
+    this.call<{ exit_code: number }>('depot_update', undefined, {
+      onStream,
+      timeoutMs: 3_600_000,
     });
 
   private async call<Result, Params = unknown>(
