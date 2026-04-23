@@ -2,7 +2,7 @@ import 'server-only';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { cache } from 'react';
-import { apiFetch } from './api.js';
+import { apiFetch } from './api';
 
 export const SESSION_COOKIE = '__Host-sid';
 

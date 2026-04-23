@@ -21,6 +21,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <Link href="/audit" className="block rounded px-2 py-1 hover:bg-neutral-900">
           Журнал действий
         </Link>
+        <Link href="/settings/account" className="block rounded px-2 py-1 hover:bg-neutral-900">
+          Аккаунт
+        </Link>
         <div className="pt-6 text-xs text-neutral-500">
           <div className="truncate">{me.display_name ?? me.email}</div>
           <form action="/api/v1/auth/logout" method="post">
