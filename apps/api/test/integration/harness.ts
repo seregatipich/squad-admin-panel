@@ -4,11 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
-import { createDatabaseClient, type DatabaseClient } from '@squad/db';
+import type { DatabaseClient } from '@squad/db';
+import * as schema from '@squad/db/schema';
 import { auditLog, users } from '@squad/db/schema';
 import { seedSystemRoles } from '@squad/db/seed';
 import type { RoleName } from '@squad/shared-config';
 import { and, desc, eq, gte } from 'drizzle-orm';
+import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import Redis from 'ioredis';
@@ -67,101 +69,142 @@ const TEST_SESSION_SECRET = 'a'.repeat(48);
 export const testDbUrl = HOST_DB_URL;
 export const testRedisUrl = HOST_REDIS_URL;
 
-export interface FakeBridgeOverrides {
-  ping?: () => Promise<{ version: string; hostname: string; uptime_seconds: number }>;
-  hostInfo?: () => Promise<{
+// Fake implementations of every public method on `@squad/bridge-client`
+// BridgeClient; signatures must match so routes that accept `app.bridge` work.
+// Arguments are passed as params objects (e.g. `{ path }`) and responses match
+// the shapes declared in packages/bridge-client/src/types.ts.
+export interface FakeBridge {
+  ping: () => Promise<{ pong: true; version: string; hostname: string }>;
+  hostInfo: () => Promise<{
+    hostname: string;
     os_name: string;
     os_version: string;
     kernel: string;
-    uptime_seconds: number;
+    arch: string;
+    cpu_model: string;
+    cpu_cores: number;
+    ram_total_bytes: number;
   }>;
-  hostMetrics?: () => Promise<Record<string, unknown>>;
-  fileRead?: (path: string) => Promise<Buffer>;
-  fileWrite?: (path: string, data: Buffer) => Promise<void>;
-  fileAtomicWrite?: (path: string, data: Buffer) => Promise<void>;
-  containerInspect?: (name: string) => Promise<Record<string, unknown>>;
-  containerRun?: (spec: Record<string, unknown>) => Promise<{ container_id: string }>;
-  containerStart?: (name: string) => Promise<void>;
-  containerStop?: (name: string) => Promise<void>;
-  containerRm?: (name: string) => Promise<void>;
-  containerLogsFollow?: (
-    name: string,
-    cb: (line: string, stream: 'stdout' | 'stderr') => void,
-  ) => { close(): void };
-  depotUpdate?: (cb: (line: string) => void) => { close(): void; done: Promise<number> };
-  ufwRule?: (op: string, rule: Record<string, unknown>) => Promise<void>;
-  processInfo?: (pid: number) => Promise<Record<string, unknown>>;
-}
-
-export interface FakeBridge {
-  ping: NonNullable<FakeBridgeOverrides['ping']>;
-  hostInfo: NonNullable<FakeBridgeOverrides['hostInfo']>;
-  hostMetrics: NonNullable<FakeBridgeOverrides['hostMetrics']>;
-  fileRead: NonNullable<FakeBridgeOverrides['fileRead']>;
-  fileWrite: NonNullable<FakeBridgeOverrides['fileWrite']>;
-  fileAtomicWrite: NonNullable<FakeBridgeOverrides['fileAtomicWrite']>;
-  containerInspect: NonNullable<FakeBridgeOverrides['containerInspect']>;
-  containerRun: NonNullable<FakeBridgeOverrides['containerRun']>;
-  containerStart: NonNullable<FakeBridgeOverrides['containerStart']>;
-  containerStop: NonNullable<FakeBridgeOverrides['containerStop']>;
-  containerRm: NonNullable<FakeBridgeOverrides['containerRm']>;
-  containerLogsFollow: NonNullable<FakeBridgeOverrides['containerLogsFollow']>;
-  depotUpdate: NonNullable<FakeBridgeOverrides['depotUpdate']>;
-  ufwRule: NonNullable<FakeBridgeOverrides['ufwRule']>;
-  processInfo: NonNullable<FakeBridgeOverrides['processInfo']>;
+  hostMetrics: () => Promise<{
+    cpu_percent: number;
+    ram_used_bytes: number;
+    ram_total_bytes: number;
+    disk_used_bytes: number;
+    disk_total_bytes: number;
+    net_rx_bytes_per_sec: number;
+    net_tx_bytes_per_sec: number;
+    sampled_at: string;
+  }>;
+  fileRead: (p: { path: string }) => Promise<{ content: string }>;
+  fileWrite: (p: { path: string; content: string; mode?: number }) => Promise<{ status: string }>;
+  fileAtomicWrite: (p: {
+    path: string;
+    content: string;
+    mode?: number;
+  }) => Promise<{ status: string }>;
+  containerInspect: (p: { name: string }) => Promise<{
+    name: string;
+    state: string;
+    running: boolean;
+    pid: number;
+    started_at: string;
+    finished_at: string;
+    exit_code: number;
+    image: string;
+    restart_count: number;
+    labels: Record<string, string>;
+  }>;
+  containerRun: (
+    p: Record<string, unknown>,
+  ) => Promise<{ container_id: string; status: 'started' }>;
+  containerStart: (p: { name: string }) => Promise<{ status: string }>;
+  containerStop: (p: { name: string; timeout_sec?: number }) => Promise<{ status: string }>;
+  containerRm: (p: { name: string }) => Promise<{ status: string }>;
+  containerLogsFollow: (
+    p: { name: string; tail?: number },
+    onStream: (frame: { id: string; stream: 'stdout' | 'stderr' | 'event'; data: unknown }) => void,
+  ) => Promise<{ exit_code: number }>;
+  depotUpdate: (
+    onStream: (frame: { id: string; stream: 'stdout' | 'stderr' | 'event'; data: unknown }) => void,
+  ) => Promise<{ exit_code: number }>;
+  ufwRule: (p: {
+    action: 'add' | 'remove';
+    port: number;
+    proto: 'tcp' | 'udp';
+    comment?: string;
+  }) => Promise<{ output: string; status: string }>;
+  processInfo: (p: { pid: number }) => Promise<{ pid: number; exists: boolean }>;
+  connect(): Promise<void>;
   close(): Promise<void>;
+  /** Overridable in-memory file store; routes use /api/v1/servers/:id/configs
+   *  read/write pathways that hit this map via `fileRead`/`fileAtomicWrite`. */
   files: Map<string, Buffer>;
 }
 
+export type FakeBridgeOverrides = Partial<FakeBridge>;
+
 export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge {
   const files = new Map<string, Buffer>();
-  return {
-    ping:
-      overrides.ping ??
-      (async () => ({ version: 'test', hostname: 'test-host', uptime_seconds: 1 })),
-    hostInfo:
-      overrides.hostInfo ??
-      (async () => ({ os_name: 'Ubuntu', os_version: '24.04', kernel: '6.8', uptime_seconds: 42 })),
-    hostMetrics:
-      overrides.hostMetrics ??
-      (async () => ({
-        cpu_percent: 1,
-        mem_used: 100,
-        mem_total: 1000,
-        disk_used: 10,
-        disk_total: 100,
-      })),
-    fileRead:
-      overrides.fileRead ??
-      (async (p: string) => {
-        const buf = files.get(p);
-        if (!buf) throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
-        return buf;
-      }),
-    fileWrite:
-      overrides.fileWrite ??
-      (async (p: string, data: Buffer) => {
-        files.set(p, Buffer.from(data));
-      }),
-    fileAtomicWrite:
-      overrides.fileAtomicWrite ??
-      (async (p: string, data: Buffer) => {
-        files.set(p, Buffer.from(data));
-      }),
-    containerInspect:
-      overrides.containerInspect ??
-      (async () => ({ State: { Status: 'running', Running: true }, Config: {}, Id: 'fake' })),
-    containerRun: overrides.containerRun ?? (async () => ({ container_id: 'fake-container-id' })),
-    containerStart: overrides.containerStart ?? (async () => undefined),
-    containerStop: overrides.containerStop ?? (async () => undefined),
-    containerRm: overrides.containerRm ?? (async () => undefined),
-    containerLogsFollow: overrides.containerLogsFollow ?? (() => ({ close() {} })),
-    depotUpdate: overrides.depotUpdate ?? (() => ({ close() {}, done: Promise.resolve(0) })),
-    ufwRule: overrides.ufwRule ?? (async () => undefined),
-    processInfo: overrides.processInfo ?? (async (pid: number) => ({ pid, alive: true })),
-    async close() {},
+  const base: FakeBridge = {
     files,
+    async connect() {},
+    async close() {},
+    ping: async () => ({ pong: true, version: 'test', hostname: 'test-host' }),
+    hostInfo: async () => ({
+      hostname: 'test-host',
+      os_name: 'Ubuntu',
+      os_version: '24.04',
+      kernel: '6.8',
+      arch: 'x86_64',
+      cpu_model: 'test-cpu',
+      cpu_cores: 8,
+      ram_total_bytes: 16 * 1024 ** 3,
+    }),
+    hostMetrics: async () => ({
+      cpu_percent: 1,
+      ram_used_bytes: 1024 ** 3,
+      ram_total_bytes: 16 * 1024 ** 3,
+      disk_used_bytes: 10 * 1024 ** 3,
+      disk_total_bytes: 100 * 1024 ** 3,
+      net_rx_bytes_per_sec: 0,
+      net_tx_bytes_per_sec: 0,
+      sampled_at: new Date().toISOString(),
+    }),
+    fileRead: async ({ path }) => {
+      const buf = files.get(path);
+      if (!buf) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+      return { content: buf.toString('utf-8') };
+    },
+    fileWrite: async ({ path, content }) => {
+      files.set(path, Buffer.from(content, 'utf-8'));
+      return { status: 'ok' };
+    },
+    fileAtomicWrite: async ({ path, content }) => {
+      files.set(path, Buffer.from(content, 'utf-8'));
+      return { status: 'ok' };
+    },
+    containerInspect: async ({ name }) => ({
+      name,
+      state: 'running',
+      running: true,
+      pid: 1,
+      started_at: new Date().toISOString(),
+      finished_at: '',
+      exit_code: 0,
+      image: 'squad-server:latest',
+      restart_count: 0,
+      labels: {},
+    }),
+    containerRun: async () => ({ container_id: 'fake-container-id', status: 'started' }),
+    containerStart: async () => ({ status: 'ok' }),
+    containerStop: async () => ({ status: 'ok' }),
+    containerRm: async () => ({ status: 'ok' }),
+    containerLogsFollow: async () => ({ exit_code: 0 }),
+    depotUpdate: async () => ({ exit_code: 0 }),
+    ufwRule: async () => ({ output: '', status: 'ok' }),
+    processInfo: async ({ pid }) => ({ pid, exists: true }),
   };
+  return { ...base, ...overrides, files };
 }
 
 interface CreatedSchema {
@@ -250,7 +293,10 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   const schemaInfo = await createIsolatedSchema();
   await runMigrations(schemaInfo.url);
 
-  const db = createDatabaseClient(schemaInfo.url);
+  // Hand-build the drizzle client with a tighter connection pool so a
+  // parallel-run test suite doesn't overwhelm the shared live Postgres.
+  const sql = postgres(schemaInfo.url, { max: 2, onnotice: () => undefined });
+  const db = drizzlePostgres(sql, { schema }) as unknown as DatabaseClient;
   const redis = new Redis(HOST_REDIS_URL);
   const bridge = opts.bridge ?? makeFakeBridge();
 
@@ -342,6 +388,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     async cleanup() {
       await app.close().catch(() => undefined);
       await redis.quit().catch(() => undefined);
+      await sql.end({ timeout: 5 }).catch(() => undefined);
       await schemaInfo.drop().catch(() => undefined);
     },
   };

@@ -111,7 +111,7 @@ describe.skipIf(skip.skip)('config versioning: history + diff + blame + restore'
       `/api/v1/servers/${serverId}/configs/${filename}/history`,
     );
     expect(after.items.length).toBe(baseline + 1);
-    expect(after.items[0]!.message).toBe('first e2e write');
+    expect(after.items[0]?.message).toBe('first e2e write');
   });
 
   it('PUT #2 creates second version', async () => {
@@ -131,8 +131,8 @@ describe.skipIf(skip.skip)('config versioning: history + diff + blame + restore'
       `/api/v1/servers/${serverId}/configs/${filename}/history`,
     );
     expect(hist.items.length).toBe(baseline + 2);
-    expect(hist.items[0]!.id).toBe(v2Id);
-    expect(hist.items[1]!.id).toBe(v1Id);
+    expect(hist.items[0]?.id).toBe(v2Id);
+    expect(hist.items[1]?.id).toBe(v1Id);
   });
 
   it('no-op write does NOT create a new version', async () => {
@@ -170,8 +170,8 @@ describe.skipIf(skip.skip)('config versioning: history + diff + blame + restore'
     const r = await api.json<BlameResp>(`/api/v1/servers/${serverId}/configs/${filename}/blame`);
     const marker = r.lines.find((l) => l.text.includes(`v2-marker-${suffix}`));
     expect(marker).toBeDefined();
-    expect(marker!.version_id).toBe(v2Id);
-    if (marker!.author_user_id) expect(r.authors[marker!.author_user_id]).toBeTruthy();
+    expect(marker?.version_id).toBe(v2Id);
+    if (marker?.author_user_id) expect(r.authors[marker?.author_user_id]).toBeTruthy();
   });
 
   it('POST /restore creates a NEW version with v1 content (non-destructive)', async () => {
@@ -198,7 +198,7 @@ describe.skipIf(skip.skip)('config versioning: history + diff + blame + restore'
     expect(hist.items.length).toBeGreaterThanOrEqual(baseline + 3);
     expect(hist.items.find((v) => v.id === v1Id)).toBeDefined(); // history preserved
     expect(hist.items.find((v) => v.id === v2Id)).toBeDefined();
-    expect(hist.items[0]!.message).toBe('e2e rollback');
+    expect(hist.items[0]?.message).toBe('e2e rollback');
   });
 
   it('history is append-only — DB trigger rejects UPDATE/DELETE', async () => {
