@@ -1,0 +1,37 @@
+import { sql } from 'drizzle-orm';
+import { bigint, index, inet, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+
+export const players = pgTable(
+  'players',
+  {
+    steamId64: bigint('steam_id64', { mode: 'bigint' }).primaryKey().notNull(),
+    canonicalName: text('canonical_name').notNull(),
+    canonicalNameNormalized: text('canonical_name_normalized').notNull(),
+    eosId: text('eos_id'),
+    battleEyeGuid: text('battle_eye_guid'),
+    lastKnownIp: inet('last_known_ip'),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true, mode: 'date' })
+      .defaultNow()
+      .notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'date' })
+      .defaultNow()
+      .notNull(),
+    totalTimePlayedSeconds: bigint('total_time_played_seconds', { mode: 'bigint' })
+      .notNull()
+      .default(0n),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  },
+  (table) => ({
+    eosIdUniqueIdx: uniqueIndex('players_eos_id_unique_idx')
+      .on(table.eosId)
+      .where(sql`eos_id IS NOT NULL`),
+    canonicalNameNormalizedIdx: index('players_canonical_name_normalized_idx').on(
+      table.canonicalNameNormalized,
+    ),
+    lastSeenAtIdx: index('players_last_seen_at_idx').on(table.lastSeenAt),
+  }),
+);
+
+export type PlayerRow = typeof players.$inferSelect;
+export type NewPlayer = typeof players.$inferInsert;

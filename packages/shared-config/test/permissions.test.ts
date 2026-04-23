@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  PERMISSION_KEYS,
-  SYSTEM_ROLE_PERMISSIONS,
-  ROLE_CLEARANCE,
   isPermissionKey,
+  PERMISSION_KEYS,
+  ROLE_CLEARANCE,
+  SYSTEM_ROLE_PERMISSIONS,
 } from '../src/permissions.js';
 
 describe('permission registry', () => {

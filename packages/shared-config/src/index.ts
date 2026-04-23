@@ -1,2 +1,2 @@
-export * from './permissions.js';
 export * from './bridge-methods.js';
+export * from './permissions.js';

@@ -34,9 +34,9 @@ describe('event envelope schema', () => {
   });
 
   it('rejects envelope with unknown event type', () => {
-    expect(
-      eventEnvelope.safeParse({ ...baseEnvelope, type: 'player.teleported' }).success,
-    ).toBe(false);
+    expect(eventEnvelope.safeParse({ ...baseEnvelope, type: 'player.teleported' }).success).toBe(
+      false,
+    );
   });
 
   it('rejects version=0 (must be positive int)', () => {

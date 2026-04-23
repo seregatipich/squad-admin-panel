@@ -1,0 +1,14 @@
+[Unit]
+Description=panel-host-bridge control socket (squad-admin-panel)
+
+[Socket]
+ListenStream=/run/panel-host-bridge.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=panel
+RemoveOnStop=yes
+PassCredentials=yes
+Accept=no
+
+[Install]
+WantedBy=sockets.target

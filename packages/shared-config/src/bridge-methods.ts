@@ -49,4 +49,5 @@ export const SQUAD_APP_ID = 403240;
 export const SQUAD_SERVERS_ROOT = '/opt/squad-servers';
 export const SQUAD_UNIT_PREFIX = 'squad-server-';
 export const SQUAD_UNIT_REGEX = /^squad-server-[a-f0-9-]{36}\.service$/;
-export const SQUAD_INSTALL_PATH_REGEX = /^\+force_install_dir \/opt\/squad-servers\/[a-f0-9-]{36}\/?$/;
+export const SQUAD_INSTALL_PATH_REGEX =
+  /^\+force_install_dir \/opt\/squad-servers\/[a-f0-9-]{36}\/?$/;

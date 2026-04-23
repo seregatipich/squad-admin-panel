@@ -82,13 +82,7 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<RoleName, readonly PermissionKey[]>
     'host:metrics',
     'org:view',
   ],
-  Viewer: [
-    'server:view',
-    'player:view',
-    'audit:view',
-    'host:view',
-    'org:view',
-  ],
+  Viewer: ['server:view', 'player:view', 'audit:view', 'host:view', 'org:view'],
 };
 
 export const SYSTEM_ROLE_CLEARANCE: Record<RoleName, number> = {

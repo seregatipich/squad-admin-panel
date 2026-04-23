@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./schema": "./src/schema/index.ts"
+    "./schema": "./src/schema/index.ts",
+    "./seed": "./src/seed/system-roles.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -18,11 +19,13 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
+    "@squad/shared-config": "workspace:*",
     "drizzle-orm": "^0.45.0",
     "postgres": "^3.4.5",
     "uuid": "^11.0.3"
   },
   "devDependencies": {
+    "@types/node": "^22.10.1",
     "@types/uuid": "^10.0.0",
     "drizzle-kit": "^0.30.0",
     "tsx": "^4.19.2",

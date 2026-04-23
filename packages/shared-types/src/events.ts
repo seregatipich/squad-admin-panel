@@ -57,7 +57,10 @@ export type EventEnvelope = z.infer<typeof eventEnvelope>;
 export const playerConnectedPayload = z
   .object({
     steam_id64: z.string().regex(/^\d{17}$/),
-    eos_id: z.string().regex(/^[a-f0-9]{32}$/).nullable(),
+    eos_id: z
+      .string()
+      .regex(/^[a-f0-9]{32}$/)
+      .nullable(),
     name: z.string().min(1).max(128),
     ip: z.string().nullable(),
   })
@@ -67,7 +70,10 @@ export type PlayerConnectedPayload = z.infer<typeof playerConnectedPayload>;
 export const playerDisconnectedPayload = z
   .object({
     steam_id64: z.string().regex(/^\d{17}$/),
-    eos_id: z.string().regex(/^[a-f0-9]{32}$/).nullable(),
+    eos_id: z
+      .string()
+      .regex(/^[a-f0-9]{32}$/)
+      .nullable(),
     reason: z.string().nullable(),
   })
   .strict();
@@ -79,7 +85,10 @@ export const rconPlayersPolledPayload = z
       z
         .object({
           steam_id64: z.string().regex(/^\d{17}$/),
-          eos_id: z.string().regex(/^[a-f0-9]{32}$/).nullable(),
+          eos_id: z
+            .string()
+            .regex(/^[a-f0-9]{32}$/)
+            .nullable(),
           name: z.string().min(1).max(128),
           team_id: z.number().int().nullable(),
           squad_id: z.number().int().nullable(),

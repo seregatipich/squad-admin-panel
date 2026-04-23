@@ -28,3 +28,4 @@ docker/squad-mock-depot/content/
 
 # Experiment artifacts outside repo path should never appear here, but guard.
 /squad-experiment/
+*.tsbuildinfo

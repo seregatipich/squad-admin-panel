@@ -1,0 +1,13 @@
+{
+  "name": "@squad/bridge",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "go build -trimpath -ldflags='-s -w' -o bin/panel-host-bridge ./cmd/panel-host-bridge",
+    "test": "go test -race -count=1 ./...",
+    "test:unit": "go test -race -count=1 ./internal/...",
+    "lint": "go vet ./... && gofmt -l -s .",
+    "typecheck": "go build -o /dev/null ./...",
+    "clean": "rm -rf bin"
+  }
+}

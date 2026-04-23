@@ -41,7 +41,7 @@
       },
       "suspicious": {
         "noExplicitAny": "error",
-        "noConsoleLog": "off"
+        "noConsole": "off"
       },
       "complexity": {
         "noForEach": "off"
