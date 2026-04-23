@@ -1,0 +1,37 @@
+{
+  "name": "squad-admin-panel",
+  "version": "0.1.0-p0",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:unit": "turbo run test:unit",
+    "test:integration": "turbo run test:integration",
+    "test:e2e": "turbo run test:e2e",
+    "db:generate": "pnpm --filter @squad/db generate",
+    "db:migrate": "pnpm --filter @squad/db migrate",
+    "db:studio": "pnpm --filter @squad/db studio",
+    "bridge:build": "pnpm --filter @squad/bridge build",
+    "bridge:test": "pnpm --filter @squad/bridge test",
+    "clean": "turbo run clean && rm -rf node_modules .turbo",
+    "verify:audit-chain": "tsx scripts/verify-audit-chain.ts",
+    "prepare": "lefthook install || true"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.0",
+    "lefthook": "^1.8.2",
+    "tsx": "^4.19.2",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,20 @@
+pre-commit:
+  parallel: true
+  commands:
+    biome-check:
+      glob: "*.{ts,tsx,js,jsx,json,css}"
+      run: pnpm exec biome check --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+    go-fmt:
+      glob: "apps/bridge/**/*.go"
+      run: |
+        cd apps/bridge && gofmt -l -s . && go vet ./...
+    gitleaks:
+      run: gitleaks protect --staged --no-banner --redact || true
+
+pre-push:
+  parallel: false
+  commands:
+    typecheck:
+      run: pnpm turbo run typecheck
+    test:
+      run: pnpm turbo run test
