@@ -2,7 +2,7 @@
 Description=panel-host-bridge privileged daemon (squad-admin-panel)
 Documentation=https://github.com/breaking-squad/squad-admin-panel
 Requires=panel-host-bridge.socket
-After=panel-host-bridge.socket network.target
+After=panel-host-bridge.socket network.target docker.service
 
 [Service]
 Type=notify
@@ -40,10 +40,10 @@ SystemCallFilter=~@debug @mount @swap @reboot @obsolete @cpu-emulation @raw-io
 SystemCallErrorNumber=EPERM
 
 LogsDirectory=panel-host-bridge
-ReadWritePaths=/opt/squad-servers /var/log/panel-host-bridge /var/lib/apt /var/cache/apt /var/lib/dpkg /etc/systemd/system /etc/squad-server /etc/ufw
+ReadWritePaths=/var/lib/squad-panel /var/log/panel-host-bridge /etc/ufw /run/docker.sock
 DeviceAllow=
 
-CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_FSETID CAP_SETUID CAP_SETGID CAP_SYS_ADMIN CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
 AmbientCapabilities=
 
 [Install]

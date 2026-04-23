@@ -24,7 +24,6 @@ import (
 
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/auth"
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/handlers"
-	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/pkgmgr"
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/rpc"
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/runner"
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/sysd"
@@ -51,11 +50,8 @@ func main() {
 	_, _ = daemon.SdNotify(false, daemon.SdNotifyReady)
 
 	disp := &handlers.Dispatcher{
-		APT:     &pkgmgr.APT{R: runner.Real{}},
-		Systemd: &sysd.Client{R: runner.Real{}},
-		UFW:     &sysd.UFW{R: runner.Real{}},
-		Steam:   &runner.SteamCMD{R: runner.Real{}},
-		R:       runner.Real{},
+		UFW:    &sysd.UFW{R: runner.Real{}},
+		Docker: runner.NewDocker(runner.Real{}),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -169,9 +165,9 @@ func serveConn(ctx context.Context, log *slog.Logger, conn *net.UnixConn, disp *
 	}
 
 	// Each request runs in its own goroutine so a long-running streaming
-	// method (journalctl_follow, steamcmd_run) cannot block other requests
-	// that arrive on the same connection while it streams. writeMu keeps
-	// the wire output frame-aligned when multiple calls interleave.
+	// method (container_logs_follow, depot_update) cannot block other
+	// requests that arrive on the same connection while it streams. writeMu
+	// keeps the wire output frame-aligned when multiple calls interleave.
 	reader := bufio.NewReader(conn)
 	var inflight sync.WaitGroup
 	defer inflight.Wait()

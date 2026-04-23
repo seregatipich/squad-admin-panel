@@ -19,7 +19,7 @@ const MaxReadBytes = 10 << 20
 // Read returns the contents of p, subject to validation. Only files
 // under the allowed roots may be read.
 func Read(p string) ([]byte, error) {
-	_, err := validate.Path(p, validate.SquadInstallRoot, validate.SystemdUnitDir, validate.SquadEnvDir)
+	_, err := validate.Path(p, validate.PanelDataRoot, "/opt/squad-servers")
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,7 @@ func Read(p string) ([]byte, error) {
 // Write writes content to p with the given mode, after validating the path.
 // Parent directories must already exist (we do not mkdir -p).
 func Write(p string, content []byte, mode os.FileMode) error {
-	_, err := validate.Path(p, validate.SquadInstallRoot, validate.SystemdUnitDir, validate.SquadEnvDir)
+	_, err := validate.Path(p, validate.PanelDataRoot, "/opt/squad-servers")
 	if err != nil {
 		return err
 	}
@@ -61,7 +61,7 @@ func Write(p string, content []byte, mode os.FileMode) error {
 // success, the previous contents are preserved in ".bak".
 // This matches what the TZ §2.1 bridge whitelist promises.
 func AtomicWrite(p string, content []byte, mode os.FileMode) error {
-	_, err := validate.Path(p, validate.SquadInstallRoot, validate.SystemdUnitDir, validate.SquadEnvDir)
+	_, err := validate.Path(p, validate.PanelDataRoot, "/opt/squad-servers")
 	if err != nil {
 		return err
 	}
