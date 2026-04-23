@@ -180,6 +180,12 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         </div>
         <div className="flex items-center gap-3">
           <Link
+            href={`/servers/${server.id}/configs`}
+            className="text-xs text-sky-400 hover:text-sky-300"
+          >
+            Конфиги →
+          </Link>
+          <Link
             href={`/servers/${server.id}/events`}
             className="text-xs text-sky-400 hover:text-sky-300"
           >
@@ -267,13 +273,13 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         <LogConsole
           lines={logs}
           height="32rem"
-          title="Журнал сервера (systemd)"
+          title="Лог контейнера (docker logs)"
           live={logsLive}
           emptyText={
             !logsEnabled
-              ? `Сервер в состоянии "${server.status}" — systemd-юнит ещё не установлен. Запустите установку, чтобы журнал появился.`
+              ? `Сервер в состоянии "${server.status}" — контейнер ещё не создан. Запустите установку, чтобы журнал появился.`
               : server.status === 'running' || server.status === 'starting'
-                ? 'Подключение к журналу…'
+                ? 'Подключение к логу контейнера…'
                 : 'Сервер остановлен — здесь будут последние 200 строк после запуска.'
           }
         />

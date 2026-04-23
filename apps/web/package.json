@@ -12,6 +12,7 @@
     "clean": "rm -rf .next .turbo"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@squad/shared-config": "workspace:*",
     "@squad/shared-types": "workspace:*",
     "next": "^15.1.0",
