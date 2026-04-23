@@ -33,9 +33,9 @@ describe('computeBlame', () => {
       v('v2', 'bob', '2026-04-02T00:00:00Z', 'keep\nnew-line'),
     ];
     const result = computeBlame(versions);
-    expect(result[0]!.version_id).toBe('v1');
-    expect(result[1]!.version_id).toBe('v2');
-    expect(result[1]!.author_user_id).toBe('bob');
+    expect(result[0]?.version_id).toBe('v1');
+    expect(result[1]?.version_id).toBe('v2');
+    expect(result[1]?.author_user_id).toBe('bob');
   });
 
   it('drops deleted lines from the output', () => {
@@ -54,10 +54,10 @@ describe('computeBlame', () => {
       v('v2', 'bob', '2026-04-02T00:00:00Z', 'one\nTWO\nthree'),
     ];
     const result = computeBlame(versions);
-    expect(result[0]!.version_id).toBe('v1');
-    expect(result[1]!.version_id).toBe('v2');
-    expect(result[1]!.author_user_id).toBe('bob');
-    expect(result[2]!.version_id).toBe('v1');
+    expect(result[0]?.version_id).toBe('v1');
+    expect(result[1]?.version_id).toBe('v2');
+    expect(result[1]?.author_user_id).toBe('bob');
+    expect(result[2]?.version_id).toBe('v1');
   });
 
   it('tip is attributed to the most recent author that touched each line across three versions', () => {
@@ -67,9 +67,9 @@ describe('computeBlame', () => {
       v('v3', 'carol', '2026-04-03T00:00:00Z', 'x\nY\nZZ'),
     ];
     const result = computeBlame(versions);
-    expect(result[0]!.author_user_id).toBe('alice');
-    expect(result[1]!.author_user_id).toBe('bob');
-    expect(result[2]!.author_user_id).toBe('carol');
+    expect(result[0]?.author_user_id).toBe('alice');
+    expect(result[1]?.author_user_id).toBe('bob');
+    expect(result[2]?.author_user_id).toBe('carol');
   });
 
   it('sorts unordered input by created_at before walking the diff', () => {

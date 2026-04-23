@@ -33,7 +33,7 @@ describe('writeAuditEntry', () => {
       context: { source: 'unit-test' },
     });
     expect(captured).toHaveLength(1);
-    const row = captured[0]!.values;
+    const row = captured[0]?.values;
     expect(row.actorUserId).toBe('u-1');
     expect(row.actorIp).toBe('10.0.0.1');
     expect(row.actorKind).toBe('user');
@@ -54,7 +54,7 @@ describe('writeAuditEntry', () => {
       targetId: null,
       context: {},
     });
-    expect(captured[0]!.values.actorKind).toBe('system');
+    expect(captured[0]?.values.actorKind).toBe('system');
   });
 
   it('maps undefined before/after to null', async () => {
@@ -67,8 +67,8 @@ describe('writeAuditEntry', () => {
       targetId: 'id',
       context: {},
     });
-    expect(captured[0]!.values.beforeSnapshot).toBeNull();
-    expect(captured[0]!.values.afterSnapshot).toBeNull();
+    expect(captured[0]?.values.beforeSnapshot).toBeNull();
+    expect(captured[0]?.values.afterSnapshot).toBeNull();
   });
 
   it('preserves object before/after snapshots', async () => {
@@ -85,8 +85,8 @@ describe('writeAuditEntry', () => {
       after,
       context: {},
     });
-    expect(captured[0]!.values.beforeSnapshot).toEqual(before);
-    expect(captured[0]!.values.afterSnapshot).toEqual(after);
+    expect(captured[0]?.values.beforeSnapshot).toEqual(before);
+    expect(captured[0]?.values.afterSnapshot).toEqual(after);
   });
 
   it('fills rowHash with an empty buffer (trigger computes the real value)', async () => {
@@ -99,7 +99,7 @@ describe('writeAuditEntry', () => {
       targetId: null,
       context: {},
     });
-    const rowHash = captured[0]!.values.rowHash as Buffer;
+    const rowHash = captured[0]?.values.rowHash as Buffer;
     expect(Buffer.isBuffer(rowHash)).toBe(true);
     expect(rowHash.byteLength).toBe(0);
   });
@@ -114,9 +114,9 @@ describe('writeAuditEntry', () => {
       targetId: null,
       context: {},
     });
-    expect(captured[0]!.values.orgId).toBeNull();
-    expect(captured[0]!.values.statusCode).toBeNull();
-    expect(captured[0]!.values.durationMs).toBeNull();
+    expect(captured[0]?.values.orgId).toBeNull();
+    expect(captured[0]?.values.statusCode).toBeNull();
+    expect(captured[0]?.values.durationMs).toBeNull();
   });
 
   it('passes statusCode/durationMs/orgId through when provided', async () => {
@@ -132,7 +132,7 @@ describe('writeAuditEntry', () => {
       durationMs: 12,
       orgId: 'org-1',
     });
-    const row = captured[0]!.values;
+    const row = captured[0]?.values;
     expect(row.statusCode).toBe(403);
     expect(row.durationMs).toBe(12);
     expect(row.orgId).toBe('org-1');

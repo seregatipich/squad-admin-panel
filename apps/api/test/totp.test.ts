@@ -93,7 +93,7 @@ describe('backup codes', () => {
 
   it('consumeBackupCode is case-insensitive and trims whitespace', async () => {
     const { plainCodes, hashedCodes } = await generateBackupCodes();
-    const { consumed } = await consumeBackupCode(` ${plainCodes[1]!.toLowerCase()} `, hashedCodes);
+    const { consumed } = await consumeBackupCode(` ${plainCodes[1]?.toLowerCase()} `, hashedCodes);
     expect(consumed).toBe(true);
   });
 
