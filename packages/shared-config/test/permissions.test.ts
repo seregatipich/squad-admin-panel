@@ -17,9 +17,9 @@ describe('permission registry', () => {
     }
   });
 
-  it('Viewer only gets *:view permissions', () => {
+  it('Viewer only gets read-only permissions (view / history segments)', () => {
     for (const key of SYSTEM_ROLE_PERMISSIONS.Viewer) {
-      expect(key.split(':')[1]).toMatch(/view/);
+      expect(key).toMatch(/(^|:)(view|history)(:|$)/);
     }
   });
 
