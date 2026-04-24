@@ -52,20 +52,64 @@ func Read(p string) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
+// mkdirAllWithMode is like os.MkdirAll but re-applies `perm` to every
+// path segment it created. os.MkdirAll honours the process umask when
+// creating directories, and the panel-host-bridge systemd unit runs
+// with UMask=0077 — which would otherwise leave configs/ at 0700 so
+// Squad (uid 1001) cannot read the .cfg files bind-mounted into its
+// container.
+func mkdirAllWithMode(p string, perm os.FileMode) error {
+	if err := os.MkdirAll(p, perm); err != nil {
+		return err
+	}
+	// Walk upward and chmod each segment that lies under the panel root;
+	// stop at the first one that already has the right permissions.
+	segments := []string{}
+	cur := p
+	for cur != "/" && cur != "." {
+		segments = append(segments, cur)
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
+	}
+	for _, seg := range segments {
+		info, err := os.Stat(seg)
+		if err != nil {
+			continue
+		}
+		if info.Mode().Perm() == perm {
+			break
+		}
+		if err := os.Chmod(seg, perm); err != nil {
+			// Not fatal — Squad only needs the leaf + one level up to be
+			// readable. Stop trying higher up the tree.
+			break
+		}
+	}
+	return nil
+}
+
 // Write writes content atomically-ish (no rename); creates parent dirs
-// up through the allowed root as needed.
+// up through the allowed root as needed. A trailing os.Chmod bypasses
+// the process umask so Squad (uid 1001) can read what the bridge (root,
+// UMask=0077) writes.
 func Write(p string, content []byte, mode os.FileMode) error {
 	_, err := validate.Path(p, writableRoots...)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := mkdirAllWithMode(filepath.Dir(p), 0o755); err != nil {
 		return fmt.Errorf("mkdir parent: %w", err)
 	}
 	if len(content) > MaxReadBytes {
 		return fmt.Errorf("%w: content exceeds %d-byte cap", validate.ErrForbidden, MaxReadBytes)
 	}
-	return os.WriteFile(p, content, mode)
+	if err := os.WriteFile(p, content, mode); err != nil {
+		return err
+	}
+	return os.Chmod(p, mode)
 }
 
 func AtomicWrite(p string, content []byte, mode os.FileMode) error {
@@ -74,7 +118,7 @@ func AtomicWrite(p string, content []byte, mode os.FileMode) error {
 		return err
 	}
 	dir := filepath.Dir(p)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := mkdirAllWithMode(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir parent: %w", err)
 	}
 	if len(content) > MaxReadBytes {
@@ -98,6 +142,12 @@ func AtomicWrite(p string, content []byte, mode os.FileMode) error {
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close: %w", err)
+	}
+	// Chmod explicitly — O_CREAT honours UMask, so the file we just made
+	// is probably 0600 even though `mode` was 0644.
+	if err := os.Chmod(newPath, mode); err != nil {
+		_ = os.Remove(newPath)
+		return fmt.Errorf("chmod new: %w", err)
 	}
 
 	if _, err := os.Stat(p); err == nil {
