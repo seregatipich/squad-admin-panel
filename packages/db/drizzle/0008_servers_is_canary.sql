@@ -1,0 +1,1 @@
+ALTER TABLE "servers" ADD COLUMN "is_canary" boolean DEFAULT false NOT NULL;
