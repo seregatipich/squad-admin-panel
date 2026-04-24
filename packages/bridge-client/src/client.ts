@@ -12,6 +12,7 @@ import {
   type ContainerLogsParams,
   type ContainerRunParams,
   type ContainerRunResult,
+  type ContainerStatsResult,
   type FileReadParams,
   type FileWriteParams,
   type HostInfo,
@@ -114,6 +115,9 @@ export class BridgeClient {
 
   containerInspect = (p: ContainerControlParams) =>
     this.call<ContainerInspectResult>('container_inspect', p, { timeoutMs: 10_000 });
+
+  containerStats = (p: ContainerControlParams) =>
+    this.call<ContainerStatsResult>('container_stats', p, { timeoutMs: 10_000 });
 
   containerLogsFollow = (p: ContainerLogsParams, onStream: (frame: BridgeStreamFrame) => void) =>
     this.call<{ exit_code: number }>('container_logs_follow', p, {

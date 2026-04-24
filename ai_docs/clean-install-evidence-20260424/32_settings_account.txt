@@ -1,0 +1,28 @@
+SQUAD ADMIN PANEL
+Дашборд
+Серверы
+Игроки
+Журнал действий
+Аккаунт
+Panel Owner
+Выйти
+Аккаунт
+ПРОФИЛЬ
+Email
+owner@squad-panel.lan
+Имя
+Panel Owner
+Clearance
+1000
+Permissions
+27 ключей
+ДВУХФАКТОРНАЯ АУТЕНТИФИКАЦИЯ (TOTP)
+
+Добавьте ещё один фактор для входа: Google Authenticator, Aegis, 1Password, любое TOTP-приложение.
+
+Подключить 2FA
+
+Отключить 2FA (нужен пароль для подтверждения):
+
+Отключить
+Выйти из панели

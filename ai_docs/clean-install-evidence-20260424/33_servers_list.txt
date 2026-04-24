@@ -1,0 +1,26 @@
+SQUAD ADMIN PANEL
+Дашборд
+Серверы
+Игроки
+Журнал действий
+Аккаунт
+Panel Owner
+Выйти
+Серверы
++ Установить новый
+ALL
+RUNNING
+STARTING
+STOPPED
+READY
+FAILED
+INSTALLING
+PENDING
+	ИМЯ	ИГРОКОВ	RCON	ПОСЛЕДНИЙ ОПРОС	ДЕЙСТВИЯ
+	Clean Install Verification Server
+clean-install-01
+	—	—	—	
+▶
+■
+↻
+открыть

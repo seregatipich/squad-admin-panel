@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -10,6 +10,24 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [needTotp, setNeedTotp] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const res = await fetch('/api/v1/me', { credentials: 'include' });
+      if (res.ok) {
+        window.location.href = '/dashboard';
+        return;
+      }
+      if (res.status === 401) {
+        await fetch('/api/v1/auth/logout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+          credentials: 'include',
+        });
+      }
+    })();
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

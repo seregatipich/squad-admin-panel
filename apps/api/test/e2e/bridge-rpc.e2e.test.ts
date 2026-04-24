@@ -7,10 +7,22 @@
  * Go daemon to be running on the host (sgid-on-panel-group access to
  * /run/panel-host-bridge.sock).
  */
+import { readdirSync } from 'node:fs';
 import { BridgeClient } from '@squad/bridge-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const SOCKET = '/run/panel-host-bridge.sock';
+const CONFIGS_ROOT = '/var/lib/squad-panel/configs';
+
+function pickExistingServerUuid(): string | null {
+  try {
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    const entries = readdirSync(CONFIGS_ROOT, { withFileTypes: true });
+    return entries.find((e) => e.isDirectory() && uuidPattern.test(e.name))?.name ?? null;
+  } catch {
+    return null;
+  }
+}
 
 describe('bridge RPC surface (e2e)', () => {
   let bridge: BridgeClient;
@@ -93,6 +105,19 @@ describe('bridge RPC surface (e2e)', () => {
     }
   });
 
+  it('container_stats on a nonexistent squad-<uuid> container reports found=false', async () => {
+    const r = await bridge.containerStats({
+      name: 'squad-00000000-0000-0000-0000-000000000000',
+    });
+    expect(r.found).toBe(false);
+  });
+
+  it('container_stats refuses a non-squad container name', async () => {
+    await expect(bridge.containerStats({ name: 'evil-container' })).rejects.toThrow(
+      /forbidden|not in allowlist|invalid/i,
+    );
+  });
+
   it('container_run with forbidden image is rejected', async () => {
     await expect(
       bridge.containerRun({
@@ -140,10 +165,15 @@ describe('bridge RPC surface (e2e)', () => {
 
   it('file_write + fileRead round-trip inside the configs allowlist', async () => {
     // The bridge's writable allowlist is exclusively
-    // /var/lib/squad-panel/configs/{uuid}/ServerConfig/*.cfg. Use an
-    // existing server's Admins.cfg — we'll restore it after writing.
-    const uuid = '019dbc73-3c07-74de-be86-c3fa1b82f36b';
-    const allowed = `/var/lib/squad-panel/configs/${uuid}/ServerConfig/Admins.cfg`;
+    // /var/lib/squad-panel/configs/{uuid}/ServerConfig/*.cfg. Pick the first
+    // UUID that actually exists on disk so the test survives reinstalls that
+    // wipe prior server UUIDs.
+    const uuid = pickExistingServerUuid();
+    if (!uuid) {
+      console.warn(`[bridge-rpc] no installed server under ${CONFIGS_ROOT}; skipping round-trip`);
+      return;
+    }
+    const allowed = `${CONFIGS_ROOT}/${uuid}/ServerConfig/Admins.cfg`;
     const before = await bridge.fileRead({ path: allowed });
     const payload = `${before.content}\n// e2e-marker-${Date.now()}\n`;
     try {

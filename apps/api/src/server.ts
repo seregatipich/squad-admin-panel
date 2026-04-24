@@ -59,7 +59,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(helmet, { global: true });
   await app.register(cookie, { secret: config.SESSION_SECRET });
   await app.register(rateLimit, {
-    max: 300,
+    max: 1200,
     timeWindow: '1 minute',
     keyGenerator: (req) => `${req.ip}:${req.user?.id ?? ''}`,
   });

@@ -5,6 +5,7 @@ import type { Logger } from 'pino';
 import { v7 as uuidv7 } from 'uuid';
 import { RconClient } from './client.js';
 import { parseListPlayers } from './parse-list-players.js';
+import { parseServerInfo } from './parse-server-info.js';
 import { upsertPlayers } from './persist.js';
 
 export interface Target {
@@ -66,6 +67,8 @@ class PerServerSupervisor {
   private stopped = false;
   private pollTimer?: NodeJS.Timeout;
   private backoffMs: number;
+  private onDisconnect?: () => void;
+  private consecutivePollFails = 0;
 
   constructor(
     private readonly target: Target,
@@ -108,11 +111,21 @@ class PerServerSupervisor {
     while (!this.stopped) {
       try {
         await this.writeStatus('connecting', { backoffMs: this.backoffMs });
+        const disconnected = new Promise<void>((resolve) => {
+          this.onDisconnect = resolve;
+        });
         this.client = new RconClient({
           host: this.target.host,
           port: this.target.port,
           password: this.target.password,
           log: this.opts.log.child({ serverId: this.target.serverId }),
+          onDisconnect: (reason) => {
+            this.opts.log.warn(
+              { serverId: this.target.serverId, reason },
+              'rcon client disconnected',
+            );
+            this.onDisconnect?.();
+          },
         });
         await this.client.connect();
         this.opts.log.info({ serverId: this.target.serverId }, 'rcon connected');
@@ -120,14 +133,17 @@ class PerServerSupervisor {
         await this.emitEvent('rcon.connected', {});
         await this.writeStatus('connected');
         this.schedulePoll();
-        await new Promise<void>((resolve) => {
-          const check = setInterval(() => {
-            if (this.stopped || !this.client) {
-              clearInterval(check);
-              resolve();
-            }
-          }, 1000);
-        });
+        await Promise.race([
+          disconnected,
+          new Promise<void>((resolve) => {
+            const check = setInterval(() => {
+              if (this.stopped) {
+                clearInterval(check);
+                resolve();
+              }
+            }, 1000);
+          }),
+        ]);
       } catch (err) {
         this.opts.log.warn(
           {
@@ -165,9 +181,12 @@ class PerServerSupervisor {
       if (!this.client) return;
       try {
         const start = Date.now();
-        const raw = await this.client.exec('ListPlayers');
-        const players = parseListPlayers(raw);
+        const rawPlayers = await this.client.exec('ListPlayers');
+        const rawInfo = await this.client.exec('ShowServerInfo').catch(() => '');
+        const players = parseListPlayers(rawPlayers);
+        const info = rawInfo ? parseServerInfo(rawInfo) : null;
         await upsertPlayers(this.opts.db, players);
+        this.consecutivePollFails = 0;
         await this.emitEvent('rcon.players_polled', {
           players: players.map((p) => ({
             steam_id64: p.steam_id64,
@@ -181,17 +200,36 @@ class PerServerSupervisor {
           polled_at: new Date().toISOString(),
           latency_ms: Date.now() - start,
         });
-        // Refresh rcon:status key on every poll so the API's /servers list
-        // can surface an always-current player count + connection state.
         await this.writeStatus('connected', {
           player_count: players.length,
           last_poll_at: new Date().toISOString(),
+          tickrate_rt: info?.tickrate ?? undefined,
+          current_map: info?.map_name ?? undefined,
+          next_layer: info?.next_layer ?? undefined,
+          game_mode: info?.game_mode ?? undefined,
         });
       } catch (err) {
+        this.consecutivePollFails += 1;
+        const reason = (err as Error).message;
         this.opts.log.warn(
-          { err: (err as Error).message, serverId: this.target.serverId },
+          { err: reason, serverId: this.target.serverId, fails: this.consecutivePollFails },
           'ListPlayers poll failed',
         );
+        await this.writeStatus('connecting', {
+          reason: 'poll-failed',
+          last_error: reason,
+          consecutive_fails: this.consecutivePollFails,
+        });
+        if (this.consecutivePollFails >= 3) {
+          this.opts.log.warn(
+            { serverId: this.target.serverId },
+            'tearing down rcon client after 3 consecutive poll failures',
+          );
+          this.consecutivePollFails = 0;
+          await this.client?.close().catch(() => undefined);
+          this.client = undefined;
+          this.onDisconnect?.();
+        }
       }
     }, interval);
   }

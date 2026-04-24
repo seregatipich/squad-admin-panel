@@ -17,6 +17,7 @@ export interface RconClientOptions {
   connectTimeoutMs?: number;
   commandTimeoutMs?: number;
   keepaliveMs?: number;
+  onDisconnect?: (reason: 'remote-close' | 'explicit-close') => void;
 }
 
 interface PendingCommand {
@@ -104,7 +105,8 @@ export class RconClient {
       }
     });
     sock.on('close', () => {
-      if (!this.closed) {
+      const wasClosed = this.closed;
+      if (!wasClosed) {
         this.opts.log.warn('rcon socket closed');
       }
       for (const [, p] of this.pending) {
@@ -113,6 +115,9 @@ export class RconClient {
       }
       this.pending.clear();
       this.socket = undefined;
+      if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = undefined;
+      this.opts.onDisconnect?.(wasClosed ? 'explicit-close' : 'remote-close');
     });
     sock.on('error', (err) => {
       this.opts.log.warn({ err: err.message }, 'rcon socket error');

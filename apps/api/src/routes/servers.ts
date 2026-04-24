@@ -22,8 +22,26 @@ function containerName(id: string) {
   return `squad-${id}`;
 }
 
+const HOST_INFO_TTL_MS = 60_000;
+
 const serverRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
+
+  let hostInfoCache: { value: { address: string; hostname: string }; at: number } | null = null;
+  async function getHostAddress(): Promise<{ address: string; hostname: string } | null> {
+    if (hostInfoCache && Date.now() - hostInfoCache.at < HOST_INFO_TTL_MS) {
+      return hostInfoCache.value;
+    }
+    try {
+      const info = await app.bridge.hostInfo();
+      const value = { address: info.hostname, hostname: info.hostname };
+      hostInfoCache = { value, at: Date.now() };
+      return value;
+    } catch (err) {
+      app.log.warn({ err: (err as Error).message }, 'hostInfo failed');
+      return null;
+    }
+  }
 
   fast.get(
     '/api/v1/servers',
@@ -159,7 +177,15 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         where: eq(serverSettings.serverId, req.params.id),
       });
       const rconRaw = await app.redis.get(`rcon:status:${row.id}`);
-      let rcon_status: unknown = { state: 'not_polled' };
+      let rcon_status: {
+        state: string;
+        ts?: string;
+        player_count?: number;
+        last_poll_at?: string;
+        backoffMs?: number;
+        tickrate_rt?: number;
+        current_map?: string;
+      } = { state: 'not_polled' };
       if (rconRaw) {
         try {
           rcon_status = JSON.parse(rconRaw);
@@ -167,6 +193,43 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           rcon_status = { state: 'not_polled' };
         }
       }
+
+      const name = containerName(row.id);
+      const [inspect, host] = await Promise.all([
+        app.bridge.containerInspect({ name }).catch((err) => {
+          app.log.warn({ err: (err as Error).message, name }, 'containerInspect failed');
+          return null;
+        }),
+        getHostAddress(),
+      ]);
+
+      const isAlive = !!inspect && inspect.state !== 'not_found' && inspect.running;
+      const stats = isAlive
+        ? await app.bridge.containerStats({ name }).catch((err) => {
+            app.log.warn({ err: (err as Error).message, name }, 'containerStats failed');
+            return null;
+          })
+        : null;
+
+      const container =
+        inspect && inspect.state !== 'not_found'
+          ? {
+              state: inspect.state,
+              running: inspect.running,
+              started_at: inspect.started_at || null,
+              finished_at: inspect.finished_at || null,
+              image: inspect.image || null,
+              pid: inspect.pid || null,
+              restart_count: inspect.restart_count,
+              exit_code: inspect.exit_code,
+              cpu_percent: stats?.found ? stats.cpu_percent : null,
+              mem_used_bytes: stats?.found ? stats.mem_used_bytes : null,
+              mem_limit_bytes: stats?.found ? stats.mem_limit_bytes : null,
+              mem_percent: stats?.found ? stats.mem_percent : null,
+              pids: stats?.found ? stats.pids : null,
+            }
+          : null;
+
       return {
         server: {
           id: row.id,
@@ -197,6 +260,8 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             }
           : null,
         rcon_status,
+        container,
+        host,
       };
     },
   );

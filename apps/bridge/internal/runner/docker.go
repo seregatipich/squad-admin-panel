@@ -20,19 +20,19 @@ func NewDocker(r Runner) *DockerRunner {
 }
 
 type ContainerRunSpec struct {
-	ServerID    string
-	Image       string
-	GamePort    int
-	QueryPort   int
-	BeaconPort  int
-	RCONPort    int
-	MaxPlayers  int
-	Tickrate    int
-	Multihome   string
-	ExtraArgs   []string
-	ConfigsHost string
-	SavedHost   string
-	DepotVolume string
+	ServerID     string
+	Image        string
+	GamePort     int
+	QueryPort    int
+	BeaconPort   int
+	RCONPort     int
+	MaxPlayers   int
+	Tickrate     int
+	Multihome    string
+	ExtraArgs    []string
+	ConfigsHost  string
+	SavedHost    string
+	DepotVolume  string
 	UlimitNofile int
 }
 
@@ -165,15 +165,15 @@ func (d *DockerRunner) Rm(ctx context.Context, name string) error {
 }
 
 type InspectResult struct {
-	Name       string         `json:"name"`
-	State      string         `json:"state"`
-	Running    bool           `json:"running"`
-	Pid        int            `json:"pid"`
-	StartedAt  string         `json:"started_at"`
-	FinishedAt string         `json:"finished_at"`
-	ExitCode   int            `json:"exit_code"`
-	Image      string         `json:"image"`
-	RestartCnt int            `json:"restart_count"`
+	Name       string            `json:"name"`
+	State      string            `json:"state"`
+	Running    bool              `json:"running"`
+	Pid        int               `json:"pid"`
+	StartedAt  string            `json:"started_at"`
+	FinishedAt string            `json:"finished_at"`
+	ExitCode   int               `json:"exit_code"`
+	Image      string            `json:"image"`
+	RestartCnt int               `json:"restart_count"`
 	Labels     map[string]string `json:"labels"`
 }
 
@@ -195,8 +195,8 @@ func (d *DockerRunner) Inspect(ctx context.Context, name string) (*InspectResult
 	}
 	out := string(so)
 	var raw struct {
-		Name   string `json:"Name"`
-		State  struct {
+		Name  string `json:"Name"`
+		State struct {
 			Status     string `json:"Status"`
 			Running    bool   `json:"Running"`
 			Pid        int    `json:"Pid"`
@@ -225,6 +225,117 @@ func (d *DockerRunner) Inspect(ctx context.Context, name string) (*InspectResult
 		RestartCnt: raw.RestartCount,
 		Labels:     raw.Config.Labels,
 	}, nil
+}
+
+type StatsResult struct {
+	Name          string  `json:"name"`
+	Found         bool    `json:"found"`
+	CPUPercent    float64 `json:"cpu_percent"`
+	MemUsedBytes  int64   `json:"mem_used_bytes"`
+	MemLimitBytes int64   `json:"mem_limit_bytes"`
+	MemPercent    float64 `json:"mem_percent"`
+	Pids          int     `json:"pids"`
+	SampledAt     string  `json:"sampled_at"`
+}
+
+func (d *DockerRunner) Stats(ctx context.Context, name string) (*StatsResult, error) {
+	if err := validate.ContainerName(name); err != nil {
+		return nil, err
+	}
+	so, se, exit, err := d.R.Run(ctx, d.Bin,
+		[]string{"stats", "--no-stream", "--format", "{{json .}}", name}, nil)
+	if err != nil {
+		return nil, err
+	}
+	if exit != 0 {
+		msg := strings.TrimSpace(string(se))
+		if strings.Contains(msg, "No such container") || strings.Contains(msg, "no such container") {
+			return &StatsResult{Name: name, Found: false}, nil
+		}
+		return nil, fmt.Errorf("docker stats exit %d: %s", exit, msg)
+	}
+	line := strings.TrimSpace(string(so))
+	if line == "" {
+		return &StatsResult{Name: name, Found: false}, nil
+	}
+	var raw struct {
+		Name     string `json:"Name"`
+		CPUPerc  string `json:"CPUPerc"`
+		MemUsage string `json:"MemUsage"`
+		MemPerc  string `json:"MemPerc"`
+		PIDs     string `json:"PIDs"`
+	}
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return nil, fmt.Errorf("parse stats: %w", err)
+	}
+	cpu, _ := parsePercent(raw.CPUPerc)
+	memPct, _ := parsePercent(raw.MemPerc)
+	used, limit := parseMemUsage(raw.MemUsage)
+	var pids int
+	_, _ = fmt.Sscanf(raw.PIDs, "%d", &pids)
+	return &StatsResult{
+		Name:          strings.TrimPrefix(raw.Name, "/"),
+		Found:         true,
+		CPUPercent:    cpu,
+		MemUsedBytes:  used,
+		MemLimitBytes: limit,
+		MemPercent:    memPct,
+		Pids:          pids,
+		SampledAt:     time.Now().UTC().Format(time.RFC3339),
+	}, nil
+}
+
+func parsePercent(s string) (float64, error) {
+	s = strings.TrimSpace(strings.TrimSuffix(s, "%"))
+	if s == "" || s == "--" {
+		return 0, nil
+	}
+	var f float64
+	_, err := fmt.Sscanf(s, "%f", &f)
+	return f, err
+}
+
+func parseMemUsage(s string) (int64, int64) {
+	parts := strings.SplitN(s, "/", 2)
+	if len(parts) != 2 {
+		return 0, 0
+	}
+	return parseSize(strings.TrimSpace(parts[0])), parseSize(strings.TrimSpace(parts[1]))
+}
+
+func parseSize(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	var n float64
+	var unit string
+	_, err := fmt.Sscanf(s, "%f%s", &n, &unit)
+	if err != nil {
+		return 0
+	}
+	unit = strings.ToUpper(strings.TrimSpace(unit))
+	mul := int64(1)
+	switch unit {
+	case "B":
+		mul = 1
+	case "KB":
+		mul = 1000
+	case "KIB":
+		mul = 1024
+	case "MB":
+		mul = 1000 * 1000
+	case "MIB":
+		mul = 1024 * 1024
+	case "GB":
+		mul = 1000 * 1000 * 1000
+	case "GIB":
+		mul = 1024 * 1024 * 1024
+	case "TB":
+		mul = 1000 * 1000 * 1000 * 1000
+	case "TIB":
+		mul = 1024 * 1024 * 1024 * 1024
+	}
+	return int64(n * float64(mul))
 }
 
 func (d *DockerRunner) LogsFollow(
@@ -285,4 +396,3 @@ func (d *DockerRunner) DepotUpdate(
 	}
 	return d.R.Stream(ctx, d.Bin, args, nil, onStdout, onStderr)
 }
-

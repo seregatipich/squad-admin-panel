@@ -89,7 +89,12 @@ export default function AccountSettings() {
   }
 
   async function logout() {
-    await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' });
+    await fetch('/api/v1/auth/logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      credentials: 'include',
+    });
     window.location.href = '/login';
   }
 

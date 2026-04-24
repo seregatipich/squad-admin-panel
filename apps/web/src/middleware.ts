@@ -23,9 +23,6 @@ export function middleware(req: NextRequest) {
     url.searchParams.set('next', pathname);
     return NextResponse.redirect(url);
   }
-  if (hasSession && pathname === '/login') {
-    return NextResponse.redirect(new URL('/dashboard', req.url));
-  }
   return NextResponse.next();
 }
 
@@ -36,6 +33,5 @@ export const config = {
     '/players/:path*',
     '/audit/:path*',
     '/settings/:path*',
-    '/login',
   ],
 };

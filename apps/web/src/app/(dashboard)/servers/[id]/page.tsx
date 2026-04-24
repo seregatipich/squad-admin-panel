@@ -20,19 +20,46 @@ interface ServerSettings {
   beacon_port: number;
   rcon_port: number;
   max_players: number;
+  tickrate: number;
+  multihome: string;
   install_path: string;
 }
 
 interface RconStatus {
   state: 'connected' | 'disconnected' | 'connecting' | 'not_polled';
   ts?: string;
+  player_count?: number;
+  last_poll_at?: string;
   backoffMs?: number;
+  tickrate_rt?: number;
+  current_map?: string;
+}
+
+interface ContainerRuntime {
+  state: string;
+  running: boolean;
+  started_at: string | null;
+  finished_at: string | null;
+  image: string | null;
+  pid: number | null;
+  restart_count: number;
+  exit_code: number;
+  cpu_percent?: number;
+  mem_used_bytes?: number;
+  mem_limit_bytes?: number;
+}
+
+interface HostInfo {
+  address: string;
+  hostname: string;
 }
 
 interface ServerResponse {
   server: ServerRow;
   settings: ServerSettings | null;
   rcon_status: RconStatus;
+  container: ContainerRuntime | null;
+  host: HostInfo | null;
 }
 
 const POLL_INTERVAL_MS = 3000;
@@ -65,7 +92,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   useEffect(() => {
     void refresh();
     const t = setInterval(refresh, POLL_INTERVAL_MS);
-    // Pause polling when the tab is hidden to avoid running the API idle.
     const onVisibility = () => {
       if (document.visibilityState === 'visible') void refresh();
     };
@@ -76,16 +102,11 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
     };
   }, [id]);
 
-  // Tick every second so "обновлено Xс назад" increments live between polls.
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
 
-  // Live Squad-server journal. Only opens when the server has a systemd unit
-  // (status ∈ running/starting/stopping/stopped/ready). For pending/failed/
-  // installing we skip the WebSocket entirely — the backend would close it
-  // immediately anyway, and reconnect storms would just spam the API.
   const currentStatus = data?.server.status ?? null;
   const logsEnabled =
     currentStatus === 'running' ||
@@ -180,25 +201,42 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   }
   if (!data) return <div className="text-neutral-500">Загрузка…</div>;
 
-  const { server, settings, rcon_status } = data;
+  const { server, settings, rcon_status, container, host } = data;
   const canStart = server.status !== 'running' && server.status !== 'starting';
   const canStop = server.status === 'running' || server.status === 'starting';
-  const rconColor =
-    rcon_status.state === 'connected'
-      ? 'bg-green-700'
-      : rcon_status.state === 'connecting'
-        ? 'bg-amber-700'
-        : 'bg-neutral-700';
+  const startedAt = container?.running ? container.started_at : null;
+  const uptimeMs = startedAt ? Math.max(0, now - new Date(startedAt).getTime()) : null;
 
   return (
     <div className="space-y-6">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">{server.display_name}</h1>
-          <div className="text-xs text-neutral-500 font-mono">{server.id}</div>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-semibold">{server.display_name}</h1>
+            <StatusBadge status={server.status} />
+          </div>
+          <div className="flex items-center gap-3 text-xs text-neutral-500">
+            <span className="font-mono">{server.id}</span>
+            {uptimeMs != null && startedAt ? (
+              <>
+                <span className="text-neutral-700">·</span>
+                <span title={`Запущен: ${new Date(startedAt).toLocaleString()}`}>
+                  uptime {formatUptime(uptimeMs)}
+                </span>
+              </>
+            ) : null}
+            {container?.restart_count ? (
+              <>
+                <span className="text-neutral-700">·</span>
+                <span title="Счётчик авто-перезапусков Docker">
+                  рестартов: {container.restart_count}
+                </span>
+              </>
+            ) : null}
+          </div>
         </div>
         <div className="flex items-center gap-3">
-          <LiveIndicator now={now} lastRefreshedAt={lastRefreshedAt} />
+          <LivePulse now={now} lastRefreshedAt={lastRefreshedAt} />
           <Link
             href={`/servers/${server.id}/configs`}
             className="text-xs text-sky-400 hover:text-sky-300"
@@ -211,7 +249,6 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           >
             События →
           </Link>
-          <StatusBadge status={server.status} />
         </div>
       </header>
 
@@ -219,43 +256,84 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{err}</div>
       ) : null}
 
-      <section className="grid grid-cols-2 gap-6">
-        <div className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">RCON</h2>
-          <div className="flex items-center gap-2">
-            <span className={`inline-block h-2 w-2 rounded-full ${rconColor}`} />
-            <span className="text-sm">
-              {rcon_status.state === 'not_polled' ? '— (сервер не запущен)' : rcon_status.state}
-            </span>
-          </div>
-          {rcon_status.ts ? (
-            <div className="text-xs text-neutral-500">
-              обновлено: {new Date(rcon_status.ts).toLocaleString()}
-            </div>
-          ) : null}
-        </div>
-        <div className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-1 text-sm">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Порты</h2>
-          {settings ? (
-            <dl className="grid grid-cols-2 gap-1 font-mono text-xs">
-              <dt className="text-neutral-500">Game UDP</dt>
-              <dd>{settings.game_port}</dd>
-              <dt className="text-neutral-500">Query UDP</dt>
-              <dd>{settings.query_port}</dd>
-              <dt className="text-neutral-500">Beacon UDP</dt>
-              <dd>{settings.beacon_port}</dd>
-              <dt className="text-neutral-500">RCON TCP</dt>
-              <dd>{settings.rcon_port}</dd>
-              <dt className="text-neutral-500">MaxPlayers</dt>
-              <dd>{settings.max_players}</dd>
-            </dl>
-          ) : (
-            <div className="text-neutral-500 text-xs">нет настроек</div>
-          )}
-        </div>
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat
+          label="Игроки"
+          value={
+            rcon_status.player_count != null
+              ? `${rcon_status.player_count} / ${settings?.max_players ?? '—'}`
+              : '—'
+          }
+          hint={
+            rcon_status.state === 'connected'
+              ? 'Онлайн-счётчик RCON (обновляется каждые 30 с)'
+              : 'Доступно при подключении RCON'
+          }
+        />
+        <Stat
+          label="Tickrate"
+          value={
+            rcon_status.tickrate_rt != null
+              ? `${rcon_status.tickrate_rt.toFixed(1)} / ${settings?.tickrate ?? '—'}`
+              : settings?.tickrate != null
+                ? `${settings.tickrate}`
+                : '—'
+          }
+          hint={
+            rcon_status.tickrate_rt != null
+              ? 'Фактический / целевой tickrate'
+              : 'Целевой tickrate (фактический появится в ServerInfo)'
+          }
+        />
+        <Stat
+          label="CPU"
+          value={container?.cpu_percent != null ? `${container.cpu_percent.toFixed(1)}%` : '—'}
+          hint="Нагрузка контейнера Squad"
+        />
+        <Stat
+          label="RAM"
+          value={
+            container?.mem_used_bytes != null
+              ? formatBytes(container.mem_used_bytes) +
+                (container.mem_limit_bytes ? ` / ${formatBytes(container.mem_limit_bytes)}` : '')
+              : '—'
+          }
+          hint="Потребление памяти контейнером"
+        />
       </section>
 
-      <section className="flex flex-wrap gap-2">
+      <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
+        <h2 className="text-xs uppercase tracking-widest text-neutral-400 mb-3">Подключение</h2>
+        {settings ? (
+          <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 font-mono text-xs">
+            <dt className="text-neutral-500">Адрес</dt>
+            <dd>{host?.address ?? '—'}</dd>
+            <dt className="text-neutral-500">Game</dt>
+            <dd>
+              {settings.game_port} <span className="text-neutral-600">UDP</span>
+            </dd>
+            <dt className="text-neutral-500">Query</dt>
+            <dd>
+              {settings.query_port} <span className="text-neutral-600">UDP</span>
+            </dd>
+            <dt className="text-neutral-500">Beacon</dt>
+            <dd>
+              {settings.beacon_port} <span className="text-neutral-600">UDP</span>
+            </dd>
+            <dt className="text-neutral-500">RCON</dt>
+            <dd className="flex items-center gap-2">
+              <span>
+                {settings.rcon_port} <span className="text-neutral-600">TCP</span>
+              </span>
+              <RconDot status={rcon_status} />
+            </dd>
+          </dl>
+        ) : (
+          <div className="text-neutral-500 text-xs">нет настроек</div>
+        )}
+      </section>
+
+      <section className="flex flex-wrap items-center gap-2">
         <ActionButton
           label="Старт"
           onClick={() => action('start')}
@@ -277,16 +355,17 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           loading={acting === 'restart'}
           tone="neutral"
         />
-        <ActionButton
-          label="Удалить"
-          onClick={() => {
-            if (confirm('Удалить сервер из панели? Файлы на диске останутся.'))
-              void action('delete');
-          }}
-          disabled={!!acting}
-          loading={acting === 'delete'}
-          tone="red"
-        />
+        <div className="ml-auto">
+          <DangerMenu
+            disabled={!!acting}
+            onDelete={() => {
+              if (confirm('Удалить сервер из панели? Файлы на диске останутся.')) {
+                void action('delete');
+              }
+            }}
+            deleting={acting === 'delete'}
+          />
+        </div>
       </section>
 
       <section>
@@ -308,19 +387,54 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   );
 }
 
-function LiveIndicator({ now, lastRefreshedAt }: { now: number; lastRefreshedAt: number }) {
-  const ageSec = Math.max(0, Math.round((now - lastRefreshedAt) / 1000));
-  const stale = ageSec > POLL_INTERVAL_MS / 1000 + 5; // ~8s since last poll = something's wrong
-  const dotColor = stale ? 'bg-red-600' : ageSec < 2 ? 'bg-green-500' : 'bg-green-700';
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="rounded border border-neutral-800 bg-neutral-950 p-3" title={hint}>
+      <div className="text-[10px] uppercase tracking-widest text-neutral-500">{label}</div>
+      <div className="mt-1 text-lg font-mono">{value}</div>
+    </div>
+  );
+}
+
+function RconDot({ status }: { status: RconStatus }) {
+  const color =
+    status.state === 'connected'
+      ? 'bg-green-500'
+      : status.state === 'connecting'
+        ? 'bg-amber-500'
+        : 'bg-neutral-600';
+  const label =
+    status.state === 'not_polled'
+      ? 'сервер не запущен'
+      : status.state === 'connecting'
+        ? `переподключение${status.backoffMs ? ` (backoff ${Math.round(status.backoffMs / 1000)}с)` : ''}`
+        : status.state;
   return (
     <span
-      className="flex items-center gap-1.5 text-xs text-neutral-500"
-      title={`Данные обновляются каждые ${POLL_INTERVAL_MS / 1000}с`}
+      className="flex items-center gap-1.5 text-[11px] text-neutral-400"
+      title={`RCON: ${label}`}
     >
-      <span
-        className={`inline-block h-2 w-2 rounded-full ${dotColor} ${ageSec < 2 ? 'animate-pulse' : ''}`}
-      />
-      <span>обновлено {ageSec}с назад</span>
+      <span className={`inline-block h-1.5 w-1.5 rounded-full ${color}`} />
+      <span>{status.state === 'connected' ? 'connected' : label}</span>
+    </span>
+  );
+}
+
+function LivePulse({ now, lastRefreshedAt }: { now: number; lastRefreshedAt: number }) {
+  const ageSec = Math.max(0, Math.round((now - lastRefreshedAt) / 1000));
+  const stale = ageSec > POLL_INTERVAL_MS / 1000 + 5;
+  const dotColor = stale ? 'bg-red-600' : 'bg-green-500';
+  return (
+    <span
+      className="flex items-center gap-1.5 text-[10px] text-neutral-600"
+      title={
+        stale
+          ? `Опрос панели завис (${ageSec}с без ответа)`
+          : `Опрос каждые ${POLL_INTERVAL_MS / 1000}с`
+      }
+    >
+      <span className={`inline-block h-1.5 w-1.5 rounded-full ${dotColor} animate-pulse`} />
+      <span>live</span>
     </span>
   );
 }
@@ -368,4 +482,86 @@ function ActionButton(props: {
       {props.loading ? '…' : props.label}
     </button>
   );
+}
+
+function DangerMenu({
+  disabled,
+  onDelete,
+  deleting,
+}: {
+  disabled: boolean;
+  onDelete: () => void;
+  deleting: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+        className="rounded border border-neutral-700 px-3 py-2 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-40"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        Опасная зона ▾
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-10 mt-1 min-w-[12rem] rounded border border-neutral-700 bg-neutral-900 shadow-lg"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            disabled={deleting}
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+            className="block w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-red-950 disabled:opacity-40"
+          >
+            {deleting ? 'Удаление…' : 'Удалить сервер'}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function formatUptime(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (d > 0) return `${d}д ${h}ч`;
+  if (h > 0) return `${h}ч ${m}м`;
+  if (m > 0) return `${m}м ${sec}с`;
+  return `${sec}с`;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KiB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MiB`;
+  return `${(n / 1024 ** 3).toFixed(2)} GiB`;
 }

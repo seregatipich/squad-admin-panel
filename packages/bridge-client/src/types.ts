@@ -138,6 +138,17 @@ export interface ContainerInspectResult {
   labels: Record<string, string>;
 }
 
+export interface ContainerStatsResult {
+  name: string;
+  found: boolean;
+  cpu_percent: number;
+  mem_used_bytes: number;
+  mem_limit_bytes: number;
+  mem_percent: number;
+  pids: number;
+  sampled_at: string;
+}
+
 export interface ContainerLogsParams {
   name: string;
   tail?: number;

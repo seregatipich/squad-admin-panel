@@ -1,0 +1,34 @@
+SQUAD ADMIN PANEL
+Дашборд
+Серверы
+Игроки
+Журнал действий
+Аккаунт
+Panel Owner
+Выйти
+Clean Install Verification Server
+019dbef8-0d99-7262-b5c4-3a368a48a732
+обновлено 0с назад
+Конфиги →
+События →
+INSTALLING
+RCON
+— (сервер не запущен)
+ПОРТЫ
+Game UDP
+7787
+Query UDP
+27165
+Beacon UDP
+15000
+RCON TCP
+21114
+MaxPlayers
+20
+Старт
+Стоп (graceful)
+Рестарт
+Удалить
+ЛОГ КОНТЕЙНЕРА (DOCKER LOGS)
+offline
+Сервер в состоянии "installing" — контейнер ещё не создан. Запустите установку, чтобы журнал появился.

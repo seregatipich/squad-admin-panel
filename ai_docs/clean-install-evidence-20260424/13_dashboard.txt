@@ -1,0 +1,77 @@
+SQUAD ADMIN PANEL
+Дашборд
+Серверы
+Игроки
+Журнал действий
+Аккаунт
+Panel Owner
+Выйти
+Дашборд
+СЕРВЕРЫ
+0
+0 running
+ИГРОКОВ ОНЛАЙН
+0
+сервера не запущены
+BRIDGE
+connected
+v 7b8caee-dirty
+ALERTS
+0
+всё чисто
+СОЕДИНЕНИЯ
+PostgreSQL
+healthy
+Redis
+healthy
+panel-host-bridge
+v7b8caee-dirty • RTT 2 ms
+worker-rcon
+targets=0
+2s ago • pid 1
+worker-log-ingest
+tails=0
+2s ago • pid 1
+worker-audit-archiver
+idle (P1)
+1s ago • pid 1
+worker-event-partition
+idle
+5s ago • pid 1
+ХОСТ
+squad
+OS
+Ubuntu 24.04.4 LTS (Noble Numbat)
+KERNEL
+6.8.0-110-generic
+ARCH
+amd64
+CPU
+unknown × 10
+CPU %
+0.0%
+RAM
+0 B / 0 B (—)
+DISK
+96 GiB / 244 GiB (39%)
+NET RX
+0 B/s
+NET TX
+0 B/s
+СЕРВЕРЫ
+все →
+Нет серверов. Установить
+ПОСЛЕДНИЕ ДЕЙСТВИЯ
+журнал →
+10:08:06
+user.login
+session
+10:07:15
+setup.owner.create
+user
+10:07:11
+setup.org.create
+organization
+10:05:45
+setup.org.create
+organization

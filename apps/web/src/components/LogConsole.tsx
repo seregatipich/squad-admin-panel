@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
 export interface LogEntry {
   ts?: string;
@@ -45,47 +45,44 @@ export function LogConsole({
 }: LogConsoleProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const programmaticScrollRef = useRef(false);
   const [atBottom, setAtBottom] = useState(true);
 
-  // Track whether the user is currently pinned at bottom. Refs avoid re-renders
-  // on every scroll; state drives the "↓ Latest" pill.
-  function onScroll() {
+  const BOTTOM_THRESHOLD = 24;
+
+  const onScroll = useCallback(() => {
     const el = scrollerRef.current;
     if (!el) return;
-    const threshold = 24;
+    if (programmaticScrollRef.current) {
+      programmaticScrollRef.current = false;
+      return;
+    }
     const distance = el.scrollHeight - el.clientHeight - el.scrollTop;
-    const pinned = distance <= threshold;
+    const pinned = distance <= BOTTOM_THRESHOLD;
     stickToBottomRef.current = pinned;
     setAtBottom(pinned);
-  }
+  }, []);
 
-  // Auto-stick: if we were at bottom before the render, scroll to the new bottom
-  // after the DOM updates. If the user had scrolled up, leave them alone.
+  // Auto-stick: after every render that changes lines, if the user was pinned
+  // at the bottom, snap to the new bottom before the browser paints. When the
+  // user has scrolled up, leave the viewport alone — new lines land below the
+  // fold and the "↓ к последней" pill shows up.
   useLayoutEffect(() => {
     if (!stickToBottomRef.current) return;
     const el = scrollerRef.current;
     if (!el) return;
+    programmaticScrollRef.current = true;
     el.scrollTop = el.scrollHeight;
-  }, []);
+  }, [lines]);
 
-  // On initial mount, snap to bottom (so pre-existing lines don't leave the user
-  // staring at line 0).
-  useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-    stickToBottomRef.current = true;
-    setAtBottom(true);
-    // intentional: only on mount
-  }, []);
-
-  function jumpToLatest() {
+  const jumpToLatest = useCallback(() => {
     const el = scrollerRef.current;
     if (!el) return;
     stickToBottomRef.current = true;
+    programmaticScrollRef.current = true;
     el.scrollTop = el.scrollHeight;
     setAtBottom(true);
-  }
+  }, []);
 
   return (
     <div className="relative space-y-1">

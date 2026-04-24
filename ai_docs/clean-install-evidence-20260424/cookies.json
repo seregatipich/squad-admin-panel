@@ -1,0 +1,12 @@
+[
+  {
+    "name": "__Host-sid",
+    "value": "s_019dbef6-02d2-74ef-ab2b-5a8f8fe4dd55_-S8iw_hpmj33Zc6E-yZHabQyzHXA5D-A",
+    "domain": "squad-panel.lan",
+    "path": "/",
+    "expires": 1777054086.87128,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  }
+]

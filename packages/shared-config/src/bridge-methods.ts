@@ -12,6 +12,7 @@ export const BRIDGE_METHODS = [
   'container_stop',
   'container_rm',
   'container_inspect',
+  'container_stats',
   'container_logs_follow',
   'depot_update',
 ] as const;

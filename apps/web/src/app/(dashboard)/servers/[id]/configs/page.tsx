@@ -66,7 +66,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
   const [blame, setBlame] = useState<BlameResponse | null>(null);
 
-  async function refreshFiles() {
+  const refreshFiles = useCallback(async () => {
     try {
       const r = await fetch(`/api/v1/servers/${id}/configs`, { credentials: 'include' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -75,7 +75,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     } catch (e) {
       setErr((e as Error).message);
     }
-  }
+  }, [id]);
 
   useEffect(() => {
     void refreshFiles();
@@ -104,7 +104,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     [id],
   );
 
-  async function loadHistory() {
+  const loadHistory = useCallback(async () => {
     if (!selected) return;
     try {
       const r = await fetch(`/api/v1/servers/${id}/configs/${selected}/history?limit=100`, {
@@ -116,9 +116,9 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     } catch (e) {
       setErr((e as Error).message);
     }
-  }
+  }, [id, selected]);
 
-  async function loadBlame() {
+  const loadBlame = useCallback(async () => {
     if (!selected) return;
     try {
       const r = await fetch(`/api/v1/servers/${id}/configs/${selected}/blame`, {
@@ -130,7 +130,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     } catch (e) {
       setErr((e as Error).message);
     }
-  }
+  }, [id, selected]);
 
   useEffect(() => {
     if (tab === 'history') void loadHistory();

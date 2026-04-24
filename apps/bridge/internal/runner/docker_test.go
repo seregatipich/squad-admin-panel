@@ -82,3 +82,48 @@ func TestDockerStopIdempotent(t *testing.T) {
 		t.Errorf("expected idempotent stop on missing container, got %v", err)
 	}
 }
+
+func TestDockerStatsParsesOutput(t *testing.T) {
+	line := `{"Name":"/squad-019dbb45-3556-751f-9124-d4cf0e6b0053","CPUPerc":"37.5%","MemUsage":"1.5GiB / 4GiB","MemPerc":"37.50%","PIDs":"42"}` + "\n"
+	f := &Fake{Stdout: []byte(line)}
+	d := NewDocker(f)
+	res, err := d.Stats(context.Background(), "squad-019dbb45-3556-751f-9124-d4cf0e6b0053")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !res.Found {
+		t.Fatalf("expected Found=true")
+	}
+	if res.CPUPercent != 37.5 {
+		t.Errorf("cpu: want 37.5, got %v", res.CPUPercent)
+	}
+	wantMem := int64(float64(1.5) * 1024 * 1024 * 1024)
+	if res.MemUsedBytes != wantMem {
+		t.Errorf("mem used: want %d, got %d", wantMem, res.MemUsedBytes)
+	}
+	if res.MemLimitBytes != 4*1024*1024*1024 {
+		t.Errorf("mem limit: want 4GiB, got %d", res.MemLimitBytes)
+	}
+	if res.Pids != 42 {
+		t.Errorf("pids: want 42, got %d", res.Pids)
+	}
+}
+
+func TestDockerStatsMissingContainer(t *testing.T) {
+	f := &Fake{Stderr: []byte("Error response from daemon: No such container: squad-x\n"), Exit: 1}
+	d := NewDocker(f)
+	res, err := d.Stats(context.Background(), "squad-019dbb45-3556-751f-9124-d4cf0e6b0053")
+	if err != nil {
+		t.Fatalf("expected graceful handling of missing container, got %v", err)
+	}
+	if res.Found {
+		t.Errorf("expected Found=false for missing container")
+	}
+}
+
+func TestDockerStatsRejectsBadName(t *testing.T) {
+	d := NewDocker(&Fake{})
+	if _, err := d.Stats(context.Background(), "../etc/passwd"); err == nil {
+		t.Errorf("expected validate.ContainerName to reject traversal name")
+	}
+}

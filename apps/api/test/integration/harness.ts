@@ -114,6 +114,16 @@ export interface FakeBridge {
     restart_count: number;
     labels: Record<string, string>;
   }>;
+  containerStats: (p: { name: string }) => Promise<{
+    name: string;
+    found: boolean;
+    cpu_percent: number;
+    mem_used_bytes: number;
+    mem_limit_bytes: number;
+    mem_percent: number;
+    pids: number;
+    sampled_at: string;
+  }>;
   containerRun: (
     p: Record<string, unknown>,
   ) => Promise<{ container_id: string; status: 'started' }>;
@@ -194,6 +204,16 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
       image: 'squad-server:latest',
       restart_count: 0,
       labels: {},
+    }),
+    containerStats: async ({ name }) => ({
+      name,
+      found: true,
+      cpu_percent: 12.5,
+      mem_used_bytes: 2 * 1024 ** 3,
+      mem_limit_bytes: 16 * 1024 ** 3,
+      mem_percent: 12.5,
+      pids: 20,
+      sampled_at: new Date().toISOString(),
     }),
     containerRun: async () => ({ container_id: 'fake-container-id', status: 'started' }),
     containerStart: async () => ({ status: 'ok' }),
@@ -412,10 +432,10 @@ export async function loginAsOwner(h: IntegrationHarness): Promise<string> {
   }
   const setCookie = resp.headers['set-cookie'];
   if (!setCookie) throw new Error('login did not return a cookie');
-  const raw = Array.isArray(setCookie) ? setCookie[0]! : setCookie;
+  const raw = Array.isArray(setCookie) ? (setCookie[0] ?? '') : setCookie;
   const match = raw.match(/(__Host-sid=[^;]+)/);
-  if (!match) throw new Error('cookie header did not contain __Host-sid');
-  return match[1]!;
+  if (!match?.[1]) throw new Error('cookie header did not contain __Host-sid');
+  return match[1];
 }
 
 /**

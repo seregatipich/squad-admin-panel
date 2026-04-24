@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { LogoutButton } from '@/components/LogoutButton';
 import { requireSession } from '@/lib/dal';
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -26,11 +27,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         </Link>
         <div className="pt-6 text-xs text-neutral-500">
           <div className="truncate">{me.display_name ?? me.email}</div>
-          <form action="/api/v1/auth/logout" method="post">
-            <button type="submit" className="mt-1 text-red-400 hover:text-red-300">
-              Выйти
-            </button>
-          </form>
+          <LogoutButton />
         </div>
       </nav>
       <main className="flex-1 p-8 space-y-6">{children}</main>
