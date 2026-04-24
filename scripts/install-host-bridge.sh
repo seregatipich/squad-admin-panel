@@ -67,6 +67,12 @@ chmod 0755 /etc/squad-server
 mkdir -p /var/log/panel-host-bridge
 chmod 0750 /var/log/panel-host-bridge
 
+# Socket dir for rnsquadjs sidecars (bind-mounted into each sidecar container
+# as /run/panelBridge). Owned by root:panel so the bridge (root) can create
+# sockets while the panel group can introspect. Re-created on every boot via
+# the unit's RuntimeDirectory=, but pre-create so first-run before boot works.
+install -d -m 0775 -o root -g panel /run/squad-panel/rnsquadjs
+
 # ReadWritePaths requires every listed path to exist, even if the feature
 # using it isn't actually installed on this host yet.
 mkdir -p /etc/ufw

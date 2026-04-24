@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -263,6 +264,61 @@ func (d *DockerRunner) VolumeEnsure(ctx context.Context, name string) error {
 		return fmt.Errorf("docker volume create exit %d: %s", exit2, strings.TrimSpace(string(se)))
 	}
 	return nil
+}
+
+type RNSquadJSRunSpec struct {
+	ServerID string            `json:"server_id"`
+	Env      map[string]string `json:"env"`
+}
+
+func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, error) {
+	if err := validate.ServerUUID(spec.ServerID); err != nil {
+		return nil, err
+	}
+	name := "rnsquadjs-" + spec.ServerID
+	if err := validate.ContainerName(name); err != nil {
+		return nil, err
+	}
+	logsBind := fmt.Sprintf("%s/%s/SquadGame/Saved/Logs:/squad/Logs:ro", validate.PanelSavedRoot, spec.ServerID)
+	socketBind := fmt.Sprintf("%s:/run/panelBridge:rw", validate.PanelSocketRoot)
+
+	args := []string{
+		"run", "-d",
+		"--name", name,
+		"--label", "panel.server_id=" + spec.ServerID,
+		"--label", "panel.kind=rnsquadjs",
+		"--network", "host",
+		"--user", "1001:1001",
+		"--read-only",
+		"--restart", "unless-stopped",
+		"-v", logsBind,
+		"-v", socketBind,
+	}
+	keys := make([]string, 0, len(spec.Env))
+	for k := range spec.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", k, spec.Env[k]))
+	}
+	args = append(args, validate.RNSquadJSImage)
+	return args, nil
+}
+
+func (d *DockerRunner) RunRNSquadJS(ctx context.Context, spec RNSquadJSRunSpec) (string, error) {
+	args, err := d.composeRNSquadJSArgs(spec)
+	if err != nil {
+		return "", err
+	}
+	so, se, exit, err := d.R.Run(ctx, d.Bin, args, nil)
+	if err != nil {
+		return strings.TrimSpace(string(so)), err
+	}
+	if exit != 0 {
+		return strings.TrimSpace(string(so)), fmt.Errorf("docker run rnsquadjs exit %d: %s", exit, strings.TrimSpace(string(se)))
+	}
+	return strings.TrimSpace(string(so)), nil
 }
 
 func (d *DockerRunner) DepotUpdate(

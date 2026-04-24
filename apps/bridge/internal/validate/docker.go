@@ -11,6 +11,7 @@ const (
 	PanelDataRoot    = "/var/lib/squad-panel"
 	PanelConfigsRoot = "/var/lib/squad-panel/configs"
 	PanelSavedRoot   = "/var/lib/squad-panel/saved"
+	PanelSocketRoot  = "/run/squad-panel/rnsquadjs"
 	DepotVolumeName  = "squad-depot"
 	ServerImage      = "squad-server:latest"
 	DepotInitImage   = "squad-panel/depot-init:latest"
@@ -124,6 +125,14 @@ func PanelSavedPath(p string) (string, error) {
 	parts := strings.Split(rel, string(filepath.Separator))
 	if len(parts) < 1 || !uuidLike(parts[0]) {
 		return "", fmt.Errorf("%w: saved path missing uuid segment", ErrForbidden)
+	}
+	return cleaned, nil
+}
+
+func PanelSocketPath(p string) (string, error) {
+	cleaned, err := Path(p, PanelSocketRoot)
+	if err != nil {
+		return "", err
 	}
 	return cleaned, nil
 }

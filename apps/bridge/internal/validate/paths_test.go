@@ -36,3 +36,21 @@ func TestPathAcceptsUnderRoot(t *testing.T) {
 		t.Errorf("Path mutated input: got %q want %q", got, good)
 	}
 }
+
+func TestPanelSocketPath_AllowsRoot(t *testing.T) {
+	if _, err := PanelSocketPath("/run/squad-panel/rnsquadjs"); err != nil {
+		t.Fatalf("expected sockets root allowed: %v", err)
+	}
+}
+
+func TestPanelSocketPath_AllowsChild(t *testing.T) {
+	if _, err := PanelSocketPath("/run/squad-panel/rnsquadjs/019dbaa5-1234-7abc-8def-0123456789ab.sock"); err != nil {
+		t.Fatalf("expected child path allowed: %v", err)
+	}
+}
+
+func TestPanelSocketPath_RejectsEscape(t *testing.T) {
+	if _, err := PanelSocketPath("/run/squad-panel/rnsquadjs/../../etc/passwd"); err == nil {
+		t.Fatal("expected rejection for escape")
+	}
+}

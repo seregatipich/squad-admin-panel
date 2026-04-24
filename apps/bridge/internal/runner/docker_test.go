@@ -82,3 +82,56 @@ func TestDockerStopIdempotent(t *testing.T) {
 		t.Errorf("expected idempotent stop on missing container, got %v", err)
 	}
 }
+
+func TestRunRNSquadJS_ComposesExpectedDockerArgs(t *testing.T) {
+	f := &Fake{Stdout: []byte("rns-container-id\n")}
+	d := NewDocker(f)
+	id := "019dbaa5-1234-7abc-8def-0123456789ab"
+	out, err := d.RunRNSquadJS(context.Background(), RNSquadJSRunSpec{
+		ServerID: id,
+		Env: map[string]string{
+			"SERVER_ID": id,
+			"API_URL":   "http://api:3000",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if out != "rns-container-id" {
+		t.Errorf("expected rns-container-id, got %q", out)
+	}
+	if len(f.Calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(f.Calls))
+	}
+	args := strings.Join(f.Calls[0].Args, " ")
+	for _, must := range []string{
+		"run -d",
+		"--name rnsquadjs-" + id,
+		"--label panel.server_id=" + id,
+		"--label panel.kind=rnsquadjs",
+		"--network host",
+		"--user 1001:1001",
+		"--read-only",
+		"--restart unless-stopped",
+		"-v /var/lib/squad-panel/saved/" + id + "/SquadGame/Saved/Logs:/squad/Logs:ro",
+		"-v /run/squad-panel/rnsquadjs:/run/panelBridge:rw",
+		"-e API_URL=http://api:3000",
+		"-e SERVER_ID=" + id,
+		"squad-panel/rnsquadjs:latest",
+	} {
+		if !strings.Contains(args, must) {
+			t.Errorf("expected args to contain %q, got: %s", must, args)
+		}
+	}
+}
+
+func TestRunRNSquadJS_RejectsBadServerID(t *testing.T) {
+	f := &Fake{}
+	d := NewDocker(f)
+	if _, err := d.RunRNSquadJS(context.Background(), RNSquadJSRunSpec{ServerID: "../etc"}); err == nil {
+		t.Fatal("expected rejection")
+	}
+	if len(f.Calls) != 0 {
+		t.Errorf("expected 0 calls on rejection, got %d", len(f.Calls))
+	}
+}

@@ -40,7 +40,10 @@ SystemCallFilter=~@debug @mount @swap @reboot @obsolete @cpu-emulation @raw-io
 SystemCallErrorNumber=EPERM
 
 LogsDirectory=panel-host-bridge
-ReadWritePaths=/var/lib/squad-panel /var/log/panel-host-bridge /etc/ufw /run/docker.sock
+RuntimeDirectory=squad-panel/rnsquadjs
+RuntimeDirectoryMode=0775
+RuntimeDirectoryPreserve=yes
+ReadWritePaths=/var/lib/squad-panel /var/log/panel-host-bridge /etc/ufw /run/docker.sock /run/squad-panel/rnsquadjs
 DeviceAllow=
 
 CapabilityBoundingSet=CAP_NET_ADMIN
