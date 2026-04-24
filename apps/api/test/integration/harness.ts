@@ -84,6 +84,9 @@ export interface FakeBridge {
     cpu_model: string;
     cpu_cores: number;
     ram_total_bytes: number;
+    uptime_seconds: number;
+    docker_version: string;
+    ip_addresses: string[];
   }>;
   hostMetrics: () => Promise<{
     cpu_percent: number;
@@ -93,6 +96,9 @@ export interface FakeBridge {
     disk_total_bytes: number;
     net_rx_bytes_per_sec: number;
     net_tx_bytes_per_sec: number;
+    load_avg_1m: number;
+    load_avg_5m: number;
+    load_avg_15m: number;
     sampled_at: string;
   }>;
   fileRead: (p: { path: string }) => Promise<{ content: string }>;
@@ -169,6 +175,9 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
       cpu_model: 'test-cpu',
       cpu_cores: 8,
       ram_total_bytes: 16 * 1024 ** 3,
+      uptime_seconds: 3600,
+      docker_version: 'Docker version 27.5.1, build 9f9e405',
+      ip_addresses: ['10.0.0.1'],
     }),
     hostMetrics: async () => ({
       cpu_percent: 1,
@@ -178,6 +187,9 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
       disk_total_bytes: 100 * 1024 ** 3,
       net_rx_bytes_per_sec: 0,
       net_tx_bytes_per_sec: 0,
+      load_avg_1m: 0,
+      load_avg_5m: 0,
+      load_avg_15m: 0,
       sampled_at: new Date().toISOString(),
     }),
     fileRead: async ({ path }) => {

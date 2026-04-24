@@ -25,9 +25,10 @@ import (
 var Version = "dev"
 
 type Dispatcher struct {
-	UFW      *sysd.UFW
-	Docker   *runner.DockerRunner
-	DiskRoot string
+	UFW          *sysd.UFW
+	Docker       *runner.DockerRunner
+	DiskRoot     string
+	MetricsCache *metrics.MetricsCache
 }
 
 func (d *Dispatcher) Handle(
@@ -98,15 +99,10 @@ func (d *Dispatcher) hostMetrics(req *rpc.Request) rpc.Response {
 	if mp == "" {
 		mp = "/"
 	}
-	_, prev, err := metrics.Metrics(nil, mp)
-	if err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeInternal, err.Error())
+	if d.MetricsCache == nil {
+		d.MetricsCache = metrics.NewMetricsCache(nil, nil, 200*time.Millisecond)
 	}
-	after, _, err := metrics.Metrics(prev, mp)
-	if err != nil {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeInternal, err.Error())
-	}
-	body, _ := json.Marshal(after)
+	body, _ := json.Marshal(d.MetricsCache.Sample(mp))
 	return rpc.NewSuccessResponse(req.ID, body)
 }
 

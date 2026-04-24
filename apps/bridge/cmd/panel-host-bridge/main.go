@@ -24,6 +24,7 @@ import (
 
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/auth"
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/handlers"
+	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/metrics"
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/rpc"
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/runner"
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/sysd"
@@ -50,8 +51,9 @@ func main() {
 	_, _ = daemon.SdNotify(false, daemon.SdNotifyReady)
 
 	disp := &handlers.Dispatcher{
-		UFW:    &sysd.UFW{R: runner.Real{}},
-		Docker: runner.NewDocker(runner.Real{}),
+		UFW:          &sysd.UFW{R: runner.Real{}},
+		Docker:       runner.NewDocker(runner.Real{}),
+		MetricsCache: metrics.NewMetricsCache(nil, nil, 200*time.Millisecond),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

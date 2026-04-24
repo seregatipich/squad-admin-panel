@@ -54,6 +54,9 @@ export interface HostInfo {
   cpu_model: string;
   cpu_cores: number;
   ram_total_bytes: number;
+  uptime_seconds: number;
+  docker_version: string;
+  ip_addresses: string[];
 }
 
 export interface HostMetrics {
@@ -64,6 +67,9 @@ export interface HostMetrics {
   disk_total_bytes: number;
   net_rx_bytes_per_sec: number;
   net_tx_bytes_per_sec: number;
+  load_avg_1m: number;
+  load_avg_5m: number;
+  load_avg_15m: number;
   sampled_at: string;
 }
 
