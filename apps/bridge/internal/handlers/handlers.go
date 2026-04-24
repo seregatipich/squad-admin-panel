@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -24,11 +25,24 @@ import (
 
 var Version = "dev"
 
+// restartFlushDelay is the time the host_agent_restart handler waits between
+// flushing its response back over the unix socket and exec'ing systemctl. It
+// is small enough that the operator perceives the restart as instant, large
+// enough that the framed response reaches the client before systemd kills us.
+const restartFlushDelay = 250 * time.Millisecond
+
 type Dispatcher struct {
 	UFW          *sysd.UFW
 	Docker       *runner.DockerRunner
 	DiskRoot     string
 	MetricsCache *metrics.MetricsCache
+	// RestartCommand returns the *exec.Cmd that performs the bridge daemon
+	// restart. Tests inject a recorder; production leaves it nil and the
+	// real systemctl invocation is used.
+	RestartCommand func() *exec.Cmd
+	// restartDelay overrides restartFlushDelay; tests use this to bring the
+	// observation window down to a few milliseconds.
+	restartDelay time.Duration
 }
 
 func (d *Dispatcher) Handle(
@@ -69,8 +83,33 @@ func (d *Dispatcher) Handle(
 		return d.containerLogsFollow(ctx, req, onStream)
 	case "depot_update":
 		return d.depotUpdate(ctx, req, onStream)
+	case "host_agent_restart":
+		return d.hostAgentRestart(req)
 	}
 	return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, "unknown method: "+req.Method)
+}
+
+func (d *Dispatcher) hostAgentRestart(req *rpc.Request) rpc.Response {
+	delay := d.restartDelay
+	if delay <= 0 {
+		delay = restartFlushDelay
+	}
+	cmdFactory := d.RestartCommand
+	if cmdFactory == nil {
+		cmdFactory = func() *exec.Cmd {
+			return exec.Command("systemctl", "restart", "panel-host-bridge.service")
+		}
+	}
+	go func() {
+		time.Sleep(delay)
+		cmd := cmdFactory()
+		if cmd == nil {
+			return
+		}
+		_ = cmd.Start()
+	}()
+	body, _ := json.Marshal(map[string]string{"status": "restarting"})
+	return rpc.NewSuccessResponse(req.ID, body)
 }
 
 // --- read-only / diagnostic ---

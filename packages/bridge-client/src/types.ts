@@ -159,3 +159,7 @@ export interface ContainerLogsParams {
   name: string;
   tail?: number;
 }
+
+export interface HostAgentRestartResult {
+  status: 'restarting';
+}

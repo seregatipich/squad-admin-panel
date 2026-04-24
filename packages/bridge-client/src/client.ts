@@ -15,6 +15,7 @@ import {
   type ContainerStatsResult,
   type FileReadParams,
   type FileWriteParams,
+  type HostAgentRestartResult,
   type HostInfo,
   type HostMetrics,
   type PingResult,
@@ -130,6 +131,9 @@ export class BridgeClient {
       onStream,
       timeoutMs: 3_600_000,
     });
+
+  hostAgentRestart = () =>
+    this.call<HostAgentRestartResult>('host_agent_restart', undefined, { timeoutMs: 5_000 });
 
   private async call<Result, Params = unknown>(
     method: BridgeRequest['method'],

@@ -15,6 +15,7 @@ export const BRIDGE_METHODS = [
   'container_stats',
   'container_logs_follow',
   'depot_update',
+  'host_agent_restart',
 ] as const;
 
 export type BridgeMethod = (typeof BRIDGE_METHODS)[number];

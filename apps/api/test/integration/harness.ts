@@ -25,6 +25,7 @@ import auditRoutes from '../../src/routes/audit.js';
 import authRoutes from '../../src/routes/auth.js';
 import depotRoutes from '../../src/routes/depot.js';
 import hostRoutes from '../../src/routes/host.js';
+import hostActionsRoutes from '../../src/routes/host-actions.js';
 import playerRoutes from '../../src/routes/players.js';
 import serverConfigRoutes from '../../src/routes/server-configs.js';
 import serverInstallRoutes from '../../src/routes/server-install.js';
@@ -150,6 +151,7 @@ export interface FakeBridge {
     comment?: string;
   }) => Promise<{ output: string; status: string }>;
   processInfo: (p: { pid: number }) => Promise<{ pid: number; exists: boolean }>;
+  hostAgentRestart: () => Promise<{ status: 'restarting' }>;
   connect(): Promise<void>;
   close(): Promise<void>;
   /** Overridable in-memory file store; routes use /api/v1/servers/:id/configs
@@ -235,6 +237,7 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
     depotUpdate: async () => ({ exit_code: 0 }),
     ufwRule: async () => ({ output: '', status: 'ok' }),
     processInfo: async ({ pid }) => ({ pid, exists: true }),
+    hostAgentRestart: async () => ({ status: 'restarting' as const }),
   };
   return { ...base, ...overrides, files };
 }
@@ -365,6 +368,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(authRoutes);
   await app.register(setupRoutes);
   await app.register(hostRoutes);
+  await app.register(hostActionsRoutes);
   await app.register(serverRoutes);
   await app.register(serverInstallRoutes);
   await app.register(serverLogsRoutes);

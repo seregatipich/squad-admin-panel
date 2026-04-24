@@ -29,6 +29,7 @@ import discordRoutes from './routes/auth-discord.js';
 import steamRoutes from './routes/auth-steam.js';
 import depotRoutes from './routes/depot.js';
 import hostRoutes from './routes/host.js';
+import hostActionsRoutes from './routes/host-actions.js';
 import playerRoutes from './routes/players.js';
 import serverConfigRoutes from './routes/server-configs.js';
 import serverInstallRoutes from './routes/server-install.js';
@@ -90,6 +91,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(authRoutes);
   await app.register(setupRoutes);
   await app.register(hostRoutes);
+  await app.register(hostActionsRoutes);
   await app.register(serverRoutes);
   await app.register(serverInstallRoutes);
   await app.register(serverLogsRoutes);

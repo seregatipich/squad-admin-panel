@@ -26,6 +26,7 @@ import authRoutes from '../src/routes/auth.js';
 import discordRoutes from '../src/routes/auth-discord.js';
 import steamRoutes from '../src/routes/auth-steam.js';
 import hostRoutes from '../src/routes/host.js';
+import hostActionsRoutes from '../src/routes/host-actions.js';
 import playerRoutes from '../src/routes/players.js';
 import serverInstallRoutes from '../src/routes/server-install.js';
 import serverRoutes from '../src/routes/servers.js';
@@ -78,6 +79,7 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   await app.register(authRoutes);
   await app.register(setupRoutes);
   await app.register(hostRoutes);
+  await app.register(hostActionsRoutes);
   await app.register(serverRoutes);
   await app.register(serverInstallRoutes);
   await app.register(playerRoutes);
