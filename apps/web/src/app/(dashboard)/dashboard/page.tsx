@@ -1,7 +1,17 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { RestartBridgeButton } from '@/components/RestartBridgeButton';
 import { SystemStatus } from '@/components/SystemStatus';
+import {
+  formatBytes,
+  formatBytesPerSec,
+  formatPercent,
+  formatRelativeTime,
+  formatUptime,
+  ratio,
+} from '@/lib/format';
+import { computeHostHealth, type HealthLevel, thresholdTone } from '@/lib/host-health';
 
 interface BridgeStatus {
   connected: boolean;
@@ -59,12 +69,24 @@ interface AuditRow {
 
 const POLL_MS = 4000;
 
+const HEALTH_LABEL: Record<HealthLevel, string> = {
+  healthy: 'Здоровый',
+  warning: 'Предупреждение',
+  critical: 'Критично',
+};
+const HEALTH_TONE: Record<HealthLevel, 'emerald' | 'amber' | 'red'> = {
+  healthy: 'emerald',
+  warning: 'amber',
+  critical: 'red',
+};
+
 export default function DashboardPage() {
   const [bridge, setBridge] = useState<BridgeStatus | null>(null);
   const [info, setInfo] = useState<HostInfo | null>(null);
   const [metrics, setMetrics] = useState<HostMetrics | null>(null);
   const [servers, setServers] = useState<ServerRow[]>([]);
   const [recent, setRecent] = useState<AuditRow[]>([]);
+  const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
     let cancelled = false;
@@ -77,6 +99,7 @@ export default function DashboardPage() {
         fetchJson<{ items: AuditRow[] }>('/api/v1/audit?page_size=10'),
       ]);
       if (cancelled) return;
+      setNow(new Date());
       if (results[0].status === 'fulfilled') setBridge(results[0].value);
       else setBridge({ connected: false, error: (results[0].reason as Error).message });
       if (results[1].status === 'fulfilled') setInfo(results[1].value);
@@ -103,11 +126,12 @@ export default function DashboardPage() {
     }
   }
 
+  const health = computeHostHealth(info, metrics, bridge);
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Дашборд</h1>
 
-      {/* 4 stat cards — §1H Screen 3 */}
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           title="Серверы"
@@ -122,54 +146,23 @@ export default function DashboardPage() {
           tone="emerald"
         />
         <StatCard
-          title="Bridge"
-          value={bridge?.connected ? 'connected' : 'offline'}
-          hint={bridge?.version ? `v ${bridge.version}` : (bridge?.error ?? '—')}
-          tone={bridge?.connected ? 'emerald' : 'red'}
+          title="Состояние хоста"
+          value={HEALTH_LABEL[health.level]}
+          hint={health.reasons[0] ?? (bridge?.connected ? 'все метрики в норме' : 'bridge оффлайн')}
+          tone={HEALTH_TONE[health.level]}
         />
         <StatCard
           title="Alerts"
           value={alerts.length.toString()}
-          hint={alerts[0] ?? 'всё чисто'}
+          hint={alerts[0] ?? 'Тревог нет'}
           tone={alerts.length ? 'amber' : 'neutral'}
         />
       </section>
 
-      {/* Live system status — every connector with its own dot */}
       <SystemStatus />
 
-      {/* Host info */}
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Хост</h2>
-          {info ? (
-            <span className="text-xs font-mono text-neutral-500">{info.hostname}</span>
-          ) : null}
-        </div>
-        {info && metrics ? (
-          <div className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2 lg:grid-cols-3">
-            <Cell label="OS" value={`${info.os_name} ${info.os_version}`} />
-            <Cell label="Kernel" value={info.kernel} mono />
-            <Cell label="Arch" value={info.arch} mono />
-            <Cell label="CPU" value={`${info.cpu_model} × ${info.cpu_cores}`} />
-            <Cell label="CPU %" value={`${metrics.cpu_percent.toFixed(1)}%`} />
-            <Cell
-              label="RAM"
-              value={`${fmtBytes(metrics.ram_used_bytes)} / ${fmtBytes(metrics.ram_total_bytes)} (${pct(metrics.ram_used_bytes, metrics.ram_total_bytes)})`}
-            />
-            <Cell
-              label="Disk"
-              value={`${fmtBytes(metrics.disk_used_bytes)} / ${fmtBytes(metrics.disk_total_bytes)} (${pct(metrics.disk_used_bytes, metrics.disk_total_bytes)})`}
-            />
-            <Cell label="Net rx" value={`${fmtBytes(metrics.net_rx_bytes_per_sec)}/s`} />
-            <Cell label="Net tx" value={`${fmtBytes(metrics.net_tx_bytes_per_sec)}/s`} />
-          </div>
-        ) : (
-          <div className="text-neutral-500 text-sm">Загрузка данных хоста…</div>
-        )}
-      </section>
+      <HostBlock bridge={bridge} info={info} metrics={metrics} health={health} now={now} />
 
-      {/* Quick server cards */}
       <section className="space-y-2">
         <div className="flex items-baseline justify-between">
           <h2 className="text-xs uppercase tracking-widest text-neutral-400">Серверы</h2>
@@ -215,7 +208,6 @@ export default function DashboardPage() {
         )}
       </section>
 
-      {/* Recent events (last 10 audit rows) */}
       <section className="space-y-2">
         <div className="flex items-baseline justify-between">
           <h2 className="text-xs uppercase tracking-widest text-neutral-400">Последние действия</h2>
@@ -248,27 +240,300 @@ export default function DashboardPage() {
   );
 }
 
+function HostBlock({
+  bridge,
+  info,
+  metrics,
+  health,
+  now,
+}: {
+  bridge: BridgeStatus | null;
+  info: HostInfo | null;
+  metrics: HostMetrics | null;
+  health: ReturnType<typeof computeHostHealth>;
+  now: Date;
+}) {
+  const isLoading = info === null || metrics === null;
+  const bridgeConnected = bridge?.connected === true;
+
+  return (
+    <section className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5 space-y-5">
+      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-zinc-800 pb-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-3">
+            <h2 className="truncate text-xl font-semibold text-neutral-100">
+              {info?.hostname ?? <span className="text-neutral-500">Хост</span>}
+            </h2>
+            <HealthPill level={health.level} />
+          </div>
+          <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-neutral-400">
+            {info ? (
+              <>
+                <span>
+                  {info.os_name} {info.os_version}
+                </span>
+                <span className="font-mono">{info.arch}</span>
+                <span>аптайм {formatUptime(info.uptime_seconds)}</span>
+              </>
+            ) : (
+              <span className="italic text-neutral-500">загрузка…</span>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-col items-end gap-2 text-xs text-neutral-400">
+          <div className="flex items-center gap-3">
+            <span>
+              Bridge:{' '}
+              {bridgeConnected ? (
+                <span className="text-emerald-400">
+                  connected{bridge?.version ? ` (v${bridge.version})` : ''}
+                </span>
+              ) : (
+                <span className="text-red-400">недоступен</span>
+              )}
+            </span>
+            <RestartBridgeButton
+              disabled={!bridgeConnected}
+              disabledReason="Сначала восстановите соединение."
+            />
+          </div>
+          <span>
+            Обновлено{' '}
+            <span className="font-mono">
+              {metrics?.sampled_at ? formatRelativeTime(metrics.sampled_at, now) : '—'}
+            </span>
+          </span>
+        </div>
+      </header>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {isLoading ? (
+          <>
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+          </>
+        ) : (
+          <>
+            <CpuCard info={info} metrics={metrics} />
+            <RamCard metrics={metrics} />
+            <DiskCard metrics={metrics} />
+            <NetworkCard metrics={metrics} />
+          </>
+        )}
+      </div>
+
+      <SystemRow info={info} metrics={metrics} />
+    </section>
+  );
+}
+
+function HealthPill({ level }: { level: HealthLevel }) {
+  const tones: Record<HealthLevel, string> = {
+    healthy: 'border-emerald-700/60 bg-emerald-900/30 text-emerald-300',
+    warning: 'border-amber-700/60 bg-amber-900/30 text-amber-300',
+    critical: 'border-red-700/60 bg-red-900/30 text-red-300',
+  };
+  return (
+    <span
+      className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-widest ${tones[level]}`}
+    >
+      {HEALTH_LABEL[level]}
+    </span>
+  );
+}
+
+function CpuCard({ info, metrics }: { info: HostInfo; metrics: HostMetrics }) {
+  const pct = Math.max(0, Math.min(100, metrics.cpu_percent));
+  const tone = thresholdTone(pct / 100, 0.8, 0.95);
+  const cpuLabel = info.cpu_model && info.cpu_model !== 'unknown' ? info.cpu_model : null;
+  return (
+    <ResourceCard
+      title="Процессор"
+      mainValue={`${metrics.cpu_percent.toFixed(1)}%`}
+      sub={
+        cpuLabel ? (
+          <span className="truncate" title={cpuLabel}>
+            {cpuLabel} • {info.cpu_cores} ядер
+          </span>
+        ) : (
+          <span className="italic text-neutral-500">неизвестно • {info.cpu_cores} ядер</span>
+        )
+      }
+      progressPct={pct}
+      progressTone={tone}
+    />
+  );
+}
+
+function RamCard({ metrics }: { metrics: HostMetrics }) {
+  const total = metrics.ram_total_bytes;
+  if (total <= 0) {
+    return (
+      <ResourceCard
+        title="Память"
+        mainValue="—"
+        sub={<span className="italic text-neutral-500">данных нет</span>}
+      />
+    );
+  }
+  const r = ratio(metrics.ram_used_bytes, total);
+  const tone = thresholdTone(r, 0.7, 0.85);
+  return (
+    <ResourceCard
+      title="Память"
+      mainValue={formatPercent(metrics.ram_used_bytes, total)}
+      sub={
+        <span>
+          {formatBytes(metrics.ram_used_bytes)} / {formatBytes(total)}
+        </span>
+      }
+      progressPct={r * 100}
+      progressTone={tone}
+    />
+  );
+}
+
+function DiskCard({ metrics }: { metrics: HostMetrics }) {
+  const total = metrics.disk_total_bytes;
+  if (total <= 0) {
+    return (
+      <ResourceCard
+        title="Диск"
+        mainValue="—"
+        sub={<span className="italic text-neutral-500">данных нет</span>}
+      />
+    );
+  }
+  const r = ratio(metrics.disk_used_bytes, total);
+  const tone = thresholdTone(r, 0.75, 0.9);
+  return (
+    <ResourceCard
+      title="Диск"
+      mainValue={formatPercent(metrics.disk_used_bytes, total)}
+      sub={
+        <span>
+          {formatBytes(metrics.disk_used_bytes)} / {formatBytes(total)}
+        </span>
+      }
+      progressPct={r * 100}
+      progressTone={tone}
+    />
+  );
+}
+
+function NetworkCard({ metrics }: { metrics: HostMetrics }) {
+  return (
+    <ResourceCard
+      title="Сеть"
+      mainValue={formatBytesPerSec(metrics.net_rx_bytes_per_sec)}
+      mainLabel="RX"
+      sub={
+        <span>
+          TX <span className="font-mono">{formatBytesPerSec(metrics.net_tx_bytes_per_sec)}</span>
+        </span>
+      }
+    />
+  );
+}
+
+function ResourceCard({
+  title,
+  mainValue,
+  mainLabel,
+  sub,
+  progressPct,
+  progressTone,
+}: {
+  title: string;
+  mainValue: string;
+  mainLabel?: string;
+  sub: React.ReactNode;
+  progressPct?: number;
+  progressTone?: 'emerald' | 'amber' | 'red';
+}) {
+  const fill: Record<string, string> = {
+    emerald: 'bg-emerald-500',
+    amber: 'bg-amber-500',
+    red: 'bg-red-500',
+  };
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4 space-y-3">
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs uppercase tracking-widest text-neutral-500">{title}</span>
+        {mainLabel ? (
+          <span className="text-[10px] uppercase tracking-widest text-neutral-500">
+            {mainLabel}
+          </span>
+        ) : null}
+      </div>
+      <div className="text-2xl font-semibold tabular-nums text-neutral-100">{mainValue}</div>
+      <div className="text-xs text-neutral-400 truncate">{sub}</div>
+      {progressPct !== undefined && progressTone ? (
+        <div className="h-2 rounded-full bg-zinc-800 overflow-hidden">
+          <div
+            className={`h-2 rounded-full ${fill[progressTone]}`}
+            style={{ width: `${Math.max(0, Math.min(100, progressPct))}%` }}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4 space-y-3 animate-pulse">
+      <div className="h-3 w-20 rounded bg-zinc-800" />
+      <div className="h-7 w-24 rounded bg-zinc-800" />
+      <div className="h-3 w-32 rounded bg-zinc-800" />
+      <div className="h-2 rounded-full bg-zinc-800" />
+    </div>
+  );
+}
+
+function SystemRow({ info, metrics }: { info: HostInfo | null; metrics: HostMetrics | null }) {
+  const ip = info && info.ip_addresses.length > 0 ? info.ip_addresses.join(', ') : '—';
+  const docker = info && info.docker_version !== '' ? info.docker_version : '—';
+  const kernel = info?.kernel ?? '—';
+  const arch = info?.arch ?? '—';
+  const load = metrics
+    ? `${metrics.load_avg_1m.toFixed(2)} / ${metrics.load_avg_5m.toFixed(2)} / ${metrics.load_avg_15m.toFixed(2)}`
+    : '—';
+
+  return (
+    <div className="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <SystemCell label="Ядро" value={kernel} mono />
+      <SystemCell label="Архитектура" value={arch} mono />
+      <SystemCell label="Docker" value={docker} mono />
+      <SystemCell label="IP" value={ip} mono />
+      <SystemCell label="Средняя загрузка" value={load} mono />
+    </div>
+  );
+}
+
+function SystemCell({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  const isMissing = value === '—';
+  return (
+    <div className="flex items-baseline gap-2 min-w-0">
+      <span className="text-neutral-500 uppercase tracking-widest text-[10px] shrink-0">
+        {label}
+      </span>
+      <span
+        className={`truncate ${mono ? 'font-mono' : ''} ${isMissing ? 'text-neutral-600' : 'text-neutral-200'}`}
+        title={value}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
 async function fetchJson<T>(path: string): Promise<T> {
   const r = await fetch(path, { credentials: 'include', cache: 'no-store' });
   if (!r.ok) throw new Error(`${path} ${r.status}`);
   return (await r.json()) as T;
-}
-
-function fmtBytes(n: number): string {
-  if (!Number.isFinite(n) || n === 0) return '0 B';
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
-}
-
-function pct(used: number, total: number): string {
-  if (!total) return '—';
-  return `${((used / total) * 100).toFixed(0)}%`;
 }
 
 function StatCard({
@@ -294,15 +559,6 @@ function StatCard({
       <div className="text-xs uppercase tracking-widest text-neutral-500">{title}</div>
       <div className="text-2xl font-semibold mt-1">{value}</div>
       {hint ? <div className="text-xs text-neutral-500 mt-1">{hint}</div> : null}
-    </div>
-  );
-}
-
-function Cell({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="flex items-baseline gap-2">
-      <span className="text-neutral-500 text-xs uppercase tracking-widest w-16">{label}</span>
-      <span className={mono ? 'font-mono text-xs' : 'text-sm'}>{value}</span>
     </div>
   );
 }
