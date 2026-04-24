@@ -65,3 +65,22 @@ func TestPanelSavedPath(t *testing.T) {
 		t.Errorf("expected forbidden for non-uuid")
 	}
 }
+
+func TestContainerImage_AllowsRNSquadJS(t *testing.T) {
+	if err := ContainerImage(RNSquadJSImage); err != nil {
+		t.Fatalf("expected RNSquadJSImage allowed, got %v", err)
+	}
+}
+
+func TestContainerName_AllowsRNSquadJSSidecar(t *testing.T) {
+	uuid := "019dbaa5-1234-7abc-8def-0123456789ab"
+	if err := ContainerName("rnsquadjs-" + uuid); err != nil {
+		t.Fatalf("expected rnsquadjs-<uuid> allowed, got %v", err)
+	}
+}
+
+func TestContainerName_RejectsBogusSidecar(t *testing.T) {
+	if err := ContainerName("rnsquadjs-not-a-uuid"); err == nil {
+		t.Fatal("expected rejection for non-uuid sidecar name")
+	}
+}
