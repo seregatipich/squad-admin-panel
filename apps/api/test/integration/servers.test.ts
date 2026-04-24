@@ -296,6 +296,48 @@ describe('POST /api/v1/servers/:id/restart', () => {
 });
 
 describe('DELETE /api/v1/servers/:id', () => {
+  it('cascades through config_versions even when the file has edit history', async () => {
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: createBody,
+      })
+    ).json<{ id: string }>();
+    // Write two config versions so config_versions gets populated. Before the
+    // 0004_config_versions_cascade migration, the cascade DELETE from servers
+    // tripped the append-only trigger and the whole request 500'd.
+    await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+      payload: { content: 'v1', message: 'a' },
+    });
+    await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+      payload: { content: 'v2', message: 'b' },
+    });
+    const { configVersions } = await import('@squad/db/schema');
+    const before = await h.db.select().from(configVersions).where(eq(configVersions.serverId, id));
+    expect(before.length).toBeGreaterThanOrEqual(2);
+
+    const resp = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/servers/${id}`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+
+    const srv = await h.db.select().from(servers).where(eq(servers.id, id));
+    expect(srv).toHaveLength(0);
+    const after = await h.db.select().from(configVersions).where(eq(configVersions.serverId, id));
+    expect(after).toHaveLength(0);
+  });
+
   it('removes the row and issues container_rm on the bridge', async () => {
     let removed = false;
     h.bridge.containerRm = async () => {
