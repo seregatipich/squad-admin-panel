@@ -28,7 +28,7 @@ host
                 ├── XADD events:server:{id}            (Redis Streams)
                 ├── SET  rcon:status:{id} EX 300       (Redis)
                 ├── SET  worker:heartbeat:rnsquadjs:{id} EX 30
-                └── HTTP POST /rcon  (loopback only — API → sidecar)
+                └── Unix POST /rcon  (per-server socket — API → sidecar)
 ```
 
 Both containers are launched, inspected, and stopped through the existing bridge RPC surface (`container_run` / `container_inspect` / `container_stop` / `container_rm`). No new bridge RPC methods are required — only an image-allowlist entry.
@@ -64,7 +64,7 @@ Single overlay plugin. Three responsibilities, no business logic.
 
 - **Event mapping.** Subscribes to RNSquadJS EventEmitter (`PLAYER_CONNECTED`, `PLAYER_DISCONNECTED`, `PLAYER_DAMAGED`, `PLAYER_DIED`, `PLAYER_WOUNDED`, `PLAYER_REVIVED`, `PLAYER_POSSESS`, `PLAYER_UNPOSSESS`, `NEW_GAME`, `ROUND_ENDED`, `SQUAD_CREATED`, `DEPLOYABLE_DAMAGED`, `TICK_RATE`, `ADMIN_BROADCAST`, `CHAT_MESSAGE`, `LIST_PLAYERS`, `LIST_SQUADS`, `SHOW_SERVER_INFO`, `POSSESSED_ADMIN_CAMERA`, `UNPOSSESSED_ADMIN_CAMERA`, `WARN`, `KICK`, `BAN`). Each event is wrapped in `EventEnvelope { id: uuidv7(), serverId, type, version, ts, payload }` from `packages/shared-types/src/events.ts` and pushed via `XADD events:server:{id} *`.
 - **RCON status.** On `connected` / `disconnected` from `squad-rcon`, write `SET rcon:status:{id} '{"state":"connected"|"disconnected", "lastChange": <iso>}' EX 300`. Same key contract as today's `apps/workers/rcon/src/supervisor.ts`.
-- **RCON command HTTP.** `POST /rcon { method, args }` on `127.0.0.1:8765`, executes via `squad-rcon`, returns `{ ok, response }`. The only consumer is the panel API.
+- **RCON command Unix socket.** `POST /rcon { method, args }` on a per-server Unix socket at `/run/panelBridge/rcon.sock` inside the sidecar (bind-mounted from host `/run/squad-panel/rnsquadjs/{uuid}.sock` so the panel API container can reach it). Loopback HTTP would require port allocation under `--network host` because all sidecars share the host network — the per-server socket avoids that allocation problem entirely. Executes via `squad-rcon`, returns `{ ok, response }`. The only consumer is the panel API.
 - **Heartbeat.** `SET worker:heartbeat:rnsquadjs:{id} '<iso>' EX 30` every 10 s — matches `packages/shared-config/src/heartbeat.ts` contract.
 
 ### 3.3. Mongo / MariaDB stance
@@ -82,7 +82,7 @@ Add `squad-panel/rnsquadjs:*` to the image allowlist. No other changes — same 
 | `apps/api/src/routes/server-install.ts` | After Squad `container_run`: second `container_run` for `rnsquadjs-{uuid}` with bind-mount of the single log file and `SERVER_ID` env. |
 | `apps/api/src/routes/servers.ts` (stop / delete) | Symmetric: stop and remove sidecar before / together with Squad container. |
 | `apps/api/src/routes/internal/rnsquadjs-config.ts` (new) | `GET /internal/rnsquadjs/config/:id` — loopback only (Fastify `onRequest` guard on `req.ip === '127.0.0.1'`). Renders single-server `config.json` from `servers` row + `Rcon.cfg` (host=`127.0.0.1`, port from DB, password from cfg). |
-| `apps/api/src/lib/rcon.ts` (new) | `rcon.exec(serverId, method, args)` → `POST http://rnsquadjs-{uuid}:8765/rcon`. Replaces direct RCON socket usage everywhere in the API. |
+| `apps/api/src/lib/rcon.ts` (new) | `rcon.exec(serverId, method, args)` → POST over the per-server Unix socket `/run/squad-panel/rnsquadjs/{uuid}.sock` (path-only loopback; survives `--network host` port-collision). Replaces direct RCON socket usage everywhere in the API. |
 | `apps/api/src/plugins/status-reconciler.ts` | No code change — already reads `rcon:status:{id}`. Add the sidecar to `container_inspect` polling so the same reconciler flips DB state for both. |
 
 ### 3.6. Worker / compose removals (after Phase 4 below, not before)
