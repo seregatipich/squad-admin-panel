@@ -241,7 +241,7 @@ describe('POST /api/v1/servers/:id/start', () => {
 });
 
 describe('POST /api/v1/servers/:id/stop', () => {
-  it('calls container_stop and transitions to stopping when no creds are present', async () => {
+  it('calls container_stop and transitions to stopping after the grace broadcast', async () => {
     let stopped = false;
     h.bridge.containerStop = async () => {
       stopped = true;
@@ -255,7 +255,6 @@ describe('POST /api/v1/servers/:id/stop', () => {
         payload: createBody,
       })
     ).json<{ id: string }>();
-    // Remove credentials so the stop route skips the 15 s graceful RCON path.
     await h.db.delete(serverCredentials).where(eq(serverCredentials.serverId, id));
 
     const resp = await h.app.inject({
@@ -269,7 +268,7 @@ describe('POST /api/v1/servers/:id/stop', () => {
     const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
     expect(row?.status).toBe('stopping');
     await assertAuditRow(h, { action: 'server.stop', resource: 'server', targetId: id });
-  });
+  }, 20_000);
 });
 
 describe('POST /api/v1/servers/:id/restart', () => {

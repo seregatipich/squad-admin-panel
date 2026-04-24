@@ -12,9 +12,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
-import { resolveRconHost } from '../lib/rcon-host.js';
-import { rconSendOnce } from '../lib/rcon-send.js';
+import { encrypt, serialize } from '../lib/crypto.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 
@@ -274,48 +272,26 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'not_found' };
       }
 
-      const settings = await app.db.query.serverSettings.findFirst({
-        where: eq(serverSettings.serverId, s.id),
+      // Graceful shutdown via the panelBridge sidecar's RCON socket.
+      await app.rcon
+        .exec(s.id, 'AdminBroadcast', ['Server is shutting down in 15 seconds'])
+        .catch((err: unknown) => {
+          req.log.warn({ err: (err as Error).message }, 'AdminBroadcast failed; continuing');
+        });
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
+      await app.rcon.exec(s.id, 'AdminEndMatch', []).catch((err: unknown) => {
+        req.log.warn({ err: (err as Error).message }, 'AdminEndMatch failed; continuing');
       });
-      const creds = await app.db.query.serverCredentials.findFirst({
-        where: eq(serverCredentials.serverId, s.id),
-      });
-
-      // Graceful shutdown (TZ §17.7): broadcast → end match → stop container.
-      if (settings && creds) {
-        try {
-          const password = decryptString(
-            app.encryptionKey,
-            deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
-          );
-          const target = {
-            host: resolveRconHost(creds.rconHost),
-            port: creds.rconPort,
-            password,
-          };
-          await rconSendOnce({
-            ...target,
-            command: 'AdminBroadcast Server is shutting down in 15 seconds',
-            connectTimeoutMs: 2000,
-            commandTimeoutMs: 3000,
-          }).catch((err) => {
-            req.log.warn({ err: (err as Error).message }, 'AdminBroadcast failed; continuing');
-          });
-          await new Promise((resolve) => setTimeout(resolve, 15_000));
-          await rconSendOnce({
-            ...target,
-            command: 'AdminEndMatch',
-            connectTimeoutMs: 2000,
-            commandTimeoutMs: 3000,
-          }).catch((err) => {
-            req.log.warn({ err: (err as Error).message }, 'AdminEndMatch failed; continuing');
-          });
-        } catch (err) {
-          req.log.warn({ err: (err as Error).message }, 'graceful stop RCON phase skipped');
-        }
-      }
 
       await app.bridge.containerStop({ name: containerName(s.id), timeout_sec: 60 });
+      await app.bridge
+        .containerStop({ name: `rnsquadjs-${s.id}`, timeout_sec: 30 })
+        .catch((err: unknown) => {
+          req.log.warn(
+            { err: (err as Error).message, id: s.id },
+            'rnsquadjs sidecar stop failed (continuing)',
+          );
+        });
       await app.db
         .update(servers)
         .set({ status: 'stopping', updatedAt: new Date() })
@@ -415,6 +391,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+      await app.bridge.containerRm({ name: `rnsquadjs-${row.id}` }).catch(() => {});
       await app.bridge.containerRm({ name: containerName(row.id) }).catch(() => {});
       await app.db.delete(servers).where(eq(servers.id, req.params.id));
       return { ok: true };

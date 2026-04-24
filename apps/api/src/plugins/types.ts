@@ -4,6 +4,7 @@ import type { PermissionKey } from '@squad/shared-config';
 import type Redis from 'ioredis';
 import type { AppConfig } from '../config.js';
 import type { PermissionContext } from '../lib/rbac.js';
+import type { RconClient } from '../lib/rcon.js';
 
 declare module 'fastify' {
   interface FastifyContextConfig {
@@ -15,6 +16,7 @@ declare module 'fastify' {
     db: DatabaseClient;
     redis: Redis;
     bridge: BridgeClient;
+    rcon: RconClient;
     encryptionKey: Buffer;
     config: AppConfig;
     /**

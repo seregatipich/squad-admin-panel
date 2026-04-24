@@ -331,6 +331,9 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   app.decorate('redis', redis);
   app.decorate('bridge', bridge);
   app.decorate('makeBridgeClient', () => bridge);
+  app.decorate('rcon', {
+    exec: async () => '',
+  } satisfies import('../../src/lib/rcon.js').RconClient);
 
   await app.register(cookie, { secret: TEST_SESSION_SECRET });
   await app.register(websocket);
