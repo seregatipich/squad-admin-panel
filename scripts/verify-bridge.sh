@@ -54,12 +54,10 @@ PY
 call 'verify-1' 'ping' 'null'
 call 'verify-2' 'host_info' 'null'
 call 'verify-3' 'host_metrics' 'null'
-call 'verify-4' 'systemctl_action' '{"unit": "nginx.service", "action": "start"}'     # must be forbidden
-call 'verify-5' 'apt_install' '{"packages": ["bash"]}'                                  # must be forbidden
-call 'verify-6' 'apt_install' '{"packages": ["curl"]}' 180
-call 'verify-7' 'file_read' '{"path": "/etc/shadow"}'                                   # must be forbidden
-call 'verify-8' 'file_atomic_write' '{"path": "/opt/squad-servers/verify-bridge.tmp", "content": "verify-bridge ok\n", "mode": 420}'
-call 'verify-9' 'file_read' '{"path": "/opt/squad-servers/verify-bridge.tmp"}'
-call 'verify-10' 'steamcmd_run' '{"args": ["+login", "admin123", "pass"]}'              # must be forbidden
+call 'verify-4' 'process_info' "{\"pid\": $$}"
+call 'verify-5' 'file_read' '{"path": "/etc/shadow"}'                                   # must be forbidden (path allowlist)
+call 'verify-6' 'file_atomic_write' '{"path": "/opt/squad-servers/verify-bridge.tmp", "content": "verify-bridge ok\n", "mode": 420}'   # must be forbidden
+call 'verify-7' 'container_inspect' '{"name": "squad-00000000-0000-0000-0000-000000000000"}'   # must resolve (missing container)
+call 'verify-8' 'container_run' '{"name": "squad-00000000-0000-0000-0000-000000000000", "image": "alpine:latest", "networkMode": "host"}'   # must be forbidden (image allowlist)
 
 log "done."

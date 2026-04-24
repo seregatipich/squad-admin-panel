@@ -30,6 +30,20 @@ services:
       api:
         condition: service_healthy
 
+  migrator:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: 'no'
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+    working_dir: /app/packages/db
+    command: ['node', '--enable-source-maps', 'dist/migrate.js']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *default-logging
+
   api:
     build:
       context: .
@@ -45,6 +59,12 @@ services:
       SESSION_SECRET: ${SESSION_SECRET}
       BRIDGE_SOCKET: /run/panel-host-bridge.sock
       APP_DOMAIN: ${APP_DOMAIN:-admin.localhost}
+      # Host-side path of the squad-depot volume. Must match the bind-mount
+      # source used by install-host-bridge.sh AND the Environment= line in
+      # /etc/systemd/system/panel-host-bridge.service. Without this override
+      # server-install.ts reads from /var/lib/docker/volumes/squad-depot/_data
+      # which does not exist for bind-mounted volumes.
+      PANEL_DEPOT_HOST_PATH: ${DATA_DIR}/depot
       # Squad servers run with --network host and listen on 127.0.0.1:{rcon_port}
       # of the host. From inside this bridge-network container, 127.0.0.1 is the
       # api container itself — use the host-gateway alias instead so one-shot
@@ -61,6 +81,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://localhost:3000/health']
       interval: 15s
@@ -103,6 +125,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     logging: *default-logging
 
   worker-rcon:
@@ -125,6 +149,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     logging: *default-logging
 
   worker-audit-archiver:
@@ -133,6 +159,11 @@ services:
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     logging: *default-logging
 
   worker-event-partition:
@@ -141,6 +172,11 @@ services:
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     logging: *default-logging
 
   postgres:
@@ -194,7 +230,32 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/postgres
   redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/redis
   caddy_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/caddy-data
   caddy_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/caddy-config
   backup_repo:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/backup-repo

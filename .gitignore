@@ -36,3 +36,7 @@ apps/web/test-results/
 
 # Git worktrees
 .worktrees/
+
+# Runtime state (postgres/redis/caddy/depot/backups/servers) — created by
+# install-host-bridge.sh + docker-compose bind-mounts, never source.
+/data/
