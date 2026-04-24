@@ -117,6 +117,9 @@ services:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@127.0.0.1:5432/admin
       REDIS_URL: redis://127.0.0.1:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      # On --network host, Squad's RCON listener is on the local loopback.
+      # Credentials with rcon_host=NULL fall back to this value.
+      RCON_HOST_DEFAULT: 127.0.0.1
     depends_on:
       postgres:
         condition: service_healthy

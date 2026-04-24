@@ -35,6 +35,8 @@ interface ServerResponse {
   rcon_status: RconStatus;
 }
 
+const POLL_INTERVAL_MS = 3000;
+
 export default function ServerDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
@@ -43,6 +45,8 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const [acting, setActing] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logsLive, setLogsLive] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<number>(() => Date.now());
+  const [now, setNow] = useState<number>(() => Date.now());
   const wsRef = useRef<WebSocket | null>(null);
 
   async function refresh() {
@@ -50,18 +54,33 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       const r = await fetch(`/api/v1/servers/${id}`, { credentials: 'include', cache: 'no-store' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setData((await r.json()) as ServerResponse);
+      setLastRefreshedAt(Date.now());
       setErr(null);
     } catch (e) {
       setErr((e as Error).message);
     }
   }
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh closes over `id` and setting a dep on it would cycle
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh closes over `id`
   useEffect(() => {
     void refresh();
-    const t = setInterval(refresh, 5000);
-    return () => clearInterval(t);
+    const t = setInterval(refresh, POLL_INTERVAL_MS);
+    // Pause polling when the tab is hidden to avoid running the API idle.
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [id]);
+
+  // Tick every second so "обновлено Xс назад" increments live between polls.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   // Live Squad-server journal. Only opens when the server has a systemd unit
   // (status ∈ running/starting/stopping/stopped/ready). For pending/failed/
@@ -179,6 +198,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           <div className="text-xs text-neutral-500 font-mono">{server.id}</div>
         </div>
         <div className="flex items-center gap-3">
+          <LiveIndicator now={now} lastRefreshedAt={lastRefreshedAt} />
           <Link
             href={`/servers/${server.id}/configs`}
             className="text-xs text-sky-400 hover:text-sky-300"
@@ -285,6 +305,23 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         />
       </section>
     </div>
+  );
+}
+
+function LiveIndicator({ now, lastRefreshedAt }: { now: number; lastRefreshedAt: number }) {
+  const ageSec = Math.max(0, Math.round((now - lastRefreshedAt) / 1000));
+  const stale = ageSec > POLL_INTERVAL_MS / 1000 + 5; // ~8s since last poll = something's wrong
+  const dotColor = stale ? 'bg-red-600' : ageSec < 2 ? 'bg-green-500' : 'bg-green-700';
+  return (
+    <span
+      className="flex items-center gap-1.5 text-xs text-neutral-500"
+      title={`Данные обновляются каждые ${POLL_INTERVAL_MS / 1000}с`}
+    >
+      <span
+        className={`inline-block h-2 w-2 rounded-full ${dotColor} ${ageSec < 2 ? 'animate-pulse' : ''}`}
+      />
+      <span>обновлено {ageSec}с назад</span>
+    </span>
   );
 }
 

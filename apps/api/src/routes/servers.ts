@@ -125,9 +125,12 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         });
         const rconPassword = randomBytes(24).toString('base64url');
         const blob = encrypt(app.encryptionKey, rconPassword);
+        // Leave rconHost unset so each downstream caller (api vs worker-rcon)
+        // resolves it against its own RCON_HOST_DEFAULT env var at connect
+        // time — see apps/workers/rcon/src/index.ts reconcile() and
+        // server-configs.ts reloadServerConfig().
         await tx.insert(serverCredentials).values({
           serverId: id,
-          rconHost: process.env.RCON_HOST_DEFAULT ?? '127.0.0.1',
           rconPort: body.rcon_port,
           rconPasswordEncrypted: serialize(blob),
         });
