@@ -27,7 +27,12 @@ ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 ProtectProc=invisible
-ProcSubset=pid
+# ProcSubset must stay `all` (the default): the bridge reads host_info /
+# host_metrics from /proc/cpuinfo, /proc/meminfo, /proc/stat, /proc/net/dev,
+# /proc/uptime and /proc/loadavg. Setting ProcSubset=pid silently hides
+# everything non-PID-related, which makes cpu_model / ram_total / cpu_percent
+# collapse to their zero values.
+ProcSubset=all
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

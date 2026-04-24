@@ -137,6 +137,20 @@ func watchdog(ctx context.Context) {
 func serveConn(ctx context.Context, log *slog.Logger, conn *net.UnixConn, disp *handlers.Dispatcher) {
 	defer conn.Close()
 
+	// On shutdown (SIGTERM → ctx.Done()) close the conn so the blocking
+	// ReadFrame returns net.ErrClosed and serveConn unwinds. Without this
+	// the bridge sits in `deactivating` for the full TimeoutStopSec because
+	// the api keeps the connection open across restarts.
+	closerDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-closerDone:
+		}
+	}()
+	defer close(closerDone)
+
 	peer, err := auth.ResolvePeer(conn)
 	if err != nil {
 		log.Warn("rejected untrusted peer",
