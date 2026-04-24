@@ -1,6 +1,7 @@
 import type { Redis } from 'ioredis';
 import { describe, expect, it, vi } from 'vitest';
 import type { EventEnvelope } from '../src/eventMap.js';
+import { Heartbeat } from '../src/heartbeat.js';
 import { RedisPublisher } from '../src/redisPublisher.js';
 
 interface FakeRedis {
@@ -61,5 +62,21 @@ describe('RedisPublisher (shadow mode)', () => {
     await pub.publishRconStatus({ state: 'connected', lastChange: '2026-04-24T10:00:00.000Z' });
     expect(r.calls[0].args[0]).toBe(`events:server:${SERVER_ID}:shadow`);
     expect(r.calls[1].args[0]).toBe(`rcon:status:${SERVER_ID}:shadow`);
+  });
+});
+
+describe('Heartbeat', () => {
+  it('SETs worker:heartbeat:rnsquadjs:{id} every interval', async () => {
+    vi.useFakeTimers();
+    const r = fakeRedis();
+    const hb = new Heartbeat(asRedis(r), SERVER_ID, 1000);
+    hb.start();
+    await vi.advanceTimersByTimeAsync(2500);
+    hb.stop();
+    expect(r.set).toHaveBeenCalledTimes(3);
+    expect(r.calls[0].args[0]).toBe(`worker:heartbeat:rnsquadjs:${SERVER_ID}`);
+    expect(r.calls[0].args[2]).toBe('EX');
+    expect(r.calls[0].args[3]).toBe(30);
+    vi.useRealTimers();
   });
 });
