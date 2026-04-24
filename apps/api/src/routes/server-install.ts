@@ -178,6 +178,27 @@ async function runInstall(app: FastifyInstance, serverId: string, sink: Sink): P
   });
   emit('container', `started ${res.container_id}`);
 
+  await app.bridge.fileAtomicWrite({
+    path: `${PANEL_SAVED_ROOT}/${serverId}/SquadGame/Saved/Logs/.keep`,
+    content: '',
+  });
+  emit(
+    'rnsquadjs',
+    `docker run --network host --name rnsquadjs-${serverId} squad-panel/rnsquadjs:latest`,
+  );
+  const sidecar = await app.bridge.containerRunRnsquadjs({
+    server_id: serverId,
+    env: {
+      SERVER_ID: serverId,
+      API_URL: process.env.RNSQUADJS_API_URL ?? 'http://api:3000',
+      LOG_FILE: '/squad/Logs/SquadGame.log',
+      PANEL_BRIDGE_MODE: 'production',
+      PANEL_BRIDGE_SOCKET: '/run/panelBridge/rcon.sock',
+      REDIS_URL: process.env.REDIS_URL ?? 'redis://redis:6379',
+    },
+  });
+  emit('rnsquadjs', `started ${sidecar.container_id}`);
+
   await app.db
     .update(servers)
     .set({
