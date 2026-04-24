@@ -14,8 +14,23 @@
  * Run: pnpm --filter @squad/api test:e2e
  */
 import { createHash } from 'node:crypto';
+import { BridgeClient } from '@squad/bridge-client';
+import Redis from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { newClient, randomPorts, shouldSkip } from './lib/client.js';
+
+async function waitFor<T>(
+  fn: () => Promise<T | null>,
+  { timeoutMs }: { timeoutMs: number },
+): Promise<T | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const v = await fn();
+    if (v !== null && v !== undefined) return v;
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  return null;
+}
 
 interface ServerResponse {
   server: { id: string; status: string; display_name: string; slug: string };
@@ -46,10 +61,20 @@ describe.skipIf(skip.skip)('install → run → edit → stop → delete', () =>
   const suffix = Date.now().toString(36);
   const slug = `e2e-${suffix}`;
   let serverId = '';
+  let bridge: BridgeClient;
+  let redis: Redis;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     console.log(`[e2e] using ports ${JSON.stringify(ports)}`);
     console.log(`[e2e] slug=${slug}`);
+    bridge = new BridgeClient({
+      socketPath: '/run/panel-host-bridge.sock',
+      onLog: () => undefined,
+    });
+    await bridge.connect();
+    redis = new Redis(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379', {
+      maxRetriesPerRequest: 2,
+    });
   });
 
   afterAll(async () => {
@@ -57,6 +82,8 @@ describe.skipIf(skip.skip)('install → run → edit → stop → delete', () =>
     if (serverId) {
       await api.fetch(`/api/v1/servers/${serverId}`, { method: 'DELETE' }).catch(() => undefined);
     }
+    await bridge?.close().catch(() => undefined);
+    await redis?.quit().catch(() => undefined);
   });
 
   it('POST /api/v1/servers creates a pending row', async () => {
@@ -118,6 +145,54 @@ describe.skipIf(skip.skip)('install → run → edit → stop → delete', () =>
     expect(typeof row.rcon_status.player_count).toBe('number');
   });
 
+  it('rnsquadjs sidecar is running and publishing heartbeat + rcon:status + events', async () => {
+    // Sidecar: rnsquadjs-{uuid} should be running.
+    const sidecarInspect = await bridge.containerInspect({ name: `rnsquadjs-${serverId}` });
+    expect(sidecarInspect.state).toBe('running');
+
+    // Heartbeat: panelBridge publishes worker:heartbeat:rnsquadjs:{id} every 10s.
+    const heartbeat = await waitFor(
+      async () => {
+        const v = await redis.get(`worker:heartbeat:rnsquadjs:${serverId}`);
+        return v ?? null;
+      },
+      { timeoutMs: 30_000 },
+    );
+    expect(heartbeat).toBeTruthy();
+
+    // rcon:status flips to connected once the sidecar authenticates RCON.
+    const status = await waitFor(
+      async () => {
+        const raw = await redis.get(`rcon:status:${serverId}`);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as { state: string };
+        return parsed.state === 'connected' ? parsed : null;
+      },
+      { timeoutMs: 60_000 },
+    );
+    expect(status?.state).toBe('connected');
+
+    // Events: at least one EventEnvelope should land within 2 min of Squad boot.
+    // Specific event-type parity is enforced by the shadow-stream comparison in
+    // Phase 1 of the cutover runbook (against the golden fixture captured in T1),
+    // not here on a fresh-install timeline where NEW_GAME may not fire for ~30 min.
+    const events = await waitFor(
+      async () => {
+        const rows = (await redis.xrange(
+          `events:server:${serverId}`,
+          '-',
+          '+',
+          'COUNT',
+          50,
+        )) as Array<[string, string[]]>;
+        return rows.length > 0 ? rows : null;
+      },
+      { timeoutMs: 120_000 },
+    );
+    expect(events).not.toBeNull();
+    expect(events?.length ?? 0).toBeGreaterThan(0);
+  });
+
   it('GET /configs lists 19 Squad cfg files', async () => {
     const r = await api.json<{ items: ConfigItem[] }>(`/api/v1/servers/${serverId}/configs`);
     expect(r.items).toHaveLength(19);
@@ -163,6 +238,17 @@ describe.skipIf(skip.skip)('install → run → edit → stop → delete', () =>
       { timeoutMs: 90_000, intervalMs: 2000, label: 'wait for stopped status' },
     );
     expect(row.server.status).toBe('stopped');
+  });
+
+  it('rnsquadjs sidecar exits alongside the Squad container', async () => {
+    const sidecarStopped = await waitFor(
+      async () => {
+        const i = await bridge.containerInspect({ name: `rnsquadjs-${serverId}` });
+        return i.state === 'exited' ? i : null;
+      },
+      { timeoutMs: 30_000 },
+    );
+    expect(sidecarStopped?.state).toBe('exited');
   });
 
   it('DELETE removes the DB row + container', async () => {
