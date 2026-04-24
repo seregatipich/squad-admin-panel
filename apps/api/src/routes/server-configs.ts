@@ -13,6 +13,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { type BlameVersion, computeBlame } from '../lib/blame.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
+import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 
 const idParams = z.object({ id: z.string().uuid() });
@@ -487,7 +488,7 @@ export async function reloadServerConfig(
     );
     const command = 'AdminReloadServerConfig';
     const response = await rconSendOnce({
-      host: creds.rconHost ?? process.env.RCON_HOST_DEFAULT ?? '127.0.0.1',
+      host: resolveRconHost(creds.rconHost),
       port: creds.rconPort,
       password,
       command,

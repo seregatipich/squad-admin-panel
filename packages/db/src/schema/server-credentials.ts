@@ -12,7 +12,9 @@ export const serverCredentials = pgTable('server_credentials', {
     .primaryKey()
     .notNull()
     .references(() => servers.id, { onDelete: 'cascade' }),
-  rconHost: text('rcon_host').notNull().default('127.0.0.1'),
+  // Nullable: NULL means "resolve against caller's RCON_HOST_DEFAULT env".
+  // Non-null is reserved for operator-pinned remote Squad instances.
+  rconHost: text('rcon_host'),
   rconPort: integer('rcon_port').notNull(),
   rconPasswordEncrypted: bytea('rcon_password_encrypted').notNull(),
   licenseKeyEncrypted: bytea('license_key_encrypted'),

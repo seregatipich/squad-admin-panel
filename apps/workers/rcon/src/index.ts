@@ -1,5 +1,5 @@
 import { createDatabaseClient, serverCredentials, serverSettings, servers } from '@squad/db';
-import { startHeartbeat } from '@squad/shared-config';
+import { resolveRconHost, startHeartbeat } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -84,11 +84,7 @@ async function main() {
         ) as Blob;
         targets.push({
           serverId: row.serverId,
-          // row.host is NULL when the operator hasn't pinned a remote RCON —
-          // fall back to this worker's RCON_HOST_DEFAULT (the compose file
-          // sets it to 127.0.0.1 for worker-rcon since this service runs
-          // with --network host).
-          host: row.host ?? process.env.RCON_HOST_DEFAULT ?? '127.0.0.1',
+          host: resolveRconHost(row.host),
           port: row.port,
           password: decrypt(key, blob),
         });

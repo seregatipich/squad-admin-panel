@@ -13,6 +13,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
+import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
@@ -288,7 +289,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
           );
           const target = {
-            host: creds.rconHost ?? process.env.RCON_HOST_DEFAULT ?? '127.0.0.1',
+            host: resolveRconHost(creds.rconHost),
             port: creds.rconPort,
             password,
           };

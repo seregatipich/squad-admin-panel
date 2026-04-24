@@ -79,7 +79,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
   useEffect(() => {
     void refreshFiles();
-  }, [id]);
+  }, [refreshFiles]);
 
   const load = useCallback(
     async (name: string) => {
@@ -135,7 +135,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   useEffect(() => {
     if (tab === 'history') void loadHistory();
     if (tab === 'blame') void loadBlame();
-  }, [tab, selected]);
+  }, [tab, loadBlame, loadHistory]);
 
   async function save() {
     if (!selected) return;

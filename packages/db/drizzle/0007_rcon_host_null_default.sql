@@ -8,6 +8,7 @@
 -- who explicitly want to pin a hostname (e.g. a remote Squad instance).
 
 ALTER TABLE server_credentials ALTER COLUMN rcon_host DROP NOT NULL;
+ALTER TABLE server_credentials ALTER COLUMN rcon_host DROP DEFAULT;
 
 UPDATE server_credentials
 SET rcon_host = NULL

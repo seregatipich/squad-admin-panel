@@ -236,6 +236,80 @@ describe('PUT /api/v1/servers/:id/configs/:name auto-reloads Squad', () => {
       fake.close();
     }
   });
+
+  it('falls back to RCON_HOST_DEFAULT when credentials leave rcon_host NULL', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    await h.db
+      .update(servers)
+      .set({ status: 'running', updatedAt: new Date() })
+      .where(eq(servers.id, id));
+    // Verify POST /servers left rcon_host as NULL (regression for 0007).
+    const [credsBefore] = await h.db
+      .select()
+      .from(serverCredentials)
+      .where(eq(serverCredentials.serverId, id));
+    expect(credsBefore?.rconHost).toBeNull();
+
+    const fake = await startFakeRcon();
+    const prev = process.env.RCON_HOST_DEFAULT;
+    process.env.RCON_HOST_DEFAULT = '127.0.0.1';
+    try {
+      await h.db
+        .update(serverCredentials)
+        .set({ rconPort: fake.port })
+        .where(eq(serverCredentials.serverId, id));
+
+      const resp = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${id}/configs/Server.cfg`,
+        headers: { cookie },
+        payload: { content: 'ServerName="fallback"' },
+      });
+      expect(resp.statusCode).toBe(200);
+      const body = resp.json<{
+        reload: { applied: boolean; via?: string; command?: string; reason?: string };
+      }>();
+      expect(body.reload.applied, JSON.stringify(body.reload)).toBe(true);
+      expect(body.reload.command).toBe('AdminReloadServerConfig');
+      expect(fake.receivedCommands).toContain('AdminReloadServerConfig');
+    } finally {
+      if (prev === undefined) delete process.env.RCON_HOST_DEFAULT;
+      else process.env.RCON_HOST_DEFAULT = prev;
+      fake.close();
+    }
+  });
+
+  it('reports reload.applied=false with reason=rcon_failed when no RCON listener answers', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    await h.db
+      .update(servers)
+      .set({ status: 'running', updatedAt: new Date() })
+      .where(eq(servers.id, id));
+    // Port 1 is privileged and nothing on localhost listens there — connect
+    // attempt must be refused quickly and surfaced as rcon_failed, not crash.
+    await h.db
+      .update(serverCredentials)
+      .set({ rconHost: '127.0.0.1', rconPort: 1 })
+      .where(eq(serverCredentials.serverId, id));
+
+    const resp = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Server.cfg`,
+      headers: { cookie },
+      payload: { content: 'ServerName="no-listener"' },
+    });
+    expect(resp.statusCode).toBe(200);
+    const body = resp.json<{
+      unchanged: boolean;
+      reload: { applied: boolean; reason?: string; detail?: string };
+    }>();
+    expect(body.unchanged).toBe(false); // write still succeeded
+    expect(body.reload.applied).toBe(false);
+    expect(body.reload.reason).toBe('rcon_failed');
+    expect(body.reload.detail).toBeTruthy();
+  });
 });
 
 describe('PUT /api/v1/servers/:id/configs/:name', () => {

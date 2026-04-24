@@ -126,6 +126,10 @@ describe('POST /api/v1/servers', () => {
       .where(eq(serverCredentials.serverId, id));
     expect(creds?.rconPort).toBe(21114);
     expect(creds?.rconPasswordEncrypted).toBeTruthy();
+    // rcon_host must be NULL so per-service RCON_HOST_DEFAULT (api vs
+    // worker-rcon) decides the actual dial target at connect time. See
+    // docs/bridge-protocol + resolveRconHost in shared-config.
+    expect(creds?.rconHost).toBeNull();
 
     // The POST /servers route has no :id in the URL, so `extractTargetId` in
     // audit plugin returns null; we assert action+resource only here.

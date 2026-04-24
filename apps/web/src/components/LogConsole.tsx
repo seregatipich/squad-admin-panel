@@ -66,7 +66,7 @@ export function LogConsole({
     const el = scrollerRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [lines.length]);
+  }, []);
 
   // On initial mount, snap to bottom (so pre-existing lines don't leave the user
   // staring at line 0).
