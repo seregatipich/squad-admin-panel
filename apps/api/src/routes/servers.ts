@@ -127,7 +127,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         const blob = encrypt(app.encryptionKey, rconPassword);
         await tx.insert(serverCredentials).values({
           serverId: id,
-          rconHost: '127.0.0.1',
+          rconHost: process.env.RCON_HOST_DEFAULT ?? '127.0.0.1',
           rconPort: body.rcon_port,
           rconPasswordEncrypted: serialize(blob),
         });
@@ -285,7 +285,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
           );
           const target = {
-            host: creds.rconHost ?? '127.0.0.1',
+            host: creds.rconHost ?? process.env.RCON_HOST_DEFAULT ?? '127.0.0.1',
             port: creds.rconPort,
             password,
           };

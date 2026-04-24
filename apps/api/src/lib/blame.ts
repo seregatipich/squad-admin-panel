@@ -32,12 +32,15 @@ export function computeBlame(versions: BlameVersion[]): BlameLine[] {
     a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0,
   );
 
-  // Initial version: every line attributed to it.
-  let current: BlameLine[] = splitLines(sorted[0]!.content).map((text) => ({
+  // Initial version: every line attributed to it. sorted[0] is defined
+  // because we returned early on empty input; the non-null assertion
+  // is safe here.
+  const first = sorted[0] as BlameVersion;
+  let current: BlameLine[] = splitLines(first.content).map((text) => ({
     text,
-    version_id: sorted[0]!.id,
-    author_user_id: sorted[0]!.author_user_id,
-    created_at: sorted[0]!.created_at,
+    version_id: first.id,
+    author_user_id: first.author_user_id,
+    created_at: first.created_at,
   }));
 
   for (let i = 1; i < sorted.length; i++) {

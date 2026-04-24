@@ -487,7 +487,7 @@ export async function reloadServerConfig(
     );
     const command = 'AdminReloadServerConfig';
     const response = await rconSendOnce({
-      host: creds.rconHost ?? '127.0.0.1',
+      host: creds.rconHost ?? process.env.RCON_HOST_DEFAULT ?? '127.0.0.1',
       port: creds.rconPort,
       password,
       command,

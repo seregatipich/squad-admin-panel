@@ -45,6 +45,14 @@ services:
       SESSION_SECRET: ${SESSION_SECRET}
       BRIDGE_SOCKET: /run/panel-host-bridge.sock
       APP_DOMAIN: ${APP_DOMAIN:-admin.localhost}
+      # Squad servers run with --network host and listen on 127.0.0.1:{rcon_port}
+      # of the host. From inside this bridge-network container, 127.0.0.1 is the
+      # api container itself — use the host-gateway alias instead so one-shot
+      # RCON calls (graceful stop broadcast, PUT /configs reload) can reach the
+      # Squad listener. See apps/api/src/routes/servers.ts and server-configs.ts.
+      RCON_HOST_DEFAULT: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     user: "0:${PANEL_GID:-987}"
     volumes:
       - /run/panel-host-bridge.sock:/run/panel-host-bridge.sock
