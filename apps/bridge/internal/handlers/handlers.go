@@ -178,8 +178,12 @@ func (d *Dispatcher) fileAtomicWrite(req *rpc.Request) rpc.Response {
 
 // Accept: any config file under /var/lib/squad-panel/configs/{uuid}/ServerConfig/,
 // any file under /var/lib/squad-panel/saved/{uuid}/ (Squad logs etc.),
-// and read-only access to /var/lib/docker/volumes/squad-depot/ so the
-// install flow can seed a new server's configs from depot defaults.
+// and read-only access to the squad-depot volume's on-disk location so the
+// install flow can seed a new server's configs from depot defaults. The
+// depot root is configurable via PANEL_DEPOT_HOST_PATH (see fsx.DepotHostPath);
+// for bind-mounted squad-depot volumes Docker does NOT populate the
+// /var/lib/docker/volumes/squad-depot/_data stub, so the operator must set
+// the env var to the bind-mount source directly.
 func validateReadablePath(p string) error {
 	if _, err := validate.PanelConfigFilePath(p); err == nil {
 		return nil
@@ -187,7 +191,7 @@ func validateReadablePath(p string) error {
 	if _, err := validate.PanelSavedPath(p); err == nil {
 		return nil
 	}
-	if _, err := validate.Path(p, "/var/lib/docker/volumes/squad-depot"); err == nil {
+	if _, err := validate.Path(p, fsx.DepotHostPath()); err == nil {
 		return nil
 	}
 	return fmt.Errorf("%w: path %q not in readable allowlist", validate.ErrForbidden, p)
