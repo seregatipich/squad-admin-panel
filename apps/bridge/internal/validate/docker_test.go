@@ -79,8 +79,22 @@ func TestContainerName_AllowsRNSquadJSSidecar(t *testing.T) {
 	}
 }
 
-func TestContainerName_RejectsBogusSidecar(t *testing.T) {
-	if err := ContainerName("rnsquadjs-not-a-uuid"); err == nil {
-		t.Fatal("expected rejection for non-uuid sidecar name")
+func TestContainerName_RejectsMalformedRNSquadJS(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"uppercase hex", "rnsquadjs-019DBAA5-1234-7abc-8def-0123456789ab"},
+		{"empty uuid", "rnsquadjs-"},
+		{"prefix probe", "xrnsquadjs-019dbaa5-1234-7abc-8def-0123456789ab"},
+		{"missing dashes", "rnsquadjs-019dbaa512347abc8def0123456789ab"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ContainerName(tc.in); err == nil {
+				t.Fatalf("expected rejection for %q", tc.in)
+			}
+		})
 	}
 }
