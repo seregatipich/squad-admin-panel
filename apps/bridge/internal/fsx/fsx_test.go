@@ -87,3 +87,24 @@ func TestWriteForcesModePastUmask(t *testing.T) {
 		})
 	}
 }
+
+func TestDepotHostPath_DefaultWhenUnset(t *testing.T) {
+	t.Setenv("PANEL_DEPOT_HOST_PATH", "")
+	if got := DepotHostPath(); got != DefaultDepotHostPath {
+		t.Errorf("expected fallback %q, got %q", DefaultDepotHostPath, got)
+	}
+}
+
+func TestDepotHostPath_HonorsEnvOverride(t *testing.T) {
+	t.Setenv("PANEL_DEPOT_HOST_PATH", "/home/squad/squad-admin-panel/data/depot")
+	if got, want := DepotHostPath(), "/home/squad/squad-admin-panel/data/depot"; got != want {
+		t.Errorf("expected %q, got %q", want, got)
+	}
+}
+
+func TestDepotHostPath_CleansTrailingSlash(t *testing.T) {
+	t.Setenv("PANEL_DEPOT_HOST_PATH", "/opt/depot/")
+	if got, want := DepotHostPath(), "/opt/depot"; got != want {
+		t.Errorf("expected %q, got %q", want, got)
+	}
+}

@@ -14,13 +14,31 @@ import (
 
 const MaxReadBytes = 10 << 20
 
-// Roots we allow *reading* from. DepotVolumeRoot is where Docker stores
-// the squad-depot volume's contents on disk — we mount it read-only into
-// server containers, and the install flow reads default .cfg files from
-// it to seed a new server's configs/{uuid}/ServerConfig/ directory.
+// DefaultDepotHostPath is the fallback location for the squad-depot
+// volume's contents on disk when the PANEL_DEPOT_HOST_PATH env var is
+// not set. For a Docker-managed named volume this is always valid; for
+// a bind-mounted squad-depot the operator must set PANEL_DEPOT_HOST_PATH
+// to the bind-mount source (e.g. ${DATA_DIR}/depot) because Docker does
+// not populate the /var/lib/docker/volumes/squad-depot/_data stub for
+// bind-mounted volumes — reads through the stub get ENOENT.
+const DefaultDepotHostPath = "/var/lib/docker/volumes/squad-depot"
+
+// DepotHostPath resolves the squad-depot volume's on-disk location,
+// honoring PANEL_DEPOT_HOST_PATH at process start. The result is an
+// absolute, filepath.Clean'd path that can be used as a readableRoot.
+func DepotHostPath() string {
+	if v := os.Getenv("PANEL_DEPOT_HOST_PATH"); v != "" {
+		return filepath.Clean(v)
+	}
+	return DefaultDepotHostPath
+}
+
+// Roots we allow *reading* from. The depot volume root is added so the
+// install flow can seed a new server's configs/{uuid}/ServerConfig/
+// directory from the SteamCMD-provided .cfg defaults.
 var readableRoots = []string{
 	validate.PanelDataRoot,
-	"/var/lib/docker/volumes/squad-depot",
+	DepotHostPath(),
 }
 
 // Writable roots are a strict subset of readable. The depot volume is

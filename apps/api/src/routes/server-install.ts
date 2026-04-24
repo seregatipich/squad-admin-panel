@@ -15,8 +15,16 @@ import { decryptString, deserialize } from '../lib/crypto.js';
 
 const paramsSchema = z.object({ id: z.string().uuid() });
 
-const DEPOT_MARKER = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data/SquadGameServer.sh`;
-const DEPOT_CONFIG_DIR = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data/SquadGame/ServerConfig`;
+// For bind-mounted squad-depot volumes, Docker does not populate the
+// /var/lib/docker/volumes/${name}/_data stub directory, so reads through
+// it return ENOENT. PANEL_DEPOT_HOST_PATH overrides the root with the
+// actual bind-mount source (e.g. ${DATA_DIR}/depot). Same env var is
+// respected by the Go bridge at apps/bridge/internal/fsx/fsx.go.
+const DEPOT_HOST_ROOT =
+  process.env.PANEL_DEPOT_HOST_PATH ?? `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data`;
+
+const DEPOT_MARKER = `${DEPOT_HOST_ROOT}/SquadGameServer.sh`;
+const DEPOT_CONFIG_DIR = `${DEPOT_HOST_ROOT}/SquadGame/ServerConfig`;
 
 interface ProgressLine {
   ts: string;
