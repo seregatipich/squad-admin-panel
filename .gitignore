@@ -33,3 +33,6 @@ docker/squad-mock-depot/content/
 # Playwright artifacts
 apps/web/playwright-report/
 apps/web/test-results/
+
+# Git worktrees
+.worktrees/
