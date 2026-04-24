@@ -29,6 +29,7 @@ import discordRoutes from './routes/auth-discord.js';
 import steamRoutes from './routes/auth-steam.js';
 import depotRoutes from './routes/depot.js';
 import hostRoutes from './routes/host.js';
+import internalRnsquadjsConfigRoutes from './routes/internal/rnsquadjs-config.js';
 import playerRoutes from './routes/players.js';
 import serverConfigRoutes from './routes/server-configs.js';
 import serverInstallRoutes from './routes/server-install.js';
@@ -99,6 +100,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(auditRoutes);
   await app.register(steamRoutes);
   await app.register(discordRoutes);
+  await app.register(internalRnsquadjsConfigRoutes);
 
   return app;
 }

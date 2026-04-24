@@ -25,6 +25,7 @@ import auditRoutes from '../../src/routes/audit.js';
 import authRoutes from '../../src/routes/auth.js';
 import depotRoutes from '../../src/routes/depot.js';
 import hostRoutes from '../../src/routes/host.js';
+import internalRnsquadjsConfigRoutes from '../../src/routes/internal/rnsquadjs-config.js';
 import playerRoutes from '../../src/routes/players.js';
 import serverConfigRoutes from '../../src/routes/server-configs.js';
 import serverInstallRoutes from '../../src/routes/server-install.js';
@@ -340,6 +341,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(depotRoutes);
   await app.register(playerRoutes);
   await app.register(auditRoutes);
+  await app.register(internalRnsquadjsConfigRoutes);
 
   const seed: IntegrationHarness['seed'] = {};
   if (opts.seedOwner) {
