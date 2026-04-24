@@ -193,4 +193,31 @@ describe('bridge RPC surface (e2e)', () => {
       expect(errored || errored === false).toBe(true);
     }
   });
+
+  it('container_run_rnsquadjs rejects bogus serverId', async () => {
+    await expect(
+      bridge.containerRunRnsquadjs({ server_id: '../etc/passwd', env: {} }),
+    ).rejects.toThrow(/forbidden/i);
+  });
+
+  it('container_run_rnsquadjs launches sidecar (cleanup happens after)', async () => {
+    const id = '019dbaa5-1234-7abc-8def-0123456789ab';
+    await bridge.containerRm({ name: `rnsquadjs-${id}` }).catch(() => undefined);
+    try {
+      const res = await bridge.containerRunRnsquadjs({
+        server_id: id,
+        env: {
+          SERVER_ID: id,
+          API_URL: 'http://api:3000',
+          LOG_FILE: '/squad/Logs/SquadGame.log',
+          PANEL_BRIDGE_MODE: 'shadow',
+          REDIS_URL: 'redis://redis:6379',
+        },
+      });
+      expect(res.container_id).toMatch(/^[a-f0-9]{12,}$/);
+      expect(res.status).toBe('started');
+    } finally {
+      await bridge.containerRm({ name: `rnsquadjs-${id}` }).catch(() => undefined);
+    }
+  });
 });

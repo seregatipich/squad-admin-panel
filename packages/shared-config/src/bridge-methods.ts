@@ -14,6 +14,7 @@ export const BRIDGE_METHODS = [
   'container_inspect',
   'container_logs_follow',
   'depot_update',
+  'container_run_rnsquadjs',
 ] as const;
 
 export type BridgeMethod = (typeof BRIDGE_METHODS)[number];

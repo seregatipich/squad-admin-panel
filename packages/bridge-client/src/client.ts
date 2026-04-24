@@ -12,6 +12,7 @@ import {
   type ContainerLogsParams,
   type ContainerRunParams,
   type ContainerRunResult,
+  type ContainerRunRnsquadjsParams,
   type FileReadParams,
   type FileWriteParams,
   type HostInfo,
@@ -102,6 +103,9 @@ export class BridgeClient {
 
   containerRun = (p: ContainerRunParams) =>
     this.call<ContainerRunResult>('container_run', p, { timeoutMs: 60_000 });
+
+  containerRunRnsquadjs = (p: ContainerRunRnsquadjsParams) =>
+    this.call<ContainerRunResult>('container_run_rnsquadjs', p, { timeoutMs: 60_000 });
 
   containerStart = (p: ContainerControlParams) =>
     this.call<{ status: string }>('container_start', p, { timeoutMs: 30_000 });
