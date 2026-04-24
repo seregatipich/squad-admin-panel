@@ -203,6 +203,19 @@ describe.skipIf(skip.skip)('install → run → edit → stop → delete', () =>
     expect(admins?.behavior).toBe('hot_reload');
   });
 
+  it('installs with real depot content (not 19 empty files)', async () => {
+    // Regression guard for the PANEL_DEPOT_HOST_PATH bug: before the fix,
+    // seedConfigs read from the unpopulated /_data stub of a bind-mounted
+    // volume, got ENOENT, and wrote 19 zero-byte cfg files. The SteamCMD
+    // depot ships real Admins.cfg and Server.cfg templates ≥ a few KB.
+    const r = await api.json<{ items: ConfigItem[] }>(`/api/v1/servers/${serverId}/configs`);
+    expect(r.items.length).toBe(19);
+    const admins = r.items.find((i) => i.name === 'Admins.cfg');
+    const serverCfg = r.items.find((i) => i.name === 'Server.cfg');
+    expect(admins?.size).toBeGreaterThan(100);
+    expect(serverCfg?.size).toBeGreaterThan(100);
+  });
+
   it('PUT /configs/Admins.cfg atomically updates content + sha256', async () => {
     const before = await api.json<ConfigBody>(`/api/v1/servers/${serverId}/configs/Admins.cfg`);
     const newContent = `${before.content}\n// e2e-marker-${suffix}\n`;

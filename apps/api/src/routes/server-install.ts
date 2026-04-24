@@ -20,11 +20,22 @@ const paramsSchema = z.object({ id: z.string().uuid() });
 // it return ENOENT. PANEL_DEPOT_HOST_PATH overrides the root with the
 // actual bind-mount source (e.g. ${DATA_DIR}/depot). Same env var is
 // respected by the Go bridge at apps/bridge/internal/fsx/fsx.go.
-const DEPOT_HOST_ROOT =
-  process.env.PANEL_DEPOT_HOST_PATH ?? `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data`;
+//
+// Resolved on every call so tests can override via vi.stubEnv without a
+// dynamic module reload; in production the env var is set once at boot by
+// docker-compose / the systemd unit, so the extra lookup is free.
+function depotHostRoot(): string {
+  const v = process.env.PANEL_DEPOT_HOST_PATH;
+  return v && v !== '' ? v : `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data`;
+}
 
-const DEPOT_MARKER = `${DEPOT_HOST_ROOT}/SquadGameServer.sh`;
-const DEPOT_CONFIG_DIR = `${DEPOT_HOST_ROOT}/SquadGame/ServerConfig`;
+function depotMarker(): string {
+  return `${depotHostRoot()}/SquadGameServer.sh`;
+}
+
+function depotConfigDir(): string {
+  return `${depotHostRoot()}/SquadGame/ServerConfig`;
+}
 
 interface ProgressLine {
   ts: string;
@@ -37,7 +48,7 @@ type Sink = (line: ProgressLine) => void;
 
 async function depotPopulated(app: FastifyInstance): Promise<boolean> {
   try {
-    const { content } = await app.bridge.fileRead({ path: DEPOT_MARKER });
+    const { content } = await app.bridge.fileRead({ path: depotMarker() });
     return content.length > 0;
   } catch {
     return false;
@@ -82,7 +93,7 @@ async function seedConfigs(
   for (const file of ALLOWED_CONFIG_FILES) {
     let content = '';
     try {
-      content = (await app.bridge.fileRead({ path: `${DEPOT_CONFIG_DIR}/${file}` })).content;
+      content = (await app.bridge.fileRead({ path: `${depotConfigDir()}/${file}` })).content;
     } catch (err) {
       sink({
         ts: new Date().toISOString(),
