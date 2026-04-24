@@ -21,19 +21,29 @@
     },
     "test": {
       "dependsOn": ["^build"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**"],
+      "passThroughEnv": ["POSTGRES_PASSWORD", "DATABASE_URL", "REDIS_URL"]
     },
     "test:unit": {
       "dependsOn": ["^build"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**"],
+      "passThroughEnv": ["POSTGRES_PASSWORD", "DATABASE_URL", "REDIS_URL"]
     },
     "test:integration": {
       "dependsOn": ["^build"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**"],
+      "passThroughEnv": ["POSTGRES_PASSWORD", "DATABASE_URL", "REDIS_URL"]
     },
     "test:e2e": {
       "dependsOn": ["^build"],
-      "outputs": ["playwright-report/**", "test-results/**"]
+      "outputs": ["playwright-report/**", "test-results/**"],
+      "passThroughEnv": [
+        "POSTGRES_PASSWORD",
+        "DATABASE_URL",
+        "REDIS_URL",
+        "PANEL_TEST_URL",
+        "PANEL_TEST_COOKIE"
+      ]
     },
     "clean": {
       "cache": false
