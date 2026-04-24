@@ -1,4 +1,5 @@
-import { configVersions, serverSettings, servers } from '@squad/db/schema';
+import { createServer as createNetServer, type Socket } from 'node:net';
+import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { and, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -63,6 +64,65 @@ function seedFakeConfig(id: string, name: string, content: string) {
   h.bridge.files.set(`${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/${name}`, Buffer.from(content));
 }
 
+/**
+ * Minimal Valve-RCON-speaking TCP server for integration tests. Accepts
+ * the AUTH packet, echoes an empty SERVERDATA_RESPONSE_VALUE for each
+ * EXECCOMMAND, and remembers the command bodies so the test can assert
+ * which RCON commands the panel emitted.
+ */
+async function startFakeRcon(): Promise<{
+  port: number;
+  receivedCommands: string[];
+  close: () => void;
+}> {
+  const received: string[] = [];
+  const server = createNetServer((sock: Socket) => {
+    let buf = Buffer.alloc(0);
+    let authed = false;
+    sock.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      while (buf.byteLength >= 4) {
+        const size = buf.readInt32LE(0);
+        if (buf.byteLength - 4 < size) break;
+        const id = buf.readInt32LE(4);
+        const type = buf.readInt32LE(8);
+        const body = buf.subarray(12, 4 + size - 2).toString('utf-8');
+        buf = buf.subarray(4 + size);
+
+        if (!authed && type === 3 /* SERVERDATA_AUTH */) {
+          // Valve protocol quirk: Squad emits two packets for the AUTH
+          // response — a zero-length SERVERDATA_RESPONSE_VALUE followed by
+          // the actual SERVERDATA_AUTH_RESPONSE. The panel client is
+          // tolerant; we send the short form.
+          const resp = Buffer.alloc(14);
+          resp.writeInt32LE(10, 0);
+          resp.writeInt32LE(id, 4);
+          resp.writeInt32LE(2 /* SERVERDATA_AUTH_RESPONSE */, 8);
+          sock.write(resp);
+          authed = true;
+        } else if (authed && type === 2 /* SERVERDATA_EXECCOMMAND */) {
+          if (body) received.push(body);
+          const resp = Buffer.alloc(14);
+          resp.writeInt32LE(10, 0);
+          resp.writeInt32LE(id, 4);
+          resp.writeInt32LE(0 /* SERVERDATA_RESPONSE_VALUE */, 8);
+          sock.write(resp);
+        }
+      }
+    });
+    sock.on('error', () => undefined);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const addr = server.address();
+  const port = addr && typeof addr === 'object' && 'port' in addr ? (addr.port as number) : 0;
+  if (!port) throw new Error('fake RCON port not assigned');
+  return {
+    port,
+    receivedCommands: received,
+    close: () => server.close(),
+  };
+}
+
 describe('GET /api/v1/servers/:id/configs', () => {
   it('lists every allowlisted file with existence flag and sha', async () => {
     const cookie = await login();
@@ -120,6 +180,61 @@ describe('GET /api/v1/servers/:id/configs/:name', () => {
     });
     expect(resp.statusCode).toBe(400);
     expect(resp.json()).toEqual({ error: 'file_not_in_allowlist' });
+  });
+});
+
+describe('PUT /api/v1/servers/:id/configs/:name auto-reloads Squad', () => {
+  it('reports reload.applied=false / reason=not_running when server status is pending', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    const resp = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Server.cfg`,
+      headers: { cookie },
+      payload: { content: 'ServerName="x"' },
+    });
+    expect(resp.statusCode).toBe(200);
+    const body = resp.json<{
+      reload: { applied: boolean; reason?: string; detail?: string };
+    }>();
+    expect(body.reload.applied).toBe(false);
+    expect(body.reload.reason).toBe('not_running');
+  });
+
+  it('fires AdminReloadServerConfig when the server is running', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    // Force status=running so reloadServerConfig gets past the guard.
+    await h.db
+      .update(servers)
+      .set({ status: 'running', updatedAt: new Date() })
+      .where(eq(servers.id, id));
+    // Point the RCON client at a tiny in-process fake server that accepts
+    // the Valve-RCON AUTH handshake and echoes back the command.
+    const fake = await startFakeRcon();
+    try {
+      await h.db
+        .update(serverCredentials)
+        .set({ rconHost: '127.0.0.1', rconPort: fake.port })
+        .where(eq(serverCredentials.serverId, id));
+
+      const resp = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${id}/configs/Server.cfg`,
+        headers: { cookie },
+        payload: { content: 'ServerName="y"' },
+      });
+      expect(resp.statusCode).toBe(200);
+      const body = resp.json<{
+        reload: { applied: true; via: string; command: string };
+      }>();
+      expect(body.reload.applied).toBe(true);
+      expect(body.reload.via).toBe('rcon');
+      expect(body.reload.command).toBe('AdminReloadServerConfig');
+      expect(fake.receivedCommands).toContain('AdminReloadServerConfig');
+    } finally {
+      fake.close();
+    }
   });
 });
 

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { configVersions, servers, users } from '@squad/db/schema';
+import { configVersions, serverCredentials, servers, users } from '@squad/db/schema';
 import {
   ALLOWED_CONFIG_FILES,
   type AllowedConfigFile,
@@ -12,6 +12,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { type BlameVersion, computeBlame } from '../lib/blame.js';
+import { decryptString, deserialize } from '../lib/crypto.js';
+import { rconSendOnce } from '../lib/rcon-send.js';
 
 const idParams = z.object({ id: z.string().uuid() });
 const nameParams = z.object({ id: z.string().uuid(), name: z.string().min(1).max(64) });
@@ -299,7 +301,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
       if (tip.length === 0) {
         return { lines: [], authors: {} };
       }
-      const tipId = tip[0]!.id;
+      const tipId = tip[0]?.id;
       const cacheKey = `config-blame:${tipId}`;
       const cached = await app.redis.get(cacheKey);
       if (cached) {
@@ -435,6 +437,15 @@ async function writeVersion(
       message,
     })
     .returning({ id: configVersions.id, createdAt: configVersions.createdAt });
+
+  // Push the change live: Squad already sees the new file through its bind
+  // mount, but only hot-reload files (Admins/Bans/RemoteAdmin/RemoteBan) are
+  // polled from disk automatically. For everything else we ask Squad to
+  // re-read its ServerConfig via AdminReloadServerConfig, over RCON. Best-
+  // effort: skip gracefully if the server isn't running or has no RCON
+  // credentials yet, and surface the outcome in the response so the UI can
+  // warn the operator that a restart is still needed.
+  const reload = await reloadServerConfig(app, serverId);
   return {
     ok: true,
     unchanged: false,
@@ -443,7 +454,54 @@ async function writeVersion(
     sha256: hex(newSha),
     created_at: inserted[0]?.createdAt,
     behavior: configFileClass(name),
+    reload,
   };
+}
+
+export type ReloadOutcome =
+  | { applied: true; via: 'rcon'; command: string; response: string }
+  | { applied: false; reason: 'not_running' | 'no_credentials' | 'rcon_failed'; detail?: string };
+
+/**
+ * Exported so POST /restore can trigger the same push. Never throws — a
+ * failing reload is not a failed write.
+ */
+export async function reloadServerConfig(
+  app: FastifyInstance,
+  serverId: string,
+): Promise<ReloadOutcome> {
+  const row = await app.db.query.servers.findFirst({ where: eq(servers.id, serverId) });
+  if (!row || (row.status !== 'running' && row.status !== 'starting')) {
+    return { applied: false, reason: 'not_running', detail: row?.status ?? 'unknown' };
+  }
+  const creds = await app.db.query.serverCredentials.findFirst({
+    where: eq(serverCredentials.serverId, serverId),
+  });
+  if (!creds?.rconPasswordEncrypted) {
+    return { applied: false, reason: 'no_credentials' };
+  }
+  try {
+    const password = decryptString(
+      app.encryptionKey,
+      deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
+    );
+    const command = 'AdminReloadServerConfig';
+    const response = await rconSendOnce({
+      host: creds.rconHost ?? '127.0.0.1',
+      port: creds.rconPort,
+      password,
+      command,
+      connectTimeoutMs: 2_000,
+      commandTimeoutMs: 4_000,
+    });
+    return { applied: true, via: 'rcon', command, response };
+  } catch (err) {
+    return {
+      applied: false,
+      reason: 'rcon_failed',
+      detail: (err as Error).message,
+    };
+  }
 }
 
 export default serverConfigRoutes;
