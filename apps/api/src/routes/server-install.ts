@@ -11,12 +11,32 @@ import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { writeAuditEntry } from '../lib/audit.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
 
 const paramsSchema = z.object({ id: z.string().uuid() });
 
-const DEPOT_MARKER = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data/SquadGameServer.sh`;
-const DEPOT_CONFIG_DIR = `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data/SquadGame/ServerConfig`;
+// For bind-mounted squad-depot volumes, Docker does not populate the
+// /var/lib/docker/volumes/${name}/_data stub directory, so reads through
+// it return ENOENT. PANEL_DEPOT_HOST_PATH overrides the root with the
+// actual bind-mount source (e.g. ${DATA_DIR}/depot). Same env var is
+// respected by the Go bridge at apps/bridge/internal/fsx/fsx.go.
+//
+// Resolved on every call so tests can override via vi.stubEnv without a
+// dynamic module reload; in production the env var is set once at boot by
+// docker-compose / the systemd unit, so the extra lookup is free.
+function depotHostRoot(): string {
+  const v = process.env.PANEL_DEPOT_HOST_PATH;
+  return v && v !== '' ? v : `/var/lib/docker/volumes/${DEPOT_VOLUME_NAME}/_data`;
+}
+
+function depotMarker(): string {
+  return `${depotHostRoot()}/SquadGameServer.sh`;
+}
+
+function depotConfigDir(): string {
+  return `${depotHostRoot()}/SquadGame/ServerConfig`;
+}
 
 interface ProgressLine {
   ts: string;
@@ -29,7 +49,7 @@ type Sink = (line: ProgressLine) => void;
 
 async function depotPopulated(app: FastifyInstance): Promise<boolean> {
   try {
-    const { content } = await app.bridge.fileRead({ path: DEPOT_MARKER });
+    const { content } = await app.bridge.fileRead({ path: depotMarker() });
     return content.length > 0;
   } catch {
     return false;
@@ -74,7 +94,7 @@ async function seedConfigs(
   for (const file of ALLOWED_CONFIG_FILES) {
     let content = '';
     try {
-      content = (await app.bridge.fileRead({ path: `${DEPOT_CONFIG_DIR}/${file}` })).content;
+      content = (await app.bridge.fileRead({ path: `${depotConfigDir()}/${file}` })).content;
     } catch (err) {
       sink({
         ts: new Date().toISOString(),
@@ -252,11 +272,26 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'install_in_progress' };
       }
+      const actorUserId = req.user?.id ?? null;
+      const actorIp = req.ip ?? null;
+      const orgId = srv.orgId;
       (async () => {
+        const startedAt = Date.now();
         try {
           await runInstall(app, id, (line) => {
             app.log.info({ server_id: id, ...line }, 'install progress');
             app.installProgress.publish(id, line);
+          });
+          await writeAuditEntry(app.db, {
+            actorUserId,
+            actorIp,
+            actionType: 'server.install.completed',
+            targetType: 'server',
+            targetId: id,
+            context: { durationMs: Date.now() - startedAt },
+            statusCode: 200,
+            durationMs: Date.now() - startedAt,
+            orgId,
           });
         } catch (err) {
           app.log.error({ err, server_id: id }, 'install failed');
@@ -270,6 +305,17 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             .update(servers)
             .set({ status: 'failed', updatedAt: new Date() })
             .where(eq(servers.id, id));
+          await writeAuditEntry(app.db, {
+            actorUserId,
+            actorIp,
+            actionType: 'server.install.failed',
+            targetType: 'server',
+            targetId: id,
+            context: { error: (err as Error).message, durationMs: Date.now() - startedAt },
+            statusCode: 500,
+            durationMs: Date.now() - startedAt,
+            orgId,
+          });
         }
       })();
       return { status: 'installing', server_id: id };

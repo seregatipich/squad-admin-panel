@@ -1,9 +1,9 @@
 // Package handlers wires RPC methods to the privileged subsystems.
 // Every method here is responsible for:
-//   1. Parsing params.
-//   2. Running validate.* to reject anything out of policy.
-//   3. Delegating to sysd / fsx / runner / metrics.
-//   4. Building a Response.
+//  1. Parsing params.
+//  2. Running validate.* to reject anything out of policy.
+//  3. Delegating to sysd / fsx / runner / metrics.
+//  4. Building a Response.
 package handlers
 
 import (
@@ -62,6 +62,8 @@ func (d *Dispatcher) Handle(
 		return d.containerRm(ctx, req)
 	case "container_inspect":
 		return d.containerInspect(ctx, req)
+	case "container_stats":
+		return d.containerStats(ctx, req)
 	case "container_logs_follow":
 		return d.containerLogsFollow(ctx, req, onStream)
 	case "depot_update":
@@ -176,8 +178,12 @@ func (d *Dispatcher) fileAtomicWrite(req *rpc.Request) rpc.Response {
 
 // Accept: any config file under /var/lib/squad-panel/configs/{uuid}/ServerConfig/,
 // any file under /var/lib/squad-panel/saved/{uuid}/ (Squad logs etc.),
-// and read-only access to /var/lib/docker/volumes/squad-depot/ so the
-// install flow can seed a new server's configs from depot defaults.
+// and read-only access to the squad-depot volume's on-disk location so the
+// install flow can seed a new server's configs from depot defaults. The
+// depot root is configurable via PANEL_DEPOT_HOST_PATH (see fsx.DepotHostPath);
+// for bind-mounted squad-depot volumes Docker does NOT populate the
+// /var/lib/docker/volumes/squad-depot/_data stub, so the operator must set
+// the env var to the bind-mount source directly.
 func validateReadablePath(p string) error {
 	if _, err := validate.PanelConfigFilePath(p); err == nil {
 		return nil
@@ -185,7 +191,7 @@ func validateReadablePath(p string) error {
 	if _, err := validate.PanelSavedPath(p); err == nil {
 		return nil
 	}
-	if _, err := validate.Path(p, "/var/lib/docker/volumes/squad-depot"); err == nil {
+	if _, err := validate.Path(p, fsx.DepotHostPath()); err == nil {
 		return nil
 	}
 	return fmt.Errorf("%w: path %q not in readable allowlist", validate.ErrForbidden, p)
@@ -335,6 +341,23 @@ func (d *Dispatcher) containerInspect(ctx context.Context, req *rpc.Request) rpc
 		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
 	}
 	res, err := d.Docker.Inspect(ctx, p.Name)
+	if err != nil {
+		code := rpc.CodeRuntimeError
+		if isForbidden(err) {
+			code = rpc.CodeForbidden
+		}
+		return rpc.NewErrorResponse(req.ID, code, err.Error())
+	}
+	body, _ := json.Marshal(res)
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+func (d *Dispatcher) containerStats(ctx context.Context, req *rpc.Request) rpc.Response {
+	var p containerParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
+	}
+	res, err := d.Docker.Stats(ctx, p.Name)
 	if err != nil {
 		code := rpc.CodeRuntimeError
 		if isForbidden(err) {
