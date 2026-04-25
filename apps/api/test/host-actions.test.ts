@@ -27,7 +27,7 @@ afterEach(async () => {
 });
 
 describe('POST /api/v1/host/restart', () => {
-  it('Owner with host:bridge_control permission triggers a restart and writes an audit row', async () => {
+  it('Owner with host:manage permission triggers a restart and writes an audit row', async () => {
     let calls = 0;
     h.bridge.hostAgentRestart = async () => {
       calls++;
@@ -45,7 +45,7 @@ describe('POST /api/v1/host/restart', () => {
     await assertAuditRow(h, { action: 'host.bridge.restart', resource: 'host' });
   });
 
-  it('viewer without host:bridge_control permission is rejected with 403', async () => {
+  it('viewer without host:manage permission is rejected with 403', async () => {
     const viewerRole = await h.db.query.roles.findFirst({
       where: (r, { and, eq: e }) => and(e(r.orgId, h.seed.orgId!), e(r.name, 'Viewer')),
     });

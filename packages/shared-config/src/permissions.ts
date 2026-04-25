@@ -112,6 +112,12 @@ export const PERMISSIONS = [
   },
   { key: 'host:view', category: 'host', label: 'Dashboard host info' },
   { key: 'host:metrics', category: 'host', label: 'Метрики (CPU/RAM/Disk/Net + история)' },
+  {
+    key: 'host:manage',
+    category: 'host',
+    label: 'Управление хост-демоном (restart bridge)',
+    dangerous: true,
+  },
   { key: 'audit:view', category: 'audit', label: 'Читать audit log' },
   { key: 'audit:export', category: 'audit', label: 'Export audit в CSV', unimplemented: true },
   { key: 'events:view', category: 'events', label: 'Game events log' },
