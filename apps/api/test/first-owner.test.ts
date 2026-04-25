@@ -105,12 +105,23 @@ describe('claimFirstOwner', () => {
   it('serialises concurrent calls — exactly one claims', async () => {
     const bridge = fakeBridge(false);
     const ids = Array.from({ length: 8 }, (_, i) => 76561198000000020n + BigInt(i));
-    const results = await Promise.all(ids.map((id) => claimFirstOwner(db, bridge, id)));
-    const claimed = results.filter((r) => r === 'claimed').length;
-    const already = results.filter((r) => r === 'already_claimed').length;
-    expect(claimed).toBe(1);
-    expect(already).toBe(7);
-    const ras = await db.select().from(playerRoleAssignments);
-    expect(ras.length).toBe(1);
+    const clients = ids.map(() => postgres(schemaInfo.url, { max: 1, onnotice: () => undefined }));
+    try {
+      // biome-ignore lint/suspicious/noExplicitAny: test setup
+      const dbs = clients.map((c) => drizzle(c, { schema }) as any);
+      const results = await Promise.all(
+        // biome-ignore lint/suspicious/noExplicitAny: test setup
+        // biome-ignore lint/style/noNonNullAssertion: ids length matches dbs length
+        dbs.map((d: any, i: number) => claimFirstOwner(d, bridge, ids[i]!)),
+      );
+      const claimed = results.filter((r) => r === 'claimed').length;
+      const already = results.filter((r) => r === 'already_claimed').length;
+      expect(claimed).toBe(1);
+      expect(already).toBe(7);
+      const ras = await db.select().from(playerRoleAssignments);
+      expect(ras.length).toBe(1);
+    } finally {
+      await Promise.all(clients.map((c) => c.end({ timeout: 5 })));
+    }
   });
 });
