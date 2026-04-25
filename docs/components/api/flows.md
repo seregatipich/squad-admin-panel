@@ -117,7 +117,7 @@ ui WS close →
 
 ## First-owner claim
 
-[`lib/first-owner.ts`](../../../apps/api/src/lib/first-owner.ts) — called once during the Steam OAuth callback when no owner exists yet.
+[`lib/first-owner.ts`](../../../apps/api/src/lib/first-owner.ts) — called once during the Steam OAuth callback when no owner exists yet. DB anchor is `panel_meta.first_owner_claimed` (singleton row, id=1, created by migration 0009).
 
 ```
 claimFirstOwner(db, bridge, steamId64):
@@ -127,28 +127,29 @@ claimFirstOwner(db, bridge, steamId64):
         ENOENT/error → continue
 
   2. db.transaction:
-        SELECT pg_advisory_xact_lock(hashtext('first_owner'))
+        SELECT pg_advisory_xact_lock(hashtext('panel_first_owner'))
                     — serialises concurrent Steam callbacks on the same Postgres connection
 
-        org = SELECT * FROM organizations LIMIT 1
-        if none → throw Error('no_organization_yet')
+        meta = SELECT * FROM panel_meta WHERE id = 1 LIMIT 1
+        if meta.first_owner_claimed === true → return 'already_claimed'
 
-        if org.settings.first_owner_claimed === true → return 'already_claimed'
-
-        ownerRole = SELECT * FROM roles WHERE org_id = org.id AND name = 'Owner' LIMIT 1
+        ownerRole = SELECT id FROM roles WHERE name = 'Owner' AND is_system_role = true LIMIT 1
         if none → return 'no_owner_role'
 
-        INSERT INTO players (steam_id64, canonical_name, …) ON CONFLICT DO NOTHING
-        INSERT INTO player_role_assignments (steam_id64, role_id, assigned_by=null) ON CONFLICT DO NOTHING
-        INSERT INTO organization_members (steam_id64, org_id, primary_role_id) ON CONFLICT DO NOTHING
-        UPDATE organizations SET settings = { …, first_owner_claimed: true }
+        ownerExists = SELECT steam_id64 FROM players WHERE role_id = ownerRole.id LIMIT 1
+        if exists → UPDATE panel_meta SET first_owner_claimed = true; return 'already_claimed'
 
+        UPDATE players SET role_id = ownerRole.id WHERE steam_id64 = steamId64
+        UPDATE panel_meta SET first_owner_claimed = true WHERE id = 1
+
+  3. if result === 'claimed':
         bridge.fileAtomicWrite('/var/lib/squad-panel/.first-owner-claimed', {steam_id64, claimed_at})
-                    — LAST operation; failure rolls back entire transaction
-  3. return 'claimed'
+                    — non-fatal if bridge write fails; DB is source of truth
+
+  4. return result
 ```
 
-If `fileAtomicWrite` throws, the whole transaction rolls back — no partial state, no DB flag set, trick stays armed for the next callback attempt.
+`fileAtomicWrite` failure is non-fatal — the DB flag is already committed, so the sentinel is an optimistic fast-path shortcut only. The transaction itself does not embed the bridge call.
 
 ## Session lifecycle
 

@@ -36,7 +36,7 @@ pnpm --filter @squad/api test:e2e
 - Blame walker in [`blame.test.ts`](../../../apps/api/test/blame.test.ts), RCON wire send in [`rcon-send.test.ts`](../../../apps/api/test/rcon-send.test.ts).
 - Steam profile enrichment in [`steam-profile.test.ts`](../../../apps/api/test/steam-profile.test.ts) — empty API key short-circuits, cache hit skips fetch, corrupt cache falls through to refetch, non-200 response returns null, empty players array returns null.
 - Steam OpenID 2.0 login + callback handlers in [`auth-steam.test.ts`](../../../apps/api/test/auth-steam.test.ts) — 8 tests: login redirect generates nonce in cookie + query; callback rejects missing cookie, mismatched nonce, expired Redis nonce, `return_to` host mismatch, `openid.response_nonce` replay; happy path creates session + `__Host-sid` cookie; no-role path redirects to `/no-access` without setting session cookie.
-- `claimFirstOwner` in [`first-owner.test.ts`](../../../apps/api/test/first-owner.test.ts) — 5 tests against a real isolated Postgres schema: claim (players/role-assignments/org-members/DB-flag all written, sentinel written last), sentinel pre-check short-circuits before any transaction, DB-flag pre-check skips sentinel write, bridge failure rolls back all DB state, 8-way concurrent race asserts exactly 1 `'claimed'` and 7 `'already_claimed'` (advisory-lock correctness).
+- `claimFirstOwner` in [`first-owner.test.ts`](../../../apps/api/test/first-owner.test.ts) — 5 direct-DB unit tests against the live DB (no isolated schema): claim sets `players.role_id` and `panel_meta.first_owner_claimed` and writes the sentinel; double-claim returns `already_claimed` and leaves player B without a role; sentinel pre-check short-circuits before the transaction; concurrent `Promise.all` race asserts advisory lock serializes to exactly 1 `'claimed'` and 1 `'already_claimed'`; missing Owner role returns `no_owner_role`. `panel_meta` singleton state and test players are saved and restored in beforeEach/afterEach.
 
 ## What is not covered
 
@@ -48,7 +48,8 @@ pnpm --filter @squad/api test:e2e
 ## Mocks and stubs
 
 - Each test that needs a fake bridge declares one inline (see e.g. [`server-logs.test.ts`](../../../apps/api/test/server-logs.test.ts), [`install-ws.test.ts`](../../../apps/api/test/install-ws.test.ts), [`bridge-heartbeat.test.ts`](../../../apps/api/test/bridge-heartbeat.test.ts)) — records call list, returns scripted responses. Used by every test except e2e.
-- `buildIntegrationApp` in [`test/integration/harness.ts`](../../../apps/api/test/integration/harness.ts) creates a per-test isolated Postgres schema and an ephemeral Fastify instance. `seedOwner: { steamId64: bigint }` inserts a `players` row, assigns the Owner role, and joins `organization_members`. `loginAsOwner(h)` calls `createSession` directly (no HTTP round-trip) and invalidates the RBAC permission cache to prevent cross-test leakage.
+- `buildIntegrationApp` in [`test/integration/harness.ts`](../../../apps/api/test/integration/harness.ts) creates a per-test isolated Postgres schema and an ephemeral Fastify instance. `seedOwner: { steamId64: bigint }` inserts a `players` row and assigns the Owner role. `loginAsOwner(h)` calls `createSession` directly (no HTTP round-trip) and invalidates the RBAC permission cache to prevent cross-test leakage.
+- `first-owner.test.ts` uses the live DB directly (no harness) and manages its own fixtures via beforeEach/afterEach. It does not use `buildIntegrationApp`.
 - Postgres/Redis: integration tests use the running compose stack. Unit tests use in-memory Drizzle adapters where possible.
 - No password/TOTP mocks are needed — those paths were deleted with Task 16.
 

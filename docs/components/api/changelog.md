@@ -1,5 +1,16 @@
 # `api` — changelog
 
+## 2026-04-25 — Task 5: first-owner refactored to panel_meta
+
+### Changed
+
+- `apps/api/src/lib/first-owner.ts` — rewritten to use `panel_meta.first_owner_claimed` as the DB anchor instead of `organizations.settings`. Advisory lock key changed from `first_owner` to `panel_first_owner`. Sentinel write moved outside the transaction (non-fatal on failure). Role assignment via `UPDATE players SET role_id` instead of `INSERT INTO player_role_assignments` + `organization_members`.
+- `apps/api/test/first-owner.test.ts` — replaced isolated-schema harness tests with direct-DB unit tests against the live DB. Saves and restores `panel_meta` singleton state in beforeEach/afterEach. Covers: claim, double-claim, sentinel fast-path, concurrent advisory-lock serialization, and missing-Owner-role error path.
+
+### Removed
+
+- No dependency on `organizations`, `organizationMembers`, `playerRoleAssignments` in `first-owner.ts`.
+
 ## 2026-04-25 — API tokens for integrations (P1)
 
 ### Added
