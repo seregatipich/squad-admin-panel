@@ -1,6 +1,11 @@
 'use client';
+
+import type { RoleColor } from '@squad/shared-config/role-colors';
+
 import Link from 'next/link';
-import { use, useEffect, useState } from 'react';
+import { use, useCallback, useEffect, useState } from 'react';
+
+import { RoleColorDot } from '@/components/RoleColorDot';
 
 interface Player {
   steam_id64: string;
@@ -32,19 +37,10 @@ interface PlayerResponse {
   ips_visible: boolean;
 }
 
-interface RoleAssignment {
-  role_id: string;
-  name: string;
-  clearance_level: number;
-  assigned_at: string;
-  assigned_by: string | null;
-}
-
-interface Role {
+interface SingleRole {
   id: string;
   name: string;
-  description: string | null;
-  clearance_level: number;
+  color: RoleColor;
   is_system_role: boolean;
 }
 
@@ -199,89 +195,62 @@ export default function PlayerDetail({ params }: { params: Promise<{ steam_id64:
 }
 
 function PanelAccessSection({ steamId64 }: { steamId64: string }) {
-  const [assignments, setAssignments] = useState<RoleAssignment[] | null>(null);
-  const [allRoles, setAllRoles] = useState<Role[] | null>(null);
+  const [current, setCurrent] = useState<SingleRole | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [allRoles, setAllRoles] = useState<SingleRole[]>([]);
   const [picked, setPicked] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
-  async function reload() {
-    const [aRes, rRes] = await Promise.all([
-      fetch(`/api/v1/players/${steamId64}/roles`, { credentials: 'include', cache: 'no-store' }),
+  const reload = useCallback(async () => {
+    const [rRes, listRes] = await Promise.all([
+      fetch(`/api/v1/players/${steamId64}/role`, { credentials: 'include', cache: 'no-store' }),
       fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
     ]);
-    if (aRes.ok) setAssignments((await aRes.json()) as RoleAssignment[]);
-    if (rRes.ok) setAllRoles((await rRes.json()) as Role[]);
-  }
+    if (rRes.ok) {
+      const body = (await rRes.json()) as { role: SingleRole | null };
+      setCurrent(body.role);
+    }
+    if (listRes.ok) setAllRoles((await listRes.json()) as SingleRole[]);
+  }, [steamId64]);
 
   useEffect(() => {
     void reload();
-  }, []);
+  }, [reload]);
 
-  async function assign() {
-    if (!picked) return;
+  const ownerId = allRoles.find((r) => r.is_system_role && r.name === 'Owner')?.id ?? null;
+
+  async function save(roleId: string | null) {
+    if (roleId === ownerId && roleId !== null) {
+      if (!confirm('Это даст пользователю полный доступ к панели. Подтвердить?')) return;
+    }
     setBusy(true);
     setMsg(null);
     try {
-      const r = await fetch(`/api/v1/players/${steamId64}/roles`, {
-        method: 'POST',
+      const r = await fetch(`/api/v1/players/${steamId64}/role`, {
+        method: 'PUT',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ role_id: picked }),
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setPicked('');
-      await reload();
-      setMsg({ kind: 'ok', text: 'Роль назначена.' });
-    } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function revoke(roleId: string) {
-    setBusy(true);
-    setMsg(null);
-    try {
-      const r = await fetch(`/api/v1/players/${steamId64}/roles/${roleId}`, {
-        method: 'DELETE',
-        credentials: 'include',
+        body: JSON.stringify({ role_id: roleId }),
       });
       if (r.status === 409) {
-        const body = await r.json().catch(() => ({}));
-        throw new Error(
-          (body as { error?: string }).error === 'cannot_remove_last_owner'
-            ? 'Нельзя убрать роль у последнего Owner — иначе панель потеряет администратора.'
-            : `HTTP ${r.status}`,
-        );
+        setMsg({ kind: 'err', text: 'Нельзя снять роль у последнего Owner.' });
+        return;
       }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       await reload();
-      setMsg({ kind: 'ok', text: 'Роль удалена.' });
+      setEditing(false);
+      setMsg({ kind: 'ok', text: 'Готово.' });
     } catch (e) {
       setMsg({ kind: 'err', text: (e as Error).message });
     } finally {
       setBusy(false);
     }
   }
-
-  if (!assignments || !allRoles) {
-    return (
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Доступ к панели</h2>
-        <div className="text-sm text-neutral-500">Загрузка…</div>
-      </section>
-    );
-  }
-
-  const assignedIds = new Set(assignments.map((a) => a.role_id));
-  const availableRoles = allRoles.filter((r) => !assignedIds.has(r.id));
 
   return (
     <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
       <h2 className="text-xs uppercase tracking-widest text-neutral-400">Доступ к панели</h2>
-
       {msg ? (
         <div
           className={`rounded border p-2 text-xs ${
@@ -293,65 +262,69 @@ function PanelAccessSection({ steamId64 }: { steamId64: string }) {
           {msg.text}
         </div>
       ) : null}
-
-      <div>
-        <h3 className="mb-2 text-sm text-neutral-400">Текущие роли</h3>
-        {assignments.length === 0 ? (
-          <p className="text-sm text-neutral-500">
-            Игрок не имеет роли в панели. При попытке войти он попадёт на /no-access.
-          </p>
-        ) : (
-          <ul className="space-y-1">
-            {assignments.map((a) => (
-              <li
-                key={a.role_id}
-                className="flex items-center justify-between rounded bg-neutral-900 px-3 py-2 text-sm"
-              >
-                <div>
-                  <span className="font-medium">{a.name}</span>
-                  <span className="ml-2 text-xs text-neutral-500">
-                    clearance {a.clearance_level} · с {new Date(a.assigned_at).toLocaleDateString()}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => revoke(a.role_id)}
-                  disabled={busy}
-                  className="rounded border border-red-900 px-3 py-0.5 text-xs text-red-400 hover:border-red-700 disabled:opacity-40"
-                >
-                  Удалить
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <div className="border-t border-neutral-900 pt-3">
-        <h3 className="mb-2 text-sm text-neutral-400">Назначить роль</h3>
+      {!editing ? (
+        <div className="flex items-center gap-3 text-sm">
+          {current ? (
+            <span className="inline-flex items-center gap-2">
+              <RoleColorDot color={current.color} />
+              <span className="font-medium">{current.name}</span>
+            </span>
+          ) : (
+            <span className="text-neutral-500">— нет доступа в панель</span>
+          )}
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="rounded border border-neutral-800 px-3 py-0.5 text-xs hover:border-neutral-600"
+          >
+            Изменить
+          </button>
+          {current ? (
+            <button
+              type="button"
+              onClick={() => save(null)}
+              disabled={busy}
+              className="rounded border border-red-900 px-3 py-0.5 text-xs text-red-400 hover:border-red-700 disabled:opacity-40"
+            >
+              Снять роль
+            </button>
+          ) : null}
+        </div>
+      ) : (
         <div className="flex gap-2">
           <select
             value={picked}
             onChange={(e) => setPicked(e.target.value)}
             className="flex-1 rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
           >
-            <option value="">— выберите роль —</option>
-            {availableRoles.map((r) => (
+            <option value="">— выберите —</option>
+            {allRoles.map((r) => (
               <option key={r.id} value={r.id}>
-                {r.name} (clearance {r.clearance_level})
+                {r.name}
               </option>
             ))}
           </select>
           <button
             type="button"
-            onClick={assign}
+            onClick={() => picked && save(picked)}
             disabled={!picked || busy}
             className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500 disabled:opacity-40"
           >
-            Назначить
+            Сохранить
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(false);
+              setPicked('');
+            }}
+            disabled={busy}
+            className="rounded border border-neutral-800 px-4 py-2 text-sm hover:border-neutral-600"
+          >
+            Отмена
           </button>
         </div>
-      </div>
+      )}
     </section>
   );
 }

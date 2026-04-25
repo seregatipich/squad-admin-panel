@@ -11,15 +11,8 @@ export default function LoginPage() {
     setError(params.get('error'));
     setSteamId(params.get('steam_id64'));
     (async () => {
-      const setupRes = await fetch('/api/v1/setup/check-env');
-      if (setupRes.status !== 410) {
-        window.location.href = '/setup';
-        return;
-      }
       const meRes = await fetch('/api/v1/me', { credentials: 'include' });
-      if (meRes.ok) {
-        window.location.href = '/dashboard';
-      }
+      if (meRes.ok) window.location.href = '/dashboard';
     })();
   }, []);
 
