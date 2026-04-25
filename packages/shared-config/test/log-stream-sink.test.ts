@@ -82,4 +82,50 @@ describe('redisSinkStream', () => {
     expect(r.calls).toHaveLength(1);
     expect(r.calls[0].args.flat()).toContain('warn-line');
   });
+
+  it('strips pino-http meta keys (req/res/responseTime/reqId/name) from ctx', async () => {
+    const r = fakeRedis();
+    const stream = redisSinkStream({ redis: r as never, defaultSource: 'api' });
+    stream.write(
+      `${JSON.stringify({
+        level: 30,
+        msg: 'request completed',
+        reqId: 'req-abc',
+        name: 'api',
+        req: { method: 'GET', url: '/x', headers: { cookie: 'should-not-leak' } },
+        res: { statusCode: 200 },
+        responseTime: 12.3,
+        keep: 'this',
+      })}\n`,
+    );
+    stream.end();
+    await new Promise<void>((resolve) => stream.on('finish', resolve));
+    const flat = r.calls[0].args.flat() as string[];
+    const cIdx = flat.indexOf('c');
+    expect(cIdx).toBeGreaterThanOrEqual(0);
+    const ctx = JSON.parse(flat[cIdx + 1]);
+    expect(ctx).toEqual({ keep: 'this' });
+    expect(JSON.stringify(ctx)).not.toContain('should-not-leak');
+  });
+
+  it('uses per-instance error-warning latch (does not leak across sinks)', async () => {
+    const errA = vi.fn(async () => {
+      throw new Error('boom-A');
+    });
+    const errB = vi.fn(async () => {
+      throw new Error('boom-B');
+    });
+    const sA = redisSinkStream({ redis: { xadd: errA } as never, defaultSource: 'api' });
+    const sB = redisSinkStream({ redis: { xadd: errB } as never, defaultSource: 'api' });
+    sA.write(`${JSON.stringify({ level: 30, msg: 'a' })}\n`);
+    sA.end();
+    sB.write(`${JSON.stringify({ level: 30, msg: 'b' })}\n`);
+    sB.end();
+    await Promise.all([
+      new Promise<void>((resolve) => sA.on('finish', resolve)),
+      new Promise<void>((resolve) => sB.on('finish', resolve)),
+    ]);
+    expect(errA).toHaveBeenCalledTimes(1);
+    expect(errB).toHaveBeenCalledTimes(1);
+  });
 });
