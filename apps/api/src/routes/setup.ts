@@ -1,5 +1,6 @@
 import { organizations } from '@squad/db/schema';
 import { seedSystemRoles } from '@squad/db/seed';
+import { sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -7,11 +8,10 @@ import { z } from 'zod';
 
 async function setupCompleted(app: import('fastify').FastifyInstance): Promise<boolean> {
   const rows = await app.db
-    .select({ settings: organizations.settings })
+    .select({ count: sql<number>`count(*)::int` })
     .from(organizations)
-    .limit(1);
-  const settings = rows[0]?.settings as Record<string, unknown> | undefined;
-  return settings?.setup_complete === true;
+    .where(sql`(settings ->> 'setup_complete')::boolean = true`);
+  return (rows[0]?.count ?? 0) > 0;
 }
 
 const initBody = z.object({
