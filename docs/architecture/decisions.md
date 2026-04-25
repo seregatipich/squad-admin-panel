@@ -2,6 +2,36 @@
 
 Meaningful architectural choices, recorded as we make them.
 
+## 2026-04-25 — API tokens for integrations (Bearer auth, scopes ⊆ user permissions)
+
+### Context
+
+The panel is admin-facing and so far had only browser cookie sessions. Integrations (CI scripts, monitoring, Discord bots) had no way to authenticate without scraping HTML or running a full Steam OpenID handshake. The schema for `player_api_tokens` already existed (since `0008_steam_only_auth.sql`) but nothing minted, validated, or accepted them — `audit_log.actor_token_id` was always NULL.
+
+### Decision
+
+Mint per-user, long-lived bearer tokens at `/api/v1/me/tokens` (cookie-only management). Tokens are `sqp_<uuidv7>_<24-byte base64url>`, persisted as `sha256` only. Authentication is `Authorization: Bearer …`; effective permissions on every request are `currentRolePermissions ∩ token.scopes`. Soft revoke (`revoked_at`), no TTL. 25 active tokens per user maximum.
+
+### Rationale
+
+- **Reuse `PERMISSION_KEYS`** instead of inventing an `api_token:*` permission family: scopes are already a familiar set with first-class UI; users can't grant a token more power than they themselves have.
+- **Live intersect, not snapshot**: revoking a role immediately shrinks a token's reach without an explicit revoke. Mirrors how cookie sessions react to role changes.
+- **Cookie-only management**: a stolen token cannot rotate itself or mint a wider one.
+- **Sha-256, not Argon2**: 24 bytes of entropy makes brute-force impossible; Argon2 is for low-entropy human secrets, not random API tokens. Same approach as session token storage.
+- **Soft revoke**: keeps `audit_log.actor_token_id` referentially valid for forensic queries.
+
+### Consequences
+
+- `audit_log.actor_token_id` becomes non-null for the first time. Canonical-JSON hashing already includes the column, so chain integrity is unaffected — but the first row carrying a value will look "different" in audit dumps.
+- The `useId`/scopes-checkbox UI implies the user must already have the permission to grant it; users with no permissions can only mint a `scopes=[]` introspection token (allowed).
+- No expiry → operators must revoke leaked tokens manually. The `sqp_` prefix makes secret scanners catch the common case.
+
+### Alternatives considered
+
+- **Per-token expiry / refresh tokens**: deferred. Would add UI complexity and a daily prune job for what is fundamentally a list operators can already curate at `/settings/tokens`.
+- **Admin-managed tokens for other users**: deferred. P1 use cases are user-owned automation; admin minting is a future RBAC question.
+- **Separate `api_token:*` permission family**: rejected — duplicates the existing permission model and forces every gated route to opt in.
+
 ## 2026-04-25 — Panel observability via two capped Redis Streams + pino multistream sink
 
 ### Context
@@ -81,7 +111,7 @@ Email/password + TOTP login was scoped for Phase 0 but never shipped to users. S
   - `organizations.settings.first_owner_claimed: true`.
   - Bridge-managed sentinel file `/var/lib/squad-panel/.first-owner-claimed`.
   - `pg_advisory_xact_lock(hashtext('first_owner'))` serialises concurrent callbacks.
-- audit_log gains discriminated actor union: `(actor_kind='steam', actor_steam_id64)` or `(actor_kind='system', actor_system_label)`. `actor_token_id` traces actions taken via API tokens (P1+ surface, schema-only for now).
+- audit_log gains discriminated actor union: `(actor_kind='steam', actor_steam_id64)` or `(actor_kind='system', actor_system_label)`. `actor_token_id` traces actions taken via API tokens (now wired up — see the 2026-04-25 "API tokens for integrations" decision).
 - Sessions are sliding with 6h TTL and 60s touch throttle (Redis `SETNX session-touch:{id}`).
 
 ### Rationale

@@ -20,7 +20,7 @@ Postgres 16+ via Drizzle ORM 0.45. Source of truth for the operational data mode
 |---|---|
 | `players.ts` | One row per SteamID64. Universal identity anchor — replaces the old `users` table. |
 | `sessions.ts` | Opaque session IDs, keyed on `players.steam_id64`. |
-| `player-api-tokens.ts` | Programmatic API tokens, keyed on `players.steam_id64`. |
+| `player-api-tokens.ts` | Programmatic API tokens, keyed on `players.steam_id64`. Wired up in [`docs/components/api-tokens/`](../api-tokens/README.md). |
 | `roles.ts` + `role-permissions.ts` + `role-server-scopes.ts` | RBAC bag-of-permissions. |
 | `player-role-assignments.ts` | Player → role mapping per org (steam_id64 primary key). |
 | `organizations.ts` + `organization-members.ts` | Multi-tenant scaffold (P0 ships a single org). Members keyed on steam_id64. |
