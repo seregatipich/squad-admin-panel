@@ -64,6 +64,13 @@
       "when": 1745877600000,
       "tag": "0008_steam_only_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1745964000000,
+      "tag": "0009_panel_rbac",
+      "breakpoints": true
     }
   ]
 }
