@@ -154,8 +154,8 @@ export const PERMISSIONS = [
   },
 ] as const satisfies readonly PermissionDef[];
 
-export const PERMISSION_KEYS = PERMISSIONS.map((p) => p.key) as readonly string[];
 export type PermissionKey = (typeof PERMISSIONS)[number]['key'];
+export const PERMISSION_KEYS = PERMISSIONS.map((p) => p.key) as readonly PermissionKey[];
 
 const PERMISSION_KEY_SET: ReadonlySet<string> = new Set(PERMISSION_KEYS);
 export function isPermissionKey(x: string): x is PermissionKey {
