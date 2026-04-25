@@ -13,6 +13,7 @@ import type { FastifyInstance } from 'fastify';
 
 const SECTION = (label: string): string => `\n===== ${label} =====\n`;
 const LEVEL_3: Record<string, string> = { debug: 'DBG', info: 'INF', warn: 'WRN', error: 'ERR' };
+const AUDIT_CAP = 50_000;
 
 interface ServerRef {
   id: string;
@@ -71,7 +72,12 @@ async function tailContainerOneShot(
       collected.push(text);
     })
     .catch(() => undefined);
-  await Promise.race([follow, new Promise((resolve) => setTimeout(resolve, deadlineMs))]);
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, deadlineMs);
+  });
+  await Promise.race([follow, deadline]);
+  if (timer) clearTimeout(timer);
   await client.close().catch(() => undefined);
   return collected.join('');
 }
@@ -146,9 +152,13 @@ export async function* exportBundle(
     })
     .from(auditLog)
     .where(gt(auditLog.createdAt, cutoffDate))
-    .orderBy(auditLog.id);
+    .orderBy(auditLog.id)
+    .limit(AUDIT_CAP);
   for (const row of auditRows) {
     yield `${row.createdAt.toISOString()} ${row.actorKind} ${row.actionType} ${row.targetType ?? ''}/${row.targetId ?? ''} ${row.statusCode ?? ''}\n`;
+  }
+  if (auditRows.length === AUDIT_CAP) {
+    yield `[audit section truncated at ${AUDIT_CAP} rows; query Postgres directly for the full record]\n`;
   }
 
   for (const s of servers) {
