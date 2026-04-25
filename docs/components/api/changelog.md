@@ -1,5 +1,21 @@
 # `api` — changelog
 
+## 2026-04-25 (Task 13)
+
+### Changed
+
+- `apps/api/src/routes/setup.ts` — collapsed from 4-step wizard (`/org`, `/owner`, `/finalize`, `/check-env`) to 2-endpoint surface (`/check-env` + `/init`). `POST /init` atomically inserts the organisation, seeds all 4 system roles, and sets `setup_complete=true` in a single transaction.
+
+### Removed
+
+- `POST /api/v1/setup/org` — merged into `/init`.
+- `POST /api/v1/setup/owner` — owner is now the first Steam player to claim the Owner role via `claimFirstOwner`.
+- `POST /api/v1/setup/finalize` — `setup_complete` flag is now set atomically in `/init`.
+
+### Added
+
+- `test/setup.test.ts` — 6 integration tests covering both endpoints.
+
 ## 2026-04-25
 
 ### Added

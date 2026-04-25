@@ -4,8 +4,8 @@ import {
   SYSTEM_ROLE_PERMISSIONS,
 } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
+import type { PgDatabase } from 'drizzle-orm/pg-core';
 import { v7 as uuidv7 } from 'uuid';
-import type { DatabaseClient } from '../client.js';
 import { rolePermissions, roles } from '../schema/index.js';
 
 export interface SeededRole {
@@ -13,7 +13,11 @@ export interface SeededRole {
   name: RoleName;
 }
 
-export async function seedSystemRoles(db: DatabaseClient, orgId: string): Promise<SeededRole[]> {
+export async function seedSystemRoles(
+  // biome-ignore lint/suspicious/noExplicitAny: accepts both DatabaseClient and PgTransaction
+  db: PgDatabase<any, any>,
+  orgId: string,
+): Promise<SeededRole[]> {
   const seeded: SeededRole[] = [];
   const names: RoleName[] = ['Owner', 'Senior Admin', 'Admin', 'Viewer'];
 

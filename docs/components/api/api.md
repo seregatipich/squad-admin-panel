@@ -9,16 +9,14 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 - **Audit**: every mutation must declare `config.audit: { action, resource }`. The CI gate [`audit-coverage.test.ts`](../../../apps/api/test/audit-coverage.test.ts) fails the build otherwise.
 - **bigserial IDs**: `audit_log.id` is serialized as a string to survive `JSON.stringify`.
 
-## Setup (one-shot, 4 steps)
+## Setup (one-shot, 2 steps)
 
-The setup flow is multi-step — the client walks through `check-env` → `org` → `owner` → `finalize`. After finalize, every route returns `410 setup_already_complete`.
+Single-pass wizard: `check-env` → `init`. Once `init` completes, both endpoints return `410 setup_already_complete`.
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| GET | `/api/v1/setup/check-env` | Probes the bridge (`host_info`) and reports OS readiness. | none |
-| POST | `/api/v1/setup/org` | Creates the first organisation + seeds system roles. Body: `{ name, slug? }`. | none |
-| POST | `/api/v1/setup/owner` | Creates the Owner user. Body: `{ email, display_name, password (≥12) }`. | none |
-| POST | `/api/v1/setup/finalize` | Marks the org `setup_complete=true` and locks the setup endpoints. | none |
+| GET | `/api/v1/setup/check-env` | Probes bridge (`host_info`) and reports `bridge`, `host`, `public_url`, `steam_web_api` readiness. Returns `{ ok, checks: Record<string, { ok, detail? }> }`. | none |
+| POST | `/api/v1/setup/init` | Atomic transaction: insert organisation + seed 4 system roles (`Owner`, `Senior Admin`, `Admin`, `Viewer`) + set `setup_complete=true`. Body: `{ name, slug? }`. Returns `{ org_id, slug }`. | none |
 
 ## Authentication and account
 
