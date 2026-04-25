@@ -169,6 +169,7 @@ export type PermissionKey = (typeof PERMISSIONS)[number]['key'];
 | whitelist | `whitelist:edit` | Управлять whitelist | unimplemented |
 | host | `host:view` | Dashboard host info | |
 | host | `host:metrics` | Метрики (CPU/RAM/Disk/Net + история) | |
+| host | `host:manage` | Управление хост-демоном (restart bridge) | dangerous |
 | audit | `audit:view` | Читать audit log | |
 | audit | `audit:export` | Export audit в CSV | unimplemented |
 | events | `events:view` | Game events log | |
@@ -202,7 +203,7 @@ export type PermissionKey = (typeof PERMISSIONS)[number]['key'];
 | `user:create` / `user:edit` / `user:delete` | дропаются (нет такого workflow) |
 | `role:manage` | разбивается на `role:view` / `role:create` / `role:edit` / `role:delete` |
 | `permission:manage` | дропается (registry — статика в коде) |
-| `host:bridge_control` | дропается (нет UI) |
+| `host:bridge_control` | `host:manage` (переименован, теперь dangerous; заменяет ошибочный маппинг на `host:metrics`) |
 | `org:view` / `org:edit` | дропаются (orgs убраны) |
 
 Все `config: { permissions: [...] }` в существующих routes обновляются в той же серии коммитов. `audit-coverage.test.ts` ловит пропуски.
