@@ -26,6 +26,7 @@ import authRoutes from '../src/routes/auth.js';
 import steamRoutes from '../src/routes/auth-steam.js';
 import hostRoutes from '../src/routes/host.js';
 import hostActionsRoutes from '../src/routes/host-actions.js';
+import meTokensRoutes from '../src/routes/me-tokens.js';
 import playerRoutes from '../src/routes/players.js';
 import serverInstallRoutes from '../src/routes/server-install.js';
 import serverRoutes from '../src/routes/servers.js';
@@ -76,6 +77,7 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   (app as any).setErrorHandler(() => undefined);
 
   await app.register(authRoutes);
+  await app.register(meTokensRoutes);
   await app.register(setupRoutes);
   await app.register(hostRoutes);
   await app.register(hostActionsRoutes);

@@ -32,6 +32,7 @@ import depotRoutes from './routes/depot.js';
 import hostRoutes from './routes/host.js';
 import hostActionsRoutes from './routes/host-actions.js';
 import logsRoutes from './routes/logs.js';
+import meTokensRoutes from './routes/me-tokens.js';
 import playerRoutes from './routes/players.js';
 import serverConfigRoutes from './routes/server-configs.js';
 import serverInstallRoutes from './routes/server-install.js';
@@ -93,6 +94,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(statusReconcilerPlugin);
 
   await app.register(authRoutes);
+  await app.register(meTokensRoutes);
   await app.register(setupRoutes);
   await app.register(hostRoutes);
   await app.register(hostActionsRoutes);
