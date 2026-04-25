@@ -17,6 +17,7 @@ import { buildLogger } from './lib/logger.js';
 import auditPlugin from './plugins/audit.js';
 import authPlugin from './plugins/auth.js';
 import bridgePlugin from './plugins/bridge.js';
+import bridgeHeartbeatPlugin from './plugins/bridge-heartbeat.js';
 import databasePlugin from './plugins/database.js';
 import healthPlugin from './plugins/health.js';
 import installProgressPlugin from './plugins/install-progress.js';
@@ -83,6 +84,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(redisPlugin, { config });
   lateSink.setInner(redisSinkStream({ redis: app.redis, defaultSource: 'api' }));
   await app.register(bridgePlugin, { config });
+  await app.register(bridgeHeartbeatPlugin);
   await app.register(metricsPlugin);
   await app.register(healthPlugin);
   await app.register(authPlugin);
