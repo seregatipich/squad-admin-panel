@@ -4,7 +4,8 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 
 ## Conventions
 
-- **Authentication**: cookie `__Host-sid` (`Secure; HttpOnly; SameSite=lax; Path=/`). Set on `POST /api/v1/auth/login`. Cleared on `POST /api/v1/auth/logout`.
+- **Authentication**: cookie `__Host-sid` (`Secure; HttpOnly; SameSite=lax; Path=/`). Set on `GET /api/v1/auth/steam/callback`. Cleared on `POST /api/v1/auth/logout`.
+- **Identity anchor**: `players.steam_id64` (bigint). There are no email/password accounts. All sessions and permissions are keyed on Steam ID.
 - **Authorisation**: every authed route declares `config.permissions: PermissionKey[]`. Anonymous → 401. Missing permission → 403.
 - **Audit**: every mutation must declare `config.audit: { action, resource }`. The CI gate [`audit-coverage.test.ts`](../../../apps/api/test/audit-coverage.test.ts) fails the build otherwise.
 - **bigserial IDs**: `audit_log.id` is serialized as a string to survive `JSON.stringify`.
@@ -22,16 +23,10 @@ Single-pass wizard: `check-env` → `init`. Once `init` completes, both endpoint
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| POST | `/api/v1/auth/login` | Email + password (+ TOTP code or backup code). 5/15min rate limit per IP. Body: `{ email, password, totp_code?, backup_code?, remember_me? }`. | none |
-| POST | `/api/v1/auth/logout` | Revoke session, clear cookie. | session |
-| GET | `/api/v1/me` | Current user, permissions array, clearance. | session |
-| POST | `/api/v1/me/totp/provision` | Generate TOTP secret + 10 backup codes. Returns otpauth URI + plaintext backup codes (shown once). | session |
-| POST | `/api/v1/me/totp/enable` | Confirm provisioned secret with a valid 6-digit code. Body: `{ totp_code }`. | session |
-| POST | `/api/v1/me/totp/disable` | Re-auth with password and clear TOTP. Body: `{ password }`. | session |
 | GET | `/api/v1/auth/steam/login` | Generates a random nonce (base64url, 16 bytes), stores it in Redis (`steam-nonce:{nonce}`, TTL 300 s) and a `__Host-steam-nonce` cookie, then redirects to `steamcommunity.com/openid/login`. | none |
 | GET | `/api/v1/auth/steam/callback` | Validates nonce cookie↔query match, single-use Redis nonce, `return_to` host-binding to `PANEL_PUBLIC_URL`, Steam `check_authentication`, and `openid.response_nonce` replay guard (`steam-response-nonce:{nonce}`, TTL 3600 s, NX). On success: upserts `players` row, runs `claimFirstOwner`, checks permissions; redirects to `/` with `__Host-sid` cookie on success or `/no-access?steam_id64=…` when no role is assigned. | none |
-| GET | `/api/v1/auth/discord/login` | **Stub (501)** — Discord OAuth lands in Phase 1. | none |
-| GET | `/api/v1/auth/discord/callback` | **Stub (501)**. | none |
+| POST | `/api/v1/auth/logout` | Revoke session, clear cookie. | session |
+| GET | `/api/v1/me` | Current player, permissions array, clearance. | session |
 
 ## RBAC reference
 
