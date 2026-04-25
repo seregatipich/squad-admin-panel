@@ -15,6 +15,7 @@ const envSchema = z.object({
   BRIDGE_SOCKET: z.string().default('/run/panel-host-bridge.sock'),
   COOKIE_SECURE: z.coerce.boolean().default(true),
   APP_DOMAIN: z.string().default('admin.localhost'),
+  PANEL_PUBLIC_URL: z.string().url(),
   STEAM_API_KEY: z.string().optional(),
   DISCORD_CLIENT_ID: z.string().optional(),
   DISCORD_CLIENT_SECRET: z.string().optional(),

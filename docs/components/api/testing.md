@@ -35,13 +35,15 @@ pnpm --filter @squad/api test:e2e
 - Config rewrite invariants in [`config-rewrite.test.ts`](../../../apps/api/test/config-rewrite.test.ts) — sha-unchanged short-circuit, append-only history, restore-as-new-version.
 - Argon2id hashing parameters in [`argon.test.ts`](../../../apps/api/test/argon.test.ts), TOTP step replay rejection in [`totp.test.ts`](../../../apps/api/test/totp.test.ts), blame walker in [`blame.test.ts`](../../../apps/api/test/blame.test.ts), RCON wire send in [`rcon-send.test.ts`](../../../apps/api/test/rcon-send.test.ts).
 - Steam profile enrichment in [`steam-profile.test.ts`](../../../apps/api/test/steam-profile.test.ts) — empty API key short-circuits, cache hit skips fetch, corrupt cache falls through to refetch, non-200 response returns null, empty players array returns null.
+- Steam OpenID 2.0 login + callback handlers in [`auth-steam.test.ts`](../../../apps/api/test/auth-steam.test.ts) — 8 tests: login redirect generates nonce in cookie + query; callback rejects missing cookie, mismatched nonce, expired Redis nonce, `return_to` host mismatch, `openid.response_nonce` replay; happy path creates session + `__Host-sid` cookie; no-role path redirects to `/no-access` without setting session cookie.
 - `claimFirstOwner` in [`first-owner.test.ts`](../../../apps/api/test/first-owner.test.ts) — 5 tests against a real isolated Postgres schema: claim (players/role-assignments/org-members/DB-flag all written, sentinel written last), sentinel pre-check short-circuits before any transaction, DB-flag pre-check skips sentinel write, bridge failure rolls back all DB state, 8-way concurrent race asserts exactly 1 `'claimed'` and 7 `'already_claimed'` (advisory-lock correctness).
 
 ## What is not covered
 
 - The actual bridge over the actual socket — that's e2e.
 - Cookie security flags in production deployment — verified manually with browser devtools.
-- OIDC providers — Steam and Discord clients are stubbed; the real handshake is verified end-to-end by hand.
+- Steam OpenID real-network handshake — `check_authentication` is mocked with `vi.spyOn(globalThis, 'fetch')`; the live Steam endpoint is exercised only in e2e.
+- Discord OAuth — client is stubbed; the real handshake is verified end-to-end by hand.
 
 ## Mocks and stubs
 

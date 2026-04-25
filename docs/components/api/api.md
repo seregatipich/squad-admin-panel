@@ -30,8 +30,8 @@ The setup flow is multi-step — the client walks through `check-env` → `org` 
 | POST | `/api/v1/me/totp/provision` | Generate TOTP secret + 10 backup codes. Returns otpauth URI + plaintext backup codes (shown once). | session |
 | POST | `/api/v1/me/totp/enable` | Confirm provisioned secret with a valid 6-digit code. Body: `{ totp_code }`. | session |
 | POST | `/api/v1/me/totp/disable` | Re-auth with password and clear TOTP. Body: `{ password }`. | session |
-| GET | `/api/v1/auth/steam/login` | **Stub (501)** — Steam OpenID 2.0 lands in Phase 1. | none |
-| GET | `/api/v1/auth/steam/callback` | **Stub (501)**. | none |
+| GET | `/api/v1/auth/steam/login` | Generates a random nonce (base64url, 16 bytes), stores it in Redis (`steam-nonce:{nonce}`, TTL 300 s) and a `__Host-steam-nonce` cookie, then redirects to `steamcommunity.com/openid/login`. | none |
+| GET | `/api/v1/auth/steam/callback` | Validates nonce cookie↔query match, single-use Redis nonce, `return_to` host-binding to `PANEL_PUBLIC_URL`, Steam `check_authentication`, and `openid.response_nonce` replay guard (`steam-response-nonce:{nonce}`, TTL 3600 s, NX). On success: upserts `players` row, runs `claimFirstOwner`, checks permissions; redirects to `/` with `__Host-sid` cookie on success or `/no-access?steam_id64=…` when no role is assigned. | none |
 | GET | `/api/v1/auth/discord/login` | **Stub (501)** — Discord OAuth lands in Phase 1. | none |
 | GET | `/api/v1/auth/discord/callback` | **Stub (501)**. | none |
 
