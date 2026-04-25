@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { rolePermissions, roles, servers, userRoleAssignments } from '@squad/db/schema';
+import { playerRoleAssignments, rolePermissions, roles, servers } from '@squad/db/schema';
 import type { PermissionKey } from '@squad/shared-config';
 import { and, eq, inArray } from 'drizzle-orm';
 
@@ -14,20 +14,21 @@ const TTL_MS = 30_000;
 
 export async function loadUserPermissions(
   db: DatabaseClient,
-  userId: string,
+  steamId64: bigint,
 ): Promise<PermissionContext> {
-  const hit = cache.get(userId);
+  const cacheKey = String(steamId64);
+  const hit = cache.get(cacheKey);
   if (hit && hit.expiresAt > Date.now()) return hit.value;
 
-  const userRoles = await db
-    .select({ roleId: userRoleAssignments.roleId })
-    .from(userRoleAssignments)
-    .where(eq(userRoleAssignments.userId, userId));
-  const roleIds = userRoles.map((r) => r.roleId);
+  const playerRoles = await db
+    .select({ roleId: playerRoleAssignments.roleId })
+    .from(playerRoleAssignments)
+    .where(eq(playerRoleAssignments.steamId64, steamId64));
+  const roleIds = playerRoles.map((r) => r.roleId);
 
   if (roleIds.length === 0) {
     const empty: PermissionContext = { permissions: new Set(), clearance: 0, roleIds: [] };
-    cache.set(userId, { value: empty, expiresAt: Date.now() + TTL_MS });
+    cache.set(cacheKey, { value: empty, expiresAt: Date.now() + TTL_MS });
     return empty;
   }
 
@@ -44,12 +45,12 @@ export async function loadUserPermissions(
   const clearance = roleRows.reduce((max, r) => Math.max(max, r.clearance), 0);
   const permissions = new Set(perms.map((p) => p.key as PermissionKey));
   const value: PermissionContext = { permissions, clearance, roleIds };
-  cache.set(userId, { value, expiresAt: Date.now() + TTL_MS });
+  cache.set(cacheKey, { value, expiresAt: Date.now() + TTL_MS });
   return value;
 }
 
-export function invalidatePermissionCache(userId: string): void {
-  cache.delete(userId);
+export function invalidatePermissionCache(steamId64: bigint): void {
+  cache.delete(String(steamId64));
 }
 
 export function hasPermission(ctx: PermissionContext, required: readonly PermissionKey[]): boolean {
@@ -59,12 +60,6 @@ export function hasPermission(ctx: PermissionContext, required: readonly Permiss
   return true;
 }
 
-/**
- * Verify the user has the required permissions scoped to a specific server.
- * Phase 0 uses org-wide permissions only; future phases will consult
- * role_server_scopes. The signature is kept stable so upgrading does not
- * require route touch-ups.
- */
 export async function hasServerPermission(
   db: DatabaseClient,
   ctx: PermissionContext,
