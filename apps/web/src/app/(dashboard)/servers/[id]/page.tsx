@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { use, useEffect, useRef, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
+import { nextBackoffMs } from '@/lib/ws-backoff';
 
 interface ServerRow {
   id: string;
@@ -73,9 +74,15 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const [acting, setActing] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logsLive, setLogsLive] = useState(false);
+  const [logsError, setLogsError] = useState<{
+    code: number | null;
+    reason: string | null;
+    retryInMs: number | null;
+  } | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<number>(() => Date.now());
   const [now, setNow] = useState<number>(() => Date.now());
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectNowRef = useRef<(() => void) | null>(null);
 
   async function refresh() {
     try {
@@ -119,55 +126,126 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   useEffect(() => {
     if (!logsEnabled) {
       setLogsLive(false);
+      setLogsError(null);
+      reconnectNowRef.current = null;
       return;
     }
     let cancelled = false;
-    let reconnects = 0;
+    let attempts = 0;
+    let backoffTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function clearBackoff() {
+      if (backoffTimer != null) {
+        clearTimeout(backoffTimer);
+        backoffTimer = null;
+      }
+    }
+
+    function scheduleReconnect() {
+      if (cancelled) return;
+      const delay = nextBackoffMs(attempts);
+      attempts++;
+      setLogsError((prev) =>
+        prev ? { ...prev, retryInMs: delay } : { code: null, reason: null, retryInMs: delay },
+      );
+      clearBackoff();
+      backoffTimer = setTimeout(() => {
+        backoffTimer = null;
+        open();
+      }, delay);
+    }
+
+    function reconnectNow() {
+      if (cancelled) return;
+      clearBackoff();
+      attempts = 0;
+      const ws = wsRef.current;
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+      open();
+    }
+
     function open() {
-      if (cancelled || reconnects >= 3) return;
+      if (cancelled) return;
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(
         `${proto}://${window.location.host}/api/v1/servers/${id}/logs/ws?lines=200`,
       );
       wsRef.current = ws;
-      ws.onopen = () => setLogsLive(true);
+      ws.onopen = () => {
+        if (cancelled) return;
+        attempts = 0;
+        clearBackoff();
+        setLogsLive(true);
+        setLogsError(null);
+      };
       ws.onmessage = (ev) => {
         try {
-          const f = JSON.parse(ev.data) as LogEntry & { error?: string; done?: boolean };
-          if (f.error) {
+          const frame = JSON.parse(ev.data) as LogEntry & {
+            error?: string;
+            done?: boolean;
+            heartbeat?: boolean;
+          };
+          if (frame.heartbeat) return;
+          if (frame.error) {
             setLogs((prev) => [
               ...prev,
               {
                 ts: new Date().toISOString(),
                 stream: 'stderr',
-                message: `[log-stream] ${f.error}`,
+                message: `[log-stream] ${frame.error}`,
               },
             ]);
             return;
           }
-          if (f.done) return;
+          if (frame.done) return;
           setLogs((prev) => {
-            const next = [...prev, f];
+            const next = [...prev, frame];
             return next.length > 2000 ? next.slice(-2000) : next;
           });
         } catch {
           // ignore malformed frame
         }
       };
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
+        if (cancelled) return;
         setLogsLive(false);
-        if (!cancelled) {
-          reconnects++;
-          setTimeout(open, 2000);
-        }
+        setLogsError({
+          code: typeof ev.code === 'number' ? ev.code : null,
+          reason:
+            (ev.reason && ev.reason.length > 0 ? ev.reason : null) ??
+            (ev.wasClean === false ? 'abnormal_closure' : null),
+          retryInMs: null,
+        });
+        scheduleReconnect();
       };
       ws.onerror = () => {
         setLogsLive(false);
       };
     }
+
+    reconnectNowRef.current = reconnectNow;
+
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      const ws = wsRef.current;
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        reconnectNow();
+      }
+    };
+    const onOnline = () => reconnectNow();
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('online', onOnline);
+
     open();
+
     return () => {
       cancelled = true;
+      clearBackoff();
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('online', onOnline);
+      reconnectNowRef.current = null;
       wsRef.current?.close();
     };
   }, [id, logsEnabled]);
@@ -375,6 +453,16 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           height="32rem"
           title="Лог контейнера (docker logs)"
           live={logsLive}
+          errorBanner={
+            logsError && logsEnabled
+              ? {
+                  code: logsError.code,
+                  reason: logsError.reason,
+                  retryInMs: logsError.retryInMs,
+                  onRetry: () => reconnectNowRef.current?.(),
+                }
+              : null
+          }
           emptyText={
             !logsEnabled
               ? `Сервер в состоянии "${server.status}" — контейнер ещё не создан. Запустите установку, чтобы журнал появился.`

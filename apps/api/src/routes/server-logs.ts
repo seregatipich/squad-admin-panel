@@ -41,6 +41,12 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
       // Dedicated bridge connection so closing the WebSocket tears down
       // the `docker logs -f` subprocess on the bridge side cleanly.
       const dedicatedBridge = app.makeBridgeClient();
+      // Frame-level heartbeat: keeps proxies (caddy, nginx) from killing the
+      // socket on idle when the container is quiet. Cleared on socket close.
+      const heartbeatInterval = setInterval(() => {
+        if (closed) return;
+        safeSend({ heartbeat: true });
+      }, 20_000);
 
       (async () => {
         const row = await app.db.query.servers.findFirst({ where: eq(servers.id, id) });
@@ -94,6 +100,7 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
 
       socket.on('close', () => {
         closed = true;
+        clearInterval(heartbeatInterval);
         dedicatedBridge.close().catch(() => undefined);
       });
 

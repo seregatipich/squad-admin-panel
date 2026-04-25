@@ -9,6 +9,13 @@ export interface LogEntry {
   id?: string;
 }
 
+export interface LogConsoleErrorBanner {
+  code: number | null;
+  reason: string | null;
+  retryInMs?: number | null;
+  onRetry?: () => void;
+}
+
 interface LogConsoleProps {
   lines: LogEntry[];
   /** Visual height; number of pixels. Defaults to 24rem. */
@@ -21,6 +28,8 @@ interface LogConsoleProps {
   showStep?: boolean;
   /** Empty-state placeholder. */
   emptyText?: string;
+  /** Optional connection-error banner shown above the log viewport. */
+  errorBanner?: LogConsoleErrorBanner | null;
 }
 
 /**
@@ -42,6 +51,7 @@ export function LogConsole({
   live,
   showStep,
   emptyText = 'Нет записей',
+  errorBanner,
 }: LogConsoleProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
@@ -99,6 +109,23 @@ export function LogConsole({
           ) : null}
         </div>
       ) : null}
+      {errorBanner ? (
+        <div
+          data-testid="logconsole-error-banner"
+          className="flex items-center justify-between gap-3 rounded border border-red-900 bg-red-950/60 px-3 py-2 text-xs text-red-200"
+        >
+          <span>{formatErrorBanner(errorBanner)}</span>
+          {errorBanner.onRetry ? (
+            <button
+              type="button"
+              onClick={errorBanner.onRetry}
+              className="rounded border border-red-800 bg-red-900/40 px-2 py-1 text-[11px] text-red-100 hover:bg-red-900"
+            >
+              Переподключиться
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <div
         ref={scrollerRef}
         onScroll={onScroll}
@@ -143,4 +170,15 @@ function formatTime(ts: string): string {
   if (Number.isNaN(d.getTime())) return ts;
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function formatErrorBanner(banner: LogConsoleErrorBanner): string {
+  const codeText = banner.code != null ? `код ${banner.code}` : 'неизвестный код';
+  const reasonText = banner.reason ? `: ${banner.reason}` : '';
+  const head = `Соединение разорвано (${codeText}${reasonText}).`;
+  if (typeof banner.retryInMs === 'number' && banner.retryInMs > 0) {
+    const seconds = Math.max(1, Math.ceil(banner.retryInMs / 1000));
+    return `${head} Повтор через ${seconds}с…`;
+  }
+  return head;
 }
