@@ -118,4 +118,21 @@ describe('bridge heartbeat plugin', () => {
     const warns = captured.filter((l) => l.level === 40);
     expect(warns).toHaveLength(0);
   });
+
+  it('skips re-entry while a previous tick is still in flight', async () => {
+    let resolveSlow: (() => void) | null = null;
+    const slow = new Promise<void>((resolve) => {
+      resolveSlow = resolve;
+    });
+    bridge.ping = vi.fn(async () => {
+      await slow;
+      return { version: 'test', hostname: 'h' };
+    });
+    captured.length = 0;
+    const first = app.bridgeHeartbeat.tickOnce();
+    await app.bridgeHeartbeat.tickOnce();
+    expect(bridge.ping).toHaveBeenCalledTimes(1);
+    resolveSlow?.();
+    await first;
+  });
 });
