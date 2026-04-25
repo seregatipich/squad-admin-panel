@@ -34,6 +34,8 @@ declare module 'fastify' {
       avatarUrl: string | null;
       permissions: PermissionContext;
     };
+    /** Set when the request was authenticated via API token (Bearer header). */
+    apiTokenId?: string;
     requestId: string;
   }
 }

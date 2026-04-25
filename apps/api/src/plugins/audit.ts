@@ -7,7 +7,7 @@ export default fp(async (app) => {
     if (auditCfg === undefined) return;
     if (auditCfg === false) return;
     const actor: AuditActor = req.user
-      ? { kind: 'steam', steamId64: req.user.steamId64, tokenId: null }
+      ? { kind: 'steam', steamId64: req.user.steamId64, tokenId: req.apiTokenId ?? null }
       : { kind: 'system', label: 'http-anonymous' };
     try {
       await writeAuditEntry(app.db, {
