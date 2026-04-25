@@ -13,11 +13,6 @@
       "types": "./dist/schema/index.d.ts",
       "development": "./src/schema/index.ts",
       "default": "./dist/schema/index.js"
-    },
-    "./seed": {
-      "types": "./dist/seed/system-roles.d.ts",
-      "development": "./src/seed/system-roles.ts",
-      "default": "./dist/seed/system-roles.js"
     }
   },
   "scripts": {

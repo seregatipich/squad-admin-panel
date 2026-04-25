@@ -1,5 +1,15 @@
 import { sql } from 'drizzle-orm';
-import { bigint, index, inet, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  bigint,
+  index,
+  inet,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
+import { roles } from './roles.js';
 
 export const players = pgTable(
   'players',
@@ -10,6 +20,7 @@ export const players = pgTable(
     eosId: text('eos_id'),
     battleEyeGuid: text('battle_eye_guid'),
     lastKnownIp: inet('last_known_ip'),
+    roleId: uuid('role_id').references(() => roles.id, { onDelete: 'set null' }),
     firstSeenAt: timestamp('first_seen_at', { withTimezone: true, mode: 'date' })
       .defaultNow()
       .notNull(),
@@ -30,6 +41,7 @@ export const players = pgTable(
       table.canonicalNameNormalized,
     ),
     lastSeenAtIdx: index('players_last_seen_at_idx').on(table.lastSeenAt),
+    roleIdIdx: index('players_role_id_idx').on(table.roleId).where(sql`role_id IS NOT NULL`),
   }),
 );
 

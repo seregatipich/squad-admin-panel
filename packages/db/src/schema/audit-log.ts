@@ -13,7 +13,6 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { organizations } from './organizations.js';
 import { playerApiTokens } from './player-api-tokens.js';
 import { players } from './players.js';
 
@@ -46,7 +45,6 @@ export const auditLog = pgTable(
     context: jsonb('context').notNull().default({}),
     statusCode: integer('status_code'),
     durationMs: integer('duration_ms'),
-    orgId: uuid('org_id').references(() => organizations.id),
     prevHash: bytea('prev_hash'),
     rowHash: bytea('row_hash').notNull(),
   },
