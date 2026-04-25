@@ -2,6 +2,50 @@
 
 Meaningful architectural choices, recorded as we make them.
 
+## 2026-04-25 — Panel RBAC: single role per user, registry-objects, drop multi-tenancy
+
+### Context
+
+The panel had an RBAC schema that was never fully enforced: `player_role_assignments` was a M:N table, `role_server_scopes` existed but was never read, `organizations` and `organization_members` were scaffolded but multi-tenancy was never built, and `clearance_level` on roles was an integer column with no enforcement logic. The permission model was a flat string array with no metadata (no category, no danger flag, no unimplemented marker). The setup wizard (`/setup`) relied on `organizations.settings` for the first-Owner claim, adding a fragile boot dependency. Pre-launch was the correct time to pay this debt before real data was in the system.
+
+### Decision
+
+1. **Single role per player** — replace `player_role_assignments` M:N with `players.role_id uuid NULL`. `NULL` is the sole gate for "no panel access".
+2. **Registry-objects** — `PERMISSIONS: readonly PermissionDef[]` in `packages/shared-config/src/permissions.ts`. Each entry carries `{key, category, label, dangerous?, unimplemented?}`. Adding a permission is a one-line append, no migration, no UI change required.
+3. **Drop multi-tenancy** — `organizations`, `organization_members`, `role_server_scopes`, `audit_log.org_id` all removed in migration `0009_panel_rbac.sql`.
+4. **Drop clearance levels** — `roles.clearance_level` column and all `hasServerPermission` / clearance-max logic removed.
+5. **Five seeded roles in SQL** — Owner (system, `is_system_role = true`), Senior Admin, Admin, Moderator, Viewer — with full permission sets INSERTed in `0009`. No application-layer seeder.
+6. **First-login Owner trick** — `claimFirstOwner()` in `apps/api/src/lib/first-owner.ts` uses `panel_meta.first_owner_claimed` and a Postgres advisory lock to assign the Owner role to the first Steam login on a fresh panel. Replaces the setup wizard.
+7. **16-color palette** — `roles.color` constrained by a DB CHECK to 16 Tailwind slug names mirrored in `ROLE_COLORS`. Unit test asserts TS constant ↔ SQL constraint sync.
+8. **Point-invalidated in-memory cache** — `loadUserPermissions` caches in Redis at `rbac:perms:{steam_id64}` with TTL 30 s. `invalidatePermissionCache` and `invalidatePermissionCacheForRole` clear entries immediately on role mutations; TTL is a safety-net only.
+
+### Rationale
+
+- **Single role over M:N**: The spec was written from the invariant "one role per user". A M:N table simulating 1:1 is tech debt from day one; pre-launch is the cheapest time to remove it.
+- **Registry-objects over flat strings**: One source of truth; types are inferred; no migration needed for new keys; the role editor UI can display categories, danger warnings, and "в разработке" without any server-side logic.
+- **Drop multi-tenancy**: Never used, never enforced, never planned for the foreseeable future. Removing it eliminates ~4 tables, one audit column, and a whole class of join complexity from every RBAC query.
+- **SQL seeder over application seeder**: Idempotent by construction (migration runs exactly once). No boot-time race conditions. Roles are guaranteed present before the API starts.
+- **Advisory lock for first-Owner**: Handles the race condition where two simultaneous first logins both see `first_owner_claimed = false`. The lock is advisory (no deadlock risk) and scoped to the transaction.
+- **In-process cache + point-invalidation**: Multi-instance API is not a current requirement. Single process cache keeps permission checks sub-millisecond; explicit invalidation on every mutation means the TTL is never visible to the user.
+
+### Consequences
+
+- Migration `0009_panel_rbac.sql` is destructive and forward-only. Any pre-existing `player_role_assignments`, `organizations`, or `role_server_scopes` rows are gone. Acceptable at pre-launch.
+- `player_api_tokens` is truncated in `0009` — no real tokens existed at migration time.
+- `audit_log.org_id` is dropped; the hash chain is unaffected (column was always NULL).
+- Operators who delete a preset role (e.g. Moderator) must re-create it manually — there is no auto-respawn. Documented in [`docs/components/rbac/troubleshooting.md`](../components/rbac/troubleshooting.md).
+- In-process cache invalidation does not propagate across API instances. Horizontal scaling requires a Redis pub/sub invalidation layer (deferred).
+
+### Alternatives considered
+
+- **Keep M:N with UNIQUE constraint**: Simulates 1:1 but leaves the conceptual mismatch in the schema forever. Rejected.
+- **Clearance levels instead of flat bag**: Spec explicitly says "no hierarchy, no clearance". Rejected.
+- **Keep organizations as dormant schema**: Adds join noise and confusion for new contributors. Rejected.
+- **Redis pub/sub invalidation now**: Multi-instance is not a current requirement; the TTL safety-net is sufficient. Deferred.
+- **DB-table for permission registry**: Would require a migration for every new key and a round-trip to DB on every role edit page load. Rejected in favour of the in-code registry.
+
+---
+
 ## 2026-04-25 — API tokens for integrations (Bearer auth, scopes ⊆ user permissions)
 
 ### Context
