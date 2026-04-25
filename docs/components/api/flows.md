@@ -150,6 +150,66 @@ claimFirstOwner(db, bridge, steamId64):
 
 If `fileAtomicWrite` throws, the whole transaction rolls back — no partial state, no DB flag set, trick stays armed for the next callback attempt.
 
+## Session lifecycle
+
+[`lib/sessions.ts`](../../../apps/api/src/lib/sessions.ts) manages opaque session tokens keyed by SHA-256 hash.
+
+### createSession
+
+```
+createSession(db, redis, { steamId64, ip, userAgent, ttlMs }):
+  mint token = "s_{uuidv7}_{24 random bytes base64url}"
+  tokenId = sha256(token)   ← stored in DB and Redis; token stays client-side only
+  now = Date.now()
+  expiresAt = now + ttlMs
+  INSERT INTO sessions (id=tokenId, steam_id64, expires_at, last_activity_at=now, ip, userAgent)
+  Redis SET session:{tokenId} {steamId64, expiresAt, lastActivityAt, ip, userAgent} EX 600
+  return { token, session: SessionRecord }
+```
+
+BigInt serialisation: `steamId64` is stored as `String(bigint)` in Redis JSON and parsed back via `BigInt(string)` on read.
+
+### resolveSession
+
+```
+resolveSession(db, redis, token):
+  tokenId = sha256(token)
+  hit = Redis GET session:{tokenId}
+  if hit:
+    if hit.expiresAt < now → revokeSession(); return null
+    return hit as SessionRecord
+  rows = SELECT * FROM sessions WHERE id=tokenId AND expires_at > now LIMIT 1
+  if none → return null
+  Redis SET session:{tokenId} … EX 600   ← warm cache for next call
+  return SessionRecord
+```
+
+### touchSession (sliding TTL)
+
+```
+touchSession({ sessionId, redis, now, ttlSeconds, throttleSeconds, updateDb }):
+  ok = Redis SET session-touch:{sessionId} 1 EX throttleSeconds NX
+  if ok !== 'OK' → return false   ← within throttle window; skip DB write
+  newExpiresAt = now + ttlSeconds * 1000
+  updateDb(newExpiresAt, now)     ← caller provides the Drizzle UPDATE
+  return true
+```
+
+Callers supply `updateDb` so `touchSession` stays DB-agnostic and unit-testable without a real Postgres connection.
+
+### revokeSession / revokeAllForPlayer
+
+```
+revokeSession(db, redis, tokenId):
+  DELETE FROM sessions WHERE id = tokenId
+  Redis DEL session:{tokenId}
+
+revokeAllForPlayer(db, redis, steamId64):
+  rows = SELECT id FROM sessions WHERE steam_id64 = steamId64
+  DELETE FROM sessions WHERE steam_id64 = steamId64
+  Redis DEL session:{id} for each row
+```
+
 ## Audit log
 
 Every authed mutation route runs through [`plugins/audit.ts`](../../../apps/api/src/plugins/audit.ts):
