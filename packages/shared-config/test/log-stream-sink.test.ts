@@ -26,10 +26,11 @@ describe('redisSinkStream', () => {
     stream.end();
     await new Promise<void>((resolve) => stream.on('finish', resolve));
     expect(r.calls).toHaveLength(1);
+    expect(r.calls[0].stream).toBe('panel:logs');
     const flat = r.calls[0].args.flat();
-    expect(flat).toContain('panel:logs');
     expect(flat).toContain('MAXLEN');
     expect(flat).toContain('100000');
+    expect(flat).toContain('*');
     expect(flat).toContain('A');
     expect(flat).toContain('I');
     expect(flat).toContain('rate-limit');

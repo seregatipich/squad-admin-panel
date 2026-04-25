@@ -95,7 +95,7 @@ async function writeLine(
     msg,
     ctx: Object.keys(ctx).length ? ctx : undefined,
   });
-  const args: unknown[] = ['*', PANEL_LOGS_STREAM, 'MAXLEN', '~', String(PANEL_LOGS_MAXLEN)];
+  const args: unknown[] = [PANEL_LOGS_STREAM, 'MAXLEN', '~', String(PANEL_LOGS_MAXLEN), '*'];
   for (const [k, v] of Object.entries(fields)) args.push(k, v);
   try {
     await redis.xadd(...args);
