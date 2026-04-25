@@ -115,6 +115,41 @@ ui WS close →
   client.close()    ← critical: tears down the bridge subprocess on the host
 ```
 
+## First-owner claim
+
+[`lib/first-owner.ts`](../../../apps/api/src/lib/first-owner.ts) — called once during the Steam OAuth callback when no owner exists yet.
+
+```
+claimFirstOwner(db, bridge, steamId64):
+
+  1. bridge.fileRead('/var/lib/squad-panel/.first-owner-claimed')
+        success → return 'already_claimed'   (fast path; avoids transaction)
+        ENOENT/error → continue
+
+  2. db.transaction:
+        SELECT pg_advisory_xact_lock(hashtext('first_owner'))
+                    — serialises concurrent Steam callbacks on the same Postgres connection
+
+        org = SELECT * FROM organizations LIMIT 1
+        if none → throw Error('no_organization_yet')
+
+        if org.settings.first_owner_claimed === true → return 'already_claimed'
+
+        ownerRole = SELECT * FROM roles WHERE org_id = org.id AND name = 'Owner' LIMIT 1
+        if none → return 'no_owner_role'
+
+        INSERT INTO players (steam_id64, canonical_name, …) ON CONFLICT DO NOTHING
+        INSERT INTO player_role_assignments (steam_id64, role_id, assigned_by=null) ON CONFLICT DO NOTHING
+        INSERT INTO organization_members (steam_id64, org_id, primary_role_id) ON CONFLICT DO NOTHING
+        UPDATE organizations SET settings = { …, first_owner_claimed: true }
+
+        bridge.fileAtomicWrite('/var/lib/squad-panel/.first-owner-claimed', {steam_id64, claimed_at})
+                    — LAST operation; failure rolls back entire transaction
+  3. return 'claimed'
+```
+
+If `fileAtomicWrite` throws, the whole transaction rolls back — no partial state, no DB flag set, trick stays armed for the next callback attempt.
+
 ## Audit log
 
 Every authed mutation route runs through [`plugins/audit.ts`](../../../apps/api/src/plugins/audit.ts):
