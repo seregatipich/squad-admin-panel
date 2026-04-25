@@ -45,7 +45,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await sql.end({ timeout: 5 });
+  if (sql) await sql.end({ timeout: 5 });
 });
 
 beforeEach(async () => {

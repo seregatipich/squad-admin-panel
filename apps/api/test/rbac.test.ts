@@ -62,7 +62,7 @@ afterAll(async () => {
     await db.delete(players).where(eq(players.steamId64, sid));
     invalidatePermissionCache(sid);
   }
-  await sql.end({ timeout: 5 });
+  if (sql) await sql.end({ timeout: 5 });
 });
 
 describe('loadUserPermissions', () => {

@@ -42,7 +42,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await pgsql.end({ timeout: 5 });
+  if (pgsql) await pgsql.end({ timeout: 5 });
 });
 
 beforeEach(async () => {
