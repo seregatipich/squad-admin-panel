@@ -34,6 +34,7 @@ pnpm --filter @squad/api test:e2e
 - `seedConfigs` in [`server-install-configs.test.ts`](../../../apps/api/test/server-install-configs.test.ts) — 19 cfg files seeded, `Rcon.cfg`/`Server.cfg` rewrite, baseline `config_versions` rows.
 - Config rewrite invariants in [`config-rewrite.test.ts`](../../../apps/api/test/config-rewrite.test.ts) — sha-unchanged short-circuit, append-only history, restore-as-new-version.
 - Argon2id hashing parameters in [`argon.test.ts`](../../../apps/api/test/argon.test.ts), TOTP step replay rejection in [`totp.test.ts`](../../../apps/api/test/totp.test.ts), blame walker in [`blame.test.ts`](../../../apps/api/test/blame.test.ts), RCON wire send in [`rcon-send.test.ts`](../../../apps/api/test/rcon-send.test.ts).
+- Steam profile enrichment in [`steam-profile.test.ts`](../../../apps/api/test/steam-profile.test.ts) — empty API key short-circuits, cache hit skips fetch, corrupt cache falls through to refetch, non-200 response returns null, empty players array returns null.
 
 ## What is not covered
 
