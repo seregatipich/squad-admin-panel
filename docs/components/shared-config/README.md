@@ -2,6 +2,18 @@
 
 Constants that have to match across multiple components. Importable as `@squad/shared-config`.
 
+## Package exports
+
+The package exposes the full barrel (`@squad/shared-config`) and two browser-safe sub-paths for use in client-side code (Next.js forbids bundling `node:stream`):
+
+| Export path | Contents |
+|---|---|
+| `@squad/shared-config` | Full barrel — use in API, workers, server components |
+| `@squad/shared-config/role-colors` | `ROLE_COLORS`, `RoleColor`, `ROLE_COLOR_SET`, `isRoleColor` |
+| `@squad/shared-config/permissions` | `PERMISSIONS`, `PERMISSION_KEYS`, `PermissionDef`, `PermissionKey`, `isPermissionKey` |
+
+Client components (e.g. `RoleEditor`, `RoleColorDot`) import from the sub-paths to avoid pulling in `log-stream-sink.ts` which depends on `node:stream`.
+
 ## Contents
 
 - [`bridge-methods.ts`](../../../packages/shared-config/src/bridge-methods.ts) — `BRIDGE_METHODS`, `BRIDGE_STREAMING_METHODS`, image/container-name allowlists, `ALLOWED_CONFIG_FILES`, `HOT_RELOAD_FILES`, `ROTATION_FILES`, `configFileClass()`.

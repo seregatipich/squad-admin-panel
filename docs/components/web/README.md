@@ -30,6 +30,9 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | `/players/[steam_id64]` | `src/app/(dashboard)/players/[steam_id64]/page.tsx` | Detail with name history; IP history is gated by `player:view_ips`. Section "Доступ к панели" allows Owners/Senior Admins to assign/revoke panel roles. |
 | `/audit` | `src/app/(dashboard)/audit/page.tsx` | Page-paginated audit log; live indicator showing freshness. |
 | `/logs` | `src/app/(dashboard)/logs/page.tsx` | Panel-wide connector logs with filters (source, level, server, free-text). Server component that pre-fetches the server list, hands off to the `LogList` client component which polls `GET /logs`. |
+| `/roles` | `src/app/(dashboard)/roles/page.tsx` | List all roles with color dot, Системная badge, user count, edit/delete actions. Delete blocked for Owner; confirm dialog shows affected user count. |
+| `/roles/new` | `src/app/(dashboard)/roles/new/page.tsx` | Create role form — wraps `RoleEditor`, POSTs to `/api/v1/roles`, redirects to list. |
+| `/roles/[id]` | `src/app/(dashboard)/roles/[id]/page.tsx` | Edit role — loads via `GET /api/v1/roles/:id`, wraps `RoleEditor`; Owner role is rendered in read-only mode. |
 | `/settings/account` | `src/app/(dashboard)/settings/account/page.tsx` | Session management — list active sessions, revoke individual or all. |
 
 ## Components
@@ -46,7 +49,8 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | `SystemStatus.tsx` | Dashboard system-health card: bridge ping, worker heartbeats, depot status. |
 | `MetricHistoryChart.tsx` | Recharts `AreaChart` rendering 24 h cpu/ram/disk (% axis) or net (KB/s axis, two areas: rx + tx). Lazy-loaded — never imported at module level. Exports `MetricKey` (`'cpu'\|'ram'\|'disk'\|'net'`) and `MetricPoint` types. |
 | `MetricHistoryModal.tsx` | Backdrop modal that fetches `GET /api/v1/host/metrics/history?seconds=86400`, decodes the packed integer tuple inline (cpu/load values divided by 100; bytes pass through), then `next/dynamic`-loads `MetricHistoryChart`. ESC / backdrop-click to close. The unpack is inlined rather than imported from `@squad/shared-config` so Next.js doesn't try to bundle the server-only `node:stream`-using modules from that package. |
-| `RoleColorDot.tsx` | Coloured dot used wherever a role's colour needs to be shown inline (e.g. role lists). Accepts `color: RoleColor` from `@squad/shared-config` and an optional `size` (`'sm'`/`'md'`). Purely presentational — no click handlers. |
+| `RoleColorDot.tsx` | Coloured dot used wherever a role's colour needs to be shown inline (e.g. role lists). Accepts `color: RoleColor` from `@squad/shared-config/role-colors` and an optional `size` (`'sm'`/`'md'`). Purely presentational — no click handlers. |
+| `RoleEditor.tsx` | Shared editor used by `/roles/new` and `/roles/[id]`. Loads permission registry from `GET /api/v1/permissions` on mount. Features: name field, 16-color swatch picker, description textarea, permission search bar, permissions grouped by 16 categories in 3-column responsive grid with ⚠️ for `dangerous` and "(в разработке)" for `unimplemented`. Owner read-only mode: amber banner + all inputs disabled. |
 
 ## Lib utilities
 
@@ -85,7 +89,7 @@ Every polling surface uses `LiveIndicator` + the same shape: poll every N second
 ## Components it depends on
 
 - [`api`](../api/README.md) — every page is data-driven by REST or WebSocket.
-- [`shared-types`](../shared-types/README.md), [`shared-config`](../shared-config/README.md) — Zod schemas, permission keys, hot-reload table. Note: the metric-unpack math is duplicated inline in `MetricHistoryModal` rather than imported, since `shared-config`'s barrel pulls in `node:stream` from the log-stream sink, which Next.js refuses to bundle for the client.
+- [`shared-types`](../shared-types/README.md), [`shared-config`](../shared-config/README.md) — Zod schemas, permission keys, hot-reload table. Client-side code imports sub-paths (`@squad/shared-config/role-colors`, `@squad/shared-config/permissions`) instead of the barrel to avoid bundling the server-only `node:stream`-dependent log-stream sink. The metric-unpack math in `MetricHistoryModal` is inlined for the same reason.
 
 ## Basic usage
 
