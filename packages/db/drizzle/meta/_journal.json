@@ -71,6 +71,13 @@
       "when": 1745964000000,
       "tag": "0009_panel_rbac",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1745968800000,
+      "tag": "0010_drop_servers_org_id",
+      "breakpoints": true
     }
   ]
 }
