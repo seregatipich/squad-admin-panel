@@ -46,6 +46,7 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | `SystemStatus.tsx` | Dashboard system-health card: bridge ping, worker heartbeats, depot status. |
 | `MetricHistoryChart.tsx` | Recharts `AreaChart` rendering 24 h cpu/ram/disk (% axis) or net (KB/s axis, two areas: rx + tx). Lazy-loaded — never imported at module level. Exports `MetricKey` (`'cpu'\|'ram'\|'disk'\|'net'`) and `MetricPoint` types. |
 | `MetricHistoryModal.tsx` | Backdrop modal that fetches `GET /api/v1/host/metrics/history?seconds=86400`, decodes the packed integer tuple inline (cpu/load values divided by 100; bytes pass through), then `next/dynamic`-loads `MetricHistoryChart`. ESC / backdrop-click to close. The unpack is inlined rather than imported from `@squad/shared-config` so Next.js doesn't try to bundle the server-only `node:stream`-using modules from that package. |
+| `RoleColorDot.tsx` | Coloured dot used wherever a role's colour needs to be shown inline (e.g. role lists). Accepts `color: RoleColor` from `@squad/shared-config` and an optional `size` (`'sm'`/`'md'`). Purely presentational — no click handlers. |
 
 ## Lib utilities
 
@@ -54,7 +55,7 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | File | Purpose |
 |---|---|
 | `api.ts` | Typed `fetch` wrapper that re-uses session cookies, surfaces `error.code` from JSON responses. |
-| `dal.ts` | Server-side Data Access Layer used by server components (`requireSession`, etc.). |
+| `dal.ts` | Server-side Data Access Layer used by server components (`requireSession`, etc.). `Me` interface matches `/api/v1/me`: `steam_id64`, `canonical_name`, `avatar_url`, `permissions`. |
 | `format.ts` | Number / duration / bytes / SteamID formatters. Tested. |
 | `host-health.ts` | Aggregates `bridge-status` + worker heartbeats into one health enum for the dashboard. Tested. |
 | `ws-backoff.ts` | Exponential-backoff WebSocket reconnect helper used by `LogConsole` and the install/depot WS subscribers. Tested. |
