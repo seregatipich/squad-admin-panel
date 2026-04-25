@@ -126,7 +126,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:id/configs/:name',
     {
       config: {
-        permissions: ['server:config:write'],
+        permissions: ['config:edit'],
         audit: { action: 'server.config.write', resource: 'server' },
       },
       schema: { params: nameParams, body: bodySchema },
@@ -152,7 +152,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
   fast.get(
     '/api/v1/servers/:id/configs/:name/history',
     {
-      config: { permissions: ['server:config:history'], audit: false },
+      config: { permissions: ['config:view'], audit: false },
       schema: {
         params: nameParams,
         querystring: z.object({ limit: z.coerce.number().int().min(1).max(500).default(100) }),
@@ -205,7 +205,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
   fast.get(
     '/api/v1/servers/:id/configs/:name/versions/:vid',
     {
-      config: { permissions: ['server:config:history'], audit: false },
+      config: { permissions: ['config:view'], audit: false },
       schema: { params: versionParams },
     },
     async (req, reply) => {
@@ -239,7 +239,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
   fast.get(
     '/api/v1/servers/:id/configs/:name/diff',
     {
-      config: { permissions: ['server:config:history'], audit: false },
+      config: { permissions: ['config:view'], audit: false },
       schema: { params: nameParams, querystring: diffQuery },
     },
     async (req, reply) => {
@@ -281,7 +281,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
   fast.get(
     '/api/v1/servers/:id/configs/:name/blame',
     {
-      config: { permissions: ['server:config:history'], audit: false },
+      config: { permissions: ['config:view'], audit: false },
       schema: { params: nameParams },
     },
     async (req, reply) => {
@@ -355,7 +355,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers/:id/configs/:name/restore/:vid',
     {
       config: {
-        permissions: ['server:config:write'],
+        permissions: ['config:rollback'],
         audit: { action: 'server.config.restore', resource: 'server' },
       },
       schema: { params: versionParams, body: restoreBody },

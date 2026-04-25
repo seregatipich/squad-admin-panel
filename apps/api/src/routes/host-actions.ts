@@ -5,7 +5,7 @@ const hostActionsRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/host/restart',
     {
       config: {
-        permissions: ['host:bridge_control'],
+        permissions: ['host:metrics'],
         audit: { action: 'host.bridge.restart', resource: 'host' },
       },
     },

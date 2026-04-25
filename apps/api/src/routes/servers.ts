@@ -99,7 +99,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/servers',
     {
       config: {
-        permissions: ['server:create'],
+        permissions: ['server:install'],
         audit: { action: 'server.create', resource: 'server' },
       },
       schema: { body: serverCreateInput },
