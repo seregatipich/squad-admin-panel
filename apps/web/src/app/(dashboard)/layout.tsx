@@ -30,6 +30,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <Link href="/settings/account" className="block rounded px-2 py-1 hover:bg-neutral-900">
           Аккаунт
         </Link>
+        <Link href="/settings/tokens" className="block rounded px-2 py-1 hover:bg-neutral-900">
+          API-токены
+        </Link>
         <div className="pt-6 text-xs text-neutral-500">
           <div className="truncate">{me.display_name ?? me.email}</div>
           <LogoutButton />
