@@ -190,6 +190,32 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       return { ok: true };
     },
   );
+
+  fast.get(
+    '/api/v1/roles',
+    {
+      config: { permissions: ['user:manage_roles'], audit: false },
+    },
+    async () => {
+      const rows = await app.db
+        .select({
+          id: roles.id,
+          name: roles.name,
+          description: roles.description,
+          clearanceLevel: roles.clearanceLevel,
+          isSystemRole: roles.isSystemRole,
+        })
+        .from(roles)
+        .orderBy(desc(roles.clearanceLevel));
+      return rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        description: r.description,
+        clearance_level: r.clearanceLevel,
+        is_system_role: r.isSystemRole,
+      }));
+    },
+  );
 };
 
 export default playerRoutes;
