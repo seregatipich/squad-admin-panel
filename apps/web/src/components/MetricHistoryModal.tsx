@@ -1,9 +1,26 @@
 'use client';
 
-import { unpackHostMetrics } from '@squad/shared-config';
 import dynamic from 'next/dynamic';
 import { useEffect, useState } from 'react';
 import type { MetricKey, MetricPoint } from './MetricHistoryChart';
+
+interface UnpackedMetrics {
+  cpu_percent: number;
+  ram_used_bytes: number;
+  disk_used_bytes: number;
+  net_rx_bytes_per_sec: number;
+  net_tx_bytes_per_sec: number;
+}
+
+function unpackHostMetrics(v: number[]): UnpackedMetrics {
+  return {
+    cpu_percent: (v[0] ?? 0) / 100,
+    ram_used_bytes: v[1] ?? 0,
+    disk_used_bytes: v[2] ?? 0,
+    net_rx_bytes_per_sec: v[3] ?? 0,
+    net_tx_bytes_per_sec: v[4] ?? 0,
+  };
+}
 
 const Chart = dynamic(() => import('./MetricHistoryChart'), {
   ssr: false,
