@@ -1,11 +1,6 @@
 import type { BridgeClient } from '@squad/bridge-client';
 import type { Logger } from 'pino';
 
-/**
- * Subscribe to `docker logs -f` for the Squad server container via the
- * panel-host-bridge. `name` is the container name (squad-{uuid}). Each
- * complete line is delivered to `onLine`. Returns a function to abort.
- */
 export function tailContainerLogs(params: {
   bridge: BridgeClient;
   name: string;
@@ -15,6 +10,20 @@ export function tailContainerLogs(params: {
   const { bridge, name, log, onLine } = params;
   let buffer = '';
   let aborted = false;
+  let bytesThisMinute = 0;
+  let linesThisMinute = 0;
+
+  log.info({ container: name }, `tail start container=${name}`);
+
+  const reportTimer = setInterval(() => {
+    if (aborted) return;
+    log.debug(
+      { container: name, bytesPerMin: bytesThisMinute, linesPerMin: linesThisMinute },
+      `tail bytes/min=${bytesThisMinute} lines/min=${linesThisMinute}`,
+    );
+    bytesThisMinute = 0;
+    linesThisMinute = 0;
+  }, 60_000);
 
   (async () => {
     try {
@@ -22,22 +31,30 @@ export function tailContainerLogs(params: {
         if (aborted) return;
         if (frame.stream !== 'stdout') return;
         const text = typeof frame.data === 'string' ? frame.data : String(frame.data ?? '');
+        bytesThisMinute += text.length;
         buffer += text;
         const parts = buffer.split('\n');
         buffer = parts.pop() ?? '';
         for (const part of parts) {
           if (part.length === 0) continue;
+          linesThisMinute++;
           onLine(part);
         }
       });
+      if (!aborted) {
+        log.warn({ container: name }, 'tail dropped → restart');
+      }
     } catch (err) {
       if (!aborted) {
-        log.error({ err: (err as Error).message, name }, 'container_logs_follow ended');
+        log.warn({ container: name, err: (err as Error).message }, 'tail dropped → restart');
       }
+    } finally {
+      clearInterval(reportTimer);
     }
   })();
 
   return () => {
     aborted = true;
+    clearInterval(reportTimer);
   };
 }
