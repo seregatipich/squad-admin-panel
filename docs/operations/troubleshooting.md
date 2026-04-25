@@ -2,7 +2,7 @@
 
 For component-specific issues, see [`components/bridge/troubleshooting.md`](../components/bridge/troubleshooting.md), [`components/api/troubleshooting.md`](../components/api/troubleshooting.md). This page is the operator-level entry point.
 
-## `docker compose up -d` starts but `/setup` never loads
+## `docker compose up -d` starts but the panel never loads
 
 1. `docker compose ps` — every container should be `healthy` (takes up to 2 min).
 2. If `api` is unhealthy: `docker compose logs api --since 2m`. See [`components/api/troubleshooting.md`](../components/api/troubleshooting.md).
@@ -79,7 +79,7 @@ The Steam ID has no panel role. An admin needs to assign one:
 
 ### `owner_role_missing` 500 on first login
 
-The system roles weren't seeded. Verify `SELECT name FROM roles` returns at least Owner. If empty, the organisation was created without seeding (corruption). Restore from backup or re-run the setup wizard after a full DB wipe.
+The system roles weren't seeded by the DB migration. Verify `SELECT name FROM roles` returns at least `Owner`. If empty, the migration didn't run — run `pnpm db:migrate` against the live database, then retry login.
 
 ### Audit chain broken after migration 0008
 

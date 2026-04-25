@@ -40,7 +40,6 @@ import serverConfigRoutes from './routes/server-configs.js';
 import serverInstallRoutes from './routes/server-install.js';
 import serverLogsRoutes from './routes/server-logs.js';
 import serverRoutes from './routes/servers.js';
-import setupRoutes from './routes/setup.js';
 import usersRoutes from './routes/users.js';
 
 // Side-effect import: augments the Fastify types with our plugin context.
@@ -98,7 +97,6 @@ export async function buildServer(config: AppConfig) {
 
   await app.register(authRoutes);
   await app.register(meTokensRoutes);
-  await app.register(setupRoutes);
   await app.register(hostRoutes);
   await app.register(hostActionsRoutes);
   await app.register(serverRoutes);

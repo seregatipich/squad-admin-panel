@@ -36,15 +36,9 @@ docker compose up -d --build
 
 ## First-time setup
 
-Open `https://${APP_DOMAIN}/setup` in a browser after the stack is healthy.
+After `docker compose up -d`, the panel is ready immediately — there is no setup wizard. The 5 system roles (`Owner`, `Senior Admin`, `Admin`, `Viewer`, `Moderator`) are seeded by the DB migration.
 
-1. **Step 1 — Environment check** (`GET /api/v1/setup/check-env`). The panel verifies:
-   - Bridge daemon is reachable.
-   - Host OS is Ubuntu/Debian.
-   - `PANEL_PUBLIC_URL` is set and self-reachable.
-   - `STEAM_API_KEY` (optional) — flagged as missing but not required.
-2. **Step 2 — Organisation init** (`POST /api/v1/setup/init`). Fill organisation name and optional slug. Submit. The panel atomically creates the organisation, seeds the 4 system roles (`Owner`, `Senior Admin`, `Admin`, `Viewer`), and marks setup complete (`organizations.settings.setup_complete=true`). Subsequent calls to `/setup/*` return `410 setup_already_complete`.
-3. Browser redirects to `/login`. Click **"Войти через Steam"**. The first user to complete the Steam OpenID flow becomes Owner via the first-owner trick: the claim writes `/var/lib/squad-panel/.first-owner-claimed` and sets `organizations.settings.first_owner_claimed=true`. All subsequent logins skip the claim.
+**First login becomes Owner.** Open `https://${APP_DOMAIN}/login` and click **"Войти через Steam"**. The first Steam OpenID callback that completes on a fresh panel automatically assigns the Owner role to that Steam account (`claimFirstOwner` in `apps/api/src/lib/first-owner.ts`). All subsequent logins skip the claim. There is no `/setup` wizard and no `/api/v1/setup/*` API.
 
 ## Resetting first-owner (e.g., after rebuilding a test panel)
 
@@ -52,8 +46,7 @@ The trick is one-shot. To re-arm it:
 
 1. Drop the database: `docker compose exec postgres psql -U admin -c 'DROP DATABASE admin; CREATE DATABASE admin;'` (**DESTRUCTIVE — all data lost**).
 2. Apply migrations: `pnpm db:migrate`.
-3. Remove the sentinel: `sudo rm /var/lib/squad-panel/.first-owner-claimed`.
-4. Walk through the wizard again.
+3. Log in via Steam — the first login becomes Owner again.
 
 ## Transferring Owner to a different Steam account
 
@@ -62,12 +55,11 @@ If the last Owner lost Steam access, do **not** reset the trick. Instead, assign
 ```sql
 -- Find the Owner role:
 SELECT id FROM roles WHERE name = 'Owner';
--- Assign it to the new SteamID:
-INSERT INTO player_role_assignments (steam_id64, role_id) VALUES (<new_steam_id64>, '<owner_role_id>');
-INSERT INTO organization_members (steam_id64, org_id, primary_role_id)
-     VALUES (<new_steam_id64>, '<org_id>', '<owner_role_id>');
--- Optionally remove the former Owner:
-DELETE FROM player_role_assignments WHERE steam_id64 = <old_steam_id64> AND role_id = '<owner_role_id>';
+-- Assign it to the new SteamID (upsert players row first if not present):
+INSERT INTO players (steam_id64, canonical_name) VALUES (<new_steam_id64>, 'NewOwner') ON CONFLICT DO NOTHING;
+UPDATE players SET role_id = '<owner_role_id>' WHERE steam_id64 = <new_steam_id64>;
+-- Optionally clear the former Owner:
+UPDATE players SET role_id = NULL WHERE steam_id64 = <old_steam_id64>;
 ```
 
 ## Verifying the install

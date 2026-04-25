@@ -10,15 +10,6 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 - **Audit**: every mutation must declare `config.audit: { action, resource }`. The CI gate [`audit-coverage.test.ts`](../../../apps/api/test/audit-coverage.test.ts) fails the build otherwise.
 - **bigserial IDs**: `audit_log.id` is serialized as a string to survive `JSON.stringify`.
 
-## Setup (one-shot, 2 steps)
-
-Single-pass wizard: `check-env` → `init`. Once `init` completes, both endpoints return `410 setup_already_complete`.
-
-| Method | Path | Purpose | Permissions |
-|---|---|---|---|
-| GET | `/api/v1/setup/check-env` | Probes bridge (`host_info`) and reports `bridge`, `host`, `public_url`, `steam_web_api` readiness. Returns `{ ok, checks: Record<string, { ok, detail? }> }`. | none |
-| POST | `/api/v1/setup/init` | Atomic transaction: insert organisation + seed 4 system roles (`Owner`, `Senior Admin`, `Admin`, `Viewer`) + set `setup_complete=true`. Body: `{ name, slug? }`. Returns `{ org_id, slug }`. | none |
-
 ## Authentication and account
 
 | Method | Path | Purpose | Permissions |
@@ -34,7 +25,7 @@ Single-pass wizard: `check-env` → `init`. Once `init` completes, both endpoint
 | POST | `/api/v1/me/tokens` | Mint a new API token. Body: `{ name: string (1..100), scopes: string[] }`. `scopes ⊆ caller.permissions` (422 `invalid_scopes` otherwise). Hard cap of 25 active tokens per user (409 `too_many_active_tokens`). Returns `{ id, name, scopes, created_at, plaintext: 'sqp_<uuid>_<random>' }` — plaintext appears **once**. | session |
 | DELETE | `/api/v1/me/tokens/:id` | Soft-revoke own token (sets `revoked_at`). Idempotent — second call returns `{ ok: true, already_revoked: true }`. 404 for foreign token. | session |
 
-Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/totp/*`, `GET /api/v1/auth/discord/*`, `POST /api/v1/setup/{org,owner,finalize}`.
+Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/totp/*`, `GET /api/v1/auth/discord/*`, `POST /api/v1/setup/{org,owner,finalize}`, `GET /api/v1/setup/check-env`, `POST /api/v1/setup/init`.
 
 ## RBAC reference
 

@@ -20,7 +20,7 @@ Fastify 5 + Zod type-provider. REST under `/api/v1/*`, WebSocket for install str
 ## Code location
 
 - Entrypoint: [`apps/api/src/index.ts`](../../../apps/api/src/index.ts) → [`server.ts`](../../../apps/api/src/server.ts) registers routes and plugins.
-- Routes: [`apps/api/src/routes/`](../../../apps/api/src/routes/) — `audit.ts`, `auth-steam.ts`, `depot.ts`, `host.ts`, `host-actions.ts`, `players.ts`, `server-configs.ts`, `server-install.ts`, `server-logs.ts`, `servers.ts`, `setup.ts`.
+- Routes: [`apps/api/src/routes/`](../../../apps/api/src/routes/) — `audit.ts`, `auth-steam.ts`, `depot.ts`, `host.ts`, `host-actions.ts`, `players.ts`, `permissions.ts`, `roles.ts`, `server-configs.ts`, `server-install.ts`, `server-logs.ts`, `servers.ts`, `users.ts`.
 - Plugins: [`apps/api/src/plugins/`](../../../apps/api/src/plugins/) — `auth.ts`, `bridge.ts`, `audit.ts`, `status-reconciler.ts`, `rate-limit.ts`, `swagger.ts`.
 - Libs: [`apps/api/src/lib/`](../../../apps/api/src/lib/) — `blame.ts` (Myers diff for config blame), `crypto.ts`, `seed-configs.ts`.
 

@@ -30,7 +30,7 @@ Secrets live in `.env`, bind-mounted read-only into compose. Never commit them.
 | Variable | Purpose | Rotation |
 |---|---|---|
 | `POSTGRES_PASSWORD` | DB superuser | Restart DB + api after rotating; existing sessions stay valid. |
-| `APP_ENCRYPTION_KEY` | 32-byte base64. Decrypts `server_credentials.rcon_password_encrypted`, `server_credentials.license_key_encrypted`. **Losing it breaks those decrypts.** | Bumps `key_version` and re-encrypts. The setup wizard emits the key once and asks the operator to store it offline. |
+| `APP_ENCRYPTION_KEY` | 32-byte base64. Decrypts `server_credentials.rcon_password_encrypted`, `server_credentials.license_key_encrypted`. **Losing it breaks those decrypts.** | Bumps `key_version` and re-encrypts. Generate with `openssl rand -base64 32` and store offline — the panel never re-displays it. |
 | `SESSION_SECRET` | Fastify cookie signing | Rotating invalidates existing sessions. |
 
 For multi-host or compliance-sensitive deployments, store the full `.env` with SOPS+age (referenced in [`development/local-development.md`](../development/local-development.md)).

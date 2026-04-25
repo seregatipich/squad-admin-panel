@@ -1,5 +1,22 @@
 # `api` — changelog
 
+## 2026-04-25 — Task 8: Drop /setup wizard
+
+### Removed
+
+- `apps/api/src/routes/setup.ts` — deleted. `/api/v1/setup/check-env` and `/api/v1/setup/init` no longer exist; both return 404.
+- `apps/api/test/setup.test.ts` — deleted (tested the removed routes).
+- `apps/api/test/integration/setup-host-audit.test.ts` — deleted (broken harness; setup-related).
+- `import setupRoutes` and `app.register(setupRoutes)` removed from `apps/api/src/server.ts`.
+
+### Added
+
+- `apps/api/test/setup-removed.test.ts` — regression guard: asserts `server.ts` contains no `setupRoutes` reference and `routes/setup.ts` does not exist.
+
+### Migration notes
+
+There is no API migration. The `/api/v1/setup/*` surface was always unauthenticated; removing it reduces attack surface. First-login Owner claim is handled by `claimFirstOwner` in `auth-steam.ts` (unchanged).
+
 ## 2026-04-25 — Task 7: RBAC routes — permissions / roles / users / player-role
 
 ### Added
