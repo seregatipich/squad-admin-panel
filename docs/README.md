@@ -27,13 +27,18 @@ Open-source, self-hosted control panel for Squad dedicated servers. Owns the ful
 ### Operations
 
 - [Setup](operations/setup.md) — first-time install on a host
+- [Deployment](operations/deployment.md) — container topology, image rebuild, update procedure
 - [Environment variables](operations/environment-variables.md) — `.env` reference
+- [Migrations](operations/migrations.md) — Drizzle migration workflow, forward-only policy, DB reset
+- [Monitoring](operations/monitoring.md) — logs stream, metrics stream, worker liveness, audit chain
 - [Troubleshooting](operations/troubleshooting.md) — common operator-level issues
 
 ### Development
 
 - [Local development](development/local-development.md) — clone-to-running-stack
 - [Testing](development/testing.md) — unit / integration / e2e tiers
+- [Conventions](development/conventions.md) — monorepo layout, language choices, commit style, invariants
+- [Code style](development/code-style.md) — formatting, naming, imports, Biome config
 
 ## Maintenance rules
 
