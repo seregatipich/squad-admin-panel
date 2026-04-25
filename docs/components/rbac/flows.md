@@ -43,6 +43,12 @@ The advisory lock prevents a race where two simultaneous first-logins both see `
 
 After the trick runs once, `first_owner_claimed` stays `true` forever. Subsequent logins proceed directly to the panel access check: role set → session cookie → redirect `/`; role NULL → redirect `/no-access?steam_id64=…`.
 
+### Sentinel file is informational only
+
+After a successful claim, the bridge writes `/var/lib/squad-panel/.first-owner-claimed` (JSON: `{steam_id64, claimed_at}`). The file is **not consulted on subsequent claim attempts** — the DB is the single source of truth. The sentinel exists for ops/forensic introspection only (`readSentinelHint` helper).
+
+This was a deliberate change after a wedge: previously the sentinel short-circuited the claim path. After `docker compose down -v` + reinstall, the DB reset to `first_owner_claimed = false` but the sentinel file persisted on the host, blocking every subsequent first-login attempt and leaving the panel without an Owner. Trusting the DB and treating the sentinel as a hint avoids that class of failure entirely. See `docs/components/rbac/troubleshooting.md` "Wedge after reinstall" for the full incident.
+
 ---
 
 ## Ordinary login flow

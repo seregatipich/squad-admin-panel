@@ -1,5 +1,49 @@
 # `rbac` — troubleshooting
 
+## Symptom: Wedge after reinstall — `claimFirstOwner` returns `already_claimed` despite fresh DB
+
+**Symptom.** Operator runs the reinstall procedure (drop+recreate DB, flush Redis, run migrator), then logs in via Steam. Lands on `/no-access` with the message "Steam ID … не имеет роли в этой панели." DB shows `panel_meta.first_owner_claimed = false` and `players.role_id IS NULL` for the operator's record — yet the Owner trick failed to fire.
+
+**Root cause.** Pre-2026-04-25 versions of `claimFirstOwner` short-circuited on the presence of `/var/lib/squad-panel/.first-owner-claimed`. The sentinel file persists across DB resets (it lives on the host filesystem, not in any Docker volume that `docker compose down -v` would wipe). After reinstall the DB was clean, but the stale sentinel from the previous installation made every first-login return `already_claimed` without consulting the DB.
+
+**Diagnosis.**
+
+```bash
+# Confirm DB says "not claimed yet"
+docker compose exec -T postgres psql -U admin admin -c "SELECT * FROM panel_meta;"
+# expect: first_owner_claimed = f
+
+docker compose exec -T postgres psql -U admin admin -c \
+  "SELECT count(*) FROM players p JOIN roles r ON r.id = p.role_id WHERE r.name = 'Owner';"
+# expect: 0
+
+# Check sentinel
+sudo ls -la /var/lib/squad-panel/.first-owner-claimed
+# if this exists with an old date, you have the wedge
+```
+
+**Fix on current code (2026-04-25 onward).** No fix needed at the user level — the sentinel is informational and DB is authoritative. The next Steam login will run the claim transaction normally and overwrite the sentinel. If you suspect the sentinel content is misleading for ops, `sudo rm /var/lib/squad-panel/.first-owner-claimed` is harmless.
+
+**Fix on legacy code.** Two options:
+
+```bash
+# Option A — let the trick fire on next login
+sudo rm /var/lib/squad-panel/.first-owner-claimed
+# then re-login via Steam in the browser
+
+# Option B — assign Owner directly via SQL (skips the trick)
+docker compose exec -T postgres psql -U admin admin -c "
+  UPDATE players SET role_id = (SELECT id FROM roles WHERE name = 'Owner' AND is_system_role = true)
+  WHERE steam_id64 = 76561199478348885;
+  UPDATE panel_meta SET first_owner_claimed = true WHERE id = 1;
+"
+docker compose restart api  # bust the in-memory permission cache
+```
+
+**Prevention.** The reinstall runbook in `docs/operations/migrations.md` lists the sentinel deletion as a mandatory step. Codebases pinned to versions before this fix MUST follow that step or use Option B above.
+
+---
+
 ## Symptom: permission cache stale after role assignment
 
 After `PUT /players/:id/role` or `PUT /roles/:id`, a user's effective permissions should update on the very next request. If they do not, the point-invalidation may have silently failed.

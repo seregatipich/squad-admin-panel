@@ -11,18 +11,23 @@ export interface SentinelBridge {
 
 const SENTINEL_PATH = '/var/lib/squad-panel/.first-owner-claimed';
 
+/**
+ * Claim Owner role on first successful Steam login.
+ *
+ * The DB is the source of truth: `panel_meta.first_owner_claimed` decides
+ * whether the trick fires. The host-side sentinel file is an informational
+ * cache only — it survives DB resets, so trusting it as authoritative
+ * caused a wedge after `docker compose down -v` + reinstall (sentinel from
+ * the previous DB blocked every subsequent claim, leaving the panel without
+ * an Owner). The sentinel is now written after a successful claim and read
+ * only as a fast-path skip; if DB and sentinel disagree, DB wins and the
+ * stale sentinel is overwritten.
+ */
 export async function claimFirstOwner(
   db: DatabaseClient,
   bridge: SentinelBridge,
   steamId64: bigint,
 ): Promise<ClaimResult> {
-  try {
-    await bridge.fileRead({ path: SENTINEL_PATH });
-    return 'already_claimed';
-  } catch {
-    // sentinel absent or bridge error — proceed to DB-anchored path
-  }
-
   const result = await db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('panel_first_owner'))`);
 
@@ -66,4 +71,21 @@ export async function claimFirstOwner(
     }
   }
   return result;
+}
+
+/**
+ * Read the sentinel file without affecting claim logic. Useful for the
+ * `/no-access` page hint and ops diagnostics. Returns `null` if absent or
+ * if the bridge call fails.
+ */
+export async function readSentinelHint(
+  bridge: SentinelBridge,
+): Promise<{ steam_id64: string; claimed_at: string } | null> {
+  try {
+    const result = (await bridge.fileRead({ path: SENTINEL_PATH })) as { content?: string };
+    if (!result?.content) return null;
+    return JSON.parse(result.content) as { steam_id64: string; claimed_at: string };
+  } catch {
+    return null;
+  }
 }

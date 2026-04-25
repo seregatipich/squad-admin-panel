@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-25 (later)
+
+### Fixed
+
+- **`claimFirstOwner` no longer trusts the host sentinel as authoritative.** The DB (`panel_meta.first_owner_claimed`) is now the sole source of truth; the sentinel file `/var/lib/squad-panel/.first-owner-claimed` is written after a successful claim but never short-circuits a future claim attempt. This fixes the wedge where reinstalls (DB reset) inherited a stale sentinel and could not bootstrap a new Owner. Added `readSentinelHint()` for ops/forensic introspection. Test `'sentinel short-circuits before tx'` replaced with `'DB is authoritative — stale sentinel does not block a fresh claim'`. See `troubleshooting.md` "Wedge after reinstall".
+
 ## 2026-04-25
 
 ### Added

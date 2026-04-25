@@ -104,20 +104,25 @@ describe('claimFirstOwner', () => {
     expect(playerB[0]?.roleId).toBeNull();
   });
 
-  it('returns already_claimed when sentinel exists (short-circuits before tx)', async () => {
+  it('DB is authoritative — stale sentinel does not block a fresh claim', async () => {
+    // Wedge scenario: panel was reinstalled (DB reset), but the sentinel
+    // file from the previous install still exists on the host. The claim
+    // must succeed against the fresh DB regardless of sentinel state.
     const bridge = fakeBridge(true);
     const result = await claimFirstOwner(db, bridge, TEST_PLAYER_A);
-    expect(result).toBe('already_claimed');
-    expect(bridge.fileAtomicWrite).not.toHaveBeenCalled();
+    expect(result).toBe('claimed');
 
     const meta = await db.select().from(panelMeta).where(eq(panelMeta.id, 1));
-    expect(meta[0]?.firstOwnerClaimed).toBe(false);
+    expect(meta[0]?.firstOwnerClaimed).toBe(true);
 
     const player = await db
       .select({ roleId: players.roleId })
       .from(players)
       .where(eq(players.steamId64, TEST_PLAYER_A));
-    expect(player[0]?.roleId).toBeNull();
+    expect(player[0]?.roleId).toBe(ownerRoleId);
+
+    // After successful claim the sentinel is rewritten with the current owner.
+    expect(bridge.fileAtomicWrite).toHaveBeenCalledTimes(1);
   });
 
   it('handles concurrent calls — only one wins (advisory lock)', async () => {

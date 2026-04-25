@@ -65,14 +65,19 @@ DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm db:migrate
 **Destroys all data.** Used after destructive forward-only migrations or for a clean dev environment.
 
 ```bash
-docker compose exec postgres psql -U admin -c 'DROP DATABASE admin; CREATE DATABASE admin;'
+docker compose stop api web caddy worker-rcon worker-log-ingest \
+                    worker-event-partition worker-audit-archiver worker-metrics-sampler
+docker compose exec -T postgres psql -U admin postgres -c 'DROP DATABASE IF EXISTS admin; CREATE DATABASE admin;'
+docker compose exec -T redis redis-cli FLUSHALL
 docker compose run --rm migrator
-# Re-arm the first-owner claim:
+docker compose up -d
+# Optional cleanup (no longer required, kept for hygiene):
 sudo rm -f /var/lib/squad-panel/.first-owner-claimed
-# (Or remove the sentinel file from the actual DATA_DIR path if install used a non-default location)
 ```
 
-The sentinel file `/var/lib/squad-panel/.first-owner-claimed` persists on the host across DB resets. If you forget to delete it, the first login after a DB reset will be denied the Owner role. The `claimFirstOwner` function in `apps/api/src/lib/first-owner.ts` checks both the DB (`panel_meta.first_owner_claimed`) and the file.
+**Sentinel file behavior (2026-04-25 onward).** The host file `/var/lib/squad-panel/.first-owner-claimed` is **informational only** — `claimFirstOwner` does not consult it when deciding whether the trick should fire. The DB (`panel_meta.first_owner_claimed`) is the single source of truth, so a stale sentinel from a previous installation no longer wedges the claim path. The next successful Steam login overwrites the sentinel with the new Owner's metadata.
+
+Removing the sentinel before a fresh login is therefore optional but recommended for ops cleanliness. Code from before this fix DID short-circuit on the sentinel — see `docs/components/rbac/troubleshooting.md` "Wedge after reinstall" for the migration story and a manual-recovery SQL block.
 
 ## Audit chain integrity
 
