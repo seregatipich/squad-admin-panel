@@ -179,6 +179,26 @@ services:
         condition: service_completed_successfully
     logging: *default-logging
 
+  worker-metrics-sampler:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      args:
+        WORKER: metrics-sampler
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://redis:6379
+      BRIDGE_SOCKET: /run/panel-host-bridge.sock
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - /run/panel-host-bridge.sock:/run/panel-host-bridge.sock
+    group_add:
+      - ${PANEL_GID:-987}
+    depends_on:
+      redis:
+        condition: service_healthy
+    logging: *default-logging
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
