@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import { MetricHistoryModal, type MetricKey } from '@/components/MetricHistoryModal';
 import { RestartBridgeButton } from '@/components/RestartBridgeButton';
 import { SystemStatus } from '@/components/SystemStatus';
 import { formatBytes, formatBytesPerSec, formatPercent, formatUptime, ratio } from '@/lib/format';
@@ -257,6 +258,7 @@ function HostBlock({
   lastUpdate: Date | null;
 }) {
   const isLoading = info === null || metrics === null;
+  const [openMetric, setOpenMetric] = useState<MetricKey | null>(null);
   const bridgeConnected = bridge?.connected === true;
 
   return (
@@ -316,15 +318,52 @@ function HostBlock({
           </>
         ) : (
           <>
-            <CpuCard info={info} metrics={metrics} />
-            <RamCard metrics={metrics} />
-            <DiskCard metrics={metrics} />
-            <NetworkCard metrics={metrics} />
+            <button
+              type="button"
+              onClick={() => setOpenMetric('cpu')}
+              className="text-left transition hover:ring-2 hover:ring-emerald-700/40 rounded-xl"
+              aria-label="Открыть график CPU за 24 часа"
+            >
+              <CpuCard info={info} metrics={metrics} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setOpenMetric('ram')}
+              className="text-left transition hover:ring-2 hover:ring-blue-700/40 rounded-xl"
+              aria-label="Открыть график RAM за 24 часа"
+            >
+              <RamCard metrics={metrics} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setOpenMetric('disk')}
+              className="text-left transition hover:ring-2 hover:ring-purple-700/40 rounded-xl"
+              aria-label="Открыть график диска за 24 часа"
+            >
+              <DiskCard metrics={metrics} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setOpenMetric('net')}
+              className="text-left transition hover:ring-2 hover:ring-amber-700/40 rounded-xl"
+              aria-label="Открыть график сети за 24 часа"
+            >
+              <NetworkCard metrics={metrics} />
+            </button>
           </>
         )}
       </div>
 
       <SystemRow info={info} metrics={metrics} />
+      {metrics ? (
+        <MetricHistoryModal
+          open={openMetric !== null}
+          onClose={() => setOpenMetric(null)}
+          metric={openMetric ?? 'cpu'}
+          ramTotalBytes={metrics.ram_total_bytes}
+          diskTotalBytes={metrics.disk_total_bytes}
+        />
+      ) : null}
     </section>
   );
 }
