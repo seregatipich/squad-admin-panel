@@ -22,6 +22,7 @@ export const PERMISSION_KEYS = [
   'user:create',
   'user:edit',
   'user:delete',
+  'user:manage_roles',
 
   'role:manage',
   'permission:manage',

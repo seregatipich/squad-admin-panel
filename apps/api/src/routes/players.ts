@@ -1,10 +1,21 @@
-import { playerIpHistory, playerNameHistory, players } from '@squad/db/schema';
-import { desc, eq } from 'drizzle-orm';
+import {
+  playerIpHistory,
+  playerNameHistory,
+  playerRoleAssignments,
+  players,
+  roles,
+} from '@squad/db/schema';
+import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 const playerIdParams = z.object({ steamId: z.string().regex(/^\d{17}$/) });
+const roleAssignBody = z.object({ role_id: z.string().uuid() });
+const playerRoleParams = z.object({
+  steamId: z.string().regex(/^\d{17}$/),
+  roleId: z.string().uuid(),
+});
 
 const playerRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -83,6 +94,100 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
           : [],
         ips_visible: ipsVisible,
       };
+    },
+  );
+  fast.get(
+    '/api/v1/players/:steamId/roles',
+    {
+      config: { permissions: ['user:manage_roles'], audit: false },
+      schema: { params: playerIdParams },
+    },
+    async (req) => {
+      const steamId64 = BigInt(req.params.steamId);
+      const rows = await app.db
+        .select({
+          roleId: playerRoleAssignments.roleId,
+          roleName: roles.name,
+          clearanceLevel: roles.clearanceLevel,
+          assignedAt: playerRoleAssignments.assignedAt,
+          assignedBy: playerRoleAssignments.assignedBy,
+        })
+        .from(playerRoleAssignments)
+        .innerJoin(roles, eq(roles.id, playerRoleAssignments.roleId))
+        .where(eq(playerRoleAssignments.steamId64, steamId64));
+      return rows.map((r) => ({
+        role_id: r.roleId,
+        name: r.roleName,
+        clearance_level: r.clearanceLevel,
+        assigned_at: r.assignedAt,
+        assigned_by: r.assignedBy ? String(r.assignedBy) : null,
+      }));
+    },
+  );
+
+  fast.post(
+    '/api/v1/players/:steamId/roles',
+    {
+      schema: {
+        params: playerIdParams,
+        body: roleAssignBody,
+      },
+      config: {
+        permissions: ['user:manage_roles'],
+        audit: { action: 'player.role.assign', resource: 'player' },
+      },
+    },
+    async (req) => {
+      const steamId64 = BigInt(req.params.steamId);
+      await app.db
+        .insert(playerRoleAssignments)
+        .values({
+          steamId64,
+          roleId: req.body.role_id,
+          assignedBy: req.user?.steamId64 ?? null,
+        })
+        .onConflictDoNothing();
+      return { ok: true };
+    },
+  );
+
+  fast.delete(
+    '/api/v1/players/:steamId/roles/:roleId',
+    {
+      schema: {
+        params: playerRoleParams,
+      },
+      config: {
+        permissions: ['user:manage_roles'],
+        audit: { action: 'player.role.revoke', resource: 'player' },
+      },
+    },
+    async (req, reply) => {
+      const steamId64 = BigInt(req.params.steamId);
+      const role = await app.db
+        .select()
+        .from(roles)
+        .where(eq(roles.id, req.params.roleId))
+        .limit(1);
+      if (role[0]?.name === 'Owner') {
+        const owners = await app.db
+          .select({ steamId64: playerRoleAssignments.steamId64 })
+          .from(playerRoleAssignments)
+          .where(eq(playerRoleAssignments.roleId, req.params.roleId));
+        if (owners.length <= 1) {
+          reply.code(409);
+          return { error: 'cannot_remove_last_owner' };
+        }
+      }
+      await app.db
+        .delete(playerRoleAssignments)
+        .where(
+          and(
+            eq(playerRoleAssignments.steamId64, steamId64),
+            eq(playerRoleAssignments.roleId, req.params.roleId),
+          ),
+        );
+      return { ok: true };
     },
   );
 };

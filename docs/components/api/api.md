@@ -85,6 +85,9 @@ Single-pass wizard: `check-env` → `init`. Once `init` completes, both endpoint
 |---|---|---|---|
 | GET | `/api/v1/players` | Up to 200 most-recently-seen, ordered by `last_seen_at`. | `player:view` |
 | GET | `/api/v1/players/:steamId` | Full detail with name history; IP history is gated by `player:view_ips` (returned as empty array + `ips_visible:false` otherwise). | `player:view` |
+| GET | `/api/v1/players/:steamId/roles` | Lists all panel roles currently assigned to the player. Returns `[{role_id, name, clearance_level, assigned_at, assigned_by}]`. | `user:manage_roles` |
+| POST | `/api/v1/players/:steamId/roles` | Assigns a role. Body: `{ role_id: uuid }`. Idempotent (conflict ignored). Audit: `player.role.assign`. | `user:manage_roles` |
+| DELETE | `/api/v1/players/:steamId/roles/:roleId` | Revokes a role. Rejects with `409 cannot_remove_last_owner` when removing the sole remaining Owner. Audit: `player.role.revoke`. | `user:manage_roles` |
 
 ## Audit
 
