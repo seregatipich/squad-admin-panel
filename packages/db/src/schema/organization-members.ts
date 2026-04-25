@@ -1,14 +1,14 @@
-import { pgTable, primaryKey, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, pgTable, primaryKey, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { organizations } from './organizations.js';
+import { players } from './players.js';
 import { roles } from './roles.js';
-import { users } from './users.js';
 
 export const organizationMembers = pgTable(
   'organization_members',
   {
-    userId: uuid('user_id')
+    steamId64: bigint('steam_id64', { mode: 'bigint' })
       .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+      .references(() => players.steamId64, { onDelete: 'cascade' }),
     orgId: uuid('org_id')
       .notNull()
       .references(() => organizations.id, { onDelete: 'cascade' }),
@@ -16,7 +16,7 @@ export const organizationMembers = pgTable(
     joinedAt: timestamp('joined_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.userId, table.orgId] }),
+    pk: primaryKey({ columns: [table.steamId64, table.orgId] }),
   }),
 );
 

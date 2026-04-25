@@ -16,9 +16,9 @@ export const players = pgTable(
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'date' })
       .defaultNow()
       .notNull(),
-    totalTimePlayedSeconds: bigint('total_time_played_seconds', { mode: 'bigint' })
+    totalTimePlayedSeconds: bigint('total_time_played_seconds', { mode: 'number' })
       .notNull()
-      .default(0n),
+      .default(0),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
