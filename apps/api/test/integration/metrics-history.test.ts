@@ -18,7 +18,7 @@ let cookie: string;
 
 beforeEach(async () => {
   h = await buildIntegrationApp({
-    seedOwner: { email: 'owner@example.com', password: 'CorrectHorseBatteryStaple1!' },
+    seedOwner: { steamId64: 76561198000000999n },
   });
   cookie = await loginAsOwner(h);
   await h.redis.del(HOST_METRICS_STREAM);

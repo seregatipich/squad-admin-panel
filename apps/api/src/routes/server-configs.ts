@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { configVersions, serverCredentials, servers, users } from '@squad/db/schema';
+import { configVersions, players, serverCredentials, servers } from '@squad/db/schema';
 import {
   ALLOWED_CONFIG_FILES,
   type AllowedConfigFile,
@@ -142,7 +142,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         req.params.name,
         req.body.content,
         req.body.message ?? null,
-        req.user?.id ?? null,
+        req.user?.steamId64 ?? null,
         req.ip ?? null,
       );
     },
@@ -168,15 +168,16 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
           id: configVersions.id,
           sha256: configVersions.sha256,
           parent_version_id: configVersions.parentVersionId,
-          author_user_id: configVersions.authorUserId,
-          author_email: users.email,
+          author_steam_id64: configVersions.authorSteamId64,
+          author_label: configVersions.authorLabel,
+          author_canonical_name: players.canonicalName,
           author_ip: configVersions.authorIp,
           message: configVersions.message,
           created_at: configVersions.createdAt,
           size: configVersions.content,
         })
         .from(configVersions)
-        .leftJoin(users, eq(users.id, configVersions.authorUserId))
+        .leftJoin(players, eq(players.steamId64, configVersions.authorSteamId64))
         .where(
           and(
             eq(configVersions.serverId, req.params.id),
@@ -189,8 +190,8 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         id: r.id,
         sha256: hex(r.sha256 as unknown as Buffer),
         parent_version_id: r.parent_version_id,
-        author_user_id: r.author_user_id,
-        author_email: r.author_email,
+        author_steam_id64: r.author_steam_id64 ? String(r.author_steam_id64) : null,
+        author_canonical_name: r.author_canonical_name ?? r.author_label ?? 'system',
         author_ip: r.author_ip,
         message: r.message,
         created_at: r.created_at,
@@ -227,7 +228,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         id: row.id,
         content: row.content,
         sha256: hex(row.sha256 as unknown as Buffer),
-        author_user_id: row.authorUserId,
+        author_steam_id64: row.authorSteamId64 ? String(row.authorSteamId64) : null,
         message: row.message,
         created_at: row.createdAt,
       };
@@ -312,7 +313,8 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         .select({
           id: configVersions.id,
           content: configVersions.content,
-          author_user_id: configVersions.authorUserId,
+          author_steam_id64: configVersions.authorSteamId64,
+          author_label: configVersions.authorLabel,
           created_at: configVersions.createdAt,
         })
         .from(configVersions)
@@ -325,22 +327,23 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
       const vs: BlameVersion[] = rows.map((r) => ({
         id: r.id,
         content: r.content,
-        author_user_id: r.author_user_id,
+        author_steam_id64: r.author_steam_id64 ? String(r.author_steam_id64) : null,
+        author_label: r.author_label,
         created_at: (r.created_at as Date).toISOString(),
       }));
       const lines = computeBlame(vs);
-      const authorIds = Array.from(
-        new Set(lines.map((l) => l.author_user_id).filter((v): v is string => !!v)),
+      const steamIds = Array.from(
+        new Set(lines.map((l) => l.author_steam_id64).filter((v): v is string => !!v)),
       );
-      const authorRows =
-        authorIds.length > 0
+      const playerRows =
+        steamIds.length > 0
           ? await app.db
-              .select({ id: users.id, email: users.email })
-              .from(users)
-              .where(inArrayOr(users.id, authorIds))
+              .select({ steamId64: players.steamId64, canonicalName: players.canonicalName })
+              .from(players)
+              .where(inArrayOr(players.steamId64, steamIds.map(BigInt)))
           : [];
       const authors: Record<string, string> = {};
-      for (const r of authorRows) authors[r.id] = r.email;
+      for (const r of playerRows) authors[String(r.steamId64)] = r.canonicalName;
       const payload = { lines, authors };
       await app.redis.set(cacheKey, JSON.stringify(payload), 'EX', 24 * 3600);
       return payload;
@@ -380,7 +383,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         req.params.name as AllowedConfigFile,
         target.content,
         message,
-        req.user?.id ?? null,
+        req.user?.steamId64 ?? null,
         req.ip ?? null,
       );
     },
@@ -390,10 +393,9 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
 import { inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 
-function inArrayOr(col: Parameters<typeof inArray>[0], values: string[]) {
-  // small helper because Drizzle's inArray throws on empty array
+function inArrayOr<T>(col: Parameters<typeof inArray>[0], values: T[]) {
   if (values.length === 0) throw new Error('empty values');
-  return inArray(col, values);
+  return inArray(col, values as Parameters<typeof inArray>[1]);
 }
 
 async function writeVersion(
@@ -402,7 +404,7 @@ async function writeVersion(
   name: AllowedConfigFile,
   content: string,
   message: string | null,
-  authorUserId: string | null,
+  authorSteamId64: bigint | null,
   authorIp: string | null,
 ) {
   // read previous for parent_version_id linkage (best-effort)
@@ -433,7 +435,8 @@ async function writeVersion(
       content,
       sha256: newSha,
       parentVersionId: prevRow?.id ?? null,
-      authorUserId,
+      authorSteamId64,
+      authorLabel: authorSteamId64 ? null : 'system',
       authorIp,
       message,
     })

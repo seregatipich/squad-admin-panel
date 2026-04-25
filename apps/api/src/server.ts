@@ -27,7 +27,6 @@ import requestContextPlugin from './plugins/request-context.js';
 import statusReconcilerPlugin from './plugins/status-reconciler.js';
 import auditRoutes from './routes/audit.js';
 import authRoutes from './routes/auth.js';
-import discordRoutes from './routes/auth-discord.js';
 import steamRoutes from './routes/auth-steam.js';
 import depotRoutes from './routes/depot.js';
 import hostRoutes from './routes/host.js';
@@ -65,7 +64,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(rateLimit, {
     max: 1200,
     timeWindow: '1 minute',
-    keyGenerator: (req) => `${req.ip}:${req.user?.id ?? ''}`,
+    keyGenerator: (req) => `${req.ip}:${req.user?.steamId64 ? String(req.user.steamId64) : ''}`,
   });
   await app.register(swagger, {
     openapi: {
@@ -106,7 +105,6 @@ export async function buildServer(config: AppConfig) {
   await app.register(auditRoutes);
   await app.register(logsRoutes);
   await app.register(steamRoutes);
-  await app.register(discordRoutes);
 
   return app;
 }

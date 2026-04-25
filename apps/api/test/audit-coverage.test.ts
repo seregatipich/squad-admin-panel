@@ -23,7 +23,6 @@ import requestContextPlugin from '../src/plugins/request-context.js';
 
 import auditRoutes from '../src/routes/audit.js';
 import authRoutes from '../src/routes/auth.js';
-import discordRoutes from '../src/routes/auth-discord.js';
 import steamRoutes from '../src/routes/auth-steam.js';
 import hostRoutes from '../src/routes/host.js';
 import hostActionsRoutes from '../src/routes/host-actions.js';
@@ -85,7 +84,6 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   await app.register(playerRoutes);
   await app.register(auditRoutes);
   await app.register(steamRoutes);
-  await app.register(discordRoutes);
 
   // suppress 'unused imports' — plugins are referenced here defensively
   // so a future refactor that pulls them into the route registration
@@ -121,7 +119,7 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
 
   it('mutating routes that claim audit: false are limited to auth callbacks and OAuth entry points', async () => {
     const routes = await collectRoutes();
-    const allowlist = new Set(['/api/v1/auth/steam/callback', '/api/v1/auth/discord/callback']);
+    const allowlist = new Set(['/api/v1/auth/steam/callback']);
     const falsy = routes.filter(
       (r) =>
         MUTATING.has(r.method) && !r.url.startsWith(SWAGGER_PREFIX) && r.config.audit === false,

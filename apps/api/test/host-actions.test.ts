@@ -1,41 +1,30 @@
-import { userRoleAssignments } from '@squad/db/schema';
+import { playerRoleAssignments } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
   type IntegrationHarness,
+  loginAsOwner,
   makeFakeBridge,
 } from './integration/harness.js';
 
-const EMAIL = 'owner@test.local';
-const PASSWORD = 'correct-horse-battery-staple';
+const OWNER_STEAM_ID = 76561198000000999n;
 
 let h: IntegrationHarness;
 
 beforeEach(async () => {
   h = await buildIntegrationApp({
-    seedOwner: { email: EMAIL, password: PASSWORD },
+    seedOwner: { steamId64: OWNER_STEAM_ID },
     bridge: makeFakeBridge(),
   });
 });
 
 afterEach(async () => {
+  if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerSteamId64);
   await h.cleanup();
 });
-
-async function login(): Promise<string> {
-  const resp = await h.app.inject({
-    method: 'POST',
-    url: '/api/v1/auth/login',
-    payload: { email: EMAIL, password: PASSWORD },
-  });
-  if (resp.statusCode !== 200) throw new Error(`login failed: ${resp.body}`);
-  const raw = Array.isArray(resp.headers['set-cookie'])
-    ? resp.headers['set-cookie'][0]!
-    : (resp.headers['set-cookie'] as string);
-  return raw.match(/(__Host-sid=[^;]+)/)?.[1]!;
-}
 
 describe('POST /api/v1/host/restart', () => {
   it('Owner with host:bridge_control permission triggers a restart and writes an audit row', async () => {
@@ -44,7 +33,7 @@ describe('POST /api/v1/host/restart', () => {
       calls++;
       return { status: 'restarting' as const };
     };
-    const cookie = await login();
+    const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'POST',
       url: '/api/v1/host/restart',
@@ -57,19 +46,19 @@ describe('POST /api/v1/host/restart', () => {
   });
 
   it('viewer without host:bridge_control permission is rejected with 403', async () => {
-    await login();
     const viewerRole = await h.db.query.roles.findFirst({
       where: (r, { and, eq: e }) => and(e(r.orgId, h.seed.orgId!), e(r.name, 'Viewer')),
     });
-    if (!viewerRole || !h.seed.ownerUserId) throw new Error('viewer role missing');
+    if (!viewerRole || !h.seed.ownerSteamId64) throw new Error('viewer role missing');
     await h.db
-      .delete(userRoleAssignments)
-      .where(eq(userRoleAssignments.userId, h.seed.ownerUserId));
+      .delete(playerRoleAssignments)
+      .where(eq(playerRoleAssignments.steamId64, h.seed.ownerSteamId64));
     await h.db
-      .insert(userRoleAssignments)
-      .values({ userId: h.seed.ownerUserId, roleId: viewerRole.id });
+      .insert(playerRoleAssignments)
+      .values({ steamId64: h.seed.ownerSteamId64, roleId: viewerRole.id });
+    invalidatePermissionCache(h.seed.ownerSteamId64);
 
-    const cookie = await login();
+    const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'POST',
       url: '/api/v1/host/restart',
@@ -82,7 +71,7 @@ describe('POST /api/v1/host/restart', () => {
     h.bridge.hostAgentRestart = async () => {
       throw new Error('socket closed');
     };
-    const cookie = await login();
+    const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'POST',
       url: '/api/v1/host/restart',

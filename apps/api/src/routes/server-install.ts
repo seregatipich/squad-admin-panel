@@ -118,7 +118,8 @@ async function seedConfigs(
       content,
       sha256: createHash('sha256').update(content).digest(),
       parentVersionId: null,
-      authorUserId: null,
+      authorSteamId64: null,
+      authorLabel: 'system',
       authorIp: null,
       message: `initial install — SteamCMD depot ${file === 'Rcon.cfg' || file === 'Server.cfg' ? '+ panel rewrite' : 'default'}`,
     });

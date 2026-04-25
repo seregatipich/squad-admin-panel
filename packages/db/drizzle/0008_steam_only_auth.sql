@@ -179,6 +179,7 @@ BEFORE UPDATE ON config_versions
 FOR EACH ROW EXECUTE FUNCTION config_versions_deny();
 CREATE TRIGGER trg_config_versions_no_del
 BEFORE DELETE ON config_versions
-FOR EACH ROW EXECUTE FUNCTION config_versions_deny();
+FOR EACH ROW WHEN (pg_trigger_depth() = 0)
+EXECUTE FUNCTION config_versions_deny();
 
 COMMIT;

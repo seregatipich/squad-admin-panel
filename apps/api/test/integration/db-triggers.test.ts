@@ -37,8 +37,9 @@ afterEach(async () => {
 describe('audit_log trigger invariants', () => {
   it('UPDATE raises "audit_log is append-only"', async () => {
     await h.db.insert(auditLog).values({
-      actorUserId: null,
+      actorSteamId64: null,
       actorKind: 'system',
+      actorSystemLabel: 'test',
       actionType: 'x.test',
       targetType: null,
       targetId: null,
@@ -54,8 +55,9 @@ describe('audit_log trigger invariants', () => {
 
   it('DELETE raises "audit_log is append-only"', async () => {
     await h.db.insert(auditLog).values({
-      actorUserId: null,
+      actorSteamId64: null,
       actorKind: 'system',
+      actorSystemLabel: 'test',
       actionType: 'x.test',
       targetType: null,
       targetId: null,
@@ -68,8 +70,9 @@ describe('audit_log trigger invariants', () => {
   it('row_hash is a 32-byte sha256 digest and chains across inserts', async () => {
     for (let i = 0; i < 3; i++) {
       await h.db.insert(auditLog).values({
-        actorUserId: null,
+        actorSteamId64: null,
         actorKind: 'system',
+        actorSystemLabel: 'test',
         actionType: `chain.${i}`,
         targetType: null,
         targetId: null,
@@ -116,6 +119,7 @@ describe('config_versions trigger invariants', () => {
       filename: 'Admins.cfg',
       content: 'original',
       sha256: Buffer.alloc(32, 0x11),
+      authorLabel: 'system',
     });
     const [row] = await h.db.select().from(configVersions);
     await expectRejectsMatching(

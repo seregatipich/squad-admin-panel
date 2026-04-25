@@ -2,20 +2,21 @@ import {
   auditLog,
   playerIpHistory,
   playerNameHistory,
+  playerRoleAssignments,
   players,
-  userRoleAssignments,
 } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
   type IntegrationHarness,
+  loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
 
-const EMAIL = 'owner@test.local';
-const PASSWORD = 'correct-horse-battery-staple';
+const OWNER_STEAM_ID = 76561198000000999n;
 
 let h: IntegrationHarness;
 
@@ -23,23 +24,10 @@ afterEach(async () => {
   if (h) await h.cleanup();
 });
 
-async function login(harness = h): Promise<string> {
-  const resp = await harness.app.inject({
-    method: 'POST',
-    url: '/api/v1/auth/login',
-    payload: { email: EMAIL, password: PASSWORD },
-  });
-  if (resp.statusCode !== 200) throw new Error(`login failed: ${resp.body}`);
-  const raw = Array.isArray(resp.headers['set-cookie'])
-    ? resp.headers['set-cookie'][0]!
-    : (resp.headers['set-cookie'] as string);
-  return raw.match(/(__Host-sid=[^;]+)/)?.[1]!;
-}
-
 describe('GET /api/v1/players + /players/:steamId', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
-      seedOwner: { email: EMAIL, password: PASSWORD },
+      seedOwner: { steamId64: OWNER_STEAM_ID },
       bridge: makeFakeBridge(),
     });
     const steamId = 76561198000000001n;
@@ -50,7 +38,7 @@ describe('GET /api/v1/players + /players/:steamId', () => {
       eosId: 'eos-abc',
       firstSeenAt: new Date('2026-01-01T00:00:00Z'),
       lastSeenAt: new Date('2026-04-23T00:00:00Z'),
-      totalTimePlayedSeconds: 3600n,
+      totalTimePlayedSeconds: 3600,
     });
     await h.db.insert(playerNameHistory).values({
       steamId64: steamId,
@@ -69,7 +57,7 @@ describe('GET /api/v1/players + /players/:steamId', () => {
   });
 
   it('lists seeded players ordered by last_seen_at desc', async () => {
-    const cookie = await login();
+    const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'GET',
       url: '/api/v1/players',
@@ -80,13 +68,13 @@ describe('GET /api/v1/players + /players/:steamId', () => {
       items: Array<{ steam_id64: string; canonical_name: string }>;
       total: number;
     }>();
-    expect(body.total).toBe(1);
-    expect(body.items[0]?.steam_id64).toBe('76561198000000001');
-    expect(body.items[0]?.canonical_name).toBe('TestPlayer');
+    expect(body.total).toBeGreaterThanOrEqual(1);
+    const player = body.items.find((i) => i.steam_id64 === '76561198000000001');
+    expect(player?.canonical_name).toBe('TestPlayer');
   });
 
   it('detail view shows names and ips for Owner (has player:view_ips)', async () => {
-    const cookie = await login();
+    const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'GET',
       url: '/api/v1/players/76561198000000001',
@@ -105,19 +93,19 @@ describe('GET /api/v1/players + /players/:steamId', () => {
   });
 
   it('detail view hides IPs from a user without player:view_ips', async () => {
-    // Demote the owner to Viewer (no view_ips).
     const viewerRole = await h.db.query.roles.findFirst({
       where: (r, { and: _a, eq: _e }) => _a(_e(r.orgId, h.seed.orgId!), _e(r.name, 'Viewer')),
     });
-    if (!viewerRole || !h.seed.ownerUserId) throw new Error('viewer role missing');
+    if (!viewerRole || !h.seed.ownerSteamId64) throw new Error('viewer role missing');
     await h.db
-      .delete(userRoleAssignments)
-      .where(eq(userRoleAssignments.userId, h.seed.ownerUserId));
-    await h.db.insert(userRoleAssignments).values({
-      userId: h.seed.ownerUserId,
+      .delete(playerRoleAssignments)
+      .where(eq(playerRoleAssignments.steamId64, h.seed.ownerSteamId64));
+    await h.db.insert(playerRoleAssignments).values({
+      steamId64: h.seed.ownerSteamId64,
       roleId: viewerRole.id,
     });
-    const cookie = await login();
+    invalidatePermissionCache(h.seed.ownerSteamId64);
+    const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'GET',
       url: '/api/v1/players/76561198000000001',
@@ -130,10 +118,10 @@ describe('GET /api/v1/players + /players/:steamId', () => {
   });
 
   it('returns 404 for unknown steamId', async () => {
-    const cookie = await login();
+    const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'GET',
-      url: '/api/v1/players/76561198000000999',
+      url: '/api/v1/players/76561198000000998',
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(404);
@@ -143,7 +131,7 @@ describe('GET /api/v1/players + /players/:steamId', () => {
 describe('/api/v1/depot', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
-      seedOwner: { email: EMAIL, password: PASSWORD },
+      seedOwner: { steamId64: OWNER_STEAM_ID },
       bridge: makeFakeBridge(),
     });
   });
@@ -155,7 +143,7 @@ describe('/api/v1/depot', () => {
         : path.endsWith('appmanifest_403240.acf')
           ? { content: '"AppState"\n{\n\t"buildid"\t"1234567"\n}' }
           : Promise.reject(new Error('ENOENT'));
-    const cookie = await login();
+    const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'GET',
       url: '/api/v1/depot',
@@ -168,7 +156,7 @@ describe('/api/v1/depot', () => {
   });
 
   it('POST /depot/update returns already_in_progress when a lock exists', async () => {
-    const cookie = await login();
+    const cookie = await loginAsOwner(h);
     const startedAt = new Date().toISOString();
     await h.redis.set('depot:updating', startedAt, 'EX', 60);
     const resp = await h.app.inject({
@@ -187,7 +175,7 @@ describe('/api/v1/depot', () => {
 describe('auth plugin', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
-      seedOwner: { email: EMAIL, password: PASSWORD },
+      seedOwner: { steamId64: OWNER_STEAM_ID },
       bridge: makeFakeBridge(),
     });
   });
@@ -205,14 +193,15 @@ describe('auth plugin', () => {
     const viewerRole = await h.db.query.roles.findFirst({
       where: (r, { and: _a, eq: _e }) => _a(_e(r.orgId, h.seed.orgId!), _e(r.name, 'Viewer')),
     });
-    if (!viewerRole || !h.seed.ownerUserId) throw new Error('viewer role missing');
+    if (!viewerRole || !h.seed.ownerSteamId64) throw new Error('viewer role missing');
     await h.db
-      .delete(userRoleAssignments)
-      .where(eq(userRoleAssignments.userId, h.seed.ownerUserId));
+      .delete(playerRoleAssignments)
+      .where(eq(playerRoleAssignments.steamId64, h.seed.ownerSteamId64));
     await h.db
-      .insert(userRoleAssignments)
-      .values({ userId: h.seed.ownerUserId, roleId: viewerRole.id });
-    const cookie = await login();
+      .insert(playerRoleAssignments)
+      .values({ steamId64: h.seed.ownerSteamId64, roleId: viewerRole.id });
+    invalidatePermissionCache(h.seed.ownerSteamId64);
+    const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'POST',
       url: '/api/v1/servers',
@@ -234,33 +223,25 @@ describe('auth plugin', () => {
 describe('audit plugin', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
-      seedOwner: { email: EMAIL, password: PASSWORD },
+      seedOwner: { steamId64: OWNER_STEAM_ID },
       bridge: makeFakeBridge(),
     });
   });
 
   it('does not write audit rows for routes with audit: false', async () => {
-    const cookie = await login();
+    const cookie = await loginAsOwner(h);
     const before = await h.db.select().from(auditLog);
-    const loginCount = before.filter((r) => r.actionType === 'user.login').length;
-    // Hit a bunch of audit:false endpoints.
     await h.app.inject({ method: 'GET', url: '/api/v1/me', headers: { cookie } });
     await h.app.inject({ method: 'GET', url: '/api/v1/host/info', headers: { cookie } });
     await h.app.inject({ method: 'GET', url: '/api/v1/host/metrics', headers: { cookie } });
     await h.app.inject({ method: 'GET', url: '/api/v1/permissions', headers: { cookie } });
-    // Give the onResponse hook a tick — though for audit:false nothing should be
-    // written even if it fired.
     await new Promise((r) => setTimeout(r, 100));
     const after = await h.db.select().from(auditLog);
     expect(after.length).toBe(before.length);
-    expect(loginCount).toBeGreaterThanOrEqual(1);
   });
 
   it('writes an audit row even when the request returns 4xx', async () => {
-    // An unauthenticated POST /auth/logout still runs through audit
-    // onResponse; the user is null, the action is user.logout.
     await h.app.inject({ method: 'POST', url: '/api/v1/auth/logout' });
-    // Wait briefly for async hook.
     await new Promise((r) => setTimeout(r, 150));
     const rows = await h.db
       .select()

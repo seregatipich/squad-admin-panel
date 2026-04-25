@@ -6,7 +6,7 @@ import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
-import { auditLog, users } from '@squad/db/schema';
+import { auditLog, organizationMembers, playerRoleAssignments, players } from '@squad/db/schema';
 import { seedSystemRoles } from '@squad/db/seed';
 import type { RoleName } from '@squad/shared-config';
 import { and, desc, eq, gte } from 'drizzle-orm';
@@ -16,7 +16,8 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import Redis from 'ioredis';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
-import { hashPassword } from '../../src/lib/argon.js';
+import { invalidatePermissionCache } from '../../src/lib/rbac.js';
+import { createSession } from '../../src/lib/sessions.js';
 import auditPluginFactory from '../../src/plugins/audit.js';
 import authPlugin from '../../src/plugins/auth.js';
 import installProgressPlugin from '../../src/plugins/install-progress.js';
@@ -303,8 +304,8 @@ export async function runMigrations(url: string) {
 export interface BuildAppOptions {
   /** A fake bridge instance; defaults to `makeFakeBridge()`. */
   bridge?: FakeBridge;
-  /** Whether to seed an organization + system roles + owner user. */
-  seedOwner?: { email: string; password: string; displayName?: string };
+  /** Whether to seed an organization + system roles + owner player. */
+  seedOwner?: { steamId64: bigint; canonicalName?: string };
   /** Whether to run status-reconciler + other heavy plugins. Off by default. */
   withStatusReconciler?: boolean;
 }
@@ -319,9 +320,7 @@ export interface IntegrationHarness {
   cleanup: () => Promise<void>;
   seed: {
     orgId?: string;
-    ownerUserId?: string;
-    ownerEmail?: string;
-    ownerPassword?: string;
+    ownerSteamId64?: bigint;
   };
 }
 
@@ -352,6 +351,8 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     COOKIE_SECURE: false,
     APP_DOMAIN: 'test.localhost',
     LOG_LEVEL: 'info',
+    SESSION_TTL_SECONDS: 21600,
+    SESSION_TOUCH_THROTTLE_SECONDS: 60,
   });
   app.decorate('encryptionKey', Buffer.from(TEST_ENCRYPTION_KEY, 'base64'));
   app.decorate('db', db);
@@ -388,29 +389,26 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
       slug: 'test-org',
     });
     await seedSystemRoles(db, orgId);
-    const ownerUserId = uuidv7();
-    const passwordHash = await hashPassword(opts.seedOwner.password);
-    await db.insert(users).values({
-      id: ownerUserId,
-      email: opts.seedOwner.email.toLowerCase(),
-      passwordHash,
-      displayName: opts.seedOwner.displayName ?? 'Test Owner',
+    const ownerSteamId64 = opts.seedOwner.steamId64;
+    const canonicalName = opts.seedOwner.canonicalName ?? 'Owner';
+    await db.insert(players).values({
+      steamId64: ownerSteamId64,
+      canonicalName,
+      canonicalNameNormalized: canonicalName.toLowerCase(),
     });
     const ownerRole = await db.query.roles.findFirst({
       where: (r, { and: _a, eq: _e }) => _a(_e(r.orgId, orgId), _e(r.name, 'Owner' as RoleName)),
     });
     if (ownerRole) {
       await db
-        .insert((await import('@squad/db/schema')).userRoleAssignments)
-        .values({ userId: ownerUserId, roleId: ownerRole.id });
+        .insert(playerRoleAssignments)
+        .values({ steamId64: ownerSteamId64, roleId: ownerRole.id });
       await db
-        .insert((await import('@squad/db/schema')).organizationMembers)
-        .values({ userId: ownerUserId, orgId, primaryRoleId: ownerRole.id });
+        .insert(organizationMembers)
+        .values({ steamId64: ownerSteamId64, orgId, primaryRoleId: ownerRole.id });
     }
     seed.orgId = orgId;
-    seed.ownerUserId = ownerUserId;
-    seed.ownerEmail = opts.seedOwner.email;
-    seed.ownerPassword = opts.seedOwner.password;
+    seed.ownerSteamId64 = ownerSteamId64;
   }
 
   await app.ready();
@@ -433,27 +431,21 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
 }
 
 /**
- * Log in the seeded owner; returns a Cookie header string ready for subsequent
- * `inject()` calls.
+ * Creates a real session for the seeded owner and returns the cookie header
+ * string ready for subsequent `inject()` calls.
  */
 export async function loginAsOwner(h: IntegrationHarness): Promise<string> {
-  if (!h.seed.ownerEmail || !h.seed.ownerPassword) {
+  if (!h.seed.ownerSteamId64) {
     throw new Error('seed owner missing; pass seedOwner to buildIntegrationApp');
   }
-  const resp = await h.app.inject({
-    method: 'POST',
-    url: '/api/v1/auth/login',
-    payload: { email: h.seed.ownerEmail, password: h.seed.ownerPassword },
+  invalidatePermissionCache(h.seed.ownerSteamId64);
+  const { token } = await createSession(h.db, h.redis, {
+    steamId64: h.seed.ownerSteamId64,
+    ip: null,
+    userAgent: 'test-harness',
+    ttlMs: 21_600_000,
   });
-  if (resp.statusCode !== 200) {
-    throw new Error(`login failed: ${resp.statusCode} ${resp.body}`);
-  }
-  const setCookie = resp.headers['set-cookie'];
-  if (!setCookie) throw new Error('login did not return a cookie');
-  const raw = Array.isArray(setCookie) ? (setCookie[0] ?? '') : setCookie;
-  const match = raw.match(/(__Host-sid=[^;]+)/);
-  if (!match?.[1]) throw new Error('cookie header did not contain __Host-sid');
-  return match[1];
+  return `__Host-sid=${token}`;
 }
 
 /**

@@ -13,10 +13,10 @@ afterEach(async () => {
 describe('integration harness', () => {
   it('builds an app against a fresh schema + seeds an owner', async () => {
     current = await buildIntegrationApp({
-      seedOwner: { email: 'owner@test.local', password: 'correct-horse-battery-staple' },
+      seedOwner: { steamId64: 76561198000000001n },
     });
     expect(current.seed.orgId).toMatch(/^[0-9a-f-]{36}$/i);
-    expect(current.seed.ownerUserId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(typeof current.seed.ownerSteamId64).toBe('bigint');
     expect(current.schema).toMatch(/^test_[0-9a-f]{12}$/);
     const healthOr404 = await current.app.inject({ method: 'GET', url: '/api/v1/setup/check-env' });
     expect([200, 410]).toContain(healthOr404.statusCode);
