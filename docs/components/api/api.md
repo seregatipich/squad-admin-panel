@@ -38,9 +38,27 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 
 ## RBAC reference
 
+### Permissions
+
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| GET | `/api/v1/permissions` | Full registered permission key set + system role mapping. Used by the role-management UI. | none |
+| GET | `/api/v1/permissions` | Full registered permission registry from `@squad/shared-config` — array of `{key, category, label, dangerous?, unimplemented?}`. Used by the role-management UI. | `role:view` |
+
+### Roles
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/roles` | List all roles with `permissions[]` and `assigned_users_count`. Sorted `is_system_role DESC, name ASC`. | `role:view` |
+| GET | `/api/v1/roles/:id` | Single role detail. 404 if not found. | `role:view` |
+| POST | `/api/v1/roles` | Create role. Body: `{name, color, description?, permissions: PermissionKey[]}`. 409 `role_name_taken` on duplicate name. Returns 201 with the new role object. Audit: `role.create`. | `role:create` |
+| PUT | `/api/v1/roles/:id` | Update role (name, color, description, permissions). 400 `owner_role_immutable` for the system Owner role. 409 `role_name_taken` on duplicate name. Invalidates permission cache for all role carriers. Audit: `role.update`. | `role:edit` |
+| DELETE | `/api/v1/roles/:id` | Delete role. Cascades `players.role_id` to NULL. 400 `owner_role_immutable` for Owner. Invalidates permission cache before deletion. Audit: `role.delete`. | `role:delete` |
+
+### Users
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/users` | Players with a non-NULL `role_id`, joined to `roles`. Sorted `last_seen_at DESC`. Returns `{steam_id64, canonical_name, last_seen_at, role: {id, name, color, is_system_role}, assigned_at, assigned_by}`. `assigned_at`/`assigned_by` are NULL in this iteration. | `user:view` |
 
 ## Servers
 
@@ -88,9 +106,8 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 |---|---|---|---|
 | GET | `/api/v1/players` | Up to 200 most-recently-seen, ordered by `last_seen_at`. | `player:view` |
 | GET | `/api/v1/players/:steamId` | Full detail with name history; IP history is gated by `player:view_ips` (returned as empty array + `ips_visible:false` otherwise). | `player:view` |
-| GET | `/api/v1/players/:steamId/roles` | Lists all panel roles currently assigned to the player. Returns `[{role_id, name, clearance_level, assigned_at, assigned_by}]`. | `user:manage_roles` |
-| POST | `/api/v1/players/:steamId/roles` | Assigns a role. Body: `{ role_id: uuid }`. Idempotent (conflict ignored). Audit: `player.role.assign`. | `user:manage_roles` |
-| DELETE | `/api/v1/players/:steamId/roles/:roleId` | Revokes a role. Rejects with `409 cannot_remove_last_owner` when removing the sole remaining Owner. Audit: `player.role.revoke`. | `user:manage_roles` |
+| GET | `/api/v1/players/:steamId/role` | Returns current role or `{role: null}`. Single-role model — each player has at most one panel role. | `user:view` |
+| PUT | `/api/v1/players/:steamId/role` | Assign or clear a role. Body: `{role_id: uuid \| null}`. 404 `role_not_found` if the role UUID doesn't exist. 409 `cannot_remove_last_owner` when the change would leave zero Owners. Invalidates the player's permission cache. Audit: `player.role.assign`. | `user:manage_roles` |
 
 ## Audit
 
