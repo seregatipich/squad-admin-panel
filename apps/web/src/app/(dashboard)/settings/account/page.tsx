@@ -5,39 +5,54 @@ import { LiveIndicator } from '@/components/LiveIndicator';
 const POLL_MS = 30_000;
 
 interface Me {
-  id: string;
-  email: string;
-  display_name: string | null;
+  steam_id64: string;
+  canonical_name: string;
+  avatar_url: string | null;
   permissions: string[];
   clearance: number;
 }
 
-interface Provision {
-  uri: string;
-  manual_entry: string;
-  backup_codes: string[];
+interface ActiveSession {
+  id: string;
+  ip: string | null;
+  user_agent: string | null;
+  last_activity_at: string;
+  expires_at: string;
+  current: boolean;
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleString('ru-RU');
+}
+
+function shortenUa(ua: string | null): string {
+  if (!ua) return '—';
+  const m = ua.match(/^([^/]+\/[^\s]+).*\((.*?)\)/);
+  return m ? `${m[1]} (${m[2]})` : ua.slice(0, 80);
 }
 
 export default function AccountSettings() {
   const [me, setMe] = useState<Me | null>(null);
-  const [provision, setProvision] = useState<Provision | null>(null);
-  const [totpCode, setTotpCode] = useState('');
-  const [disablePass, setDisablePass] = useState('');
+  const [sessions, setSessions] = useState<ActiveSession[]>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [revokingAll, setRevokingAll] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const r = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const j = (await r.json()) as Me;
-        if (!cancelled) {
-          setMe(j);
-          setLastUpdate(new Date());
-        }
+        const [meRes, sessRes] = await Promise.all([
+          fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+          fetch('/api/v1/me/sessions', { credentials: 'include', cache: 'no-store' }),
+        ]);
+        if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
+        if (!sessRes.ok) throw new Error(`HTTP ${sessRes.status}`);
+        if (cancelled) return;
+        setMe((await meRes.json()) as Me);
+        setSessions((await sessRes.json()) as ActiveSession[]);
+        setLastUpdate(new Date());
       } catch (e) {
         if (!cancelled) setMsg({ kind: 'err', text: (e as Error).message });
       }
@@ -50,69 +65,43 @@ export default function AccountSettings() {
     };
   }, []);
 
-  async function beginTotp() {
-    setBusy(true);
+  async function revokeOne(id: string) {
+    setBusyId(id);
     setMsg(null);
     try {
-      const r = await fetch('/api/v1/me/totp/provision', {
-        method: 'POST',
+      const r = await fetch(`/api/v1/me/sessions/${id}`, {
+        method: 'DELETE',
         credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setProvision((await r.json()) as Provision);
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+      setMsg({ kind: 'ok', text: 'Сессия завершена.' });
     } catch (e) {
       setMsg({ kind: 'err', text: (e as Error).message });
     } finally {
-      setBusy(false);
+      setBusyId(null);
     }
   }
 
-  async function confirmTotp() {
-    setBusy(true);
+  async function revokeAll() {
+    setRevokingAll(true);
+    setMsg(null);
     try {
-      const r = await fetch('/api/v1/me/totp/enable', {
-        method: 'POST',
+      const r = await fetch('/api/v1/me/sessions', {
+        method: 'DELETE',
         credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ totp_code: totpCode.trim() }),
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-      setMsg({ kind: 'ok', text: '2FA включена. Сохраните backup-коды!' });
-      setProvision(null);
-      setTotpCode('');
-    } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function disableTotp() {
-    setBusy(true);
-    try {
-      const r = await fetch('/api/v1/me/totp/disable', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ password: disablePass }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setMsg({ kind: 'ok', text: '2FA отключена.' });
-      setDisablePass('');
+      window.location.href = '/login';
     } catch (e) {
       setMsg({ kind: 'err', text: (e as Error).message });
-    } finally {
-      setBusy(false);
+      setRevokingAll(false);
     }
   }
 
   async function logout() {
     await fetch('/api/v1/auth/logout', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
       credentials: 'include',
     });
     window.location.href = '/login';
@@ -123,7 +112,7 @@ export default function AccountSettings() {
   }
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-6 max-w-3xl">
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Аккаунт</h1>
         <LiveIndicator lastUpdate={lastUpdate} />
@@ -144,10 +133,10 @@ export default function AccountSettings() {
       <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
         <h2 className="text-xs uppercase tracking-widest text-neutral-400">Профиль</h2>
         <dl className="grid grid-cols-[140px_1fr] gap-y-1 text-sm">
-          <dt className="text-neutral-500">Email</dt>
-          <dd>{me.email}</dd>
+          <dt className="text-neutral-500">SteamID64</dt>
+          <dd className="font-mono">{me.steam_id64}</dd>
           <dt className="text-neutral-500">Имя</dt>
-          <dd>{me.display_name ?? '—'}</dd>
+          <dd>{me.canonical_name}</dd>
           <dt className="text-neutral-500">Clearance</dt>
           <dd className="font-mono">{me.clearance}</dd>
           <dt className="text-neutral-500">Permissions</dt>
@@ -155,101 +144,57 @@ export default function AccountSettings() {
         </dl>
       </section>
 
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-          Двухфакторная аутентификация (TOTP)
-        </h2>
-
-        {!provision ? (
-          <>
-            <p className="text-sm text-neutral-400">
-              Добавьте ещё один фактор для входа: Google Authenticator, Aegis, 1Password, любое
-              TOTP-приложение.
-            </p>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={beginTotp}
-              className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500 disabled:opacity-40"
-            >
-              Подключить 2FA
-            </button>
-
-            <div className="border-t border-neutral-800 pt-4 space-y-2">
-              <p className="text-sm text-neutral-400">
-                Отключить 2FA (нужен пароль для подтверждения):
-              </p>
-              <div className="flex gap-2">
-                <input
-                  type="password"
-                  value={disablePass}
-                  onChange={(e) => setDisablePass(e.target.value)}
-                  placeholder="Текущий пароль"
-                  className="flex-1 rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-                />
-                <button
-                  type="button"
-                  disabled={busy || !disablePass}
-                  onClick={disableTotp}
-                  className="rounded bg-red-700 px-4 py-2 text-sm text-white hover:bg-red-600 disabled:opacity-40"
-                >
-                  Отключить
-                </button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-sm">1. Отсканируйте QR-код или введите вручную:</p>
-            <div className="rounded bg-neutral-900 p-3 font-mono text-xs break-all">
-              {provision.manual_entry}
-            </div>
-            <p className="text-xs text-neutral-500">
-              Или откройте otpauth-ссылку на устройстве где стоит TOTP-приложение:
-            </p>
-            <div className="rounded bg-neutral-900 p-2 font-mono text-[10px] break-all text-neutral-500">
-              {provision.uri}
-            </div>
-
-            <p className="text-sm pt-2">2. Сохраните backup-коды (каждый работает один раз):</p>
-            <div className="grid grid-cols-2 gap-1 font-mono text-xs">
-              {provision.backup_codes.map((c) => (
-                <div key={c} className="rounded bg-neutral-900 px-2 py-1">
-                  {c}
-                </div>
+      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Активные сессии</h2>
+          <button
+            type="button"
+            disabled={revokingAll || sessions.length <= 1}
+            onClick={revokeAll}
+            className="rounded border border-red-900 px-3 py-1 text-xs text-red-400 hover:border-red-700 hover:text-red-300 disabled:opacity-40"
+          >
+            {revokingAll ? 'Завершаются…' : 'Завершить все'}
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs uppercase text-neutral-500">
+              <tr>
+                <th className="py-2 pr-2">IP</th>
+                <th className="py-2 pr-2">Устройство</th>
+                <th className="py-2 pr-2">Последнее действие</th>
+                <th className="py-2 pr-2">Истекает</th>
+                <th className="py-2 pr-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sessions.map((s) => (
+                <tr key={s.id} className="border-t border-neutral-900">
+                  <td className="py-2 pr-2 font-mono">{s.ip ?? '—'}</td>
+                  <td className="py-2 pr-2 text-neutral-400">{shortenUa(s.user_agent)}</td>
+                  <td className="py-2 pr-2 text-neutral-400">{formatDate(s.last_activity_at)}</td>
+                  <td className="py-2 pr-2 text-neutral-400">{formatDate(s.expires_at)}</td>
+                  <td className="py-2 pr-2 text-right">
+                    {s.current ? (
+                      <span className="rounded bg-emerald-950/50 px-2 py-0.5 text-xs text-emerald-300">
+                        текущая
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={busyId === s.id}
+                        onClick={() => revokeOne(s.id)}
+                        className="rounded border border-red-900 px-3 py-0.5 text-xs text-red-400 hover:border-red-700 disabled:opacity-40"
+                      >
+                        {busyId === s.id ? '…' : 'Завершить'}
+                      </button>
+                    )}
+                  </td>
+                </tr>
               ))}
-            </div>
-
-            <p className="text-sm pt-2">3. Введите 6-значный код из приложения:</p>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                inputMode="numeric"
-                pattern="\d{6}"
-                value={totpCode}
-                onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                placeholder="123456"
-                className="w-32 rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-mono"
-              />
-              <button
-                type="button"
-                disabled={busy || totpCode.length !== 6}
-                onClick={confirmTotp}
-                className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500 disabled:opacity-40"
-              >
-                Включить
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => setProvision(null)}
-                className="rounded border border-neutral-800 px-4 py-2 text-sm text-neutral-400 hover:text-neutral-200"
-              >
-                Отмена
-              </button>
-            </div>
-          </div>
-        )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section>
