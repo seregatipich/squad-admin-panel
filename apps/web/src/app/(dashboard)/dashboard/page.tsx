@@ -1,16 +1,10 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { LiveIndicator } from '@/components/LiveIndicator';
 import { RestartBridgeButton } from '@/components/RestartBridgeButton';
 import { SystemStatus } from '@/components/SystemStatus';
-import {
-  formatBytes,
-  formatBytesPerSec,
-  formatPercent,
-  formatRelativeTime,
-  formatUptime,
-  ratio,
-} from '@/lib/format';
+import { formatBytes, formatBytesPerSec, formatPercent, formatUptime, ratio } from '@/lib/format';
 import { computeHostHealth, type HealthLevel, thresholdTone } from '@/lib/host-health';
 
 interface BridgeStatus {
@@ -86,7 +80,7 @@ export default function DashboardPage() {
   const [metrics, setMetrics] = useState<HostMetrics | null>(null);
   const [servers, setServers] = useState<ServerRow[]>([]);
   const [recent, setRecent] = useState<AuditRow[]>([]);
-  const [now, setNow] = useState(() => new Date());
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,7 +93,7 @@ export default function DashboardPage() {
         fetchJson<{ items: AuditRow[] }>('/api/v1/audit?page_size=10'),
       ]);
       if (cancelled) return;
-      setNow(new Date());
+      setLastUpdate(new Date());
       if (results[0].status === 'fulfilled') setBridge(results[0].value);
       else setBridge({ connected: false, error: (results[0].reason as Error).message });
       if (results[1].status === 'fulfilled') setInfo(results[1].value);
@@ -130,7 +124,10 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Дашборд</h1>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">Дашборд</h1>
+        <LiveIndicator lastUpdate={lastUpdate} />
+      </div>
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
@@ -161,7 +158,13 @@ export default function DashboardPage() {
 
       <SystemStatus />
 
-      <HostBlock bridge={bridge} info={info} metrics={metrics} health={health} now={now} />
+      <HostBlock
+        bridge={bridge}
+        info={info}
+        metrics={metrics}
+        health={health}
+        lastUpdate={lastUpdate}
+      />
 
       <section className="space-y-2">
         <div className="flex items-baseline justify-between">
@@ -245,13 +248,13 @@ function HostBlock({
   info,
   metrics,
   health,
-  now,
+  lastUpdate,
 }: {
   bridge: BridgeStatus | null;
   info: HostInfo | null;
   metrics: HostMetrics | null;
   health: ReturnType<typeof computeHostHealth>;
-  now: Date;
+  lastUpdate: Date | null;
 }) {
   const isLoading = info === null || metrics === null;
   const bridgeConnected = bridge?.connected === true;
@@ -297,12 +300,9 @@ function HostBlock({
               disabledReason="Сначала восстановите соединение."
             />
           </div>
-          <span>
-            Обновлено{' '}
-            <span className="font-mono">
-              {metrics?.sampled_at ? formatRelativeTime(metrics.sampled_at, now) : '—'}
-            </span>
-          </span>
+          <LiveIndicator
+            lastUpdate={metrics?.sampled_at ? new Date(metrics.sampled_at) : lastUpdate}
+          />
         </div>
       </header>
 

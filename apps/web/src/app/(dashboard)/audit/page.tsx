@@ -1,5 +1,6 @@
 'use client';
 import { Fragment, useEffect, useMemo, useState } from 'react';
+import { LiveIndicator } from '@/components/LiveIndicator';
 
 interface AuditEntry {
   id: string;
@@ -21,6 +22,7 @@ export default function AuditPage() {
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,6 +37,7 @@ export default function AuditPage() {
         if (!cancelled) {
           setItems(j.items);
           setErr(null);
+          setLastUpdate(new Date());
         }
       } catch (e) {
         if (!cancelled) setErr((e as Error).message);
@@ -62,9 +65,12 @@ export default function AuditPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Журнал действий</h1>
-        <span className="text-xs text-neutral-500">записей: {items.length}</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-neutral-500">записей: {items.length}</span>
+          <LiveIndicator lastUpdate={lastUpdate} />
+        </div>
       </div>
 
       {err ? (

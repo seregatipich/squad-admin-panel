@@ -1,6 +1,9 @@
 'use client';
 import dynamic from 'next/dynamic';
-import { use, useCallback, useEffect, useState } from 'react';
+import { use, useCallback, useEffect, useRef, useState } from 'react';
+import { LiveIndicator } from '@/components/LiveIndicator';
+
+const POLL_MS = 8000;
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 const MonacoDiff = dynamic(
@@ -66,12 +69,31 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
   const [blame, setBlame] = useState<BlameResponse | null>(null);
 
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [serverSha, setServerSha] = useState<string | null>(null);
+  const [externalChange, setExternalChange] = useState<{ sha: string; content: string } | null>(
+    null,
+  );
+  const dirtyRef = useRef(false);
+  const selectedRef = useRef<string | null>(null);
+  const serverShaRef = useRef<string | null>(null);
+  useEffect(() => {
+    dirtyRef.current = dirty;
+  }, [dirty]);
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
+  useEffect(() => {
+    serverShaRef.current = serverSha;
+  }, [serverSha]);
+
   const refreshFiles = useCallback(async () => {
     try {
       const r = await fetch(`/api/v1/servers/${id}/configs`, { credentials: 'include' });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = (await r.json()) as { items: FileItem[] };
       setFiles(j.items);
+      setLastUpdate(new Date());
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -79,7 +101,39 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
   useEffect(() => {
     void refreshFiles();
+    const t = setInterval(() => {
+      void refreshFiles();
+    }, POLL_MS);
+    return () => clearInterval(t);
   }, [refreshFiles]);
+
+  useEffect(() => {
+    if (!selected) return;
+    let cancelled = false;
+    async function poll() {
+      const target = selectedRef.current;
+      if (!target) return;
+      try {
+        const r = await fetch(`/api/v1/servers/${id}/configs/${target}`, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        if (!r.ok) return;
+        const j = (await r.json()) as { content: string; sha256: string | null };
+        if (cancelled || selectedRef.current !== target) return;
+        if (j.sha256 && serverShaRef.current && j.sha256 !== serverShaRef.current) {
+          setExternalChange({ sha: j.sha256, content: j.content });
+        }
+      } catch {
+        // ignore transient errors during polling
+      }
+    }
+    const t = setInterval(poll, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [id, selected]);
 
   const load = useCallback(
     async (name: string) => {
@@ -87,14 +141,17 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       setMsg(null);
       setSelected(name);
       setTab('editor');
+      setExternalChange(null);
       try {
         const r = await fetch(`/api/v1/servers/${id}/configs/${name}`, {
           credentials: 'include',
+          cache: 'no-store',
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const j = (await r.json()) as { content: string };
+        const j = (await r.json()) as { content: string; sha256: string | null };
         setContent(j.content);
         setServerContent(j.content);
+        setServerSha(j.sha256);
         setDirty(false);
         setCommitMessage('');
       } catch (e) {
@@ -103,6 +160,21 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     },
     [id],
   );
+
+  const acceptExternalChange = useCallback(() => {
+    if (!externalChange) return;
+    if (dirtyRef.current) return;
+    setContent(externalChange.content);
+    setServerContent(externalChange.content);
+    setServerSha(externalChange.sha);
+    setDirty(false);
+    setExternalChange(null);
+    setMsg('Загружена новая версия с диска');
+  }, [externalChange]);
+
+  const dismissExternalChange = useCallback(() => {
+    setExternalChange(null);
+  }, []);
 
   const loadHistory = useCallback(async () => {
     if (!selected) return;
@@ -150,9 +222,11 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
         body: JSON.stringify({ content, message: commitMessage || undefined }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-      const j = (await r.json()) as { behavior: string; unchanged?: boolean };
+      const j = (await r.json()) as { behavior: string; unchanged?: boolean; sha256?: string };
       setServerContent(content);
+      if (j.sha256) setServerSha(j.sha256);
       setDirty(false);
+      setExternalChange(null);
       setCommitMessage('');
       setMsg(
         j.unchanged
@@ -217,9 +291,12 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
   return (
     <div className="space-y-4">
-      <header className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold">Конфигурация сервера</h1>
-        <div className="text-xs font-mono text-neutral-500">{id}</div>
+      <header className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-semibold">Конфигурация сервера</h1>
+          <div className="text-xs font-mono text-neutral-500">{id}</div>
+        </div>
+        <LiveIndicator lastUpdate={lastUpdate} />
       </header>
 
       {err ? (
@@ -227,6 +304,38 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       ) : null}
       {msg ? (
         <div className="rounded border border-green-900 bg-green-950 px-3 py-2 text-sm">{msg}</div>
+      ) : null}
+      {externalChange ? (
+        <div
+          data-testid="external-change-banner"
+          className="flex items-center justify-between gap-3 rounded border border-amber-900 bg-amber-950/60 px-3 py-2 text-sm"
+        >
+          <span>
+            Файл изменён извне — открыть новую версию?
+            {dirty ? (
+              <span className="ml-2 text-xs text-amber-300">
+                (есть несохранённые правки — они не будут перезаписаны автоматически)
+              </span>
+            ) : null}
+          </span>
+          <span className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={acceptExternalChange}
+              disabled={dirty}
+              className="rounded bg-amber-700 px-2 py-1 text-xs text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Загрузить
+            </button>
+            <button
+              type="button"
+              onClick={dismissExternalChange}
+              className="rounded border border-amber-800 px-2 py-1 text-xs text-amber-200 hover:bg-amber-900/40"
+            >
+              Скрыть
+            </button>
+          </span>
+        </div>
       ) : null}
 
       <div className="grid grid-cols-[260px_1fr] gap-4">

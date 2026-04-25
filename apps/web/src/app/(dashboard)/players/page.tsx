@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import { LiveIndicator } from '@/components/LiveIndicator';
 
 interface Player {
   steam_id64: string;
@@ -25,6 +26,7 @@ export default function PlayersPage() {
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [onlyOnline, setOnlyOnline] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,6 +37,7 @@ export default function PlayersPage() {
         if (!cancelled) {
           setData((await r.json()) as PlayersResponse);
           setErr(null);
+          setLastUpdate(new Date());
         }
       } catch (e) {
         if (!cancelled) setErr((e as Error).message);
@@ -70,13 +73,16 @@ export default function PlayersPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Игроки</h1>
-        <div className="text-xs text-neutral-500">
-          всего: {data?.total ?? 0} • онлайн сейчас:{' '}
-          {data?.items.filter(
-            (p) => Date.now() - new Date(p.last_seen_at).getTime() <= ONLINE_WINDOW_MS,
-          ).length ?? 0}
+        <div className="flex items-center gap-3">
+          <div className="text-xs text-neutral-500">
+            всего: {data?.total ?? 0} • онлайн сейчас:{' '}
+            {data?.items.filter(
+              (p) => Date.now() - new Date(p.last_seen_at).getTime() <= ONLINE_WINDOW_MS,
+            ).length ?? 0}
+          </div>
+          <LiveIndicator lastUpdate={lastUpdate} />
         </div>
       </div>
 

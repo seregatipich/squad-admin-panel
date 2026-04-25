@@ -1,5 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { LiveIndicator } from '@/components/LiveIndicator';
+
+const POLL_MS = 30_000;
 
 interface Me {
   id: string;
@@ -22,12 +25,29 @@ export default function AccountSettings() {
   const [disablePass, setDisablePass] = useState('');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   useEffect(() => {
-    fetch('/api/v1/me', { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then(setMe)
-      .catch((e) => setMsg({ kind: 'err', text: (e as Error).message }));
+    let cancelled = false;
+    async function load() {
+      try {
+        const r = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as Me;
+        if (!cancelled) {
+          setMe(j);
+          setLastUpdate(new Date());
+        }
+      } catch (e) {
+        if (!cancelled) setMsg({ kind: 'err', text: (e as Error).message });
+      }
+    }
+    void load();
+    const t = setInterval(load, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
   }, []);
 
   async function beginTotp() {
@@ -104,7 +124,10 @@ export default function AccountSettings() {
 
   return (
     <div className="space-y-6 max-w-2xl">
-      <h1 className="text-2xl font-semibold">Аккаунт</h1>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">Аккаунт</h1>
+        <LiveIndicator lastUpdate={lastUpdate} />
+      </div>
 
       {msg ? (
         <div

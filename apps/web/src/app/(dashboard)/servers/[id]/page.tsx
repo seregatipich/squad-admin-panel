@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { use, useEffect, useRef, useState } from 'react';
+import { LiveIndicator } from '@/components/LiveIndicator';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
 
 interface ServerRow {
@@ -236,7 +237,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <LivePulse now={now} lastRefreshedAt={lastRefreshedAt} />
+          <LiveIndicator lastUpdate={lastRefreshedAt} />
           <Link
             href={`/servers/${server.id}/configs`}
             className="text-xs text-sky-400 hover:text-sky-300"
@@ -416,25 +417,6 @@ function RconDot({ status }: { status: RconStatus }) {
     >
       <span className={`inline-block h-1.5 w-1.5 rounded-full ${color}`} />
       <span>{status.state === 'connected' ? 'connected' : label}</span>
-    </span>
-  );
-}
-
-function LivePulse({ now, lastRefreshedAt }: { now: number; lastRefreshedAt: number }) {
-  const ageSec = Math.max(0, Math.round((now - lastRefreshedAt) / 1000));
-  const stale = ageSec > POLL_INTERVAL_MS / 1000 + 5;
-  const dotColor = stale ? 'bg-red-600' : 'bg-green-500';
-  return (
-    <span
-      className="flex items-center gap-1.5 text-[10px] text-neutral-600"
-      title={
-        stale
-          ? `Опрос панели завис (${ageSec}с без ответа)`
-          : `Опрос каждые ${POLL_INTERVAL_MS / 1000}с`
-      }
-    >
-      <span className={`inline-block h-1.5 w-1.5 rounded-full ${dotColor} animate-pulse`} />
-      <span>live</span>
     </span>
   );
 }

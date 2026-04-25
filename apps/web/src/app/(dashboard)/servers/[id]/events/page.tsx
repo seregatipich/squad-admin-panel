@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { use, useEffect, useState } from 'react';
+import { LiveIndicator } from '@/components/LiveIndicator';
 
 interface Event {
   stream_id: string;
@@ -22,6 +23,7 @@ export default function EventsPage({ params }: { params: Promise<{ id: string }>
   const [events, setEvents] = useState<Event[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,6 +37,7 @@ export default function EventsPage({ params }: { params: Promise<{ id: string }>
         if (!cancelled) {
           setEvents(((await r.json()) as EventsResponse).items);
           setErr(null);
+          setLastUpdate(new Date());
         }
       } catch (e) {
         if (!cancelled) setErr((e as Error).message);
@@ -53,12 +56,18 @@ export default function EventsPage({ params }: { params: Promise<{ id: string }>
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <Link href={`/servers/${id}`} className="text-sky-400 hover:text-sky-300 text-xs font-mono">
-          ← сервер
-        </Link>
-        <h1 className="text-2xl font-semibold">События сервера</h1>
-        <span className="text-xs text-neutral-500 font-mono">{id}</span>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <Link
+            href={`/servers/${id}`}
+            className="text-sky-400 hover:text-sky-300 text-xs font-mono"
+          >
+            ← сервер
+          </Link>
+          <h1 className="text-2xl font-semibold">События сервера</h1>
+          <span className="text-xs text-neutral-500 font-mono">{id}</span>
+        </div>
+        <LiveIndicator lastUpdate={lastUpdate} />
       </div>
 
       {err ? (

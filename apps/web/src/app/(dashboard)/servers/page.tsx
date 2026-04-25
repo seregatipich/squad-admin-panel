@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import { LiveIndicator } from '@/components/LiveIndicator';
 
 interface Server {
   id: string;
@@ -38,6 +39,7 @@ export default function ServersPage() {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<StatusFilter>('all');
   const [actingId, setActingId] = useState<string | null>(null);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -49,6 +51,7 @@ export default function ServersPage() {
         if (!cancelled) {
           setData(j);
           setErr(null);
+          setLastUpdate(new Date());
         }
       } catch (e) {
         if (!cancelled) setErr((e as Error).message);
@@ -95,14 +98,17 @@ export default function ServersPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Серверы</h1>
-        <Link
-          href="/servers/new"
-          className="rounded bg-sky-600 px-3 py-1.5 text-sm text-white hover:bg-sky-500"
-        >
-          + Установить новый
-        </Link>
+        <div className="flex items-center gap-3">
+          <LiveIndicator lastUpdate={lastUpdate} />
+          <Link
+            href="/servers/new"
+            className="rounded bg-sky-600 px-3 py-1.5 text-sm text-white hover:bg-sky-500"
+          >
+            + Установить новый
+          </Link>
+        </div>
       </div>
 
       {err ? (
