@@ -274,6 +274,11 @@ describe('GET /api/v1/audit', () => {
     });
     expect(resp.statusCode).toBe(401); // session revoked
     const freshCookie = await login();
+    // The audit row for the fresh login is written by the onResponse hook
+    // asynchronously — give it a beat before reading or the audit list may
+    // be ordered with the previous logout still on top (its hook fired
+    // first).
+    await new Promise((r) => setTimeout(r, 150));
     const ok = await h.app.inject({
       method: 'GET',
       url: '/api/v1/audit?page=1&page_size=10',
