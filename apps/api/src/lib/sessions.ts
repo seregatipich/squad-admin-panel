@@ -7,8 +7,9 @@ import { v7 as uuidv7 } from 'uuid';
 
 export interface SessionRecord {
   id: string;
-  userId: string;
+  steamId64: bigint;
   expiresAt: Date;
+  lastActivityAt: Date;
   ip: string | null;
   userAgent: string | null;
 }
@@ -16,11 +17,6 @@ export interface SessionRecord {
 const REDIS_PREFIX = 'session:';
 const REDIS_TTL_SECONDS = 600;
 
-/**
- * Generate a new opaque session ID. The returned value is the token the
- * client stores in the __Host-sid cookie; the database key is the SHA-256
- * of the token so leaking the DB still doesn't expose valid tokens.
- */
 export function mintSessionToken(): { token: string; tokenId: string } {
   const raw = randomBytes(24).toString('base64url');
   const token = `s_${uuidv7()}_${raw}`;
@@ -35,21 +31,24 @@ export function tokenIdFromToken(token: string): string {
 export async function createSession(
   db: DatabaseClient,
   redis: Redis,
-  params: { userId: string; ip: string | null; userAgent: string | null; ttlMs: number },
+  params: { steamId64: bigint; ip: string | null; userAgent: string | null; ttlMs: number },
 ): Promise<{ token: string; session: SessionRecord }> {
   const { token, tokenId } = mintSessionToken();
-  const expiresAt = new Date(Date.now() + params.ttlMs);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + params.ttlMs);
   await db.insert(sessions).values({
     id: tokenId,
-    userId: params.userId,
+    steamId64: params.steamId64,
     expiresAt,
+    lastActivityAt: now,
     ip: params.ip,
     userAgent: params.userAgent,
   });
   const record: SessionRecord = {
     id: tokenId,
-    userId: params.userId,
+    steamId64: params.steamId64,
     expiresAt,
+    lastActivityAt: now,
     ip: params.ip,
     userAgent: params.userAgent,
   };
@@ -81,8 +80,9 @@ export async function resolveSession(
   if (!row) return null;
   const record: SessionRecord = {
     id: row.id,
-    userId: row.userId,
+    steamId64: row.steamId64,
     expiresAt: row.expiresAt,
+    lastActivityAt: row.lastActivityAt,
     ip: row.ip ?? null,
     userAgent: row.userAgent ?? null,
   };
@@ -99,17 +99,17 @@ export async function revokeSession(
   await redis.del(`${REDIS_PREFIX}${tokenId}`);
 }
 
-export async function revokeAllForUser(
+export async function revokeAllForPlayer(
   db: DatabaseClient,
   redis: Redis,
-  userId: string,
+  steamId64: bigint,
 ): Promise<void> {
   const rows = await db
     .select({ id: sessions.id })
     .from(sessions)
-    .where(eq(sessions.userId, userId));
+    .where(eq(sessions.steamId64, steamId64));
   if (rows.length) {
-    await db.delete(sessions).where(eq(sessions.userId, userId));
+    await db.delete(sessions).where(eq(sessions.steamId64, steamId64));
     await redis.del(...rows.map((r) => `${REDIS_PREFIX}${r.id}`));
   }
 }
@@ -119,12 +119,36 @@ export async function pruneExpired(db: DatabaseClient): Promise<number> {
   return (result as unknown as { rowCount?: number }).rowCount ?? 0;
 }
 
+export interface TouchSessionInput {
+  sessionId: string;
+  redis: Pick<Redis, 'set'>;
+  now: Date;
+  ttlSeconds: number;
+  throttleSeconds: number;
+  updateDb: (newExpiresAt: Date, newLastActivity: Date) => Promise<void>;
+}
+
+export async function touchSession(input: TouchSessionInput): Promise<boolean> {
+  const ok = await input.redis.set(
+    `session-touch:${input.sessionId}`,
+    '1',
+    'EX' as never,
+    input.throttleSeconds as never,
+    'NX' as never,
+  );
+  if (ok !== 'OK') return false;
+  const newExpiresAt = new Date(input.now.getTime() + input.ttlSeconds * 1000);
+  await input.updateDb(newExpiresAt, input.now);
+  return true;
+}
+
 async function cachePut(redis: Redis, record: SessionRecord): Promise<void> {
   await redis.set(
     `${REDIS_PREFIX}${record.id}`,
     JSON.stringify({
-      userId: record.userId,
+      steamId64: String(record.steamId64),
       expiresAt: record.expiresAt.toISOString(),
+      lastActivityAt: record.lastActivityAt.toISOString(),
       ip: record.ip,
       userAgent: record.userAgent,
     }),
@@ -138,15 +162,17 @@ async function cacheGet(redis: Redis, tokenId: string): Promise<SessionRecord | 
   if (!raw) return null;
   try {
     const obj = JSON.parse(raw) as {
-      userId: string;
+      steamId64: string;
       expiresAt: string;
+      lastActivityAt: string;
       ip: string | null;
       userAgent: string | null;
     };
     return {
       id: tokenId,
-      userId: obj.userId,
+      steamId64: BigInt(obj.steamId64),
       expiresAt: new Date(obj.expiresAt),
+      lastActivityAt: new Date(obj.lastActivityAt),
       ip: obj.ip,
       userAgent: obj.userAgent,
     };
