@@ -78,6 +78,13 @@
       "when": 1745968800000,
       "tag": "0010_drop_servers_org_id",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1745974800000,
+      "tag": "0011_servers_is_canary",
+      "breakpoints": true
     }
   ]
 }
