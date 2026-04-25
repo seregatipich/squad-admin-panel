@@ -8,5 +8,9 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/dist/**', 'test/e2e/**'],
     testTimeout: 10_000,
     hookTimeout: 30_000,
+    // RBAC integration tests share the live Postgres DB. Run files serially
+    // so cross-file mutations (players.role_id, roles, panel_meta) don't race.
+    fileParallelism: false,
+    sequence: { concurrent: false },
   },
 });
