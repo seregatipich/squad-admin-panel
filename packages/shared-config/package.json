@@ -8,6 +8,16 @@
       "types": "./dist/index.d.ts",
       "development": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./role-colors": {
+      "types": "./dist/role-colors.d.ts",
+      "development": "./src/role-colors.ts",
+      "default": "./dist/role-colors.js"
+    },
+    "./permissions": {
+      "types": "./dist/permissions.d.ts",
+      "development": "./src/permissions.ts",
+      "default": "./dist/permissions.js"
     }
   },
   "scripts": {

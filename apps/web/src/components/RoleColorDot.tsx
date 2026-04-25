@@ -1,4 +1,4 @@
-import type { RoleColor } from '@squad/shared-config';
+import type { RoleColor } from '@squad/shared-config/role-colors';
 
 const CLASS_MAP: Record<RoleColor, string> = {
   red: 'bg-red-500',
