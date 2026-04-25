@@ -277,7 +277,6 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
         ? { kind: 'steam' as const, steamId64: req.user.steamId64, tokenId: null }
         : { kind: 'system' as const, label: 'http-anonymous' };
       const actorIp = req.ip ?? null;
-      const orgId = srv.orgId;
       (async () => {
         const startedAt = Date.now();
         try {
@@ -294,7 +293,6 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             context: { durationMs: Date.now() - startedAt },
             statusCode: 200,
             durationMs: Date.now() - startedAt,
-            orgId,
           });
         } catch (err) {
           app.log.error({ err, server_id: id }, 'install failed');
@@ -317,7 +315,6 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             context: { error: (err as Error).message, durationMs: Date.now() - startedAt },
             statusCode: 500,
             durationMs: Date.now() - startedAt,
-            orgId,
           });
         }
       })();

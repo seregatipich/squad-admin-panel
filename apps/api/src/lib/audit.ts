@@ -21,7 +21,6 @@ export interface AuditEntryInput {
   context: Record<string, unknown>;
   statusCode?: number;
   durationMs?: number;
-  orgId?: string | null;
 }
 
 export async function writeAuditEntry(db: DatabaseClient, entry: AuditEntryInput): Promise<void> {
@@ -40,7 +39,6 @@ export async function writeAuditEntry(db: DatabaseClient, entry: AuditEntryInput
     context: (entry.context ?? {}) as object,
     statusCode: entry.statusCode ?? null,
     durationMs: entry.durationMs ?? null,
-    orgId: entry.orgId ?? null,
     rowHash: Buffer.from([]),
   });
 }

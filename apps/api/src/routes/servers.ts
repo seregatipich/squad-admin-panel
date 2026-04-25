@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { organizations, serverCredentials, serverSettings, servers } from '@squad/db/schema';
+import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import {
   DEPOT_VOLUME_NAME,
   PANEL_CONFIGS_ROOT,
@@ -105,18 +105,11 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       schema: { body: serverCreateInput },
     },
     async (req, reply) => {
-      const orgs = await app.db.select().from(organizations).limit(1);
-      const org = orgs[0];
-      if (!org) {
-        reply.code(400);
-        return { error: 'no_organization' };
-      }
       const id = uuidv7();
       const body = req.body;
       await app.db.transaction(async (tx) => {
         await tx.insert(servers).values({
           id,
-          orgId: org.id,
           displayName: body.display_name,
           slug: body.slug,
           description: body.description ?? null,
@@ -233,7 +226,6 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       return {
         server: {
           id: row.id,
-          org_id: row.orgId,
           display_name: row.displayName,
           slug: row.slug,
           description: row.description,
