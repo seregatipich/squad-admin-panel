@@ -49,18 +49,17 @@ packages/
   bridge-client/    TypeScript client for the Go bridge
 scripts/            install-host-bridge.sh, verify-bridge.sh, uninstall.sh
 docker/             Dockerfiles + Caddyfile
-docs/               Architecture, protocol, rbac, security, troubleshooting
+docs/               README.md + architecture/, components/<name>/, operations/, development/
 ```
 
 ## Docs
 
-- [architecture.md](docs/architecture.md) — component diagram and data flow
-- [bridge-protocol.md](docs/bridge-protocol.md) — wire format for the 14 RPC methods
-- [event-envelope.md](docs/event-envelope.md) — shape and versioning
-- [rbac.md](docs/rbac.md) — permission keys and clearance model
-- [security.md](docs/security.md) — threat model and hardening details
-- [development.md](docs/development.md) — local dev setup
-- [troubleshooting.md](docs/troubleshooting.md) — common issues
+Start at [`docs/README.md`](docs/README.md) — it indexes everything.
+
+- [`docs/architecture/`](docs/architecture/) — system overview, data flow, RBAC, security, decisions
+- [`docs/components/`](docs/components/) — per-component docs (api, web, bridge, workers, db, …)
+- [`docs/operations/`](docs/operations/) — setup, environment variables, troubleshooting
+- [`docs/development/`](docs/development/) — local development, testing
 
 ## License
 

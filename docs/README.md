@@ -1,0 +1,41 @@
+# Squad Admin Panel — documentation
+
+Open-source, self-hosted control panel for Squad dedicated servers. Owns the full server lifecycle: install, update, start/stop, live config editing, log/event ingestion, audit. Each Squad server runs as its own Docker container; the panel is `docker compose up -d` on a single Linux host.
+
+## Table of contents
+
+### Architecture
+
+- [System overview](architecture/system-overview.md) — privilege zones, components, bird's-eye view
+- [Data flow](architecture/data-flow.md) — install flow, event pipeline, RCON loop
+- [RBAC](architecture/rbac.md) — permission keys, system roles, enforcement
+- [Security](architecture/security.md) — threat model, secrets, attack surface
+- [Decisions](architecture/decisions.md) — meaningful architectural choices
+
+### Components
+
+- [`api`](components/api/README.md) — Fastify HTTP/WebSocket
+- [`web`](components/web/README.md) — Next.js dashboard
+- [`bridge`](components/bridge/README.md) — Go host daemon (the only privileged component)
+- [`workers`](components/workers/README.md) — RCON, log-ingest, archiver, partitioner, stubs
+- [`db`](components/db/README.md) — Drizzle schema + Postgres migrations
+- [`shared-types`](components/shared-types/README.md) — Zod schemas + `EventEnvelope`
+- [`shared-config`](components/shared-config/README.md) — permission keys, bridge-method allowlist
+- [`bridge-client`](components/bridge-client/README.md) — TS client for the Go bridge
+
+### Operations
+
+- [Setup](operations/setup.md) — first-time install on a host
+- [Environment variables](operations/environment-variables.md) — `.env` reference
+- [Troubleshooting](operations/troubleshooting.md) — common operator-level issues
+
+### Development
+
+- [Local development](development/local-development.md) — clone-to-running-stack
+- [Testing](development/testing.md) — unit / integration / e2e tiers
+
+## Maintenance rules
+
+`docs/` is part of the source of truth. Every change to code, schema, configuration, or workflow must land with the matching documentation update in the same task. The full policy lives in [CLAUDE.md](../CLAUDE.md#documentation-system).
+
+When code and docs disagree, **the code wins** — but the doc must be updated to match in the same change. Never document behavior that does not exist.
