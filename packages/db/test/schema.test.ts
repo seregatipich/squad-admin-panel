@@ -7,12 +7,8 @@ describe('schema surface', () => {
     const expected = [
       'sessions',
       'playerApiTokens',
-      'organizations',
-      'organizationMembers',
       'roles',
       'rolePermissions',
-      'roleServerScopes',
-      'playerRoleAssignments',
       'servers',
       'serverCredentials',
       'serverSettings',
@@ -20,9 +16,9 @@ describe('schema surface', () => {
       'playerNameHistory',
       'playerIpHistory',
       'events',
-      'processedEvents',
       'auditLog',
       'configVersions',
+      'panelMeta',
     ];
     for (const name of expected) {
       expect(schema).toHaveProperty(name);
