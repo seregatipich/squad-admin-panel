@@ -4,6 +4,7 @@ import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import websocket from '@fastify/websocket';
+import { redisSinkStream } from '@squad/shared-config';
 import Fastify from 'fastify';
 import {
   jsonSchemaTransform,
@@ -41,7 +42,7 @@ import setupRoutes from './routes/setup.js';
 import './plugins/types.js';
 
 export async function buildServer(config: AppConfig) {
-  const logger = buildLogger(config.LOG_LEVEL);
+  const { logger, lateSink } = buildLogger(config.LOG_LEVEL);
   const app = Fastify({
     loggerInstance: logger,
     trustProxy: true,
@@ -80,6 +81,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(requestContextPlugin);
   await app.register(databasePlugin, { config });
   await app.register(redisPlugin, { config });
+  lateSink.setInner(redisSinkStream({ redis: app.redis, defaultSource: 'api' }));
   await app.register(bridgePlugin, { config });
   await app.register(metricsPlugin);
   await app.register(healthPlugin);
