@@ -43,3 +43,16 @@ var uuidRegexp = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-
 func uuidLike(s string) bool {
 	return uuidRegexp.MatchString(s)
 }
+
+const sentinelFirstOwnerPath = "/var/lib/squad-panel/.first-owner-claimed"
+
+func PanelSentinelPath(p string) (string, error) {
+	cleaned, err := Path(p, sentinelFirstOwnerPath)
+	if err != nil {
+		return "", err
+	}
+	if cleaned != sentinelFirstOwnerPath {
+		return "", fmt.Errorf("%w: only %q is allowed", ErrForbidden, sentinelFirstOwnerPath)
+	}
+	return cleaned, nil
+}

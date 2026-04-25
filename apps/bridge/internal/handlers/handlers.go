@@ -229,11 +229,17 @@ func validateReadablePath(p string) error {
 	if _, err := validate.Path(p, fsx.DepotHostPath()); err == nil {
 		return nil
 	}
+	if _, err := validate.PanelSentinelPath(p); err == nil {
+		return nil
+	}
 	return fmt.Errorf("%w: path %q not in readable allowlist", validate.ErrForbidden, p)
 }
 
 func validateWritablePath(p string) error {
 	if _, err := validate.PanelConfigFilePath(p); err == nil {
+		return nil
+	}
+	if _, err := validate.PanelSentinelPath(p); err == nil {
 		return nil
 	}
 	return fmt.Errorf("%w: path %q not in writable allowlist", validate.ErrForbidden, p)
