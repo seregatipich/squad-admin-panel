@@ -7,6 +7,7 @@ import { invalidatePermissionCache } from '../lib/rbac.js';
 
 const playerIdParams = z.object({ steamId: z.string().regex(/^\d{17}$/) });
 const roleAssignBody = z.object({ role_id: z.string().uuid().nullable() });
+const listQuery = z.object({ q: z.string().min(1).max(64).optional() });
 
 const playerRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -14,10 +15,20 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
   fast.get(
     '/api/v1/players',
     {
+      schema: { querystring: listQuery },
       config: { permissions: ['player:view'], audit: false },
     },
-    async () => {
-      const rows = await app.db.select().from(players).orderBy(desc(players.lastSeenAt)).limit(200);
+    async (req) => {
+      const q = req.query.q?.toLowerCase().trim();
+      const whereClause = q
+        ? sql`canonical_name_normalized LIKE ${`%${q}%`} OR steam_id64::text = ${q}`
+        : undefined;
+      const rows = await app.db
+        .select()
+        .from(players)
+        .where(whereClause)
+        .orderBy(desc(players.lastSeenAt))
+        .limit(200);
       return {
         items: rows.map((r) => ({
           steam_id64: r.steamId64.toString(),
