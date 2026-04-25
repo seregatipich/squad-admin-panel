@@ -17,9 +17,8 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 
 | Route | File | What it does |
 |---|---|---|
-| `/login` | `src/app/login/page.tsx` | "Войти через Steam" button. Redirects to Steam OpenID 2.0. |
+| `/login` | `src/app/login/page.tsx` | "Войти через Steam" button. Redirects to Steam OpenID 2.0. Immediately redirects to `/dashboard` if already authenticated. |
 | `/no-access` | `src/app/no-access/page.tsx` | Shown after successful Steam login when the player has no panel role. Displays their Steam ID so an Owner can look them up. |
-| `/setup` | `src/app/setup/page.tsx` | Walks the operator through 2-step setup: `check-env` → `init` (organisation name). |
 | `/dashboard` | `src/app/(dashboard)/dashboard/page.tsx` | Hub: bridge status, host metrics tile (live), per-worker heartbeats, server count summary. The metrics tile opens the `MetricHistoryModal` for 24 h history. |
 | `/servers` | `src/app/(dashboard)/servers/page.tsx` | List with live `rcon_state` / `player_count` / `last_poll_at`. |
 | `/servers/new` | `src/app/(dashboard)/servers/new/page.tsx` | Install wizard: collects display name + ports, `POST /servers`, then `POST /servers/:id/install`, subscribes to `/install/ws`. |
@@ -27,7 +26,7 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | `/servers/[id]/configs` | `src/app/(dashboard)/servers/[id]/configs/page.tsx` | Monaco editor with three tabs: Editor / История (versions, restore, diff) / Blame. |
 | `/servers/[id]/events` | `src/app/(dashboard)/servers/[id]/events/page.tsx` | Newest envelopes from `events:server:{id}` via `GET /servers/:id/events`. |
 | `/players` | `src/app/(dashboard)/players/page.tsx` | Recently-seen players. |
-| `/players/[steam_id64]` | `src/app/(dashboard)/players/[steam_id64]/page.tsx` | Detail with name history; IP history is gated by `player:view_ips`. Section "Доступ к панели" allows Owners/Senior Admins to assign/revoke panel roles. |
+| `/players/[steam_id64]` | `src/app/(dashboard)/players/[steam_id64]/page.tsx` | Detail with name history; IP history is gated by `player:view_ips`. Section "Доступ к панели" (gated by `user:manage_roles`) shows the player's current single role with a color dot, an "Изменить" button to open a dropdown of all roles, and a "Снять роль" button (`PUT /api/v1/players/:id/role` with `role_id: null`). Picking the Owner role triggers a confirm dialog. 409 "last Owner" errors surface as an inline message. |
 | `/audit` | `src/app/(dashboard)/audit/page.tsx` | Page-paginated audit log; live indicator showing freshness. |
 | `/logs` | `src/app/(dashboard)/logs/page.tsx` | Panel-wide connector logs with filters (source, level, server, free-text). Server component that pre-fetches the server list, hands off to the `LogList` client component which polls `GET /logs`. |
 | `/roles` | `src/app/(dashboard)/roles/page.tsx` | List all roles with color dot, Системная badge, user count, edit/delete actions. Delete blocked for Owner; confirm dialog shows affected user count. |
@@ -71,7 +70,7 @@ Every polling surface uses `LiveIndicator` + the same shape: poll every N second
 
 ## Code location
 
-- App Router: [`apps/web/src/app/`](../../../apps/web/src/app/) — `(dashboard)/`, `login/`, `setup/`.
+- App Router: [`apps/web/src/app/`](../../../apps/web/src/app/) — `(dashboard)/`, `login/`.
 - Components: [`apps/web/src/components/`](../../../apps/web/src/components/).
 - Auth helper: `apps/web/src/app/(dashboard)/layout.tsx` calls `requireSession()`.
 
