@@ -6,15 +6,21 @@
  * in /var/lib/squad-panel.
  */
 import { execSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDatabaseClient } from '@squad/db';
-import { organizationMembers, roles, servers, userRoleAssignments, users } from '@squad/db/schema';
+import {
+  organizationMembers,
+  playerRoleAssignments,
+  players,
+  roles,
+  servers,
+  sessions,
+} from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { hashPassword } from '../../src/lib/argon.js';
+import { mintSessionToken } from '../../src/lib/sessions.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -43,58 +49,69 @@ function statMode(absPath: string): string {
 const PG_PASSWORD = dotenv('POSTGRES_PASSWORD') ?? 'admin';
 const LIVE_DB_URL = `postgres://admin:${PG_PASSWORD}@127.0.0.1:5432/admin`;
 const PANEL_URL = process.env.PANEL_URL ?? 'https://squad-panel.lan';
-const TEST_EMAIL = `e2e-perms-${randomBytes(4).toString('hex')}@test.local`;
-const TEST_PASSWORD = 'correct-horse-battery-staple';
+const TEST_STEAM_ID = 76561198999999002n;
 
 let db: ReturnType<typeof createDatabaseClient>;
-let testUserId: string;
+let sessionTokenId: string;
+let cookie: string;
 
 beforeAll(async () => {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   db = createDatabaseClient(LIVE_DB_URL);
   const owner = await db.query.roles.findFirst({ where: eq(roles.name, 'Owner') });
   if (!owner) throw new Error('no Owner role seeded in live DB');
-  testUserId = crypto.randomUUID();
-  await db.insert(users).values({
-    id: testUserId,
-    email: TEST_EMAIL,
-    passwordHash: await hashPassword(TEST_PASSWORD),
-    displayName: 'Perms E2E',
+
+  await db
+    .insert(players)
+    .values({
+      steamId64: TEST_STEAM_ID,
+      canonicalName: 'E2E Test Player',
+      canonicalNameNormalized: 'e2e test player',
+    })
+    .onConflictDoNothing();
+  await db
+    .insert(playerRoleAssignments)
+    .values({ steamId64: TEST_STEAM_ID, roleId: owner.id })
+    .onConflictDoNothing();
+  await db
+    .insert(organizationMembers)
+    .values({ steamId64: TEST_STEAM_ID, orgId: owner.orgId, primaryRoleId: owner.id })
+    .onConflictDoNothing();
+
+  const { token, tokenId } = mintSessionToken();
+  sessionTokenId = tokenId;
+  await db.insert(sessions).values({
+    id: tokenId,
+    steamId64: TEST_STEAM_ID,
+    expiresAt: new Date(Date.now() + 3_600_000),
+    lastActivityAt: new Date(),
+    ip: null,
+    userAgent: null,
   });
-  await db.insert(userRoleAssignments).values({ userId: testUserId, roleId: owner.id });
-  await db.insert(organizationMembers).values({
-    userId: testUserId,
-    orgId: owner.orgId,
-    primaryRoleId: owner.id,
-  });
+  cookie = `__Host-sid=${token}`;
 }, 30_000);
 
 afterAll(async () => {
   await db
-    .delete(userRoleAssignments)
-    .where(eq(userRoleAssignments.userId, testUserId))
+    .delete(sessions)
+    .where(eq(sessions.id, sessionTokenId))
+    .catch(() => undefined);
+  await db
+    .delete(playerRoleAssignments)
+    .where(eq(playerRoleAssignments.steamId64, TEST_STEAM_ID))
     .catch(() => undefined);
   await db
     .delete(organizationMembers)
-    .where(eq(organizationMembers.userId, testUserId))
+    .where(eq(organizationMembers.steamId64, TEST_STEAM_ID))
     .catch(() => undefined);
   await db
-    .delete(users)
-    .where(eq(users.id, testUserId))
+    .delete(players)
+    .where(eq(players.steamId64, TEST_STEAM_ID))
     .catch(() => undefined);
 }, 30_000);
 
 describe('PUT /configs writes files readable by Squad (uid 1001)', () => {
   it('produces mode 0644 on the file and 0755 on ServerConfig/', async () => {
-    const loginResp = await fetch(`${PANEL_URL}/api/v1/auth/login`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
-    });
-    expect(loginResp.status).toBe(200);
-    const cookie = (loginResp.headers.get('set-cookie') ?? '').match(/(__Host-sid=[^;]+)/)?.[1];
-    expect(cookie).toBeTruthy();
-
     const anyServer = await db.select({ id: servers.id }).from(servers).limit(1);
     const serverId = anyServer[0]?.id;
     if (!serverId) {
@@ -113,13 +130,13 @@ describe('PUT /configs writes files readable by Squad (uid 1001)', () => {
     );
 
     const current = await fetch(`${PANEL_URL}/api/v1/servers/${serverId}/configs/Admins.cfg`, {
-      headers: { cookie: cookie! },
+      headers: { cookie: cookie },
     });
     const { content: original } = (await current.json()) as { content: string };
 
     const putResp = await fetch(`${PANEL_URL}/api/v1/servers/${serverId}/configs/Admins.cfg`, {
       method: 'PUT',
-      headers: { cookie: cookie!, 'content-type': 'application/json' },
+      headers: { cookie: cookie, 'content-type': 'application/json' },
       body: JSON.stringify({
         content: `${original}\n// perms check ${Date.now()}\n`,
         message: 'perms e2e',
@@ -135,7 +152,7 @@ describe('PUT /configs writes files readable by Squad (uid 1001)', () => {
     // Restore
     await fetch(`${PANEL_URL}/api/v1/servers/${serverId}/configs/Admins.cfg`, {
       method: 'PUT',
-      headers: { cookie: cookie!, 'content-type': 'application/json' },
+      headers: { cookie: cookie, 'content-type': 'application/json' },
       body: JSON.stringify({ content: original, message: 'revert perms e2e' }),
     });
   }, 30_000);

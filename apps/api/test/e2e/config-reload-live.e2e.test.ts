@@ -8,15 +8,21 @@
  * status=running with a reachable RCON listener (ECONNREFUSED → test
  * is skipped with a clear message).
  */
-import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDatabaseClient } from '@squad/db';
-import { organizationMembers, roles, servers, userRoleAssignments, users } from '@squad/db/schema';
+import {
+  organizationMembers,
+  playerRoleAssignments,
+  players,
+  roles,
+  servers,
+  sessions,
+} from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { hashPassword } from '../../src/lib/argon.js';
+import { mintSessionToken } from '../../src/lib/sessions.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -37,11 +43,10 @@ function dotenv(key: string): string | undefined {
 const PG_PASSWORD = dotenv('POSTGRES_PASSWORD') ?? 'admin';
 const LIVE_DB_URL = `postgres://admin:${PG_PASSWORD}@127.0.0.1:5432/admin`;
 const PANEL_URL = process.env.PANEL_URL ?? 'https://squad-panel.lan';
-const TEST_EMAIL = `e2e-reload-${randomBytes(4).toString('hex')}@test.local`;
-const TEST_PASSWORD = 'correct-horse-battery-staple';
+const TEST_STEAM_ID = 76561198999999001n;
 
 let db: ReturnType<typeof createDatabaseClient>;
-let testUserId: string;
+let sessionTokenId: string;
 let cookie: string;
 
 beforeAll(async () => {
@@ -51,41 +56,52 @@ beforeAll(async () => {
   const owner = await db.query.roles.findFirst({ where: eq(roles.name, 'Owner') });
   if (!owner) throw new Error('no Owner role seeded in live DB');
 
-  testUserId = crypto.randomUUID();
-  await db.insert(users).values({
-    id: testUserId,
-    email: TEST_EMAIL,
-    passwordHash: await hashPassword(TEST_PASSWORD),
-    displayName: 'Reload E2E',
-  });
-  await db.insert(userRoleAssignments).values({ userId: testUserId, roleId: owner.id });
+  await db
+    .insert(players)
+    .values({
+      steamId64: TEST_STEAM_ID,
+      canonicalName: 'E2E Test Player',
+      canonicalNameNormalized: 'e2e test player',
+    })
+    .onConflictDoNothing();
+  await db
+    .insert(playerRoleAssignments)
+    .values({ steamId64: TEST_STEAM_ID, roleId: owner.id })
+    .onConflictDoNothing();
   await db
     .insert(organizationMembers)
-    .values({ userId: testUserId, orgId: owner.orgId, primaryRoleId: owner.id });
+    .values({ steamId64: TEST_STEAM_ID, orgId: owner.orgId, primaryRoleId: owner.id })
+    .onConflictDoNothing();
 
-  const loginResp = await fetch(`${PANEL_URL}/api/v1/auth/login`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
+  const { token, tokenId } = mintSessionToken();
+  sessionTokenId = tokenId;
+  await db.insert(sessions).values({
+    id: tokenId,
+    steamId64: TEST_STEAM_ID,
+    expiresAt: new Date(Date.now() + 3_600_000),
+    lastActivityAt: new Date(),
+    ip: null,
+    userAgent: null,
   });
-  if (loginResp.status !== 200) throw new Error(`login failed: ${await loginResp.text()}`);
-  const raw = loginResp.headers.get('set-cookie') ?? '';
-  cookie = raw.match(/(__Host-sid=[^;]+)/)?.[1] ?? '';
-  if (!cookie) throw new Error('no session cookie from login');
+  cookie = `__Host-sid=${token}`;
 }, 30_000);
 
 afterAll(async () => {
   await db
-    .delete(userRoleAssignments)
-    .where(eq(userRoleAssignments.userId, testUserId))
+    .delete(sessions)
+    .where(eq(sessions.id, sessionTokenId))
+    .catch(() => undefined);
+  await db
+    .delete(playerRoleAssignments)
+    .where(eq(playerRoleAssignments.steamId64, TEST_STEAM_ID))
     .catch(() => undefined);
   await db
     .delete(organizationMembers)
-    .where(eq(organizationMembers.userId, testUserId))
+    .where(eq(organizationMembers.steamId64, TEST_STEAM_ID))
     .catch(() => undefined);
   await db
-    .delete(users)
-    .where(eq(users.id, testUserId))
+    .delete(players)
+    .where(eq(players.steamId64, TEST_STEAM_ID))
     .catch(() => undefined);
 }, 30_000);
 
