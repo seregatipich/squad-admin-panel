@@ -1,23 +1,18 @@
 import fp from 'fastify-plugin';
-import { writeAuditEntry } from '../lib/audit.js';
+import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 
-/**
- * Installs a global onResponse hook that persists an audit row for any
- * route whose `config.audit` is defined. Routes that explicitly set
- * `config.audit = false` are allowed to pass (for rare read-only GET
- * endpoints); any mutation without either a config or the explicit
- * `false` opt-out fails the CI "no-audit-bypass" test.
- */
 export default fp(async (app) => {
   app.addHook('onResponse', async (req, reply) => {
     const auditCfg = req.routeOptions?.config?.audit;
     if (auditCfg === undefined) return;
     if (auditCfg === false) return;
+    const actor: AuditActor = req.user
+      ? { kind: 'steam', steamId64: req.user.steamId64, tokenId: null }
+      : { kind: 'system', label: 'http-anonymous' };
     try {
       await writeAuditEntry(app.db, {
-        actorUserId: req.user?.id ?? null,
+        actor,
         actorIp: req.ip ?? null,
-        actorKind: req.user ? 'user' : 'system',
         actionType: auditCfg.action,
         targetType: auditCfg.resource,
         targetId: extractTargetId(req.params),
@@ -42,6 +37,6 @@ function extractTargetId(params: unknown): string | null {
   const p = params as Record<string, unknown>;
   if (typeof p.id === 'string') return p.id;
   if (typeof p.serverId === 'string') return p.serverId;
-  if (typeof p.userId === 'string') return p.userId;
+  if (typeof p.steam_id64 === 'string') return p.steam_id64;
   return null;
 }

@@ -272,7 +272,9 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'install_in_progress' };
       }
-      const actorUserId = req.user?.id ?? null;
+      const actor = req.user
+        ? { kind: 'steam' as const, steamId64: req.user.steamId64, tokenId: null }
+        : { kind: 'system' as const, label: 'http-anonymous' };
       const actorIp = req.ip ?? null;
       const orgId = srv.orgId;
       (async () => {
@@ -283,7 +285,7 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             app.installProgress.publish(id, line);
           });
           await writeAuditEntry(app.db, {
-            actorUserId,
+            actor,
             actorIp,
             actionType: 'server.install.completed',
             targetType: 'server',
@@ -306,7 +308,7 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             .set({ status: 'failed', updatedAt: new Date() })
             .where(eq(servers.id, id));
           await writeAuditEntry(app.db, {
-            actorUserId,
+            actor,
             actorIp,
             actionType: 'server.install.failed',
             targetType: 'server',

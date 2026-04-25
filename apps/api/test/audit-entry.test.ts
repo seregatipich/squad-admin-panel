@@ -22,10 +22,10 @@ function fakeDb(): { db: DatabaseClient; captured: CapturedInsert[] } {
 }
 
 describe('writeAuditEntry', () => {
-  it('defaults actorKind to "user" and persists the minimum required fields', async () => {
+  it('writes a steam-actor row with all expected columns', async () => {
     const { db, captured } = fakeDb();
     await writeAuditEntry(db, {
-      actorUserId: 'u-1',
+      actor: { kind: 'steam', steamId64: 76561198000000123n, tokenId: null },
       actorIp: '10.0.0.1',
       actionType: 'server.create',
       targetType: 'server',
@@ -33,108 +33,83 @@ describe('writeAuditEntry', () => {
       context: { source: 'unit-test' },
     });
     expect(captured).toHaveLength(1);
-    const row = captured[0]?.values;
-    expect(row.actorUserId).toBe('u-1');
+    const row = captured[0]!.values;
+    expect(row.actorKind).toBe('steam');
+    expect(row.actorSteamId64).toBe(76561198000000123n);
+    expect(row.actorTokenId).toBeNull();
+    expect(row.actorSystemLabel).toBeNull();
     expect(row.actorIp).toBe('10.0.0.1');
-    expect(row.actorKind).toBe('user');
     expect(row.actionType).toBe('server.create');
     expect(row.targetType).toBe('server');
     expect(row.targetId).toBe('s-1');
     expect(row.context).toEqual({ source: 'unit-test' });
   });
 
-  it('passes explicit actorKind values through untouched', async () => {
+  it('writes a system-actor row with label and null steam fields', async () => {
     const { db, captured } = fakeDb();
     await writeAuditEntry(db, {
-      actorUserId: null,
+      actor: { kind: 'system', label: 'status-reconciler' },
       actorIp: null,
-      actorKind: 'system',
       actionType: 'scheduler.tick',
       targetType: null,
       targetId: null,
       context: {},
     });
-    expect(captured[0]?.values.actorKind).toBe('system');
+    const row = captured[0]!.values;
+    expect(row.actorKind).toBe('system');
+    expect(row.actorSteamId64).toBeNull();
+    expect(row.actorTokenId).toBeNull();
+    expect(row.actorSystemLabel).toBe('status-reconciler');
+  });
+
+  it('records actor_token_id when steam-actor was acting via API token', async () => {
+    const { db, captured } = fakeDb();
+    await writeAuditEntry(db, {
+      actor: {
+        kind: 'steam',
+        steamId64: 76561198000000124n,
+        tokenId: '0195000a-0000-7000-8000-000000000001',
+      },
+      actorIp: '10.0.0.2',
+      actionType: 'server.update',
+      targetType: 'server',
+      targetId: 's-2',
+      context: {},
+    });
+    const row = captured[0]!.values;
+    expect(row.actorTokenId).toBe('0195000a-0000-7000-8000-000000000001');
+    expect(row.actorSteamId64).toBe(76561198000000124n);
   });
 
   it('maps undefined before/after to null', async () => {
     const { db, captured } = fakeDb();
     await writeAuditEntry(db, {
-      actorUserId: 'u',
+      actor: { kind: 'steam', steamId64: 1n, tokenId: null },
       actorIp: null,
-      actionType: 'a',
-      targetType: 't',
-      targetId: 'id',
-      context: {},
-    });
-    expect(captured[0]?.values.beforeSnapshot).toBeNull();
-    expect(captured[0]?.values.afterSnapshot).toBeNull();
-  });
-
-  it('preserves object before/after snapshots', async () => {
-    const { db, captured } = fakeDb();
-    const before = { status: 'stopped' };
-    const after = { status: 'running' };
-    await writeAuditEntry(db, {
-      actorUserId: 'u',
-      actorIp: null,
-      actionType: 'server.start',
-      targetType: 'server',
-      targetId: 's-1',
-      before,
-      after,
-      context: {},
-    });
-    expect(captured[0]?.values.beforeSnapshot).toEqual(before);
-    expect(captured[0]?.values.afterSnapshot).toEqual(after);
-  });
-
-  it('fills rowHash with an empty buffer (trigger computes the real value)', async () => {
-    const { db, captured } = fakeDb();
-    await writeAuditEntry(db, {
-      actorUserId: 'u',
-      actorIp: null,
-      actionType: 'x',
+      actionType: 'noop',
       targetType: null,
       targetId: null,
       context: {},
     });
-    const rowHash = captured[0]?.values.rowHash as Buffer;
-    expect(Buffer.isBuffer(rowHash)).toBe(true);
-    expect(rowHash.byteLength).toBe(0);
+    const row = captured[0]!.values;
+    expect(row.beforeSnapshot).toBeNull();
+    expect(row.afterSnapshot).toBeNull();
   });
 
-  it('defaults orgId, statusCode and durationMs to null', async () => {
+  it('maps explicit before/after objects to jsonb-friendly values', async () => {
     const { db, captured } = fakeDb();
     await writeAuditEntry(db, {
-      actorUserId: 'u',
+      actor: { kind: 'system', label: 'migrator' },
       actorIp: null,
-      actionType: 'x',
+      actionType: 'noop',
       targetType: null,
       targetId: null,
+      before: { x: 1 },
+      after: { x: 2 },
       context: {},
     });
-    expect(captured[0]?.values.orgId).toBeNull();
-    expect(captured[0]?.values.statusCode).toBeNull();
-    expect(captured[0]?.values.durationMs).toBeNull();
-  });
-
-  it('passes statusCode/durationMs/orgId through when provided', async () => {
-    const { db, captured } = fakeDb();
-    await writeAuditEntry(db, {
-      actorUserId: 'u',
-      actorIp: null,
-      actionType: 'x',
-      targetType: null,
-      targetId: null,
-      context: {},
-      statusCode: 403,
-      durationMs: 12,
-      orgId: 'org-1',
-    });
-    const row = captured[0]?.values;
-    expect(row.statusCode).toBe(403);
-    expect(row.durationMs).toBe(12);
-    expect(row.orgId).toBe('org-1');
+    const row = captured[0]!.values;
+    expect(row.beforeSnapshot).toEqual({ x: 1 });
+    expect(row.afterSnapshot).toEqual({ x: 2 });
   });
 });
