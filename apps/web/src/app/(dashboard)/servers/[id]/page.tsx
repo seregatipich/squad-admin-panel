@@ -117,11 +117,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
 
   const currentStatus = data?.server.status ?? null;
   const logsEnabled =
-    currentStatus === 'running' ||
-    currentStatus === 'starting' ||
-    currentStatus === 'stopping' ||
-    currentStatus === 'stopped' ||
-    currentStatus === 'ready';
+    currentStatus === 'running' || currentStatus === 'starting' || currentStatus === 'stopping';
 
   useEffect(() => {
     if (!logsEnabled) {
@@ -133,6 +129,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
     let cancelled = false;
     let attempts = 0;
     let backoffTimer: ReturnType<typeof setTimeout> | null = null;
+    const MAX_AUTO_ATTEMPTS = 5;
 
     function clearBackoff() {
       if (backoffTimer != null) {
@@ -143,11 +140,12 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
 
     function scheduleReconnect() {
       if (cancelled) return;
+      if (attempts >= MAX_AUTO_ATTEMPTS) {
+        setLogsError((prev) => (prev ? { ...prev, retryInMs: null } : prev));
+        return;
+      }
       const delay = nextBackoffMs(attempts);
       attempts++;
-      setLogsError((prev) =>
-        prev ? { ...prev, retryInMs: delay } : { code: null, reason: null, retryInMs: delay },
-      );
       clearBackoff();
       backoffTimer = setTimeout(() => {
         backoffTimer = null;
@@ -211,12 +209,22 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       ws.onclose = (ev) => {
         if (cancelled) return;
         setLogsLive(false);
-        setLogsError({
-          code: typeof ev.code === 'number' ? ev.code : null,
-          reason:
-            (ev.reason && ev.reason.length > 0 ? ev.reason : null) ??
-            (ev.wasClean === false ? 'abnormal_closure' : null),
-          retryInMs: null,
+        const willRetry = attempts < MAX_AUTO_ATTEMPTS;
+        const nextDelay = willRetry ? nextBackoffMs(attempts) : null;
+        const code = typeof ev.code === 'number' ? ev.code : null;
+        const reason =
+          (ev.reason && ev.reason.length > 0 ? ev.reason : null) ??
+          (ev.wasClean === false ? 'abnormal_closure' : null);
+        setLogsError((prev) => {
+          if (
+            prev &&
+            prev.code === code &&
+            prev.reason === reason &&
+            prev.retryInMs === nextDelay
+          ) {
+            return prev;
+          }
+          return { code, reason, retryInMs: nextDelay };
         });
         scheduleReconnect();
       };
