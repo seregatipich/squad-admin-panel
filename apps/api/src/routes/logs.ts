@@ -1,3 +1,4 @@
+import { servers as serversTbl } from '@squad/db';
 import {
   decodeLogEntry,
   LOG_LEVELS,
@@ -7,6 +8,7 @@ import {
 } from '@squad/shared-config';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { streamBundle } from '../lib/log-export.js';
 
 const SOURCE_CODES = ['B', 'R', 'L', 'W', 'D', 'I', 'A'] as const;
 const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -99,6 +101,20 @@ const logsRoutes: FastifyPluginAsync = async (app) => {
         });
 
       return { entries };
+    },
+  );
+  app.get(
+    '/api/v1/logs/export',
+    { config: { permissions: ['host:metrics'], audit: false } },
+    async (_req, reply) => {
+      const rows = await app.db
+        .select({ id: serversTbl.id, display_name: serversTbl.displayName })
+        .from(serversTbl);
+      const fname = `panel-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.txt.gz`;
+      void reply.header('Content-Type', 'text/plain; charset=utf-8');
+      void reply.header('Content-Encoding', 'gzip');
+      void reply.header('Content-Disposition', `attachment; filename="${fname}"`);
+      return reply.send(streamBundle(app, rows));
     },
   );
 };
