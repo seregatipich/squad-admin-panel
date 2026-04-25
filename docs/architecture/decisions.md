@@ -65,3 +65,39 @@ Each Squad server now runs as a Docker container (`squad-server:latest`, debian-
 
 - **Keep native systemd, harden bridge args further.** Rejected — apt + steamcmd are unbounded surfaces; whitelisting them safely is harder than removing them.
 - **Run Squad in `network_mode: bridge` with explicit port mapping.** Rejected — Squad's EOS handshake misbehaves behind a NAT layer; `--network host` is the supported config.
+
+## 2026-04-25 — Steam-only login + steam_id64 PK + dual-anchor first-owner trick
+
+### Context
+
+Email/password + TOTP login was scoped for Phase 0 but never shipped to users. Spec §1.1–§1.6 mandated Steam OpenID 2.0 as the only authentication path. The panel manages Squad servers; players already have a primary identity (Steam ID) that is captured automatically by `worker-rcon` and `worker-log-ingest`.
+
+### Decision
+
+- Steam OpenID 2.0 is the only login method. `/api/v1/auth/login` and TOTP endpoints are removed.
+- Identity anchor moves from `users.id uuid` to `players.steam_id64 bigint`. The `users` table is dropped.
+- "Pending users" UI is replaced by "players without panel role" — assignment lives in `/players/<steam_id64>` profile under "Доступ к панели".
+- First Steam-login after fresh install becomes Owner exactly once via dual anchor:
+  - `organizations.settings.first_owner_claimed: true`.
+  - Bridge-managed sentinel file `/var/lib/squad-panel/.first-owner-claimed`.
+  - `pg_advisory_xact_lock(hashtext('first_owner'))` serialises concurrent callbacks.
+- audit_log gains discriminated actor union: `(actor_kind='steam', actor_steam_id64)` or `(actor_kind='system', actor_system_label)`. `actor_token_id` traces actions taken via API tokens (P1+ surface, schema-only for now).
+- Sessions are sliding with 6h TTL and 60s touch throttle (Redis `SETNX session-touch:{id}`).
+
+### Rationale
+
+Steam ID is the universal Squad identity. Anchoring everything (sessions, audit, role assignments) on `players.steam_id64` removes the artificial split between "panel users" and "game players" — a moderator IS a player who happens to have a panel role.
+
+The dual anchor for first-owner survives `DROP DATABASE` + restore: the sentinel file persists on the host. Deleting both the DB row and the sentinel file requires root + bridge access — i.e., a deliberate operator action, never accidental.
+
+### Consequences
+
+- Steam Web API key (`STEAM_API_KEY`) is optional. Without it, persona is `Player <last 4 of steam_id64>`; the player can update their canonical name when they next play on a server (RCON ListPlayers updates).
+- Audit hash chain uses `action_type|target_type|target_id|context|created_at` — actor fields are NOT in the canonical payload, so the discriminated actor change does not break `pnpm verify:audit-chain`.
+- e2e tests cannot fully exercise the OpenID 2.0 verifier without a real Steam account; they verify post-login state via `PANEL_TEST_COOKIE` env. The cookie-supply pattern is documented in `docs/components/api/testing.md`.
+
+### Alternatives considered
+
+- **Soft-cut behind a feature flag** — kept email/password as a backdoor. Rejected: doubled the auth attack surface and the spec explicitly required "единственный способ входа".
+- **Discord OAuth as alternative** — rejected for Phase 1; Discord remains a linked identity for notifications/bot scope (P1+).
+- **Steam OAuth instead of OpenID 2.0** — Steam has no OAuth endpoint. OpenID 2.0 is the only public auth surface Steam offers.

@@ -25,8 +25,13 @@ Single-pass wizard: `check-env` → `init`. Once `init` completes, both endpoint
 |---|---|---|---|
 | GET | `/api/v1/auth/steam/login` | Generates a random nonce (base64url, 16 bytes), stores it in Redis (`steam-nonce:{nonce}`, TTL 300 s) and a `__Host-steam-nonce` cookie, then redirects to `steamcommunity.com/openid/login`. | none |
 | GET | `/api/v1/auth/steam/callback` | Validates nonce cookie↔query match, single-use Redis nonce, `return_to` host-binding to `PANEL_PUBLIC_URL`, Steam `check_authentication`, and `openid.response_nonce` replay guard (`steam-response-nonce:{nonce}`, TTL 3600 s, NX). On success: upserts `players` row, runs `claimFirstOwner`, checks permissions; redirects to `/` with `__Host-sid` cookie on success or `/no-access?steam_id64=…` when no role is assigned. | none |
-| POST | `/api/v1/auth/logout` | Revoke session, clear cookie. | session |
-| GET | `/api/v1/me` | Current player, permissions array, clearance. | session |
+| POST | `/api/v1/auth/logout` | Revoke current session, clear `__Host-sid` cookie. | session |
+| GET | `/api/v1/me` | Current player, permissions array, clearance. Returns `{ steam_id64, canonical_name, avatar_url, permissions, clearance }`. | session |
+| GET | `/api/v1/me/sessions` | List own active sessions; `current: true` on the request's session. | session |
+| DELETE | `/api/v1/me/sessions/:id` | Revoke own session by id. 404 for foreign session. | session |
+| DELETE | `/api/v1/me/sessions` | Revoke all own sessions. | session |
+
+Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/totp/*`, `GET /api/v1/auth/discord/*`, `POST /api/v1/setup/{org,owner,finalize}`.
 
 ## RBAC reference
 

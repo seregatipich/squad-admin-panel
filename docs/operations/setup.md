@@ -14,10 +14,13 @@ git clone git@github.com:breaking-squad/squad-admin-panel.git
 cd squad-admin-panel
 
 cp .env.example .env
-# Fill in: APP_DOMAIN, POSTGRES_PASSWORD, APP_ENCRYPTION_KEY, SESSION_SECRET.
+# Fill in: APP_DOMAIN, PANEL_PUBLIC_URL, POSTGRES_PASSWORD, APP_ENCRYPTION_KEY, SESSION_SECRET.
+# PANEL_PUBLIC_URL must be the full public URL (e.g. https://squad-panel.example.com).
+# It is required for Steam OpenID return_to host-binding.
 # Generate secrets:
 #   openssl rand -base64 32
 # Save APP_ENCRYPTION_KEY OFFLINE — losing it makes encrypted secrets unrecoverable.
+# STEAM_API_KEY is optional; without it player names fall back to "Player <last 4 of SteamID>".
 
 sudo ./scripts/install-host-bridge.sh
 # Idempotent. Creates the `panel` system group, installs the systemd unit + socket,
@@ -31,7 +34,41 @@ docker compose up -d --build
 # wait ~2 min, then browse to https://${APP_DOMAIN}/
 ```
 
-The first `/setup` page asks for owner email + password. Once submitted, the endpoint guards against re-runs (`410 setup_already_complete`).
+## First-time setup
+
+Open `https://${APP_DOMAIN}/setup` in a browser after the stack is healthy.
+
+1. **Step 1 — Environment check** (`GET /api/v1/setup/check-env`). The panel verifies:
+   - Bridge daemon is reachable.
+   - Host OS is Ubuntu/Debian.
+   - `PANEL_PUBLIC_URL` is set and self-reachable.
+   - `STEAM_API_KEY` (optional) — flagged as missing but not required.
+2. **Step 2 — Organisation init** (`POST /api/v1/setup/init`). Fill organisation name and optional slug. Submit. The panel atomically creates the organisation, seeds the 4 system roles (`Owner`, `Senior Admin`, `Admin`, `Viewer`), and marks setup complete (`organizations.settings.setup_complete=true`). Subsequent calls to `/setup/*` return `410 setup_already_complete`.
+3. Browser redirects to `/login`. Click **"Войти через Steam"**. The first user to complete the Steam OpenID flow becomes Owner via the first-owner trick: the claim writes `/var/lib/squad-panel/.first-owner-claimed` and sets `organizations.settings.first_owner_claimed=true`. All subsequent logins skip the claim.
+
+## Resetting first-owner (e.g., after rebuilding a test panel)
+
+The trick is one-shot. To re-arm it:
+
+1. Drop the database: `docker compose exec postgres psql -U admin -c 'DROP DATABASE admin; CREATE DATABASE admin;'` (**DESTRUCTIVE — all data lost**).
+2. Apply migrations: `pnpm db:migrate`.
+3. Remove the sentinel: `sudo rm /var/lib/squad-panel/.first-owner-claimed`.
+4. Walk through the wizard again.
+
+## Transferring Owner to a different Steam account
+
+If the last Owner lost Steam access, do **not** reset the trick. Instead, assign the Owner role directly via SQL:
+
+```sql
+-- Find the Owner role:
+SELECT id FROM roles WHERE name = 'Owner';
+-- Assign it to the new SteamID:
+INSERT INTO player_role_assignments (steam_id64, role_id) VALUES (<new_steam_id64>, '<owner_role_id>');
+INSERT INTO organization_members (steam_id64, org_id, primary_role_id)
+     VALUES (<new_steam_id64>, '<org_id>', '<owner_role_id>');
+-- Optionally remove the former Owner:
+DELETE FROM player_role_assignments WHERE steam_id64 = <old_steam_id64> AND role_id = '<owner_role_id>';
+```
 
 ## Verifying the install
 
@@ -45,7 +82,7 @@ curl -sk https://${APP_DOMAIN}/ready          # {"status":"ready"}
 
 ## First Squad server
 
-1. Log in. Create a server in the install wizard.
+1. Log in via Steam. Create a server in the install wizard.
 2. The first install triggers `bridge.depot_update` — this takes ~25 minutes (≈45 GB) on a clean host. Subsequent installs reuse the depot volume.
 3. After `depot_update` finishes, the wizard seeds 19 cfg files, opens UFW rules, and starts the container.
 4. The dashboard's RCON status indicator turns green within ~30 s of the container reaching `running`.

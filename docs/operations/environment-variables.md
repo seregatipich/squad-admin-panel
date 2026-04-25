@@ -9,14 +9,14 @@
 | `TLS_ISSUER` | yes | `internal` | all | `internal` (Caddy self-signed for dev) or `acme` (Let's Encrypt). | no |
 | `ACME_EMAIL` | only if `TLS_ISSUER=acme` | `admin@example.com` | all | Contact email used by Let's Encrypt. | no |
 | `POSTGRES_PASSWORD` | yes | — | all | Password for the `admin` Postgres role. Generate with `openssl rand -base64 32`. | yes |
-| `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64 AES-256-GCM key. Decrypts `server_credentials.*_encrypted`, `users.totp_secret_encrypted`. **Losing it is unrecoverable.** | yes |
+| `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64 AES-256-GCM key. Decrypts `server_credentials.*_encrypted`. **Losing it is unrecoverable.** | yes |
 | `SESSION_SECRET` | yes | — | all | Cookie-signing secret. Rotation invalidates existing sessions. | yes |
 | `DATABASE_URL` | yes | `postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin` | all | Defaults are fine inside compose. | yes |
 | `REDIS_URL` | yes | `redis://redis:6379` | all | Defaults are fine inside compose. | no |
 | `BRIDGE_SOCKET` | yes | `/run/panel-host-bridge.sock` | all | Path to the bridge unix socket inside containers. | no |
-| `STEAM_API_KEY` | optional | — | all | Required to enable Steam OIDC login. | yes |
-| `DISCORD_CLIENT_ID` | optional | — | all | Required to enable Discord OIDC login. | no |
-| `DISCORD_CLIENT_SECRET` | optional | — | all | Required to enable Discord OIDC login. | yes |
+| `STEAM_API_KEY` | no | — | api | Steam Web API key for persona/avatar enrichment. Get from https://steamcommunity.com/dev/apikey. Without it, player names fall back to `Player <last 4 of steam_id64>`. | yes |
+| `SESSION_TTL_SECONDS` | no | `21600` (6 h) | api | Sliding session lifetime in seconds. | no |
+| `SESSION_TOUCH_THROTTLE_SECONDS` | no | `60` | api | Minimum interval between DB session-touch writes per session (Redis `SETNX session-touch:{id}`). | no |
 | `GLITCHTIP_DSN` | optional | — | all | Sentry-compatible error reporting. | yes |
 | `GLITCHTIP_SECRET_KEY` | optional | — | all | GlitchTip server-side ingest. | yes |
 | `RESTIC_REPOSITORY` | optional | — | all | Where the (post-P0) backup worker writes snapshots. | no |

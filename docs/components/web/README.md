@@ -5,7 +5,7 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 ## Responsibilities
 
 - Dashboard, server detail, install wizard, config editor, players, audit, panel-wide log console, account.
-- Auth screens: login, TOTP enrollment / challenge.
+- Auth screens: Steam login button → OpenID redirect, `/no-access` for players without a role.
 - Live indicators: connection state, polling staleness, WS reconnect with exponential backoff.
 
 ## What this component does NOT do
@@ -17,8 +17,9 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 
 | Route | File | What it does |
 |---|---|---|
-| `/login` | `src/app/login/page.tsx` | Email + password, optional TOTP / backup code. |
-| `/setup` | `src/app/setup/page.tsx` | Walks the operator through the 4-step setup (`check-env` → `org` → `owner` → `finalize`). |
+| `/login` | `src/app/login/page.tsx` | "Войти через Steam" button. Redirects to Steam OpenID 2.0. |
+| `/no-access` | `src/app/no-access/page.tsx` | Shown after successful Steam login when the player has no panel role. Displays their Steam ID so an Owner can look them up. |
+| `/setup` | `src/app/setup/page.tsx` | Walks the operator through 2-step setup: `check-env` → `init` (organisation name). |
 | `/dashboard` | `src/app/(dashboard)/dashboard/page.tsx` | Hub: bridge status, host metrics tile (live), per-worker heartbeats, server count summary. The metrics tile opens the `MetricHistoryModal` for 24 h history. |
 | `/servers` | `src/app/(dashboard)/servers/page.tsx` | List with live `rcon_state` / `player_count` / `last_poll_at`. |
 | `/servers/new` | `src/app/(dashboard)/servers/new/page.tsx` | Install wizard: collects display name + ports, `POST /servers`, then `POST /servers/:id/install`, subscribes to `/install/ws`. |
@@ -26,10 +27,10 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | `/servers/[id]/configs` | `src/app/(dashboard)/servers/[id]/configs/page.tsx` | Monaco editor with three tabs: Editor / История (versions, restore, diff) / Blame. |
 | `/servers/[id]/events` | `src/app/(dashboard)/servers/[id]/events/page.tsx` | Newest envelopes from `events:server:{id}` via `GET /servers/:id/events`. |
 | `/players` | `src/app/(dashboard)/players/page.tsx` | Recently-seen players. |
-| `/players/[steam_id64]` | `src/app/(dashboard)/players/[steam_id64]/page.tsx` | Detail with name history; IP history is gated by `player:view_ips`. |
+| `/players/[steam_id64]` | `src/app/(dashboard)/players/[steam_id64]/page.tsx` | Detail with name history; IP history is gated by `player:view_ips`. Section "Доступ к панели" allows Owners/Senior Admins to assign/revoke panel roles. |
 | `/audit` | `src/app/(dashboard)/audit/page.tsx` | Page-paginated audit log; live indicator showing freshness. |
 | `/logs` | `src/app/(dashboard)/logs/page.tsx` | Panel-wide connector logs with filters (source, level, server, free-text). Server component that pre-fetches the server list, hands off to the `LogList` client component which polls `GET /logs`. |
-| `/settings/account` | `src/app/(dashboard)/settings/account/page.tsx` | TOTP provision / enable / disable. |
+| `/settings/account` | `src/app/(dashboard)/settings/account/page.tsx` | Session management — list active sessions, revoke individual or all. |
 
 ## Components
 

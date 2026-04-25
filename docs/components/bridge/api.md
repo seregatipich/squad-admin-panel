@@ -84,6 +84,7 @@ All file methods are restricted to:
 - `/var/lib/squad-panel/configs/{uuid}/ServerConfig/<allowed-cfg-name>` (RW)
 - `/var/lib/squad-panel/saved/{uuid}/**` (RW)
 - `/var/lib/docker/volumes/squad-depot/**` (RO)
+- `/var/lib/squad-panel/.first-owner-claimed` (read + atomic_write, exact-match only — sentinel for the first-owner claim trick; see [`docs/architecture/decisions.md`](../../architecture/decisions.md#2026-04-25--steam-only-login--steam_id64-pk--dual-anchor-first-owner-trick))
 
 Allowed cfg filenames are pinned by `ALLOWED_CONFIG_FILES` in `shared-config` (19 files: `Admins.cfg`, `Bans.cfg`, …, `VoteConfig.cfg`).
 

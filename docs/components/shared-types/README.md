@@ -11,7 +11,7 @@ Single source of truth for cross-component contracts. Importable from anywhere i
 ## Files
 
 - [`packages/shared-types/src/events.ts`](../../../packages/shared-types/src/events.ts) — `EventEnvelope`, `EVENT_TYPES`, per-type payload schemas.
-- `packages/shared-types/src/auth.ts` — login, TOTP, OIDC payloads.
+- `packages/shared-types/src/auth.ts` — Steam OpenID session and player DTOs.
 - `packages/shared-types/src/servers.ts` — server DTOs, install WS frame schemas.
 - `packages/shared-types/src/configs.ts` — cfg list + version + diff response shapes.
 

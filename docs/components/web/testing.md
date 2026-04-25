@@ -18,7 +18,8 @@ pnpm --filter @squad/web test:e2e     # Playwright (no specs yet)
 
 The user-visible flows are covered transitively by the API e2e suite (install lifecycle, config edit, RCON status). When Playwright specs land they should cover at minimum:
 
-- Login (password + TOTP) and wrong-password rate limit.
+- Steam login button → OpenID redirect → callback → dashboard redirect.
+- `/no-access` page shown for player with no role.
 - Install wizard happy path.
 - Config editor save → new history row → restore-as-new.
 - Live log viewer subscription.
