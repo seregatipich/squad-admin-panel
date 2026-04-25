@@ -1,22 +1,17 @@
 import { BridgeClient } from '@squad/bridge-client';
 import { createDatabaseClient, serverSettings, servers } from '@squad/db';
-import { startHeartbeat } from '@squad/shared-config';
+import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
-import pino from 'pino';
+import pino, { multistream } from 'pino';
 import { LogIngestor } from './parser/ingest.js';
 import { publish } from './publish.js';
 import { tailContainerLogs } from './tail.js';
 
-const log = pino({
-  level: process.env.LOG_LEVEL ?? 'info',
-  base: { service: 'worker-log-ingest' },
-});
-
 const requiredEnv = (name: string): string => {
   const v = process.env[name];
   if (!v) {
-    log.fatal(`${name} is required`);
+    console.error(`fatal: ${name} is required`);
     process.exit(1);
   }
   return v;
@@ -29,6 +24,13 @@ async function main() {
     enableReadyCheck: true,
     retryStrategy: (times: number) => Math.min(2000, 200 * 2 ** Math.min(times, 6)),
   });
+  const log = pino(
+    { level: process.env.LOG_LEVEL ?? 'info', base: { service: 'worker-log-ingest' } },
+    multistream([
+      { stream: process.stdout },
+      { stream: redisSinkStream({ redis, defaultSource: 'log-ingest' }) },
+    ]),
+  );
   redis.on('error', (err: Error) => log.warn({ err: err.message }, 'redis error (will retry)'));
   redis.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
   const bridge = new BridgeClient({
@@ -112,6 +114,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  log.fatal({ err: (err as Error).message }, 'fatal');
+  console.error('fatal:', err);
   process.exit(1);
 });

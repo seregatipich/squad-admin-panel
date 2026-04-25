@@ -16,8 +16,8 @@ pnpm workspace + Turbo orchestration. TypeScript for everything except the privi
 ```
 apps/
   api/              Fastify 5 + Zod type-provider, REST + @fastify/websocket
-  web/              Next.js 15 App Router, client components polling REST
-  bridge/           Go 1.22 privileged daemon (panel-host-bridge)
+  web/              Next.js 15 + React 19 App Router, Tailwind 4, client components polling REST
+  bridge/           Go 1.25 privileged daemon (panel-host-bridge)
   workers/
     rcon/           Valve-RCON client + supervisor publishing rcon:status:{id}
     log-ingest/     docker logs -f tail → regex parser → Redis Streams
@@ -31,7 +31,7 @@ packages/
   bridge-client/    TS client for the Go bridge over /run/panel-host-bridge.sock
 docker/             Dockerfiles (api/web/worker/squad-server/depot-init) + Caddyfile + entrypoints
 scripts/            install-host-bridge.sh, verify-bridge.sh, verify-audit-chain.ts
-docs/               architecture, bridge-protocol, event-envelope, rbac, security, …
+docs/               README.md + architecture/ + components/<name>/ + operations/ + development/
 ```
 
 ## Commands
@@ -71,7 +71,7 @@ docker compose logs api --since 2m          # journal-style tail
 sudo ./scripts/install-host-bridge.sh       # idempotent — creates panel group, unit, socket
 sudo install -m 0755 apps/bridge/bin/panel-host-bridge /usr/local/bin/  # redeploy; `cp` fails with "Text file busy" while running
 sudo systemctl {restart,status} panel-host-bridge
-sg panel -c 'bash scripts/verify-bridge.sh'  # RPC smoke test with all 14 methods
+sg panel -c 'bash scripts/verify-bridge.sh'  # RPC smoke test with all 17 methods
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same `pnpm turbo run typecheck|test` + `biome check` + `go test -race` + `govulncheck` + gitleaks. Lefthook pre-commit runs `go-fmt`, `biome-check`, and gitleaks locally; if gitleaks binary is missing it warns but does not block.
@@ -82,7 +82,7 @@ Three privilege zones with narrow contracts between them.
 
 ### 1. Host daemon `apps/bridge/` (Go, root)
 
-Listens on `/run/panel-host-bridge.sock` (systemd socket activation, 0660 root:panel). Auth by `SO_PEERCRED` + primary-GID check — only the `panel` group can connect. 14 whitelisted RPC methods, length-prefixed JSON framing (16 MiB max), each request dispatched in its own goroutine so long-running streams (`container_logs_follow`, `depot_update`) don't block other calls.
+Listens on `/run/panel-host-bridge.sock` (systemd socket activation, 0660 root:panel). Auth by `SO_PEERCRED` + primary-GID check — only the `panel` group can connect. 17 whitelisted RPC methods (full set in `packages/shared-config/src/bridge-methods.ts`: ping, host_info, host_metrics, file_read|write|atomic_write, ufw_rule, process_info, container_run|start|stop|rm|inspect|stats|logs_follow, depot_update, host_agent_restart). Length-prefixed JSON framing (16 MiB max), each request dispatched in its own goroutine so long-running streams (`container_logs_follow`, `depot_update`) don't block other calls.
 
 Current method set (`packages/shared-config/src/bridge-methods.ts` is the source of truth):
 - `ping`, `host_info`, `host_metrics`, `process_info`
@@ -164,8 +164,596 @@ The e2e runner (`vitest.e2e.config.ts`) runs serially, 15 min global timeout, an
 
 ## Before shipping a change
 
-1. Read `docs/architecture.md` if touching cross-component data flow, `docs/bridge-protocol.md` if changing the bridge surface, `docs/rbac.md` if adding a permission key.
+1. Read `docs/architecture/data-flow.md` if touching cross-component data flow, `docs/components/bridge/api.md` if changing the bridge surface, `docs/architecture/rbac.md` if adding a permission key.
 2. If a route is new and mutates state, it **must** have `config.audit: {action, resource}` — `apps/api/test/audit-coverage.test.ts` scans registered routes at startup and fails the suite if a POST/PUT/PATCH/DELETE lacks it.
 3. If adding a bridge RPC method, keep three sources in sync: `packages/shared-config/src/bridge-methods.ts`, `packages/bridge-client/src/client.ts`, and the Go handlers in `apps/bridge/internal/handlers/handlers.go`. The `validate.*` allowlist must be tightened in the same commit. Add a case to `test/e2e/bridge-rpc.e2e.test.ts` covering both the success and the forbidden path.
 4. Critical-path changes (install flow, container_run spec, config editor, RCON AUTH, depot seeding) require a test in `test/e2e/install-lifecycle.e2e.test.ts` or a new file under `test/e2e/` — the suite must stay green after the change.
 5. `pnpm turbo run typecheck && pnpm turbo run test` green AND `pnpm --filter @squad/api test:e2e` green are both prerequisites for a commit touching the critical path.
+
+## Documentation System
+
+Documentation is a mandatory part of this repository. Treat `docs/` as part of the source of truth for the project, and keep it synchronized with the actual code at all times.
+
+You must not consider any coding task complete until you have checked whether documentation needs to be created or updated.
+
+### Core Rule
+
+After every change to code, tests, configuration, data models, APIs, dependencies, architecture, deployment behavior, or developer workflows, check the `docs/` directory and update all affected documentation in the same task.
+
+Do not wait for the user to explicitly ask for documentation updates.
+
+If the code and documentation disagree, the code is the source of truth, but you must immediately update the documentation to match the code.
+
+Never document behavior that does not exist in the current codebase.
+
+---
+
+## Documentation Location
+
+All project documentation must live under:
+
+```text
+docs/
+```
+
+The documentation structure should be:
+
+```text
+docs/
+  README.md
+  architecture/
+    README.md
+    system-overview.md
+    data-flow.md
+    decisions.md
+  components/
+    <component-name>/
+      README.md
+      api.md
+      data-model.md
+      flows.md
+      configuration.md
+      testing.md
+      troubleshooting.md
+      changelog.md
+  operations/
+    setup.md
+    deployment.md
+    environment-variables.md
+    migrations.md
+    monitoring.md
+  development/
+    conventions.md
+    testing.md
+    local-development.md
+    code-style.md
+```
+
+Create only useful files. Do not create empty placeholder documents.
+
+If a document is not applicable, either do not create it or explicitly state why it is not applicable.
+
+Example:
+
+```md
+This component currently has no public API.
+```
+
+---
+
+## Component Detection
+
+A component is any meaningful standalone part of the system, including but not limited to:
+
+* service
+* module
+* package
+* library
+* domain area
+* API layer
+* CLI
+* UI feature
+* worker
+* background job
+* queue consumer
+* integration
+* infrastructure layer
+* configuration layer
+* database or persistence layer
+
+Each significant component must have its own directory:
+
+```text
+docs/components/<component-name>/
+```
+
+---
+
+## Required Component Documents
+
+Each component should normally contain:
+
+```text
+README.md
+api.md
+data-model.md
+flows.md
+configuration.md
+testing.md
+troubleshooting.md
+changelog.md
+```
+
+### `README.md`
+
+Must explain:
+
+* component purpose
+* responsibilities
+* what the component does not do
+* code location
+* main files and directories
+* dependencies
+* components that depend on it
+* components it depends on
+* basic usage example
+* links to related component docs
+
+### `api.md`
+
+Must document public interfaces, including:
+
+* HTTP endpoints
+* RPC methods
+* exported functions/classes
+* CLI commands
+* events
+* queues
+* hooks
+* SDK interfaces
+* public configuration surface
+
+For each API, include:
+
+* name
+* purpose
+* input parameters
+* output value
+* errors
+* side effects
+* example usage
+
+### `data-model.md`
+
+Must document:
+
+* entities
+* fields
+* types
+* constraints
+* relationships
+* storage location
+* migrations
+* validation rules
+* example payloads or records
+
+### `flows.md`
+
+Must document:
+
+* main flows
+* alternative flows
+* error flows
+* retry logic
+* fallback logic
+* background processing
+* interactions with other components
+
+### `configuration.md`
+
+Must document:
+
+* environment variables
+* config files
+* feature flags
+* defaults
+* required values
+* sensitive values
+* local/staging/production differences
+* configuration examples
+
+Use this table for environment variables:
+
+```md
+| Name | Required | Default | Environment | Description | Sensitive |
+|---|---:|---|---|---|---|
+```
+
+### `testing.md`
+
+Must document:
+
+* test locations
+* how to run tests
+* what is covered
+* what is not covered
+* mocks and stubs
+* test data
+* important edge cases
+
+### `troubleshooting.md`
+
+Must document:
+
+* common problems
+* symptoms
+* likely causes
+* diagnostics
+* fixes
+* useful logs
+* useful commands
+* relevant metrics
+
+### `changelog.md`
+
+Must be updated for meaningful component changes.
+
+Use this format:
+
+```md
+# Changelog
+
+## YYYY-MM-DD
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+### Migration notes
+```
+
+---
+
+## Top-Level Documentation
+
+### `docs/README.md`
+
+Must be the main documentation entry point.
+
+It should include:
+
+* short project description
+* links to architecture docs
+* list of components
+* links to component documentation
+* links to setup, testing, deployment, and configuration docs
+* documentation maintenance rules
+
+### `docs/architecture/README.md`
+
+Must describe:
+
+* system purpose
+* main subsystems
+* component relationships
+* external services
+* architectural constraints
+
+### `docs/architecture/system-overview.md`
+
+Must describe:
+
+* how the system works overall
+* responsibilities of major components
+* main user/system scenarios
+* critical dependencies
+
+### `docs/architecture/data-flow.md`
+
+Must describe:
+
+* input data
+* processing stages
+* output data
+* storage locations
+* external calls
+* error cases
+
+### `docs/architecture/decisions.md`
+
+Must record meaningful architectural decisions.
+
+Use this format:
+
+```md
+## YYYY-MM-DD — Decision title
+
+### Context
+
+### Decision
+
+### Rationale
+
+### Consequences
+
+### Alternatives considered
+```
+
+---
+
+## Mandatory Workflow For Every Task
+
+For every repository task, follow this workflow:
+
+```text
+1. Understand the requested change.
+2. Identify affected components.
+3. Inspect existing documentation for those components.
+4. Modify the code.
+5. Modify or create tests when needed.
+6. Update all affected documentation.
+7. Check that documentation matches the final code.
+8. Check relative links in changed documentation.
+9. Report documentation updates in the final response.
+```
+
+A task is not complete until documentation has been checked.
+
+---
+
+## When Documentation Must Be Updated
+
+Update documentation whenever any of the following changes occur:
+
+* new component added
+* component removed
+* component renamed
+* directory structure changed
+* new API added
+* existing API changed
+* API removed
+* function/method/endpoint/command parameters changed
+* response format changed
+* data model changed
+* database schema changed
+* migration added
+* business logic changed
+* validation rules changed
+* authorization logic changed
+* authentication logic changed
+* error handling changed
+* dependency added
+* dependency removed
+* configuration changed
+* environment variable added
+* environment variable removed
+* default value changed
+* test behavior changed
+* important edge case added
+* local development workflow changed
+* build command changed
+* test command changed
+* deployment process changed
+* background job changed
+* worker changed
+* queue changed
+* external integration changed
+* monitoring, logging, or metrics changed
+
+---
+
+## Documentation Update Mapping
+
+When changing an API, update:
+
+```text
+docs/components/<component-name>/api.md
+docs/components/<component-name>/README.md
+docs/components/<component-name>/flows.md
+docs/components/<component-name>/testing.md
+docs/components/<component-name>/changelog.md
+```
+
+When changing data models, schemas, DTOs, events, or migrations, update:
+
+```text
+docs/components/<component-name>/data-model.md
+docs/components/<component-name>/flows.md
+docs/architecture/data-flow.md
+docs/components/<component-name>/changelog.md
+```
+
+When changing configuration, update:
+
+```text
+docs/components/<component-name>/configuration.md
+docs/operations/environment-variables.md
+docs/operations/setup.md
+docs/components/<component-name>/changelog.md
+```
+
+When changing tests, update:
+
+```text
+docs/components/<component-name>/testing.md
+docs/development/testing.md
+```
+
+When changing architecture, component responsibilities, dependencies, or data flow, update:
+
+```text
+docs/architecture/README.md
+docs/architecture/system-overview.md
+docs/architecture/data-flow.md
+docs/architecture/decisions.md
+```
+
+When adding a new component, create:
+
+```text
+docs/components/<component-name>/README.md
+docs/components/<component-name>/api.md
+docs/components/<component-name>/data-model.md
+docs/components/<component-name>/flows.md
+docs/components/<component-name>/configuration.md
+docs/components/<component-name>/testing.md
+docs/components/<component-name>/troubleshooting.md
+docs/components/<component-name>/changelog.md
+```
+
+Also update:
+
+```text
+docs/README.md
+docs/architecture/README.md
+docs/architecture/system-overview.md
+docs/architecture/data-flow.md
+```
+
+When removing a component:
+
+* remove or archive its documentation
+* update `docs/README.md`
+* update architecture docs
+* update data-flow docs
+* remove broken links
+* add changelog notes to related components if relevant
+
+If historical documentation should be preserved, move it to:
+
+```text
+docs/archive/<component-name>/
+```
+
+Add this notice at the top of archived files:
+
+```md
+> Archived: this component was removed from active code on YYYY-MM-DD.
+```
+
+---
+
+## Documentation Quality Rules
+
+Documentation must be:
+
+* accurate
+* specific to the current code
+* useful to a new developer
+* linked with relative links
+* free of broken links
+* free of stale behavior descriptions
+* free of invented future behavior
+* free of empty TODO-only sections
+
+Prefer:
+
+* concrete examples
+* tables for APIs and configuration
+* code snippets where useful
+* short explanations tied to actual files
+* explicit notes about limitations
+
+Do not write vague phrases such as:
+
+```text
+This handles business logic.
+```
+
+Instead, explain what logic it handles, where it lives, and how it is triggered.
+
+---
+
+## Initial Documentation Creation
+
+If `docs/` does not exist, create it.
+
+Initial setup process:
+
+```text
+1. Scan the repository structure.
+2. Identify major components.
+3. Create `docs/README.md`.
+4. Create `docs/architecture/`.
+5. Create `docs/components/`.
+6. Create documentation for each major component.
+7. Add operations and development docs if relevant.
+8. Add relative links between documents.
+9. Verify that no created document is empty.
+```
+
+Base the initial documentation only on actual code, configuration, tests, and repository files.
+
+---
+
+## Prohibited Behavior
+
+Do not:
+
+* finish a task without checking documentation
+* change code while ignoring `docs/`
+* leave stale documentation behind
+* create empty documentation files
+* document behavior that does not exist
+* describe planned behavior as current behavior
+* leave TODOs instead of documenting information that can be inferred from code
+* delete documentation without confirming the component was removed
+* ignore configuration changes
+* ignore test changes
+* ignore migration notes
+* leave broken relative links
+
+---
+
+## Documentation Self-Check
+
+Before finalizing any task, perform this checklist:
+
+```md
+## Documentation Self-Check
+
+- [ ] I identified all affected components.
+- [ ] I checked existing documentation under `docs/`.
+- [ ] I updated component docs if behavior changed.
+- [ ] I updated API docs if public interfaces changed.
+- [ ] I updated data-model docs if data structures changed.
+- [ ] I updated flows docs if logic or interactions changed.
+- [ ] I updated configuration docs if settings changed.
+- [ ] I updated testing docs if tests or edge cases changed.
+- [ ] I updated architecture docs if responsibilities or data flow changed.
+- [ ] I updated changelogs for meaningful component changes.
+- [ ] I checked relative links in changed docs.
+- [ ] I verified that documentation matches the final code.
+```
+
+If any required item is not complete, continue working until the documentation is correct.
+
+---
+
+## Final Response Requirement
+
+At the end of every task, include a documentation report:
+
+```md
+## Documentation Update Report
+
+### Updated docs
+
+- `path/to/doc.md` — what changed
+
+### Not updated
+
+- `path/to/doc.md` — why no update was needed
+
+### Documentation risks
+
+- `None`, or list known risks/uncertainties
+```
+
+If no documentation changed, explicitly state which documentation was checked and why no update was required.
+
+Do not write only "documentation was not needed" without explaining the check.

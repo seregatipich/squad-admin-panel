@@ -128,7 +128,14 @@ class PerServerSupervisor {
           },
         });
         await this.client.connect();
-        this.opts.log.info({ serverId: this.target.serverId }, 'rcon connected');
+        this.opts.log.info(
+          {
+            serverId: this.target.serverId,
+            host: this.target.host,
+            port: this.target.port,
+          },
+          'connect: rcon authenticated',
+        );
         this.backoffMs = this.opts.initialBackoffMs ?? 1000;
         await this.emitEvent('rcon.connected', {});
         await this.writeStatus('connected');
@@ -152,6 +159,13 @@ class PerServerSupervisor {
             backoffMs: this.backoffMs,
           },
           'rcon connect failed',
+        );
+        this.opts.log.warn(
+          {
+            serverId: this.target.serverId,
+            backoffMs: this.backoffMs,
+          },
+          `reconnect in ${this.backoffMs}ms`,
         );
       } finally {
         if (this.pollTimer) clearInterval(this.pollTimer);
@@ -187,6 +201,15 @@ class PerServerSupervisor {
         const info = rawInfo ? parseServerInfo(rawInfo) : null;
         await upsertPlayers(this.opts.db, players);
         this.consecutivePollFails = 0;
+        const pollMs = Date.now() - start;
+        this.opts.log.info(
+          {
+            serverId: this.target.serverId,
+            ms: pollMs,
+            n: players.length,
+          },
+          'poll listplayers',
+        );
         await this.emitEvent('rcon.players_polled', {
           players: players.map((p) => ({
             steam_id64: p.steam_id64,

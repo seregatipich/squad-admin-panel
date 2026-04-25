@@ -4,6 +4,7 @@ import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import websocket from '@fastify/websocket';
+import { redisSinkStream } from '@squad/shared-config';
 import Fastify from 'fastify';
 import {
   jsonSchemaTransform,
@@ -16,6 +17,7 @@ import { buildLogger } from './lib/logger.js';
 import auditPlugin from './plugins/audit.js';
 import authPlugin from './plugins/auth.js';
 import bridgePlugin from './plugins/bridge.js';
+import bridgeHeartbeatPlugin from './plugins/bridge-heartbeat.js';
 import databasePlugin from './plugins/database.js';
 import healthPlugin from './plugins/health.js';
 import installProgressPlugin from './plugins/install-progress.js';
@@ -30,6 +32,7 @@ import steamRoutes from './routes/auth-steam.js';
 import depotRoutes from './routes/depot.js';
 import hostRoutes from './routes/host.js';
 import hostActionsRoutes from './routes/host-actions.js';
+import logsRoutes from './routes/logs.js';
 import playerRoutes from './routes/players.js';
 import serverConfigRoutes from './routes/server-configs.js';
 import serverInstallRoutes from './routes/server-install.js';
@@ -41,7 +44,7 @@ import setupRoutes from './routes/setup.js';
 import './plugins/types.js';
 
 export async function buildServer(config: AppConfig) {
-  const logger = buildLogger(config.LOG_LEVEL);
+  const { logger, lateSink } = buildLogger(config.LOG_LEVEL);
   const app = Fastify({
     loggerInstance: logger,
     trustProxy: true,
@@ -80,7 +83,9 @@ export async function buildServer(config: AppConfig) {
   await app.register(requestContextPlugin);
   await app.register(databasePlugin, { config });
   await app.register(redisPlugin, { config });
+  lateSink.setInner(redisSinkStream({ redis: app.redis, defaultSource: 'api' }));
   await app.register(bridgePlugin, { config });
+  await app.register(bridgeHeartbeatPlugin);
   await app.register(metricsPlugin);
   await app.register(healthPlugin);
   await app.register(authPlugin);
@@ -99,6 +104,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(depotRoutes);
   await app.register(playerRoutes);
   await app.register(auditRoutes);
+  await app.register(logsRoutes);
   await app.register(steamRoutes);
   await app.register(discordRoutes);
 

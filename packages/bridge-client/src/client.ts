@@ -140,6 +140,33 @@ export class BridgeClient {
     params?: Params,
     opts: { onStream?: (frame: BridgeStreamFrame) => void; timeoutMs?: number } = {},
   ): Promise<Result> {
+    const t0 = Date.now();
+    this.onLog(`rpc ${method} start`, { src: 'bridge', method });
+    try {
+      const result = await this.callImpl<Result, Params>(method, params, opts);
+      this.onLog(`rpc ${method} ${Date.now() - t0}ms ok`, {
+        src: 'bridge',
+        method,
+        ms: Date.now() - t0,
+      });
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.onLog(`rpc ${method} ${Date.now() - t0}ms err: ${message}`, {
+        src: 'bridge',
+        method,
+        ms: Date.now() - t0,
+        err: message,
+      });
+      throw err;
+    }
+  }
+
+  private async callImpl<Result, Params = unknown>(
+    method: BridgeRequest['method'],
+    params?: Params,
+    opts: { onStream?: (frame: BridgeStreamFrame) => void; timeoutMs?: number } = {},
+  ): Promise<Result> {
     if (this.closed) throw new BridgeError('transport', 'client is closed');
     if (!this.socket) await this.connect();
     if (!this.socket) throw new BridgeError('transport', 'socket unavailable after connect');

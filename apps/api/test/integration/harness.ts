@@ -26,6 +26,7 @@ import authRoutes from '../../src/routes/auth.js';
 import depotRoutes from '../../src/routes/depot.js';
 import hostRoutes from '../../src/routes/host.js';
 import hostActionsRoutes from '../../src/routes/host-actions.js';
+import logsRoutes from '../../src/routes/logs.js';
 import playerRoutes from '../../src/routes/players.js';
 import serverConfigRoutes from '../../src/routes/server-configs.js';
 import serverInstallRoutes from '../../src/routes/server-install.js';
@@ -376,6 +377,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(depotRoutes);
   await app.register(playerRoutes);
   await app.register(auditRoutes);
+  await app.register(logsRoutes);
 
   const seed: IntegrationHarness['seed'] = {};
   if (opts.seedOwner) {

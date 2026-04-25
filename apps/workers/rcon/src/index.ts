@@ -1,19 +1,14 @@
 import { createDatabaseClient, serverCredentials, serverSettings, servers } from '@squad/db';
-import { resolveRconHost, startHeartbeat } from '@squad/shared-config';
+import { redisSinkStream, resolveRconHost, startHeartbeat } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
-import pino from 'pino';
+import pino, { multistream } from 'pino';
 import { RconSupervisor, type Target } from './supervisor.js';
-
-const log = pino({
-  level: process.env.LOG_LEVEL ?? 'info',
-  base: { service: 'worker-rcon' },
-});
 
 const requiredEnv = (name: string): string => {
   const v = process.env[name];
   if (!v) {
-    log.fatal(`${name} is required`);
+    console.error(`fatal: ${name} is required`);
     process.exit(1);
   }
   return v;
@@ -53,6 +48,13 @@ async function main() {
     enableReadyCheck: true,
     retryStrategy: (times: number) => Math.min(2000, 200 * 2 ** Math.min(times, 6)),
   });
+  const log = pino(
+    { level: process.env.LOG_LEVEL ?? 'info', base: { service: 'worker-rcon' } },
+    multistream([
+      { stream: process.stdout },
+      { stream: redisSinkStream({ redis, defaultSource: 'rcon' }) },
+    ]),
+  );
   redis.on('error', (err: Error) => log.warn({ err: err.message }, 'redis error (will retry)'));
   redis.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
   const key = Buffer.from(requiredEnv('APP_ENCRYPTION_KEY'), 'base64');
@@ -125,6 +127,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  log.fatal({ err: (err as Error).message }, 'fatal');
+  console.error('fatal', (err as Error).message);
   process.exit(1);
 });

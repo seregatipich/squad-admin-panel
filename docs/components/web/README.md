@@ -1,0 +1,99 @@
+# `web` — Next.js dashboard
+
+Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server components handle auth gates; client components do polling and live updates over WebSocket.
+
+## Responsibilities
+
+- Dashboard, server detail, install wizard, config editor, players, audit, panel-wide log console, account.
+- Auth screens: login, TOTP enrollment / challenge.
+- Live indicators: connection state, polling staleness, WS reconnect with exponential backoff.
+
+## What this component does NOT do
+
+- It does not call the bridge directly — it goes through `api`.
+- Next.js middleware never authorises. The real gate is server-side `requireSession()` inside `src/app/(dashboard)/layout.tsx`, deduped via `react.cache()`. This is intentional after CVE-2025-29927.
+
+## App Router pages
+
+| Route | File | What it does |
+|---|---|---|
+| `/login` | `src/app/login/page.tsx` | Email + password, optional TOTP / backup code. |
+| `/setup` | `src/app/setup/page.tsx` | Walks the operator through the 4-step setup (`check-env` → `org` → `owner` → `finalize`). |
+| `/dashboard` | `src/app/(dashboard)/dashboard/page.tsx` | Hub: bridge status, host metrics tile (live), per-worker heartbeats, server count summary. The metrics tile opens the `MetricHistoryModal` for 24 h history. |
+| `/servers` | `src/app/(dashboard)/servers/page.tsx` | List with live `rcon_state` / `player_count` / `last_poll_at`. |
+| `/servers/new` | `src/app/(dashboard)/servers/new/page.tsx` | Install wizard: collects display name + ports, `POST /servers`, then `POST /servers/:id/install`, subscribes to `/install/ws`. |
+| `/servers/[id]` | `src/app/(dashboard)/servers/[id]/page.tsx` | Detail: status, container stats, RCON, action buttons (start/stop/restart/delete), live `/logs/ws` console. |
+| `/servers/[id]/configs` | `src/app/(dashboard)/servers/[id]/configs/page.tsx` | Monaco editor with three tabs: Editor / История (versions, restore, diff) / Blame. |
+| `/servers/[id]/events` | `src/app/(dashboard)/servers/[id]/events/page.tsx` | Newest envelopes from `events:server:{id}` via `GET /servers/:id/events`. |
+| `/players` | `src/app/(dashboard)/players/page.tsx` | Recently-seen players. |
+| `/players/[steam_id64]` | `src/app/(dashboard)/players/[steam_id64]/page.tsx` | Detail with name history; IP history is gated by `player:view_ips`. |
+| `/audit` | `src/app/(dashboard)/audit/page.tsx` | Page-paginated audit log; live indicator showing freshness. |
+| `/logs` | `src/app/(dashboard)/logs/page.tsx` | Panel-wide connector logs with filters (source, level, server, free-text). Server component that pre-fetches the server list, hands off to the `LogList` client component which polls `GET /logs`. |
+| `/settings/account` | `src/app/(dashboard)/settings/account/page.tsx` | TOTP provision / enable / disable. |
+
+## Components
+
+`apps/web/src/components/`:
+
+| File | Purpose |
+|---|---|
+| `LiveIndicator.tsx` | Shared "fresh / stale / disconnected" pill used by every polling surface. Hover shows last-success age. |
+| `LogConsole.tsx` | Per-server live log viewer over `/api/v1/servers/:id/logs/ws`. Auto-scroll, ANSI stripping, error/`done` frames. |
+| `LogList.tsx` | Panel-wide connector-logs client component used by `/logs`. Cursor-paginated against `GET /logs`, filter pills, "live tail" toggle. |
+| `LogoutButton.tsx` | `POST /auth/logout`, redirect to `/login`. |
+| `RestartBridgeButton.tsx` | `POST /host/restart`, requires `host:bridge_control`. |
+| `SystemStatus.tsx` | Dashboard system-health card: bridge ping, worker heartbeats, depot status. |
+| `MetricHistoryChart.tsx` | Recharts `AreaChart` rendering 24 h cpu/ram/disk (% axis) or net (KB/s axis, two areas: rx + tx). Lazy-loaded — never imported at module level. Exports `MetricKey` (`'cpu'\|'ram'\|'disk'\|'net'`) and `MetricPoint` types. |
+| `MetricHistoryModal.tsx` | Backdrop modal that fetches `GET /api/v1/host/metrics/history?seconds=86400`, decodes the packed integer tuple inline (cpu/load values divided by 100; bytes pass through), then `next/dynamic`-loads `MetricHistoryChart`. ESC / backdrop-click to close. The unpack is inlined rather than imported from `@squad/shared-config` so Next.js doesn't try to bundle the server-only `node:stream`-using modules from that package. |
+
+## Lib utilities
+
+`apps/web/src/lib/`:
+
+| File | Purpose |
+|---|---|
+| `api.ts` | Typed `fetch` wrapper that re-uses session cookies, surfaces `error.code` from JSON responses. |
+| `dal.ts` | Server-side Data Access Layer used by server components (`requireSession`, etc.). |
+| `format.ts` | Number / duration / bytes / SteamID formatters. Tested. |
+| `host-health.ts` | Aggregates `bridge-status` + worker heartbeats into one health enum for the dashboard. Tested. |
+| `ws-backoff.ts` | Exponential-backoff WebSocket reconnect helper used by `LogConsole` and the install/depot WS subscribers. Tested. |
+
+## Live-refresh and staleness
+
+Every polling surface uses `LiveIndicator` + the same shape: poll every N seconds, show last-success age, switch to amber when staleness exceeds a per-surface threshold, surface visible error state instead of silently failing. WS surfaces use `ws-backoff` for reconnect; the server-logs WS gets a 20 s heartbeat frame from the API so proxies don't kill the socket on quiet servers.
+
+## Code location
+
+- App Router: [`apps/web/src/app/`](../../../apps/web/src/app/) — `(dashboard)/`, `login/`, `setup/`.
+- Components: [`apps/web/src/components/`](../../../apps/web/src/components/).
+- Auth helper: `apps/web/src/app/(dashboard)/layout.tsx` calls `requireSession()`.
+
+## Dependencies
+
+- `next` 15.1, `react` 19, `react-dom` 19
+- `tailwindcss` 4 + `@tailwindcss/postcss`
+- `@monaco-editor/react` 4.7
+- `recharts` 3 — used only inside `MetricHistoryChart`, split into its own JS chunk via `next/dynamic`
+- Tests: `@playwright/test` 1.59, `vitest` 3 (currently `--passWithNoTests` for Vitest; component-level `*.test.ts` like `LiveIndicator.test.ts` and `format.test.ts` ARE wired)
+
+## Components that depend on it
+
+- Operators in their browsers.
+
+## Components it depends on
+
+- [`api`](../api/README.md) — every page is data-driven by REST or WebSocket.
+- [`shared-types`](../shared-types/README.md), [`shared-config`](../shared-config/README.md) — Zod schemas, permission keys, hot-reload table. Note: the metric-unpack math is duplicated inline in `MetricHistoryModal` rather than imported, since `shared-config`'s barrel pulls in `node:stream` from the log-stream sink, which Next.js refuses to bundle for the client.
+
+## Basic usage
+
+```bash
+pnpm --filter @squad/web dev          # next dev --port 3000
+```
+
+In compose, Caddy serves the prebuilt `next start` output.
+
+## See also
+
+- [Configuration](configuration.md)
+- [Testing](testing.md)

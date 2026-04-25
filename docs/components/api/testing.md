@@ -1,0 +1,55 @@
+# `api` — testing
+
+## Where the tests live
+
+| Tier | Location | What it covers |
+|---|---|---|
+| Unit | [`apps/api/test/*.test.ts`](../../../apps/api/test/) excluding `e2e/` | Auth helpers, Zod schemas, blame walker, hash chain helpers, route schemas via `fastify.inject()` with a fake bridge. |
+| Integration | Same directory, marked by use of real Postgres/Redis (`TEST_DATABASE_URL` set) | Audit triggers, RBAC enforcement, WS frame splitting, install WS plumbing. |
+| E2E | [`apps/api/test/e2e/*.e2e.test.ts`](../../../apps/api/test/e2e/) | Live panel + real bridge + real Docker. Run via `pnpm --filter @squad/api test:e2e`. |
+
+## How to run
+
+```bash
+# Unit + integration (default; uses fake bridge, in-memory Redis)
+pnpm --filter @squad/api test
+
+# Single file
+pnpm --filter @squad/api exec vitest run test/rcon-send.test.ts
+
+# E2E (needs PANEL_TEST_URL + PANEL_TEST_COOKIE; see CLAUDE.md)
+pnpm --filter @squad/api test:e2e
+```
+
+## What is covered
+
+- All happy paths for routes listed in [`api.md`](api.md).
+- 401/403 enforcement: every authed route has at least one negative test.
+- Audit-coverage CI gate: [`audit-coverage.test.ts`](../../../apps/api/test/audit-coverage.test.ts) walks every registered route at startup and fails if a `POST`/`PUT`/`PATCH`/`DELETE` lacks `config.audit`.
+- Hash-chain integrity in [`audit-entry.test.ts`](../../../apps/api/test/audit-entry.test.ts).
+- WebSocket plumbing in [`install-ws.test.ts`](../../../apps/api/test/install-ws.test.ts) and [`server-logs.test.ts`](../../../apps/api/test/server-logs.test.ts).
+- Bridge heartbeat loop ([`bridge-heartbeat.test.ts`](../../../apps/api/test/bridge-heartbeat.test.ts)) — `tickOnce` driven manually to assert state-transition logging (alive→down warns once, down→alive logs the down-duration, no warn flapping on consecutive failures, late `onReady` after `onClose` does not leak a timer).
+- Event reclaim / DLQ in [`event-dlq-autoclaim.test.ts`](../../../apps/api/test/event-dlq-autoclaim.test.ts) — `XAUTOCLAIM` cadence and the 5-delivery → DLQ rule.
+- `POST /host/restart` happy + EPIPE-after-restart paths in [`host-actions.test.ts`](../../../apps/api/test/host-actions.test.ts).
+- `seedConfigs` in [`server-install-configs.test.ts`](../../../apps/api/test/server-install-configs.test.ts) — 19 cfg files seeded, `Rcon.cfg`/`Server.cfg` rewrite, baseline `config_versions` rows.
+- Config rewrite invariants in [`config-rewrite.test.ts`](../../../apps/api/test/config-rewrite.test.ts) — sha-unchanged short-circuit, append-only history, restore-as-new-version.
+- Argon2id hashing parameters in [`argon.test.ts`](../../../apps/api/test/argon.test.ts), TOTP step replay rejection in [`totp.test.ts`](../../../apps/api/test/totp.test.ts), blame walker in [`blame.test.ts`](../../../apps/api/test/blame.test.ts), RCON wire send in [`rcon-send.test.ts`](../../../apps/api/test/rcon-send.test.ts).
+
+## What is not covered
+
+- The actual bridge over the actual socket — that's e2e.
+- Cookie security flags in production deployment — verified manually with browser devtools.
+- OIDC providers — Steam and Discord clients are stubbed; the real handshake is verified end-to-end by hand.
+
+## Mocks and stubs
+
+- Each test that needs a fake bridge declares one inline (see e.g. [`server-logs.test.ts`](../../../apps/api/test/server-logs.test.ts), [`install-ws.test.ts`](../../../apps/api/test/install-ws.test.ts), [`bridge-heartbeat.test.ts`](../../../apps/api/test/bridge-heartbeat.test.ts)) — records call list, returns scripted responses. Used by every test except e2e.
+- Postgres/Redis: integration tests use the running compose stack. Unit tests use in-memory Drizzle adapters where possible.
+- `argon2` is real (no mock) — slow but small enough for the suite.
+
+## Important edge cases
+
+- `audit_log.id` is `bigserial`; serializing without `String(...)` breaks `JSON.stringify` on bigint.
+- The bridge-client decode-error path must NOT permanently close the client (a long log-follow connection blip would otherwise wedge every subsequent caller).
+- `server.status` `not_polled` is a real value, not an error. Tests assert the literal `{state: 'not_polled'}` shape.
+- `__Host-` cookies cannot be set without `Secure` — local dev without HTTPS-via-Caddy will fail to log in.

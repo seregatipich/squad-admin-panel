@@ -22,6 +22,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <Link href="/audit" className="block rounded px-2 py-1 hover:bg-neutral-900">
           Журнал действий
         </Link>
+        {me.permissions.includes('host:view') ? (
+          <Link href="/logs" className="block rounded px-2 py-1 hover:bg-neutral-900">
+            Логи
+          </Link>
+        ) : null}
         <Link href="/settings/account" className="block rounded px-2 py-1 hover:bg-neutral-900">
           Аккаунт
         </Link>
