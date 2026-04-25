@@ -1,12 +1,11 @@
 import cookie from '@fastify/cookie';
 import * as schema from '@squad/db/schema';
-import { organizations } from '@squad/db/schema';
-import { seedSystemRoles } from '@squad/db/seed';
+import { panelMeta } from '@squad/db/schema';
+import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Fastify from 'fastify';
 import Redis from 'ioredis';
 import postgres from 'postgres';
-import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import steamRoutes from '../src/routes/auth-steam.js';
 import { createIsolatedSchema, makeFakeBridge, runMigrations } from './integration/harness.js';
@@ -79,9 +78,6 @@ describe('GET /api/v1/auth/steam/callback', () => {
     schemaInfo = await createIsolatedSchema();
     await runMigrations(schemaInfo.url);
     h = await buildApp({ dbUrl: schemaInfo.url });
-    const orgId = uuidv7();
-    await h.db.insert(organizations).values({ id: orgId, name: 'T', slug: 't' });
-    await seedSystemRoles(h.db, orgId);
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
       return new Response('is_valid:true\n', { status: 200 });
     });
@@ -219,7 +215,7 @@ describe('GET /api/v1/auth/steam/callback', () => {
   });
 
   it('player without role lands on /no-access (when sentinel already claimed)', async () => {
-    await h.db.update(organizations).set({ settings: { first_owner_claimed: true } });
+    await h.db.update(panelMeta).set({ firstOwnerClaimed: true }).where(eq(panelMeta.id, 1));
     const NONCE = 'noaccess-nonce';
     await h.redis.set(`steam-nonce:${NONCE}`, '{}', 'EX', 300);
     const u = new URLSearchParams({

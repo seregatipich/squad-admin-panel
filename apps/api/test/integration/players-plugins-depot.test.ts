@@ -1,10 +1,4 @@
-import {
-  auditLog,
-  playerIpHistory,
-  playerNameHistory,
-  playerRoleAssignments,
-  players,
-} from '@squad/db/schema';
+import { auditLog, playerIpHistory, playerNameHistory, players, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
@@ -93,17 +87,17 @@ describe('GET /api/v1/players + /players/:steamId', () => {
   });
 
   it('detail view hides IPs from a user without player:view_ips', async () => {
-    const viewerRole = await h.db.query.roles.findFirst({
-      where: (r, { and: _a, eq: _e }) => _a(_e(r.orgId, h.seed.orgId!), _e(r.name, 'Viewer')),
-    });
-    if (!viewerRole || !h.seed.ownerSteamId64) throw new Error('viewer role missing');
+    const viewerRoleRows = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.name, 'Viewer'))
+      .limit(1);
+    const viewerRoleId = viewerRoleRows[0]?.id;
+    if (!viewerRoleId || !h.seed.ownerSteamId64) throw new Error('viewer role missing');
     await h.db
-      .delete(playerRoleAssignments)
-      .where(eq(playerRoleAssignments.steamId64, h.seed.ownerSteamId64));
-    await h.db.insert(playerRoleAssignments).values({
-      steamId64: h.seed.ownerSteamId64,
-      roleId: viewerRole.id,
-    });
+      .update(players)
+      .set({ roleId: viewerRoleId })
+      .where(eq(players.steamId64, h.seed.ownerSteamId64));
     invalidatePermissionCache(h.seed.ownerSteamId64);
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
@@ -190,16 +184,17 @@ describe('auth plugin', () => {
   });
 
   it('protected route enforces permissions: Viewer is 403 on POST /servers', async () => {
-    const viewerRole = await h.db.query.roles.findFirst({
-      where: (r, { and: _a, eq: _e }) => _a(_e(r.orgId, h.seed.orgId!), _e(r.name, 'Viewer')),
-    });
-    if (!viewerRole || !h.seed.ownerSteamId64) throw new Error('viewer role missing');
+    const viewerRoleRows = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.name, 'Viewer'))
+      .limit(1);
+    const viewerRoleId = viewerRoleRows[0]?.id;
+    if (!viewerRoleId || !h.seed.ownerSteamId64) throw new Error('viewer role missing');
     await h.db
-      .delete(playerRoleAssignments)
-      .where(eq(playerRoleAssignments.steamId64, h.seed.ownerSteamId64));
-    await h.db
-      .insert(playerRoleAssignments)
-      .values({ steamId64: h.seed.ownerSteamId64, roleId: viewerRole.id });
+      .update(players)
+      .set({ roleId: viewerRoleId })
+      .where(eq(players.steamId64, h.seed.ownerSteamId64));
     invalidatePermissionCache(h.seed.ownerSteamId64);
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
@@ -216,7 +211,7 @@ describe('auth plugin', () => {
       },
     });
     expect(resp.statusCode).toBe(403);
-    expect(resp.json<{ error: string; required: string[] }>().required).toContain('server:create');
+    expect(resp.json<{ error: string; required: string[] }>().required).toContain('server:install');
   });
 });
 

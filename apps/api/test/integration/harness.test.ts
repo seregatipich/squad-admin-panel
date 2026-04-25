@@ -15,11 +15,10 @@ describe('integration harness', () => {
     current = await buildIntegrationApp({
       seedOwner: { steamId64: 76561198000000001n },
     });
-    expect(current.seed.orgId).toMatch(/^[0-9a-f-]{36}$/i);
     expect(typeof current.seed.ownerSteamId64).toBe('bigint');
     expect(current.schema).toMatch(/^test_[0-9a-f]{12}$/);
-    const healthOr404 = await current.app.inject({ method: 'GET', url: '/api/v1/setup/check-env' });
-    expect([200, 410]).toContain(healthOr404.statusCode);
+    const meRes = await current.app.inject({ method: 'GET', url: '/api/v1/me' });
+    expect([200, 401]).toContain(meRes.statusCode);
   }, 30_000);
 
   it('cleanup drops the schema', async () => {

@@ -6,16 +6,13 @@ import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
-import { auditLog, organizationMembers, playerRoleAssignments, players } from '@squad/db/schema';
-import { seedSystemRoles } from '@squad/db/seed';
-import type { RoleName } from '@squad/shared-config';
+import { auditLog, players, roles } from '@squad/db/schema';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import Redis from 'ioredis';
 import postgres from 'postgres';
-import { v7 as uuidv7 } from 'uuid';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import auditPluginFactory from '../../src/plugins/audit.js';
@@ -29,12 +26,14 @@ import hostRoutes from '../../src/routes/host.js';
 import hostActionsRoutes from '../../src/routes/host-actions.js';
 import logsRoutes from '../../src/routes/logs.js';
 import meTokensRoutes from '../../src/routes/me-tokens.js';
+import permissionsRoutes from '../../src/routes/permissions.js';
 import playerRoutes from '../../src/routes/players.js';
+import rolesRoutes from '../../src/routes/roles.js';
 import serverConfigRoutes from '../../src/routes/server-configs.js';
 import serverInstallRoutes from '../../src/routes/server-install.js';
 import serverLogsRoutes from '../../src/routes/server-logs.js';
 import serverRoutes from '../../src/routes/servers.js';
-import setupRoutes from '../../src/routes/setup.js';
+import usersRoutes from '../../src/routes/users.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_FOLDER = path.resolve(__dirname, '../../../../packages/db/drizzle');
@@ -305,7 +304,7 @@ export async function runMigrations(url: string) {
 export interface BuildAppOptions {
   /** A fake bridge instance; defaults to `makeFakeBridge()`. */
   bridge?: FakeBridge;
-  /** Whether to seed an organization + system roles + owner player. */
+  /** Whether to seed an owner player (roles come from migration 0009). */
   seedOwner?: { steamId64: bigint; canonicalName?: string };
   /** Whether to run status-reconciler + other heavy plugins. Off by default. */
   withStatusReconciler?: boolean;
@@ -320,7 +319,6 @@ export interface IntegrationHarness {
   schema: string;
   cleanup: () => Promise<void>;
   seed: {
-    orgId?: string;
     ownerSteamId64?: bigint;
   };
 }
@@ -370,7 +368,9 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
 
   await app.register(authRoutes);
   await app.register(meTokensRoutes);
-  await app.register(setupRoutes);
+  await app.register(permissionsRoutes);
+  await app.register(rolesRoutes);
+  await app.register(usersRoutes);
   await app.register(hostRoutes);
   await app.register(hostActionsRoutes);
   await app.register(serverRoutes);
@@ -384,32 +384,21 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
 
   const seed: IntegrationHarness['seed'] = {};
   if (opts.seedOwner) {
-    const orgId = uuidv7();
-    await db.insert((await import('@squad/db/schema')).organizations).values({
-      id: orgId,
-      name: 'Test Org',
-      slug: 'test-org',
-    });
-    await seedSystemRoles(db, orgId);
     const ownerSteamId64 = opts.seedOwner.steamId64;
     const canonicalName = opts.seedOwner.canonicalName ?? 'Owner';
+    const ownerRows = await db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+      .limit(1);
+    const ownerRoleId = ownerRows[0]?.id;
+    if (!ownerRoleId) throw new Error('Owner role missing — migration 0009 not applied?');
     await db.insert(players).values({
       steamId64: ownerSteamId64,
       canonicalName,
       canonicalNameNormalized: canonicalName.toLowerCase(),
+      roleId: ownerRoleId,
     });
-    const ownerRole = await db.query.roles.findFirst({
-      where: (r, { and: _a, eq: _e }) => _a(_e(r.orgId, orgId), _e(r.name, 'Owner' as RoleName)),
-    });
-    if (ownerRole) {
-      await db
-        .insert(playerRoleAssignments)
-        .values({ steamId64: ownerSteamId64, roleId: ownerRole.id });
-      await db
-        .insert(organizationMembers)
-        .values({ steamId64: ownerSteamId64, orgId, primaryRoleId: ownerRole.id });
-    }
-    seed.orgId = orgId;
     seed.ownerSteamId64 = ownerSteamId64;
   }
 

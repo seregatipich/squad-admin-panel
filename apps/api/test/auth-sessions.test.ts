@@ -1,21 +1,12 @@
 import cookie from '@fastify/cookie';
 import * as schema from '@squad/db/schema';
-import {
-  organizationMembers,
-  organizations,
-  playerRoleAssignments,
-  players,
-  roles,
-  sessions as sessionsTable,
-} from '@squad/db/schema';
-import { seedSystemRoles } from '@squad/db/seed';
-import { eq } from 'drizzle-orm';
+import { players, roles, sessions as sessionsTable } from '@squad/db/schema';
+import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import Redis from 'ioredis';
 import postgres from 'postgres';
-import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createSession } from '../src/lib/sessions.js';
 import authPlugin, { SESSION_COOKIE } from '../src/plugins/auth.js';
@@ -66,31 +57,27 @@ async function seedAuthedPlayer(
   db: any,
   redis: Redis,
   steamId64: bigint,
-): Promise<{ token: string; sessionId: string; orgId: string }> {
-  const orgId = uuidv7();
-  await db.insert(organizations).values({ id: orgId, name: 'T', slug: 't' });
-  await seedSystemRoles(db, orgId);
-  const ownerRole = await db
+): Promise<{ token: string; sessionId: string }> {
+  const ownerRoleRows = await db
     .select({ id: roles.id })
     .from(roles)
-    .where(eq(roles.orgId, orgId))
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
     .limit(1);
+  const ownerRoleId = ownerRoleRows[0]?.id;
+  if (!ownerRoleId) throw new Error('Owner role missing — migration 0009 not applied?');
   await db.insert(players).values({
     steamId64,
     canonicalName: 'TestPlayer',
     canonicalNameNormalized: 'testplayer',
+    roleId: ownerRoleId,
   });
-  const ownerRoleId = ownerRole[0]?.id;
-  if (!ownerRoleId) throw new Error('Owner role not found after seeding');
-  await db.insert(playerRoleAssignments).values({ steamId64, roleId: ownerRoleId });
-  await db.insert(organizationMembers).values({ steamId64, orgId, primaryRoleId: ownerRoleId });
   const result = await createSession(db, redis, {
     steamId64,
     ip: null,
     userAgent: 'test-ua',
     ttlMs: 21600 * 1000,
   });
-  return { token: result.token, sessionId: result.session.id, orgId };
+  return { token: result.token, sessionId: result.session.id };
 }
 
 describe('GET /api/v1/me', () => {

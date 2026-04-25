@@ -1,4 +1,4 @@
-import { playerRoleAssignments } from '@squad/db/schema';
+import { players, roles } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
@@ -46,16 +46,17 @@ describe('POST /api/v1/host/restart', () => {
   });
 
   it('viewer without host:manage permission is rejected with 403', async () => {
-    const viewerRole = await h.db.query.roles.findFirst({
-      where: (r, { and, eq: e }) => and(e(r.orgId, h.seed.orgId!), e(r.name, 'Viewer')),
-    });
-    if (!viewerRole || !h.seed.ownerSteamId64) throw new Error('viewer role missing');
+    const viewerRoleRows = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.name, 'Viewer'))
+      .limit(1);
+    const viewerRoleId = viewerRoleRows[0]?.id;
+    if (!viewerRoleId || !h.seed.ownerSteamId64) throw new Error('viewer role missing');
     await h.db
-      .delete(playerRoleAssignments)
-      .where(eq(playerRoleAssignments.steamId64, h.seed.ownerSteamId64));
-    await h.db
-      .insert(playerRoleAssignments)
-      .values({ steamId64: h.seed.ownerSteamId64, roleId: viewerRole.id });
+      .update(players)
+      .set({ roleId: viewerRoleId })
+      .where(eq(players.steamId64, h.seed.ownerSteamId64));
     invalidatePermissionCache(h.seed.ownerSteamId64);
 
     const cookie = await loginAsOwner(h);

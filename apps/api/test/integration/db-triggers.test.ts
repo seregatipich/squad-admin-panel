@@ -101,16 +101,10 @@ describe('audit_log trigger invariants', () => {
 
 describe('config_versions trigger invariants', () => {
   it('rejects UPDATE and DELETE', async () => {
-    // Seed an org + a server directly via Drizzle so FK for config_versions holds.
-    const { organizations, servers } = await import('@squad/db/schema');
-    await h.db.insert(organizations).values({
-      id: '019e0000-0000-7000-8000-000000000000',
-      name: 'o',
-      slug: 'o',
-    });
+    // Seed a server directly via Drizzle so FK for config_versions holds.
+    const { servers } = await import('@squad/db/schema');
     await h.db.insert(servers).values({
       id: '019e0000-0000-7000-8000-000000000001',
-      orgId: '019e0000-0000-7000-8000-000000000000',
       displayName: 'Trigger Test',
       slug: 'trigger-test',
     });
