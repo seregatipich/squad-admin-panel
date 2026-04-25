@@ -97,8 +97,7 @@ export default fp(async (app) => {
               avatarUrl: null,
               permissions: {
                 permissions: effective,
-                clearance: rolePerms.clearance,
-                roleIds: rolePerms.roleIds,
+                roleId: rolePerms.roleId,
               },
             };
             req.apiTokenId = token.id;
