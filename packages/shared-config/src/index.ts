@@ -5,3 +5,4 @@ export * from './log-stream-sink.js';
 export * from './metrics-pack.js';
 export * from './permissions.js';
 export * from './rcon-host.js';
+export * from './role-colors.js';

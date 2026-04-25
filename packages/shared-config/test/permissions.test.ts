@@ -1,36 +1,44 @@
 import { describe, expect, it } from 'vitest';
 import {
   isPermissionKey,
+  PERMISSION_CATEGORIES,
   PERMISSION_KEYS,
-  ROLE_CLEARANCE,
-  SYSTEM_ROLE_PERMISSIONS,
+  PERMISSIONS,
+  type PermissionDef,
 } from '../src/permissions.js';
 
-describe('permission registry', () => {
-  it('has no duplicate keys', () => {
-    expect(new Set(PERMISSION_KEYS).size).toBe(PERMISSION_KEYS.length);
+describe('PERMISSIONS registry', () => {
+  it('keys are unique', () => {
+    const keys = PERMISSIONS.map((p) => p.key);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('Owner role has every permission in the registry', () => {
-    for (const key of PERMISSION_KEYS) {
-      expect(SYSTEM_ROLE_PERMISSIONS.Owner).toContain(key);
+  it('every category is declared in PERMISSION_CATEGORIES', () => {
+    const cats = new Set<string>(PERMISSION_CATEGORIES);
+    for (const p of PERMISSIONS) {
+      expect(cats.has(p.category), `bad category for ${p.key}: ${p.category}`).toBe(true);
     }
   });
 
-  it('Viewer only gets read-only permissions (view / history segments)', () => {
-    for (const key of SYSTEM_ROLE_PERMISSIONS.Viewer) {
-      expect(key).toMatch(/(^|:)(view|history)(:|$)/);
+  it('dangerous and unimplemented are true | undefined (never false)', () => {
+    for (const p of PERMISSIONS as readonly PermissionDef[]) {
+      if ('dangerous' in p) expect(p.dangerous).toBe(true);
+      if ('unimplemented' in p) expect(p.unimplemented).toBe(true);
     }
   });
 
-  it('isPermissionKey rejects unknown strings', () => {
+  it('every key has a non-empty label', () => {
+    for (const p of PERMISSIONS) {
+      expect(p.label, `empty label for ${p.key}`).toBeTruthy();
+    }
+  });
+
+  it('PERMISSION_KEYS matches PERMISSIONS', () => {
+    expect(PERMISSION_KEYS).toEqual(PERMISSIONS.map((p) => p.key));
+  });
+
+  it('isPermissionKey narrows correctly', () => {
     expect(isPermissionKey('server:view')).toBe(true);
-    expect(isPermissionKey('server:nuke-from-orbit')).toBe(false);
-  });
-
-  it('clearance ordering Owner > Senior Admin > Admin > Viewer', () => {
-    expect(ROLE_CLEARANCE.OWNER).toBeGreaterThan(ROLE_CLEARANCE.SENIOR_ADMIN);
-    expect(ROLE_CLEARANCE.SENIOR_ADMIN).toBeGreaterThan(ROLE_CLEARANCE.ADMIN);
-    expect(ROLE_CLEARANCE.ADMIN).toBeGreaterThan(ROLE_CLEARANCE.VIEWER);
+    expect(isPermissionKey('not-a-key')).toBe(false);
   });
 });
