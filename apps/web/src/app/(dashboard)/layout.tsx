@@ -19,6 +19,16 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <Link href="/players" className="block rounded px-2 py-1 hover:bg-neutral-900">
           Игроки
         </Link>
+        {me.permissions.includes('role:view') ? (
+          <Link href="/roles" className="block rounded px-2 py-1 hover:bg-neutral-900">
+            Роли
+          </Link>
+        ) : null}
+        {me.permissions.includes('user:view') ? (
+          <Link href="/users" className="block rounded px-2 py-1 hover:bg-neutral-900">
+            Пользователи
+          </Link>
+        ) : null}
         <Link href="/audit" className="block rounded px-2 py-1 hover:bg-neutral-900">
           Журнал действий
         </Link>
@@ -34,7 +44,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
           API-токены
         </Link>
         <div className="pt-6 text-xs text-neutral-500">
-          <div className="truncate">{me.display_name ?? me.email}</div>
+          <div className="truncate">{me.canonical_name}</div>
           <LogoutButton />
         </div>
       </nav>

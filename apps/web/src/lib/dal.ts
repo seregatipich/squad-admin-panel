@@ -7,11 +7,10 @@ import { apiFetch } from './api';
 export const SESSION_COOKIE = '__Host-sid';
 
 export interface Me {
-  id: string;
-  email: string;
-  display_name: string | null;
+  steam_id64: string;
+  canonical_name: string;
+  avatar_url: string | null;
   permissions: string[];
-  clearance: number;
 }
 
 export const getSession = cache(async (): Promise<Me | null> => {

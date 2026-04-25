@@ -9,7 +9,6 @@ interface Me {
   canonical_name: string;
   avatar_url: string | null;
   permissions: string[];
-  clearance: number;
 }
 
 interface ActiveSession {
@@ -137,8 +136,6 @@ export default function AccountSettings() {
           <dd className="font-mono">{me.steam_id64}</dd>
           <dt className="text-neutral-500">Имя</dt>
           <dd>{me.canonical_name}</dd>
-          <dt className="text-neutral-500">Clearance</dt>
-          <dd className="font-mono">{me.clearance}</dd>
           <dt className="text-neutral-500">Permissions</dt>
           <dd className="font-mono text-xs">{me.permissions.length} ключей</dd>
         </dl>
