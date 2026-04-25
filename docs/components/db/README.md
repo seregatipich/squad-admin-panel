@@ -6,7 +6,7 @@ Postgres 16+ via Drizzle ORM 0.45. Source of truth for the operational data mode
 
 - Schema definition + types (`@squad/db` re-exports inferred row types).
 - Migrations runner ([`packages/db/src/migrate.ts`](../../../packages/db/src/migrate.ts)).
-- System-role seed ([`packages/db/src/seed/system-roles.ts`](../../../packages/db/src/seed/system-roles.ts)).
+- System-role seed lives in migration `0009_panel_rbac.sql` (forward-only, in-DB).
 - Drizzle Studio access (`pnpm db:studio`).
 
 ## What this component does NOT do
