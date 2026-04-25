@@ -1,18 +1,10 @@
 import * as schema from '@squad/db/schema';
-import {
-  organizationMembers,
-  organizations,
-  playerRoleAssignments,
-  players,
-} from '@squad/db/schema';
-import { seedSystemRoles } from '@squad/db/seed';
-import { eq } from 'drizzle-orm';
+import { panelMeta, players, roles } from '@squad/db/schema';
+import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { claimFirstOwner } from '../src/lib/first-owner.js';
-import { createIsolatedSchema, runMigrations } from './integration/harness.js';
 
 interface FakeBridge {
   fileRead: ReturnType<typeof vi.fn>;
@@ -27,101 +19,130 @@ const fakeBridge = (existingSentinel: boolean): FakeBridge => ({
   fileAtomicWrite: vi.fn(async () => ({ status: 'written' })),
 });
 
+const TEST_PLAYER_A = 76561197999000010n;
+const TEST_PLAYER_B = 76561197999000011n;
+
+let pgsql: ReturnType<typeof postgres>;
+let db: ReturnType<typeof drizzle<typeof schema>>;
+let ownerRoleId: string;
+
+beforeAll(async () => {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error('DATABASE_URL not set');
+  pgsql = postgres(url);
+  db = drizzle(pgsql, { schema });
+
+  const ownerRows = await db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  if (!ownerRows[0]) throw new Error('Owner role missing — migration 0009 not applied?');
+  ownerRoleId = ownerRows[0].id;
+});
+
+afterAll(async () => {
+  await pgsql.end({ timeout: 5 });
+});
+
+beforeEach(async () => {
+  await db.update(panelMeta).set({ firstOwnerClaimed: false }).where(eq(panelMeta.id, 1));
+  await db.update(players).set({ roleId: null }).where(eq(players.roleId, ownerRoleId));
+  for (const sid of [TEST_PLAYER_A, TEST_PLAYER_B]) {
+    const stub = `Test ${String(sid).slice(-4)}`;
+    await db
+      .insert(players)
+      .values({
+        steamId64: sid,
+        canonicalName: stub,
+        canonicalNameNormalized: stub.toLowerCase(),
+        roleId: null,
+      })
+      .onConflictDoUpdate({
+        target: players.steamId64,
+        set: { roleId: null },
+      });
+  }
+});
+
+afterEach(async () => {
+  for (const sid of [TEST_PLAYER_A, TEST_PLAYER_B]) {
+    await db.delete(players).where(eq(players.steamId64, sid));
+  }
+  await db.update(panelMeta).set({ firstOwnerClaimed: false }).where(eq(panelMeta.id, 1));
+});
+
 describe('claimFirstOwner', () => {
-  let schemaInfo: Awaited<ReturnType<typeof createIsolatedSchema>>;
-  let sql: ReturnType<typeof postgres>;
-  // biome-ignore lint/suspicious/noExplicitAny: test setup
-  let db: any;
-  let orgId: string;
-
-  beforeEach(async () => {
-    schemaInfo = await createIsolatedSchema();
-    await runMigrations(schemaInfo.url);
-    sql = postgres(schemaInfo.url, { max: 1, onnotice: () => undefined });
-    db = drizzle(sql, { schema });
-    orgId = uuidv7();
-    await db.insert(organizations).values({ id: orgId, name: 'T', slug: 't' });
-    await seedSystemRoles(db, orgId);
-  });
-
-  afterEach(async () => {
-    await sql.end({ timeout: 5 });
-    await schemaInfo.drop();
-  });
-
-  it('claims first owner when neither anchor is set', async () => {
+  it('claims Owner once and sets the singleton flag', async () => {
     const bridge = fakeBridge(false);
-    const result = await claimFirstOwner(db, bridge, 76561198000000010n);
+    const result = await claimFirstOwner(db, bridge, TEST_PLAYER_A);
     expect(result).toBe('claimed');
-    const ras = await db
-      .select()
-      .from(playerRoleAssignments)
-      .where(eq(playerRoleAssignments.steamId64, 76561198000000010n));
-    expect(ras.length).toBe(1);
-    const member = await db
-      .select()
-      .from(organizationMembers)
-      .where(eq(organizationMembers.steamId64, 76561198000000010n));
-    expect(member.length).toBe(1);
-    const player = await db.select().from(players).where(eq(players.steamId64, 76561198000000010n));
-    expect(player[0]?.canonicalName).toBe('Player 0010');
-    const orgRow = await db.select().from(organizations).limit(1);
-    expect((orgRow[0]?.settings as Record<string, unknown>).first_owner_claimed).toBe(true);
+
+    const player = await db
+      .select({ roleId: players.roleId })
+      .from(players)
+      .where(eq(players.steamId64, TEST_PLAYER_A));
+    expect(player[0]?.roleId).toBe(ownerRoleId);
+
+    const meta = await db.select().from(panelMeta).where(eq(panelMeta.id, 1));
+    expect(meta[0]?.firstOwnerClaimed).toBe(true);
+
     expect(bridge.fileAtomicWrite).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns already_claimed on second call (DB anchor)', async () => {
+    await claimFirstOwner(db, fakeBridge(false), TEST_PLAYER_A);
+
+    const bridge2 = fakeBridge(false);
+    const result = await claimFirstOwner(db, bridge2, TEST_PLAYER_B);
+    expect(result).toBe('already_claimed');
+
+    const playerB = await db
+      .select({ roleId: players.roleId })
+      .from(players)
+      .where(eq(players.steamId64, TEST_PLAYER_B));
+    expect(playerB[0]?.roleId).toBeNull();
   });
 
   it('returns already_claimed when sentinel exists (short-circuits before tx)', async () => {
     const bridge = fakeBridge(true);
-    const result = await claimFirstOwner(db, bridge, 76561198000000011n);
+    const result = await claimFirstOwner(db, bridge, TEST_PLAYER_A);
     expect(result).toBe('already_claimed');
     expect(bridge.fileAtomicWrite).not.toHaveBeenCalled();
-    const ras = await db.select().from(playerRoleAssignments);
-    expect(ras.length).toBe(0);
+
+    const meta = await db.select().from(panelMeta).where(eq(panelMeta.id, 1));
+    expect(meta[0]?.firstOwnerClaimed).toBe(false);
+
+    const player = await db
+      .select({ roleId: players.roleId })
+      .from(players)
+      .where(eq(players.steamId64, TEST_PLAYER_A));
+    expect(player[0]?.roleId).toBeNull();
   });
 
-  it('returns already_claimed when DB flag is set even without sentinel', async () => {
-    const bridge = fakeBridge(false);
+  it('handles concurrent calls — only one wins (advisory lock)', async () => {
+    const bridge1 = fakeBridge(false);
+    const bridge2 = fakeBridge(false);
+    const [r1, r2] = await Promise.all([
+      claimFirstOwner(db, bridge1, TEST_PLAYER_A),
+      claimFirstOwner(db, bridge2, TEST_PLAYER_B),
+    ]);
+    const claimed = [r1, r2].filter((r) => r === 'claimed');
+    const alreadyClaimed = [r1, r2].filter((r) => r === 'already_claimed');
+    expect(claimed.length).toBe(1);
+    expect(alreadyClaimed.length).toBe(1);
+  });
+
+  it('returns no_owner_role if Owner role somehow missing', async () => {
     await db
-      .update(organizations)
-      .set({ settings: { first_owner_claimed: true } })
-      .where(eq(organizations.id, orgId));
-    const result = await claimFirstOwner(db, bridge, 76561198000000012n);
-    expect(result).toBe('already_claimed');
-    expect(bridge.fileAtomicWrite).not.toHaveBeenCalled();
-  });
-
-  it('rolls back the transaction if sentinel write fails', async () => {
-    const bridge = fakeBridge(false);
-    bridge.fileAtomicWrite = vi.fn(async () => {
-      throw new Error('bridge down');
-    });
-    await expect(claimFirstOwner(db, bridge, 76561198000000013n)).rejects.toThrow();
-    const ras = await db.select().from(playerRoleAssignments);
-    expect(ras.length).toBe(0);
-    const orgRow = await db.select().from(organizations).limit(1);
-    expect((orgRow[0]?.settings as Record<string, unknown>).first_owner_claimed).not.toBe(true);
-  });
-
-  it('serialises concurrent calls — exactly one claims', async () => {
-    const bridge = fakeBridge(false);
-    const ids = Array.from({ length: 8 }, (_, i) => 76561198000000020n + BigInt(i));
-    const clients = ids.map(() => postgres(schemaInfo.url, { max: 1, onnotice: () => undefined }));
+      .update(roles)
+      .set({ isSystemRole: false })
+      .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)));
     try {
-      // biome-ignore lint/suspicious/noExplicitAny: test setup
-      const dbs = clients.map((c) => drizzle(c, { schema }) as any);
-      const results = await Promise.all(
-        // biome-ignore lint/suspicious/noExplicitAny: test setup
-        // biome-ignore lint/style/noNonNullAssertion: ids length matches dbs length
-        dbs.map((d: any, i: number) => claimFirstOwner(d, bridge, ids[i]!)),
-      );
-      const claimed = results.filter((r) => r === 'claimed').length;
-      const already = results.filter((r) => r === 'already_claimed').length;
-      expect(claimed).toBe(1);
-      expect(already).toBe(7);
-      const ras = await db.select().from(playerRoleAssignments);
-      expect(ras.length).toBe(1);
+      const result = await claimFirstOwner(db, fakeBridge(false), TEST_PLAYER_A);
+      expect(result).toBe('no_owner_role');
     } finally {
-      await Promise.all(clients.map((c) => c.end({ timeout: 5 })));
+      await db.update(roles).set({ isSystemRole: true }).where(eq(roles.name, 'Owner'));
     }
   });
 });

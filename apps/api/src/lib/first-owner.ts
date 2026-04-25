@@ -1,11 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import {
-  organizationMembers,
-  organizations,
-  playerRoleAssignments,
-  players,
-  roles,
-} from '@squad/db/schema';
+import { panelMeta, players, roles } from '@squad/db/schema';
 import { and, eq, sql } from 'drizzle-orm';
 
 export type ClaimResult = 'claimed' | 'already_claimed' | 'no_owner_role';
@@ -17,10 +11,6 @@ export interface SentinelBridge {
 
 const SENTINEL_PATH = '/var/lib/squad-panel/.first-owner-claimed';
 
-function stubName(steamId64: bigint): string {
-  return `Player ${String(steamId64).slice(-4)}`;
-}
-
 export async function claimFirstOwner(
   db: DatabaseClient,
   bridge: SentinelBridge,
@@ -30,60 +20,50 @@ export async function claimFirstOwner(
     await bridge.fileRead({ path: SENTINEL_PATH });
     return 'already_claimed';
   } catch {
-    // sentinel absent or bridge error — proceed to transactional path
+    // sentinel absent or bridge error — proceed to DB-anchored path
   }
 
-  return await db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('first_owner'))`);
+  const result = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('panel_first_owner'))`);
 
-    const orgs = await tx.select().from(organizations).limit(1);
-    const org = orgs[0];
-    if (!org) throw new Error('no_organization_yet');
-
-    const settings = (org.settings as Record<string, unknown>) ?? {};
-    if (settings.first_owner_claimed === true) return 'already_claimed';
+    const meta = await tx.select().from(panelMeta).where(eq(panelMeta.id, 1)).limit(1);
+    if (meta[0]?.firstOwnerClaimed) return 'already_claimed' as const;
 
     const ownerRoleRows = await tx
-      .select()
+      .select({ id: roles.id })
       .from(roles)
-      .where(and(eq(roles.orgId, org.id), eq(roles.name, 'Owner')))
+      .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
       .limit(1);
-    const ownerRole = ownerRoleRows[0];
-    if (!ownerRole) return 'no_owner_role';
+    const ownerRoleId = ownerRoleRows[0]?.id;
+    if (!ownerRoleId) return 'no_owner_role' as const;
 
-    const stub = stubName(steamId64);
-    await tx
-      .insert(players)
-      .values({
-        steamId64,
-        canonicalName: stub,
-        canonicalNameNormalized: stub.toLowerCase(),
-      })
-      .onConflictDoNothing();
+    const ownerExists = await tx
+      .select({ steamId64: players.steamId64 })
+      .from(players)
+      .where(eq(players.roleId, ownerRoleId))
+      .limit(1);
+    if (ownerExists.length > 0) {
+      await tx.update(panelMeta).set({ firstOwnerClaimed: true }).where(eq(panelMeta.id, 1));
+      return 'already_claimed' as const;
+    }
 
-    await tx
-      .insert(playerRoleAssignments)
-      .values({ steamId64, roleId: ownerRole.id, assignedBy: null })
-      .onConflictDoNothing();
-
-    await tx
-      .insert(organizationMembers)
-      .values({ steamId64, orgId: org.id, primaryRoleId: ownerRole.id })
-      .onConflictDoNothing();
-
-    await tx
-      .update(organizations)
-      .set({ settings: { ...settings, first_owner_claimed: true } })
-      .where(eq(organizations.id, org.id));
-
-    await bridge.fileAtomicWrite({
-      path: SENTINEL_PATH,
-      content: JSON.stringify({
-        steam_id64: String(steamId64),
-        claimed_at: new Date().toISOString(),
-      }),
-    });
-
-    return 'claimed';
+    await tx.update(players).set({ roleId: ownerRoleId }).where(eq(players.steamId64, steamId64));
+    await tx.update(panelMeta).set({ firstOwnerClaimed: true }).where(eq(panelMeta.id, 1));
+    return 'claimed' as const;
   });
+
+  if (result === 'claimed') {
+    try {
+      await bridge.fileAtomicWrite({
+        path: SENTINEL_PATH,
+        content: JSON.stringify({
+          steam_id64: String(steamId64),
+          claimed_at: new Date().toISOString(),
+        }),
+      });
+    } catch {
+      // sentinel write failure is non-fatal — DB is the source of truth.
+    }
+  }
+  return result;
 }
