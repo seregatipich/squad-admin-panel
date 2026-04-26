@@ -27,13 +27,15 @@ declare module 'fastify' {
     makeBridgeClient: () => BridgeClient;
   }
   interface FastifyRequest {
-    session?: { id: string; userId: string };
+    session?: { id: string; steamId64: bigint };
     user?: {
-      id: string;
-      email: string;
-      displayName: string | null;
+      steamId64: bigint;
+      canonicalName: string;
+      avatarUrl: string | null;
       permissions: PermissionContext;
     };
+    /** Set when the request was authenticated via API token (Bearer header). */
+    apiTokenId?: string;
     requestId: string;
   }
 }

@@ -2,7 +2,7 @@
 
 For component-specific issues, see [`components/bridge/troubleshooting.md`](../components/bridge/troubleshooting.md), [`components/api/troubleshooting.md`](../components/api/troubleshooting.md). This page is the operator-level entry point.
 
-## `docker compose up -d` starts but `/setup` never loads
+## `docker compose up -d` starts but the panel never loads
 
 1. `docker compose ps` — every container should be `healthy` (takes up to 2 min).
 2. If `api` is unhealthy: `docker compose logs api --since 2m`. See [`components/api/troubleshooting.md`](../components/api/troubleshooting.md).
@@ -67,17 +67,23 @@ docker compose restart worker-rcon
 
 If restarts don't help, capture `docker compose logs worker-rcon` and open an issue.
 
-## "This user doesn't exist" — but the row is in the DB
+## Steam login
 
-Email lookup is case-insensitive (`lower(email) UNIQUE`). Confirm with:
+### "Доступ запрещён" on `/no-access` after Steam login
 
-```sql
-SELECT id, email FROM users WHERE lower(email) = lower('USER@example.com');
-```
+The Steam ID has no panel role. An admin needs to assign one:
 
-## 2FA recovery without a backup code
+1. Owner opens `/players/<their_steam_id64>` in the panel.
+2. Section "Доступ к панели" → "Назначить роль" dropdown → pick role → "Назначить".
+3. The user logs in via Steam again. Their next callback now resolves to a player with non-empty permissions and they are redirected to `/`.
 
-See [`components/api/troubleshooting.md`](../components/api/troubleshooting.md#totp-recovery-without-a-backup-code) for the SQL recovery path.
+### `owner_role_missing` 500 on first login
+
+The system roles weren't seeded by the DB migration. Verify `SELECT name FROM roles` returns at least `Owner`. If empty, the migration didn't run — run `pnpm db:migrate` against the live database, then retry login.
+
+### Audit chain broken after migration 0008
+
+Migration 0008 drops and recreates `audit_log`. The hash chain restarts from `prev_hash = NULL`. `pnpm verify:audit-chain` will be green going forward; rows from before migration 0008 are gone with the table.
 
 ## Useful commands
 

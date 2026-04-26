@@ -8,6 +8,16 @@
       "types": "./dist/index.d.ts",
       "development": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./role-colors": {
+      "types": "./dist/role-colors.d.ts",
+      "development": "./src/role-colors.ts",
+      "default": "./dist/role-colors.js"
+    },
+    "./permissions": {
+      "types": "./dist/permissions.d.ts",
+      "development": "./src/permissions.ts",
+      "default": "./dist/permissions.js"
     }
   },
   "scripts": {
@@ -15,9 +25,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run",
-    "clean": "rm -rf dist .turbo"
+    "clean": "rm -rf dist .turbo",
+    "test:mutation": "stryker run"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
     "@types/node": "^22.10.1",
     "typescript": "^5.7.2",
     "vitest": "^3.2.4"

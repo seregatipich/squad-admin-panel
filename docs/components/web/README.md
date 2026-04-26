@@ -5,7 +5,7 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 ## Responsibilities
 
 - Dashboard, server detail, install wizard, config editor, players, audit, panel-wide log console, account.
-- Auth screens: login, TOTP enrollment / challenge.
+- Auth screens: Steam login button → OpenID redirect, `/no-access` for players without a role.
 - Live indicators: connection state, polling staleness, WS reconnect with exponential backoff.
 
 ## What this component does NOT do
@@ -17,8 +17,8 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 
 | Route | File | What it does |
 |---|---|---|
-| `/login` | `src/app/login/page.tsx` | Email + password, optional TOTP / backup code. |
-| `/setup` | `src/app/setup/page.tsx` | Walks the operator through the 4-step setup (`check-env` → `org` → `owner` → `finalize`). |
+| `/login` | `src/app/login/page.tsx` | "Войти через Steam" button. Redirects to Steam OpenID 2.0. Immediately redirects to `/dashboard` if already authenticated. |
+| `/no-access` | `src/app/no-access/page.tsx` | Shown after successful Steam login when the player has no panel role. Displays their Steam ID so an Owner can look them up. |
 | `/dashboard` | `src/app/(dashboard)/dashboard/page.tsx` | Hub: bridge status, host metrics tile (live), per-worker heartbeats, server count summary. The metrics tile opens the `MetricHistoryModal` for 24 h history. |
 | `/servers` | `src/app/(dashboard)/servers/page.tsx` | List with live `rcon_state` / `player_count` / `last_poll_at`. |
 | `/servers/new` | `src/app/(dashboard)/servers/new/page.tsx` | Install wizard: collects display name + ports, `POST /servers`, then `POST /servers/:id/install`, subscribes to `/install/ws`. |
@@ -26,10 +26,14 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | `/servers/[id]/configs` | `src/app/(dashboard)/servers/[id]/configs/page.tsx` | Monaco editor with three tabs: Editor / История (versions, restore, diff) / Blame. |
 | `/servers/[id]/events` | `src/app/(dashboard)/servers/[id]/events/page.tsx` | Newest envelopes from `events:server:{id}` via `GET /servers/:id/events`. |
 | `/players` | `src/app/(dashboard)/players/page.tsx` | Recently-seen players. |
-| `/players/[steam_id64]` | `src/app/(dashboard)/players/[steam_id64]/page.tsx` | Detail with name history; IP history is gated by `player:view_ips`. |
+| `/players/[steam_id64]` | `src/app/(dashboard)/players/[steam_id64]/page.tsx` | Detail with name history; IP history is gated by `player:view_ips`. Section "Доступ к панели" (gated by `user:manage_roles`) shows the player's current single role with a color dot, an "Изменить" button to open a dropdown of all roles, and a "Снять роль" button (`PUT /api/v1/players/:id/role` with `role_id: null`). Picking the Owner role triggers a confirm dialog. 409 "last Owner" errors surface as an inline message. |
 | `/audit` | `src/app/(dashboard)/audit/page.tsx` | Page-paginated audit log; live indicator showing freshness. |
 | `/logs` | `src/app/(dashboard)/logs/page.tsx` | Panel-wide connector logs with filters (source, level, server, free-text). Server component that pre-fetches the server list, hands off to the `LogList` client component which polls `GET /logs`. |
-| `/settings/account` | `src/app/(dashboard)/settings/account/page.tsx` | TOTP provision / enable / disable. |
+| `/roles` | `src/app/(dashboard)/roles/page.tsx` | List all roles with color dot, Системная badge, user count, edit/delete actions. Delete blocked for Owner; confirm dialog shows affected user count. |
+| `/roles/new` | `src/app/(dashboard)/roles/new/page.tsx` | Create role form — wraps `RoleEditor`, POSTs to `/api/v1/roles`, redirects to list. |
+| `/roles/[id]` | `src/app/(dashboard)/roles/[id]/page.tsx` | Edit role — loads via `GET /api/v1/roles/:id`, wraps `RoleEditor`; Owner role is rendered in read-only mode. |
+| `/settings/account` | `src/app/(dashboard)/settings/account/page.tsx` | Session management — list active sessions, revoke individual or all. |
+| `/users` | `src/app/(dashboard)/users/page.tsx` | Table of all players with a non-NULL role (nick, SteamID64, role with color dot, last_seen). "Назначить роль игроку" button (gated by `user:manage_roles`) opens a modal with debounced `GET /api/v1/players?q=` typeahead + role dropdown; assigning the Owner role requires an explicit `confirm()` before submitting. |
 
 ## Components
 
@@ -45,6 +49,8 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | `SystemStatus.tsx` | Dashboard system-health card: bridge ping, worker heartbeats, depot status. |
 | `MetricHistoryChart.tsx` | Recharts `AreaChart` rendering 24 h cpu/ram/disk (% axis) or net (KB/s axis, two areas: rx + tx). Lazy-loaded — never imported at module level. Exports `MetricKey` (`'cpu'\|'ram'\|'disk'\|'net'`) and `MetricPoint` types. |
 | `MetricHistoryModal.tsx` | Backdrop modal that fetches `GET /api/v1/host/metrics/history?seconds=86400`, decodes the packed integer tuple inline (cpu/load values divided by 100; bytes pass through), then `next/dynamic`-loads `MetricHistoryChart`. ESC / backdrop-click to close. The unpack is inlined rather than imported from `@squad/shared-config` so Next.js doesn't try to bundle the server-only `node:stream`-using modules from that package. |
+| `RoleColorDot.tsx` | Coloured dot used wherever a role's colour needs to be shown inline (e.g. role lists). Accepts `color: RoleColor` from `@squad/shared-config/role-colors` and an optional `size` (`'sm'`/`'md'`). Purely presentational — no click handlers. |
+| `RoleEditor.tsx` | Shared editor used by `/roles/new` and `/roles/[id]`. Loads permission registry from `GET /api/v1/permissions` on mount. Features: name field, 16-color swatch picker, description textarea, permission search bar, permissions grouped by 16 categories in 3-column responsive grid with ⚠️ for `dangerous` and "(в разработке)" for `unimplemented`. Owner read-only mode: amber banner + all inputs disabled. |
 
 ## Lib utilities
 
@@ -53,7 +59,7 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | File | Purpose |
 |---|---|
 | `api.ts` | Typed `fetch` wrapper that re-uses session cookies, surfaces `error.code` from JSON responses. |
-| `dal.ts` | Server-side Data Access Layer used by server components (`requireSession`, etc.). |
+| `dal.ts` | Server-side Data Access Layer used by server components (`requireSession`, etc.). `Me` interface matches `/api/v1/me`: `steam_id64`, `canonical_name`, `avatar_url`, `permissions`. |
 | `format.ts` | Number / duration / bytes / SteamID formatters. Tested. |
 | `host-health.ts` | Aggregates `bridge-status` + worker heartbeats into one health enum for the dashboard. Tested. |
 | `ws-backoff.ts` | Exponential-backoff WebSocket reconnect helper used by `LogConsole` and the install/depot WS subscribers. Tested. |
@@ -64,7 +70,7 @@ Every polling surface uses `LiveIndicator` + the same shape: poll every N second
 
 ## Code location
 
-- App Router: [`apps/web/src/app/`](../../../apps/web/src/app/) — `(dashboard)/`, `login/`, `setup/`.
+- App Router: [`apps/web/src/app/`](../../../apps/web/src/app/) — `(dashboard)/`, `login/`.
 - Components: [`apps/web/src/components/`](../../../apps/web/src/components/).
 - Auth helper: `apps/web/src/app/(dashboard)/layout.tsx` calls `requireSession()`.
 
@@ -83,7 +89,7 @@ Every polling surface uses `LiveIndicator` + the same shape: poll every N second
 ## Components it depends on
 
 - [`api`](../api/README.md) — every page is data-driven by REST or WebSocket.
-- [`shared-types`](../shared-types/README.md), [`shared-config`](../shared-config/README.md) — Zod schemas, permission keys, hot-reload table. Note: the metric-unpack math is duplicated inline in `MetricHistoryModal` rather than imported, since `shared-config`'s barrel pulls in `node:stream` from the log-stream sink, which Next.js refuses to bundle for the client.
+- [`shared-types`](../shared-types/README.md), [`shared-config`](../shared-config/README.md) — Zod schemas, permission keys, hot-reload table. Client-side code imports sub-paths (`@squad/shared-config/role-colors`, `@squad/shared-config/permissions`) instead of the barrel to avoid bundling the server-only `node:stream`-dependent log-stream sink. The metric-unpack math in `MetricHistoryModal` is inlined for the same reason.
 
 ## Basic usage
 

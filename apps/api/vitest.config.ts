@@ -2,11 +2,23 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    // E2E tests live under test/e2e/ and hit a live panel stack over HTTP.
-    // Skip them by default because they require docker + real Squad depot;
-    // run with: pnpm --filter @squad/api test:e2e
     exclude: ['**/node_modules/**', '**/dist/**', 'test/e2e/**'],
     testTimeout: 10_000,
-    hookTimeout: 30_000,
+    hookTimeout: 120_000,
+    fileParallelism: false,
+    sequence: { concurrent: false },
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'lcov', 'json-summary'],
+      include: ['src/**/*.ts'],
+      exclude: ['src/**/*.test.ts', 'src/**/*.d.ts', 'src/**/types.ts'],
+      thresholds: {
+        lines: 70,
+        functions: 70,
+        branches: 60,
+        statements: 70,
+      },
+      reportsDirectory: './coverage',
+    },
   },
 });

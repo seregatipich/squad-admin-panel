@@ -74,6 +74,43 @@ func TestValidateWritablePath_RejectsDepot(t *testing.T) {
 	}
 }
 
+func TestValidateReadablePath_AcceptsSentinel(t *testing.T) {
+	if err := validateReadablePath("/var/lib/squad-panel/.first-owner-claimed"); err != nil {
+		t.Errorf("expected sentinel readable, got %v", err)
+	}
+}
+
+func TestValidateReadablePath_RejectsSentinelNeighbours(t *testing.T) {
+	cases := []string{
+		"/var/lib/squad-panel/.first-owner-claim",
+		"/var/lib/squad-panel/something-else",
+		"/var/lib/squad-panel/.first-owner-claimed/extra",
+	}
+	for _, p := range cases {
+		if err := validateReadablePath(p); err == nil {
+			t.Errorf("expected rejection for %q", p)
+		}
+	}
+}
+
+func TestValidateWritablePath_AcceptsSentinel(t *testing.T) {
+	if err := validateWritablePath("/var/lib/squad-panel/.first-owner-claimed"); err != nil {
+		t.Errorf("expected sentinel writable, got %v", err)
+	}
+}
+
+func TestValidateWritablePath_RejectsSentinelNeighbours(t *testing.T) {
+	cases := []string{
+		"/var/lib/squad-panel/.first-owner-claim",
+		"/var/lib/squad-panel/something-else",
+	}
+	for _, p := range cases {
+		if err := validateWritablePath(p); err == nil {
+			t.Errorf("expected rejection for %q", p)
+		}
+	}
+}
+
 func TestHostAgentRestart_RespondsBeforeExec(t *testing.T) {
 	execCalled := make(chan []string, 1)
 	var execCount atomic.Int32

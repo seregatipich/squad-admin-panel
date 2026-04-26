@@ -2,9 +2,20 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    // Playwright specs live under e2e/*.spec.ts; they use @playwright/test,
-    // not vitest. Run them via `pnpm --filter @squad/web test:e2e`.
-    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**', '.next/**'],
+    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**', '**/.next/**', 'test/e2e/**'],
     passWithNoTests: true,
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'lcov', 'json-summary'],
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'src/**/*.d.ts', 'src/**/types.ts'],
+      thresholds: {
+        lines: 1,
+        functions: 68,
+        branches: 83,
+        statements: 1,
+      },
+      reportsDirectory: './coverage',
+    },
   },
 });

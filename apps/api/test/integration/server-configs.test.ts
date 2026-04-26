@@ -7,17 +7,17 @@ import {
   assertAuditRow,
   buildIntegrationApp,
   type IntegrationHarness,
+  loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
 
-const EMAIL = 'owner@test.local';
-const PASSWORD = 'correct-horse-battery-staple';
+const OWNER_STEAM_ID = 76561198000000999n;
 
 let h: IntegrationHarness;
 
 beforeEach(async () => {
   h = await buildIntegrationApp({
-    seedOwner: { email: EMAIL, password: PASSWORD },
+    seedOwner: { steamId64: OWNER_STEAM_ID },
     bridge: makeFakeBridge(),
   });
 });
@@ -27,16 +27,7 @@ afterEach(async () => {
 });
 
 async function login(): Promise<string> {
-  const resp = await h.app.inject({
-    method: 'POST',
-    url: '/api/v1/auth/login',
-    payload: { email: EMAIL, password: PASSWORD },
-  });
-  if (resp.statusCode !== 200) throw new Error(`login failed: ${resp.body}`);
-  const raw = Array.isArray(resp.headers['set-cookie'])
-    ? resp.headers['set-cookie'][0]!
-    : (resp.headers['set-cookie'] as string);
-  return raw.match(/(__Host-sid=[^;]+)/)?.[1]!;
+  return loginAsOwner(h);
 }
 
 async function createServer(cookie: string): Promise<string> {

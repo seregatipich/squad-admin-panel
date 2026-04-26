@@ -3,14 +3,15 @@ import { diffArrays } from 'diff';
 export interface BlameVersion {
   id: string;
   content: string;
-  author_user_id: string | null;
+  author_steam_id64: string | null;
+  author_label: string | null;
   created_at: string;
 }
 
 export interface BlameLine {
   text: string;
   version_id: string;
-  author_user_id: string | null;
+  author_steam_id64: string | null;
   created_at: string;
 }
 
@@ -39,7 +40,7 @@ export function computeBlame(versions: BlameVersion[]): BlameLine[] {
   let current: BlameLine[] = splitLines(first.content).map((text) => ({
     text,
     version_id: first.id,
-    author_user_id: first.author_user_id,
+    author_steam_id64: first.author_steam_id64,
     created_at: first.created_at,
   }));
 
@@ -56,7 +57,7 @@ export function computeBlame(versions: BlameVersion[]): BlameLine[] {
           out.push({
             text,
             version_id: v.id,
-            author_user_id: v.author_user_id,
+            author_steam_id64: v.author_steam_id64,
             created_at: v.created_at,
           });
         }

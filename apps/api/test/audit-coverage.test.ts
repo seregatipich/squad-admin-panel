@@ -23,14 +23,16 @@ import requestContextPlugin from '../src/plugins/request-context.js';
 
 import auditRoutes from '../src/routes/audit.js';
 import authRoutes from '../src/routes/auth.js';
-import discordRoutes from '../src/routes/auth-discord.js';
 import steamRoutes from '../src/routes/auth-steam.js';
 import hostRoutes from '../src/routes/host.js';
 import hostActionsRoutes from '../src/routes/host-actions.js';
+import meTokensRoutes from '../src/routes/me-tokens.js';
+import permissionsRoutes from '../src/routes/permissions.js';
 import playerRoutes from '../src/routes/players.js';
+import rolesRoutes from '../src/routes/roles.js';
 import serverInstallRoutes from '../src/routes/server-install.js';
 import serverRoutes from '../src/routes/servers.js';
-import setupRoutes from '../src/routes/setup.js';
+import usersRoutes from '../src/routes/users.js';
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const SWAGGER_PREFIX = '/api/docs';
@@ -77,15 +79,17 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   (app as any).setErrorHandler(() => undefined);
 
   await app.register(authRoutes);
-  await app.register(setupRoutes);
+  await app.register(meTokensRoutes);
   await app.register(hostRoutes);
   await app.register(hostActionsRoutes);
   await app.register(serverRoutes);
   await app.register(serverInstallRoutes);
+  await app.register(permissionsRoutes);
+  await app.register(rolesRoutes);
+  await app.register(usersRoutes);
   await app.register(playerRoutes);
   await app.register(auditRoutes);
   await app.register(steamRoutes);
-  await app.register(discordRoutes);
 
   // suppress 'unused imports' — plugins are referenced here defensively
   // so a future refactor that pulls them into the route registration
@@ -121,7 +125,7 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
 
   it('mutating routes that claim audit: false are limited to auth callbacks and OAuth entry points', async () => {
     const routes = await collectRoutes();
-    const allowlist = new Set(['/api/v1/auth/steam/callback', '/api/v1/auth/discord/callback']);
+    const allowlist = new Set(['/api/v1/auth/steam/callback']);
     const falsy = routes.filter(
       (r) =>
         MUTATING.has(r.method) && !r.url.startsWith(SWAGGER_PREFIX) && r.config.audit === false,

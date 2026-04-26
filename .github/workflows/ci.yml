@@ -19,7 +19,20 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo run typecheck
       - run: pnpm exec biome check .
-      - run: pnpm turbo run test
+      - name: Run tests with coverage
+        run: pnpm test:cov
+        env:
+          DATABASE_URL: postgres://admin:test_password@localhost:5432/admin
+          POSTGRES_PASSWORD: test_password
+          REDIS_URL: redis://localhost:6379
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.sha }}
+          path: '**/coverage/lcov.info'
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Scan for secrets
         uses: gitleaks/gitleaks-action@v2
         env:

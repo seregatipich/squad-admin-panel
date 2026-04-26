@@ -21,23 +21,11 @@ interface ServersResponse {
 }
 
 const POLL_MS = 4000;
-const STATUS_FILTERS = [
-  'all',
-  'running',
-  'starting',
-  'stopped',
-  'ready',
-  'failed',
-  'installing',
-  'pending',
-] as const;
-type StatusFilter = (typeof STATUS_FILTERS)[number];
 
 export default function ServersPage() {
   const [data, setData] = useState<ServersResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
-  const [filter, setFilter] = useState<StatusFilter>('all');
   const [actingId, setActingId] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
@@ -68,16 +56,14 @@ export default function ServersPage() {
   const rows = useMemo(() => {
     if (!data) return [];
     const needle = q.trim().toLowerCase();
-    return data.items.filter((s) => {
-      if (filter !== 'all' && s.status !== filter) return false;
-      if (!needle) return true;
-      return (
+    if (!needle) return data.items;
+    return data.items.filter(
+      (s) =>
         s.display_name.toLowerCase().includes(needle) ||
         s.slug.toLowerCase().includes(needle) ||
-        s.id.toLowerCase().includes(needle)
-      );
-    });
-  }, [data, q, filter]);
+        s.id.toLowerCase().includes(needle),
+    );
+  }, [data, q]);
 
   async function runAction(id: string, action: 'start' | 'stop' | 'restart') {
     setActingId(`${id}:${action}`);
@@ -115,31 +101,13 @@ export default function ServersPage() {
         <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{err}</div>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          type="search"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Поиск по имени, slug или id…"
-          className="flex-1 min-w-[220px] rounded border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-sm"
-        />
-        <div className="flex flex-wrap gap-1 text-xs">
-          {STATUS_FILTERS.map((s) => (
-            <button
-              type="button"
-              key={s}
-              onClick={() => setFilter(s)}
-              className={`rounded px-2 py-1 font-mono uppercase ${
-                filter === s
-                  ? 'bg-sky-700 text-white'
-                  : 'bg-neutral-900 text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-      </div>
+      <input
+        type="search"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Поиск по имени, slug или id…"
+        className="w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-sm"
+      />
 
       {rows.length === 0 ? (
         <div className="rounded border border-neutral-800 bg-neutral-950 p-6 text-center text-neutral-500 text-sm">

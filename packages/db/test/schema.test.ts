@@ -5,16 +5,10 @@ import * as schema from '../src/schema/index.js';
 describe('schema surface', () => {
   it('exports every P0 table', () => {
     const expected = [
-      'users',
       'sessions',
-      'userIdentities',
-      'userApiTokens',
-      'organizations',
-      'organizationMembers',
+      'playerApiTokens',
       'roles',
       'rolePermissions',
-      'roleServerScopes',
-      'userRoleAssignments',
       'servers',
       'serverCredentials',
       'serverSettings',
@@ -22,8 +16,9 @@ describe('schema surface', () => {
       'playerNameHistory',
       'playerIpHistory',
       'events',
-      'processedEvents',
       'auditLog',
+      'configVersions',
+      'panelMeta',
     ];
     for (const name of expected) {
       expect(schema).toHaveProperty(name);

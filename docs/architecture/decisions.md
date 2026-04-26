@@ -2,6 +2,80 @@
 
 Meaningful architectural choices, recorded as we make them.
 
+## 2026-04-25 — Panel RBAC: single role per user, registry-objects, drop multi-tenancy
+
+### Context
+
+The panel had an RBAC schema that was never fully enforced: `player_role_assignments` was a M:N table, `role_server_scopes` existed but was never read, `organizations` and `organization_members` were scaffolded but multi-tenancy was never built, and `clearance_level` on roles was an integer column with no enforcement logic. The permission model was a flat string array with no metadata (no category, no danger flag, no unimplemented marker). The setup wizard (`/setup`) relied on `organizations.settings` for the first-Owner claim, adding a fragile boot dependency. Pre-launch was the correct time to pay this debt before real data was in the system.
+
+### Decision
+
+1. **Single role per player** — replace `player_role_assignments` M:N with `players.role_id uuid NULL`. `NULL` is the sole gate for "no panel access".
+2. **Registry-objects** — `PERMISSIONS: readonly PermissionDef[]` in `packages/shared-config/src/permissions.ts`. Each entry carries `{key, category, label, dangerous?, unimplemented?}`. Adding a permission is a one-line append, no migration, no UI change required.
+3. **Drop multi-tenancy** — `organizations`, `organization_members`, `role_server_scopes`, `audit_log.org_id` all removed in migration `0009_panel_rbac.sql`.
+4. **Drop clearance levels** — `roles.clearance_level` column and all `hasServerPermission` / clearance-max logic removed.
+5. **Five seeded roles in SQL** — Owner (system, `is_system_role = true`), Senior Admin, Admin, Moderator, Viewer — with full permission sets INSERTed in `0009`. No application-layer seeder.
+6. **First-login Owner trick** — `claimFirstOwner()` in `apps/api/src/lib/first-owner.ts` uses `panel_meta.first_owner_claimed` and a Postgres advisory lock to assign the Owner role to the first Steam login on a fresh panel. Replaces the setup wizard.
+7. **16-color palette** — `roles.color` constrained by a DB CHECK to 16 Tailwind slug names mirrored in `ROLE_COLORS`. Unit test asserts TS constant ↔ SQL constraint sync.
+8. **Point-invalidated in-memory cache** — `loadUserPermissions` caches in Redis at `rbac:perms:{steam_id64}` with TTL 30 s. `invalidatePermissionCache` and `invalidatePermissionCacheForRole` clear entries immediately on role mutations; TTL is a safety-net only.
+
+### Rationale
+
+- **Single role over M:N**: The spec was written from the invariant "one role per user". A M:N table simulating 1:1 is tech debt from day one; pre-launch is the cheapest time to remove it.
+- **Registry-objects over flat strings**: One source of truth; types are inferred; no migration needed for new keys; the role editor UI can display categories, danger warnings, and "в разработке" without any server-side logic.
+- **Drop multi-tenancy**: Never used, never enforced, never planned for the foreseeable future. Removing it eliminates ~4 tables, one audit column, and a whole class of join complexity from every RBAC query.
+- **SQL seeder over application seeder**: Idempotent by construction (migration runs exactly once). No boot-time race conditions. Roles are guaranteed present before the API starts.
+- **Advisory lock for first-Owner**: Handles the race condition where two simultaneous first logins both see `first_owner_claimed = false`. The lock is advisory (no deadlock risk) and scoped to the transaction.
+- **In-process cache + point-invalidation**: Multi-instance API is not a current requirement. Single process cache keeps permission checks sub-millisecond; explicit invalidation on every mutation means the TTL is never visible to the user.
+
+### Consequences
+
+- Migration `0009_panel_rbac.sql` is destructive and forward-only. Any pre-existing `player_role_assignments`, `organizations`, or `role_server_scopes` rows are gone. Acceptable at pre-launch.
+- `player_api_tokens` is truncated in `0009` — no real tokens existed at migration time.
+- `audit_log.org_id` is dropped; the hash chain is unaffected (column was always NULL).
+- Operators who delete a preset role (e.g. Moderator) must re-create it manually — there is no auto-respawn. Documented in [`docs/components/rbac/troubleshooting.md`](../components/rbac/troubleshooting.md).
+- In-process cache invalidation does not propagate across API instances. Horizontal scaling requires a Redis pub/sub invalidation layer (deferred).
+
+### Alternatives considered
+
+- **Keep M:N with UNIQUE constraint**: Simulates 1:1 but leaves the conceptual mismatch in the schema forever. Rejected.
+- **Clearance levels instead of flat bag**: Spec explicitly says "no hierarchy, no clearance". Rejected.
+- **Keep organizations as dormant schema**: Adds join noise and confusion for new contributors. Rejected.
+- **Redis pub/sub invalidation now**: Multi-instance is not a current requirement; the TTL safety-net is sufficient. Deferred.
+- **DB-table for permission registry**: Would require a migration for every new key and a round-trip to DB on every role edit page load. Rejected in favour of the in-code registry.
+
+---
+
+## 2026-04-25 — API tokens for integrations (Bearer auth, scopes ⊆ user permissions)
+
+### Context
+
+The panel is admin-facing and so far had only browser cookie sessions. Integrations (CI scripts, monitoring, Discord bots) had no way to authenticate without scraping HTML or running a full Steam OpenID handshake. The schema for `player_api_tokens` already existed (since `0008_steam_only_auth.sql`) but nothing minted, validated, or accepted them — `audit_log.actor_token_id` was always NULL.
+
+### Decision
+
+Mint per-user, long-lived bearer tokens at `/api/v1/me/tokens` (cookie-only management). Tokens are `sqp_<uuidv7>_<24-byte base64url>`, persisted as `sha256` only. Authentication is `Authorization: Bearer …`; effective permissions on every request are `currentRolePermissions ∩ token.scopes`. Soft revoke (`revoked_at`), no TTL. 25 active tokens per user maximum.
+
+### Rationale
+
+- **Reuse `PERMISSION_KEYS`** instead of inventing an `api_token:*` permission family: scopes are already a familiar set with first-class UI; users can't grant a token more power than they themselves have.
+- **Live intersect, not snapshot**: revoking a role immediately shrinks a token's reach without an explicit revoke. Mirrors how cookie sessions react to role changes.
+- **Cookie-only management**: a stolen token cannot rotate itself or mint a wider one.
+- **Sha-256, not Argon2**: 24 bytes of entropy makes brute-force impossible; Argon2 is for low-entropy human secrets, not random API tokens. Same approach as session token storage.
+- **Soft revoke**: keeps `audit_log.actor_token_id` referentially valid for forensic queries.
+
+### Consequences
+
+- `audit_log.actor_token_id` becomes non-null for the first time. Canonical-JSON hashing already includes the column, so chain integrity is unaffected — but the first row carrying a value will look "different" in audit dumps.
+- The `useId`/scopes-checkbox UI implies the user must already have the permission to grant it; users with no permissions can only mint a `scopes=[]` introspection token (allowed).
+- No expiry → operators must revoke leaked tokens manually. The `sqp_` prefix makes secret scanners catch the common case.
+
+### Alternatives considered
+
+- **Per-token expiry / refresh tokens**: deferred. Would add UI complexity and a daily prune job for what is fundamentally a list operators can already curate at `/settings/tokens`.
+- **Admin-managed tokens for other users**: deferred. P1 use cases are user-owned automation; admin minting is a future RBAC question.
+- **Separate `api_token:*` permission family**: rejected — duplicates the existing permission model and forces every gated route to opt in.
+
 ## 2026-04-25 — Panel observability via two capped Redis Streams + pino multistream sink
 
 ### Context
@@ -65,3 +139,39 @@ Each Squad server now runs as a Docker container (`squad-server:latest`, debian-
 
 - **Keep native systemd, harden bridge args further.** Rejected — apt + steamcmd are unbounded surfaces; whitelisting them safely is harder than removing them.
 - **Run Squad in `network_mode: bridge` with explicit port mapping.** Rejected — Squad's EOS handshake misbehaves behind a NAT layer; `--network host` is the supported config.
+
+## 2026-04-25 — Steam-only login + steam_id64 PK + dual-anchor first-owner trick
+
+### Context
+
+Email/password + TOTP login was scoped for Phase 0 but never shipped to users. Spec §1.1–§1.6 mandated Steam OpenID 2.0 as the only authentication path. The panel manages Squad servers; players already have a primary identity (Steam ID) that is captured automatically by `worker-rcon` and `worker-log-ingest`.
+
+### Decision
+
+- Steam OpenID 2.0 is the only login method. `/api/v1/auth/login` and TOTP endpoints are removed.
+- Identity anchor moves from `users.id uuid` to `players.steam_id64 bigint`. The `users` table is dropped.
+- "Pending users" UI is replaced by "players without panel role" — assignment lives in `/players/<steam_id64>` profile under "Доступ к панели".
+- First Steam-login after fresh install becomes Owner exactly once via dual anchor:
+  - `organizations.settings.first_owner_claimed: true`.
+  - Bridge-managed sentinel file `/var/lib/squad-panel/.first-owner-claimed`.
+  - `pg_advisory_xact_lock(hashtext('first_owner'))` serialises concurrent callbacks.
+- audit_log gains discriminated actor union: `(actor_kind='steam', actor_steam_id64)` or `(actor_kind='system', actor_system_label)`. `actor_token_id` traces actions taken via API tokens (now wired up — see the 2026-04-25 "API tokens for integrations" decision).
+- Sessions are sliding with 6h TTL and 60s touch throttle (Redis `SETNX session-touch:{id}`).
+
+### Rationale
+
+Steam ID is the universal Squad identity. Anchoring everything (sessions, audit, role assignments) on `players.steam_id64` removes the artificial split between "panel users" and "game players" — a moderator IS a player who happens to have a panel role.
+
+The dual anchor for first-owner survives `DROP DATABASE` + restore: the sentinel file persists on the host. Deleting both the DB row and the sentinel file requires root + bridge access — i.e., a deliberate operator action, never accidental.
+
+### Consequences
+
+- Steam Web API key (`STEAM_API_KEY`) is optional. Without it, persona is `Player <last 4 of steam_id64>`; the player can update their canonical name when they next play on a server (RCON ListPlayers updates).
+- Audit hash chain uses `action_type|target_type|target_id|context|created_at` — actor fields are NOT in the canonical payload, so the discriminated actor change does not break `pnpm verify:audit-chain`.
+- e2e tests cannot fully exercise the OpenID 2.0 verifier without a real Steam account; they verify post-login state via `PANEL_TEST_COOKIE` env. The cookie-supply pattern is documented in `docs/components/api/testing.md`.
+
+### Alternatives considered
+
+- **Soft-cut behind a feature flag** — kept email/password as a backdoor. Rejected: doubled the auth attack surface and the spec explicitly required "единственный способ входа".
+- **Discord OAuth as alternative** — rejected for Phase 1; Discord remains a linked identity for notifications/bot scope (P1+).
+- **Steam OAuth instead of OpenID 2.0** — Steam has no OAuth endpoint. OpenID 2.0 is the only public auth surface Steam offers.

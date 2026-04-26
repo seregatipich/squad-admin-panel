@@ -24,9 +24,11 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
         .select({
           id: auditLog.id,
           created_at: auditLog.createdAt,
-          actor_user_id: auditLog.actorUserId,
-          actor_ip: auditLog.actorIp,
           actor_kind: auditLog.actorKind,
+          actor_steam_id64: auditLog.actorSteamId64,
+          actor_token_id: auditLog.actorTokenId,
+          actor_system_label: auditLog.actorSystemLabel,
+          actor_ip: auditLog.actorIp,
           action_type: auditLog.actionType,
           target_type: auditLog.targetType,
           target_id: auditLog.targetId,
@@ -38,9 +40,11 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
         .orderBy(desc(auditLog.id))
         .limit(page_size)
         .offset(offset);
-      // audit_log.id is bigserial → bigint in Drizzle → BigInt in JS.
-      // JSON.stringify chokes on BigInt, so we stringify it explicitly.
-      const items = rows.map((r) => ({ ...r, id: String(r.id) }));
+      const items = rows.map((r) => ({
+        ...r,
+        id: String(r.id),
+        actor_steam_id64: r.actor_steam_id64 !== null ? String(r.actor_steam_id64) : null,
+      }));
       return {
         items,
         total: items.length,

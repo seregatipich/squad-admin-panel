@@ -12,7 +12,7 @@
 
 | Store | Used by | What lives there |
 |---|---|---|
-| PostgreSQL | api, workers, db migrations | users, sessions, servers, players, config_versions, audit_log, events (partitioned monthly), processed_events |
+| PostgreSQL | api, workers, db migrations | players (with `role_id`), sessions, roles, role_permissions, panel_meta (singleton), servers, config_versions, audit_log, events (partitioned monthly), processed_events |
 | Redis | api, all workers | event streams `events:server:{id}` and `events:global`; connector-logs stream `panel:logs` (`MAXLEN ~ 100k`); host metrics history `host:metrics` (`XADD` capped); depot progress stream `depot:progress` (≤5k entries); status keys `rcon:status:{id}`, `worker:heartbeat:{name}` (TTL 30 s); blame cache `config-blame:{tip_version_id}` (TTL 24 h); install in-flight `depot:updating`; rate-limit counters |
 | Host filesystem | bridge, server containers | `/var/lib/squad-panel/configs/{uuid}/ServerConfig/*.cfg` (RW host, RW container), `/var/lib/squad-panel/saved/{uuid}/**` (RW), `/var/lib/docker/volumes/squad-depot/**` (RO) |
 

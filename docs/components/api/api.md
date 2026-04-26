@@ -4,42 +4,52 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 
 ## Conventions
 
-- **Authentication**: cookie `__Host-sid` (`Secure; HttpOnly; SameSite=lax; Path=/`). Set on `POST /api/v1/auth/login`. Cleared on `POST /api/v1/auth/logout`.
+- **Authentication**: cookie `__Host-sid` (`Secure; HttpOnly; SameSite=lax; Path=/`). Set on `GET /api/v1/auth/steam/callback`. Cleared on `POST /api/v1/auth/logout`. As an alternative for programmatic access, requests may carry `Authorization: Bearer sqp_…` (an API token minted via `/api/v1/me/tokens`) — the cookie path takes precedence when both are present. Token-managing routes (`/api/v1/me/tokens*`) reject Bearer auth.
+- **Identity anchor**: `players.steam_id64` (bigint). There are no email/password accounts. All sessions and permissions are keyed on Steam ID.
 - **Authorisation**: every authed route declares `config.permissions: PermissionKey[]`. Anonymous → 401. Missing permission → 403.
 - **Audit**: every mutation must declare `config.audit: { action, resource }`. The CI gate [`audit-coverage.test.ts`](../../../apps/api/test/audit-coverage.test.ts) fails the build otherwise.
 - **bigserial IDs**: `audit_log.id` is serialized as a string to survive `JSON.stringify`.
-
-## Setup (one-shot, 4 steps)
-
-The setup flow is multi-step — the client walks through `check-env` → `org` → `owner` → `finalize`. After finalize, every route returns `410 setup_already_complete`.
-
-| Method | Path | Purpose | Permissions |
-|---|---|---|---|
-| GET | `/api/v1/setup/check-env` | Probes the bridge (`host_info`) and reports OS readiness. | none |
-| POST | `/api/v1/setup/org` | Creates the first organisation + seeds system roles. Body: `{ name, slug? }`. | none |
-| POST | `/api/v1/setup/owner` | Creates the Owner user. Body: `{ email, display_name, password (≥12) }`. | none |
-| POST | `/api/v1/setup/finalize` | Marks the org `setup_complete=true` and locks the setup endpoints. | none |
 
 ## Authentication and account
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| POST | `/api/v1/auth/login` | Email + password (+ TOTP code or backup code). 5/15min rate limit per IP. Body: `{ email, password, totp_code?, backup_code?, remember_me? }`. | none |
-| POST | `/api/v1/auth/logout` | Revoke session, clear cookie. | session |
-| GET | `/api/v1/me` | Current user, permissions array, clearance. | session |
-| POST | `/api/v1/me/totp/provision` | Generate TOTP secret + 10 backup codes. Returns otpauth URI + plaintext backup codes (shown once). | session |
-| POST | `/api/v1/me/totp/enable` | Confirm provisioned secret with a valid 6-digit code. Body: `{ totp_code }`. | session |
-| POST | `/api/v1/me/totp/disable` | Re-auth with password and clear TOTP. Body: `{ password }`. | session |
-| GET | `/api/v1/auth/steam/login` | **Stub (501)** — Steam OpenID 2.0 lands in Phase 1. | none |
-| GET | `/api/v1/auth/steam/callback` | **Stub (501)**. | none |
-| GET | `/api/v1/auth/discord/login` | **Stub (501)** — Discord OAuth lands in Phase 1. | none |
-| GET | `/api/v1/auth/discord/callback` | **Stub (501)**. | none |
+| GET | `/api/v1/auth/steam/login` | Generates a random nonce (base64url, 16 bytes), stores it in Redis (`steam-nonce:{nonce}`, TTL 300 s) and a `__Host-steam-nonce` cookie, then redirects to `steamcommunity.com/openid/login`. | none |
+| GET | `/api/v1/auth/steam/callback` | Validates nonce cookie↔query match, single-use Redis nonce, `return_to` host-binding to `PANEL_PUBLIC_URL`, Steam `check_authentication`, and `openid.response_nonce` replay guard (`steam-response-nonce:{nonce}`, TTL 3600 s, NX). On success: upserts `players` row, runs `claimFirstOwner`, checks permissions; redirects to `/` with `__Host-sid` cookie on success or `/no-access?steam_id64=…` when no role is assigned. | none |
+| POST | `/api/v1/auth/logout` | Revoke current session, clear `__Host-sid` cookie. | session |
+| GET | `/api/v1/me` | Current player, permissions array, clearance. Returns `{ steam_id64, canonical_name, avatar_url, permissions, clearance }`. | session |
+| GET | `/api/v1/me/sessions` | List own active sessions; `current: true` on the request's session. | session |
+| DELETE | `/api/v1/me/sessions/:id` | Revoke own session by id. 404 for foreign session. | session |
+| DELETE | `/api/v1/me/sessions` | Revoke all own sessions. | session |
+| GET | `/api/v1/me/tokens` | List own API tokens (id, name, scopes, created_at, last_used_at, revoked_at). Never returns plaintext or hash. | session |
+| POST | `/api/v1/me/tokens` | Mint a new API token. Body: `{ name: string (1..100), scopes: string[] }`. `scopes ⊆ caller.permissions` (422 `invalid_scopes` otherwise). Hard cap of 25 active tokens per user (409 `too_many_active_tokens`). Returns `{ id, name, scopes, created_at, plaintext: 'sqp_<uuid>_<random>' }` — plaintext appears **once**. | session |
+| DELETE | `/api/v1/me/tokens/:id` | Soft-revoke own token (sets `revoked_at`). Idempotent — second call returns `{ ok: true, already_revoked: true }`. 404 for foreign token. | session |
+
+Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/totp/*`, `GET /api/v1/auth/discord/*`, `POST /api/v1/setup/{org,owner,finalize}`, `GET /api/v1/setup/check-env`, `POST /api/v1/setup/init`.
 
 ## RBAC reference
 
+### Permissions
+
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| GET | `/api/v1/permissions` | Full registered permission key set + system role mapping. Used by the role-management UI. | none |
+| GET | `/api/v1/permissions` | Full registered permission registry from `@squad/shared-config` — array of `{key, category, label, dangerous?, unimplemented?}`. Used by the role-management UI. | `role:view` |
+
+### Roles
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/roles` | List all roles with `permissions[]` and `assigned_users_count`. Sorted `is_system_role DESC, name ASC`. | `role:view` |
+| GET | `/api/v1/roles/:id` | Single role detail. 404 if not found. | `role:view` |
+| POST | `/api/v1/roles` | Create role. Body: `{name, color, description?, permissions: PermissionKey[]}`. 409 `role_name_taken` on duplicate name. Returns 201 with the new role object. Audit: `role.create`. | `role:create` |
+| PUT | `/api/v1/roles/:id` | Update role (name, color, description, permissions). 400 `owner_role_immutable` for the system Owner role. 409 `role_name_taken` on duplicate name. Invalidates permission cache for all role carriers. Audit: `role.update`. | `role:edit` |
+| DELETE | `/api/v1/roles/:id` | Delete role. Cascades `players.role_id` to NULL. 400 `owner_role_immutable` for Owner. Invalidates permission cache before deletion. Audit: `role.delete`. | `role:delete` |
+
+### Users
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/users` | Players with a non-NULL `role_id`, joined to `roles`. Sorted `last_seen_at DESC`. Returns `{steam_id64, canonical_name, last_seen_at, role: {id, name, color, is_system_role}, assigned_at, assigned_by}`. `assigned_at`/`assigned_by` are NULL in this iteration. | `user:view` |
 
 ## Servers
 
@@ -85,8 +95,10 @@ The setup flow is multi-step — the client walks through `check-env` → `org` 
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| GET | `/api/v1/players` | Up to 200 most-recently-seen, ordered by `last_seen_at`. | `player:view` |
+| GET | `/api/v1/players` | Up to 200 most-recently-seen, ordered by `last_seen_at`. Optional `?q=` filter: matches `canonical_name_normalized LIKE %q%` or exact `steam_id64::text`. | `player:view` |
 | GET | `/api/v1/players/:steamId` | Full detail with name history; IP history is gated by `player:view_ips` (returned as empty array + `ips_visible:false` otherwise). | `player:view` |
+| GET | `/api/v1/players/:steamId/role` | Returns current role or `{role: null}`. Single-role model — each player has at most one panel role. | `user:view` |
+| PUT | `/api/v1/players/:steamId/role` | Assign or clear a role. Body: `{role_id: uuid \| null}`. 404 `role_not_found` if the role UUID doesn't exist. 409 `cannot_remove_last_owner` when the change would leave zero Owners. Invalidates the player's permission cache. Audit: `player.role.assign`. | `user:manage_roles` |
 
 ## Audit
 

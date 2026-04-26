@@ -2,6 +2,7 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { LogConsole } from '@/components/LogConsole';
+import { nameToSlug, sanitizeSlug } from './_slug';
 
 interface ProgressLine {
   ts: string;
@@ -47,8 +48,14 @@ export default function NewServerWizard() {
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      setError(`Не удалось создать сервер (HTTP ${res.status}) ${detail}`);
+      const body = (await res.json().catch(() => null)) as { message?: string } | null;
+      const msg = body?.message ?? '';
+      const human = msg.includes('body/slug')
+        ? 'Slug должен начинаться с латинской буквы или цифры (a-z, 0-9, дефис).'
+        : msg.includes('body/display_name')
+          ? 'Название обязательно.'
+          : msg || `HTTP ${res.status}`;
+      setError(`Не удалось создать сервер: ${human}`);
       return;
     }
     const created = (await res.json()) as CreateResponse;
@@ -106,13 +113,7 @@ export default function NewServerWizard() {
           value={form.display_name}
           onChange={(v) => {
             const next: typeof form = { ...form, display_name: v };
-            if (!form.slug_touched) {
-              next.slug = v
-                .toLowerCase()
-                .replace(/[^a-z0-9-]+/g, '-')
-                .replace(/^-+|-+$/g, '')
-                .slice(0, 64);
-            }
+            if (!form.slug_touched) next.slug = nameToSlug(v);
             setForm(next);
           }}
           placeholder="My Squad Server"
@@ -124,7 +125,7 @@ export default function NewServerWizard() {
           onChange={(v) =>
             setForm({
               ...form,
-              slug: v.toLowerCase().replace(/[^a-z0-9-]+/g, '-'),
+              slug: sanitizeSlug(v),
               slug_touched: true,
             })
           }

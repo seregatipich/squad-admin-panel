@@ -172,6 +172,27 @@ The e2e runner (`vitest.e2e.config.ts`) runs serially, 15 min global timeout, an
 
 ## Documentation System
 
+> # ⛔ HARD-GATE — DOCUMENTATION IS LOAD-BEARING
+>
+> **Documentation is a first-class deliverable. Code without matching documentation is INCOMPLETE WORK and will be treated as a bug.**
+>
+> 1. **No code change ships without a matching documentation change in the SAME commit (or a documentation commit immediately following in the SAME PR).** Mixing code and docs across PRs is forbidden. If the code touched a behavior that is documented anywhere in `docs/`, that doc must be updated.
+> 2. **Every component MUST have all 8 files** listed below, populated with real content. A component with fewer than 8 files is a documentation defect that MUST be fixed before any new feature lands in that component.
+> 3. **Stale or missing docs are P0 bugs.** Catching one means stopping the current task and fixing the docs first. "I'll do the docs later" is **prohibited**. There is no "later".
+> 4. **A task is not done until its `## Documentation Update Report` lists every changed/created file with a one-line reason.** Empty reports are only acceptable when the agent has demonstrably checked every potentially-affected doc and explicitly stated why each was unaffected.
+> 5. **Pre-commit gate** (where automated): a hook should fail the commit if it touches a component's source without touching that component's docs/. Add this check the next time `lefthook.yml` is touched.
+> 6. **Reviewers** (human or subagent) **MUST reject** any PR that ships code without doc updates. "Out of scope" or "Task 14 will catch it" are NOT acceptable excuses — the task that introduces the change owns the docs for that change.
+> 7. **Coverage target: 100% always.** The 8-file template is the floor, not the ceiling. The audit query in §"Coverage audit" below is the official scoreboard. Any component below 8/8 is a P0 documentation defect.
+> 8. **Every documentation file MUST describe EVERYTHING in its scope** — no summaries, no "see code for details", no truncation. If `flows.md` documents flows, it covers ALL flows of the component. If `data-model.md` documents schema, it covers EVERY table/column/index/constraint owned by the component, with example payloads. Stub docs are worse than no docs because they create false confidence.
+>
+> **Penalties** (enforced via review and CI):
+> - Code change without doc update → **commit reverted**, work redone in single combined commit.
+> - Component lacking any of the 8 files → **feature freeze on that component** until docs caught up.
+> - "Documentation will follow in next PR" → **PR rejected**, no exceptions.
+> - Vague/empty docs (e.g. `## API\n\nSee code.`) → treated as missing docs, same penalty.
+>
+> **This applies retroactively.** Existing gaps in `docs/` are tracked as P0 bugs. They MUST be closed before any new feature work in that area.
+
 Documentation is a mandatory part of this repository. Treat `docs/` as part of the source of truth for the project, and keep it synchronized with the actual code at all times.
 
 You must not consider any coding task complete until you have checked whether documentation needs to be created or updated.
@@ -185,6 +206,40 @@ Do not wait for the user to explicitly ask for documentation updates.
 If the code and documentation disagree, the code is the source of truth, but you must immediately update the documentation to match the code.
 
 Never document behavior that does not exist in the current codebase.
+
+### Coverage audit — the official scoreboard
+
+Run this anytime to measure documentation coverage:
+
+```bash
+for dir in docs/components/*/; do
+  comp=$(basename "$dir")
+  files=$(ls "$dir" | wc -l)
+  required="README.md api.md data-model.md flows.md configuration.md testing.md troubleshooting.md changelog.md"
+  missing=""
+  for f in $required; do
+    [ -f "$dir/$f" ] || missing="$missing $f"
+  done
+  status="✅"
+  [ -n "$missing" ] && status="❌ missing:$missing"
+  echo "$comp: $files/8 $status"
+done
+```
+
+Components below 8/8 are **work-in-progress documentation debt** that MUST be closed.
+
+### "Describe EVERYTHING" — what each file MUST contain
+
+For every component, the 8 files MUST cover:
+
+- **`README.md`** — purpose, what it does NOT do, code locations, dependencies (in/out), entry-point example, links to all other 7 files.
+- **`api.md`** — every public function/endpoint/CLI command/event. For each: signature, parameters (types + constraints), return value/response shape, errors (codes + meanings), side effects, example call. NO "see code".
+- **`data-model.md`** — every entity/table/schema/event/payload owned by the component. For each: fields + types + constraints + indexes + FKs + validation rules + example record + migration history.
+- **`flows.md`** — every main, alternative, error, retry, fallback, and background flow. Sequence (step-by-step), inputs, outputs, side effects, interactions with other components. Diagrams encouraged.
+- **`configuration.md`** — every env var, config file, feature flag, default. Required vs optional, sensitive flags, per-environment differences. Use the table format from §"Required Component Documents → configuration.md".
+- **`testing.md`** — every test file location, what it covers, what it explicitly does NOT cover, mocks/stubs/fakes used, test data sources, how to run each tier, important edge cases the tests guard.
+- **`troubleshooting.md`** — every known issue with: symptom, root cause, diagnosis steps, fix steps, useful log lines, useful commands, related metrics. Add an entry every time a real incident is resolved.
+- **`changelog.md`** — every meaningful change to the component, dated, in the format from §"changelog.md". Migration notes mandatory for breaking changes.
 
 ---
 

@@ -1,16 +1,28 @@
+import { startHeartbeat } from '@squad/shared-config';
+import Redis from 'ioredis';
 import pino from 'pino';
 
 const log = pino({ level: process.env.LOG_LEVEL ?? 'info', base: { service: 'worker-stats' } });
 
-/**
- * Phase 0 stub. Functionality deferred to the phase indicated in TZ §2.2.
- */
 async function main() {
   log.info('worker-stats idle — deferred to later phase');
-  const heartbeat = setInterval(() => log.debug('heartbeat'), 60_000);
-  const shutdown = (sig: NodeJS.Signals) => {
+  const redisUrl = process.env.REDIS_URL;
+  const redis = redisUrl
+    ? new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false })
+    : null;
+  const stopHeartbeat = redis
+    ? startHeartbeat({
+        redis,
+        name: 'stats',
+        statusFn: () => 'idle (P2)',
+        onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
+      })
+    : () => {};
+
+  const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
-    clearInterval(heartbeat);
+    stopHeartbeat();
+    await redis?.quit().catch(() => undefined);
     process.exit(0);
   };
   process.once('SIGINT', shutdown);

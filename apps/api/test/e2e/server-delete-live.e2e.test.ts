@@ -18,15 +18,16 @@ import {
   configVersions,
   organizationMembers,
   organizations,
+  playerRoleAssignments,
+  players,
   roles,
   servers,
-  userRoleAssignments,
-  users,
+  sessions,
 } from '@squad/db/schema';
 import { seedSystemRoles } from '@squad/db/seed';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { hashPassword } from '../../src/lib/argon.js';
+import { mintSessionToken } from '../../src/lib/sessions.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -47,16 +48,14 @@ function dotenv(key: string): string | undefined {
 const PASSWORD = dotenv('POSTGRES_PASSWORD') ?? 'admin';
 const LIVE_DB_URL = `postgres://admin:${PASSWORD}@127.0.0.1:5432/admin`;
 const PANEL_URL = process.env.PANEL_URL ?? 'https://squad-panel.lan';
-const TEST_EMAIL = `e2e-delete-${randomBytes(4).toString('hex')}@test.local`;
-const TEST_PASSWORD = 'correct-horse-battery-staple';
+const TEST_STEAM_ID = 76561198999999003n;
 
 let db: ReturnType<typeof createDatabaseClient>;
-let testUserId: string;
 let testOrgId: string;
+let sessionTokenId: string;
 let sessionCookie: string | null = null;
 let createdServerId: string | null = null;
 
-// node's undici rejects self-signed Caddy certs unless we disable verification.
 const fetchOpts: RequestInit = {};
 
 beforeAll(async () => {
@@ -69,68 +68,68 @@ beforeAll(async () => {
   if (!owner) throw new Error('no Owner role seeded in live DB — is setup complete?');
   testOrgId = owner.orgId;
 
-  testUserId = crypto.randomUUID();
-  const hash = await hashPassword(TEST_PASSWORD);
-  await db.insert(users).values({
-    id: testUserId,
-    email: TEST_EMAIL,
-    passwordHash: hash,
-    displayName: 'E2E Delete Tester',
+  await db
+    .insert(players)
+    .values({
+      steamId64: TEST_STEAM_ID,
+      canonicalName: 'E2E Test Player',
+      canonicalNameNormalized: 'e2e test player',
+    })
+    .onConflictDoNothing();
+  await db
+    .insert(playerRoleAssignments)
+    .values({ steamId64: TEST_STEAM_ID, roleId: owner.id })
+    .onConflictDoNothing();
+  await db
+    .insert(organizationMembers)
+    .values({ steamId64: TEST_STEAM_ID, orgId: testOrgId, primaryRoleId: owner.id })
+    .onConflictDoNothing();
+
+  const { token, tokenId } = mintSessionToken();
+  sessionTokenId = tokenId;
+  await db.insert(sessions).values({
+    id: tokenId,
+    steamId64: TEST_STEAM_ID,
+    expiresAt: new Date(Date.now() + 3_600_000),
+    lastActivityAt: new Date(),
+    ip: null,
+    userAgent: null,
   });
-  await db.insert(userRoleAssignments).values({
-    userId: testUserId,
-    roleId: owner.id,
-  });
-  await db.insert(organizationMembers).values({
-    userId: testUserId,
-    orgId: testOrgId,
-    primaryRoleId: owner.id,
-  });
+  sessionCookie = `__Host-sid=${token}`;
 }, 30_000);
 
 afterAll(async () => {
-  // Best-effort cleanup. The server row might already be deleted by the test.
   if (createdServerId) {
     await db
       .delete(servers)
       .where(eq(servers.id, createdServerId))
       .catch(() => undefined);
   }
-  if (testUserId) {
-    await db
-      .delete(userRoleAssignments)
-      .where(eq(userRoleAssignments.userId, testUserId))
-      .catch(() => undefined);
-    await db
-      .delete(organizationMembers)
-      .where(eq(organizationMembers.userId, testUserId))
-      .catch(() => undefined);
-    await db
-      .delete(users)
-      .where(eq(users.id, testUserId))
-      .catch(() => undefined);
-  }
-  // silence unused
+  await db
+    .delete(sessions)
+    .where(eq(sessions.id, sessionTokenId))
+    .catch(() => undefined);
+  await db
+    .delete(playerRoleAssignments)
+    .where(eq(playerRoleAssignments.steamId64, TEST_STEAM_ID))
+    .catch(() => undefined);
+  await db
+    .delete(organizationMembers)
+    .where(eq(organizationMembers.steamId64, TEST_STEAM_ID))
+    .catch(() => undefined);
+  await db
+    .delete(players)
+    .where(eq(players.steamId64, TEST_STEAM_ID))
+    .catch(() => undefined);
   void organizations;
   void seedSystemRoles;
 }, 30_000);
 
 describe('DELETE /api/v1/servers/:id end-to-end against live panel', () => {
   it('logs in, creates a server, writes a config version, then deletes — through the live HTTPS stack', async () => {
-    // 1. Login — collect the cookie.
-    const loginResp = await fetch(`${PANEL_URL}/api/v1/auth/login`, {
-      ...fetchOpts,
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
-    });
-    expect(loginResp.status, await loginResp.text()).toBe(200);
-    const rawCookie = loginResp.headers.get('set-cookie') ?? '';
-    const m = rawCookie.match(/(__Host-sid=[^;]+)/);
-    if (!m) throw new Error(`login did not return __Host-sid; got: ${rawCookie}`);
-    sessionCookie = m[1]!;
+    if (!sessionCookie) throw new Error('session cookie not set by beforeAll');
 
-    // 2. Create a server via the live API.
+    // 1. Create a server via the live API.
     const slug = `e2e-del-${randomBytes(3).toString('hex')}`;
     const createResp = await fetch(`${PANEL_URL}/api/v1/servers`, {
       ...fetchOpts,

@@ -37,8 +37,9 @@ afterEach(async () => {
 describe('audit_log trigger invariants', () => {
   it('UPDATE raises "audit_log is append-only"', async () => {
     await h.db.insert(auditLog).values({
-      actorUserId: null,
+      actorSteamId64: null,
       actorKind: 'system',
+      actorSystemLabel: 'test',
       actionType: 'x.test',
       targetType: null,
       targetId: null,
@@ -54,8 +55,9 @@ describe('audit_log trigger invariants', () => {
 
   it('DELETE raises "audit_log is append-only"', async () => {
     await h.db.insert(auditLog).values({
-      actorUserId: null,
+      actorSteamId64: null,
       actorKind: 'system',
+      actorSystemLabel: 'test',
       actionType: 'x.test',
       targetType: null,
       targetId: null,
@@ -68,8 +70,9 @@ describe('audit_log trigger invariants', () => {
   it('row_hash is a 32-byte sha256 digest and chains across inserts', async () => {
     for (let i = 0; i < 3; i++) {
       await h.db.insert(auditLog).values({
-        actorUserId: null,
+        actorSteamId64: null,
         actorKind: 'system',
+        actorSystemLabel: 'test',
         actionType: `chain.${i}`,
         targetType: null,
         targetId: null,
@@ -98,16 +101,10 @@ describe('audit_log trigger invariants', () => {
 
 describe('config_versions trigger invariants', () => {
   it('rejects UPDATE and DELETE', async () => {
-    // Seed an org + a server directly via Drizzle so FK for config_versions holds.
-    const { organizations, servers } = await import('@squad/db/schema');
-    await h.db.insert(organizations).values({
-      id: '019e0000-0000-7000-8000-000000000000',
-      name: 'o',
-      slug: 'o',
-    });
+    // Seed a server directly via Drizzle so FK for config_versions holds.
+    const { servers } = await import('@squad/db/schema');
     await h.db.insert(servers).values({
       id: '019e0000-0000-7000-8000-000000000001',
-      orgId: '019e0000-0000-7000-8000-000000000000',
       displayName: 'Trigger Test',
       slug: 'trigger-test',
     });
@@ -116,6 +113,7 @@ describe('config_versions trigger invariants', () => {
       filename: 'Admins.cfg',
       content: 'original',
       sha256: Buffer.alloc(32, 0x11),
+      authorLabel: 'system',
     });
     const [row] = await h.db.select().from(configVersions);
     await expectRejectsMatching(

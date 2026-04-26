@@ -4,13 +4,15 @@ import { auditLog } from '@squad/db/schema';
 export interface AuditConfig {
   action: string;
   resource: string;
-  /** Set to `false` explicitly on safe read-only routes; everything else requires a config. */
 }
 
+export type AuditActor =
+  | { kind: 'steam'; steamId64: bigint; tokenId?: string | null }
+  | { kind: 'system'; label: string };
+
 export interface AuditEntryInput {
-  actorUserId: string | null;
+  actor: AuditActor;
   actorIp: string | null;
-  actorKind?: 'user' | 'system' | 'external';
   actionType: string;
   targetType: string | null;
   targetId: string | null;
@@ -19,14 +21,16 @@ export interface AuditEntryInput {
   context: Record<string, unknown>;
   statusCode?: number;
   durationMs?: number;
-  orgId?: string | null;
 }
 
 export async function writeAuditEntry(db: DatabaseClient, entry: AuditEntryInput): Promise<void> {
+  const actor = entry.actor;
   await db.insert(auditLog).values({
-    actorUserId: entry.actorUserId,
+    actorKind: actor.kind,
+    actorSteamId64: actor.kind === 'steam' ? actor.steamId64 : null,
+    actorTokenId: actor.kind === 'steam' ? (actor.tokenId ?? null) : null,
+    actorSystemLabel: actor.kind === 'system' ? actor.label : null,
     actorIp: entry.actorIp,
-    actorKind: entry.actorKind ?? 'user',
     actionType: entry.actionType,
     targetType: entry.targetType,
     targetId: entry.targetId,
@@ -35,7 +39,6 @@ export async function writeAuditEntry(db: DatabaseClient, entry: AuditEntryInput
     context: (entry.context ?? {}) as object,
     statusCode: entry.statusCode ?? null,
     durationMs: entry.durationMs ?? null,
-    orgId: entry.orgId ?? null,
-    rowHash: Buffer.from([]), // server-side trigger computes the real hash
+    rowHash: Buffer.from([]),
   });
 }

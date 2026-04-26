@@ -71,6 +71,10 @@ services:
       # RCON calls (graceful stop broadcast, PUT /configs reload) can reach the
       # Squad listener. See apps/api/src/routes/servers.ts and server-configs.ts.
       RCON_HOST_DEFAULT: host.docker.internal
+      PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:-https://squad-panel.lan}
+      STEAM_API_KEY: ${STEAM_API_KEY:-}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-21600}
+      SESSION_TOUCH_THROTTLE_SECONDS: ${SESSION_TOUCH_THROTTLE_SECONDS:-60}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     user: "0:${PANEL_GID:-987}"

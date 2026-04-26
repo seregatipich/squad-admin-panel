@@ -4,7 +4,7 @@ Fastify 5 + Zod type-provider. REST under `/api/v1/*`, WebSocket for install str
 
 ## Responsibilities
 
-- Auth: cookie sessions, Argon2id passwords, TOTP, optional Steam/Discord OIDC.
+- Auth: Steam OpenID 2.0 (only login method). Cookie sessions keyed on `players.steam_id64`. Sliding TTL with throttled DB touch.
 - RBAC: every authed route declares its permissions in `config.permissions`. The `preHandler` hook returns 401/403 accordingly.
 - Audit: every mutation route declares `config.audit`; audit rows are hash-chained and append-only (DB triggers reject `UPDATE`/`DELETE`).
 - Install orchestration: WebSocket flow under `POST /api/v1/servers/:id/install` that drives `bridge.depot_update` → `seedConfigs` → `bridge.ufw_rule` → `bridge.container_run`.
@@ -20,7 +20,7 @@ Fastify 5 + Zod type-provider. REST under `/api/v1/*`, WebSocket for install str
 ## Code location
 
 - Entrypoint: [`apps/api/src/index.ts`](../../../apps/api/src/index.ts) → [`server.ts`](../../../apps/api/src/server.ts) registers routes and plugins.
-- Routes: [`apps/api/src/routes/`](../../../apps/api/src/routes/) — `audit.ts`, `auth.ts`, `auth-discord.ts`, `auth-steam.ts`, `depot.ts`, `host.ts`, `host-actions.ts`, `players.ts`, `server-configs.ts`, `server-install.ts`, `server-logs.ts`, `servers.ts`, `setup.ts`.
+- Routes: [`apps/api/src/routes/`](../../../apps/api/src/routes/) — `audit.ts`, `auth-steam.ts`, `depot.ts`, `host.ts`, `host-actions.ts`, `players.ts`, `permissions.ts`, `roles.ts`, `server-configs.ts`, `server-install.ts`, `server-logs.ts`, `servers.ts`, `users.ts`.
 - Plugins: [`apps/api/src/plugins/`](../../../apps/api/src/plugins/) — `auth.ts`, `bridge.ts`, `audit.ts`, `status-reconciler.ts`, `rate-limit.ts`, `swagger.ts`.
 - Libs: [`apps/api/src/lib/`](../../../apps/api/src/lib/) — `blame.ts` (Myers diff for config blame), `crypto.ts`, `seed-configs.ts`.
 
@@ -28,7 +28,7 @@ Fastify 5 + Zod type-provider. REST under `/api/v1/*`, WebSocket for install str
 
 - Fastify 5.2 + `fastify-type-provider-zod` 4 + Zod 3.24
 - `@fastify/cookie/cors/helmet/rate-limit/websocket/swagger(-ui)`
-- Auth/crypto: `@node-rs/argon2`, `@oslojs/crypto|encoding|otp`, `arctic` 3 (OAuth)
+- Auth/crypto: `@oslojs/crypto|encoding`, `arctic` 3 (OpenID 2.0)
 - Logs/metrics: `pino` 9, `prom-client` 15
 - Redis: `ioredis` 5; HTTP egress: `undici` 8
 - DB: `drizzle-orm` 0.45 via `@squad/db`

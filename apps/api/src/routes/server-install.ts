@@ -118,7 +118,8 @@ async function seedConfigs(
       content,
       sha256: createHash('sha256').update(content).digest(),
       parentVersionId: null,
-      authorUserId: null,
+      authorSteamId64: null,
+      authorLabel: 'system',
       authorIp: null,
       message: `initial install — SteamCMD depot ${file === 'Rcon.cfg' || file === 'Server.cfg' ? '+ panel rewrite' : 'default'}`,
     });
@@ -272,9 +273,10 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'install_in_progress' };
       }
-      const actorUserId = req.user?.id ?? null;
+      const actor = req.user
+        ? { kind: 'steam' as const, steamId64: req.user.steamId64, tokenId: null }
+        : { kind: 'system' as const, label: 'http-anonymous' };
       const actorIp = req.ip ?? null;
-      const orgId = srv.orgId;
       (async () => {
         const startedAt = Date.now();
         try {
@@ -283,7 +285,7 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             app.installProgress.publish(id, line);
           });
           await writeAuditEntry(app.db, {
-            actorUserId,
+            actor,
             actorIp,
             actionType: 'server.install.completed',
             targetType: 'server',
@@ -291,7 +293,6 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             context: { durationMs: Date.now() - startedAt },
             statusCode: 200,
             durationMs: Date.now() - startedAt,
-            orgId,
           });
         } catch (err) {
           app.log.error({ err, server_id: id }, 'install failed');
@@ -306,7 +307,7 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             .set({ status: 'failed', updatedAt: new Date() })
             .where(eq(servers.id, id));
           await writeAuditEntry(app.db, {
-            actorUserId,
+            actor,
             actorIp,
             actionType: 'server.install.failed',
             targetType: 'server',
@@ -314,7 +315,6 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             context: { error: (err as Error).message, durationMs: Date.now() - startedAt },
             statusCode: 500,
             durationMs: Date.now() - startedAt,
-            orgId,
           });
         }
       })();

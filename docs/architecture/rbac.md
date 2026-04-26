@@ -1,44 +1,44 @@
 # RBAC
 
-The panel uses a permission-key model. A role is a bag of permission-key strings plus a clearance level (0–1000). Adding a new permission is a one-line append in [`packages/shared-config/src/permissions.ts`](../../packages/shared-config/src/permissions.ts) — no migration, no client changes.
+The panel uses a permission-key model. A role is a bag of permission-key strings. Adding a new permission is a one-line append in [`packages/shared-config/src/permissions.ts`](../../packages/shared-config/src/permissions.ts) — no migration, no client changes.
 
-## Permission keys
+## Permission registry
 
-The full registered set lives in the shared package. Current keys:
+Each entry in `PERMISSIONS` is a `PermissionDef` with:
+- `key` — unique string identifier (e.g. `server:start`)
+- `category` — one of the 16 values in `PERMISSION_CATEGORIES`
+- `label` — human-readable Russian description
+- `dangerous?: true` — present when the action is destructive or irreversible
+- `unimplemented?: true` — present when the action is planned but not yet active
 
-```
-server:view              server:edit              server:start
-server:create            server:delete            server:stop
-server:install           server:update            server:restart
-server:config:write      server:config:history
+Current keys by category:
 
-player:view              player:view_ips          player:view_eos_id
-player:view_steam_id
+| Category | Keys |
+|---|---|
+| servers | `server:view`, `server:install`, `server:start`, `server:stop`, `server:force_stop`, `server:restart`, `server:delete`, `server:edit_settings`, `server:update` |
+| configs | `config:view`, `config:edit`, `config:rollback` |
+| players | `player:view`, `player:view_ips`, `player:view_notes`*, `player:edit_notes`*, `player:set_flags`* |
+| moderation | `mod:kick`*, `mod:warn`*, `mod:ban_temp`*, `mod:ban_perm`*, `mod:unban`* |
+| admin_groups | `admin_group:view`*, `admin_group:edit`* |
+| whitelist | `whitelist:view`*, `whitelist:edit`* |
+| host | `host:view`, `host:metrics` |
+| audit | `audit:view`, `audit:export`* |
+| events | `events:view` |
+| users | `user:view`, `user:manage_roles` |
+| roles | `role:view`, `role:create`, `role:edit`, `role:delete` |
+| backup | `backup:view`*, `backup:trigger`*, `backup:restore`* |
+| api_tokens | `api_token:create`, `api_token:revoke` |
+| discord | `discord:link`* |
+| triggers | `trigger:view`*, `trigger:edit`* |
+| scheduler | `scheduler:view`*, `scheduler:edit`* |
 
-audit:view
-
-user:view                user:create              user:edit              user:delete
-role:manage              permission:manage
-
-host:view                host:metrics             host:bridge_control
-
-org:view                 org:edit
-```
+_* = `unimplemented: true` — key is registered but no route enforces it yet._
 
 Routes refer to these as literal strings; the type system narrows them to `PermissionKey`.
 
-## System roles (seeded per-org)
+## Role colors
 
-| Role | Clearance | Permissions |
-|---|---:|---|
-| Owner | 1000 | every registered permission |
-| Senior Admin | 750 | servers full + config write/history, players (incl. IPs/EOS/Steam), audit:view, host:view+metrics, user:view, org:view |
-| Admin | 500 | server:view/start/stop/restart + config:history, player:view + EOS + Steam, host:view + metrics, org:view |
-| Viewer | 100 | `*:view` only (`server:view`, `server:config:history`, `player:view`, `audit:view`, `host:view`, `org:view`) |
-
-The exact mapping is `SYSTEM_ROLE_PERMISSIONS` in [`packages/shared-config/src/permissions.ts`](../../packages/shared-config/src/permissions.ts).
-
-Non-system roles can be created per-org by users with `role:manage`. Phase 0 ships no UI for that — operators manage them via SQL.
+Roles have a `color` column constrained by `CONSTRAINT roles_color_palette CHECK (color IN (...))`. The 16 allowed values are mirrored in [`packages/shared-config/src/role-colors.ts`](../../packages/shared-config/src/role-colors.ts) as `ROLE_COLORS`. The test suite in `packages/shared-config/test/role-colors.test.ts` asserts that the TS constant and the SQL constraint stay in sync.
 
 ## Enforcement
 
@@ -61,7 +61,3 @@ The shared `preHandler` hook (`apps/api/src/plugins/auth.ts`) returns 401 for an
 ## Audit-coverage CI gate
 
 `apps/api/test/audit-coverage.test.ts` walks every registered route at startup and fails the suite if any `POST`/`PUT`/`PATCH`/`DELETE` lacks a `config.audit` entry. New mutating routes therefore cannot ship without an audit trail.
-
-## Clearance
-
-`roles.clearance_level` (0–1000) decides "can this user manage that user?" — an actor can manage a target only when `actor.clearance > target.clearance`. Phase 0 doesn't expose user management in the UI yet; clearance is seeded but not enforced. Phase 1 adds invite + role-assignment endpoints that consume it.

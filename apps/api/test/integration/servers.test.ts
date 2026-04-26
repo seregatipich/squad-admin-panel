@@ -1,15 +1,16 @@
-import { serverCredentials, serverSettings, servers, userRoleAssignments } from '@squad/db/schema';
+import { players, roles, serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
   type IntegrationHarness,
+  loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
 
-const EMAIL = 'owner@test.local';
-const PASSWORD = 'correct-horse-battery-staple';
+const OWNER_STEAM_ID = 76561198000000999n;
 
 const createBody = {
   display_name: 'Test Server',
@@ -29,7 +30,7 @@ let h: IntegrationHarness;
 
 beforeEach(async () => {
   h = await buildIntegrationApp({
-    seedOwner: { email: EMAIL, password: PASSWORD },
+    seedOwner: { steamId64: OWNER_STEAM_ID },
     bridge: makeFakeBridge(),
   });
 });
@@ -39,16 +40,7 @@ afterEach(async () => {
 });
 
 async function login(): Promise<string> {
-  const resp = await h.app.inject({
-    method: 'POST',
-    url: '/api/v1/auth/login',
-    payload: { email: EMAIL, password: PASSWORD },
-  });
-  if (resp.statusCode !== 200) throw new Error(`login failed: ${resp.body}`);
-  const raw = Array.isArray(resp.headers['set-cookie'])
-    ? resp.headers['set-cookie'][0]!
-    : (resp.headers['set-cookie'] as string);
-  return raw.match(/(__Host-sid=[^;]+)/)?.[1]!;
+  return loginAsOwner(h);
 }
 
 describe('GET /api/v1/servers', () => {
@@ -374,19 +366,19 @@ describe('RBAC enforcement on /api/v1/servers', () => {
   it('viewer role cannot create servers', async () => {
     const ownerCookie = await login();
     // Demote the owner by replacing their Owner role with Viewer.
-    const viewerRole = await h.db.query.roles.findFirst({
-      where: (r, { and, eq: e }) => and(e(r.orgId, h.seed.orgId!), e(r.name, 'Viewer')),
-    });
-    if (!viewerRole || !h.seed.ownerUserId) throw new Error('roles missing');
+    const viewerRoleRows = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.name, 'Viewer'))
+      .limit(1);
+    const viewerRoleId = viewerRoleRows[0]?.id;
+    if (!viewerRoleId || !h.seed.ownerSteamId64) throw new Error('roles missing');
     await h.db
-      .delete(userRoleAssignments)
-      .where(eq(userRoleAssignments.userId, h.seed.ownerUserId));
-    await h.db
-      .insert(userRoleAssignments)
-      .values({ userId: h.seed.ownerUserId, roleId: viewerRole.id });
+      .update(players)
+      .set({ roleId: viewerRoleId })
+      .where(eq(players.steamId64, h.seed.ownerSteamId64));
+    invalidatePermissionCache(h.seed.ownerSteamId64);
 
-    // New login picks up the fresh permission set (the rbac cache is
-    // per-process and keyed by user id).
     const cookie = await login();
     const resp = await h.app.inject({
       method: 'POST',

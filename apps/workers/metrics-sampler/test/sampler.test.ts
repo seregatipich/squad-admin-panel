@@ -55,7 +55,7 @@ describe('runSampler', () => {
     expect(redis.calls[0].stream).toBe('host:metrics');
     const vEntry = redis.calls[0].entries.find(([k]) => k === 'v');
     expect(vEntry).toBeDefined();
-    expect(JSON.parse(vEntry![1])).toEqual([5000, 100, 100, 10, 20, 50, 60, 70]);
+    expect(JSON.parse(vEntry?.[1])).toEqual([5000, 100, 100, 10, 20, 50, 60, 70]);
   });
 
   it('continues sampling after a bridge error', async () => {

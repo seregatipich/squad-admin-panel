@@ -6,7 +6,7 @@ Postgres 16+ via Drizzle ORM 0.45. Source of truth for the operational data mode
 
 - Schema definition + types (`@squad/db` re-exports inferred row types).
 - Migrations runner ([`packages/db/src/migrate.ts`](../../../packages/db/src/migrate.ts)).
-- System-role seed ([`packages/db/src/seed/system-roles.ts`](../../../packages/db/src/seed/system-roles.ts)).
+- System-role seed lives in migration `0009_panel_rbac.sql` (forward-only, in-DB).
 - Drizzle Studio access (`pnpm db:studio`).
 
 ## What this component does NOT do
@@ -18,22 +18,18 @@ Postgres 16+ via Drizzle ORM 0.45. Source of truth for the operational data mode
 
 | File | Purpose |
 |---|---|
-| `users.ts` | Auth identity, Argon2id password hash, TOTP, encrypted secrets. |
-| `sessions.ts` | Opaque session IDs. |
-| `user-identities.ts` | OIDC provider links (Steam, Discord). |
-| `user-api-tokens.ts` | Programmatic API tokens (P1+). |
-| `roles.ts` + `role-permissions.ts` + `role-server-scopes.ts` | RBAC bag-of-permissions. |
-| `user-role-assignments.ts` | User → role mapping per org. |
-| `organizations.ts` + `organization-members.ts` | Multi-tenant scaffold (P0 ships a single org). |
-| `servers.ts` | One row per managed Squad server. |
+| `players.ts` | One row per SteamID64. Universal identity anchor — replaces the old `users` table. |
+| `sessions.ts` | Opaque session IDs, keyed on `players.steam_id64`. |
+| `player-api-tokens.ts` | Programmatic API tokens, keyed on `players.steam_id64`. Wired up in [`docs/components/api-tokens/`](../api-tokens/README.md). |
+| `roles.ts` + `role-permissions.ts` | RBAC bag-of-permissions. |
+| `servers.ts` | One row per managed Squad server. Multi-tenancy columns removed in migrations 0009–0010. |
 | `server-credentials.ts` | RCON password (encrypted), Squad license key (encrypted). |
 | `server-settings.ts` | Per-server panel-side preferences (scheduler, discord). |
-| `players.ts` | One row per SteamID64. |
 | `player-name-history.ts` | Append-only on every poll where the name changes. |
 | `player-ip-history.ts` | Append-only on every connect with a new IP. |
-| `config-versions.ts` | Append-only history of every cfg edit. DB trigger rejects `UPDATE`/`DELETE`. |
+| `config-versions.ts` | Append-only history of every cfg edit. DB trigger rejects `UPDATE`/`DELETE` (trigger uses `WHEN (pg_trigger_depth() = 0)` to allow cascade deletes from parent `servers` row). |
 | `events.ts` | Partitioned monthly. Mirrors the canonical `EventEnvelope`. |
-| `audit-log.ts` | Append-only, hash-chained. DB trigger rejects `UPDATE`/`DELETE` and writes `row_hash`. |
+| `audit-log.ts` | Append-only, hash-chained. DB trigger rejects `UPDATE`/`DELETE` and writes `row_hash`. Actor is `actorKind: 'steam' \| 'system'` with `actorSteamId64` or `actorSystemLabel`. |
 
 ## Migrations
 

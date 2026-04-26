@@ -9,31 +9,12 @@ docker compose logs api --since 2m
 Most common causes:
 
 - `APP_ENCRYPTION_KEY` missing or < 32 bytes (base64-decoded).
+- `PANEL_PUBLIC_URL` not set — required for Steam OpenID `return_to` host-binding. The callback will fail with a host-mismatch error without it.
 - `DATABASE_URL` / `REDIS_URL` unreachable. Check `docker compose ps postgres redis` first.
 - `BRIDGE_SOCKET` not bind-mounted into the container (compare `compose.yml` `volumes:` for the `api` service).
 - `panel` group missing inside the container (check `group_add: [panel]`).
 
-## "This user doesn't exist" but the row is in the DB
-
-The email lookup is case-insensitive (`lower(email) UNIQUE`). Confirm:
-
-```sql
-SELECT id, email FROM users WHERE lower(email) = lower('USER@example.com');
-```
-
-## TOTP recovery without a backup code
-
-Backup codes + TOTP secret are Argon2id-hashed and AES-256-GCM-encrypted respectively, so the panel cannot recover them. Recovery is a DB-level operation (Owner only):
-
-```sql
-UPDATE users
-   SET totp_secret_encrypted = NULL,
-       totp_backup_codes_hash = NULL,
-       totp_last_used_step = NULL
- WHERE id = (SELECT id FROM users WHERE lower(email) = lower('owner@example.com'));
-```
-
-## 429 on login after a single attempt
+## 429 on Steam callback after a single attempt
 
 `@fastify/rate-limit` keys on IP. If you are behind Caddy and the panel sees `X-Forwarded-For` correctly, this is intentional after 5 wrong attempts. Otherwise check the `trustProxy` config in [`apps/api/src/server.ts`](../../../apps/api/src/server.ts).
 

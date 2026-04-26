@@ -9,18 +9,16 @@
  *     polling interval.
  */
 import { expect, test } from '@playwright/test';
-import { loginAndAttachCookie, runSql, seedOwner, teardownOwner, uniqueEmail } from './helpers';
+import { loginAndAttachCookie, runSql, seedOwner, teardownOwner } from './helpers';
 
 test.describe('server detail live-refresh indicator', () => {
   test('indicator tick/reset proves the page polls without manual reload', async ({
     page,
     context,
-    request,
   }) => {
-    const email = uniqueEmail();
-    const uid = await seedOwner(email);
+    const seed = await seedOwner();
     try {
-      await loginAndAttachCookie(page, context, request, email);
+      await loginAndAttachCookie(page, context, null as never, seed);
 
       const anyServerId = runSql('SELECT id FROM servers LIMIT 1');
       if (!anyServerId) {
@@ -46,7 +44,7 @@ test.describe('server detail live-refresh indicator', () => {
       const dot = page.locator('span.bg-green-500, span.bg-green-700').first();
       await expect(dot).toBeVisible();
     } finally {
-      await teardownOwner(uid);
+      await teardownOwner(seed.uid);
     }
   });
 });

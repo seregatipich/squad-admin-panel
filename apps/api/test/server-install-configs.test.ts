@@ -24,11 +24,11 @@ import {
   buildIntegrationApp,
   type FakeBridge,
   type IntegrationHarness,
+  loginAsOwner,
   makeFakeBridge,
 } from './integration/harness.js';
 
-const EMAIL = 'owner@test.local';
-const PASSWORD = 'correct-horse-battery-staple';
+const OWNER_STEAM_ID = 76561198000000999n;
 
 const createBody = {
   display_name: 'Depot Seed Test',
@@ -79,16 +79,7 @@ function seedDepotFiles(bridge: FakeBridge, depotRoot: string): void {
 }
 
 async function loginAs(h: IntegrationHarness): Promise<string> {
-  const resp = await h.app.inject({
-    method: 'POST',
-    url: '/api/v1/auth/login',
-    payload: { email: EMAIL, password: PASSWORD },
-  });
-  if (resp.statusCode !== 200) throw new Error(`login failed: ${resp.body}`);
-  const raw = Array.isArray(resp.headers['set-cookie'])
-    ? resp.headers['set-cookie'][0]!
-    : (resp.headers['set-cookie'] as string);
-  return raw.match(/(__Host-sid=[^;]+)/)?.[1]!;
+  return loginAsOwner(h);
 }
 
 async function createServer(h: IntegrationHarness, cookie: string): Promise<string> {
@@ -149,7 +140,7 @@ describe('server install depot seeding', () => {
       vi.stubEnv('PANEL_DEPOT_HOST_PATH', '');
       bridge = makeFakeBridge();
       seedDepotFiles(bridge, depotRoot);
-      h = await buildIntegrationApp({ seedOwner: { email: EMAIL, password: PASSWORD }, bridge });
+      h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, bridge });
     });
 
     it('seeds 19 non-empty cfg files + config_versions rows from the default depot root', async () => {
@@ -185,7 +176,7 @@ describe('server install depot seeding', () => {
       vi.stubEnv('PANEL_DEPOT_HOST_PATH', depotRoot);
       bridge = makeFakeBridge();
       seedDepotFiles(bridge, depotRoot);
-      h = await buildIntegrationApp({ seedOwner: { email: EMAIL, password: PASSWORD }, bridge });
+      h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, bridge });
     });
 
     it('reads depot defaults from the env-override path (not the legacy stub)', async () => {
@@ -230,7 +221,7 @@ describe('server install depot seeding', () => {
       bridge = makeFakeBridge();
       seedDepotFiles(bridge, depotRoot);
       bridge.files.delete(`${depotRoot}/SquadGame/ServerConfig/Admins.cfg`);
-      h = await buildIntegrationApp({ seedOwner: { email: EMAIL, password: PASSWORD }, bridge });
+      h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, bridge });
     });
 
     it('writes 0-byte Admins.cfg, logs the fallback, still seeds the other 18', async () => {
