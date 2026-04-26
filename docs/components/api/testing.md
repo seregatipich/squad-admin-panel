@@ -4,6 +4,7 @@
 
 | Tier | Location | What it covers |
 |---|---|---|
+| Property | [`apps/api/test/property/`](../../../apps/api/test/property/) | Fuzz/property-based tests using `@fast-check/vitest`. Audit chain hash integrity under random insertion patterns. |
 | Unit | [`apps/api/test/*.test.ts`](../../../apps/api/test/) excluding `e2e/` and `security/` | Auth helpers, Zod schemas, blame walker, hash chain helpers, route schemas via `fastify.inject()` with a fake bridge. |
 | Integration | Same directory, marked by use of real Postgres/Redis (`TEST_DATABASE_URL` set) | Audit triggers, RBAC enforcement, WS frame splitting, install WS plumbing. |
 | Security | [`apps/api/test/security/*.test.ts`](../../../apps/api/test/security/) | Permission boundary matrix, SQL injection payloads, XSS smoke, cookie security attributes. |
@@ -12,8 +13,12 @@
 ## How to run
 
 ```bash
-# Unit + integration + security (default; needs DATABASE_URL for security tests)
+# Unit + integration + security + property (default; needs DATABASE_URL)
 DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm --filter @squad/api test
+
+# Property tests only
+DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin \
+  pnpm --filter @squad/api exec vitest run test/property/
 
 # Security suite only (uses dedicated config with hookTimeout=300 s)
 DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin \
@@ -25,6 +30,19 @@ pnpm --filter @squad/api exec vitest run test/rcon-send.test.ts
 # E2E (needs PANEL_TEST_URL + PANEL_TEST_COOKIE; see CLAUDE.md)
 pnpm --filter @squad/api test:e2e
 ```
+
+## Property-based tests
+
+[`test/property/audit-chain.test.ts`](../../../apps/api/test/property/audit-chain.test.ts) — 1 property, 10 random runs, up to 20 rows per run:
+
+Inserts random batches of `audit_log` rows via raw SQL (bypassing the ORM), then reads back the stored `prev_hash` and `row_hash` columns and verifies the entire chain from the first row to the last:
+
+- `row.prev_hash_hex` equals the `row_hash` of the preceding row (or `null` for the first row ever).
+- `row.row_hash_hex` equals `sha256(prev || canonical_string)` computed independently in JS using `node:crypto`.
+
+The canonical string mirrors the DB trigger exactly: `action_type|target_type|target_id|context::text|created_at::text`.
+
+Important: all `ORDER BY` clauses use the table-qualified form `ORDER BY audit_log.id ASC` to ensure numeric ordering — PostgreSQL resolves unqualified `ORDER BY id` to the `id::text` select expression when `id::text` appears in the column list, which would sort lexicographically.
 
 ## What is covered
 

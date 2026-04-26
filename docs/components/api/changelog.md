@@ -1,5 +1,11 @@
 # `api` — changelog
 
+## 2026-04-26 — Phase 6 Task 56: audit chain property tests
+
+### Added
+
+- `apps/api/test/property/audit-chain.test.ts` — property-based fuzz test (`@fast-check/vitest`, 10 runs × up to 20 random rows). Verifies that the DB trigger correctly builds the sha256 hash chain across random `audit_log` insertions: `prev_hash` links match, `row_hash` values match independent JS computation of `sha256(prev || canonical)`.
+
 ## 2026-04-26 — Phase 7 Tasks 57-60: security regression test suite
 
 ### Added
