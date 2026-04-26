@@ -19,7 +19,7 @@ All require a valid session. Permission gating is noted where applicable.
 | Route | File | Required permission(s) | What it displays |
 |---|---|---|---|
 | `/dashboard` | `(dashboard)/dashboard/page.tsx` | none (all authenticated users) | Summary cards (server count, online players, host health, alerts). Host info/metrics widget with sparkline buttons that open `MetricHistoryModal`. Recent activity feed from `GET /api/v1/audit`. Connection health panel (PostgreSQL, Redis, bridge, workers). Polls every 4 s. |
-| `/servers` | `(dashboard)/servers/page.tsx` | none | Filterable server list with status dot, player count, RCON state, last-poll time. Start / stop / restart action buttons. Polls every 4 s. |
+| `/servers` | `(dashboard)/servers/page.tsx` | none | Server list with status dot, player count, RCON state, last-poll time. Free-text search by name, slug, or id. Start / stop / restart action buttons. Polls every 4 s. |
 | `/servers/new` | `(dashboard)/servers/new/page.tsx` | `server:create` (enforced by API) | Two-step wizard: form (display_name, slug auto-transliterated from Cyrillic, ports, max_players) → POST /servers → POST /servers/:id/install → WebSocket log tail via `LogConsole`. |
 | `/servers/[id]` | `(dashboard)/servers/[id]/page.tsx` | none | Server detail: status, RCON state, container runtime, log tail (WebSocket), start/stop/restart buttons, links to configs and events tabs. |
 | `/servers/[id]/configs` | `(dashboard)/servers/[id]/configs/page.tsx` | `config:view` | Monaco-backed config editor with three tabs: Editor (dirty-tracking, optional commit message), History (config_versions list with diff/restore), Blame (per-line attribution). |
