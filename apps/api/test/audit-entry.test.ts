@@ -1,6 +1,12 @@
 import type { DatabaseClient } from '@squad/db';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { writeAuditEntry } from '../src/lib/audit.js';
+import {
+  buildIntegrationApp,
+  type IntegrationHarness,
+  loginAsOwner,
+  makeFakeBridge,
+} from './integration/harness.js';
 
 interface CapturedInsert {
   table: unknown;
@@ -111,5 +117,93 @@ describe('writeAuditEntry', () => {
     const row = captured[0]!.values;
     expect(row.beforeSnapshot).toEqual({ x: 1 });
     expect(row.afterSnapshot).toEqual({ x: 2 });
+  });
+});
+
+describe('GET /api/v1/audit — HTTP integration', () => {
+  const OWNER_STEAM = 76561198000001200n;
+  let h: IntegrationHarness;
+
+  beforeEach(async () => {
+    h = await buildIntegrationApp({
+      seedOwner: { steamId64: OWNER_STEAM },
+      bridge: makeFakeBridge(),
+    });
+  });
+
+  afterEach(async () => {
+    await h.cleanup();
+  });
+
+  it('returns 401 without authentication', async () => {
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/audit' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('happy path: returns paginated audit items', async () => {
+    const cookie = await loginAsOwner(h);
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: {
+        display_name: 'Audit Test',
+        slug: 'audit-test',
+        game_port: 7790,
+        query_port: 27190,
+        beacon_port: 15090,
+        rcon_port: 21190,
+        max_players: 80,
+        tickrate: 50,
+        multihome: '0.0.0.0',
+      },
+    });
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/audit',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      items: Array<{ id: string; action_type: string }>;
+      page: number;
+      page_size: number;
+    };
+    expect(body.page).toBe(1);
+    expect(body.page_size).toBe(50);
+    expect(Array.isArray(body.items)).toBe(true);
+    const hasSrvCreate = body.items.some((r) => r.action_type === 'server.create');
+    expect(hasSrvCreate).toBe(true);
+  });
+
+  it('pagination: page 2 returns a different offset', async () => {
+    const cookie = await loginAsOwner(h);
+    const p1 = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/audit?page=1&page_size=1',
+      headers: { cookie },
+    });
+    const p2 = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/audit?page=2&page_size=1',
+      headers: { cookie },
+    });
+    expect(p1.statusCode).toBe(200);
+    expect(p2.statusCode).toBe(200);
+    const b1 = p1.json() as { items: Array<{ id: string }> };
+    const b2 = p2.json() as { items: Array<{ id: string }> };
+    if (b1.items.length > 0 && b2.items.length > 0) {
+      expect(b1.items[0]?.id).not.toBe(b2.items[0]?.id);
+    }
+  });
+
+  it('page_size out of range returns 400/422', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/audit?page_size=9999',
+      headers: { cookie },
+    });
+    expect([400, 422]).toContain(res.statusCode);
   });
 });

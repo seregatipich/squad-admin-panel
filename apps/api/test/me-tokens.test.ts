@@ -136,6 +136,35 @@ describe('POST /api/v1/me/tokens', () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it('401 when not authenticated', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/me/tokens',
+      payload: { name: 'unauthenticated', scopes: [] },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('409 when 25 active tokens already exist', async () => {
+    for (let i = 0; i < 25; i++) {
+      const r = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/me/tokens',
+        headers: { cookie },
+        payload: { name: `token-${i}`, scopes: [] },
+      });
+      expect(r.statusCode).toBe(201);
+    }
+    const over = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/me/tokens',
+      headers: { cookie },
+      payload: { name: 'over-limit', scopes: [] },
+    });
+    expect(over.statusCode).toBe(409);
+    expect(over.json()).toMatchObject({ error: 'too_many_active_tokens' });
+  });
 });
 
 describe('DELETE /api/v1/me/tokens/:id', () => {
@@ -185,6 +214,14 @@ describe('DELETE /api/v1/me/tokens/:id', () => {
       headers: { cookie },
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('401 when not authenticated', async () => {
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: '/api/v1/me/tokens/01939a8b-0000-7000-8000-000000000001',
+    });
+    expect(res.statusCode).toBe(401);
   });
 
   it('idempotent: second revoke returns ok with already_revoked flag', async () => {

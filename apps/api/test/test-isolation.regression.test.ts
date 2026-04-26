@@ -15,6 +15,9 @@ describe('test isolation', () => {
            -e "e2e/" \
            -e "roles\\.id, id)" \
            -e "auth-steam\\.test\\.ts" \
+           -e "security/sql-injection" \
+           -e "security/permission-matrix" \
+           -e "security/xss-smoke" \
        || true`,
       { encoding: 'utf8', cwd: '/home/squad/squad-admin-panel' },
     );

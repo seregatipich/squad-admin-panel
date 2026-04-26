@@ -26,6 +26,15 @@ afterEach(async () => {
   await h.cleanup();
 });
 
+async function demoteToNoRole(h: IntegrationHarness): Promise<void> {
+  if (!h.seed.ownerSteamId64) throw new Error('owner steam id missing');
+  await h.db
+    .update(players)
+    .set({ roleId: null })
+    .where(eq(players.steamId64, h.seed.ownerSteamId64));
+  invalidatePermissionCache(h.seed.ownerSteamId64);
+}
+
 describe('POST /api/v1/host/restart', () => {
   it('Owner with host:manage permission triggers a restart and writes an audit row', async () => {
     let calls = 0;
@@ -80,5 +89,106 @@ describe('POST /api/v1/host/restart', () => {
     });
     expect(resp.statusCode).toBe(200);
     expect(resp.json()).toEqual({ status: 'restarting' });
+  });
+
+  it('propagates a hard 5xx when the bridge returns a non-connection error', async () => {
+    h.bridge.hostAgentRestart = async () => {
+      throw new Error('internal bridge failure');
+    };
+    const cookie = await loginAsOwner(h);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/host/restart',
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(502);
+    expect(resp.json()).toMatchObject({ error: 'bridge_unreachable' });
+  });
+
+  it('returns 401 when not authenticated', async () => {
+    const resp = await h.app.inject({ method: 'POST', url: '/api/v1/host/restart' });
+    expect(resp.statusCode).toBe(401);
+  });
+});
+
+describe('GET /api/v1/host/info', () => {
+  it('returns host info for a user with host:view permission', async () => {
+    const cookie = await loginAsOwner(h);
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/host/info',
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    const body = resp.json() as { hostname: string; cpu_cores: number };
+    expect(typeof body.hostname).toBe('string');
+    expect(typeof body.cpu_cores).toBe('number');
+  });
+
+  it('returns 401 without a session', async () => {
+    const resp = await h.app.inject({ method: 'GET', url: '/api/v1/host/info' });
+    expect(resp.statusCode).toBe(401);
+  });
+
+  it('returns 403 for Viewer who lacks host:view', async () => {
+    await demoteToNoRole(h);
+    const cookie = await loginAsOwner(h);
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/host/info',
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(403);
+  });
+});
+
+describe('GET /api/v1/host/metrics/history', () => {
+  it('returns ts/v arrays (empty when no data in stream)', async () => {
+    const cookie = await loginAsOwner(h);
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/host/metrics/history',
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    const body = resp.json() as { ts: number[]; v: number[][] };
+    expect(Array.isArray(body.ts)).toBe(true);
+    expect(Array.isArray(body.v)).toBe(true);
+  });
+
+  it('accepts the ?seconds= query param and clamps values', async () => {
+    const cookie = await loginAsOwner(h);
+    const ok = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/host/metrics/history?seconds=3600',
+      headers: { cookie },
+    });
+    expect(ok.statusCode).toBe(200);
+
+    const bad = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/host/metrics/history?seconds=0',
+      headers: { cookie },
+    });
+    expect([400, 422]).toContain(bad.statusCode);
+  });
+
+  it('returns 401 without a session', async () => {
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/host/metrics/history',
+    });
+    expect(resp.statusCode).toBe(401);
+  });
+
+  it('returns 403 for Viewer who lacks host:metrics', async () => {
+    await demoteToNoRole(h);
+    const cookie = await loginAsOwner(h);
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/host/metrics/history',
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(403);
   });
 });

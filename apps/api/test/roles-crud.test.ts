@@ -5,8 +5,14 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { invalidatePermissionCacheForRole } from '../src/lib/rbac.js';
+import { invalidatePermissionCache, invalidatePermissionCacheForRole } from '../src/lib/rbac.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
+import {
+  buildIntegrationApp,
+  type IntegrationHarness,
+  loginAsOwner,
+  makeFakeBridge,
+} from './integration/harness.js';
 
 let sql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;
@@ -172,5 +178,127 @@ describe('roles — cascade delete', () => {
     expect(playerRow[0]?.roleId).toBeNull();
 
     await db.delete(players).where(eq(players.steamId64, steamId));
+  });
+});
+
+describe('roles HTTP — description=null update and color validation', () => {
+  const OWNER_STEAM = 76561198000001100n;
+  let h: IntegrationHarness;
+
+  beforeEach(async () => {
+    h = await buildIntegrationApp({
+      seedOwner: { steamId64: OWNER_STEAM },
+      bridge: makeFakeBridge(),
+    });
+  });
+
+  afterEach(async () => {
+    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerSteamId64);
+    await h.cleanup();
+  });
+
+  it('PUT /roles/:id accepts description=null and clears the field', async () => {
+    const cookie = await loginAsOwner(h);
+    const create = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/roles',
+      headers: { cookie },
+      payload: { name: 'DescRole', color: 'blue', description: 'initial desc', permissions: [] },
+    });
+    expect(create.statusCode).toBe(201);
+    const { id } = create.json() as { id: string };
+
+    const update = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/roles/${id}`,
+      headers: { cookie },
+      payload: { description: null },
+    });
+    expect(update.statusCode).toBe(200);
+    const body = update.json() as { description: string | null };
+    expect(body.description).toBeNull();
+  });
+
+  it('POST /roles returns 400 for an invalid color value', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/roles',
+      headers: { cookie },
+      payload: { name: 'BadColor', color: 'not-a-real-color', permissions: [] },
+    });
+    expect([400, 422]).toContain(res.statusCode);
+  });
+
+  it('POST /roles returns 409 when role name already exists', async () => {
+    const cookie = await loginAsOwner(h);
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/roles',
+      headers: { cookie },
+      payload: { name: 'DupRole', color: 'green', permissions: [] },
+    });
+    const dup = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/roles',
+      headers: { cookie },
+      payload: { name: 'DupRole', color: 'red', permissions: [] },
+    });
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json()).toMatchObject({ error: 'role_name_taken' });
+  });
+
+  it('PUT /roles/:id returns 400 when trying to modify the Owner role', async () => {
+    const cookie = await loginAsOwner(h);
+    const all = await h.app.inject({ method: 'GET', url: '/api/v1/roles', headers: { cookie } });
+    const ownerRole = (all.json() as Array<{ id: string; name: string }>).find(
+      (r) => r.name === 'Owner',
+    );
+    expect(ownerRole).toBeDefined();
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/roles/${ownerRole!.id}`,
+      headers: { cookie },
+      payload: { name: 'Hacker' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'owner_role_immutable' });
+  });
+
+  it('DELETE /roles/:id returns 400 when trying to delete the Owner role', async () => {
+    const cookie = await loginAsOwner(h);
+    const all = await h.app.inject({ method: 'GET', url: '/api/v1/roles', headers: { cookie } });
+    const ownerRole = (all.json() as Array<{ id: string; name: string }>).find(
+      (r) => r.name === 'Owner',
+    );
+    expect(ownerRole).toBeDefined();
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/roles/${ownerRole!.id}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'owner_role_immutable' });
+  });
+
+  it('GET /roles and GET /roles/:id return 401 without auth', async () => {
+    const list = await h.app.inject({ method: 'GET', url: '/api/v1/roles' });
+    expect(list.statusCode).toBe(401);
+
+    const single = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/roles/019e0000-0000-7000-8000-000000000000',
+    });
+    expect(single.statusCode).toBe(401);
+  });
+
+  it('GET /roles/:id returns 404 for unknown id', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/roles/019e0000-0000-7000-8000-000000000000',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(404);
   });
 });

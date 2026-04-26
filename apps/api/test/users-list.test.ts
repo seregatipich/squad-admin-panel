@@ -4,7 +4,14 @@ import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
+import {
+  buildIntegrationApp,
+  type IntegrationHarness,
+  loginAsOwner,
+  makeFakeBridge,
+} from './integration/harness.js';
 
 let sql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;
@@ -96,5 +103,69 @@ describe('users list — role_id NOT NULL filter', () => {
       .from(players)
       .where(eq(players.steamId64, TEST_PLAYER_WITHOUT_ROLE));
     expect(noRole[0]?.roleId).toBeNull();
+  });
+});
+
+describe('GET /api/v1/users — HTTP integration', () => {
+  const OWNER_STEAM = 76561198000001300n;
+  let h: IntegrationHarness;
+
+  beforeEach(async () => {
+    h = await buildIntegrationApp({
+      seedOwner: { steamId64: OWNER_STEAM },
+      bridge: makeFakeBridge(),
+    });
+  });
+
+  afterEach(async () => {
+    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerSteamId64);
+    await h.cleanup();
+  });
+
+  it('returns 401 without authentication', async () => {
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/users' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('happy path: owner has a role and appears in the list', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/users', headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{
+      steam_id64: string;
+      role: { name: string };
+    }>;
+    expect(Array.isArray(body)).toBe(true);
+    const owner = body.find((u) => u.steam_id64 === String(OWNER_STEAM));
+    expect(owner).toBeDefined();
+    expect(owner?.role.name).toBe('Owner');
+  });
+
+  it('returns 403 when player has no role (no permissions)', async () => {
+    if (!h.seed.ownerSteamId64) throw new Error('owner missing');
+    await h.db
+      .update(players)
+      .set({ roleId: null })
+      .where(eq(players.steamId64, h.seed.ownerSteamId64));
+    invalidatePermissionCache(h.seed.ownerSteamId64);
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/users', headers: { cookie } });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('role.name is null-safe when player has no role (LEFT JOIN scenario)', async () => {
+    const cookie = await loginAsOwner(h);
+    const stubSteam = testSteamId(710001);
+    await h.db.insert(players).values({
+      steamId64: stubSteam,
+      canonicalName: 'NoRoleUser',
+      canonicalNameNormalized: 'noroleuser',
+      roleId: null,
+    });
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/users', headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ steam_id64: string }>;
+    const found = body.find((u) => u.steam_id64 === String(stubSteam));
+    expect(found).toBeUndefined();
   });
 });

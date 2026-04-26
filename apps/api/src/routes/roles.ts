@@ -98,7 +98,10 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
           }
         });
       } catch (err) {
-        if ((err as { code?: string }).code === '23505') {
+        if (
+          (err as { code?: string }).code === '23505' ||
+          (err as { cause?: { code?: string } }).cause?.code === '23505'
+        ) {
           reply.code(409);
           return { error: 'role_name_taken' };
         }
@@ -150,7 +153,10 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
           }
         });
       } catch (err) {
-        if ((err as { code?: string }).code === '23505') {
+        if (
+          (err as { code?: string }).code === '23505' ||
+          (err as { cause?: { code?: string } }).cause?.code === '23505'
+        ) {
           reply.code(409);
           return { error: 'role_name_taken' };
         }

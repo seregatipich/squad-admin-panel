@@ -281,4 +281,80 @@ describe('DELETE /api/v1/me/sessions', () => {
       .where(eq(sessionsTable.steamId64, 76561198000000700n));
     expect(remaining.length).toBe(0);
   });
+
+  it('returns 401 when not authenticated', async () => {
+    const res = await h.app.inject({ method: 'DELETE', url: '/api/v1/me/sessions' });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('DELETE /api/v1/me/sessions/:id — revoke own current session', () => {
+  let schemaInfo: Awaited<ReturnType<typeof createIsolatedSchema>>;
+  let h: Awaited<ReturnType<typeof buildApp>>;
+  beforeEach(async () => {
+    schemaInfo = await createIsolatedSchema();
+    await runMigrations(schemaInfo.url);
+    h = await buildApp({ dbUrl: schemaInfo.url });
+  });
+  afterEach(async () => {
+    await h.cleanup();
+    await schemaInfo.drop();
+  });
+
+  it('can revoke the current session (own active session)', async () => {
+    const { token, sessionId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000800n);
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/me/sessions/${sessionId}`,
+      cookies: { [SESSION_COOKIE]: token },
+    });
+    expect(res.statusCode).toBe(200);
+    const rows = await h.db.select().from(sessionsTable).where(eq(sessionsTable.id, sessionId));
+    expect(rows.length).toBe(0);
+  });
+
+  it('returns 401 when not authenticated', async () => {
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: '/api/v1/me/sessions/some-session-id',
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('GET /api/v1/me/sessions — pagination implicit', () => {
+  let schemaInfo: Awaited<ReturnType<typeof createIsolatedSchema>>;
+  let h: Awaited<ReturnType<typeof buildApp>>;
+  beforeEach(async () => {
+    schemaInfo = await createIsolatedSchema();
+    await runMigrations(schemaInfo.url);
+    h = await buildApp({ dbUrl: schemaInfo.url });
+  });
+  afterEach(async () => {
+    await h.cleanup();
+    await schemaInfo.drop();
+  });
+
+  it('returns 401 when not authenticated', async () => {
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/me/sessions' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('session list shows correct count when player has multiple sessions', async () => {
+    const { token } = await seedAuthedPlayer(h.db, h.redis, 76561198000000900n);
+    await createSession(h.db, h.redis, {
+      steamId64: 76561198000000900n,
+      ip: null,
+      userAgent: 'extra-ua',
+      ttlMs: 21600 * 1000,
+    });
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/me/sessions',
+      cookies: { [SESSION_COOKIE]: token },
+    });
+    expect(res.statusCode).toBe(200);
+    const list = res.json() as unknown[];
+    expect(list.length).toBe(2);
+  });
 });
