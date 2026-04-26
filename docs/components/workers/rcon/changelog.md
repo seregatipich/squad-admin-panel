@@ -1,5 +1,12 @@
 # Changelog — worker-rcon
 
+## 2026-04-26
+
+### Added
+
+- `test/supervisor.test.ts`: unit tests for `RconSupervisor` reconcile lifecycle (add/remove targets, idempotency).
+- `test/contract.test.ts`: subprocess contract tests — heartbeat publication on Redis DB 14, SIGTERM exit 0 within 5s.
+
 ## 2026-04-25
 
 ### Added

@@ -3,10 +3,32 @@
 ## Running tests
 
 ```bash
-pnpm --filter @squad/worker-event-partition test
+REDIS_URL=redis://127.0.0.1:6379/14 pnpm --filter @squad/worker-event-partition test
 ```
 
-Runs with `--passWithNoTests`. There are no test files in the current implementation.
+## Test files
+
+All tests live under `apps/workers/event-partition/test/`.
+
+### `partition.test.ts`
+
+Unit tests for partition name computation.
+
+| Test | What it verifies |
+|---|---|
+| Generates correct partition name for a given year/month | Zero-padded `events_YYYY_MM` format |
+| Computes next month partition rolling over December → January | Year boundary handled correctly |
+| Computes next month for a regular month | April → May |
+| Current and next partition names are distinct | No off-by-one error |
+
+### `contract.test.ts`
+
+Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
+
+| Test | What it verifies |
+|---|---|
+| Publishes heartbeat within 30s of start | `worker:heartbeat:event-partition` key has TTL ≤ 30s |
+| Exits 0 on SIGTERM within 5s | Graceful shutdown path |
 
 ## Coverage gaps
 

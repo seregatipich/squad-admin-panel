@@ -1,5 +1,12 @@
 # Changelog — worker-metrics-sampler
 
+## 2026-04-26
+
+### Added
+
+- Added `test/maxlen.test.ts`: MAXLEN enforcement test verifying `MAXLEN ~ HOST_METRICS_MAXLEN` on every xadd call.
+- Added `test/contract.test.ts`: subprocess contract tests — heartbeat + SIGTERM exit 0.
+
 ## 2026-04-25
 
 ### Added

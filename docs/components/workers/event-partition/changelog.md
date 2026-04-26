@@ -1,5 +1,12 @@
 # Changelog — worker-event-partition
 
+## 2026-04-26
+
+### Added
+
+- Added `test/partition.test.ts`: partition name computation tests including year-boundary rollover.
+- Added `test/contract.test.ts`: subprocess contract tests — heartbeat + SIGTERM exit 0.
+
 ## 2026-04-25
 
 ### Added

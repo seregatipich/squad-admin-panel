@@ -1,5 +1,12 @@
 # Changelog — worker-audit-archiver
 
+## 2026-04-26
+
+### Added
+
+- Added `test/archive.test.ts`: stub behavior tests for `startHeartbeat` Redis interface.
+- Added `test/contract.test.ts`: subprocess contract tests — heartbeat + SIGTERM exit 0.
+
 ## 2026-04-25
 
 ### Added

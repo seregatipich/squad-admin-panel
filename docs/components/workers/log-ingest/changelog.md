@@ -1,5 +1,12 @@
 # Changelog — worker-log-ingest
 
+## 2026-04-26
+
+### Added
+
+- Added `test/ingest.test.ts`: player connect/disconnect flow tests (correlation window, player.disconnected, rcon.connected, unknown lines).
+- Added `test/contract.test.ts`: subprocess contract tests — heartbeat + SIGTERM exit 0.
+
 ## 2026-04-25
 
 ### Added
