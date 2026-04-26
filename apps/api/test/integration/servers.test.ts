@@ -262,6 +262,37 @@ describe('POST /api/v1/servers/:id/stop', () => {
     expect(row?.status).toBe('stopping');
     await assertAuditRow(h, { action: 'server.stop', resource: 'server', targetId: id });
   });
+
+  it('writes status=stopping BEFORE calling container_stop so a crash mid-stop leaves a recoverable state', async () => {
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: createBody,
+      })
+    ).json<{ id: string }>();
+    await h.db.delete(serverCredentials).where(eq(serverCredentials.serverId, id));
+    await h.db
+      .update(servers)
+      .set({ status: 'running', updatedAt: new Date() })
+      .where(eq(servers.id, id));
+
+    let statusAtStopCall: string | null = null;
+    h.bridge.containerStop = async () => {
+      const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
+      statusAtStopCall = row?.status ?? null;
+    };
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/stop`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(statusAtStopCall).toBe('stopping');
+  });
 });
 
 describe('POST /api/v1/servers/:id/restart', () => {

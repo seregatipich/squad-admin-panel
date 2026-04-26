@@ -17,9 +17,11 @@ import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import auditPluginFactory from '../../src/plugins/audit.js';
 import authPlugin from '../../src/plugins/auth.js';
+import healthPlugin from '../../src/plugins/health.js';
 import installProgressPlugin from '../../src/plugins/install-progress.js';
 import liveBusPlugin from '../../src/plugins/live-bus.js';
 import requestContextPlugin from '../../src/plugins/request-context.js';
+import statusReconcilerPlugin from '../../src/plugins/status-reconciler.js';
 import auditRoutes from '../../src/routes/audit.js';
 import authRoutes from '../../src/routes/auth.js';
 import depotRoutes from '../../src/routes/depot.js';
@@ -370,6 +372,27 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(auditPluginFactory);
   await app.register(installProgressPlugin);
   await app.register(liveBusPlugin);
+  await app.register(healthPlugin);
+  if (opts.withStatusReconciler) {
+    await app.register(statusReconcilerPlugin);
+  } else {
+    // Tests that don't exercise the reconciler still need the decorator so
+    // routes that consult `app.statusReconciler` (e.g. POST /reconcile)
+    // resolve. Provide a no-op stub.
+    app.decorate('statusReconciler', {
+      stats: async () => ({
+        last_tick_at: null,
+        last_tick_duration_ms: null,
+        last_tick_servers_inspected: 0,
+        consecutive_tick_errors: 0,
+        servers_in_transient: 0,
+        stuck_servers: [],
+        bridge_failures_by_server: {},
+      }),
+      reconcileOnce: async () => null,
+      tickNow: async () => undefined,
+    });
+  }
 
   await app.register(authRoutes);
   await app.register(meTokensRoutes);

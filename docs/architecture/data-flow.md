@@ -72,12 +72,32 @@ POST /servers/:id/install
                                    ──────────────────────▶   ufw_rule add … (×4)
                                    ──────────────────────▶   container_run {image, name, mounts, env, host_network}
                                                        ◀──   {ok, container_id}
-status-reconciler (every 4 s) ──▶  container_inspect
+status-reconciler (immediate on onReady, then every 4 s) ──▶  container_inspect
                                                        ◀──   {state: running}
                                    UPDATE servers SET status='running'
+                                   liveBus.publish({type:'server.status', source:'reconciler'})
                                                                             (worker-rcon picks it up
                                                                              on next reconcile)
 ```
+
+### Stop flow ordering (eager status update)
+
+`POST /api/v1/servers/:id/stop` writes the row to `status='stopping'` BEFORE the slow RCON sequence + `container_stop`:
+
+```
+POST /servers/:id/stop ──▶  UPDATE servers SET status='stopping'
+                            liveBus.publish({type:'server.status', source:'stop'})
+                            (UI updates immediately)
+                            ─bridge.rcon broadcast──▶ AdminBroadcast …
+                            sleep 15 s
+                            ─bridge.rcon end-match──▶ AdminEndMatch
+                            ─bridge.containerStop({timeout_sec: 60})
+status-reconciler (≤4 s later) ──▶ container_inspect
+                                                  ◀── {state: 'exited'}
+                                   UPDATE servers SET status='stopped'
+```
+
+If the API process crashes between the eager UPDATE and `container_stop`, the row sits in `stopping`; the next reconciler tick reads docker state and resolves it. This is why the plugin's `mapState` treats `not_found`, `exited`, and `dead` as `stopped` — Docker may have already cleaned up.
 
 ## Server lifecycle: deletion + restore
 
@@ -252,4 +272,5 @@ When a server transitions to `stopped`/`failed`, the supervisor drops it from `t
 | `container_run` exits non-zero | `ok:false, code:'runtime_error'` to the install WebSocket; install flow fails the install row and emits `server.install.failed`. |
 | Worker stops sending heartbeats | `worker:heartbeat:{name}` TTL expires (30 s). `/api/v1/health/workers` reports stale; UI dashboard shows red. |
 | Audit chain break | `pnpm verify:audit-chain` exits non-zero with the first broken row id. Treat as an incident. |
-| Status-reconciler can't reach Docker | Servers stuck in their last-known status; `worker-rcon` heartbeat continues unaffected. |
+| Status-reconciler can't reach Docker | Per-server consecutive `container_inspect` failures are counted in `bridge_failures_by_server` (visible at `GET /api/v1/health/reconciler`). Log cadence: silent on attempt 1, `warn` at 5/30/every 60th. The DB row stays at its last status — ops can force a single-server reconcile via `POST /api/v1/servers/:id/reconcile`. `worker-rcon` heartbeat continues unaffected. |
+| Status-reconciler returns an unmapped docker state | The plugin logs `'unknown docker state'` at warn and leaves the DB row alone. The row appears in `stuck_servers[]` after `STUCK_AFTER_MS` (90 s). Add the new state to `mapState`'s switch and ship a patch — the reconciler refuses to guess. |

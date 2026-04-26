@@ -60,8 +60,9 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 | GET | `/api/v1/servers/:id` | Full detail: settings, RCON status, container inspect+stats, host info. | `server:view` |
 | DELETE | `/api/v1/servers/:id` | **Soft-delete + backup orchestrator**. Phase 1 reads every allowed `.cfg` via `bridge.fileRead` and inserts one `config_versions` row per file with `message = 'deletion-backup-marker <iso>'`. If 0 files were read the route returns 500 `delete_failed` and leaves the server alive. Phase 2-4 are best-effort: `container_stop` (30 s) + `container_rm`, `directory_delete` on `configs/{uuid}` and `saved/{uuid}`, `ufw_rule remove` × 4 (game/query/beacon/rcon). Phase 5 sets `servers.deleted_at = now()`, `deleted_by_steam_id64 = <actor>`, `deletion_backup_marker_id = <first-row-id>`. Audit row written by the route (`server.delete`). On success emits a `server.deleted` LiveEvent. Response: `{ ok, backup_marker_id, files_backed_up, files_attempted, container_removed, configs_dir_removed, saved_dir_removed, ufw_rules_removed, errors[] }`. Repeating the call on an already-soft-deleted server returns 404. | `server:delete` |
 | POST | `/api/v1/servers/:id/start` | If container exists → `container_start`; otherwise `container_run`. | `server:start` |
-| POST | `/api/v1/servers/:id/stop` | RCON `AdminBroadcast` → 15s wait → `AdminEndMatch` → `container_stop` (60 s grace). | `server:stop` |
+| POST | `/api/v1/servers/:id/stop` | Sets `servers.status='stopping'` and emits `server.status` LiveEvent **before** the RCON sequence so the UI updates instantly and a process crash mid-stop leaves a state the reconciler can resolve. Then RCON `AdminBroadcast` → 15 s wait → `AdminEndMatch` → `container_stop` (60 s grace). | `server:stop` |
 | POST | `/api/v1/servers/:id/restart` | `container_stop` then `container_start`. | `server:restart` |
+| POST | `/api/v1/servers/:id/reconcile` | Forces a single-server reconciliation: calls `container_inspect` once, maps the docker state, updates `servers.status` if it changed, and emits `server.status` LiveEvent. Returns `{ inspected_state, inspected_running, previous_status, new_status, changed }`. 502 `bridge_unavailable` when the bridge throws — the next call can recover. 404 for unknown/soft-deleted servers. Audit `server.reconcile`. Use this when ops sees a server stuck in `starting`/`stopping`/`installing` longer than expected. | `server:view` |
 | GET | `/api/v1/servers/:id/events` | Recent envelopes from `events:server:{id}` (XREVRANGE, default 100). Used by the live-events UI. | `server:view` |
 
 ## Server archive (soft-deleted servers)
@@ -188,6 +189,7 @@ Aggregated logs from every panel component (api, workers, bridge events, depot/i
 | GET | `/ready` | Readiness — also requires bridge ping success. |
 | GET | `/metrics` | Prometheus metrics from `prom-client`. |
 | GET | `/api/v1/health/workers` | Per-worker `worker:heartbeat:{name}` aggregate (alive / age_ms / details). |
+| GET | `/api/v1/health/reconciler` | Status-reconciler diagnostics — `last_tick_at`, `last_tick_duration_ms`, `last_tick_servers_inspected`, `consecutive_tick_errors`, `stuck_servers[]` (rows in `starting`/`stopping`/`installing` with `updated_at` older than 90 s — `{id, status, updated_at, age_ms}`), `bridge_failures_by_server` (per-id consecutive `container_inspect` failures), and a derived `healthy` boolean (true ⇔ last tick within 12 s, no consecutive errors, no stuck rows). Unauthenticated, no permission gate — same threat model as `/health`. |
 
 ## Adding a route
 

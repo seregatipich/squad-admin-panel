@@ -1,5 +1,28 @@
 # `api` — changelog
 
+## 2026-04-26 — Status reconciler hardening + manual reconcile + health visibility
+
+### Added
+
+- `POST /api/v1/servers/:id/reconcile` — forces a single-server `container_inspect` + DB sync. Returns `{previous_status, new_status, changed, inspected_state, inspected_running}`. 502 `bridge_unavailable` on bridge throw, 404 on unknown/soft-deleted id. Permission `server:view`. Audit `server.reconcile`.
+- `GET /api/v1/health/reconciler` — surfaces `last_tick_at`, `last_tick_duration_ms`, `last_tick_servers_inspected`, `consecutive_tick_errors`, `stuck_servers[]` (rows in `starting`/`stopping`/`installing` with `updated_at` older than 90 s), `bridge_failures_by_server`, and a derived `healthy` boolean.
+- `apps/api/test/status-reconciler.test.ts` — pure unit tests on `mapState` (case-insensitivity, all docker states, unknown-state guard) and reconciler constants.
+- `apps/api/test/integration/status-reconciler.integration.test.ts` — 10 integration tests against a real DB schema: status flips for exited/running/not_found/unknown, per-server consecutive bridge-failure counter (increment + reset), `tickNow()` semantics, manual reconcile happy + 502 + 404 paths, `/health/reconciler` end-to-end including stuck-server detection.
+
+### Changed
+
+- `apps/api/src/routes/servers.ts` — `POST /api/v1/servers/:id/stop` now writes `servers.status='stopping'` and emits the `server.status` LiveEvent **before** the RCON broadcast + 15 s wait + `container_stop`. Previously the status flip happened after the slow bridge sequence, leaving the UI stale for ~75 s and a process crash mid-stop leaving a permanently inconsistent row. The reconciler resolves the row to `stopped` once Docker reports `exited`.
+- `apps/api/src/plugins/status-reconciler.ts` — extracted pure `mapState(dockerState, running): {status, known}`; `known=false` for unmapped states leaves the DB untouched and logs `warn 'unknown docker state'` instead of silently skipping. Added per-server consecutive-failure counter for `container_inspect` errors, with escalating log levels (debug → warn at 5/30/every 60th). First tick fires on `onReady`, not after one interval. Decorated `app.statusReconciler` with `{stats(), reconcileOnce(id), tickNow()}` so routes can interact with the reconciler without re-implementing it.
+- `apps/api/src/plugins/live-bus.ts` — extended `LiveEvent.server.status.data.source` union with `'stop' | 'start' | 'restart'` so route-emitted status events are distinguishable from reconciler-emitted ones.
+- `apps/api/src/plugins/health.ts` — new `/api/v1/health/reconciler` route reads `app.statusReconciler.stats()`.
+- `apps/api/test/integration/harness.ts` — wired the long-declared `withStatusReconciler` flag to actually register the reconciler plugin; without it tests get a no-op stub `app.statusReconciler` so `POST /reconcile` resolves cleanly.
+
+### Migration notes
+
+- The new `LiveEvent` source values are additive; the WS frame schema accepts them without UI changes (the dashboard ignores the source field today). Worker components that re-publish `server.status` are unaffected.
+- The DB schema is unchanged; no migration required.
+- Operations: when a server is stuck in `Остановка`/`Запускается`/`Установка`, `curl /api/v1/health/reconciler` first, then `POST /api/v1/servers/:id/reconcile` to force a resolution.
+
 ## 2026-04-26 — Bundles C+D: server soft-delete with config backup, archive, restore-configs
 
 ### Added

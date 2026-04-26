@@ -65,4 +65,18 @@ export default fp(async (app) => {
       .sort((a, b) => a.name.localeCompare(b.name));
     return { items, total: items.length };
   });
+
+  app.get('/api/v1/health/reconciler', { config: { audit: false } }, async () => {
+    const stats = await app.statusReconciler.stats();
+    return {
+      ...stats,
+      // Convenience flag the UI can poll: green when the loop is alive
+      // (last tick within 3 intervals) AND no rows are stuck.
+      healthy:
+        stats.last_tick_at != null &&
+        Date.now() - new Date(stats.last_tick_at).getTime() < 12_000 &&
+        stats.consecutive_tick_errors === 0 &&
+        stats.stuck_servers.length === 0,
+    };
+  });
 });

@@ -28,7 +28,9 @@ These are not env-driven; change in code if needed.
 
 - `@fastify/rate-limit`: 300 req/min per `(IP, steamId64)`. Steam callback is IP-keyed.
 - Cookie session TTL: 6 h sliding (configurable via `SESSION_TTL_SECONDS`). Touch throttled to one DB write per 60 s (`SESSION_TOUCH_THROTTLE_SECONDS`).
-- `status-reconciler` poll interval: 4 s. Lower means faster UI feedback, more `container_inspect` load.
+- `status-reconciler` poll interval: 4 s (`RECONCILE_INTERVAL_MS` in [`status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts)). The first tick fires on `onReady`, then every 4 s. Lower means faster UI feedback, more `container_inspect` load.
+- `status-reconciler` stuck threshold: 90 s (`STUCK_AFTER_MS`). Rows in `starting`/`stopping`/`installing` older than this surface in `GET /api/v1/health/reconciler` `stuck_servers[]`.
+- `status-reconciler` failure-log cadence: per-server consecutive `container_inspect` errors are silent on attempt 1 (debug), then `warn` on attempt 5, 30, and every 60th. The map is pruned on success and when the row leaves a transient state.
 - Blame cache TTL in Redis: 24 h.
 
 ## See also

@@ -344,6 +344,20 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         where: eq(serverCredentials.serverId, s.id),
       });
 
+      // Mark 'stopping' BEFORE the slow RCON+stop sequence so the UI gets
+      // immediate feedback and a process crash mid-flight leaves a state the
+      // reconciler can resolve. The reconciler treats 'stopping' as transient
+      // and will flip it to 'stopped' as soon as Docker reports exit.
+      await app.db
+        .update(servers)
+        .set({ status: 'stopping', updatedAt: new Date() })
+        .where(eq(servers.id, s.id));
+      app.liveBus?.publish({
+        type: 'server.status',
+        ts: new Date().toISOString(),
+        data: { server_id: s.id, status: 'stopping', source: 'stop' },
+      });
+
       // Graceful shutdown (TZ §17.7): broadcast → end match → stop container.
       if (settings && creds) {
         try {
@@ -379,10 +393,6 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       }
 
       await app.bridge.containerStop({ name: containerName(s.id), timeout_sec: 60 });
-      await app.db
-        .update(servers)
-        .set({ status: 'stopping', updatedAt: new Date() })
-        .where(eq(servers.id, s.id));
       return { status: 'stopping' };
     },
   );
@@ -412,6 +422,34 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         .set({ status: 'starting', updatedAt: new Date() })
         .where(eq(servers.id, s.id));
       return { status: 'restarting' };
+    },
+  );
+
+  fast.post(
+    '/api/v1/servers/:id/reconcile',
+    {
+      config: {
+        permissions: ['server:view'],
+        audit: { action: 'server.reconcile', resource: 'server' },
+      },
+      schema: { params: serverIdParams },
+    },
+    async (req, reply) => {
+      try {
+        const result = await app.statusReconciler.reconcileOnce(req.params.id);
+        if (!result) {
+          reply.code(404);
+          return { error: 'not_found' };
+        }
+        return result;
+      } catch (err) {
+        req.log.warn(
+          { err: (err as Error).message, serverId: req.params.id },
+          'manual reconcile failed',
+        );
+        reply.code(502);
+        return { error: 'bridge_unavailable', message: (err as Error).message };
+      }
     },
   );
 

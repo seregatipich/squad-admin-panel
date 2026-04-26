@@ -65,6 +65,34 @@ psql -c "SELECT context FROM audit_log WHERE action_type='server.delete' AND tar
 
 **Action**: there is no fallback — pre-Bundle-C deletions did not back up configs. Manually re-edit the cfg files via the editor at `/servers/:newId/configs`.
 
+## Server is stuck on "Остановка" / "Запускается" / "Установка"
+
+**Symptom**: a row sits in `stopping`, `starting`, or `installing` for more than ~90 s and the UI never moves on.
+
+**Diagnosis**:
+
+```bash
+curl -sk https://${APP_DOMAIN}/api/v1/health/reconciler | jq
+```
+
+Look at the response:
+
+- `last_tick_at` older than ~12 s → the reconciler loop is wedged. Check `docker compose logs api --since 2m | grep reconciler:` for `tick failed` lines.
+- `consecutive_tick_errors > 0` → the SELECT itself is failing (DB outage or schema mismatch). The DB connection is unhealthy.
+- `bridge_failures_by_server[<id>] >= 5` → the bridge can't inspect that server's container. Run `sg panel -c 'bash scripts/verify-bridge.sh'` and `sudo systemctl status panel-host-bridge`.
+- `stuck_servers[]` non-empty → reconciler is alive but couldn't resolve the row, usually because `docker inspect` returned an unmapped state string (see `mapState` in [`status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts)). `docker compose logs api --since 5m | grep 'unknown docker state'` shows the raw state.
+
+**Action**: force a single-server reconcile.
+
+```bash
+curl -skX POST https://${APP_DOMAIN}/api/v1/servers/<id>/reconcile \
+  -H "Cookie: __Host-sid=<your-session>" | jq
+```
+
+The response includes `inspected_state`, `inspected_running`, and the resulting `new_status`. If 502 `bridge_unavailable` comes back, fix the bridge first; the row will move on its own once the next tick succeeds. If a never-before-seen docker state is reported (the `unknown docker state` warning above), add it to `mapState`'s switch statement and ship a patch — the reconciler is intentionally conservative and will not guess.
+
+If the row was wrongly stuck on a UUID that no longer has a container at all (`inspected_state: 'not_found'`), the reconcile will flip it to `stopped`. The UI will catch up on the next live-bus event.
+
 ## Audit chain shows a gap
 
 See [`operations/troubleshooting.md`](../../operations/troubleshooting.md#audit-log-shows-a-gap-or-hash-mismatch).

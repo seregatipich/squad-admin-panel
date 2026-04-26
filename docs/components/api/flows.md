@@ -131,28 +131,61 @@ Audit row at step 1 (`server.restore`), step 3 (`server.restore_configs`), and t
 
 ## Status reconciler
 
-[`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts):
+[`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts) — fires once on `onReady` and then every `RECONCILE_INTERVAL_MS` (4 s):
 
 ```
-every 4 s:
-  for srv in SELECT id, container_name FROM servers WHERE status NOT IN ('pending','failed'):
-    inspect = bridge.container_inspect(container_name)
-    desired = mapInspectToStatus(inspect)
-    if desired !== srv.status:
-      UPDATE servers SET status = desired
-      audit row (action: 'server.status.reconciled')
-      publish event to events:server:{id}
+on ready: tick() once immediately
+every 4 s: tick()
+
+tick():
+  rows = SELECT id, status FROM servers
+         WHERE status IN TRANSIENT_STATES AND deleted_at IS NULL
+  prune bridgeFailures map: drop any id no longer in the tick set
+  for row in rows:
+    try:
+      res = bridge.containerInspect({name: "squad-${id}"})
+      bridgeFailures.delete(id)            ← reset on first success
+    catch err:
+      next = (bridgeFailures.get(id) ?? 0) + 1
+      bridgeFailures.set(id, next)
+      log.debug at 1, log.warn at 5, 30, 60, 120, ...   ← escalating cadence
+      continue                              ← do NOT modify DB
+    mapped = mapState(res.state, res.running)
+    if !mapped.known:
+      log.warn 'unknown docker state' (DB stays as-is — surfaces as stuck)
+      continue
+    if mapped.status !== row.status:
+      UPDATE servers SET status=mapped.status, container_id, updated_at WHERE id=?
+      liveBus.publish({type:'server.status', source:'reconciler'})
 ```
 
-`mapInspectToStatus`:
+`mapState(dockerState, running)` — single source of truth for the docker→DB mapping:
 
-| Docker state | DB status |
+| Inspect | DB status |
 |---|---|
-| `running` | `running` |
-| `created` / `restarting` | `starting` |
-| `exited (0)` | `stopped` |
-| `exited (≠0)` | `crashed` |
-| missing | unchanged (assume mid-creation) |
+| `running=true` (any state string) | `running` |
+| `state='running'` | `running` |
+| `state='created'` / `'restarting'` | `starting` |
+| `state='paused'` / `'removing'` | `stopping` |
+| `state='exited'` / `'dead'` / `'not_found'` | `stopped` |
+| anything else | `{status: null, known: false}` — DB untouched, warn |
+
+### TRANSIENT_STATES (rows the reconciler watches)
+`starting`, `stopping`, `running`, `stopped`, `ready`, `installing`, `failed`. Even terminal states like `running` and `stopped` are watched so an externally restarted/crashed container is reflected back into the DB.
+
+### STUCK_CANDIDATE_STATES (rows the health endpoint flags)
+`starting`, `stopping`, `installing`. A row in one of these states with `updated_at` older than `STUCK_AFTER_MS` (90 s) appears in `GET /api/v1/health/reconciler` `stuck_servers[]`. `running`/`stopped` are NOT stuck candidates — they are valid steady states.
+
+### Escape hatches when a row is stuck
+1. `POST /api/v1/servers/:id/reconcile` — drives one immediate `container_inspect` for the given server. Returns `{previous_status, new_status, changed, inspected_state, inspected_running}`. 502 if the bridge throws (ops should investigate the bridge then retry).
+2. `GET /api/v1/health/reconciler` — exposes `last_tick_at`, `consecutive_tick_errors`, `stuck_servers[]`, `bridge_failures_by_server`. The derived `healthy` flag goes false if the loop hasn't ticked in 12 s, has any consecutive tick errors, or any stuck rows.
+
+### Eager status writes on user actions
+`POST /api/v1/servers/:id/stop` writes `status='stopping'` to the DB **before** the RCON broadcast + 15 s wait + `container_stop`, then publishes `server.status` to live-bus. This means:
+- A crash mid-stop leaves a `stopping` row that the next reconciler tick can resolve to `stopped` (or back to `running` if Docker says so).
+- The UI updates instantly instead of after ~75 s of slow bridge calls.
+
+`POST /api/v1/servers/:id/start` keeps the existing pattern — DB→`starting` is set after the bridge call returns, since `containerRun`/`containerStart` are short.
 
 ## Worker heartbeat aggregation
 
