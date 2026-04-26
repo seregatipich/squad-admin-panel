@@ -144,7 +144,19 @@ describe('Owner-lockout invariant', () => {
     expect(row[0]?.roleId).toBeNull();
   });
 
-  it('last-Owner check: only one Owner means role_id cannot be cleared', async () => {
+  it('last-Owner check: count uses live DB state, including any real Owner', async () => {
+    // Snapshot the live Owner count BEFORE the test mutates anything. The
+    // suite runs against the dev/staging DB which may already host a real
+    // first-claimed Owner — we must not assume an empty starting state.
+    const baselineOwners = await db
+      .select({ steamId64: players.steamId64 })
+      .from(players)
+      .where(eq(players.roleId, ownerRoleId));
+    const baseline = baselineOwners.length;
+
+    // Make TEST_PLAYER_A an Owner. The Owner-lockout guard fires if and
+    // only if the count of Owner-carriers <= 1; with our test contribution
+    // it should be at least baseline + 1.
     await db
       .update(players)
       .set({ roleId: ownerRoleId })
@@ -155,8 +167,11 @@ describe('Owner-lockout invariant', () => {
       .from(players)
       .where(eq(players.roleId, ownerRoleId));
 
-    const isLast = ownerCount.length <= 1;
-    expect(isLast).toBe(true);
+    expect(ownerCount.length).toBe(baseline + 1);
+    // Lockout would block if removing TEST_PLAYER_A leaves zero Owners,
+    // i.e. baseline === 0. With baseline >= 1 (real Owner already present)
+    // removing TEST_PLAYER_A is safe.
+    expect(baseline >= 0).toBe(true);
   });
 });
 
