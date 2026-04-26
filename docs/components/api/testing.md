@@ -53,7 +53,7 @@ Important: all `ORDER BY` clauses use the table-qualified form `ORDER BY audit_l
 - WebSocket plumbing in [`install-ws.test.ts`](../../../apps/api/test/install-ws.test.ts) and [`server-logs.test.ts`](../../../apps/api/test/server-logs.test.ts).
 - Bridge heartbeat loop ([`bridge-heartbeat.test.ts`](../../../apps/api/test/bridge-heartbeat.test.ts)) — `tickOnce` driven manually to assert state-transition logging (alive→down warns once, down→alive logs the down-duration, no warn flapping on consecutive failures, late `onReady` after `onClose` does not leak a timer).
 - Event reclaim / DLQ in [`event-dlq-autoclaim.test.ts`](../../../apps/api/test/event-dlq-autoclaim.test.ts) — `XAUTOCLAIM` cadence and the 5-delivery → DLQ rule.
-- `POST /host/restart` happy + EPIPE-after-restart paths in [`host-actions.test.ts`](../../../apps/api/test/host-actions.test.ts).
+- `POST /host/restart`, `GET /host/info`, `GET /host/metrics/history` — happy paths, 401, 403 (no-role), bridge 5xx → 502, EPIPE-treated-as-success paths in [`host-actions.test.ts`](../../../apps/api/test/host-actions.test.ts).
 - `seedConfigs` in [`server-install-configs.test.ts`](../../../apps/api/test/server-install-configs.test.ts) — 19 cfg files seeded, `Rcon.cfg`/`Server.cfg` rewrite, baseline `config_versions` rows.
 - Config rewrite invariants in [`config-rewrite.test.ts`](../../../apps/api/test/config-rewrite.test.ts) — sha-unchanged short-circuit, append-only history, restore-as-new-version.
 - Blame walker in [`blame.test.ts`](../../../apps/api/test/blame.test.ts), RCON wire send in [`rcon-send.test.ts`](../../../apps/api/test/rcon-send.test.ts).
@@ -90,6 +90,13 @@ API-layer XSS assertions. Verifies that HTML in role names and descriptions is s
 ### cookie-security.test.ts — 5 tests
 
 Verifies `__Host-sid` cookie on session touch has `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`. Also verifies unauthenticated requests don't set a session cookie and expired tokens return 401.
+
+- Role CRUD HTTP surface (401, 404, 409 duplicate name, Owner immutability) in [`roles-crud.test.ts`](../../../apps/api/test/roles-crud.test.ts).
+- Audit log HTTP surface (401, pagination, `page_size` validation) in [`audit-entry.test.ts`](../../../apps/api/test/audit-entry.test.ts).
+- Users list HTTP surface (401, 403 no-role, INNER JOIN null-role omission) in [`users-list.test.ts`](../../../apps/api/test/users-list.test.ts).
+- Players HTTP surface (401, 403 no-role, ASCII/steamId64/Cyrillic search, role-assign 200/404/409) in [`player-role-assign.test.ts`](../../../apps/api/test/player-role-assign.test.ts).
+- Session management (401 on each route, revoke own session) in [`auth-sessions.test.ts`](../../../apps/api/test/auth-sessions.test.ts).
+- API token management (401 on create/delete, 409 25-token limit) in [`me-tokens.test.ts`](../../../apps/api/test/me-tokens.test.ts).
 
 ## What is not covered
 
