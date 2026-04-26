@@ -1,6 +1,6 @@
 # Squad Admin Panel — documentation
 
-Open-source, self-hosted control panel for Squad dedicated servers. Owns the full server lifecycle: install, update, start/stop, live config editing, log/event ingestion, audit. Each Squad server runs as its own Docker container; the panel is `docker compose up -d` on a single Linux host.
+Open-source, self-hosted control panel for Squad dedicated servers. Owns the full destructive lifecycle: install, update, start/stop, live config editing, log/event ingestion, audit, **soft-delete with mandatory config backup**, and **restore from archive**. Each Squad server runs as its own Docker container; the panel is `docker compose up -d` on a single Linux host. Live status (server, container, RCON, bridge connectivity) is pushed over a single authenticated WebSocket so the UI never feels stale.
 
 ## Table of contents
 

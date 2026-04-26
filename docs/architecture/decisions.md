@@ -2,6 +2,55 @@
 
 Meaningful architectural choices, recorded as we make them.
 
+## 2026-04-26 — Server lifecycle: soft-delete with mandatory backup, restore via re-install + overlay, panel-wide live-bus
+
+### Context
+
+`DELETE /api/v1/servers/:id` previously did the bare minimum: `containerRm` (errors silently swallowed) + `db.delete(servers)`. Host directories under `/var/lib/squad-panel/{configs,saved}/{uuid}` were left behind. There was no audit trail beyond the route's `audit: { action }` entry, no way to recover a deleted server's tuned `.cfg`, and no way for the UI to know — without polling — that a status had changed or that the bridge had died.
+
+The user requirement was that the panel own the destructive lifecycle end-to-end (delete files, but always back up `.cfg` first), expose the backup history click-through in the UI, and surface connectivity state without perceptible delay.
+
+### Decision
+
+1. **Soft-delete, not hard-delete.** Add `servers.deleted_at`, `servers.deleted_by_steam_id64`, `servers.deletion_backup_marker_id`. Replace the global unique slug index with a partial unique on `slug WHERE deleted_at IS NULL` so deleted slugs can be reused. All active-server queries get `WHERE deleted_at IS NULL`.
+
+2. **Backup is mandatory and uses the existing `config_versions` table.** The orchestrator (`apps/api/src/lib/server-delete.ts`) reads each `.cfg` via the bridge, then inserts a row per file tagged `message LIKE 'deletion-backup-marker%'`. If zero files could be backed up, the deletion aborts and the server stays alive. `Rcon.cfg` is backed up with its real password (it has to be — otherwise restore can't reproduce a working RCON setup).
+
+3. **Best-effort destructive phases after the backup.** Container stop+rm, `directory_delete configs`, `directory_delete saved`, ufw rule cleanup. Each phase records its own success/error in the response body and audit context. The DB soft-delete commits regardless — operators see exactly what succeeded and can finish the cleanup manually.
+
+4. **New bridge RPC `directory_delete`** (Bundle A). Hard-allowlisted to exactly `${PANEL_CONFIGS_ROOT}/{uuid}` or `${PANEL_SAVED_ROOT}/{uuid}` (no trailing path components, no traversal, uuid regex). Idempotent — missing dir returns `{removed:false}`.
+
+5. **Restore = re-install + overlay, not container-resurrection.** `POST /api/v1/servers/archive/:id/restore` mints a new server (UUIDv7, copies `serverSettings` from the archive, generates a fresh RCON password). Caller drives the standard install flow. Then `POST /api/v1/servers/:newId/restore-configs { from_archive_id }` reads the latest `deletion-backup-marker` rows and overlays them via `bridge.fileAtomicWrite`, skipping `Rcon.cfg`. Each overlaid file lands as a new `config_versions` row with `message = 'restored from server <id>...'`, so blame and history stay consistent.
+
+6. **Live-bus replaces polling for status.** New plugin `apps/api/src/plugins/live-bus.ts` + route `GET /api/v1/ws/live`. Typed events: `server.status`, `server.deleted`, `server.restored`, `rcon.status`, `bridge.connection`, `worker.heartbeat`. Producers: status-reconciler emits on edge transitions, bridge-heartbeat on up/down flips, worker-rcon `PUBLISH`es on a separate Redis channel that the API re-emits. Web client uses `useSyncExternalStore` for instant card updates and renders a sticky `ConnectionBanner` when WS or bridge drop.
+
+### Rationale
+
+- **Why `config_versions` for backup storage and not a separate table?** The version-history table already has the right shape (server_id, filename, content, sha256, author, timestamp, message), CASCADE FK to servers, and an append-only DB trigger. A new table would have meant duplicating semantics and introducing a second blame source. The `message LIKE` filter is fast enough (we have an index on `(server_id, filename, created_at)` already).
+
+- **Why soft-delete with cascade-friendly history?** Soft-delete keeps `config_versions` rows reachable for restore without inventing a new "orphaned configs" lifecycle. The partial unique slug index sidesteps the obvious downside (slug exhaustion) without weakening the active-server invariant.
+
+- **Why best-effort instead of transactional rollback?** The destructive phases touch disk + Docker + ufw — none of those participate in our DB transaction. Trying to roll back partial state after a phase-3 failure (configs gone, saved still present) is harder and more error-prone than recording exactly what succeeded and leaving the operator a trail. Phase 1 (backup) is the only "all or nothing" gate.
+
+- **Why a single live-bus WS instead of per-feature SSE / polling?** One WS per session is cheaper, lets us multiplex any future event type without API churn, survives proxy timeouts via the 10 s ping-pong, and gives the web client one place to detect "connection lost" instead of one detector per polling loop. The Redis fan-out lets us scale to multiple API replicas without invasive coordination.
+
+- **Why DB-authoritative liveness for `bridge.connection` instead of relying on the bridge to emit?** The bridge has no event channel — it answers RPCs and that's it. The API's existing 5 s `bridge-heartbeat` ping is the natural source: it already knows up vs down and only emits on edge transitions, which is exactly what the UI needs.
+
+### Consequences
+
+- DELETE now returns a richer shape (`{ok, backup_marker_id, files_backed_up, container_removed, configs_dir_removed, saved_dir_removed, ufw_rules_removed, errors[]}`) — old clients that ignored extras keep working; new clients can surface partial-failure detail.
+- `servers_slug_key` is gone. Anything that joined on it (none in our code) would break — but the new `servers_slug_active_key` covers the active-server uniqueness invariant.
+- `config_versions` storage grows by the size of one full backup per deletion. Acceptable for P0; long-term retention/cleanup is a separate epic.
+- Reverse-proxy WS upgrade must be allowed (Caddy default config in this repo already does).
+- Workers that emit on Redis (currently rcon) now have a second consumer (the live-bus subscriber) — heartbeat or DLQ behavior unchanged.
+
+### Alternatives considered
+
+- **Hard-delete with separate `deleted_servers_archive` table** — would have required keeping configs in a parallel store, invented a new blame-and-restore flow that diverges from the live one, and made restore-configs a fresh feature to maintain. Rejected.
+- **JSON-bundle backup on the host filesystem (`/var/lib/squad-panel/backups/...`)** — would have required adding another allowlisted path to the bridge, a worker to clean it up, and a separate file-fetch endpoint for the UI. The DB-resident backup gets free SQL access, ships with `pg_dump`, and reuses the version-history UI. Rejected.
+- **Per-event WebSocket endpoints (`/ws/server-status`, `/ws/rcon`, `/ws/bridge`)** — simpler routing, but multiplies connection overhead, breaks bridge-detection-on-disconnect into N independent paths, and forces every new event type to be a new endpoint. Rejected in favor of the single `/ws/live` channel.
+- **Server-Sent Events (SSE) instead of WS** — one-way is fine for these events, but loses the client → server pong needed to detect dead-but-not-closed connections behind aggressive proxies. WS pings are the proven pattern. Rejected.
+
 ## 2026-04-25 — Panel RBAC: single role per user, registry-objects, drop multi-tenancy
 
 ### Context
