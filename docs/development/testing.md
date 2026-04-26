@@ -54,6 +54,38 @@ pnpm --filter @squad/api test:e2e
 
 `vitest.e2e.config.ts` runs serially with a 15 min global timeout.
 
+## Coverage reporting
+
+Every TS package (`@squad/api`, `@squad/web`, `@squad/db`, `@squad/shared-config`, `@squad/shared-types`, `@squad/bridge-client`, `@squad/worker-rcon`, `@squad/worker-log-ingest`, `@squad/worker-metrics-sampler`) ships a `vitest.config.ts` with a `coverage.thresholds` block. The Go bridge is excluded — it uses `go test -race` separately.
+
+Run coverage locally:
+
+```bash
+# all TS packages, with coverage table + lcov output
+DATABASE_URL=<...> pnpm test:cov
+
+# single package
+DATABASE_URL=<...> pnpm --filter @squad/api exec vitest run --coverage
+```
+
+CI runs `pnpm test:cov` in the `node` job and uploads `**/coverage/lcov.info` as the `coverage-<sha>` artifact (retention: 7 days).
+
+Threshold values reflect the measured baseline at the time coverage was introduced, minus a 5 pp safety margin. They are intentional floors, not targets — ratchet them upward as new tests are added.
+
+| Package | lines | funcs | branches | stmts |
+|---|---|---|---|---|
+| `@squad/api` | 70 | 70 | 60 | 70 |
+| `@squad/web` | 1 | 68 | 83 | 1 |
+| `@squad/db` | 72 | 12 | 45 | 72 |
+| `@squad/shared-config` | 68 | 80 | 65 | 68 |
+| `@squad/shared-types` | 48 | 10 | 45 | 48 |
+| `@squad/bridge-client` | 8 | 60 | 70 | 8 |
+| `worker-rcon` | 12 | 68 | 77 | 12 |
+| `worker-log-ingest` | 31 | 68 | 74 | 31 |
+| `worker-metrics-sampler` | 34 | 62 | 55 | 34 |
+
+Low line/stmt thresholds (e.g. `@squad/web` at 1%, `bridge-client` at 8%) reflect packages where tests cover only pure utility modules while the top-level entry-points and runtime clients are intentionally untested at the unit level. These will be ratcheted as Phase 3 (Playwright web e2e) and Phase 5 (DB + bridge-client unit) tests are added.
+
 ## Definition of "fixed"
 
 If you claim a bug is fixed or a feature is shipped, the corresponding test is in the right tier and passes on your machine. "Works on my manual retry" is not fixed. `pnpm turbo run test` green AND `pnpm --filter @squad/api test:e2e` green is fixed.
