@@ -138,7 +138,7 @@ func (d *DockerRunner) Stop(ctx context.Context, name string, timeout time.Durat
 	}
 	if exit != 0 {
 		msg := strings.TrimSpace(string(se))
-		if strings.Contains(msg, "No such container") {
+		if strings.Contains(strings.ToLower(msg), "no such container") {
 			return nil
 		}
 		return fmt.Errorf("docker stop exit %d: %s", exit, msg)
@@ -156,7 +156,7 @@ func (d *DockerRunner) Rm(ctx context.Context, name string) error {
 	}
 	if exit != 0 {
 		msg := strings.TrimSpace(string(se))
-		if strings.Contains(msg, "No such container") {
+		if strings.Contains(strings.ToLower(msg), "no such container") {
 			return nil
 		}
 		return fmt.Errorf("docker rm exit %d: %s", exit, msg)
@@ -188,7 +188,8 @@ func (d *DockerRunner) Inspect(ctx context.Context, name string) (*InspectResult
 	}
 	if exit != 0 {
 		msg := strings.TrimSpace(string(se))
-		if strings.Contains(msg, "No such object") {
+		lower := strings.ToLower(msg)
+		if strings.Contains(lower, "no such object") || strings.Contains(lower, "no such container") {
 			return &InspectResult{Name: name, State: "not_found", Running: false}, nil
 		}
 		return nil, fmt.Errorf("docker inspect exit %d: %s", exit, msg)

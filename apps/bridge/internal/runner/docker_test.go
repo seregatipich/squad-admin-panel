@@ -127,3 +127,52 @@ func TestDockerStatsRejectsBadName(t *testing.T) {
 		t.Errorf("expected validate.ContainerName to reject traversal name")
 	}
 }
+
+// Regression test for the "Server stuck on 'Остановка' for 2 hours" incident:
+// Docker writes "no such object" with lowercase 'n' for `docker inspect` when
+// the container is gone. The previous matcher only checked for the
+// upper-cased "No such object" form, so the bridge propagated a runtime_error
+// to the reconciler instead of returning State="not_found", which the
+// reconciler can flip to status='stopped'.
+func TestDockerInspectLowercaseNoSuchObjectIsNotFound(t *testing.T) {
+	f := &Fake{Stderr: []byte("error: no such object: squad-foo\n"), Exit: 1}
+	d := NewDocker(f)
+	res, err := d.Inspect(context.Background(), "squad-019dbb45-3556-751f-9124-d4cf0e6b0053")
+	if err != nil {
+		t.Fatalf("expected lowercase 'no such object' to be treated as not_found, got %v", err)
+	}
+	if res.State != "not_found" {
+		t.Errorf("state: want not_found, got %q", res.State)
+	}
+	if res.Running {
+		t.Errorf("running: want false, got true")
+	}
+}
+
+func TestDockerInspectUppercaseNoSuchObjectIsNotFound(t *testing.T) {
+	f := &Fake{Stderr: []byte("Error: No such object: squad-foo\n"), Exit: 1}
+	d := NewDocker(f)
+	res, err := d.Inspect(context.Background(), "squad-019dbb45-3556-751f-9124-d4cf0e6b0053")
+	if err != nil {
+		t.Fatalf("expected 'No such object' to be treated as not_found, got %v", err)
+	}
+	if res.State != "not_found" {
+		t.Errorf("state: want not_found, got %q", res.State)
+	}
+}
+
+func TestDockerStopLowercaseNoSuchContainerIsIdempotent(t *testing.T) {
+	f := &Fake{Stderr: []byte("error: no such container: foo\n"), Exit: 1}
+	d := NewDocker(f)
+	if err := d.Stop(context.Background(), "squad-019dbb45-3556-751f-9124-d4cf0e6b0053", 0); err != nil {
+		t.Errorf("expected idempotent stop on missing container (lowercase), got %v", err)
+	}
+}
+
+func TestDockerRmLowercaseNoSuchContainerIsIdempotent(t *testing.T) {
+	f := &Fake{Stderr: []byte("error: no such container: foo\n"), Exit: 1}
+	d := NewDocker(f)
+	if err := d.Rm(context.Background(), "squad-019dbb45-3556-751f-9124-d4cf0e6b0053"); err != nil {
+		t.Errorf("expected idempotent rm on missing container (lowercase), got %v", err)
+	}
+}
