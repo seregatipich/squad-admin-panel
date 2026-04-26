@@ -5,6 +5,13 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { claimFirstOwner } from '../src/lib/first-owner.js';
+import {
+  type LiveStateSnapshot,
+  maskLiveOwners,
+  restoreLiveOwners,
+  snapshotLiveOwnerState,
+  testSteamId,
+} from './helpers/snapshot-restore.js';
 
 interface FakeBridge {
   fileRead: ReturnType<typeof vi.fn>;
@@ -19,12 +26,13 @@ const fakeBridge = (existingSentinel: boolean): FakeBridge => ({
   fileAtomicWrite: vi.fn(async () => ({ status: 'written' })),
 });
 
-const TEST_PLAYER_A = 76561197999000010n;
-const TEST_PLAYER_B = 76561197999000011n;
+const TEST_PLAYER_A = testSteamId(10);
+const TEST_PLAYER_B = testSteamId(11);
 
 let pgsql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;
 let ownerRoleId: string;
+let liveSnapshot: LiveStateSnapshot;
 
 beforeAll(async () => {
   const url = process.env.DATABASE_URL;
@@ -32,53 +40,16 @@ beforeAll(async () => {
   pgsql = postgres(url);
   db = drizzle(pgsql, { schema });
 
-  const ownerRows = await db
-    .select({ id: roles.id })
-    .from(roles)
-    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
-    .limit(1);
-  if (!ownerRows[0]) throw new Error('Owner role missing — migration 0009 not applied?');
-  ownerRoleId = ownerRows[0].id;
+  liveSnapshot = await snapshotLiveOwnerState(db);
+  ownerRoleId = liveSnapshot.ownerRoleId;
 });
 
 afterAll(async () => {
   if (pgsql) await pgsql.end({ timeout: 5 });
 });
 
-// Snapshot real-world state once per file so we can restore it after the
-// suite mutates panel_meta. The DB is shared with dev/staging — we MUST NOT
-// strip Owner role from a real user to make a test pass.
-let snapshotFirstOwnerClaimed = false;
-let snapshotRealOwnerSteamIds: bigint[] = [];
-
-beforeAll(async () => {
-  // (existing beforeAll connection setup happens above; this hook augments it
-  //  by capturing the live state we plan to perturb.)
-}, 0);
-
 beforeEach(async () => {
-  // Capture live state on the first beforeEach (cheap; once per test run).
-  if (snapshotRealOwnerSteamIds.length === 0) {
-    const meta = await db.select().from(panelMeta).where(eq(panelMeta.id, 1));
-    snapshotFirstOwnerClaimed = meta[0]?.firstOwnerClaimed ?? false;
-    const realOwners = await db
-      .select({ steamId64: players.steamId64 })
-      .from(players)
-      .where(eq(players.roleId, ownerRoleId));
-    snapshotRealOwnerSteamIds = realOwners.map((r) => r.steamId64);
-  }
-
-  // Reset panel_meta + ONLY clear Owner role from test players.
-  await db.update(panelMeta).set({ firstOwnerClaimed: false }).where(eq(panelMeta.id, 1));
-  for (const sid of [TEST_PLAYER_A, TEST_PLAYER_B]) {
-    await db.update(players).set({ roleId: null }).where(eq(players.steamId64, sid));
-  }
-  // If a real Owner exists, the claim path's "Owner already exists" branch
-  // would fire and the test wouldn't exercise the claim transition. Hide
-  // them temporarily by clearing role_id; afterEach restores them.
-  for (const sid of snapshotRealOwnerSteamIds) {
-    await db.update(players).set({ roleId: null }).where(eq(players.steamId64, sid));
-  }
+  await maskLiveOwners(db, liveSnapshot);
   for (const sid of [TEST_PLAYER_A, TEST_PLAYER_B]) {
     const stub = `Test ${String(sid).slice(-4)}`;
     await db
@@ -100,14 +71,7 @@ afterEach(async () => {
   for (const sid of [TEST_PLAYER_A, TEST_PLAYER_B]) {
     await db.delete(players).where(eq(players.steamId64, sid));
   }
-  // Restore real Owners we may have masked, and the original panel_meta flag.
-  for (const sid of snapshotRealOwnerSteamIds) {
-    await db.update(players).set({ roleId: ownerRoleId }).where(eq(players.steamId64, sid));
-  }
-  await db
-    .update(panelMeta)
-    .set({ firstOwnerClaimed: snapshotFirstOwnerClaimed })
-    .where(eq(panelMeta.id, 1));
+  await restoreLiveOwners(db, liveSnapshot);
 });
 
 describe('claimFirstOwner', () => {
@@ -143,9 +107,6 @@ describe('claimFirstOwner', () => {
   });
 
   it('DB is authoritative — stale sentinel does not block a fresh claim', async () => {
-    // Wedge scenario: panel was reinstalled (DB reset), but the sentinel
-    // file from the previous install still exists on the host. The claim
-    // must succeed against the fresh DB regardless of sentinel state.
     const bridge = fakeBridge(true);
     const result = await claimFirstOwner(db, bridge, TEST_PLAYER_A);
     expect(result).toBe('claimed');
@@ -159,7 +120,6 @@ describe('claimFirstOwner', () => {
       .where(eq(players.steamId64, TEST_PLAYER_A));
     expect(player[0]?.roleId).toBe(ownerRoleId);
 
-    // After successful claim the sentinel is rewritten with the current owner.
     expect(bridge.fileAtomicWrite).toHaveBeenCalledTimes(1);
   });
 

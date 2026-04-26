@@ -4,13 +4,14 @@ import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { testSteamId } from './helpers/snapshot-restore.js';
 
 let sql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;
 let viewerRoleId: string;
 
-const TEST_PLAYER_WITH_ROLE = 76561197999700001n;
-const TEST_PLAYER_WITHOUT_ROLE = 76561197999700002n;
+const TEST_PLAYER_WITH_ROLE = testSteamId(700001);
+const TEST_PLAYER_WITHOUT_ROLE = testSteamId(700002);
 
 beforeAll(async () => {
   const dbUrl = process.env.DATABASE_URL;

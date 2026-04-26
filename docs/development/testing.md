@@ -97,6 +97,62 @@ If you claim a bug is fixed or a feature is shipped, the corresponding test is i
 - A change to the install/start/stop flow → an updated `install-lifecycle.e2e.test.ts`.
 - A new event type → a unit test for the producer + a consumer test that exercises idempotency.
 
+## Test isolation
+
+Tests in `apps/api/test/*.test.ts` run against the **shared dev/staging Postgres DB** — not an ephemeral throwaway. That means mutations in one test run can corrupt real state. The following rules are non-negotiable for any test that touches the shared DB directly (i.e. not via the integration harness's isolated schema).
+
+### Why it matters
+
+The DB is shared with the operator's running panel. A test that calls `update(players).set({ roleId: null })` without filtering to test-only steam IDs will silently strip the Owner role from a real admin player mid-run. This happened. It must never happen again.
+
+### The TEST_STEAM_BASE convention
+
+All test players must use steam IDs from the reserved range `76561197999000000` – `76561197999999999`. Real Steam IDs are never issued in this range. The helper enforces this:
+
+```ts
+import { testSteamId } from './helpers/snapshot-restore.js';
+
+const PLAYER_A = testSteamId(1);    // 76561197999000001n
+const PLAYER_B = testSteamId(2);    // 76561197999000002n
+```
+
+`testSteamId(suffix)` throws immediately if the suffix is out of range (0–999999).
+
+### The snapshot / mask / restore pattern
+
+Any test that must mutate `panel_meta.first_owner_claimed` or temporarily clear the Owner role from live players (to test the first-claim path) must use the helpers in `apps/api/test/helpers/snapshot-restore.ts`:
+
+```ts
+import {
+  type LiveStateSnapshot,
+  maskLiveOwners,
+  restoreLiveOwners,
+  snapshotLiveOwnerState,
+} from './helpers/snapshot-restore.js';
+
+let liveSnapshot: LiveStateSnapshot;
+
+beforeAll(async () => {
+  liveSnapshot = await snapshotLiveOwnerState(db);
+});
+
+beforeEach(async () => {
+  await maskLiveOwners(db, liveSnapshot);   // hides real Owners + resets flag
+});
+
+afterEach(async () => {
+  await restoreLiveOwners(db, liveSnapshot); // restores Owners + original flag
+});
+```
+
+`snapshotLiveOwnerState` reads the current Owner role ID, the list of real Owner steam IDs, and the `first_owner_claimed` flag in one pass. `maskLiveOwners` clears them; `restoreLiveOwners` puts them back exactly.
+
+### Regression guard
+
+`apps/api/test/test-isolation.regression.test.ts` runs as part of the normal `pnpm --filter @squad/api test` suite and greps test files for unguarded mutations of shared tables. If a new test file introduces a `delete(players)` or `update(panelMeta)` without a test-ID filter, the guard fails the suite immediately with a message pointing to this document.
+
+To legitimately exclude a file from the guard (e.g. it uses `createIsolatedSchema()`), add it to the exclusion list inside that test file.
+
 ## Linters and type checkers
 
 Treat as part of the test suite. Pre-commit (`lefthook`) and CI both run them.

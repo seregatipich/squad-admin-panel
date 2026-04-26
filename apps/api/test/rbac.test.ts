@@ -9,10 +9,11 @@ import {
   invalidatePermissionCacheForRole,
   loadUserPermissions,
 } from '../src/lib/rbac.js';
+import { testSteamId } from './helpers/snapshot-restore.js';
 
-const PLAYER_A = 76561197999000001n;
-const PLAYER_B = 76561197999000002n;
-const PLAYER_C = 76561197999000003n;
+const PLAYER_A = testSteamId(1);
+const PLAYER_B = testSteamId(2);
+const PLAYER_C = testSteamId(3);
 
 let sql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;

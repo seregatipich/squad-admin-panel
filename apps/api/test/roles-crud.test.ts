@@ -6,6 +6,7 @@ import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCacheForRole } from '../src/lib/rbac.js';
+import { testSteamId } from './helpers/snapshot-restore.js';
 
 let sql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;
@@ -126,7 +127,7 @@ describe('roles — cache invalidation', () => {
   it('invalidatePermissionCacheForRole runs for a role with users', async () => {
     const id = await createRole('CacheTestRoleWithUsers', 'pink', ['server:view']);
 
-    const steamId = 76561197999900001n;
+    const steamId = testSteamId(900001);
     const stub = 'CacheTestUser';
     await db
       .insert(players)
@@ -148,7 +149,7 @@ describe('roles — cache invalidation', () => {
 describe('roles — cascade delete', () => {
   it('deleting a role sets players.role_id to NULL (FK ON DELETE SET NULL)', async () => {
     const id = await createRole('CascadeRole', 'red', []);
-    const steamId = 76561197999900002n;
+    const steamId = testSteamId(900002);
     const stub = 'CascadePlayer';
     await db
       .insert(players)

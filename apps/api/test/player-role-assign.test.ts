@@ -10,15 +10,16 @@ import {
   invalidatePermissionCacheForRole,
   loadUserPermissions,
 } from '../src/lib/rbac.js';
+import { testSteamId } from './helpers/snapshot-restore.js';
 
 let sql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;
 let ownerRoleId: string;
 let viewerRoleId: string;
 
-const TEST_PLAYER_A = 76561197999800001n;
-const TEST_PLAYER_B = 76561197999800002n;
-const TEST_PLAYER_C = 76561197999800003n;
+const TEST_PLAYER_A = testSteamId(800001);
+const TEST_PLAYER_B = testSteamId(800002);
+const TEST_PLAYER_C = testSteamId(800003);
 const createdRoleIds: string[] = [];
 
 beforeAll(async () => {
