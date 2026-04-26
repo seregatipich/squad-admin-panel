@@ -6,13 +6,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as schema from '../src/schema/index.js';
 import { players, roles, serverSettings, servers } from '../src/schema/index.js';
 
+const DATABASE_URL = process.env.DATABASE_URL;
+const describeIfDb = DATABASE_URL ? describe : describe.skip;
+
 let pgsql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;
 
 beforeAll(() => {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error('DATABASE_URL not set');
-  pgsql = postgres(url, { max: 5 });
+  if (!DATABASE_URL) return;
+  pgsql = postgres(DATABASE_URL, { max: 5 });
   db = drizzle(pgsql, { schema });
 });
 
@@ -20,7 +22,7 @@ afterAll(async () => {
   if (pgsql) await pgsql.end({ timeout: 5 });
 });
 
-describe('createDatabaseClient', () => {
+describeIfDb('createDatabaseClient', () => {
   it('connects and runs a trivial query', async () => {
     const r = await db.execute(sql`SELECT 1::int AS x`);
     const row =
@@ -29,7 +31,7 @@ describe('createDatabaseClient', () => {
   });
 });
 
-describe('transactions', () => {
+describeIfDb('transactions', () => {
   it('commits on success', async () => {
     const id = uuidv7();
     const slug = `tx-commit-${id}`;
@@ -71,7 +73,7 @@ describe('transactions', () => {
   });
 });
 
-describe('advisory locks', () => {
+describeIfDb('advisory locks', () => {
   it('serializes two concurrent transactions on the same lock key', async () => {
     const timestamps: Array<{ tx: number; ts: number }> = [];
 
@@ -91,7 +93,7 @@ describe('advisory locks', () => {
   });
 });
 
-describe('FK constraints', () => {
+describeIfDb('FK constraints', () => {
   it('ON DELETE CASCADE removes server_settings when server deleted', async () => {
     const serverId = uuidv7();
 

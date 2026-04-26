@@ -10,13 +10,15 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+const DATABASE_URL = process.env.DATABASE_URL;
+const describeIfDb = DATABASE_URL ? describe : describe.skip;
+
 let pgsql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;
 
 beforeAll(() => {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error('DATABASE_URL not set');
-  pgsql = postgres(url);
+  if (!DATABASE_URL) return;
+  pgsql = postgres(DATABASE_URL);
   db = drizzle(pgsql, { schema });
 });
 
@@ -24,7 +26,7 @@ afterAll(async () => {
   if (pgsql) await pgsql.end({ timeout: 5 });
 });
 
-describe('migration regressions', () => {
+describeIfDb('migration regressions', () => {
   it('servers table has no org_id column (0010 dropped it)', async () => {
     const rows = await db.execute(sql`
       SELECT column_name FROM information_schema.columns

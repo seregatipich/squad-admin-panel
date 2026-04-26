@@ -30,7 +30,7 @@ const createdRoleIds: string[] = [];
 
 beforeAll(async () => {
   const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) throw new Error('DATABASE_URL is not set');
+  if (!dbUrl) return;
   sql = postgres(dbUrl, { max: 3, onnotice: () => undefined });
   db = drizzle(sql, { schema });
 
@@ -84,7 +84,9 @@ afterEach(async () => {
   createdRoleIds.length = 0;
 });
 
-describe('player single-role assignment', () => {
+const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
+
+describeIfDb('player single-role assignment', () => {
   it('assigning a role updates players.role_id', async () => {
     await db
       .update(players)
@@ -130,7 +132,7 @@ describe('player single-role assignment', () => {
   });
 });
 
-describe('Owner-lockout invariant', () => {
+describeIfDb('Owner-lockout invariant', () => {
   it('allows removing Owner role when another Owner exists', async () => {
     await db
       .update(players)
@@ -184,7 +186,7 @@ describe('Owner-lockout invariant', () => {
   });
 });
 
-describe('cache invalidation on role permission change', () => {
+describeIfDb('cache invalidation on role permission change', () => {
   it('after role permission update, cached permissions are stale until invalidated', async () => {
     const testRoleId = uuidv7();
     await db.insert(roles).values({
@@ -216,7 +218,7 @@ describe('cache invalidation on role permission change', () => {
   });
 });
 
-describe('GET /api/v1/players — HTTP integration', () => {
+describeIfDb('GET /api/v1/players — HTTP integration', () => {
   const OWNER_STEAM = 76561198000001400n;
   let h: IntegrationHarness;
 
@@ -296,7 +298,7 @@ describe('GET /api/v1/players — HTTP integration', () => {
   });
 });
 
-describe('PUT /api/v1/players/:steamId/role — HTTP integration', () => {
+describeIfDb('PUT /api/v1/players/:steamId/role — HTTP integration', () => {
   const OWNER_STEAM = 76561198000001410n;
   let h: IntegrationHarness;
 

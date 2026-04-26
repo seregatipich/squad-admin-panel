@@ -22,7 +22,7 @@ const TEST_PLAYER_WITHOUT_ROLE = testSteamId(700002);
 
 beforeAll(async () => {
   const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) throw new Error('DATABASE_URL is not set');
+  if (!dbUrl) return;
   sql = postgres(dbUrl, { max: 3, onnotice: () => undefined });
   db = drizzle(sql, { schema });
 
@@ -64,7 +64,9 @@ afterEach(async () => {
   }
 });
 
-describe('users list — role_id NOT NULL filter', () => {
+const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
+
+describeIfDb('users list — role_id NOT NULL filter', () => {
   it('players with role_id set appear in joined query', async () => {
     const usersWithRole = await db
       .select({
@@ -106,7 +108,7 @@ describe('users list — role_id NOT NULL filter', () => {
   });
 });
 
-describe('GET /api/v1/users — HTTP integration', () => {
+describeIfDb('GET /api/v1/users — HTTP integration', () => {
   const OWNER_STEAM = 76561198000001300n;
   let h: IntegrationHarness;
 

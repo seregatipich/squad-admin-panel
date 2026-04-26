@@ -22,7 +22,7 @@ const createdRoleIds: string[] = [];
 
 beforeAll(async () => {
   const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) throw new Error('DATABASE_URL is not set');
+  if (!dbUrl) return;
   sql = postgres(dbUrl, { max: 3, onnotice: () => undefined });
   db = drizzle(sql, { schema });
 
@@ -64,7 +64,9 @@ async function createRole(name: string, color = 'blue', perms: string[] = []) {
   return id;
 }
 
-describe('roles — Owner-guard invariants', () => {
+const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
+
+describeIfDb('roles — Owner-guard invariants', () => {
   it('Owner role is_system_role=true with name=Owner', async () => {
     const row = await db.select().from(roles).where(eq(roles.id, ownerRoleId)).limit(1);
     expect(row[0]?.isSystemRole).toBe(true);
@@ -83,7 +85,7 @@ describe('roles — Owner-guard invariants', () => {
   });
 });
 
-describe('roles — permission management', () => {
+describeIfDb('roles — permission management', () => {
   it('creates a role with permissions and reads them back', async () => {
     const perms = ['server:view', 'player:view'];
     const id = await createRole('TestReader', 'teal', perms);
@@ -124,7 +126,7 @@ describe('roles — permission management', () => {
   });
 });
 
-describe('roles — cache invalidation', () => {
+describeIfDb('roles — cache invalidation', () => {
   it('invalidatePermissionCacheForRole resolves without error for empty role', async () => {
     const id = await createRole('CacheTestRole', 'lime', []);
     await expect(invalidatePermissionCacheForRole(db, id)).resolves.not.toThrow();
@@ -152,7 +154,7 @@ describe('roles — cache invalidation', () => {
   });
 });
 
-describe('roles — cascade delete', () => {
+describeIfDb('roles — cascade delete', () => {
   it('deleting a role sets players.role_id to NULL (FK ON DELETE SET NULL)', async () => {
     const id = await createRole('CascadeRole', 'red', []);
     const steamId = testSteamId(900002);
@@ -181,7 +183,7 @@ describe('roles — cascade delete', () => {
   });
 });
 
-describe('roles HTTP — description=null update and color validation', () => {
+describeIfDb('roles HTTP — description=null update and color validation', () => {
   const OWNER_STEAM = 76561198000001100n;
   let h: IntegrationHarness;
 

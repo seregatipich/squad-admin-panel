@@ -34,10 +34,12 @@ let db: ReturnType<typeof drizzle<typeof schema>>;
 let ownerRoleId: string;
 let liveSnapshot: LiveStateSnapshot;
 
+const DATABASE_URL = process.env.DATABASE_URL;
+const describeIfDb = DATABASE_URL ? describe : describe.skip;
+
 beforeAll(async () => {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error('DATABASE_URL not set');
-  pgsql = postgres(url);
+  if (!DATABASE_URL) return;
+  pgsql = postgres(DATABASE_URL);
   db = drizzle(pgsql, { schema });
 
   liveSnapshot = await snapshotLiveOwnerState(db);
@@ -49,6 +51,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  if (!DATABASE_URL) return;
   await maskLiveOwners(db, liveSnapshot);
   for (const sid of [TEST_PLAYER_A, TEST_PLAYER_B]) {
     const stub = `Test ${String(sid).slice(-4)}`;
@@ -68,13 +71,14 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (!DATABASE_URL) return;
   for (const sid of [TEST_PLAYER_A, TEST_PLAYER_B]) {
     await db.delete(players).where(eq(players.steamId64, sid));
   }
   await restoreLiveOwners(db, liveSnapshot);
 });
 
-describe('claimFirstOwner', () => {
+describeIfDb('claimFirstOwner', () => {
   it('claims Owner once and sets the singleton flag', async () => {
     const bridge = fakeBridge(false);
     const result = await claimFirstOwner(db, bridge, TEST_PLAYER_A);
