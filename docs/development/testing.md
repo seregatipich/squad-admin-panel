@@ -2,7 +2,27 @@
 
 The non-negotiable rule: **every piece of functionality must be exercisable by a single test suite, end-to-end, against real infrastructure.** Fakes belong inside unit tests; the critical path (install a server, boot Squad, auth RCON, edit a config, stop, delete) is validated against a live panel stack with real Docker, Postgres, Redis, and the real Go bridge. If a change cannot be covered by a test that drives the system the way a human would, the change is not done.
 
-## Three tiers
+## Three tiers + property-based
+
+### Property-based (fuzz)
+
+Pure-function invariants exercised by `@fast-check/vitest` (workspace root `devDependency`). Each property runs 100 random examples by default (configurable via `numRuns`). These live in `test/property/` subdirectories alongside the other test tiers.
+
+| Package | File | What it proves |
+|---|---|---|
+| `@squad/web` | `test/property/slug.test.ts` | Slug utilities always produce API-valid output; idempotent round-trips for pre-valid slugs |
+| `@squad/shared-config` | `test/property/registry.test.ts` | `isPermissionKey` accepts every registered key and rejects all others; every subset is a valid permission set |
+| `@squad/api` | `test/property/audit-chain.test.ts` | DB-trigger hash chain is intact across 10 random batches (5–20 rows each) |
+
+Run all property suites:
+
+```bash
+DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm --filter @squad/web exec vitest run test/property/
+DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm --filter @squad/shared-config exec vitest run test/property/
+DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm --filter @squad/api exec vitest run test/property/
+```
+
+Property tests are included in `pnpm turbo run test` — they are not a separate step.
 
 ### Tier 1 — unit
 
