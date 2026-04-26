@@ -1,3 +1,5 @@
+// regression: routes had stale permission keys (e.g. 'server:create') after RBAC key rename
+// Fix: keys renamed to match new RBAC model; this test asserts no stale keys remain
 import { execSync } from 'node:child_process';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';

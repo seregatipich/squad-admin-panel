@@ -151,6 +151,8 @@ describe('Owner-lockout invariant', () => {
     expect(row[0]?.roleId).toBeNull();
   });
 
+  // regression: last-Owner guard counted ALL owners globally → test failed when real Owner present
+  // Fix: snapshot the baseline owner count before mutation and compare relative to it
   it('last-Owner check: count uses live DB state, including any real Owner', async () => {
     // Snapshot the live Owner count BEFORE the test mutates anything. The
     // suite runs against the dev/staging DB which may already host a real

@@ -1,3 +1,5 @@
+// regression: first-owner.test.ts beforeEach stripped Owner role from real users
+// Fix: snapshot/mask/restore helper in test/helpers/snapshot-restore.ts
 import { execSync } from 'node:child_process';
 import { describe, it } from 'vitest';
 

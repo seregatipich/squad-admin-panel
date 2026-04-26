@@ -38,3 +38,8 @@ apps/web/test-results/
 # Runtime state (postgres/redis/caddy/depot/backups/servers) — created by
 # install-host-bridge.sh + docker-compose bind-mounts, never source.
 /data/
+
+# Stryker mutation testing
+.stryker-tmp/
+reports/mutation/
+

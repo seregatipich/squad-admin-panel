@@ -106,7 +106,8 @@ describe('claimFirstOwner', () => {
     expect(playerB[0]?.roleId).toBeNull();
   });
 
-  it('DB is authoritative — stale sentinel does not block a fresh claim', async () => {
+  // regression: stale /var/lib/squad-panel/.first-owner-claimed sentinel blocked claim path
+  it('DB is authoritative — stale sentinel does not block a fresh claim (regression)', async () => {
     const bridge = fakeBridge(true);
     const result = await claimFirstOwner(db, bridge, TEST_PLAYER_A);
     expect(result).toBe('claimed');
