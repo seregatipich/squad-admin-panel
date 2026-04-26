@@ -14,17 +14,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDatabaseClient } from '@squad/db';
-import {
-  configVersions,
-  organizationMembers,
-  organizations,
-  playerRoleAssignments,
-  players,
-  roles,
-  servers,
-  sessions,
-} from '@squad/db/schema';
-import { seedSystemRoles } from '@squad/db/seed';
+import { configVersions, players, roles, servers, sessions } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mintSessionToken } from '../../src/lib/sessions.js';
@@ -51,7 +41,6 @@ const PANEL_URL = process.env.PANEL_URL ?? 'https://squad-panel.lan';
 const TEST_STEAM_ID = 76561198999999003n;
 
 let db: ReturnType<typeof createDatabaseClient>;
-let testOrgId: string;
 let sessionTokenId: string;
 let sessionCookie: string | null = null;
 let createdServerId: string | null = null;
@@ -62,11 +51,13 @@ beforeAll(async () => {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   db = createDatabaseClient(LIVE_DB_URL);
 
-  const owner = await db.query.roles.findFirst({
-    where: eq(roles.name, 'Owner'),
-  });
-  if (!owner) throw new Error('no Owner role seeded in live DB — is setup complete?');
-  testOrgId = owner.orgId;
+  const ownerRows = await db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  const ownerRoleId = ownerRows[0]?.id;
+  if (!ownerRoleId) throw new Error('no Owner role seeded in live DB — is setup complete?');
 
   await db
     .insert(players)
@@ -74,16 +65,12 @@ beforeAll(async () => {
       steamId64: TEST_STEAM_ID,
       canonicalName: 'E2E Test Player',
       canonicalNameNormalized: 'e2e test player',
+      roleId: ownerRoleId,
     })
-    .onConflictDoNothing();
-  await db
-    .insert(playerRoleAssignments)
-    .values({ steamId64: TEST_STEAM_ID, roleId: owner.id })
-    .onConflictDoNothing();
-  await db
-    .insert(organizationMembers)
-    .values({ steamId64: TEST_STEAM_ID, orgId: testOrgId, primaryRoleId: owner.id })
-    .onConflictDoNothing();
+    .onConflictDoUpdate({
+      target: players.steamId64,
+      set: { roleId: ownerRoleId },
+    });
 
   const { token, tokenId } = mintSessionToken();
   sessionTokenId = tokenId;
@@ -110,19 +97,14 @@ afterAll(async () => {
     .where(eq(sessions.id, sessionTokenId))
     .catch(() => undefined);
   await db
-    .delete(playerRoleAssignments)
-    .where(eq(playerRoleAssignments.steamId64, TEST_STEAM_ID))
-    .catch(() => undefined);
-  await db
-    .delete(organizationMembers)
-    .where(eq(organizationMembers.steamId64, TEST_STEAM_ID))
+    .update(players)
+    .set({ roleId: null })
+    .where(eq(players.steamId64, TEST_STEAM_ID))
     .catch(() => undefined);
   await db
     .delete(players)
     .where(eq(players.steamId64, TEST_STEAM_ID))
     .catch(() => undefined);
-  void organizations;
-  void seedSystemRoles;
 }, 30_000);
 
 describe('DELETE /api/v1/servers/:id end-to-end against live panel', () => {

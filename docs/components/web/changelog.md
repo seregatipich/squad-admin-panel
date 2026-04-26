@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-04-26 — Bundle F: archive UI + connection banner + live-bus client
+
+### Added
+
+- `apps/web/src/lib/live-bus.ts` — singleton `LiveBusHandle` for `wss://.../api/v1/ws/live` with the discriminated `LiveEvent` union mirrored from the API. Auto-pong, exponential reconnect (`[1s,2s,4s,8s,16s,30s]`), idle-close after 5 s with no subscribers.
+- `apps/web/src/lib/use-live-bus.ts` — `useLiveBusEvents`, `useLiveBusState`, `useBridgeState` hooks.
+- `apps/web/src/components/connection-banner.tsx` — sticky banner: red on WS loss, amber on bridge down, hidden when both healthy. Mounted in `(dashboard)/layout.tsx`.
+- `apps/web/src/app/(dashboard)/servers/archive/page.tsx` — soft-deleted servers table.
+- `apps/web/src/app/(dashboard)/servers/archive/[id]/page.tsx` — archive detail + per-cfg backup viewer.
+- `apps/web/src/app/(dashboard)/servers/archive/[id]/restore/page.tsx` — restore wizard: slug input → POST /restore (handles 409 inline) → POST /install (WS log tail) → POST /restore-configs (summary card) → POST /start.
+
+### Changed
+
+- `apps/web/src/app/(dashboard)/servers/[id]/page.tsx` — delete confirm copy: «Файлы будут стёрты с диска. Бэкап `.cfg` сохранится в архиве (раздел Архив серверов).»
+- `apps/web/src/app/(dashboard)/servers/page.tsx` — subscribes to `server.status` and `rcon.status` via `useLiveBusEvents` for instant row updates; REST poll dropped to 120 s focus-refetch fallback.
+
+### Migration notes
+
+- No env var changes. The WS URL is derived from `window.location`; Caddy already forwards the upgrade headers.
+
 ## 2026-04-25 (e2e Playwright specs)
 
 ### Added

@@ -515,6 +515,9 @@ One row per managed Squad server instance. Multi-tenancy columns (`org_id`) were
 | `tags` | `text[]` | NO | `{}` | Free-form labels |
 | `timezone` | `text` | NO | `'UTC'` | IANA timezone name |
 | `is_canary` | `boolean` | NO | `false` | Marks canary/staging server instances |
+| `deleted_at` | `timestamptz` | YES | NULL | Soft-delete marker; non-NULL row is hidden from active list endpoints |
+| `deleted_by_steam_id64` | `bigint` | YES | NULL | FK → `players.steam_id64` ON DELETE SET NULL; actor that issued the deletion |
+| `deletion_backup_marker_id` | `uuid` | YES | NULL | FK → `config_versions.id` ON DELETE SET NULL; first row of the deletion-time backup batch |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `updated_at` | `timestamptz` | NO | `now()` | |
 
@@ -526,13 +529,20 @@ One row per managed Squad server instance. Multi-tenancy columns (`org_id`) were
 
 | Name | Columns | Type |
 |---|---|---|
-| `servers_slug_key` | `slug` | UNIQUE |
+| `servers_slug_active_key` | `slug` WHERE `deleted_at IS NULL` | UNIQUE (partial) |
 | `servers_status_idx` | `status` | plain |
+| `servers_deleted_at_idx` | `deleted_at` | plain |
 
 **Constraints**
 
 - `servers_status_enum` CHECK: `status IN ('pending','installing','ready','starting','running','stopping','stopped','failed')`
 - `servers_runtime_enum` CHECK: `runtime IN ('container')`
+- `servers_deleted_by_steam_id64_fkey` FK → `players.steam_id64` ON DELETE SET NULL
+- `servers_deletion_backup_marker_id_fkey` FK → `config_versions.id` ON DELETE SET NULL
+
+**Soft-delete semantics**
+
+Setting `deleted_at = now()` retires a row. The partial unique index allows a freshly-installed server to reuse a slug previously held by a deleted row. List/detail endpoints filter `WHERE deleted_at IS NULL`; the archive endpoints filter `WHERE deleted_at IS NOT NULL`.
 
 ---
 
@@ -581,3 +591,4 @@ Applied in order by `pnpm db:migrate`. Journal: [`packages/db/drizzle/meta/_jour
 | 0010 | `0010_drop_servers_org_id` | 2026-04-29 | Drops `servers.org_id` column and old composite indexes; creates `servers_slug_key` and `servers_status_idx` |
 | 0011 | `0011_servers_is_canary` | 2026-04-29 | Carry-forward: `ALTER TABLE servers ADD COLUMN IF NOT EXISTS is_canary boolean NOT NULL DEFAULT false` |
 | 0012 | `0012_host_manage_permission` | 2026-04-29 | Grants `host:manage` permission to Owner and Senior Admin system roles |
+| 0013 | `0013_servers_soft_delete` | 2026-04-30 | Adds `servers.deleted_at` / `deleted_by_steam_id64` / `deletion_backup_marker_id`; replaces full unique `servers_slug_key` with partial `servers_slug_active_key` (where `deleted_at IS NULL`); adds `servers_deleted_at_idx` |

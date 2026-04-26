@@ -211,6 +211,106 @@ Returned in `items[]` by `GET /api/v1/players`. Source: `playerRow` schema in `p
 }
 ```
 
+### Server soft-delete result
+
+Returned by `DELETE /api/v1/servers/:id`. Source: `DeleteResult` in [`apps/api/src/lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts).
+
+```json
+{
+  "ok": true,
+  "backup_marker_id": "0190abcd-...",
+  "files_backed_up": 19,
+  "files_attempted": 19,
+  "container_removed": true,
+  "configs_dir_removed": true,
+  "saved_dir_removed": true,
+  "ufw_rules_removed": 4,
+  "errors": []
+}
+```
+
+Each entry in `errors[]` is `{phase: 'container_stop'|'container_rm'|'configs_dir_delete'|'saved_dir_delete'|'ufw_<proto>_<port>', error: string}`. Phases 2-4 are best-effort: a non-empty `errors[]` does NOT roll back the soft-delete UPDATE on `servers`. If phase 1 (the config backup) reads zero files the route returns 500 `{ error: 'delete_failed', message: '...' }` and the row stays alive.
+
+### Server restore result
+
+Returned by `POST /api/v1/servers/archive/:id/restore`. Source: route handler in [`apps/api/src/routes/server-archive.ts`](../../../apps/api/src/routes/server-archive.ts).
+
+```json
+{
+  "id": "0190xxxx-...",
+  "archive_id": "0190abcd-...",
+  "slug": "alpha-restored",
+  "display_name": "Alpha (restored)",
+  "status": "pending",
+  "next_steps": [
+    "POST /api/v1/servers/:id/install",
+    "POST /api/v1/servers/:id/restore-configs { from_archive_id }",
+    "POST /api/v1/servers/:id/start"
+  ]
+}
+```
+
+### Restore-configs result
+
+Returned by `POST /api/v1/servers/:id/restore-configs`. Source: `RestoreConfigsResult` in [`apps/api/src/lib/server-restore.ts`](../../../apps/api/src/lib/server-restore.ts).
+
+```json
+{
+  "ok": true,
+  "archive_server_id": "0190abcd-...",
+  "files_restored": 18,
+  "files_skipped": ["Rcon.cfg"],
+  "files_missing": [],
+  "config_version_ids": ["0190ef01-...", "0190ef02-..."],
+  "errors": []
+}
+```
+
+`files_skipped` always contains `Rcon.cfg` (the new server keeps its freshly-generated RCON password). `files_missing` lists `ALLOWED_CONFIG_FILES` entries that had no `deletion-backup-marker` row in the archive. `errors[]` carries `{file, error}` from any `bridge.fileAtomicWrite` failure; the loop continues on error.
+
+### Archive server item
+
+Returned in `items[]` by `GET /api/v1/servers/archive`.
+
+```json
+{
+  "id": "0190abcd-...",
+  "display_name": "Alpha",
+  "slug": "alpha",
+  "description": null,
+  "status": "running",
+  "tags": [],
+  "created_at": "2026-04-20T10:00:00.000Z",
+  "deleted_at": "2026-04-26T12:00:00.000Z",
+  "deleted_by_steam_id64": "76561198012345678",
+  "deletion_backup_marker_id": "0190dead-..."
+}
+```
+
+`status` reflects the value at the moment of deletion (the row is frozen). `deleted_by_steam_id64` and `deletion_backup_marker_id` may be `null` for system-driven deletions or batches where every config read failed (the latter cannot happen in practice — phase 1 raises before phase 5 in that case).
+
+### Archive detail
+
+Returned by `GET /api/v1/servers/archive/:id`.
+
+```json
+{
+  "server": { "id": "...", "display_name": "...", "slug": "...", "description": null,
+              "deleted_at": "...", "deleted_by_steam_id64": "...", "deletion_backup_marker_id": "...", "tags": [] },
+  "settings": { "install_path": "/var/lib/squad-panel/configs/...", "game_port": 7787,
+                "query_port": 27165, "beacon_port": 15000, "rcon_port": 21114,
+                "max_players": 100, "tickrate": 50, "multihome": "0.0.0.0" },
+  "backups": [
+    { "id": "0190dead-...", "filename": "Server.cfg", "sha256_hex": "abcd...",
+      "message": "deletion-backup-marker 2026-04-26T12:00:00.000Z",
+      "created_at": "2026-04-26T12:00:00.000Z",
+      "author_steam_id64": "76561198012345678", "author_label": "steam:..." }
+  ]
+}
+```
+
+`backups[]` is deduplicated to the most recent backup row per filename so older deletions of the same server contribute at most one entry per file (the newest).
+
 ### Audit entry
 
 Returned in `items[]` by `GET /api/v1/audit`. Source: `auditEntry` schema in `packages/shared-types/src/api.ts`.
@@ -316,7 +416,9 @@ The `context` column in `audit_log` is a JSON object. Its contents depend on `ac
 |---|---|
 | `config.write` | `{before_sha256, after_sha256, file_name, server_id}` — content itself is never stored |
 | `server.create` | `{server_id, slug, display_name}` |
-| `server.delete` | `{server_id, slug}` |
+| `server.delete` | `{server_id, slug, backup_marker_id, files_backed_up, files_attempted, container_removed, configs_dir_removed, saved_dir_removed, ufw_rules_removed, errors[]}` — full `DeleteResult` mirrored as audit context. |
+| `server.restore` | `{archive_id, new_server_id, slug, display_name}` |
+| `server.restore_configs` | `{server_id, archive_server_id, files_restored, files_skipped, files_missing, errors[]}` |
 | `server.start` / `server.stop` / `server.restart` | `{server_id, container_id}` |
 | `role.create` / `role.update` / `role.delete` | `{role_id, name}` |
 | `user.api_token.create` | `{token_id, name, scopes}` |

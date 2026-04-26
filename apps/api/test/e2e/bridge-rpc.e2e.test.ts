@@ -7,18 +7,33 @@
  * Go daemon to be running on the host (sgid-on-panel-group access to
  * /run/panel-host-bridge.sock).
  */
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { BridgeClient } from '@squad/bridge-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const SOCKET = '/run/panel-host-bridge.sock';
 const CONFIGS_ROOT = '/var/lib/squad-panel/configs';
+const SAVED_ROOT = '/var/lib/squad-panel/saved';
 
 function pickExistingServerUuid(): string | null {
   try {
     const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     const entries = readdirSync(CONFIGS_ROOT, { withFileTypes: true });
-    return entries.find((e) => e.isDirectory() && uuidPattern.test(e.name))?.name ?? null;
+    // Only return a UUID whose ServerConfig/Admins.cfg actually exists on disk;
+    // freshly-created servers with no install run have an empty ServerConfig dir.
+    return (
+      entries
+        .filter((e) => e.isDirectory() && uuidPattern.test(e.name))
+        .find((e) => {
+          try {
+            readdirSync(`${CONFIGS_ROOT}/${e.name}/ServerConfig`).includes('Admins.cfg');
+            const files = readdirSync(`${CONFIGS_ROOT}/${e.name}/ServerConfig`);
+            return files.includes('Admins.cfg');
+          } catch {
+            return false;
+          }
+        })?.name ?? null
+    );
   } catch {
     return null;
   }
@@ -64,10 +79,26 @@ describe('bridge RPC surface (e2e)', () => {
   });
 
   it('file_read on depot SquadGameServer.sh → OK (validates :ro allowlist)', async () => {
-    const r = await bridge.fileRead({
-      path: '/var/lib/docker/volumes/squad-depot/_data/SquadGameServer.sh',
-    });
-    expect(r.content).toMatch(/SquadGameServer/);
+    // The bridge resolves the depot root from PANEL_DEPOT_HOST_PATH at start-up.
+    // On this host it is /home/squad/squad-admin-panel/data/depot (bind-mounted
+    // as squad-depot volume). Fall back to the Docker-volume default path so the
+    // test is portable to both layouts.
+    const depotRoots = [
+      '/home/squad/squad-admin-panel/data/depot',
+      '/var/lib/docker/volumes/squad-depot/_data',
+      '/var/lib/docker/volumes/squad-depot',
+    ];
+    let lastErr: Error | undefined;
+    for (const root of depotRoots) {
+      try {
+        const r = await bridge.fileRead({ path: `${root}/SquadGameServer.sh` });
+        expect(r.content).toMatch(/SquadGameServer/);
+        return;
+      } catch (e) {
+        lastErr = e as Error;
+      }
+    }
+    throw lastErr;
   });
 
   it('file_atomic_write outside configs path → forbidden', async () => {
@@ -222,5 +253,80 @@ describe('bridge RPC surface (e2e)', () => {
       }
       expect(errored || errored === false).toBe(true);
     }
+  });
+});
+
+describe('directory_delete (e2e)', () => {
+  let bridge: BridgeClient;
+  // UUIDs reserved for this test only — uuidv7 prefix `00000000-0000-7eee-...`
+  // is unused by uuidv7-generated server ids, so we won't collide with a real
+  // server's data.
+  const TEST_UUID_CONFIGS = '00000000-0000-7eee-8000-000000000001';
+  const TEST_UUID_SAVED = '00000000-0000-7eee-8000-000000000002';
+  const configsPath = `${CONFIGS_ROOT}/${TEST_UUID_CONFIGS}`;
+  const savedPath = `${SAVED_ROOT}/${TEST_UUID_SAVED}`;
+
+  beforeAll(async () => {
+    bridge = new BridgeClient({ socketPath: SOCKET, onLog: () => undefined });
+    await bridge.connect();
+    // Best-effort cleanup from prior runs.
+    await bridge.directoryDelete({ path: configsPath }).catch(() => undefined);
+    await bridge.directoryDelete({ path: savedPath }).catch(() => undefined);
+  });
+
+  afterAll(async () => {
+    await bridge.directoryDelete({ path: configsPath }).catch(() => undefined);
+    await bridge.directoryDelete({ path: savedPath }).catch(() => undefined);
+    await bridge.close();
+  });
+
+  it('deletes a configs/{uuid} directory and is idempotent on the second call', async () => {
+    // Seed the directory by writing one allowed cfg file under it; the bridge's
+    // file_atomic_write MkdirAlls up through the configs root.
+    const seedPath = `${configsPath}/ServerConfig/Admins.cfg`;
+    await bridge.fileAtomicWrite({ path: seedPath, content: '// seeded by e2e\n' });
+    expect(existsSync(configsPath)).toBe(true);
+
+    const first = await bridge.directoryDelete({ path: configsPath });
+    expect(first.removed).toBe(true);
+    expect(existsSync(configsPath)).toBe(false);
+
+    const second = await bridge.directoryDelete({ path: configsPath });
+    expect(second.removed).toBe(false);
+  });
+
+  it('deletes a saved/{uuid} directory and is idempotent on the second call', async () => {
+    // saved paths are not writable via file_atomic_write; rely on the bridge
+    // creating intermediate dirs is not possible here, so we only verify the
+    // idempotent non-existent path response. If the directory happens to exist
+    // (e.g. Squad container was started previously), the first call removes it.
+    const first = await bridge.directoryDelete({ path: savedPath });
+    expect(typeof first.removed).toBe('boolean');
+    const second = await bridge.directoryDelete({ path: savedPath });
+    expect(second.removed).toBe(false);
+  });
+
+  it('rejects path traversal', async () => {
+    await expect(
+      bridge.directoryDelete({ path: '/var/lib/squad-panel/configs/../etc' }),
+    ).rejects.toThrow(/forbidden/i);
+  });
+
+  it('rejects a non-uuid segment', async () => {
+    await expect(
+      bridge.directoryDelete({ path: '/var/lib/squad-panel/configs/not-a-uuid' }),
+    ).rejects.toThrow(/forbidden/i);
+  });
+
+  it('rejects an arbitrary path outside the panel data root', async () => {
+    await expect(bridge.directoryDelete({ path: '/etc' })).rejects.toThrow(/forbidden/i);
+  });
+
+  it('rejects a file path under configs (must be the {uuid} root, not deeper)', async () => {
+    await expect(
+      bridge.directoryDelete({
+        path: `${CONFIGS_ROOT}/${TEST_UUID_CONFIGS}/ServerConfig/Server.cfg`,
+      }),
+    ).rejects.toThrow(/forbidden/i);
   });
 });

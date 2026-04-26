@@ -12,15 +12,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDatabaseClient } from '@squad/db';
-import {
-  organizationMembers,
-  playerRoleAssignments,
-  players,
-  roles,
-  servers,
-  sessions,
-} from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { players, roles, servers, sessions } from '@squad/db/schema';
+import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mintSessionToken } from '../../src/lib/sessions.js';
 
@@ -53,8 +46,13 @@ beforeAll(async () => {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   db = createDatabaseClient(LIVE_DB_URL);
 
-  const owner = await db.query.roles.findFirst({ where: eq(roles.name, 'Owner') });
-  if (!owner) throw new Error('no Owner role seeded in live DB');
+  const ownerRows = await db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+    .limit(1);
+  const ownerRoleId = ownerRows[0]?.id;
+  if (!ownerRoleId) throw new Error('no Owner role seeded in live DB');
 
   await db
     .insert(players)
@@ -62,16 +60,12 @@ beforeAll(async () => {
       steamId64: TEST_STEAM_ID,
       canonicalName: 'E2E Test Player',
       canonicalNameNormalized: 'e2e test player',
+      roleId: ownerRoleId,
     })
-    .onConflictDoNothing();
-  await db
-    .insert(playerRoleAssignments)
-    .values({ steamId64: TEST_STEAM_ID, roleId: owner.id })
-    .onConflictDoNothing();
-  await db
-    .insert(organizationMembers)
-    .values({ steamId64: TEST_STEAM_ID, orgId: owner.orgId, primaryRoleId: owner.id })
-    .onConflictDoNothing();
+    .onConflictDoUpdate({
+      target: players.steamId64,
+      set: { roleId: ownerRoleId },
+    });
 
   const { token, tokenId } = mintSessionToken();
   sessionTokenId = tokenId;
@@ -92,12 +86,9 @@ afterAll(async () => {
     .where(eq(sessions.id, sessionTokenId))
     .catch(() => undefined);
   await db
-    .delete(playerRoleAssignments)
-    .where(eq(playerRoleAssignments.steamId64, TEST_STEAM_ID))
-    .catch(() => undefined);
-  await db
-    .delete(organizationMembers)
-    .where(eq(organizationMembers.steamId64, TEST_STEAM_ID))
+    .update(players)
+    .set({ roleId: null })
+    .where(eq(players.steamId64, TEST_STEAM_ID))
     .catch(() => undefined);
   await db
     .delete(players)

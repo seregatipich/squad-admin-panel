@@ -38,6 +38,7 @@ sg panel -c 'bash scripts/verify-bridge.sh'
 - Peer-cred check: connections from outside the `panel` group are rejected before the first frame is read.
 - Wire framing: oversized frame drops the connection; partial frames are buffered.
 - Stream multiplexing: `container_logs_follow` and `depot_update` interleave `stream:'stdout'` chunks with the final response.
+- `directory_delete`: forbidden paths (`/etc/passwd`, `…/ServerConfig/Server.cfg`, `…/configs/../etc`, `…/configs/not-a-uuid`), idempotent miss (`removed:false` for absent dir), invalid JSON → `invalid_args`. Go unit tests in `apps/bridge/internal/handlers/handlers_test.go` and validator tests in `apps/bridge/internal/validate/docker_test.go`. E2E success and forbidden cases in `apps/api/test/e2e/bridge-rpc.e2e.test.ts` `describe('directory_delete (e2e)')`.
 
 ## What is not covered
 

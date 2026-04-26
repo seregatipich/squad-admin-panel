@@ -102,6 +102,44 @@ sudo systemctl restart panel-host-bridge
 
 ---
 
+## ConnectionBanner stuck red after refresh
+
+**Symptom:** The top of every dashboard page shows «Связь с панелью потеряна — переподключаемся…» and never disappears.
+
+**Cause:** Either the session expired (the WS `Sec-WebSocket-Protocol` upgrade fails because the cookie is no longer valid) or the API was restarted and the singleton lost its socket. The reconnect schedule walks `BACKOFF_STEPS_MS = [1s, 2s, 4s, 8s, 16s, 30s]` and stops re-trying when the page goes idle.
+
+**Fix:** refresh the page. If the banner returns immediately, log out and back in to mint a fresh session.
+
+## ConnectionBanner stuck amber
+
+**Symptom:** Banner shows «Bridge не отвечает — операции с сервером временно недоступны».
+
+**Cause:** API is fine and the WS is open, but `bridge-heartbeat` reports `bridge.connection: down`. The Go daemon at `/run/panel-host-bridge.sock` died or the systemd unit failed.
+
+**Fix:** `sudo systemctl status panel-host-bridge` and `sudo systemctl restart panel-host-bridge.service`. The banner clears within ~5 s of the next successful ping.
+
+## "Архив серверов" page is empty after I deleted servers
+
+**Symptom:** `/servers/archive` shows zero rows even though servers were deleted in the past.
+
+**Cause:** Pre-Bundle-C deletions did NOT soft-delete — the row was removed entirely and configs were not backed up. Only deletions that happened on or after the Bundle C release ship into the archive.
+
+**Fix:** none. Old deletions are gone; future ones will appear here.
+
+## Restore wizard fails at "Установка"
+
+**Symptom:** `/servers/archive/[id]/restore` got past the slug step (server row created), but the install WS shows red errors.
+
+**Cause:** Same as the standard install failure path — bridge offline, depot empty, or `container_run` error. The new server row is `pending` and visible at `/servers`; the operator can retry `POST /api/v1/servers/:id/install` directly.
+
+**Fix:** resolve the install failure (see the install-wizard troubleshooting above), then return to `/servers/[id]` and run the install again. The restore-configs step still works against the same `from_archive_id` once the server reaches `ready`.
+
+## Restore wizard says `files_missing[]` on every cfg
+
+**Cause:** `from_archive_id` is from a deletion that pre-dates Bundle C, so no `deletion-backup-marker` rows exist. The new server keeps install-time defaults.
+
+**Fix:** there is no fallback — re-edit configs by hand at `/servers/<newId>/configs`.
+
 ## `/no-access` page hint about `.first-owner-claimed`
 
 **Symptom:** Fresh installation: you authenticated via Steam but landed on `/no-access`.

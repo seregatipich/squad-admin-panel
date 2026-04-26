@@ -13,6 +13,138 @@ import (
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
 )
 
+func TestValidateDeletableDir_AcceptsConfigsAndSavedRoots(t *testing.T) {
+	uuid := "019dbaa5-1234-7abc-8def-0123456789ab"
+	cases := []string{
+		"/var/lib/squad-panel/configs/" + uuid,
+		"/var/lib/squad-panel/saved/" + uuid,
+	}
+	for _, p := range cases {
+		cleaned, err := validateDeletableDir(p)
+		if err != nil {
+			t.Errorf("expected %q allowed, got %v", p, err)
+		}
+		if cleaned != p {
+			t.Errorf("cleaned = %q, want %q", cleaned, p)
+		}
+	}
+}
+
+func TestValidateDeletableDir_RejectsEverythingElse(t *testing.T) {
+	uuid := "019dbaa5-1234-7abc-8def-0123456789ab"
+	cases := []string{
+		"",
+		"/etc/passwd",
+		"/var/lib/squad-panel",
+		"/var/lib/squad-panel/configs",
+		"/var/lib/squad-panel/configs/" + uuid + "/ServerConfig",
+		"/var/lib/squad-panel/configs/" + uuid + "/ServerConfig/Server.cfg",
+		"/var/lib/squad-panel/saved/" + uuid + "/Logs/SquadGame.log",
+		"/var/lib/squad-panel/configs/../etc",
+		"/var/lib/squad-panel/configs/not-a-uuid",
+		"/var/lib/docker/volumes/squad-depot/_data",
+	}
+	for _, p := range cases {
+		_, err := validateDeletableDir(p)
+		if err == nil {
+			t.Errorf("expected rejection for %q", p)
+			continue
+		}
+		if !errors.Is(err, validate.ErrForbidden) {
+			t.Errorf("expected ErrForbidden for %q, got %v", p, err)
+		}
+	}
+}
+
+func TestDirectoryDelete_ForbiddenPathReturnsForbidden(t *testing.T) {
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]string{"path": "/etc/passwd"})
+	req := &rpc.Request{ID: "req-1", Method: "directory_delete", Params: params}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if resp.OK {
+		t.Fatalf("expected error response, got success")
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeForbidden {
+		t.Fatalf("expected CodeForbidden, got %+v", resp.Error)
+	}
+}
+
+func TestDirectoryDelete_FilePathUnderConfigsForbidden(t *testing.T) {
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]string{
+		"path": "/var/lib/squad-panel/configs/019dbaa5-1234-7abc-8def-0123456789ab/ServerConfig/Server.cfg",
+	})
+	req := &rpc.Request{ID: "req-2", Method: "directory_delete", Params: params}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if resp.OK {
+		t.Fatalf("expected error response, got success")
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeForbidden {
+		t.Fatalf("expected CodeForbidden, got %+v", resp.Error)
+	}
+}
+
+func TestDirectoryDelete_NonExistentValidPathIsIdempotent(t *testing.T) {
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]string{
+		"path": "/var/lib/squad-panel/configs/00000000-0000-7000-8000-000000000999",
+	})
+	req := &rpc.Request{ID: "req-3", Method: "directory_delete", Params: params}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected success for non-existent valid path, got %+v", resp.Error)
+	}
+	var body map[string]bool
+	if err := json.Unmarshal(resp.Result, &body); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if body["removed"] != false {
+		t.Fatalf("expected removed=false for non-existent path, got %v", body)
+	}
+}
+
+func TestDirectoryDelete_TraversalForbidden(t *testing.T) {
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]string{
+		"path": "/var/lib/squad-panel/configs/../etc",
+	})
+	req := &rpc.Request{ID: "req-4", Method: "directory_delete", Params: params}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if resp.OK {
+		t.Fatalf("expected error response, got success")
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeForbidden {
+		t.Fatalf("expected CodeForbidden, got %+v", resp.Error)
+	}
+}
+
+func TestDirectoryDelete_BadUUIDForbidden(t *testing.T) {
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]string{
+		"path": "/var/lib/squad-panel/configs/not-a-uuid",
+	})
+	req := &rpc.Request{ID: "req-5", Method: "directory_delete", Params: params}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if resp.OK {
+		t.Fatalf("expected error response, got success")
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeForbidden {
+		t.Fatalf("expected CodeForbidden, got %+v", resp.Error)
+	}
+}
+
+func TestDirectoryDelete_InvalidJSONReturnsInvalidArgs(t *testing.T) {
+	d := &Dispatcher{}
+	req := &rpc.Request{ID: "req-6", Method: "directory_delete", Params: []byte("not-json")}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if resp.OK {
+		t.Fatalf("expected error response, got success")
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeInvalidArgs {
+		t.Fatalf("expected CodeInvalidArgs, got %+v", resp.Error)
+	}
+}
+
 func TestValidateReadablePath_AcceptsConfigsAndSaved(t *testing.T) {
 	cases := []string{
 		"/var/lib/squad-panel/configs/019dbaa5-1234-7abc-8def-0123456789ab/ServerConfig/Admins.cfg",

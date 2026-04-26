@@ -1,7 +1,8 @@
 'use client';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import { useLiveSubscription } from '@/lib/use-live-bus';
 
 interface Server {
   id: string;
@@ -20,7 +21,7 @@ interface ServersResponse {
   total: number;
 }
 
-const POLL_MS = 4000;
+const POLL_MS = 120_000;
 
 export default function ServersPage() {
   const [data, setData] = useState<ServersResponse | null>(null);
@@ -52,6 +53,51 @@ export default function ServersPage() {
       clearInterval(t);
     };
   }, []);
+
+  const onStatus = useCallback((event: { data: { server_id: string; status: string } }) => {
+    setData((prev) => {
+      if (!prev) return prev;
+      const idx = prev.items.findIndex((s) => s.id === event.data.server_id);
+      if (idx < 0) return prev;
+      const items = prev.items.slice();
+      items[idx] = { ...items[idx], status: event.data.status };
+      return { ...prev, items };
+    });
+    setLastUpdate(new Date());
+  }, []);
+  useLiveSubscription('server.status', onStatus);
+
+  const onDeleted = useCallback((event: { data: { server_id: string } }) => {
+    setData((prev) => {
+      if (!prev) return prev;
+      const items = prev.items.filter((s) => s.id !== event.data.server_id);
+      if (items.length === prev.items.length) return prev;
+      return { items, total: items.length };
+    });
+    setLastUpdate(new Date());
+  }, []);
+  useLiveSubscription('server.deleted', onDeleted);
+
+  const onRcon = useCallback(
+    (event: { data: { server_id: string; state: string; player_count?: number } }) => {
+      setData((prev) => {
+        if (!prev) return prev;
+        const idx = prev.items.findIndex((s) => s.id === event.data.server_id);
+        if (idx < 0) return prev;
+        const items = prev.items.slice();
+        items[idx] = {
+          ...items[idx],
+          rcon_state: event.data.state,
+          player_count:
+            event.data.player_count != null ? event.data.player_count : items[idx].player_count,
+        };
+        return { ...prev, items };
+      });
+      setLastUpdate(new Date());
+    },
+    [],
+  );
+  useLiveSubscription('rcon.status', onRcon);
 
   const rows = useMemo(() => {
     if (!data) return [];

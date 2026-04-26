@@ -1,5 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
+  bigint,
   boolean,
   check,
   index,
@@ -9,6 +11,8 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { configVersions } from './config-versions.js';
+import { players } from './players.js';
 
 export const servers = pgTable(
   'servers',
@@ -23,12 +27,24 @@ export const servers = pgTable(
     tags: text('tags').array().notNull().default([]),
     timezone: text('timezone').notNull().default('UTC'),
     isCanary: boolean('is_canary').notNull().default(false),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'date' }),
+    deletedBySteamId64: bigint('deleted_by_steam_id64', { mode: 'bigint' }).references(
+      () => players.steamId64,
+      { onDelete: 'set null' },
+    ),
+    deletionBackupMarkerId: uuid('deletion_backup_marker_id').references(
+      (): AnyPgColumn => configVersions.id,
+      { onDelete: 'set null' },
+    ),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
   (table) => ({
-    slugKey: uniqueIndex('servers_slug_key').on(table.slug),
+    slugActiveKey: uniqueIndex('servers_slug_active_key')
+      .on(table.slug)
+      .where(sql`deleted_at IS NULL`),
     statusIdx: index('servers_status_idx').on(table.status),
+    deletedAtIdx: index('servers_deleted_at_idx').on(table.deletedAt),
     statusCheck: check(
       'servers_status_enum',
       sql`status IN ('pending','installing','ready','starting','running','stopping','stopped','failed')`,

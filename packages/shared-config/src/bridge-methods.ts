@@ -5,6 +5,7 @@ export const BRIDGE_METHODS = [
   'file_read',
   'file_write',
   'file_atomic_write',
+  'directory_delete',
   'ufw_rule',
   'process_info',
   'container_run',

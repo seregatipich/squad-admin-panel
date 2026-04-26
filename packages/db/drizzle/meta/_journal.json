@@ -92,6 +92,13 @@
       "when": 1745978400000,
       "tag": "0012_host_manage_permission",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1745982000000,
+      "tag": "0013_servers_soft_delete",
+      "breakpoints": true
     }
   ]
 }

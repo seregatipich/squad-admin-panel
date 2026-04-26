@@ -1,5 +1,24 @@
 # `bridge` — changelog
 
+## 2026-04-26 — `directory_delete` RPC for server soft-delete orchestrator
+
+### Added
+
+- `directory_delete({ path }) → { removed: boolean }` — 18th whitelisted method. Calls `os.RemoveAll` against the **exact** `/var/lib/squad-panel/{configs,saved}/{uuid}` root. Idempotent; missing path returns `{ removed: false }` rather than erroring. Used by `apps/api/src/lib/server-delete.ts` after configs have been backed up to `config_versions`.
+- `validate.PanelConfigsServerRoot(p)` and `validate.PanelSavedServerRoot(p)` in `apps/bridge/internal/validate/docker.go` — accept only the per-server root with a canonical UUID, no children, no trailing slash, no traversal. Used exclusively by `directory_delete`.
+- Go unit tests in `apps/bridge/internal/handlers/handlers_test.go`: forbidden-path, file-path-under-configs forbidden, traversal forbidden, bad-UUID forbidden, idempotent missing-dir success, invalid JSON returns `invalid_args`. Validator-level tests for both root variants in `apps/bridge/internal/validate/docker_test.go`.
+- E2E coverage in `apps/api/test/e2e/bridge-rpc.e2e.test.ts` (`describe('directory_delete (e2e)')`): success on `configs/{uuid}` root, success on `saved/{uuid}` root, idempotent re-delete, forbidden cases (traversal, file path, bad uuid, depot root).
+
+### Changed
+
+- `packages/shared-config/src/bridge-methods.ts` — appended `'directory_delete'` to `BRIDGE_METHODS`.
+- `packages/bridge-client/src/client.ts` — new `directoryDelete(p) → call<{ removed: boolean }>('directory_delete', p, { timeoutMs: 60_000 })` wrapper plus `DirectoryDeleteParams`/`DirectoryDeleteResult` types.
+
+### Migration notes
+
+- No schema or systemd change. Redeploy the binary with `sudo install -m 0755 apps/bridge/bin/panel-host-bridge /usr/local/bin/` and `sudo systemctl restart panel-host-bridge.service`.
+- Operators that have stale `/var/lib/squad-panel/{configs,saved}/{uuid}` directories from pre-soft-delete tombstones can NOT use `directory_delete` to clean them up retroactively unless the matching `servers` row exists; the API surface only invokes `directory_delete` from inside the soft-delete orchestrator. Manual `sudo rm -rf` remains the documented recovery path.
+
 ## 2025-11-15
 
 ### Removed

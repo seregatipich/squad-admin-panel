@@ -70,8 +70,9 @@ The `seedOwner` helper in `helpers.ts` creates test isolation without Steam OAut
 - RCON send flow.
 - Audit log export.
 - Settings / API tokens pages.
+- Archive / restore wizard UI flow (covered at the API layer by `server-delete-restore-lifecycle.e2e.test.ts`; UI flow remains a manual smoke until a Playwright spec lands).
 
-These are covered at the API layer in `apps/api/test/e2e/install-lifecycle.e2e.test.ts`.
+These are covered at the API layer in `apps/api/test/e2e/install-lifecycle.e2e.test.ts` and `apps/api/test/e2e/server-delete-restore-lifecycle.e2e.test.ts`.
 
 ## Important edge cases
 

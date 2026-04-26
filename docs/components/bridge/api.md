@@ -44,7 +44,7 @@ For every new connection the bridge reads `SO_PEERCRED` and looks up the caller'
 
 ## Methods
 
-All 17 RPC methods from `BRIDGE_METHODS`. Request shapes match the Go handlers; the TS client mirrors them in [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts).
+All 18 RPC methods from `BRIDGE_METHODS`. Request shapes match the Go handlers; the TS client mirrors them in [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts).
 
 ### Liveness / host
 
@@ -99,6 +99,28 @@ Non-atomic. Use only when atomicity is not required.
 #### `file_atomic_write({ path, content, mode? })` → `{ status: 'written' }`
 
 Writes a sibling `.new`, fsyncs, then `rename(2)` into place. Existing file is renamed to `.bak` first. `MkdirAll`s up through the allowed root.
+
+#### `directory_delete({ path })` → `{ removed: boolean }`
+
+`os.RemoveAll(path)` against the **exact** per-server data root. Used by the soft-delete orchestrator after backing up configs into `config_versions`.
+
+Path allowlist (validated by `validate.PanelConfigsServerRoot` / `validate.PanelSavedServerRoot` in [`apps/bridge/internal/validate/docker.go`](../../../apps/bridge/internal/validate/docker.go)): the path must be **exactly** one of:
+
+- `/var/lib/squad-panel/configs/{uuid}` — the per-server config root.
+- `/var/lib/squad-panel/saved/{uuid}` — the per-server saved-state root.
+
+Where `{uuid}` matches the canonical UUID v4/v7 regex. No trailing slash, no traversal, no children of the root, no other prefix. Anything else (including a `ServerConfig` subpath, the depot root, or `/etc/passwd`) returns `forbidden`.
+
+**Idempotent**: a missing directory returns `{ removed: false }` (not an error). A real removal returns `{ removed: true }`. Any non-`ENOENT` failure surfaces as `runtime_error`.
+
+```json
+// success
+{ "id": "req-1", "ok": true, "result": { "removed": true } }
+// idempotent miss
+{ "id": "req-2", "ok": true, "result": { "removed": false } }
+// allowlist miss (sub-path, traversal, bad uuid, unknown root, file path)
+{ "id": "req-3", "ok": false, "code": "forbidden", "message": "..." }
+```
 
 ### Network
 

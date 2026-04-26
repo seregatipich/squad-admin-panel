@@ -22,6 +22,49 @@ Most common causes:
 
 Almost always a bridge / `panel`-group issue. See [`components/bridge/troubleshooting.md`](../bridge/troubleshooting.md).
 
+## `DELETE /servers/:id` returns 500 `delete_failed: no config files could be backed up`
+
+**Cause**: Phase 1 of [`server-delete.ts`](../../../apps/api/src/lib/server-delete.ts) tried `bridge.fileRead` on every `ALLOWED_CONFIG_FILES` entry under `${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/` and got zero hits. Either the directory is missing entirely (server was never installed, or files were already wiped manually), or the bridge can't read them (permissions, allowlist mismatch).
+
+**Diagnostics**:
+
+```bash
+ls -la /var/lib/squad-panel/configs/<server-id>/ServerConfig/   # do the files exist?
+docker compose logs api --since 2m | grep server-delete         # bridge fileRead errors?
+sg panel -c 'bash scripts/verify-bridge.sh'                     # bridge healthy at all?
+```
+
+**Action**: do NOT add a `force=true` flag — phase 1 protects the operator from data loss. If the server is genuinely abandoned, verify the directory really is empty, then drop the row directly: `DELETE FROM servers WHERE id='<id>';` followed by manual `docker rm -f squad-<id>` and `sudo rm -rf /var/lib/squad-panel/{configs,saved}/<id>`. The audit log records nothing for this manual path; document the operation in the runbook.
+
+## DELETE returned `ok:true` but the container is still running
+
+**Cause**: Phase 2 (`container_stop` + `container_rm`) is best-effort. A non-empty `errors[]` in the response (and in `audit_log.context`) shows the failure; phase 5 still flipped `deleted_at` so the row is gone from active lists.
+
+**Action**:
+
+```bash
+docker rm -f squad-<id>                              # finish the job
+psql -c "SELECT context FROM audit_log WHERE action_type='server.delete' AND target_id='<id>' ORDER BY id DESC LIMIT 1"
+```
+
+## DELETE returned `ok:true` but `/var/lib/squad-panel/configs/<id>` still exists
+
+**Cause**: Phase 3 `directory_delete` returned an error (recorded in `errors[]`). The bridge's path validator (`PanelConfigsServerRoot`/`PanelSavedServerRoot`) requires an exact root match — if a manual `chmod` made the dir partially un-removable the bridge reports `runtime_error`.
+
+**Action**: `sudo rm -rf /var/lib/squad-panel/{configs,saved}/<id>`. Future `directory_delete` calls on the same id will already hit the new partial unique index — no risk of accidentally re-creating a hole.
+
+## Restore wizard fails with 409 `slug_in_use`
+
+**Cause**: The partial unique index `servers_slug_active_key` on `servers(slug) WHERE deleted_at IS NULL` prevents two ACTIVE rows from sharing a slug. The archive row's slug doesn't conflict (it has `deleted_at`), but if you tried to restore with the same slug while a different active server already owns it, the insert fails.
+
+**Action**: pick a different slug in the restore wizard (`<old>-restored-1` is the conventional pattern). If you genuinely want to "take back" the slug, soft-delete the conflicting active server first.
+
+## Restore-configs reports `files_missing[]` on every cfg
+
+**Cause**: `POST /servers/:newId/restore-configs` reads `config_versions WHERE message LIKE 'deletion-backup-marker%' AND server_id = from_archive_id`. If the archive's `from_archive_id` corresponds to a server whose deletion happened before Bundle C shipped (i.e. before `deletion-backup-marker` rows were emitted), no rows match. The new server keeps its install-time defaults.
+
+**Action**: there is no fallback — pre-Bundle-C deletions did not back up configs. Manually re-edit the cfg files via the editor at `/servers/:newId/configs`.
+
 ## Audit chain shows a gap
 
 See [`operations/troubleshooting.md`](../../operations/troubleshooting.md#audit-log-shows-a-gap-or-hash-mismatch).

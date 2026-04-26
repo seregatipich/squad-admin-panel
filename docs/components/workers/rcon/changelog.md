@@ -1,5 +1,11 @@
 # Changelog — worker-rcon
 
+## 2026-04-26 — Bundle E: live-bus fan-out
+
+### Changed
+
+- `PerServerSupervisor.writeStatus` now also `PUBLISH`es to the Redis channel `rcon:status:changed` with `{server_id, state, player_count?}` after the existing `SET rcon:status:{id}` call. The API's `live-bus` plugin subscribes to this channel and re-emits as `rcon.status` LiveEvents. Publish failures are swallowed — the SET remains the source of truth.
+
 ## 2026-04-26
 
 ### Added

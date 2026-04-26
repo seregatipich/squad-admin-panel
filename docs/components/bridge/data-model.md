@@ -235,6 +235,31 @@ Identical params and result to `file_write`. Uses a write-to-temp + rename patte
 
 ---
 
+### `directory_delete`
+
+**Params:**
+```json
+{ "path": "/var/lib/squad-panel/configs/019dbac8-ceb0-77ab-859b-bfa9a282ee2c" }
+```
+
+**Result:**
+```json
+{ "removed": true }
+```
+
+`removed` is `true` when `os.RemoveAll` actually unlinked something, `false` when the path did not exist (idempotent). Any other `RemoveAll` error surfaces as `runtime_error`.
+
+**Path allowlist** (exact match, no children, no trailing slash, validated UUID):
+
+- `/var/lib/squad-panel/configs/{uuid}` — per-server config root.
+- `/var/lib/squad-panel/saved/{uuid}` — per-server saved-state root.
+
+Anything else (depot root, sentinel, `ServerConfig/<file>`, traversal, non-UUID component) returns `forbidden`.
+
+Used exclusively by the soft-delete orchestrator after backing up `.cfg` files to `config_versions`. See [`apps/api/src/lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts).
+
+---
+
 ### `ufw_rule`
 
 **Params:**
@@ -441,6 +466,12 @@ Any path that matches one of:
 Only:
 1. `/var/lib/squad-panel/configs/{uuid}/ServerConfig/{file}.cfg` — same cfg file allowlist as above.
 2. `/var/lib/squad-panel/.first-owner-claimed` (exact path).
+
+### Deletable directories (`directory_delete` only)
+
+Exact-match-only roots; no children, no trailing slash, UUID-validated:
+1. `/var/lib/squad-panel/configs/{uuid}` (validator: `PanelConfigsServerRoot`).
+2. `/var/lib/squad-panel/saved/{uuid}` (validator: `PanelSavedServerRoot`).
 
 ### Allowed cfg files (19 total)
 

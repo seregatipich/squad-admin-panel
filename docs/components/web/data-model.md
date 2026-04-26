@@ -185,6 +185,106 @@ The `context` field contains action-specific metadata (before/after sha256 for c
 
 ---
 
+## Live-bus event shape (client-side mirror)
+
+`apps/web/src/lib/live-bus.ts` re-declares the same discriminated union as the API plugin so the dashboard can subscribe with full type safety:
+
+```ts
+type LiveEvent =
+  | { type: 'server.status';     ts: string; data: { server_id: string; status: string; source: 'reconciler' | 'install' | 'delete' } }
+  | { type: 'server.deleted';    ts: string; data: { server_id: string; deleted_at: string; by: string | null } }
+  | { type: 'server.restored';   ts: string; data: { old_server_id: string; new_server_id: string } }
+  | { type: 'rcon.status';       ts: string; data: { server_id: string; state: string; player_count?: number } }
+  | { type: 'bridge.connection'; ts: string; data: { state: 'up' | 'down'; down_for_s: number } }
+  | { type: 'worker.heartbeat';  ts: string; data: { worker: string; healthy: boolean } };
+
+type LiveBusState = 'connecting' | 'open' | 'closed';
+type BridgeState = 'up' | 'down' | 'unknown';
+```
+
+The web client reconnects on close (`BACKOFF_STEPS_MS = [1s, 2s, 4s, 8s, 16s, 30s]`) and idle-closes after 5 s with no subscribers. Server pings are answered with `{type:'pong'}` automatically.
+
+## Archive shapes
+
+Used by `/servers/archive` and `/servers/archive/[id]`.
+
+```ts
+interface ArchiveServer {
+  id: string;
+  display_name: string;
+  slug: string;
+  description: string | null;
+  status: string;                       // value frozen at deletion time
+  tags: string[];
+  created_at: string;                   // ISO 8601
+  deleted_at: string;                   // ISO 8601
+  deleted_by_steam_id64: string | null; // serialized as string (BigInt)
+  deletion_backup_marker_id: string | null;
+}
+
+interface ArchiveBackupRow {
+  id: string;
+  filename: string;
+  sha256_hex: string;
+  message: string;                      // 'deletion-backup-marker <iso>'
+  created_at: string;
+  author_steam_id64: string | null;
+  author_label: string | null;
+}
+
+interface ArchiveDetail {
+  server: ArchiveServer;
+  settings: {
+    install_path: string;
+    game_port: number;
+    query_port: number;
+    beacon_port: number;
+    rcon_port: number;
+    max_players: number;
+    tickrate: number;
+    multihome: string;
+  } | null;
+  backups: ArchiveBackupRow[];          // dedup'd, latest-per-filename
+}
+
+interface ArchiveConfigContent {
+  id: string;
+  filename: string;
+  content: string;
+  sha256_hex: string;
+  created_at: string;
+  message: string;
+}
+
+interface RestoreRequest {
+  slug: string;                         // ^[a-z0-9-]+$, 1-64
+  display_name?: string;
+}
+
+interface RestoreResponse {
+  id: string;                           // new server id (UUID v7)
+  archive_id: string;
+  slug: string;
+  display_name: string;
+  status: 'pending';
+  next_steps: string[];
+}
+
+interface RestoreConfigsRequest {
+  from_archive_id: string;              // archive UUID
+}
+
+interface RestoreConfigsResponse {
+  ok: true;
+  archive_server_id: string;
+  files_restored: number;
+  files_skipped: string[];              // always includes 'Rcon.cfg'
+  files_missing: string[];
+  config_version_ids: string[];
+  errors: Array<{ file: string; error: string }>;
+}
+```
+
 ## Player detail shape
 
 Used in `/players/[steam_id64]`.

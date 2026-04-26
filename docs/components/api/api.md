@@ -58,11 +58,52 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 | GET | `/api/v1/servers` | List + per-server `rcon_state` / `player_count` / `last_poll_at` from Redis. | `server:view` |
 | POST | `/api/v1/servers` | Create row in `pending`. Allocates ports, generates RCON password, encrypts and stores. | `server:create` |
 | GET | `/api/v1/servers/:id` | Full detail: settings, RCON status, container inspect+stats, host info. | `server:view` |
-| DELETE | `/api/v1/servers/:id` | Best-effort `container_rm` then delete row. Bind-mounted dirs retained. | `server:delete` |
+| DELETE | `/api/v1/servers/:id` | **Soft-delete + backup orchestrator**. Phase 1 reads every allowed `.cfg` via `bridge.fileRead` and inserts one `config_versions` row per file with `message = 'deletion-backup-marker <iso>'`. If 0 files were read the route returns 500 `delete_failed` and leaves the server alive. Phase 2-4 are best-effort: `container_stop` (30 s) + `container_rm`, `directory_delete` on `configs/{uuid}` and `saved/{uuid}`, `ufw_rule remove` × 4 (game/query/beacon/rcon). Phase 5 sets `servers.deleted_at = now()`, `deleted_by_steam_id64 = <actor>`, `deletion_backup_marker_id = <first-row-id>`. Audit row written by the route (`server.delete`). On success emits a `server.deleted` LiveEvent. Response: `{ ok, backup_marker_id, files_backed_up, files_attempted, container_removed, configs_dir_removed, saved_dir_removed, ufw_rules_removed, errors[] }`. Repeating the call on an already-soft-deleted server returns 404. | `server:delete` |
 | POST | `/api/v1/servers/:id/start` | If container exists → `container_start`; otherwise `container_run`. | `server:start` |
 | POST | `/api/v1/servers/:id/stop` | RCON `AdminBroadcast` → 15s wait → `AdminEndMatch` → `container_stop` (60 s grace). | `server:stop` |
 | POST | `/api/v1/servers/:id/restart` | `container_stop` then `container_start`. | `server:restart` |
 | GET | `/api/v1/servers/:id/events` | Recent envelopes from `events:server:{id}` (XREVRANGE, default 100). Used by the live-events UI. | `server:view` |
+
+## Server archive (soft-deleted servers)
+
+Backed by [`apps/api/src/routes/server-archive.ts`](../../../apps/api/src/routes/server-archive.ts). All `WHERE deleted_at IS NOT NULL` queries — the active-server routes above filter `deleted_at IS NULL` so a soft-deleted server returns 404 from those endpoints.
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/servers/archive` | List soft-deleted servers ordered `deleted_at DESC`. Returns `{ items: ArchiveServer[], total }`. | `server:view` |
+| GET | `/api/v1/servers/archive/:id` | Archive detail: server meta + `serverSettings` snapshot + deduped list of backup `config_versions` rows (latest per filename, `WHERE message LIKE 'deletion-backup-marker%'`). Returns `{ server, settings, backups[] }`. 404 if not soft-deleted. | `server:view` |
+| GET | `/api/v1/servers/archive/:id/configs/:filename` | Read content of the most recent backup version of one cfg file. Returns `{ id, filename, content, sha256_hex, created_at, message }`. 404 if no backup row exists. | `config:view` |
+| POST | `/api/v1/servers/archive/:id/restore` | Create a NEW server row (UUIDv7) with metadata copied from the archive. Body: `{ slug: ^[a-z0-9-]+$ (1-64), display_name? }`. 409 `slug_in_use` when an active row already owns the slug (partial unique index `servers_slug_active_key`). 404 when the archive is missing. Audit `server.restore`. Emits `server.restored` LiveEvent. Returns 201 `{ id, archive_id, slug, display_name, status:'pending', next_steps[] }`. **Does NOT install or copy configs** — operator must continue with `POST /servers/:id/install`, then `POST /servers/:id/restore-configs`. | `server:install` |
+| POST | `/api/v1/servers/:id/restore-configs` | Overlay backup configs from an archive onto a freshly-installed server. Body: `{ from_archive_id: uuid }`. Reads `config_versions` rows with `message LIKE 'deletion-backup-marker%'` for the archive, skips `Rcon.cfg` (preserves the new server's password), `bridge.fileAtomicWrite`s each onto `configs/{newId}/ServerConfig/`, then inserts one fresh `config_versions` row per restored file (`message = "restored from server <archiveId> backup <iso>"`). Audit `server.restore_configs`. 404 if either the new server or the archive is missing. Returns `{ ok, archive_server_id, files_restored, files_skipped[], files_missing[], config_version_ids[], errors[] }`. | `config:edit` |
+
+Example: list archive
+
+```bash
+curl -sS -H "Cookie: __Host-sid=$SID" https://panel.local/api/v1/servers/archive | jq .
+```
+
+Example: restore
+
+```bash
+curl -sS -X POST -H "Cookie: __Host-sid=$SID" -H 'content-type: application/json' \
+  -d '{"slug":"alpha-restored","display_name":"Alpha (restored)"}' \
+  https://panel.local/api/v1/servers/archive/<archiveId>/restore
+# → 201 { id: <newId>, archive_id: <archiveId>, ... }
+curl -sS -X POST -H "Cookie: __Host-sid=$SID" https://panel.local/api/v1/servers/<newId>/install
+# wait for /install to finish (status=ready)
+curl -sS -X POST -H "Cookie: __Host-sid=$SID" -H 'content-type: application/json' \
+  -d '{"from_archive_id":"<archiveId>"}' \
+  https://panel.local/api/v1/servers/<newId>/restore-configs
+curl -sS -X POST -H "Cookie: __Host-sid=$SID" https://panel.local/api/v1/servers/<newId>/start
+```
+
+Errors:
+
+| Code | Where | Meaning |
+|---|---|---|
+| 404 `not_found` | GET archive, GET detail, GET single config, POST restore, POST restore-configs | Archive id is not soft-deleted, or no matching cfg backup row, or new server not installed yet. |
+| 404 `archive_not_found` | POST restore-configs | The `from_archive_id` body field does not point at a soft-deleted server. |
+| 409 `slug_in_use` | POST restore | An ACTIVE server (deleted_at IS NULL) already owns this slug; the partial unique index blocks the insert. Pick a different slug. |
 
 ## Server install
 
@@ -90,6 +131,12 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
 | WS | `/api/v1/servers/:id/logs/ws` | Live `docker logs -f` via dedicated bridge connection. `?lines=<N≤5000>` for backfill (default 200). 20 s heartbeat frame so proxies don't kill idle sockets. | `server:view` |
+
+## Live event bus (panel-wide)
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| WS | `/api/v1/ws/live` | Push channel for typed `LiveEvent` frames (`server.status`, `server.deleted`, `server.restored`, `rcon.status`, `bridge.connection`, `worker.heartbeat`). Server pings every 10 s; clients must reply `{"type":"pong"}` within 30 s or the socket is closed (code 4000). See [live-bus component](../live-bus/README.md) for wire formats and producer fan-out. | `server:view` |
 
 ## Players
 

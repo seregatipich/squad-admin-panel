@@ -109,10 +109,12 @@ describe.skipIf(skip.skip)('install → run → edit → stop → delete', () =>
   });
 
   it('worker-rcon establishes connection (rcon_status.state=connected)', async () => {
+    // Squad takes up to 90s to bind RCON after the container starts; allow
+    // 120s so this test is stable in environments where boot is slow.
     const row = await api.waitFor<ServerResponse>(
       () => api.json<ServerResponse>(`/api/v1/servers/${serverId}`),
       (v) => v.rcon_status?.state === 'connected',
-      { timeoutMs: 90_000, intervalMs: 2000, label: 'wait for RCON connected' },
+      { timeoutMs: 120_000, intervalMs: 2000, label: 'wait for RCON connected' },
     );
     expect(row.rcon_status.state).toBe('connected');
     expect(typeof row.rcon_status.player_count).toBe('number');
@@ -178,11 +180,30 @@ describe.skipIf(skip.skip)('install → run → edit → stop → delete', () =>
     expect(row.server.status).toBe('stopped');
   });
 
-  it('DELETE removes the DB row + container', async () => {
+  it('DELETE soft-deletes (backup + container removed) and surfaces in archive', async () => {
     const r = await api.fetch(`/api/v1/servers/${serverId}`, { method: 'DELETE' });
     expect([200, 204]).toContain(r.status);
+    const body = (await r.json()) as {
+      ok: boolean;
+      backup_marker_id: string | null;
+      files_backed_up: number;
+      container_removed: boolean;
+      configs_dir_removed: boolean;
+      saved_dir_removed: boolean;
+      ufw_rules_removed: number;
+      errors: Array<{ phase: string; error: string }>;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.backup_marker_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(body.files_backed_up).toBeGreaterThanOrEqual(1);
+    expect(body.container_removed).toBe(true);
+
     const after = await api.fetch(`/api/v1/servers/${serverId}`);
     expect(after.status).toBe(404);
+
+    const archive = await api.json<{ items: Array<{ id: string }> }>('/api/v1/servers/archive');
+    expect(archive.items.some((s) => s.id === serverId)).toBe(true);
+
     serverId = ''; // signal afterAll to skip cleanup
   });
 });

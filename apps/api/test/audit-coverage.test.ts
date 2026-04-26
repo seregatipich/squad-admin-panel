@@ -30,6 +30,7 @@ import meTokensRoutes from '../src/routes/me-tokens.js';
 import permissionsRoutes from '../src/routes/permissions.js';
 import playerRoutes from '../src/routes/players.js';
 import rolesRoutes from '../src/routes/roles.js';
+import archiveRoutes from '../src/routes/server-archive.js';
 import serverInstallRoutes from '../src/routes/server-install.js';
 import serverRoutes from '../src/routes/servers.js';
 import usersRoutes from '../src/routes/users.js';
@@ -83,6 +84,7 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   await app.register(hostRoutes);
   await app.register(hostActionsRoutes);
   await app.register(serverRoutes);
+  await app.register(archiveRoutes);
   await app.register(serverInstallRoutes);
   await app.register(permissionsRoutes);
   await app.register(rolesRoutes);

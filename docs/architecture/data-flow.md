@@ -79,6 +79,101 @@ status-reconciler (every 4 s) ──▶  container_inspect
                                                                              on next reconcile)
 ```
 
+## Server lifecycle: deletion + restore
+
+```
+UI delete confirm                 api                                    bridge
+─────────────────                 ───                                    ──────
+DELETE /servers/:id ─────────▶  softDeleteServer(ctx, id):
+                                 phase 1 (THROWS on total fail):
+                                   for cfg in ALLOWED_CONFIG_FILES:
+                                     ─bridge.fileRead({path})───────▶   read configs/{id}/ServerConfig/<cfg>
+                                                              ◀────    {content}
+                                   db.transaction:
+                                     INSERT config_versions × N
+                                       message='deletion-backup-marker <iso>'
+                                     backup_marker_id = first row id
+                                 phase 2 (best-effort):
+                                   ─bridge.containerStop({timeout:30})▶ docker stop squad-{id}
+                                   ─bridge.containerRm()─────────────▶  docker rm
+                                 phase 3 (best-effort):
+                                   ─bridge.directoryDelete(configs)──▶  os.RemoveAll /configs/{id}
+                                   ─bridge.directoryDelete(saved)────▶  os.RemoveAll /saved/{id}
+                                 phase 4 (best-effort):
+                                   ─bridge.ufwRule({action:'remove'})▶  × game/query/beacon/rcon
+                                 phase 5:
+                                   UPDATE servers SET deleted_at=now(),
+                                                      deleted_by_steam_id64,
+                                                      deletion_backup_marker_id
+                                   WHERE id=$1 AND deleted_at IS NULL
+route:
+  phase 6: audit_log row (action='server.delete', context=DeleteResult)
+  phase 7: liveBus.publish({type:'server.deleted', data:{server_id, deleted_at, by}})
+                                                                              │
+                                                                              ▼
+                                                                  every UI tab patches
+                                                                  its /servers state
+```
+
+If phase 1 throws (zero readable cfg) the route returns 500 and the row stays alive. Phases 2-4 errors are recorded in `result.errors[]` and bubble into `audit_log.context.errors` — phase 5 always runs because the orchestrator does not throw on best-effort failures.
+
+```
+Restore (3 endpoints, UI wizard glues them together)
+────────────────────────────────────────────────────
+1. POST /servers/archive/:archiveId/restore       ─▶  INSERT servers (uuidv7, slug, ...)  → 409 on slug_in_use
+                                                  ─▶  liveBus.publish({type:'server.restored', data:{old, new}})
+2. POST /servers/:newId/install                   ─▶  existing install pipeline (depot → seedConfigs → ufw → container_run)
+3. POST /servers/:newId/restore-configs           ─▶  SELECT config_versions WHERE message LIKE 'deletion-backup-marker%'
+                                                       AND server_id=archiveId
+                                                  ─▶  for each filename (skip Rcon.cfg):
+                                                       bridge.fileAtomicWrite onto /configs/{newId}/ServerConfig/
+                                                       INSERT config_versions (message='restored from server <id> backup <iso>')
+4. POST /servers/:newId/start                     ─▶  bridge.containerStart
+```
+
+## Live-bus fan-out
+
+```
+producers                                          consumers
+─────────                                          ─────────
+status-reconciler (every 4s, on edge)
+   │  liveBus.publish({type:'server.status', ...})
+   ▼
+bridge-heartbeat (every 5s, on up↔down edge)
+   │  liveBus.publish({type:'bridge.connection', ...})
+   ▼
+DELETE /servers/:id (after softDeleteServer)
+   │  liveBus.publish({type:'server.deleted', ...})
+   ▼
+POST /archive/:id/restore
+   │  liveBus.publish({type:'server.restored', ...})
+   ▼
+                          ┌──────────────────────────────────────────────┐
+                          │  app.liveBus.publish(event)                  │
+                          │   1. localEmit  → in-process subscribers     │
+                          │   2. redis PUBLISH live-bus <json>           │
+                          └──────┬───────────────────────────────────────┘
+                                 │
+                ┌────────────────┴─────────────────────┐
+                ▼                                      ▼
+   redis SUBSCRIBE live-bus                 redis SUBSCRIBE rcon:status:changed
+   (every API replica)                      (every API replica)
+                │                                      │
+                │                                      │  worker-rcon PerServerSupervisor
+                │                                      │  PUBLISH rcon:status:changed
+                │                                      │   {server_id, state, player_count?}
+                ▼                                      ▼
+   each replica re-emits to local           plugin re-stamps as
+   subscribers; WS handlers forward          {type:'rcon.status', ts:<fresh>, data:{...}}
+   to their connected browsers              and re-emits locally
+                │
+                ▼
+   GET /api/v1/ws/live  ── per-socket route handler  ── browser
+        ping every 10s, drop on no-pong > 30s (close 4000)
+```
+
+The originating replica's Redis subscriber will see its own publish back; the in-process emit fires BEFORE the publish so the in-process subscribers may receive the event twice. UI updates are last-writer-wins, so this is benign (see [`live-bus/flows.md`](../components/live-bus/flows.md#2-cross-replica-fan-out)).
+
 ## Connector logs pipeline
 
 ```

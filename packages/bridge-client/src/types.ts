@@ -83,6 +83,14 @@ export interface FileWriteParams {
   mode?: number;
 }
 
+export interface DirectoryDeleteParams {
+  path: string;
+}
+
+export interface DirectoryDeleteResult {
+  removed: boolean;
+}
+
 export interface UfwRuleParams {
   action: 'add' | 'remove';
   port: number;

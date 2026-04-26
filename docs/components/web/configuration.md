@@ -21,3 +21,7 @@ UI strings are Russian. Don't machine-translate when editing copy unless asked.
 ## Listening port
 
 `next start --port 3000` inside the container. Caddy proxies `/` (excluding `/api/*` and the WebSocket upgrade routes) to that port over the internal compose network.
+
+## Live-bus WebSocket
+
+The dashboard opens a single `wss://${origin}/api/v1/ws/live` socket (singleton in [`apps/web/src/lib/live-bus.ts`](../../../apps/web/src/lib/live-bus.ts)). No env var configures it — the URL is derived from `window.location`. Caddy already forwards the upgrade headers; no proxy change required.

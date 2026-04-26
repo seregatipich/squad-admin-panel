@@ -105,6 +105,20 @@ class PerServerSupervisor {
     } catch {
       // telemetry only; swallow
     }
+    try {
+      const playerCount =
+        typeof extra.player_count === 'number' ? (extra.player_count as number) : undefined;
+      await this.opts.redis.publish(
+        'rcon:status:changed',
+        JSON.stringify({
+          server_id: this.target.serverId,
+          state,
+          ...(playerCount !== undefined ? { player_count: playerCount } : {}),
+        }),
+      );
+    } catch {
+      // best-effort fan-out; the SET above is the source of truth
+    }
   }
 
   private async connectLoop(): Promise<void> {

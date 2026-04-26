@@ -22,6 +22,113 @@ status-reconciler (every 4 s) flips servers.status → 'running'
 
 The WS uses `app.makeBridgeClient()` (per-socket bridge connection) so a long-running `depot_update` does not starve sibling callers using `app.bridge`.
 
+## Server soft-delete + backup
+
+Orchestrator: [`apps/api/src/lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts). Route: `DELETE /api/v1/servers/:id` in [`apps/api/src/routes/servers.ts`](../../../apps/api/src/routes/servers.ts).
+
+```
+DELETE /api/v1/servers/:id
+  ↓ 404 if servers.deleted_at IS NOT NULL (idempotent)
+  ↓
+softDeleteServer(ctx, serverId):
+  Phase 1 — backup configs (THROWS on total failure)
+    for file in ALLOWED_CONFIG_FILES:
+      bridge.fileRead({path: "${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/${file}"})
+        success → push {filename, content, sha256} to `backed`
+        failure → log warn, skip the file
+    if backed.length === 0:
+      throw "no config files could be backed up"   ← server stays alive, 500 to client
+    db.transaction:
+      INSERT config_versions × backed.length VALUES (
+        server_id=id, filename, content, sha256,
+        author_steam_id64=actor, author_label="steam:<id>" or "system",
+        message="deletion-backup-marker <iso>"
+      )
+      backup_marker_id = first inserted row's id
+
+  Phase 2 — container (best-effort, errors recorded)
+    bridge.containerStop({name: "squad-${id}", timeout_sec: 30})    ← swallow not_found
+    bridge.containerRm({name: "squad-${id}"})                       ← not_found counts as success
+    container_removed = true on success or not_found
+
+  Phase 3 — disk (best-effort)
+    bridge.directoryDelete({path: "${PANEL_CONFIGS_ROOT}/${id}"})   ← exact-root, no children
+    bridge.directoryDelete({path: "${PANEL_SAVED_ROOT}/${id}"})
+
+  Phase 4 — firewall (best-effort, per-port)
+    settings = SELECT * FROM server_settings WHERE server_id = id
+    for port in [game_port:udp, query_port:udp, beacon_port:udp, rcon_port:tcp]:
+      bridge.ufwRule({action: 'remove', port, proto, comment: "squad-{kind}-${id8}"})
+      ufw_rules_removed++ on success
+
+  Phase 5 — soft-delete UPDATE (single row)
+    UPDATE servers
+       SET deleted_at = now(),
+           deleted_by_steam_id64 = actor,
+           deletion_backup_marker_id = backup_marker_id,
+           updatedAt = now()
+     WHERE id = ? AND deleted_at IS NULL          ← partial-unique-safe
+
+  return DeleteResult { backup_marker_id, files_backed_up, files_attempted,
+                        container_removed, configs_dir_removed, saved_dir_removed,
+                        ufw_rules_removed, errors[] }
+
+route layer:
+  Phase 6 — audit
+    auditPlugin writes audit_log row with action='server.delete',
+    target='server', context=DeleteResult JSON.
+
+  Phase 7 — live event
+    app.liveBus.publish({type: 'server.deleted', ts, data: {server_id, deleted_at, by}})
+    → in-process WS subscribers see it immediately,
+    → Redis PUBLISH live-bus replicates to other API instances.
+```
+
+Failure handling per phase: phase 1 throws → 500, server stays alive. Phases 2-4 errors are collected in `result.errors[]` and the delete still completes (operator inspects `audit_log.context.errors` and cleans up by hand if needed). Phase 5 always runs because phases 2-4 do not throw; the row gets `deleted_at` even when the container or files survive.
+
+## Server restore (archive → new server)
+
+Three-step orchestrator (no single endpoint glues them together — UI drives the wizard). Code: [`apps/api/src/routes/server-archive.ts`](../../../apps/api/src/routes/server-archive.ts) and [`apps/api/src/lib/server-restore.ts`](../../../apps/api/src/lib/server-restore.ts).
+
+```
+1. POST /api/v1/servers/archive/:archiveId/restore  body={slug, display_name?}
+     → SELECT * FROM servers WHERE id=archiveId AND deleted_at IS NOT NULL
+     → 404 if missing
+     → SELECT 1 FROM servers WHERE slug=$slug AND deleted_at IS NULL
+     → 409 slug_in_use if found (servers_slug_active_key partial-unique)
+     → INSERT INTO servers (id=uuidv7(), display_name, slug, description, status='pending',
+                           runtime='container', tags=archive.tags, timezone=archive.timezone)
+     → liveBus.publish({type: 'server.restored', data: {old_server_id, new_server_id}})
+     → 201 { id: newId, archive_id, slug, display_name, status, next_steps[] }
+
+2. POST /api/v1/servers/:newId/install
+     → existing install pipeline (depot check → seedConfigs writes 19 default cfg →
+       19 baseline config_versions rows → ufw_rule add ×4 → container_run)
+
+3. POST /api/v1/servers/:newId/restore-configs  body={from_archive_id}
+     → SELECT * FROM servers WHERE id=newId AND deleted_at IS NULL  → 404 if missing
+     → SELECT * FROM servers WHERE id=from_archive_id AND deleted_at IS NOT NULL
+     → 404 archive_not_found if missing
+     → SELECT * FROM config_versions
+        WHERE server_id = from_archive_id AND message LIKE 'deletion-backup-marker%'
+        ORDER BY created_at ASC
+     → byFile = first occurrence wins per filename (asc order)
+     → for filename in ALLOWED_CONFIG_FILES:
+         if filename === 'Rcon.cfg': skip (preserve new RCON password)
+         backup = byFile.get(filename); if missing: record files_missing
+         bridge.fileAtomicWrite({path: "${PANEL_CONFIGS_ROOT}/${newId}/ServerConfig/${filename}",
+                                content: backup.content})
+         INSERT config_versions VALUES (server_id=newId, filename, content, sha256,
+                                        author=actor,
+                                        message="restored from server <archiveId> backup <iso>")
+     → returns RestoreConfigsResult { files_restored, files_skipped, files_missing,
+                                      config_version_ids[], errors[] }
+
+4. POST /api/v1/servers/:newId/start    (existing route — boots Squad with restored configs)
+```
+
+Audit row at step 1 (`server.restore`), step 3 (`server.restore_configs`), and the existing audit on step 2/4. `Rcon.cfg` skip is intentional: backing up the old password works (it's just text), but copying it to the new server would defeat the rotation that happened during install.
+
 ## Status reconciler
 
 [`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts):

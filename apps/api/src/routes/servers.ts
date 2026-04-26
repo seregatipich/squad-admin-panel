@@ -7,7 +7,7 @@ import {
   SERVER_IMAGE,
 } from '@squad/shared-config';
 import { serverCreateInput } from '@squad/shared-types';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
 import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
+import { softDeleteServer } from '../lib/server-delete.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 
@@ -62,6 +63,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           updated_at: servers.updatedAt,
         })
         .from(servers)
+        .where(isNull(servers.deletedAt))
         .orderBy(servers.displayName);
       const items = await Promise.all(
         rows.map(async (r) => {
@@ -160,7 +162,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
     },
     async (req, reply) => {
       const row = await app.db.query.servers.findFirst({
-        where: eq(servers.id, req.params.id),
+        where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
       });
       if (!row) {
         reply.code(404);
@@ -268,7 +270,9 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       schema: { params: serverIdParams },
     },
     async (req, reply) => {
-      const s = await app.db.query.servers.findFirst({ where: eq(servers.id, req.params.id) });
+      const s = await app.db.query.servers.findFirst({
+        where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
+      });
       if (!s) {
         reply.code(404);
         return { error: 'not_found' };
@@ -325,7 +329,9 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       schema: { params: serverIdParams },
     },
     async (req, reply) => {
-      const s = await app.db.query.servers.findFirst({ where: eq(servers.id, req.params.id) });
+      const s = await app.db.query.servers.findFirst({
+        where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
+      });
       if (!s) {
         reply.code(404);
         return { error: 'not_found' };
@@ -391,7 +397,9 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       schema: { params: serverIdParams },
     },
     async (req, reply) => {
-      const s = await app.db.query.servers.findFirst({ where: eq(servers.id, req.params.id) });
+      const s = await app.db.query.servers.findFirst({
+        where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
+      });
       if (!s) {
         reply.code(404);
         return { error: 'not_found' };
@@ -418,7 +426,15 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         }),
       },
     },
-    async (req) => {
+    async (req, reply) => {
+      const row = await app.db.query.servers.findFirst({
+        where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
+        columns: { id: true },
+      });
+      if (!row) {
+        reply.code(404);
+        return { error: 'not_found' };
+      }
       const stream = `events:server:${req.params.id}`;
       const raw = (await app.redis.xrevrange(stream, '+', '-', 'COUNT', req.query.limit)) as Array<
         [string, string[]]
@@ -467,14 +483,39 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       schema: { params: serverIdParams },
     },
     async (req, reply) => {
-      const row = await app.db.query.servers.findFirst({ where: eq(servers.id, req.params.id) });
+      const row = await app.db.query.servers.findFirst({
+        where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
+      });
       if (!row) {
         reply.code(404);
         return { error: 'not_found' };
       }
-      await app.bridge.containerRm({ name: containerName(row.id) }).catch(() => {});
-      await app.db.delete(servers).where(eq(servers.id, req.params.id));
-      return { ok: true };
+      try {
+        const result = await softDeleteServer(
+          {
+            db: app.db,
+            bridge: app.bridge,
+            log: req.log,
+            actorSteamId64: req.user?.steamId64 ?? null,
+            actorIp: req.ip ?? null,
+            actorLabel: req.user ? `steam:${req.user.steamId64}` : 'system',
+          },
+          row.id,
+        );
+        app.liveBus.publish({
+          type: 'server.deleted',
+          ts: new Date().toISOString(),
+          data: {
+            server_id: row.id,
+            deleted_at: new Date().toISOString(),
+            by: req.user ? String(req.user.steamId64) : null,
+          },
+        });
+        return { ok: true, ...result };
+      } catch (err) {
+        reply.code(500);
+        return { error: 'delete_failed', message: (err as Error).message };
+      }
     },
   );
 };

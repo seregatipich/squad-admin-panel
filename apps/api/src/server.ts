@@ -21,6 +21,7 @@ import bridgeHeartbeatPlugin from './plugins/bridge-heartbeat.js';
 import databasePlugin from './plugins/database.js';
 import healthPlugin from './plugins/health.js';
 import installProgressPlugin from './plugins/install-progress.js';
+import liveBusPlugin from './plugins/live-bus.js';
 import metricsPlugin from './plugins/metrics.js';
 import redisPlugin from './plugins/redis.js';
 import requestContextPlugin from './plugins/request-context.js';
@@ -31,11 +32,13 @@ import steamRoutes from './routes/auth-steam.js';
 import depotRoutes from './routes/depot.js';
 import hostRoutes from './routes/host.js';
 import hostActionsRoutes from './routes/host-actions.js';
+import liveRoutes from './routes/live.js';
 import logsRoutes from './routes/logs.js';
 import meTokensRoutes from './routes/me-tokens.js';
 import permissionsRoutes from './routes/permissions.js';
 import playerRoutes from './routes/players.js';
 import rolesRoutes from './routes/roles.js';
+import archiveRoutes from './routes/server-archive.js';
 import serverConfigRoutes from './routes/server-configs.js';
 import serverInstallRoutes from './routes/server-install.js';
 import serverLogsRoutes from './routes/server-logs.js';
@@ -86,6 +89,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(databasePlugin, { config });
   await app.register(redisPlugin, { config });
   lateSink.setInner(redisSinkStream({ redis: app.redis, defaultSource: 'api' }));
+  await app.register(liveBusPlugin);
   await app.register(bridgePlugin, { config });
   await app.register(bridgeHeartbeatPlugin);
   await app.register(metricsPlugin);
@@ -100,6 +104,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(hostRoutes);
   await app.register(hostActionsRoutes);
   await app.register(serverRoutes);
+  await app.register(archiveRoutes);
   await app.register(serverInstallRoutes);
   await app.register(serverLogsRoutes);
   await app.register(serverConfigRoutes);
@@ -110,6 +115,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(playerRoutes);
   await app.register(auditRoutes);
   await app.register(logsRoutes);
+  await app.register(liveRoutes);
   await app.register(steamRoutes);
 
   return app;

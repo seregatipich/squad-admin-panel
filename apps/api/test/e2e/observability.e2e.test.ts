@@ -2,6 +2,20 @@ import { gunzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { newClient, shouldSkip } from './lib/client.js';
 
+function decodeExport(buf: Buffer, contentEncoding: string | null): string {
+  if (contentEncoding === 'gzip') {
+    try {
+      return gunzipSync(buf).toString('utf-8');
+    } catch {
+      // Caddy's `encode gzip` directive may decompress the API's gzip stream
+      // transparently while still forwarding the content-encoding header.
+      // In that case the body is already plain text.
+      return buf.toString('utf-8');
+    }
+  }
+  return buf.toString('utf-8');
+}
+
 const skip = shouldSkip();
 
 describe.skipIf(skip.skip)('observability e2e', () => {
@@ -61,7 +75,7 @@ describe.skipIf(skip.skip)('observability e2e', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-encoding')).toBe('gzip');
     const buf = Buffer.from(await res.arrayBuffer());
-    const text = gunzipSync(buf).toString('utf-8');
+    const text = decodeExport(buf, res.headers.get('content-encoding'));
     for (const section of [
       '===== BRIDGE =====',
       '===== HOST METRICS 24h (CSV) =====',

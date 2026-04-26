@@ -89,6 +89,48 @@ If the first-owner claim already happened and the user has no role, the API retu
 
 ---
 
+## Server delete + archive + restore
+
+### Delete (from `/servers/[id]`)
+
+1. Operator clicks "Удалить сервер".
+2. Confirm modal renders the warning copy: «Файлы будут стёрты с диска. Бэкап `.cfg` сохранится в архиве (раздел Архив серверов).»
+3. On confirm: `DELETE /api/v1/servers/:id` fires.
+4. API returns `DeleteResult` (see API data-model). UI shows a toast with `files_backed_up`/`container_removed` summary; non-empty `errors[]` surfaces a red badge linking to `/audit?target_id=<id>`.
+5. The page redirects to `/servers`. The live-bus `server.deleted` event removes the row from any other open `/servers` tab without a refetch.
+
+### Archive list (`/servers/archive`)
+
+1. Operator opens `/servers/archive` (sidebar entry gated by `server:view`).
+2. `GET /api/v1/servers/archive` populates the table.
+3. Row click → `/servers/archive/[id]`.
+
+### Archive detail (`/servers/archive/[id]`)
+
+1. `GET /api/v1/servers/archive/:id` returns settings snapshot + backup file list.
+2. Each cfg row opens a read-only Monaco viewer fed by `GET /api/v1/servers/archive/:id/configs/:filename`.
+3. "Восстановить" button → `/servers/archive/[id]/restore`.
+
+### Restore wizard (`/servers/archive/[id]/restore`)
+
+1. Operator enters a slug (default = `${old_slug}-restored`) and optional display_name.
+2. `POST /api/v1/servers/archive/:id/restore` fires.
+3. On 409 `slug_in_use`: inline error, slug field flagged red. Operator picks a different slug.
+4. On 201: store `new_server_id` and `archive_id`; transition to "Установка" phase.
+5. `POST /api/v1/servers/:newId/install` fires. WebSocket `/api/v1/servers/:newId/install/ws` streams progress through `LogConsole`.
+6. On install `done` frame: transition to "Восстановление конфигов".
+7. `POST /api/v1/servers/:newId/restore-configs` body `{from_archive_id: archiveId}`.
+8. Summary card shows `files_restored`, `files_skipped` (always includes `Rcon.cfg`), `files_missing`, and any `errors[]` per file.
+9. "Запустить сервер" button → `POST /api/v1/servers/:newId/start` and navigate to `/servers/:newId`.
+
+## Connection banner
+
+1. `apps/web/src/app/(dashboard)/layout.tsx` mounts `<ConnectionBanner />` at the top of every authenticated page.
+2. The banner subscribes to the singleton `live-bus` handle via `useLiveBusState()` and `useBridgeState()`.
+3. On `server.status` / `rcon.status` events the dashboard's `/servers` page patches its local row state directly — REST polling drops to 120 s as a focus-refetch fallback.
+4. On WS close the banner turns red (`Связь с панелью потеряна — переподключаемся…`) and the singleton runs `BACKOFF_STEPS_MS` reconnect.
+5. On `bridge.connection: down` the banner turns amber. On `bridge.connection: up` it disappears.
+
 ## Server install wizard
 
 1. Admin navigates to `/servers/new`.

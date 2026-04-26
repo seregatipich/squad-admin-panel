@@ -13,6 +13,8 @@ import {
   type ContainerRunParams,
   type ContainerRunResult,
   type ContainerStatsResult,
+  type DirectoryDeleteParams,
+  type DirectoryDeleteResult,
   type FileReadParams,
   type FileWriteParams,
   type HostAgentRestartResult,
@@ -97,6 +99,9 @@ export class BridgeClient {
   fileRead = (p: FileReadParams) => this.call<{ content: string }>('file_read', p);
   fileWrite = (p: FileWriteParams) => this.call<{ status: string }>('file_write', p);
   fileAtomicWrite = (p: FileWriteParams) => this.call<{ status: string }>('file_atomic_write', p);
+
+  directoryDelete = (p: DirectoryDeleteParams) =>
+    this.call<DirectoryDeleteResult>('directory_delete', p, { timeoutMs: 60_000 });
 
   ufwRule = (p: UfwRuleParams) => this.call<{ output: string; status: string }>('ufw_rule', p);
 

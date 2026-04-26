@@ -28,9 +28,15 @@ export default fp(async (app) => {
       try {
         await app.bridge.ping();
         const rttMs = Date.now() - t0;
-        if (!lastWasUp) {
+        const wasDown = !lastWasUp;
+        if (wasDown) {
           const downForS = lastDownAt ? Math.round((Date.now() - lastDownAt) / 1000) : 0;
           app.log.info({ src: 'bridge', rttMs, downForS }, `recovered after ${downForS}s`);
+          app.liveBus?.publish({
+            type: 'bridge.connection',
+            ts: new Date().toISOString(),
+            data: { state: 'up', down_for_s: downForS },
+          });
         } else {
           app.log.debug({ src: 'bridge', rttMs }, `alive rtt=${rttMs}ms`);
         }
@@ -38,9 +44,15 @@ export default fp(async (app) => {
         lastDownAt = null;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (lastWasUp) {
+        const wasUp = lastWasUp;
+        if (wasUp) {
           lastDownAt = Date.now();
           app.log.warn({ src: 'bridge', err: message }, `down: ${message}`);
+          app.liveBus?.publish({
+            type: 'bridge.connection',
+            ts: new Date().toISOString(),
+            data: { state: 'down', down_for_s: 0 },
+          });
         } else {
           app.log.debug({ src: 'bridge', err: message }, 'still down');
         }

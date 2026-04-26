@@ -125,7 +125,8 @@ These tests drive the full panel stack and exercise DB behavior indirectly throu
 | `apps/api/test/e2e/install-lifecycle.e2e.test.ts` | Full server lifecycle: `servers` row transitions, `config_versions` baseline seeding, status updates via reconciler |
 | `apps/api/test/e2e/config-versioning.e2e.test.ts` | Multiple `config_versions` rows created per edit; sha256 dedup prevents no-op writes |
 | `apps/api/test/e2e/panel-rbac.e2e.test.ts` | `players.role_id` assignment enforces permission checks end-to-end |
-| `apps/api/test/e2e/server-delete-live.e2e.test.ts` | `servers` row deleted; cascade to `server_settings`, `server_credentials`, `config_versions` verified |
+| `apps/api/test/e2e/server-delete-live.e2e.test.ts` | Soft-delete: `servers.deleted_at` / `deleted_by_steam_id64` / `deletion_backup_marker_id` populated; partial unique index `servers_slug_active_key` allows re-using the slug; `config_versions` rows with `message LIKE 'deletion-backup-marker%'` written before destructive phases run. |
+| `apps/api/test/e2e/server-delete-restore-lifecycle.e2e.test.ts` | Full deletion + restore: edit cfg → DELETE (creates archive row) → POST `/restore` (new uuid) → POST `/install` (19 default config_versions baseline) → POST `/restore-configs` (overlay backup, skip Rcon.cfg) → POST `/start`; asserts restored cfg sha256 matches the pre-delete edit on disk and in `config_versions`. |
 
 **How to run:**
 

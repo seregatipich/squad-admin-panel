@@ -1,5 +1,5 @@
 import { servers } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 
 /**
@@ -49,7 +49,9 @@ const serverLogsRoutes: FastifyPluginAsync = async (app) => {
       }, 20_000);
 
       (async () => {
-        const row = await app.db.query.servers.findFirst({ where: eq(servers.id, id) });
+        const row = await app.db.query.servers.findFirst({
+          where: and(eq(servers.id, id), isNull(servers.deletedAt)),
+        });
         if (!row) {
           safeSend({ error: 'not_found' });
           socket.close();

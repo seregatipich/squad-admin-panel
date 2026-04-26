@@ -4,6 +4,30 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-04-30
+
+### Migration 0013 — soft-delete on `servers`
+
+**File:** `packages/db/drizzle/0013_servers_soft_delete.sql`
+
+#### Added
+
+- `servers.deleted_at timestamptz NULL` — soft-delete marker.
+- `servers.deleted_by_steam_id64 bigint NULL REFERENCES players(steam_id64) ON DELETE SET NULL` — actor that issued the deletion.
+- `servers.deletion_backup_marker_id uuid NULL REFERENCES config_versions(id) ON DELETE SET NULL` — points at the first `config_versions` row of the deletion-time backup batch.
+- `servers_deleted_at_idx` btree index on `deleted_at`.
+- `servers_slug_active_key` partial unique index on `slug` WHERE `deleted_at IS NULL`.
+
+#### Removed
+
+- Full unique index `servers_slug_key` (replaced by the partial variant above).
+
+#### Migration notes
+
+Forward-only. Existing rows have `deleted_at = NULL`, so the partial unique index keeps the same constraint surface as the old full unique. After this migration a previously-used slug can be reclaimed once the original row is soft-deleted (`UPDATE servers SET deleted_at = now()`).
+
+---
+
 ## 2025-04-30
 
 ### Migration 0012 — `host:manage` permission

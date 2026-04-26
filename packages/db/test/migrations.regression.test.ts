@@ -43,12 +43,12 @@ describeIfDb('migration regressions', () => {
     expect((rows as unknown[]).length).toBe(1);
   });
 
-  it('servers_slug_key unique index exists (0010 recreated after org_id drop)', async () => {
+  it('servers_slug_key unique index dropped (0013 replaced with partial index)', async () => {
     const rows = await db.execute(sql`
       SELECT indexname FROM pg_indexes
       WHERE schemaname = 'public' AND tablename = 'servers' AND indexname = 'servers_slug_key';
     `);
-    expect((rows as unknown[]).length).toBe(1);
+    expect((rows as unknown[]).length).toBe(0);
   });
 
   it('servers_status_idx index exists (0010 recreated after org drop)', async () => {
@@ -57,5 +57,64 @@ describeIfDb('migration regressions', () => {
       WHERE schemaname = 'public' AND tablename = 'servers' AND indexname = 'servers_status_idx';
     `);
     expect((rows as unknown[]).length).toBe(1);
+  });
+
+  it('servers has deleted_at column', async () => {
+    const rows = await db.execute(sql`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'servers' AND column_name = 'deleted_at';
+    `);
+    expect((rows as unknown[]).length).toBe(1);
+  });
+
+  it('servers has deleted_by_steam_id64 column', async () => {
+    const rows = await db.execute(sql`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'servers' AND column_name = 'deleted_by_steam_id64';
+    `);
+    expect((rows as unknown[]).length).toBe(1);
+  });
+
+  it('servers has deletion_backup_marker_id column', async () => {
+    const rows = await db.execute(sql`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'servers' AND column_name = 'deletion_backup_marker_id';
+    `);
+    expect((rows as unknown[]).length).toBe(1);
+  });
+
+  it('servers_slug_active_key is partial unique on deleted_at IS NULL', async () => {
+    const rows = (await db.execute(sql`
+      SELECT indexdef FROM pg_indexes
+      WHERE schemaname = 'public' AND tablename = 'servers' AND indexname = 'servers_slug_active_key';
+    `)) as unknown as Array<{ indexdef: string }>;
+    expect(rows.length).toBe(1);
+    expect(rows[0].indexdef).toMatch(/UNIQUE/i);
+    expect(rows[0].indexdef).toMatch(/WHERE \(deleted_at IS NULL\)/i);
+  });
+
+  it('two servers can share slug if one is deleted', async () => {
+    const slug = `regression-soft-delete-${Date.now()}`;
+    const firstId = crypto.randomUUID();
+    const secondId = crypto.randomUUID();
+    try {
+      await db.execute(sql`
+        INSERT INTO servers (id, display_name, slug)
+        VALUES (${firstId}::uuid, 'first', ${slug});
+      `);
+      await db.execute(sql`
+        UPDATE servers SET deleted_at = now() WHERE id = ${firstId}::uuid;
+      `);
+      await db.execute(sql`
+        INSERT INTO servers (id, display_name, slug)
+        VALUES (${secondId}::uuid, 'second', ${slug});
+      `);
+      const rows = (await db.execute(sql`
+        SELECT id FROM servers WHERE slug = ${slug};
+      `)) as unknown as Array<{ id: string }>;
+      expect(rows.length).toBe(2);
+    } finally {
+      await db.execute(sql`DELETE FROM servers WHERE id IN (${firstId}::uuid, ${secondId}::uuid);`);
+    }
   });
 });

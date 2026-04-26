@@ -7,7 +7,7 @@ import {
   PANEL_CONFIGS_ROOT,
 } from '@squad/shared-config';
 import { createPatch } from 'diff';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -59,7 +59,9 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
       schema: { params: idParams },
     },
     async (req, reply) => {
-      const row = await app.db.query.servers.findFirst({ where: eq(servers.id, req.params.id) });
+      const row = await app.db.query.servers.findFirst({
+        where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
+      });
       if (!row) {
         reply.code(404);
         return { error: 'not_found' };
@@ -474,7 +476,9 @@ export async function reloadServerConfig(
   app: FastifyInstance,
   serverId: string,
 ): Promise<ReloadOutcome> {
-  const row = await app.db.query.servers.findFirst({ where: eq(servers.id, serverId) });
+  const row = await app.db.query.servers.findFirst({
+    where: and(eq(servers.id, serverId), isNull(servers.deletedAt)),
+  });
   if (!row || (row.status !== 'running' && row.status !== 'starting')) {
     return { applied: false, reason: 'not_running', detail: row?.status ?? 'unknown' };
   }

@@ -1,5 +1,5 @@
 import { servers } from '@squad/db/schema';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import fp from 'fastify-plugin';
 
 /**
@@ -38,7 +38,9 @@ export default fp(async (app) => {
       const rows = await app.db
         .select({ id: servers.id, status: servers.status })
         .from(servers)
-        .where(inArray(servers.status, Array.from(TRANSIENT_STATES)));
+        .where(
+          and(inArray(servers.status, Array.from(TRANSIENT_STATES)), isNull(servers.deletedAt)),
+        );
       for (const row of rows) {
         try {
           const res = await app.bridge.containerInspect({ name: `squad-${row.id}` });
@@ -62,6 +64,11 @@ export default fp(async (app) => {
               },
               'reconciler: status updated',
             );
+            app.liveBus?.publish({
+              type: 'server.status',
+              ts: new Date().toISOString(),
+              data: { server_id: row.id, status: mapped, source: 'reconciler' },
+            });
           }
         } catch (err) {
           app.log.debug(

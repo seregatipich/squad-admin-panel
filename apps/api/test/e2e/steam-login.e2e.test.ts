@@ -48,13 +48,13 @@ describe.skipIf(skip.skip)('steam-login e2e', () => {
     expect(sessions.some((s) => s.current)).toBe(true);
   });
 
-  it('POST /api/v1/setup/init returns 410 (setup is locked after first init)', async () => {
+  it('legacy POST /api/v1/setup/init returns 404 (setup wizard removed in Эпик 2)', async () => {
     const res = await api.fetch('/api/v1/setup/init', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'attempt' }),
     });
-    expect(res.status).toBe(410);
+    expect(res.status).toBe(404);
   });
 
   it('GET /api/v1/auth/steam/login redirects to steamcommunity.com', async () => {

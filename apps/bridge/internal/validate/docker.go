@@ -122,3 +122,35 @@ func PanelSavedPath(p string) (string, error) {
 	}
 	return cleaned, nil
 }
+
+// PanelConfigsServerRoot accepts only the exact `<PanelConfigsRoot>/{uuid}`
+// directory (no trailing components, no trailing slash, no traversal).
+// Used by directory_delete to bound the destructive blast radius.
+func PanelConfigsServerRoot(p string) (string, error) {
+	return panelServerRoot(p, PanelConfigsRoot, "configs")
+}
+
+// PanelSavedServerRoot accepts only the exact `<PanelSavedRoot>/{uuid}`
+// directory. Same constraints as PanelConfigsServerRoot.
+func PanelSavedServerRoot(p string) (string, error) {
+	return panelServerRoot(p, PanelSavedRoot, "saved")
+}
+
+func panelServerRoot(p, root, label string) (string, error) {
+	cleaned, err := Path(p, root)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, cleaned)
+	if err != nil {
+		return "", fmt.Errorf("%w: cannot derive relative path", ErrForbidden)
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) != 1 {
+		return "", fmt.Errorf("%w: %s server root must be exactly %s/{uuid}", ErrForbidden, label, root)
+	}
+	if !uuidLike(parts[0]) {
+		return "", fmt.Errorf("%w: %s server root segment %q is not a uuid", ErrForbidden, label, parts[0])
+	}
+	return cleaned, nil
+}

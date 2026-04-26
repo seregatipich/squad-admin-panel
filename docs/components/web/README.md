@@ -22,9 +22,12 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | `/dashboard` | `src/app/(dashboard)/dashboard/page.tsx` | Hub: bridge status, host metrics tile (live), per-worker heartbeats, server count summary. The metrics tile opens the `MetricHistoryModal` for 24 h history. |
 | `/servers` | `src/app/(dashboard)/servers/page.tsx` | List with live `rcon_state` / `player_count` / `last_poll_at`. |
 | `/servers/new` | `src/app/(dashboard)/servers/new/page.tsx` | Install wizard: collects display name + ports, `POST /servers`, then `POST /servers/:id/install`, subscribes to `/install/ws`. |
-| `/servers/[id]` | `src/app/(dashboard)/servers/[id]/page.tsx` | Detail: status, container stats, RCON, action buttons (start/stop/restart/delete), live `/logs/ws` console. |
+| `/servers/[id]` | `src/app/(dashboard)/servers/[id]/page.tsx` | Detail: status, container stats, RCON, action buttons (start/stop/restart/delete), live `/logs/ws` console. Delete confirm copy explains: "Файлы будут стёрты с диска. Бэкап `.cfg` сохранится в архиве (раздел Архив серверов)." |
 | `/servers/[id]/configs` | `src/app/(dashboard)/servers/[id]/configs/page.tsx` | Monaco editor with three tabs: Editor / История (versions, restore, diff) / Blame. |
 | `/servers/[id]/events` | `src/app/(dashboard)/servers/[id]/events/page.tsx` | Newest envelopes from `events:server:{id}` via `GET /servers/:id/events`. |
+| `/servers/archive` | `src/app/(dashboard)/servers/archive/page.tsx` | Soft-deleted servers table (`GET /api/v1/servers/archive`): display name, slug, deleted_at, deleted_by. Row click → archive detail. |
+| `/servers/archive/[id]` | `src/app/(dashboard)/servers/archive/[id]/page.tsx` | Archive detail: settings snapshot + per-file backup browser. Each cfg row opens a read-only Monaco viewer fed by `GET /api/v1/servers/archive/:id/configs/:filename`. "Восстановить" CTA navigates to the restore wizard. |
+| `/servers/archive/[id]/restore` | `src/app/(dashboard)/servers/archive/[id]/restore/page.tsx` | Restore wizard: enter slug + display_name → POST /restore (handles 409 inline) → POST /install → tail install WS → POST /restore-configs (shows `files_restored` / `files_skipped` / `files_missing` summary) → POST /start → "Открыть сервер". |
 | `/players` | `src/app/(dashboard)/players/page.tsx` | Recently-seen players. |
 | `/players/[steam_id64]` | `src/app/(dashboard)/players/[steam_id64]/page.tsx` | Detail with name history; IP history is gated by `player:view_ips`. Section "Доступ к панели" (gated by `user:manage_roles`) shows the player's current single role with a color dot, an "Изменить" button to open a dropdown of all roles, and a "Снять роль" button (`PUT /api/v1/players/:id/role` with `role_id: null`). Picking the Owner role triggers a confirm dialog. 409 "last Owner" errors surface as an inline message. |
 | `/audit` | `src/app/(dashboard)/audit/page.tsx` | Page-paginated audit log; live indicator showing freshness. |
@@ -42,6 +45,7 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | File | Purpose |
 |---|---|
 | `LiveIndicator.tsx` | Shared "fresh / stale / disconnected" pill used by every polling surface. Hover shows last-success age. |
+| `connection-banner.tsx` | Sticky top banner rendered by the dashboard layout. Reads `useLiveBusState()` + `useBridgeState()` from `src/lib/use-live-bus.ts`. Renders nothing when WS is `open` and bridge state is not `down`; renders red "Связь с панелью потеряна — переподключаемся…" when WS is not open; renders amber "Bridge не отвечает — операции с сервером временно недоступны" when the bridge is down. |
 | `LogConsole.tsx` | Per-server live log viewer over `/api/v1/servers/:id/logs/ws`. Auto-scroll, ANSI stripping, error/`done` frames. |
 | `LogList.tsx` | Panel-wide connector-logs client component used by `/logs`. Cursor-paginated against `GET /logs`, filter pills, "live tail" toggle. |
 | `LogoutButton.tsx` | `POST /auth/logout`, redirect to `/login`. |
@@ -63,6 +67,8 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | `format.ts` | Number / duration / bytes / SteamID formatters. Tested. |
 | `host-health.ts` | Aggregates `bridge-status` + worker heartbeats into one health enum for the dashboard. Tested. |
 | `ws-backoff.ts` | Exponential-backoff WebSocket reconnect helper used by `LogConsole` and the install/depot WS subscribers. Tested. |
+| `live-bus.ts` | Singleton `LiveBusHandle` for `wss://.../api/v1/ws/live`. Mirrors the API-side `LiveEvent` discriminated union, exposes `subscribe(cb)`, `state()`, `bridgeState()`, `onStateChange(cb)`, `onBridgeChange(cb)`. Connection is shared across all `useLiveBus*` hooks; `BACKOFF_STEPS_MS = [1s, 2s, 4s, 8s, 16s, 30s]`; idle close after `IDLE_CLOSE_DELAY_MS = 5s` with no subscribers. Replies `{type:'pong'}` to every server ping. |
+| `use-live-bus.ts` | React hooks: `useLiveBusEvents(filter, cb)` for typed event subscriptions, `useLiveBusState()` and `useBridgeState()` for connection state; both used by `ConnectionBanner` and the live `/servers` list. |
 
 ## Live-refresh and staleness
 

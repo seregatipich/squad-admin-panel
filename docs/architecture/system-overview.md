@@ -46,10 +46,11 @@
 1. The dashboard's `SystemStatus` widget polls `GET /api/v1/host/bridge-status` (latency + connected flag) and `GET /api/v1/health/workers` (per-worker heartbeat). The 24 h metrics tile opens a modal that fetches `GET /api/v1/host/metrics/history?seconds=86400` and lazy-loads a Recharts area chart.
 2. Every panel component (api, workers, depot, install steps, bridge connector status) writes to the `panel:logs` Redis Stream via the [`log-stream-sink`](../components/shared-config/README.md) pino multistream. The connector-logs page at `/logs` polls `GET /api/v1/logs` with filters; operators can also `GET /api/v1/logs/export` for a gzipped support bundle.
 
-### Stop / delete a server
+### Stop / delete / restore a server
 
 1. `POST /:id/stop` issues RCON `AdminBroadcast` → `AdminEndMatch` → `bridge.container_stop`.
-2. `DELETE /:id` removes the DB row and the container; bind-mounted dirs under `/var/lib/squad-panel/{configs,saved}/{uuid}/` are kept by default.
+2. `DELETE /:id` is **soft-delete + backup**: the orchestrator (`apps/api/src/lib/server-delete.ts`) backs every allowed `.cfg` into `config_versions` (message `'deletion-backup-marker <iso>'`), then best-effort tears down the container, calls `bridge.directory_delete` on `configs/{uuid}` and `saved/{uuid}`, removes the four UFW rules, and finally sets `servers.deleted_at`/`deleted_by_steam_id64`/`deletion_backup_marker_id`. An audit row records the full `DeleteResult`; `app.liveBus.publish('server.deleted', …)` fans out to every connected UI tab. List/detail/start/stop/restart routes filter `WHERE deleted_at IS NULL`, so the deleted id 404s on the active surface.
+3. The archive endpoints (`GET /api/v1/servers/archive`, `…/:id`, `…/:id/configs/:filename`) read soft-deleted rows; the panel surfaces them at `/servers/archive`. Operators restore by `POST /api/v1/servers/archive/:id/restore` (creates a new server row with a fresh slug — partial unique index `servers_slug_active_key` blocks slug collisions on active rows), then `POST /api/v1/servers/:newId/install` (default `.cfg` baseline), then `POST /api/v1/servers/:newId/restore-configs` (overlays backup configs except `Rcon.cfg`), then `POST /api/v1/servers/:newId/start`.
 
 ## Critical dependencies
 

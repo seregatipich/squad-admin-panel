@@ -18,6 +18,7 @@ import { createSession } from '../../src/lib/sessions.js';
 import auditPluginFactory from '../../src/plugins/audit.js';
 import authPlugin from '../../src/plugins/auth.js';
 import installProgressPlugin from '../../src/plugins/install-progress.js';
+import liveBusPlugin from '../../src/plugins/live-bus.js';
 import requestContextPlugin from '../../src/plugins/request-context.js';
 import auditRoutes from '../../src/routes/audit.js';
 import authRoutes from '../../src/routes/auth.js';
@@ -29,6 +30,7 @@ import meTokensRoutes from '../../src/routes/me-tokens.js';
 import permissionsRoutes from '../../src/routes/permissions.js';
 import playerRoutes from '../../src/routes/players.js';
 import rolesRoutes from '../../src/routes/roles.js';
+import archiveRoutes from '../../src/routes/server-archive.js';
 import serverConfigRoutes from '../../src/routes/server-configs.js';
 import serverInstallRoutes from '../../src/routes/server-install.js';
 import serverLogsRoutes from '../../src/routes/server-logs.js';
@@ -152,6 +154,7 @@ export interface FakeBridge {
     proto: 'tcp' | 'udp';
     comment?: string;
   }) => Promise<{ output: string; status: string }>;
+  directoryDelete: (p: { path: string }) => Promise<{ removed: boolean }>;
   processInfo: (p: { pid: number }) => Promise<{ pid: number; exists: boolean }>;
   hostAgentRestart: () => Promise<{ status: 'restarting' }>;
   connect(): Promise<void>;
@@ -238,6 +241,7 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
     containerLogsFollow: async () => ({ exit_code: 0 }),
     depotUpdate: async () => ({ exit_code: 0 }),
     ufwRule: async () => ({ output: '', status: 'ok' }),
+    directoryDelete: async () => ({ removed: true }),
     processInfo: async ({ pid }) => ({ pid, exists: true }),
     hostAgentRestart: async () => ({ status: 'restarting' as const }),
   };
@@ -365,6 +369,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(authPlugin);
   await app.register(auditPluginFactory);
   await app.register(installProgressPlugin);
+  await app.register(liveBusPlugin);
 
   await app.register(authRoutes);
   await app.register(meTokensRoutes);
@@ -374,6 +379,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(hostRoutes);
   await app.register(hostActionsRoutes);
   await app.register(serverRoutes);
+  await app.register(archiveRoutes);
   await app.register(serverInstallRoutes);
   await app.register(serverLogsRoutes);
   await app.register(serverConfigRoutes);

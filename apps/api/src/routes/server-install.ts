@@ -7,7 +7,7 @@ import {
   PANEL_SAVED_ROOT,
   SERVER_IMAGE,
 } from '@squad/shared-config';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -135,7 +135,9 @@ async function runInstall(app: FastifyInstance, serverId: string, sink: Sink): P
   const emit = (step: string, message: string, stream?: 'stdout' | 'stderr') =>
     sink({ ts: new Date().toISOString(), step, message, stream });
 
-  const srv = await app.db.query.servers.findFirst({ where: eq(servers.id, serverId) });
+  const srv = await app.db.query.servers.findFirst({
+    where: and(eq(servers.id, serverId), isNull(servers.deletedAt)),
+  });
   if (!srv) throw new Error('server_not_found');
   const settings = await app.db.query.serverSettings.findFirst({
     where: eq(serverSettings.serverId, serverId),
@@ -264,7 +266,9 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
     },
     async (req, reply) => {
       const { id } = req.params;
-      const srv = await app.db.query.servers.findFirst({ where: eq(servers.id, id) });
+      const srv = await app.db.query.servers.findFirst({
+        where: and(eq(servers.id, id), isNull(servers.deletedAt)),
+      });
       if (!srv) {
         reply.code(404);
         return { error: 'not_found' };

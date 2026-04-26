@@ -1,5 +1,49 @@
 # `api` — changelog
 
+## 2026-04-26 — Bundles C+D: server soft-delete with config backup, archive, restore-configs
+
+### Added
+
+- `apps/api/src/lib/server-delete.ts` — `softDeleteServer(ctx, serverId): DeleteResult`. Phase 1 reads every `ALLOWED_CONFIG_FILES` via `bridge.fileRead` and inserts one `config_versions` row per file (`message = 'deletion-backup-marker <iso>'`); 0 reads aborts with throw. Phase 2 best-effort `containerStop({timeout_sec:30})` + `containerRm`. Phase 3 best-effort `bridge.directoryDelete` on `${PANEL_CONFIGS_ROOT}/${id}` and `${PANEL_SAVED_ROOT}/${id}`. Phase 4 best-effort `ufwRule({action:'remove'})` × 4 ports. Phase 5 `UPDATE servers SET deleted_at, deleted_by_steam_id64, deletion_backup_marker_id`.
+- `apps/api/src/lib/server-restore.ts` — `restoreConfigsFromArchive(ctx, newServerId, archiveServerId)`. Reads `config_versions` rows with `message LIKE 'deletion-backup-marker%'`, dedupes by filename (asc-by-created), skips `Rcon.cfg`, `bridge.fileAtomicWrite`s onto the new server's ServerConfig dir, inserts a fresh `config_versions` row per overlay (`message = 'restored from server <id> backup <iso>'`).
+- `apps/api/src/routes/server-archive.ts` — five new routes:
+  - `GET /api/v1/servers/archive` — list soft-deleted (`server:view`).
+  - `GET /api/v1/servers/archive/:id` — detail + dedup'd backup list (`server:view`).
+  - `GET /api/v1/servers/archive/:id/configs/:filename` — read backup content (`config:view`).
+  - `POST /api/v1/servers/archive/:id/restore` — create a NEW row from the archive metadata, 409 `slug_in_use` against partial unique index (`server:install`, audit `server.restore`).
+  - `POST /api/v1/servers/:id/restore-configs` — overlay backup configs onto a freshly-installed server (`config:edit`, audit `server.restore_configs`).
+- `apps/api/test/server-delete.test.ts` — orchestrator phases against fake bridge, idempotency.
+- `apps/api/test/server-archive.test.ts` — archive + restore route HTTP surface, 404/409 paths.
+- `apps/api/test/e2e/server-delete-live.e2e.test.ts` — live DELETE smoke.
+- `apps/api/test/e2e/server-delete-restore-lifecycle.e2e.test.ts` — install → DELETE → restore → re-install → restore-configs → start → assert restored cfg sha matches.
+
+### Changed
+
+- `apps/api/src/routes/servers.ts` — `DELETE /api/v1/servers/:id` now invokes `softDeleteServer` and returns the full `DeleteResult` instead of dropping the row. Emits `server.deleted` LiveEvent on success. List/detail/start/stop/restart routes filter `WHERE deleted_at IS NULL`; soft-deleted ids 404.
+- `apps/api/src/routes/server-configs.ts`, `apps/api/src/routes/server-install.ts`, `apps/api/src/routes/server-logs.ts` — same `deleted_at IS NULL` filter so a deleted server cannot be edited or re-installed at the old id.
+- `apps/api/src/server.ts` — registers `archiveRoutes`.
+- `packages/bridge-client/src/client.ts` — added `directoryDelete({path}) → {removed: boolean}` (used by phase 3).
+
+### Migration notes
+
+- Requires DB migration `0013_servers_soft_delete` and bridge release containing `directory_delete`. Roll out the migration and the bridge first, then deploy api.
+- DELETE response shape changed from `{ ok: true }` to a full `DeleteResult` object. UI clients that ignored the body are unaffected; programmatic clients that asserted on the exact body need an update.
+- DELETE on an already-soft-deleted id now returns 404 (was: 200 idempotent). Audit-log consumers will see one row per delete event, never two.
+
+## 2026-04-26 — Bundle E: live-bus WebSocket + Redis pub/sub fan-out
+
+### Added
+
+- `apps/api/src/plugins/live-bus.ts` — process-local `EventEmitter` plus a Redis subscriber on `live-bus` and `rcon:status:changed` channels. `app.liveBus.publish()` emits to in-process listeners and replicates over Redis to other API replicas; `app.liveBus.subscribe(cb)` returns an unsubscribe handle. Falls back to single-process mode when the Redis client lacks `duplicate()` (test fixtures).
+- `apps/api/src/routes/live.ts` — `GET /api/v1/ws/live` (permission `server:view`, `audit: false`). Forwards every `LiveEvent` to the connected socket. Server pings every 10 s; client must reply `{"type":"pong"}` within 30 s or the socket is closed with code 4000.
+- `apps/api/test/live-bus.test.ts` — three vitest cases: forwards `server.status` events to the socket, accepts client `pong` frames without disconnect, releases subscriber handlers on socket close.
+
+### Changed
+
+- `apps/api/src/plugins/status-reconciler.ts` — emits `server.status` LiveEvent on every successful state transition.
+- `apps/api/src/plugins/bridge-heartbeat.ts` — emits `bridge.connection` LiveEvent on edges (`up` ↔ `down`); steady-state ticks stay silent.
+- `apps/api/src/server.ts` — registers `liveBusPlugin` between `redisPlugin` and `bridgePlugin`, and `liveRoutes` after the WebSocket plugin.
+
 ## 2026-04-26 — Phase 2 Tasks 7-19: coverage matrix gap-fill + roles.ts bug fix
 
 ### Added

@@ -9,7 +9,9 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strings"
@@ -63,6 +65,8 @@ func (d *Dispatcher) Handle(
 		return d.fileWrite(req)
 	case "file_atomic_write":
 		return d.fileAtomicWrite(req)
+	case "directory_delete":
+		return d.directoryDelete(req)
 	case "ufw_rule":
 		return d.ufwRule(ctx, req)
 	case "process_info":
@@ -209,6 +213,40 @@ func (d *Dispatcher) fileAtomicWrite(req *rpc.Request) rpc.Response {
 	}
 	body, _ := json.Marshal(map[string]string{"status": "written"})
 	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+type directoryDeleteParams struct {
+	Path string `json:"path"`
+}
+
+func (d *Dispatcher) directoryDelete(req *rpc.Request) rpc.Response {
+	var p directoryDeleteParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
+	}
+	cleaned, err := validateDeletableDir(p.Path)
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
+	}
+	if _, statErr := os.Stat(cleaned); errors.Is(statErr, fs.ErrNotExist) {
+		body, _ := json.Marshal(map[string]bool{"removed": false})
+		return rpc.NewSuccessResponse(req.ID, body)
+	}
+	if err := os.RemoveAll(cleaned); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	body, _ := json.Marshal(map[string]bool{"removed": true})
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+func validateDeletableDir(p string) (string, error) {
+	if cleaned, err := validate.PanelConfigsServerRoot(p); err == nil {
+		return cleaned, nil
+	}
+	if cleaned, err := validate.PanelSavedServerRoot(p); err == nil {
+		return cleaned, nil
+	}
+	return "", fmt.Errorf("%w: directory_delete only allows %s/{uuid} or %s/{uuid}", validate.ErrForbidden, validate.PanelConfigsRoot, validate.PanelSavedRoot)
 }
 
 // Accept: any config file under /var/lib/squad-panel/configs/{uuid}/ServerConfig/,

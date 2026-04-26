@@ -1,9 +1,10 @@
 'use client';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { use, useEffect, useRef, useState } from 'react';
+import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
+import { useLiveSubscription } from '@/lib/use-live-bus';
 import { nextBackoffMs } from '@/lib/ws-backoff';
 
 interface ServerRow {
@@ -114,6 +115,18 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  const onLiveStatus = useCallback(
+    (event: { data: { server_id: string; status: string } }) => {
+      if (event.data.server_id !== id) return;
+      setData((prev) =>
+        prev ? { ...prev, server: { ...prev.server, status: event.data.status } } : prev,
+      );
+      setLastRefreshedAt(Date.now());
+    },
+    [id],
+  );
+  useLiveSubscription('server.status', onLiveStatus);
 
   const currentStatus = data?.server.status ?? null;
   const logsEnabled =
@@ -272,7 +285,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         const text = await r.text();
         setErr(`${name} failed: HTTP ${r.status} ${text}`);
       } else if (name === 'delete') {
-        router.push('/servers');
+        router.push(`/servers/archive/${id}`);
         return;
       }
       await refresh();
@@ -446,7 +459,11 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           <DangerMenu
             disabled={!!acting}
             onDelete={() => {
-              if (confirm('Удалить сервер из панели? Файлы на диске останутся.')) {
+              if (
+                confirm(
+                  'Удалить сервер? Файлы на диске будут стёрты, бэкап .cfg сохранится в Архиве серверов.',
+                )
+              ) {
                 void action('delete');
               }
             }}

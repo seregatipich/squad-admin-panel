@@ -292,7 +292,7 @@ describe('POST /api/v1/servers/:id/restart', () => {
 });
 
 describe('DELETE /api/v1/servers/:id', () => {
-  it('cascades through config_versions even when the file has edit history', async () => {
+  it('preserves config_versions history (soft-delete) and appends backup-marker rows', async () => {
     const cookie = await login();
     const { id } = (
       await h.app.inject({
@@ -302,9 +302,6 @@ describe('DELETE /api/v1/servers/:id', () => {
         payload: createBody,
       })
     ).json<{ id: string }>();
-    // Write two config versions so config_versions gets populated. Before the
-    // 0004_config_versions_cascade migration, the cascade DELETE from servers
-    // tripped the append-only trigger and the whole request 500'd.
     await h.app.inject({
       method: 'PUT',
       url: `/api/v1/servers/${id}/configs/Admins.cfg`,
@@ -328,16 +325,17 @@ describe('DELETE /api/v1/servers/:id', () => {
     });
     expect(resp.statusCode).toBe(200);
 
-    const srv = await h.db.select().from(servers).where(eq(servers.id, id));
-    expect(srv).toHaveLength(0);
+    const [srv] = await h.db.select().from(servers).where(eq(servers.id, id));
+    expect(srv?.deletedAt).not.toBeNull();
     const after = await h.db.select().from(configVersions).where(eq(configVersions.serverId, id));
-    expect(after).toHaveLength(0);
+    expect(after.length).toBeGreaterThan(before.length);
   });
 
-  it('removes the row and issues container_rm on the bridge', async () => {
+  it('soft-deletes the row, calls container_rm, and writes audit', async () => {
     let removed = false;
     h.bridge.containerRm = async () => {
       removed = true;
+      return { status: 'ok' };
     };
     const cookie = await login();
     const { id } = (
@@ -348,16 +346,24 @@ describe('DELETE /api/v1/servers/:id', () => {
         payload: createBody,
       })
     ).json<{ id: string }>();
+    // Seed at least one config file so the backup phase has something to read.
+    h.bridge.files.set(
+      `/var/lib/squad-panel/configs/${id}/ServerConfig/Admins.cfg`,
+      Buffer.from('Admin=76561198000000999:Owner\n', 'utf-8'),
+    );
     const resp = await h.app.inject({
       method: 'DELETE',
       url: `/api/v1/servers/${id}`,
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(200);
-    expect(resp.json()).toEqual({ ok: true });
+    const body = resp.json() as { ok: boolean; container_removed: boolean };
+    expect(body.ok).toBe(true);
+    expect(body.container_removed).toBe(true);
     expect(removed).toBe(true);
     const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
-    expect(row).toBeUndefined();
+    expect(row?.deletedAt).not.toBeNull();
+    expect(row?.deletedBySteamId64).toBe(OWNER_STEAM_ID);
     await assertAuditRow(h, { action: 'server.delete', resource: 'server', targetId: id });
   });
 });

@@ -21,9 +21,12 @@ All require a valid session. Permission gating is noted where applicable.
 | `/dashboard` | `(dashboard)/dashboard/page.tsx` | none (all authenticated users) | Summary cards (server count, online players, host health, alerts). Host info/metrics widget with sparkline buttons that open `MetricHistoryModal`. Recent activity feed from `GET /api/v1/audit`. Connection health panel (PostgreSQL, Redis, bridge, workers). Polls every 4 s. |
 | `/servers` | `(dashboard)/servers/page.tsx` | none | Server list with status dot, player count, RCON state, last-poll time. Free-text search by name, slug, or id. Start / stop / restart action buttons. Polls every 4 s. |
 | `/servers/new` | `(dashboard)/servers/new/page.tsx` | `server:create` (enforced by API) | Two-step wizard: form (display_name, slug auto-transliterated from Cyrillic, ports, max_players) → POST /servers → POST /servers/:id/install → WebSocket log tail via `LogConsole`. |
-| `/servers/[id]` | `(dashboard)/servers/[id]/page.tsx` | none | Server detail: status, RCON state, container runtime, log tail (WebSocket), start/stop/restart buttons, links to configs and events tabs. |
+| `/servers/[id]` | `(dashboard)/servers/[id]/page.tsx` | none | Server detail: status, RCON state, container runtime, log tail (WebSocket), start/stop/restart buttons, links to configs and events tabs. Delete confirm modal warns that files will be wiped from disk and the cfg backup will live in `/servers/archive`. |
 | `/servers/[id]/configs` | `(dashboard)/servers/[id]/configs/page.tsx` | `config:view` | Monaco-backed config editor with three tabs: Editor (dirty-tracking, optional commit message), History (config_versions list with diff/restore), Blame (per-line attribution). |
 | `/servers/[id]/events` | `(dashboard)/servers/[id]/events/page.tsx` | none | Per-server event feed from Redis Streams via `GET /api/v1/servers/:id/events`. |
+| `/servers/archive` | `(dashboard)/servers/archive/page.tsx` | `server:view` | Soft-deleted server table from `GET /api/v1/servers/archive`. Forbidden state when caller lacks the permission. |
+| `/servers/archive/[id]` | `(dashboard)/servers/archive/[id]/page.tsx` | `server:view` (+ `config:view` to read backup contents) | Detail + per-cfg backup browser. Each row opens a read-only Monaco viewer fed by `GET /api/v1/servers/archive/:id/configs/:filename`. |
+| `/servers/archive/[id]/restore` | `(dashboard)/servers/archive/[id]/restore/page.tsx` | `server:install` (+ `config:edit`) | Restore wizard: slug + display_name → POST `/restore` (409 inline on slug conflict) → POST `/install` with WS log tail → POST `/restore-configs` → POST `/start`. |
 | `/players` | `(dashboard)/players/page.tsx` | none | Paginated player list; search by name, SteamID64, EOS ID. "Online" filter (last_seen_at within 90 s). Polls every 8 s. |
 | `/players/[steam_id64]` | `(dashboard)/players/[steam_id64]/page.tsx` | none | Player profile: SteamID64, EOS ID, playtime, name history, IP history (hidden unless `player:view_ips`). `PanelAccessSection` (assign/remove panel role) shown when caller has `user:manage_roles`. |
 | `/audit` | `(dashboard)/audit/page.tsx` | none | Full audit log (last 200 entries), filterable by action_type, target, or actor. Expandable context JSON per row. Polls every 6 s. |
@@ -40,6 +43,19 @@ All require a valid session. Permission gating is noted where applicable.
 ## Reusable components
 
 All components live under `apps/web/src/components/`.
+
+### `ConnectionBanner`
+
+```ts
+function ConnectionBanner(): JSX.Element | null
+```
+
+Sticky top-of-layout banner. Returns `null` when `useLiveBusState() === 'open'` AND `useBridgeState() !== 'down'`. Otherwise renders one of:
+
+- Red: `Связь с панелью потеряна — переподключаемся…` (WS not in `open` state).
+- Amber: `Bridge не отвечает — операции с сервером временно недоступны` (WS open but bridge state is `down`).
+
+The banner has `role="alert"` and `data-testid="connection-banner"` for Playwright. Mounted by `apps/web/src/app/(dashboard)/layout.tsx` so every authenticated page sees it.
 
 ### `LiveIndicator`
 

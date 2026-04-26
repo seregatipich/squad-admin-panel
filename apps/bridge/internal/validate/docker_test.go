@@ -65,3 +65,84 @@ func TestPanelSavedPath(t *testing.T) {
 		t.Errorf("expected forbidden for non-uuid")
 	}
 }
+
+func TestPanelConfigsServerRoot(t *testing.T) {
+	uuid := "019dbb45-3556-751f-9124-d4cf0e6b0053"
+	ok := "/var/lib/squad-panel/configs/" + uuid
+	cleaned, err := PanelConfigsServerRoot(ok)
+	if err != nil {
+		t.Fatalf("expected ok for %q, got %v", ok, err)
+	}
+	if cleaned != ok {
+		t.Errorf("cleaned = %q, want %q", cleaned, ok)
+	}
+
+	// Trailing-slash form should clean down to the same canonical path.
+	cleaned, err = PanelConfigsServerRoot(ok + "/")
+	if err != nil {
+		t.Fatalf("expected ok for trailing slash, got %v", err)
+	}
+	if cleaned != ok {
+		t.Errorf("trailing-slash cleaned = %q, want %q", cleaned, ok)
+	}
+
+	bad := []string{
+		"",
+		"configs/" + uuid,
+		"/var/lib/squad-panel/configs/" + uuid + "/ServerConfig",
+		"/var/lib/squad-panel/configs/" + uuid + "/ServerConfig/Server.cfg",
+		"/var/lib/squad-panel/configs/not-a-uuid",
+		"/var/lib/squad-panel/configs",
+		"/var/lib/squad-panel/configs/../etc",
+		"/var/lib/squad-panel/saved/" + uuid,
+		"/etc/passwd",
+		"/var/lib/squad-panel/configs/" + uuid + "\x00",
+	}
+	for _, b := range bad {
+		if _, err := PanelConfigsServerRoot(b); err == nil {
+			t.Errorf("expected forbidden for %q, got ok", b)
+		} else if !errors.Is(err, ErrForbidden) {
+			t.Errorf("expected ErrForbidden for %q, got %v", b, err)
+		}
+	}
+}
+
+func TestPanelSavedServerRoot(t *testing.T) {
+	uuid := "019dbb45-3556-751f-9124-d4cf0e6b0053"
+	ok := "/var/lib/squad-panel/saved/" + uuid
+	cleaned, err := PanelSavedServerRoot(ok)
+	if err != nil {
+		t.Fatalf("expected ok for %q, got %v", ok, err)
+	}
+	if cleaned != ok {
+		t.Errorf("cleaned = %q, want %q", cleaned, ok)
+	}
+
+	cleaned, err = PanelSavedServerRoot(ok + "/")
+	if err != nil {
+		t.Fatalf("expected ok for trailing slash, got %v", err)
+	}
+	if cleaned != ok {
+		t.Errorf("trailing-slash cleaned = %q, want %q", cleaned, ok)
+	}
+
+	bad := []string{
+		"",
+		"saved/" + uuid,
+		"/var/lib/squad-panel/saved/" + uuid + "/Logs",
+		"/var/lib/squad-panel/saved/" + uuid + "/Logs/SquadGame.log",
+		"/var/lib/squad-panel/saved/not-a-uuid",
+		"/var/lib/squad-panel/saved",
+		"/var/lib/squad-panel/saved/../etc",
+		"/var/lib/squad-panel/configs/" + uuid,
+		"/etc/passwd",
+		"/var/lib/squad-panel/saved/" + uuid + "\x00",
+	}
+	for _, b := range bad {
+		if _, err := PanelSavedServerRoot(b); err == nil {
+			t.Errorf("expected forbidden for %q, got ok", b)
+		} else if !errors.Is(err, ErrForbidden) {
+			t.Errorf("expected ErrForbidden for %q, got %v", b, err)
+		}
+	}
+}
