@@ -45,9 +45,40 @@ afterAll(async () => {
   if (pgsql) await pgsql.end({ timeout: 5 });
 });
 
+// Snapshot real-world state once per file so we can restore it after the
+// suite mutates panel_meta. The DB is shared with dev/staging — we MUST NOT
+// strip Owner role from a real user to make a test pass.
+let snapshotFirstOwnerClaimed = false;
+let snapshotRealOwnerSteamIds: bigint[] = [];
+
+beforeAll(async () => {
+  // (existing beforeAll connection setup happens above; this hook augments it
+  //  by capturing the live state we plan to perturb.)
+}, 0);
+
 beforeEach(async () => {
+  // Capture live state on the first beforeEach (cheap; once per test run).
+  if (snapshotRealOwnerSteamIds.length === 0) {
+    const meta = await db.select().from(panelMeta).where(eq(panelMeta.id, 1));
+    snapshotFirstOwnerClaimed = meta[0]?.firstOwnerClaimed ?? false;
+    const realOwners = await db
+      .select({ steamId64: players.steamId64 })
+      .from(players)
+      .where(eq(players.roleId, ownerRoleId));
+    snapshotRealOwnerSteamIds = realOwners.map((r) => r.steamId64);
+  }
+
+  // Reset panel_meta + ONLY clear Owner role from test players.
   await db.update(panelMeta).set({ firstOwnerClaimed: false }).where(eq(panelMeta.id, 1));
-  await db.update(players).set({ roleId: null }).where(eq(players.roleId, ownerRoleId));
+  for (const sid of [TEST_PLAYER_A, TEST_PLAYER_B]) {
+    await db.update(players).set({ roleId: null }).where(eq(players.steamId64, sid));
+  }
+  // If a real Owner exists, the claim path's "Owner already exists" branch
+  // would fire and the test wouldn't exercise the claim transition. Hide
+  // them temporarily by clearing role_id; afterEach restores them.
+  for (const sid of snapshotRealOwnerSteamIds) {
+    await db.update(players).set({ roleId: null }).where(eq(players.steamId64, sid));
+  }
   for (const sid of [TEST_PLAYER_A, TEST_PLAYER_B]) {
     const stub = `Test ${String(sid).slice(-4)}`;
     await db
@@ -69,7 +100,14 @@ afterEach(async () => {
   for (const sid of [TEST_PLAYER_A, TEST_PLAYER_B]) {
     await db.delete(players).where(eq(players.steamId64, sid));
   }
-  await db.update(panelMeta).set({ firstOwnerClaimed: false }).where(eq(panelMeta.id, 1));
+  // Restore real Owners we may have masked, and the original panel_meta flag.
+  for (const sid of snapshotRealOwnerSteamIds) {
+    await db.update(players).set({ roleId: ownerRoleId }).where(eq(players.steamId64, sid));
+  }
+  await db
+    .update(panelMeta)
+    .set({ firstOwnerClaimed: snapshotFirstOwnerClaimed })
+    .where(eq(panelMeta.id, 1));
 });
 
 describe('claimFirstOwner', () => {
