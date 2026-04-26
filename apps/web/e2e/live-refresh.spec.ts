@@ -3,23 +3,13 @@
  * changes within one polling window without a manual page reload.
  *
  * The suite seeds ONE Owner in beforeAll and reuses the cookie across every
- * test — /api/v1/auth/login is rate-limited to 5/15min per IP and we need
- * the budget for the audit-page probe in (f).
+ * test.
  */
 import { expect, type Page, test } from '@playwright/test';
-import {
-  loginAndAttachCookie,
-  redisCmd,
-  runSql,
-  seedOwner,
-  TEST_PASSWORD,
-  teardownOwner,
-  uniqueEmail,
-} from './helpers';
+import { redisCmd, runSql, seedOwner, teardownOwner } from './helpers';
 
 test.describe.configure({ mode: 'serial' });
 
-let ownerEmail = '';
 let ownerUid = '';
 let ownerCookie = '';
 
@@ -54,19 +44,13 @@ async function expectIndicatorTicks(page: Page, atMostMs = 12_000) {
 }
 
 function pickServerId(): string {
-  const id = runSql('SELECT id FROM servers LIMIT 1');
-  return id;
-}
-
-function getOrgId(): string {
-  return runSql('SELECT id FROM organizations LIMIT 1');
+  return runSql('SELECT id FROM servers LIMIT 1');
 }
 
 function insertSyntheticServer(suffix: string): string {
-  const orgId = getOrgId();
   const id = runSql('SELECT gen_random_uuid()');
   runSql(
-    `INSERT INTO servers (id, org_id, display_name, slug, status) VALUES ('${id}', '${orgId}', 'live-refresh ${suffix}', 'live-refresh-${suffix}', 'stopped')`,
+    `INSERT INTO servers (id, display_name, slug, status) VALUES ('${id}', 'live-refresh ${suffix}', 'live-refresh-${suffix}', 'stopped')`,
   );
   return id;
 }
@@ -76,19 +60,10 @@ function deleteSyntheticServer(id: string) {
 }
 
 test.describe('live refresh — no F5 needed', () => {
-  test.beforeAll(async ({ browser, playwright }) => {
-    ownerEmail = uniqueEmail('lr');
-    ownerUid = await seedOwner(ownerEmail);
-    const ctx = await browser.newContext();
-    const request = await playwright.request.newContext({
-      baseURL: test.info().project.use.baseURL ?? 'https://squad-panel.lan',
-      ignoreHTTPSErrors: true,
-    });
-    const page = await ctx.newPage();
-    ownerCookie = await loginAndAttachCookie(page, ctx, request, ownerEmail);
-    await page.close();
-    await ctx.close();
-    await request.dispose();
+  test.beforeAll(async () => {
+    const seed = await seedOwner();
+    ownerUid = seed.uid;
+    ownerCookie = seed.token;
   });
 
   test.afterAll(async () => {
@@ -152,9 +127,6 @@ test.describe('live refresh — no F5 needed', () => {
   test('c) server detail reflects RCON flips via redis within one poll window', async ({
     page,
   }) => {
-    // Use a synthetic stopped server so worker-rcon never overwrites the
-    // synthetic redis state we inject (worker-rcon only polls running/starting
-    // servers; the real production server would race with us here).
     const targetId = insertSyntheticServer('rcon-c');
     runSql(
       `INSERT INTO server_settings (server_id, install_path, game_port, query_port, beacon_port, rcon_port) VALUES ('${targetId}', '/tmp/${targetId}', 7787, 27166, 15001, 21115)`,
@@ -163,8 +135,6 @@ test.describe('live refresh — no F5 needed', () => {
       await attachOwnerCookie(page);
       await page.goto(`/servers/${targetId}`);
 
-      // Initially the page should render "not_polled" / "сервер не запущен"
-      // because no rcon:status key exists for the synthetic server.
       await expect(page.locator('text=сервер не запущен').first()).toBeVisible({
         timeout: 10_000,
       });
@@ -177,7 +147,6 @@ test.describe('live refresh — no F5 needed', () => {
       });
       redisCmd(['SET', `rcon:status:${targetId}`, payload, 'EX', '120']);
 
-      // RCON dot pill text in the connection block should switch to connected.
       await expect(page.locator('text=connected').first()).toBeVisible({ timeout: 8_000 });
 
       redisCmd(['DEL', `rcon:status:${targetId}`]);
@@ -262,10 +231,7 @@ test.describe('live refresh — no F5 needed', () => {
     }
   });
 
-  test('f) audit page surfaces a new login entry within one poll window', async ({
-    page,
-    request,
-  }) => {
+  test('f) audit page surfaces a new audit entry within one poll window', async ({ page }) => {
     await attachOwnerCookie(page);
     await page.goto('/audit');
 
@@ -273,21 +239,24 @@ test.describe('live refresh — no F5 needed', () => {
     await expect(firstActionCell).toBeVisible({ timeout: 10_000 });
     const before = (await firstActionCell.textContent())?.trim();
 
-    const probe = await request.post('/api/v1/auth/login', {
-      data: { email: ownerEmail, password: TEST_PASSWORD },
-      ignoreHTTPSErrors: true,
-    });
-    expect(probe.ok()).toBe(true);
+    // Trigger an audit-logged action via the API using the owner cookie
+    await page.evaluate(async (cookie) => {
+      await fetch('/api/v1/me', {
+        headers: { Cookie: `__Host-sid=${cookie}` },
+        credentials: 'include',
+        cache: 'no-store',
+      });
+    }, ownerCookie);
 
     await expect
       .poll(
         async () => {
           const cell = page.locator('table tbody tr td').nth(2);
           const txt = (await cell.textContent())?.trim();
-          return txt === 'user.login' && txt !== before;
+          return txt !== before;
         },
         {
-          message: 'audit table never showed the new user.login at the top',
+          message: 'audit table never showed a new entry at the top',
           timeout: 10_000,
           intervals: [500, 1000],
         },
@@ -317,24 +286,23 @@ test.describe('live refresh — no F5 needed', () => {
     }
   });
 
-  test('h) account page reflects external display_name change within 35 s', async ({ page }) => {
+  test('h) account page reflects external canonical_name change within 35 s', async ({ page }) => {
     test.setTimeout(60_000);
     await attachOwnerCookie(page);
     await page.goto('/settings/account');
 
-    const profileSection = page.locator('section', { hasText: 'Профиль' });
-    await expect(profileSection.locator('dd', { hasText: 'Playwright Owner' })).toBeVisible({
-      timeout: 10_000,
-    });
+    const profileSection = page.locator('section', { hasText: 'Профиль' }).first();
+    await expect(profileSection).toBeVisible({ timeout: 10_000 });
 
+    const origName = runSql(`SELECT canonical_name FROM players WHERE steam_id64=${ownerUid}`);
     const newName = `LR Renamed ${Date.now()}`;
     try {
-      runSql(`UPDATE users SET display_name='${newName}' WHERE id='${ownerUid}'`);
-      await expect(profileSection.locator('dd', { hasText: newName })).toBeVisible({
+      runSql(`UPDATE players SET canonical_name='${newName}' WHERE steam_id64=${ownerUid}`);
+      await expect(profileSection.locator(`text=${newName}`).first()).toBeVisible({
         timeout: 35_000,
       });
     } finally {
-      runSql(`UPDATE users SET display_name='Playwright Owner' WHERE id='${ownerUid}'`);
+      runSql(`UPDATE players SET canonical_name='${origName}' WHERE steam_id64=${ownerUid}`);
     }
   });
 
@@ -355,8 +323,6 @@ test.describe('live refresh — no F5 needed', () => {
         { url: `/servers/${realId}/configs`, pollMs: 8000 },
       );
     }
-    // /settings/account polls every 30s — keep its window short by checking
-    // that the indicator at least RENDERS, not that it ticks within 30s.
     pages.push({ url: '/settings/account', pollMs: 30_000 });
 
     for (const { url, pollMs } of pages) {

@@ -9,14 +9,7 @@
  *     not the generic "Подключение…" placeholder.
  */
 import { expect, test } from '@playwright/test';
-import {
-  loginAndAttachCookie,
-  redisCmd,
-  runSql,
-  seedOwner,
-  teardownOwner,
-  uniqueEmail,
-} from './helpers';
+import { redisCmd, runSql, seedOwner, teardownOwner } from './helpers';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -24,15 +17,10 @@ function pickRunningServerId(): string {
   return runSql("SELECT id FROM servers WHERE status='running' LIMIT 1");
 }
 
-function getOrgId(): string {
-  return runSql('SELECT id FROM organizations LIMIT 1');
-}
-
 function insertSyntheticServer(suffix: string, status: string): string {
-  const orgId = getOrgId();
   const id = runSql('SELECT gen_random_uuid()');
   runSql(
-    `INSERT INTO servers (id, org_id, display_name, slug, status) VALUES ('${id}', '${orgId}', 'logs-resilience ${suffix}', 'logs-resilience-${suffix}', '${status}')`,
+    `INSERT INTO servers (id, display_name, slug, status) VALUES ('${id}', 'logs-resilience ${suffix}', 'logs-resilience-${suffix}', '${status}')`,
   );
   return id;
 }
@@ -42,29 +30,40 @@ function deleteSyntheticServer(id: string) {
 }
 
 test.describe('docker-logs WS resilience', () => {
-  let ownerEmail = '';
   let ownerUid = '';
+  let ownerToken = '';
 
   test.beforeAll(async () => {
-    ownerEmail = uniqueEmail('lr-logs');
-    ownerUid = await seedOwner(ownerEmail);
+    const seed = await seedOwner();
+    ownerUid = seed.uid;
+    ownerToken = seed.token;
   });
 
   test.afterAll(async () => {
     if (ownerUid) await teardownOwner(ownerUid);
   });
 
-  test('Test 1: live pill + log lines arrive on a running server', async ({
-    page,
-    context,
-    request,
-  }) => {
+  async function attachOwnerCookie(page: import('@playwright/test').Page) {
+    const baseURL = test.info().project.use.baseURL ?? 'https://squad-panel.lan';
+    await page.context().addCookies([
+      {
+        name: '__Host-sid',
+        value: ownerToken,
+        url: baseURL,
+        httpOnly: true,
+        secure: true,
+        sameSite: 'Lax',
+      },
+    ]);
+  }
+
+  test('Test 1: live pill + log lines arrive on a running server', async ({ page }) => {
     const runningId = pickRunningServerId();
     if (!runningId) {
       test.skip(true, 'no running server — bring one up via the install flow first');
       return;
     }
-    await loginAndAttachCookie(page, context, request, ownerEmail);
+    await attachOwnerCookie(page);
     await page.goto(`/servers/${runningId}`);
 
     const livePill = page.locator('span:has-text("live")').first();
@@ -96,14 +95,10 @@ test.describe('docker-logs WS resilience', () => {
       .toBeGreaterThanOrEqual(1);
   });
 
-  test('Test 4: pre-install server shows "ещё не создан", not "Подключение…"', async ({
-    page,
-    context,
-    request,
-  }) => {
+  test('Test 4: pre-install server shows "ещё не создан", not "Подключение…"', async ({ page }) => {
     const installingId = insertSyntheticServer('preinstall', 'installing');
     try {
-      await loginAndAttachCookie(page, context, request, ownerEmail);
+      await attachOwnerCookie(page);
       await page.goto(`/servers/${installingId}`);
 
       await expect(page.locator('text=ещё не создан').first()).toBeVisible({ timeout: 10_000 });
@@ -116,16 +111,10 @@ test.describe('docker-logs WS resilience', () => {
 
   test('Test 3: never enters a permanent "failed" state — error banner with retry is always shown', async ({
     page,
-    context,
-    request,
   }) => {
-    // Synthetic stopped server flipped to "running" so the WS endpoint accepts
-    // it and tries `docker logs squad-{uuid}` against a container that does
-    // not exist. The bridge errors back, ws closes, the frontend MUST keep
-    // retrying with a visible error banner — never silently give up.
     const fakeId = insertSyntheticServer('no-container', 'running');
     try {
-      await loginAndAttachCookie(page, context, request, ownerEmail);
+      await attachOwnerCookie(page);
       await page.goto(`/servers/${fakeId}`);
 
       const banner = page.locator('[data-testid="logconsole-error-banner"]');
@@ -135,8 +124,6 @@ test.describe('docker-logs WS resilience', () => {
       const retryBtn = banner.locator('button:has-text("Переподключиться")');
       await expect(retryBtn).toBeVisible();
 
-      // Banner must persist on subsequent retry cycles — the previous bug
-      // hid the offline pill once `reconnects >= 3` and showed nothing.
       await page.waitForTimeout(6_000);
       await expect(banner).toBeVisible();
     } finally {
