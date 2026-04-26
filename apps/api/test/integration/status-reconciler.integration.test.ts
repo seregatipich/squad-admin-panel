@@ -303,6 +303,125 @@ describe('POST /api/v1/servers/:id/reconcile', () => {
   });
 });
 
+describe('reconciler — fail-safe behavior', () => {
+  it("does NOT touch 'installing' rows even when docker reports not_found", async () => {
+    const id = await createServer();
+    const installingSince = new Date(Date.now() - 60_000);
+    await h.db
+      .update(servers)
+      .set({ status: 'installing', updatedAt: installingSince })
+      .where(eq(servers.id, id));
+    h.bridge.containerInspect = async ({ name }) => ({
+      name,
+      state: 'not_found',
+      running: false,
+      pid: 0,
+      started_at: '',
+      finished_at: '',
+      exit_code: 0,
+      image: '',
+      restart_count: 0,
+      labels: {},
+    });
+
+    await h.app.statusReconciler.tickNow();
+
+    const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
+    expect(row?.status).toBe('installing');
+  });
+
+  it("flips an 'installing' row older than STALE_INSTALL_AFTER_MS to 'failed'", async () => {
+    const id = await createServer();
+    const ancient = new Date(Date.now() - 31 * 60_000);
+    await h.db
+      .update(servers)
+      .set({ status: 'installing', updatedAt: ancient })
+      .where(eq(servers.id, id));
+
+    await h.app.statusReconciler.tickNow();
+
+    const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
+    expect(row?.status).toBe('failed');
+  });
+
+  it('runs per-server inspects in parallel — slow servers do not delay fast ones', async () => {
+    const fastId = await createServer();
+    const slowCookie = await loginAsOwner(h);
+    const slowResp = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie: slowCookie },
+      payload: { ...createBody, slug: 'reconciler-slow', display_name: 'Slow' },
+    });
+    const slowId = slowResp.json<{ id: string }>().id;
+
+    await h.db
+      .update(servers)
+      .set({ status: 'starting', updatedAt: new Date() })
+      .where(eq(servers.id, fastId));
+    await h.db
+      .update(servers)
+      .set({ status: 'starting', updatedAt: new Date() })
+      .where(eq(servers.id, slowId));
+
+    h.bridge.containerInspect = async ({ name }) => {
+      const isSlow = name.endsWith(slowId);
+      if (isSlow) {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+      return {
+        name,
+        state: 'running',
+        running: true,
+        pid: 1,
+        started_at: '',
+        finished_at: '',
+        exit_code: 0,
+        image: 'squad-server:latest',
+        restart_count: 0,
+        labels: {},
+      };
+    };
+
+    const t0 = Date.now();
+    await h.app.statusReconciler.tickNow();
+    const elapsed = Date.now() - t0;
+
+    expect(elapsed).toBeLessThan(1500);
+    const [fast] = await h.db.select().from(servers).where(eq(servers.id, fastId));
+    const [slow] = await h.db.select().from(servers).where(eq(servers.id, slowId));
+    expect(fast?.status).toBe('running');
+    expect(slow?.status).toBe('running');
+  });
+
+  it('runs an immediate recovery tick on plugin ready (api-restart scenario)', async () => {
+    // The harness already registered the plugin with onReady-fired tick before
+    // this test runs. Re-create the same scenario by inserting a stuck row,
+    // then re-running the recovery via the public tickNow handle — this is
+    // the exact code path onReady invokes on a fresh process.
+    const id = await createServer();
+    await h.db
+      .update(servers)
+      .set({ status: 'stopping', updatedAt: new Date() })
+      .where(eq(servers.id, id));
+    h.bridge.containerInspect = async ({ name }) => ({
+      name,
+      state: 'exited',
+      running: false,
+      pid: 0,
+      started_at: '',
+      finished_at: '',
+      exit_code: 0,
+      image: '',
+      restart_count: 0,
+      labels: {},
+    });
+    await h.app.statusReconciler.tickNow();
+    const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
+    expect(row?.status).toBe('stopped');
+  });
+});
+
 describe('GET /api/v1/health/reconciler', () => {
   it('returns stats including stuck servers and a healthy flag', async () => {
     const id = await createServer();

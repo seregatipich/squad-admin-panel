@@ -28,21 +28,20 @@ import type { LiveBus } from './live-bus.js';
  */
 export const RECONCILE_INTERVAL_MS = 4_000;
 export const STUCK_AFTER_MS = 90_000;
+export const TICK_BUDGET_MS = 12_000;
+export const STALE_INSTALL_AFTER_MS = 30 * 60_000;
 
-export const TRANSIENT_STATES = new Set([
-  'starting',
-  'stopping',
-  'running',
-  'stopped',
-  'ready',
-  'installing',
-  'failed',
-]);
+// Rows in these statuses are owned by docker — the reconciler reads
+// container_inspect and writes back the docker-derived state. `installing`
+// and `failed` are owned by other components (install-progress, operator)
+// and are deliberately NOT in this set: a no-op container would otherwise
+// flip a fresh `installing` row to `stopped` and mask a failed install.
+export const TRANSIENT_STATES = new Set(['starting', 'stopping', 'running', 'stopped', 'ready']);
 
-// Subset of TRANSIENT_STATES that should never persist longer than a couple
-// of minutes. If a row sits here past STUCK_AFTER_MS the reconciler couldn't
-// resolve it (bridge wedged, container in a weird state, etc.) and ops needs
-// a signal.
+// Statuses the stuck-server health endpoint flags when older than
+// STUCK_AFTER_MS. `installing` is special-cased here because the watchdog
+// (separate code path) flips it to `failed` after STALE_INSTALL_AFTER_MS,
+// but ops still want visibility on rows installing for >90s.
 export const STUCK_CANDIDATE_STATES = new Set(['starting', 'stopping', 'installing']);
 
 export type DockerStateLabel =
@@ -83,9 +82,11 @@ export interface ReconcilerStats {
   last_tick_at: string | null;
   last_tick_duration_ms: number | null;
   last_tick_servers_inspected: number;
+  last_tick_budget_exceeded: boolean;
   consecutive_tick_errors: number;
   servers_in_transient: number;
   stuck_servers: Array<{ id: string; status: string; updated_at: string; age_ms: number }>;
+  stale_installs_failed: number;
   bridge_failures_by_server: Record<string, number>;
 }
 
@@ -113,7 +114,13 @@ interface TickDeps {
   liveBus?: LiveBus;
   log: Pick<FastifyBaseLogger, 'info' | 'warn' | 'error' | 'debug'>;
   bridgeFailures: Map<string, number>;
-  state: { lastTickAt: number | null; lastTickDurationMs: number | null; lastInspected: number };
+  state: {
+    lastTickAt: number | null;
+    lastTickDurationMs: number | null;
+    lastInspected: number;
+    lastBudgetExceeded: boolean;
+    staleInstallsFailed: number;
+  };
 }
 
 async function reconcileServer(deps: TickDeps, row: { id: string; status: string }): Promise<void> {
@@ -179,6 +186,8 @@ export default fp(async (app) => {
     lastTickAt: null,
     lastTickDurationMs: null,
     lastInspected: 0,
+    lastBudgetExceeded: false,
+    staleInstallsFailed: 0,
   };
 
   function deps(): TickDeps {
@@ -211,16 +220,37 @@ export default fp(async (app) => {
       for (const id of bridgeFailures.keys()) {
         if (!transientIds.has(id)) bridgeFailures.delete(id);
       }
-      for (const row of rows) {
-        try {
-          await reconcileServer(deps(), row);
-        } catch (err) {
-          app.log.warn(
-            { err: (err as Error).message, serverId: row.id },
-            'reconciler: per-server tick failed',
-          );
-        }
+      // Per-server inspect runs in parallel under a single tick budget.
+      // Each individual containerInspect already has a 10 s timeout in
+      // the BridgeClient; this enforces an upper bound on the tick as a
+      // whole so a few hung calls don't push the next tick past a useful
+      // SLA. The next interval will reschedule any unfinished servers.
+      let budgetExceeded = false;
+      const budget = new Promise<'budget'>((resolve) =>
+        setTimeout(() => {
+          budgetExceeded = true;
+          resolve('budget');
+        }, TICK_BUDGET_MS),
+      );
+      const work = Promise.allSettled(
+        rows.map((row) =>
+          reconcileServer(deps(), row).catch((err) => {
+            app.log.warn(
+              { err: (err as Error).message, serverId: row.id },
+              'reconciler: per-server tick failed',
+            );
+          }),
+        ),
+      );
+      await Promise.race([work, budget]);
+      tickState.lastBudgetExceeded = budgetExceeded;
+      if (budgetExceeded) {
+        app.log.warn(
+          { rows: rows.length, budgetMs: TICK_BUDGET_MS },
+          'reconciler: tick budget exceeded — some servers will retry next tick',
+        );
       }
+      await failStaleInstalls();
       consecutiveTickErrors = 0;
     } catch (err) {
       consecutiveTickErrors++;
@@ -232,6 +262,39 @@ export default fp(async (app) => {
       tickState.lastTickAt = Date.now();
       tickState.lastTickDurationMs = Date.now() - t0;
       inFlight = false;
+    }
+  }
+
+  // Install owners (apps/api/src/routes/server-install.ts) flip 'installing' →
+  // 'running'/'failed' inside their own pipeline. If the API process dies
+  // mid-install — or the WebSocket caller disconnects without the pipeline
+  // catching the exit — the row is stuck on 'installing' forever.
+  // The watchdog flips long-stale 'installing' rows to 'failed' so the UI
+  // doesn't lie. The threshold is generous (30 min) because depot_update
+  // alone takes ~25 min on first install.
+  async function failStaleInstalls() {
+    const cutoff = new Date(Date.now() - STALE_INSTALL_AFTER_MS);
+    const stale = await app.db
+      .select({ id: servers.id, updatedAt: servers.updatedAt })
+      .from(servers)
+      .where(and(eq(servers.status, 'installing'), isNull(servers.deletedAt)));
+    for (const row of stale) {
+      const updatedAt = row.updatedAt ?? new Date();
+      if (new Date(updatedAt).getTime() > cutoff.getTime()) continue;
+      await app.db
+        .update(servers)
+        .set({ status: 'failed', updatedAt: new Date() })
+        .where(eq(servers.id, row.id));
+      tickState.staleInstallsFailed++;
+      app.log.warn(
+        { serverId: row.id, ageMs: Date.now() - new Date(updatedAt).getTime() },
+        "reconciler: stale install flipped 'installing' → 'failed'",
+      );
+      app.liveBus?.publish({
+        type: 'server.status',
+        ts: new Date().toISOString(),
+        data: { server_id: row.id, status: 'failed', source: 'reconciler' },
+      });
     }
   }
 
@@ -314,9 +377,11 @@ export default fp(async (app) => {
       last_tick_at: tickState.lastTickAt ? new Date(tickState.lastTickAt).toISOString() : null,
       last_tick_duration_ms: tickState.lastTickDurationMs,
       last_tick_servers_inspected: tickState.lastInspected,
+      last_tick_budget_exceeded: tickState.lastBudgetExceeded,
       consecutive_tick_errors: consecutiveTickErrors,
       servers_in_transient: tickState.lastInspected,
       stuck_servers: stuck,
+      stale_installs_failed: tickState.staleInstallsFailed,
       bridge_failures_by_server: Object.fromEntries(bridgeFailures),
     };
   }
@@ -328,6 +393,16 @@ export default fp(async (app) => {
   });
 
   app.addHook('onReady', async () => {
+    // Surface the boot-time state so an api restart immediately tells
+    // operations how many rows the reconciler is about to converge.
+    const transientCount = await app.db
+      .select({ id: servers.id })
+      .from(servers)
+      .where(and(inArray(servers.status, Array.from(TRANSIENT_STATES)), isNull(servers.deletedAt)));
+    app.log.info(
+      { rows: transientCount.length, intervalMs: RECONCILE_INTERVAL_MS },
+      'reconciler: ready — running initial recovery tick',
+    );
     // Run an immediate tick so a fresh process resolves any rows already in
     // a transient state at boot, then schedule the recurring loop.
     void tick().catch((err) =>

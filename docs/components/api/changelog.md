@@ -1,5 +1,36 @@
 # `api` — changelog
 
+## 2026-04-26 — Reconciler restart-resilience: parallel tick, watchdog, eager start/restart
+
+### Added
+
+- `STALE_INSTALL_AFTER_MS` watchdog (30 min) inside the reconciler tick. Rows in `status='installing'` whose `updated_at` is older than the threshold get auto-flipped to `'failed'` with a `server.status` LiveEvent. Prevents indefinite "Установка" rows after an api crash mid-install.
+- `TICK_BUDGET_MS` (12 s) overall tick deadline. The tick races `Promise.allSettled` against a budget timer; servers that don't finish before budget retry on the next interval. Surfaced as `last_tick_budget_exceeded` in `/api/v1/health/reconciler`.
+- Boot-time recovery log: on `onReady` the reconciler logs at info level `'reconciler: ready — running initial recovery tick' rows=N intervalMs=4000` so an api restart announces what it's about to converge.
+- `stale_installs_failed` counter in the reconciler stats payload (cumulative across the process lifetime).
+
+### Changed
+
+- `apps/api/src/plugins/status-reconciler.ts` — `TRANSIENT_STATES` now contains only docker-owned states: `starting`, `stopping`, `running`, `stopped`, `ready`. Rows in `installing` and `failed` are deliberately untouched by the docker→DB mapping (those are owned by the install pipeline and the operator). The previous wider set would have flipped a fresh `installing` row to `stopped` whenever Docker reported `not_found`, masking the install in progress.
+- `apps/api/src/plugins/status-reconciler.ts` — per-server `containerInspect` now runs in parallel via `Promise.allSettled` instead of a sequential `for` loop. A single slow bridge call no longer drags the whole tick. With the 10 s per-call timeout already enforced by `BridgeClient`, the worst-case tick duration is bounded by `TICK_BUDGET_MS`.
+- `apps/api/src/routes/servers.ts` — `POST /servers/:id/start` and `POST /servers/:id/restart` now write `status='starting'` + emit `server.status` LiveEvent BEFORE calling the bridge (`containerRun` / `containerStart`). Symmetric with the `/stop` change in the previous patch — a process crash mid-bridge-call leaves a state the reconciler can converge.
+- `apps/api/test/integration/status-reconciler.integration.test.ts` — added 4 fail-safe tests: reconciler does NOT touch `installing` rows on `not_found`, watchdog flips ancient `installing` to `failed`, parallel-inspect bound (slow server doesn't delay fast), startup recovery tick path.
+- `apps/api/test/status-reconciler.test.ts` — added unit tests for the new constants (`installing`/`failed` exclusion, `STUCK_CANDIDATE_STATES` membership, `TICK_BUDGET_MS` and `STALE_INSTALL_AFTER_MS` invariants).
+- `apps/api/test/integration/servers.test.ts` — added eager-start regression: assert `containerRun` sees `servers.status='starting'` already in the DB.
+
+### Migration notes
+
+- Operations: a row that was previously in `installing` for >30 min will now flip to `failed` on the next reconciler tick after deploy. If you have intentional long-running installs (e.g. depot_update on a slow link) this is the threshold; tune `STALE_INSTALL_AFTER_MS` upward if needed.
+- The reconciler no longer touches `installing` rows during normal operation — install-progress remains the sole writer until either it finishes (→ `running`/`failed`) or the watchdog flips it (→ `failed`).
+- API container needs a rebuild to pick up these changes: `docker compose build api && docker compose up -d api`.
+
+## 2026-04-26 — Bridge: case-insensitive docker error detection
+
+### Fixed
+
+- `apps/bridge/internal/runner/docker.go` — `Inspect` previously matched only `"No such object"` (capital N) when classifying a missing container as `state: "not_found"`. Docker on this host writes `"no such object"` lowercase, so the matcher missed it and the bridge returned a `runtime_error` to callers (the status reconciler swallowed the throw and the DB row stayed in `stopping` indefinitely — root cause of the "Server stuck on Остановка for 2 hours" incident). Fix: lowercase the message before substring-checking. Same latent bug fixed proactively in `Stop` and `Rm` (which also matched `"No such container"` capitalized).
+- `apps/bridge/internal/runner/docker_test.go` — added 4 regression tests: lowercase `no such object` on `Inspect`, lowercase `no such container` on `Stop`/`Rm`, and a re-affirmed uppercase `No such object` test.
+
 ## 2026-04-26 — Status reconciler hardening + manual reconcile + health visibility
 
 ### Added

@@ -93,6 +93,46 @@ The response includes `inspected_state`, `inspected_running`, and the resulting 
 
 If the row was wrongly stuck on a UUID that no longer has a container at all (`inspected_state: 'not_found'`), the reconcile will flip it to `stopped`. The UI will catch up on the next live-bus event.
 
+## Server is stuck on "Установка" / "installing"
+
+**Symptom**: a row sits in `installing` for more than 30 min and the install pipeline never completes.
+
+**Diagnosis**: usually means the api process or the install WebSocket died mid-`depot_update`/`container_run`. The reconciler's watchdog auto-flips these to `failed` after `STALE_INSTALL_AFTER_MS` (30 min by default). Check:
+
+```bash
+docker compose logs api --since 10m | grep "stale install flipped"
+curl -sk https://${APP_DOMAIN}/api/v1/health/reconciler | jq '.stale_installs_failed'
+```
+
+**Action**: if the watchdog has not yet fired and you don't want to wait, manually flip the row:
+
+```sql
+UPDATE servers SET status='failed', updated_at=now() WHERE id='<id>' AND status='installing';
+```
+
+Then start a fresh install via `POST /api/v1/servers/:id/install`. The configs directory may have partial state; `softDeleteServer` followed by re-create is the cleanest path if seedConfigs has not run yet.
+
+## Bridge case-insensitivity on docker errors
+
+**Symptom**: `container_inspect` returns `runtime_error` with message `"docker inspect exit 1: error: no such object: ..."` instead of `state: 'not_found'`.
+
+**Cause**: pre-`8a7ae2b` bridge matched only the capitalized form (`"No such object"`). Docker writes lowercase on some installs.
+
+**Diagnosis**:
+
+```bash
+sudo systemctl status panel-host-bridge
+panel-host-bridge --version  # check the build hash
+```
+
+**Action**: rebuild + redeploy the bridge:
+
+```bash
+make -C apps/bridge build
+sudo install -m 0755 apps/bridge/bin/panel-host-bridge /usr/local/bin/
+sudo systemctl restart panel-host-bridge
+```
+
 ## Audit chain shows a gap
 
 See [`operations/troubleshooting.md`](../../operations/troubleshooting.md#audit-log-shows-a-gap-or-hash-mismatch).

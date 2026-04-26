@@ -293,6 +293,18 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           .where(eq(servers.id, s.id));
         return { status: 'running', note: 'already running' };
       }
+      // Eager flip + LiveEvent BEFORE container_run/start: if the api process
+      // crashes mid-bridge-call the row stays 'starting' and the reconciler
+      // converges it to 'running'/'stopped' on the next tick.
+      await app.db
+        .update(servers)
+        .set({ status: 'starting', updatedAt: new Date() })
+        .where(eq(servers.id, s.id));
+      app.liveBus?.publish({
+        type: 'server.status',
+        ts: new Date().toISOString(),
+        data: { server_id: s.id, status: 'starting', source: 'start' },
+      });
       if (inspect && inspect.state !== 'not_found') {
         await app.bridge.containerStart({ name });
       } else {
@@ -311,10 +323,6 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           depot_volume: DEPOT_VOLUME_NAME,
         });
       }
-      await app.db
-        .update(servers)
-        .set({ status: 'starting', updatedAt: new Date() })
-        .where(eq(servers.id, s.id));
       return { status: 'starting' };
     },
   );
@@ -415,12 +423,17 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'not_found' };
       }
       const name = containerName(s.id);
-      await app.bridge.containerStop({ name, timeout_sec: 60 }).catch(() => {});
-      await app.bridge.containerStart({ name });
       await app.db
         .update(servers)
         .set({ status: 'starting', updatedAt: new Date() })
         .where(eq(servers.id, s.id));
+      app.liveBus?.publish({
+        type: 'server.status',
+        ts: new Date().toISOString(),
+        data: { server_id: s.id, status: 'starting', source: 'restart' },
+      });
+      await app.bridge.containerStop({ name, timeout_sec: 60 }).catch(() => {});
+      await app.bridge.containerStart({ name });
       return { status: 'restarting' };
     },
   );

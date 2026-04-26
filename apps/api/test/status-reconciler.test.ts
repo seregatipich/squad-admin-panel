@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   mapState,
   RECONCILE_INTERVAL_MS,
+  STALE_INSTALL_AFTER_MS,
   STUCK_AFTER_MS,
   STUCK_CANDIDATE_STATES,
+  TICK_BUDGET_MS,
   TRANSIENT_STATES,
 } from '../src/plugins/status-reconciler.js';
 
@@ -42,13 +44,28 @@ describe('mapState', () => {
 });
 
 describe('reconciler constants', () => {
-  it('STUCK_CANDIDATE_STATES is a subset of TRANSIENT_STATES', () => {
-    for (const s of STUCK_CANDIDATE_STATES) {
-      expect(TRANSIENT_STATES.has(s)).toBe(true);
-    }
+  it("'installing' is intentionally NOT in TRANSIENT_STATES (owned by install pipeline)", () => {
+    expect(TRANSIENT_STATES.has('installing')).toBe(false);
+  });
+
+  it("'failed' is intentionally NOT in TRANSIENT_STATES (operator-cleared)", () => {
+    expect(TRANSIENT_STATES.has('failed')).toBe(false);
+  });
+
+  it("'installing' is in STUCK_CANDIDATE_STATES so the watchdog sees it", () => {
+    expect(STUCK_CANDIDATE_STATES.has('installing')).toBe(true);
   });
 
   it('STUCK_AFTER_MS is well above the polling interval', () => {
     expect(STUCK_AFTER_MS).toBeGreaterThan(RECONCILE_INTERVAL_MS * 5);
+  });
+
+  it('TICK_BUDGET_MS bounds a single tick at a sensible upper limit', () => {
+    expect(TICK_BUDGET_MS).toBeGreaterThan(RECONCILE_INTERVAL_MS);
+    expect(TICK_BUDGET_MS).toBeLessThanOrEqual(30_000);
+  });
+
+  it('STALE_INSTALL_AFTER_MS exceeds the typical depot_update wall-clock (~25 min)', () => {
+    expect(STALE_INSTALL_AFTER_MS).toBeGreaterThan(25 * 60_000);
   });
 });

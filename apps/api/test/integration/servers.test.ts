@@ -263,6 +263,33 @@ describe('POST /api/v1/servers/:id/stop', () => {
     await assertAuditRow(h, { action: 'server.stop', resource: 'server', targetId: id });
   });
 
+  it('writes status=starting BEFORE calling container_run/start so a crash leaves a recoverable state', async () => {
+    const cookie = await login();
+    h.bridge.containerInspect = async () => ({ state: 'not_found' });
+    let statusAtRunCall: string | null = null;
+    h.bridge.containerRun = async () => {
+      const [row] = await h.db.select().from(servers);
+      statusAtRunCall = row?.status ?? null;
+      return { container_id: 'abc', status: 'started' };
+    };
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug: 'eager-start-test' },
+      })
+    ).json<{ id: string }>();
+    void id;
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/start`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(statusAtRunCall).toBe('starting');
+  });
+
   it('writes status=stopping BEFORE calling container_stop so a crash mid-stop leaves a recoverable state', async () => {
     const cookie = await login();
     const { id } = (

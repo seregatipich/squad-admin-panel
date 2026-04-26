@@ -29,8 +29,11 @@ These are not env-driven; change in code if needed.
 - `@fastify/rate-limit`: 300 req/min per `(IP, steamId64)`. Steam callback is IP-keyed.
 - Cookie session TTL: 6 h sliding (configurable via `SESSION_TTL_SECONDS`). Touch throttled to one DB write per 60 s (`SESSION_TOUCH_THROTTLE_SECONDS`).
 - `status-reconciler` poll interval: 4 s (`RECONCILE_INTERVAL_MS` in [`status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts)). The first tick fires on `onReady`, then every 4 s. Lower means faster UI feedback, more `container_inspect` load.
+- `status-reconciler` per-tick budget: 12 s (`TICK_BUDGET_MS`). `Promise.allSettled` across all transient servers races against a timer of this length. Servers that don't finish before budget retry on the next interval. `last_tick_budget_exceeded` in the health endpoint flags when this kicked in.
+- `status-reconciler` stale-install watchdog: 30 min (`STALE_INSTALL_AFTER_MS`). A row in `status='installing'` with `updated_at` older than this threshold is auto-flipped to `failed` on the next tick. Tune up if you have intentional long-running installs (e.g. depot_update on a slow link).
 - `status-reconciler` stuck threshold: 90 s (`STUCK_AFTER_MS`). Rows in `starting`/`stopping`/`installing` older than this surface in `GET /api/v1/health/reconciler` `stuck_servers[]`.
 - `status-reconciler` failure-log cadence: per-server consecutive `container_inspect` errors are silent on attempt 1 (debug), then `warn` on attempt 5, 30, and every 60th. The map is pruned on success and when the row leaves a transient state.
+- `status-reconciler` watched statuses: `starting`, `stopping`, `running`, `stopped`, `ready`. `installing` (owned by install-progress) and `failed` (operator-cleared) are intentionally excluded from the docker→DB mapping. The watchdog handles `installing` separately.
 - Blame cache TTL in Redis: 24 h.
 
 ## See also

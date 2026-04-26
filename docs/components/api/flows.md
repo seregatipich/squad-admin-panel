@@ -181,11 +181,56 @@ tick():
 2. `GET /api/v1/health/reconciler` — exposes `last_tick_at`, `consecutive_tick_errors`, `stuck_servers[]`, `bridge_failures_by_server`. The derived `healthy` flag goes false if the loop hasn't ticked in 12 s, has any consecutive tick errors, or any stuck rows.
 
 ### Eager status writes on user actions
-`POST /api/v1/servers/:id/stop` writes `status='stopping'` to the DB **before** the RCON broadcast + 15 s wait + `container_stop`, then publishes `server.status` to live-bus. This means:
-- A crash mid-stop leaves a `stopping` row that the next reconciler tick can resolve to `stopped` (or back to `running` if Docker says so).
-- The UI updates instantly instead of after ~75 s of slow bridge calls.
 
-`POST /api/v1/servers/:id/start` keeps the existing pattern — DB→`starting` is set after the bridge call returns, since `containerRun`/`containerStart` are short.
+All three control routes write the DB row to its target transient state **before** invoking the bridge, then publish a `server.status` LiveEvent so the UI updates immediately and a process crash mid-call leaves the row in a state the reconciler can resolve.
+
+| Route | DB before bridge call | Reconciler converges to |
+|---|---|---|
+| `POST /servers/:id/stop` | `stopping` | `stopped` (docker `exited`/`not_found`) or `running` (stop failed) |
+| `POST /servers/:id/start` | `starting` | `running` (docker `running`) or `stopped` (start failed) |
+| `POST /servers/:id/restart` | `starting` | same as start |
+
+### Parallel inspects with a tick budget
+
+The tick is bounded:
+
+```
+tick():
+  rows = SELECT … WHERE status IN TRANSIENT_STATES
+  raceWith TICK_BUDGET_MS (12 s):
+    Promise.allSettled(rows.map(row => reconcileServer(row)))
+  if budget exceeded:
+    log.warn 'tick budget exceeded — some servers will retry next tick'
+    tickState.lastBudgetExceeded = true
+  failStaleInstalls()  ← watchdog
+```
+
+Each individual `containerInspect` is bounded by the BridgeClient's own 10 s timeout. With ~10 typical servers the tick finishes in ~50 ms; if all bridge calls hit the timeout simultaneously the budget kicks in and the next interval picks up where this one left off. The reconciler is therefore bounded by `max(per-call-timeout, TICK_BUDGET_MS)` even on unhealthy infrastructure.
+
+### Stale-install watchdog
+
+```
+failStaleInstalls():
+  cutoff = now - STALE_INSTALL_AFTER_MS  (30 min)
+  for row in SELECT … WHERE status='installing' AND deleted_at IS NULL:
+    if row.updated_at < cutoff:
+      UPDATE servers SET status='failed', updated_at=now() WHERE id=row.id
+      log.warn 'stale install flipped installing → failed'
+      liveBus.publish({type:'server.status', source:'reconciler'})
+      tickState.staleInstallsFailed++
+```
+
+This guards against the api process dying between `setStatus('installing')` and `setStatus('running')` in the install pipeline — without the watchdog, the row would sit in `installing` indefinitely. 30 min was picked to be safely above the typical depot_update wall-clock (~25 min on first install).
+
+### Boot-time recovery
+
+On `onReady` the plugin logs the count of transient rows it's about to converge:
+
+```
+{"level":30,"rows":3,"intervalMs":4000,"msg":"reconciler: ready — running initial recovery tick"}
+```
+
+A fresh api process announces what it inherited from the previous run; ops can grep for this line to confirm the reconciler started.
 
 ## Worker heartbeat aggregation
 
