@@ -1,5 +1,10 @@
 # `shared-config` — changelog
 
+## 2026-04-26
+
+### Added
+- `packages/shared-config/test/property/registry.test.ts` — property-based tests (3 properties, 100 runs each) for `isPermissionKey` and `PERMISSION_KEYS` registry consistency.
+
 ## 2026-04-25
 
 ### Added

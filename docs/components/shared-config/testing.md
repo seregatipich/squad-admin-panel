@@ -24,6 +24,7 @@ All tests live in `packages/shared-config/test/` and run under vitest.
 | `permissions.test.ts` | Key uniqueness; every category in `PERMISSION_CATEGORIES`; `dangerous`/`unimplemented` are `true` or absent (never `false`); non-empty labels; `PERMISSION_KEYS` derivation; `isPermissionKey` type guard |
 | `rcon-host.test.ts` | Explicit creds win; fallback to `RCON_HOST_DEFAULT`; fallback to `127.0.0.1`; empty-string treated as null |
 | `role-colors.test.ts` | Palette matches `roles_color_palette` SQL CHECK in `0009_panel_rbac.sql`; exactly 16 colors; all unique |
+| `property/registry.test.ts` | Property-based (`@fast-check/vitest`): every registered key passes `isPermissionKey`; unregistered strings are rejected; every subset of keys is a valid permission set. |
 
 ## Key edge cases
 
