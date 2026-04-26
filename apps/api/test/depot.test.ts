@@ -244,8 +244,8 @@ describe('POST /api/v1/depot/update', () => {
       if (lastUpdate) break;
       await new Promise((r) => setTimeout(r, 50));
     }
-    expect(lastUpdate).not.toBeNull();
-    const parsed = JSON.parse(lastUpdate!);
+    if (!lastUpdate) throw new Error('depot:last_update never set');
+    const parsed = JSON.parse(lastUpdate);
     expect(parsed.status).toBe('failed');
     expect(parsed.error).toContain('steamcmd exploded');
   });
