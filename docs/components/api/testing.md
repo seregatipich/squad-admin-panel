@@ -4,15 +4,20 @@
 
 | Tier | Location | What it covers |
 |---|---|---|
-| Unit | [`apps/api/test/*.test.ts`](../../../apps/api/test/) excluding `e2e/` | Auth helpers, Zod schemas, blame walker, hash chain helpers, route schemas via `fastify.inject()` with a fake bridge. |
+| Unit | [`apps/api/test/*.test.ts`](../../../apps/api/test/) excluding `e2e/` and `security/` | Auth helpers, Zod schemas, blame walker, hash chain helpers, route schemas via `fastify.inject()` with a fake bridge. |
 | Integration | Same directory, marked by use of real Postgres/Redis (`TEST_DATABASE_URL` set) | Audit triggers, RBAC enforcement, WS frame splitting, install WS plumbing. |
+| Security | [`apps/api/test/security/*.test.ts`](../../../apps/api/test/security/) | Permission boundary matrix, SQL injection payloads, XSS smoke, cookie security attributes. |
 | E2E | [`apps/api/test/e2e/*.e2e.test.ts`](../../../apps/api/test/e2e/) | Live panel + real bridge + real Docker. Run via `pnpm --filter @squad/api test:e2e`. |
 
 ## How to run
 
 ```bash
-# Unit + integration (default; uses fake bridge, in-memory Redis)
-pnpm --filter @squad/api test
+# Unit + integration + security (default; needs DATABASE_URL for security tests)
+DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm --filter @squad/api test
+
+# Security suite only (uses dedicated config with hookTimeout=300 s)
+DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin \
+  pnpm --filter @squad/api exec vitest run --config vitest.security.config.ts test/security/
 
 # Single file
 pnpm --filter @squad/api exec vitest run test/rcon-send.test.ts
@@ -38,12 +43,42 @@ pnpm --filter @squad/api test:e2e
 - Steam OpenID 2.0 login + callback handlers in [`auth-steam.test.ts`](../../../apps/api/test/auth-steam.test.ts) — 8 tests: login redirect generates nonce in cookie + query; callback rejects missing cookie, mismatched nonce, expired Redis nonce, `return_to` host mismatch, `openid.response_nonce` replay; happy path creates session + `__Host-sid` cookie; no-role path redirects to `/no-access` without setting session cookie.
 - `claimFirstOwner` in [`first-owner.test.ts`](../../../apps/api/test/first-owner.test.ts) — 5 direct-DB unit tests against the live DB (no isolated schema): claim sets `players.role_id` and `panel_meta.first_owner_claimed` and writes the sentinel; double-claim returns `already_claimed` and leaves player B without a role; sentinel pre-check short-circuits before the transaction; concurrent `Promise.all` race asserts advisory lock serializes to exactly 1 `'claimed'` and 1 `'already_claimed'`; missing Owner role returns `no_owner_role`. `panel_meta` singleton state and test players are saved and restored in beforeEach/afterEach.
 
+## Security test suite
+
+[`test/security/`](../../../apps/api/test/security/) contains four regression test files:
+
+### permission-matrix.test.ts — 3100 tests
+
+Programmatic permission boundary matrix. `collectProtectedRoutes()` builds a minimal Fastify app, walks `onRoute` hooks, and returns every route that declares `config.permissions` (WebSocket routes excluded — HTTP inject is incompatible with the upgrade protocol). For each route, three test categories run:
+
+1. `returns 403 to a user with no permissions` — asserts status 403.
+2. `returns not-403 to a user with all required permissions` — asserts status ≠ 403.
+3. `with only <perm>: allowed|403` — one test per permission key; asserts `allowed` if that key is the exact required set, `403` otherwise.
+
+All ~70 test users (1 no-perms, 48 single-perm, ~21 unique required-set combos) are pre-created in `beforeAll` via `Promise.all` to keep setup under 5 seconds.
+
+### sql-injection.test.ts — 63 tests
+
+9 classic injection payloads × 7 endpoint groups. Each test asserts:
+- `res.statusCode >= 200 && res.statusCode < 500`
+- `tablesExist()` is still `true` after the request (queries `information_schema.tables` for `players`, `roles`, `sessions`)
+
+Endpoints covered: `GET /api/v1/players?q=`, `GET /api/v1/players/:steamId`, `POST /api/v1/roles` (name), `PUT /api/v1/roles/:id` (name), `POST /api/v1/servers` (slug), `GET /api/v1/audit?q=`, `PUT /api/v1/players/:steamId/role` (role_id).
+
+### xss-smoke.test.ts — 4 tests
+
+API-layer XSS assertions. Verifies that HTML in role names and descriptions is stored as-is (no server-side escaping/sanitization), HTML in query params returns 200 with expected shape, and `Content-Type` for JSON responses is `application/json`.
+
+### cookie-security.test.ts — 5 tests
+
+Verifies `__Host-sid` cookie on session touch has `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`. Also verifies unauthenticated requests don't set a session cookie and expired tokens return 401.
+
 ## What is not covered
 
 - The actual bridge over the actual socket — that's e2e.
-- Cookie security flags in production deployment — verified manually with browser devtools.
 - Steam OpenID real-network handshake — `check_authentication` is mocked with `vi.spyOn(globalThis, 'fetch')`; the live Steam endpoint is exercised only in e2e.
 - Discord OAuth — the stub routes were removed; no Discord integration exists.
+- WebSocket routes in the permission matrix (HTTP inject cannot complete a WebSocket upgrade; those routes are excluded from the matrix). The auth hook on WebSocket routes is covered by separate integration tests.
 
 ## Mocks and stubs
 
