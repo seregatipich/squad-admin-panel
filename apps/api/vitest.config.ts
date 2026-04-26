@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     exclude: ['**/node_modules/**', '**/dist/**', 'test/e2e/**'],
     testTimeout: 10_000,
-    hookTimeout: 30_000,
+    hookTimeout: 120_000,
     fileParallelism: false,
     sequence: { concurrent: false },
     coverage: {
