@@ -7,6 +7,7 @@
 | Tier | Location | Runner |
 |---|---|---|
 | 1 — unit (schema surface) | `packages/db/test/schema.test.ts` | `vitest` |
+| 1 — unit (client + constraints) | `packages/db/test/client.test.ts` | `vitest` with `DATABASE_URL` |
 | 2 — integration (live DB) | `apps/api/test/*.test.ts` | `vitest` with `DATABASE_URL` |
 | 3 — e2e (full stack) | `apps/api/test/e2e/*.e2e.test.ts` | `vitest` (separate config) |
 
@@ -37,6 +38,33 @@ These tests use `getTableColumns` from `drizzle-orm` to interrogate the schema d
 - Trigger behavior (requires a live DB).
 - CHECK constraint enforcement (requires a live DB).
 - Actual column DDL in the database matching the schema (covered by Tier 2).
+
+---
+
+## Tier 1 — DB client and constraint tests
+
+**File**: `packages/db/test/client.test.ts`
+
+**Requires `DATABASE_URL`.** Connects to the live Postgres instance, creates and cleans up its own isolated rows.
+
+**How to run:**
+
+```bash
+DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm --filter @squad/db test
+```
+
+**What is covered:**
+
+| Test | What it proves |
+|---|---|
+| `connects and runs a trivial query` | `drizzle(postgres(url))` reaches Postgres and executes `SELECT 1` |
+| `commits on success` | Rows inserted inside a successful transaction are visible after commit |
+| `rolls back on throw` | Rows inserted inside a thrown transaction are absent after rollback |
+| `serializes two concurrent transactions on the same lock key` | `pg_advisory_xact_lock(hashtext(...))` forces serial execution; second transaction waits ≥ 95 ms |
+| `ON DELETE CASCADE removes server_settings when server deleted` | Deleting a `servers` row also removes its `server_settings` row |
+| `ON DELETE SET NULL preserves player but clears role_id when role deleted` | Deleting a `roles` row sets `players.role_id = NULL` but leaves the player row intact |
+
+**Test isolation**: each test creates rows with `uuidv7()` identifiers and deletes them in the test body (or via cascade). The advisory lock test uses `hashtext('test_lock_unit')` and leaves no rows.
 
 ---
 
