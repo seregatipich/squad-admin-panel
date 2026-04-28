@@ -25,19 +25,25 @@ Tails `docker logs -f squad-{uuid}` for every running Squad container via the ho
 apps/workers/log-ingest/
   src/
     index.ts                  — entry point, reconcile loop, shutdown
+    manager.ts                — TailManager (aborters map + tails.changed diag)
     tail.ts                   — tailContainerLogs (bridge → line buffer)
     publish.ts                — Redis XADD with dedup key
     parser/
       patterns.ts             — log line prefix parser + regex patterns
+                                + Squad fatal detection (LogExit / Fatal / Assertion)
       ingest.ts               — LogIngestor class (per-server state machine)
   test/
     patterns.test.ts
+    ingest.test.ts
+    manager.test.ts
+    contract.test.ts
 ```
 
 ## Dependencies
 
 - `@squad/bridge-client` — `containerLogsFollow` RPC
 - `@squad/db` — `servers`, `serverSettings` tables (status + beaconPort)
+- `@squad/diag` — `createDiag` factory; emits to `diag:queue`
 - `@squad/shared-config` — `startHeartbeat`, `redisSinkStream`
 - `@squad/shared-types` — `EventEnvelope`, `STREAM_NAME`, `DEDUP_KEY`
 - `ioredis` — Redis client

@@ -1,9 +1,11 @@
 import { BridgeClient } from '@squad/bridge-client';
 import { createDatabaseClient, serverSettings, servers } from '@squad/db';
+import { createDiag } from '@squad/diag';
 import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
+import { TailManager } from './manager.js';
 import { LogIngestor } from './parser/ingest.js';
 import { publish } from './publish.js';
 import { tailContainerLogs } from './tail.js';
@@ -38,37 +40,47 @@ async function main() {
     onLog: (m, meta) => log.info({ ...meta }, m),
   });
 
-  const aborters = new Map<string, () => void>();
+  const diag = createDiag({ redis, log });
 
-  async function reconcile() {
-    const rows = await db
-      .select({
-        id: servers.id,
-        status: servers.status,
-        beaconPort: serverSettings.beaconPort,
-      })
-      .from(servers)
-      .innerJoin(serverSettings, eq(servers.id, serverSettings.serverId));
-    const wanted = new Set<string>();
-    for (const row of rows) {
-      if (row.status === 'running' || row.status === 'starting') {
-        wanted.add(row.id);
-        if (!aborters.has(row.id)) {
-          attachTail(row.id, row.beaconPort);
-        }
-      }
-    }
-    for (const id of aborters.keys()) {
-      if (!wanted.has(id)) {
-        aborters.get(id)?.();
-        aborters.delete(id);
-      }
-    }
-  }
-
-  function attachTail(serverId: string, beaconPort: number) {
+  const manager = new TailManager((serverId, beaconPort) => {
     log.info({ serverId, beaconPort }, 'attaching log tail');
-    const ingestor = new LogIngestor({ serverId, beaconPort });
+    const ingestor = new LogIngestor({
+      serverId,
+      beaconPort,
+      onParseError: (report) => {
+        diag
+          .emit({
+            component: 'worker-log-ingest',
+            kind: 'parser_error',
+            severity: 'warn',
+            serverId,
+            message: report.errorMessage,
+            payload: {
+              lineSample: report.lineSample,
+              regex: report.regex,
+              errorMessage: report.errorMessage,
+            },
+          })
+          .catch(() => undefined);
+      },
+      onSquadFatal: (report) => {
+        diag
+          .emit({
+            component: 'worker-log-ingest',
+            kind: 'squad.log.fatal',
+            severity: 'fatal',
+            serverId,
+            message: report.message.slice(0, 200),
+            payload: {
+              ts: report.ts,
+              file: report.file,
+              line: report.line,
+              raw: report.raw.slice(0, 500),
+            },
+          })
+          .catch(() => undefined);
+      },
+    });
     const abort = tailContainerLogs({
       bridge,
       log,
@@ -81,8 +93,51 @@ async function main() {
           );
         }
       },
+      onStarted: () => {
+        diag
+          .emit({
+            component: 'worker-log-ingest',
+            kind: 'tail.started',
+            severity: 'info',
+            serverId,
+            message: `tail started for squad-${serverId}`,
+            payload: { container: `squad-${serverId}` },
+          })
+          .catch(() => undefined);
+      },
+      onStopped: ({ reason, error }) => {
+        diag
+          .emit({
+            component: 'worker-log-ingest',
+            kind: 'tail.stopped',
+            severity: 'info',
+            serverId,
+            message: `tail stopped for squad-${serverId} (${reason})`,
+            payload: {
+              container: `squad-${serverId}`,
+              reason,
+              ...(error ? { error } : {}),
+            },
+          })
+          .catch(() => undefined);
+      },
     });
-    aborters.set(serverId, abort);
+    return { abort };
+  }, diag);
+
+  async function reconcile() {
+    const rows = await db
+      .select({
+        id: servers.id,
+        status: servers.status,
+        beaconPort: serverSettings.beaconPort,
+      })
+      .from(servers)
+      .innerJoin(serverSettings, eq(servers.id, serverSettings.serverId));
+    const wanted = rows
+      .filter((r) => r.status === 'running' || r.status === 'starting')
+      .map((r) => ({ serverId: r.id, beaconPort: r.beaconPort }));
+    manager.reconcile(wanted);
   }
 
   await reconcile();
@@ -93,7 +148,7 @@ async function main() {
   const stopHeartbeat = startHeartbeat({
     redis,
     name: 'log-ingest',
-    statusFn: () => `tails=${aborters.size}`,
+    statusFn: () => `tails=${manager.size()}`,
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
 
@@ -101,8 +156,7 @@ async function main() {
     log.info({ sig }, 'shutdown');
     stopHeartbeat();
     clearInterval(interval);
-    for (const abort of aborters.values()) abort();
-    aborters.clear();
+    manager.stopAll();
     await redis.quit().catch(() => undefined);
     await bridge.close();
     process.exit(0);

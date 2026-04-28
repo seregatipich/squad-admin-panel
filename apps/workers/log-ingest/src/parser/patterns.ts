@@ -78,3 +78,46 @@ export function isBenignNoise(line: string): boolean {
   }
   return false;
 }
+
+export const SQUAD_LOG_EXIT = /^\[(?<ts>[^\]]+)\]\[ *\d+\]LogExit: (?<msg>.*)$/;
+export const SQUAD_FATAL_ERROR = /^\[(?<ts>[^\]]+)\]\[ *\d+\]Fatal error: (?<msg>.*)$/;
+export const SQUAD_ASSERTION_FAILED =
+  /Assertion failed: (?<msg>.*) \[File:(?<file>[^\]]+) Line: (?<line>\d+)\]/;
+
+export interface SquadFatalMatch {
+  ts: string | null;
+  message: string;
+  file: string | null;
+  line: number | null;
+}
+
+export function detectSquadFatal(line: string): SquadFatalMatch | null {
+  const assertion = SQUAD_ASSERTION_FAILED.exec(line);
+  if (assertion?.groups) {
+    return {
+      ts: null,
+      message: assertion.groups.msg ?? '',
+      file: assertion.groups.file ?? null,
+      line: Number(assertion.groups.line),
+    };
+  }
+  const exit = SQUAD_LOG_EXIT.exec(line);
+  if (exit?.groups) {
+    return {
+      ts: exit.groups.ts ?? null,
+      message: exit.groups.msg ?? '',
+      file: null,
+      line: null,
+    };
+  }
+  const fatal = SQUAD_FATAL_ERROR.exec(line);
+  if (fatal?.groups) {
+    return {
+      ts: fatal.groups.ts ?? null,
+      message: fatal.groups.msg ?? '',
+      file: null,
+      line: null,
+    };
+  }
+  return null;
+}

@@ -14,7 +14,7 @@ All tests live under `apps/workers/log-ingest/test/`.
 
 ### `patterns.test.ts`
 
-Unit tests for the log line parser and event extractor.
+Unit tests for the log line parser, event extractor, and Squad-fatal detector.
 
 **Log line prefix parser:**
 
@@ -35,6 +35,16 @@ Unit tests for the log line parser and event extractor.
 | `server.crashed` on non-143 non-zero exit | `ReturnCode=134` → `server.crashed` |
 | Drops benign audio-export noise before parsing | Noise line → empty event list |
 
+**Squad fatal/log-exit/assertion detection:**
+
+| Test | What it verifies |
+|---|---|
+| Detects `LogExit:` lines | `detectSquadFatal` returns `{ ts, message, file: null, line: null }` |
+| Detects `Fatal error:` lines | `detectSquadFatal` returns `{ ts, message, file: null, line: null }` |
+| Detects `Assertion failed: … [File:… Line:…]` | `detectSquadFatal` returns `{ ts: null, message, file, line }` |
+| `LogIngestor` invokes `onSquadFatal` once per matching line | Three fixture lines (one per pattern) → callback fired three times with parsed payloads + raw text |
+| Ordinary log lines do not invoke `onSquadFatal` | Match-state-changed line → callback not fired |
+
 ### `ingest.test.ts`
 
 Unit tests for the `LogIngestor` player connect/disconnect flow.
@@ -47,6 +57,19 @@ Unit tests for the `LogIngestor` player connect/disconnect flow.
 | `rcon.connected` on ADMIN COMMAND line | `LogSquad: ADMIN COMMAND: ListPlayers from RCON` |
 | Empty list for unrecognised lines | Unknown category/message produces no events |
 
+### `manager.test.ts`
+
+Unit tests for `TailManager.reconcile` — the part of the worker that owns the aborters map and emits `tails.changed`.
+
+| Test | What it verifies |
+|---|---|
+| Starts a tail per new server, emits `tails.changed` payload | Factory invoked once with `(serverId, beaconPort)`; diag emit carries `{ added: ['srv-a'], removed: [], total: 1 }`, `severity: 'info'`, `component: 'worker-log-ingest'` |
+| Unchanged ticks do not emit | Two reconciles with the same wanted set → exactly one diag emit total |
+| Removal emits `tails.changed` with `removed` populated | Drop a server from wanted → factory not re-invoked, abort closure fires once |
+| Single tick can be both add and remove | Swap A for B in one reconcile → one diag emit with both lists populated |
+| Optional diag is honoured | Manager constructed without diag does not throw on reconcile |
+| `stopAll` aborts every running tail and clears the set | All abort closures invoked, `manager.size()` returns 0 |
+
 ### `contract.test.ts`
 
 Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
@@ -58,7 +81,7 @@ Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
 
 ## Coverage gaps
 
-- `tail.ts` is not unit-tested (requires a mock `BridgeClient` returning a stream). Integration coverage comes from `apps/api/test/e2e/install-lifecycle.e2e.test.ts` which verifies `server.ready` and `player.connected` appear in the event stream after a live server boot.
+- `tail.ts` is not unit-tested (requires a mock `BridgeClient` returning a stream). Integration coverage comes from `apps/api/test/e2e/install-lifecycle.e2e.test.ts` which verifies `server.ready` and `player.connected` appear in the event stream after a live server boot. The `tail.started` / `tail.stopped` diag emits are wired in `index.ts` glue and exercised end-to-end during the install-lifecycle e2e run.
 - `publish.ts` dedup logic is untested in isolation.
 
 ## Test data
