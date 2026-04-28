@@ -27,7 +27,7 @@ interface BridgeRequest<Params = unknown> {
 }
 ```
 
-`method` must be one of the 18 values in `BRIDGE_METHODS` (see [`shared-config/api.md`](../shared-config/api.md)).
+`method` must be one of the 19 values in `BRIDGE_METHODS` (see [`shared-config/api.md`](../shared-config/api.md)).
 
 ## Response shape (`BridgeResponse`)
 

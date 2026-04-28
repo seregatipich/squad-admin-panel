@@ -2,7 +2,7 @@
 
 ## Bridge method allowlist
 
-18 RPC method names in declaration order (from `BRIDGE_METHODS`):
+19 RPC method names in declaration order (from `BRIDGE_METHODS`):
 
 ```
 ping  host_info  host_metrics

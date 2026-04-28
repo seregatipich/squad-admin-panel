@@ -45,7 +45,7 @@ Seven cases:
 
 ## What is not covered by unit tests
 
-- All 18 RPC method param shapes — covered by E2E forbidden/success pairs.
+- All 19 RPC method param shapes — covered by E2E forbidden/success pairs.
 - `depotUpdate` streaming — structurally identical to `containerLogsFollow`; covered by E2E.
 - The Go-side computation behind `panel_disk_usage` (du-walks, `docker system df`) — covered by the bridge's own Go tests and by the E2E success/forbidden case.
 
