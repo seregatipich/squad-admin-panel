@@ -1,5 +1,23 @@
 # `bridge` — changelog
 
+## 2026-04-28 — `panel_disk_usage` RPC for operational visibility
+
+### Added
+
+- `panel_disk_usage({}) → PanelDiskUsageResult` — 19th whitelisted method. Combines `du -sb` walks of `/var/lib/squad-panel/{configs,saved,audit-archive}`, `docker system df --format '{{json .}}' -v` filtered to panel-owned volumes (`squad-depot`, `squad-panel_pg-data`, `squad-panel_redis-data`) and images (`squad-server`, `squad-panel/depot-init`, `squad-panel/api`, `squad-panel/web`, `squad-panel/worker`), and `syscall.Statfs(/var/lib/squad-panel)` for whole-host capacity. Result is cached in-process for 5 minutes; subsequent calls return the same payload with `cache_age_seconds` advanced.
+- `panelDiskUsageResult`, `savedEntry`, `dockerVol`, `dockerImg` Go types + a `parseHumanSize` helper for `docker system df` size strings (`1.2GB`, `512MB`, `0B`).
+- `Dispatcher` injectors (`panelRoot`, `duFn`, `statfsFn`, `dockerDfFn`) so the handler is fully unit-testable without root or a live Docker daemon.
+- Three Go unit tests in `apps/bridge/internal/handlers/handlers_test.go`: full-result computation against a tempdir, cache hit within TTL (no probe re-invocation, identical `computed_at`), missing-dir tempdir returns zero counters with empty `saved_per_server`.
+
+### Changed
+
+- `Dispatcher.Handle` switch gains a `panel_disk_usage` case routed to the new method.
+
+### Migration notes
+
+- No schema or systemd change. Redeploy the binary with `sudo install -m 0755 apps/bridge/bin/panel-host-bridge /usr/local/bin/` and `sudo systemctl restart panel-host-bridge.service`. The 5-minute cache is per-process, so the first call after restart triggers a full compute.
+- The wire request payload is the empty object `{}`; older clients that send no `params` field should add `params: {}` for forward compatibility.
+
 ## 2026-04-26 — `directory_delete` RPC for server soft-delete orchestrator
 
 ### Added

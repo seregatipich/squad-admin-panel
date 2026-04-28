@@ -1,11 +1,15 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -294,5 +298,186 @@ func TestHostAgentRestart_RespondsBeforeExec(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("exec was never invoked after response delay")
+	}
+}
+
+func newDiskUsageDispatcher(t *testing.T, root string) (*Dispatcher, *atomic.Int32, *atomic.Int32, *atomic.Int32) {
+	t.Helper()
+	resetPanelDiskUsageCache()
+	var duCalls atomic.Int32
+	var statfsCalls atomic.Int32
+	var dockerCalls atomic.Int32
+	d := &Dispatcher{
+		panelRoot: root,
+		duFn: func(path string) (int64, error) {
+			duCalls.Add(1)
+			return realDuBytes(path)
+		},
+		statfsFn: func(path string, st *syscall.Statfs_t) error {
+			statfsCalls.Add(1)
+			st.Blocks = 1024
+			st.Bavail = 512
+			st.Bsize = 4096
+			return nil
+		},
+		dockerDfFn: func() ([]dockerVol, []dockerImg, int64, error) {
+			dockerCalls.Add(1)
+			return []dockerVol{
+					{Name: "squad-depot", Bytes: 1_000_000},
+					{Name: "squad-panel_pg-data", Bytes: 50_000},
+				},
+				[]dockerImg{
+					{Repository: "squad-server", Tag: "latest", Bytes: 2_500_000},
+				},
+				1_000_000,
+				nil
+		},
+	}
+	return d, &duCalls, &statfsCalls, &dockerCalls
+}
+
+func TestPanelDiskUsage_AllowlistedAndComputed(t *testing.T) {
+	tmp := t.TempDir()
+	uuid := "019dbaa5-1234-7abc-8def-0123456789ab"
+	if err := os.MkdirAll(filepath.Join(tmp, "configs", uuid), 0o755); err != nil {
+		t.Fatalf("mkdir configs: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "saved", uuid), 0o755); err != nil {
+		t.Fatalf("mkdir saved: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "configs", uuid, "x.cfg"), bytes.Repeat([]byte("a"), 100), 0o644); err != nil {
+		t.Fatalf("write configs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "saved", uuid, "log.txt"), bytes.Repeat([]byte("b"), 250), 0o644); err != nil {
+		t.Fatalf("write saved: %v", err)
+	}
+
+	d, _, _, _ := newDiskUsageDispatcher(t, tmp)
+	req := &rpc.Request{ID: "req-1", Method: "panel_disk_usage", Params: []byte("{}")}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected OK, got error: %+v", resp.Error)
+	}
+	var got panelDiskUsageResult
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ConfigsBytes < 100 {
+		t.Fatalf("configs_bytes = %d, expected >= 100", got.ConfigsBytes)
+	}
+	if got.SavedTotalBytes < 250 {
+		t.Fatalf("saved_total_bytes = %d, expected >= 250", got.SavedTotalBytes)
+	}
+	if got.AuditArchiveBytes != 0 {
+		t.Fatalf("audit_archive_bytes = %d, expected 0 (missing dir)", got.AuditArchiveBytes)
+	}
+	if len(got.SavedPerServer) != 1 || got.SavedPerServer[0].UUID != uuid {
+		t.Fatalf("saved_per_server = %+v, expected single uuid=%s", got.SavedPerServer, uuid)
+	}
+	if got.SavedPerServer[0].Bytes < 250 {
+		t.Fatalf("saved_per_server[0].bytes = %d, expected >= 250", got.SavedPerServer[0].Bytes)
+	}
+	if got.DepotVolumeBytes != 1_000_000 {
+		t.Fatalf("depot_volume_bytes = %d, expected 1_000_000", got.DepotVolumeBytes)
+	}
+	if len(got.DockerVolumes) != 2 || len(got.DockerImages) != 1 {
+		t.Fatalf("docker_volumes=%d docker_images=%d, expected 2 and 1", len(got.DockerVolumes), len(got.DockerImages))
+	}
+	wantTotal := got.ConfigsBytes + got.SavedTotalBytes + got.AuditArchiveBytes
+	for _, v := range got.DockerVolumes {
+		wantTotal += v.Bytes
+	}
+	for _, im := range got.DockerImages {
+		wantTotal += im.Bytes
+	}
+	if got.TotalPanelBytes != wantTotal {
+		t.Fatalf("total_panel_bytes = %d, expected %d", got.TotalPanelBytes, wantTotal)
+	}
+	if got.HostTotalBytes != int64(1024)*int64(4096) {
+		t.Fatalf("host_total_bytes = %d, expected %d", got.HostTotalBytes, int64(1024)*int64(4096))
+	}
+	if got.HostUsedBytes != int64(1024-512)*int64(4096) {
+		t.Fatalf("host_used_bytes = %d, expected %d", got.HostUsedBytes, int64(1024-512)*int64(4096))
+	}
+	if _, err := time.Parse(time.RFC3339, got.ComputedAt); err != nil {
+		t.Fatalf("computed_at = %q is not RFC3339: %v", got.ComputedAt, err)
+	}
+	if got.CacheAgeSeconds != 0 {
+		t.Fatalf("cache_age_seconds = %d on fresh compute, expected 0", got.CacheAgeSeconds)
+	}
+}
+
+func TestPanelDiskUsage_CachesWithinTTL(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "configs"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	d, duCalls, statfsCalls, dockerCalls := newDiskUsageDispatcher(t, tmp)
+
+	req := &rpc.Request{ID: "req-1", Method: "panel_disk_usage", Params: []byte("{}")}
+	resp1 := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if !resp1.OK {
+		t.Fatalf("first call failed: %+v", resp1.Error)
+	}
+	firstDu := duCalls.Load()
+	firstStatfs := statfsCalls.Load()
+	firstDocker := dockerCalls.Load()
+	if firstDu == 0 || firstStatfs == 0 || firstDocker == 0 {
+		t.Fatalf("first call did not invoke probes (du=%d statfs=%d docker=%d)", firstDu, firstStatfs, firstDocker)
+	}
+
+	resp2 := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if !resp2.OK {
+		t.Fatalf("second call failed: %+v", resp2.Error)
+	}
+	if duCalls.Load() != firstDu {
+		t.Fatalf("du re-invoked on cache hit (was %d, now %d)", firstDu, duCalls.Load())
+	}
+	if statfsCalls.Load() != firstStatfs {
+		t.Fatalf("statfs re-invoked on cache hit (was %d, now %d)", firstStatfs, statfsCalls.Load())
+	}
+	if dockerCalls.Load() != firstDocker {
+		t.Fatalf("docker df re-invoked on cache hit (was %d, now %d)", firstDocker, dockerCalls.Load())
+	}
+
+	var first, second panelDiskUsageResult
+	if err := json.Unmarshal(resp1.Result, &first); err != nil {
+		t.Fatalf("decode first: %v", err)
+	}
+	if err := json.Unmarshal(resp2.Result, &second); err != nil {
+		t.Fatalf("decode second: %v", err)
+	}
+	if second.ComputedAt != first.ComputedAt {
+		t.Fatalf("computed_at changed on cache hit: %q vs %q", first.ComputedAt, second.ComputedAt)
+	}
+	if second.CacheAgeSeconds < 0 {
+		t.Fatalf("cache_age_seconds = %d, expected >= 0", second.CacheAgeSeconds)
+	}
+}
+
+func TestPanelDiskUsage_MissingDirsReturnZero(t *testing.T) {
+	tmp := t.TempDir()
+	d, _, _, _ := newDiskUsageDispatcher(t, tmp)
+
+	req := &rpc.Request{ID: "req-1", Method: "panel_disk_usage", Params: []byte("{}")}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected OK with empty tempdir, got: %+v", resp.Error)
+	}
+	var got panelDiskUsageResult
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ConfigsBytes != 0 {
+		t.Fatalf("configs_bytes = %d, expected 0", got.ConfigsBytes)
+	}
+	if got.SavedTotalBytes != 0 {
+		t.Fatalf("saved_total_bytes = %d, expected 0", got.SavedTotalBytes)
+	}
+	if got.AuditArchiveBytes != 0 {
+		t.Fatalf("audit_archive_bytes = %d, expected 0", got.AuditArchiveBytes)
+	}
+	if len(got.SavedPerServer) != 0 {
+		t.Fatalf("saved_per_server = %+v, expected empty", got.SavedPerServer)
 	}
 }

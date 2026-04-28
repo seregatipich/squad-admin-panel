@@ -33,7 +33,7 @@ Source: `apps/bridge/internal/rpc/types.go`.
 | Field | Type | Description |
 |---|---|---|
 | `id` | string | Caller-assigned request identifier; echoed back in the response. |
-| `method` | string | One of the 17 whitelisted RPC methods. |
+| `method` | string | One of the 19 whitelisted RPC methods. |
 | `params` | object (optional) | Method-specific parameters. Omitted for methods that take no params (e.g., `host_info`). |
 
 ---
@@ -446,6 +446,57 @@ Schedules `systemctl restart panel-host-bridge.service` to run after a 250 ms fl
 ```json
 { "status": "restarting" }
 ```
+
+---
+
+### `panel_disk_usage`
+
+**Params:** none (request must still be a JSON object: `{}`).
+
+**Result** (source: `panelDiskUsageResult` in `apps/bridge/internal/handlers/handlers.go`):
+
+```json
+{
+  "configs_bytes":       12345,
+  "saved_total_bytes":   67890,
+  "saved_per_server":    [
+    { "uuid": "019dbaa5-1234-7abc-8def-0123456789ab", "bytes": 67890 }
+  ],
+  "depot_volume_bytes":  53687091200,
+  "docker_volumes":      [
+    { "name": "squad-depot",          "bytes": 53687091200 },
+    { "name": "squad-panel_pg-data",  "bytes": 524288000 },
+    { "name": "squad-panel_redis-data","bytes": 16777216 }
+  ],
+  "docker_images": [
+    { "repository": "squad-server",            "tag": "latest", "bytes": 4294967296 },
+    { "repository": "squad-panel/depot-init",  "tag": "latest", "bytes": 314572800 }
+  ],
+  "audit_archive_bytes": 0,
+  "total_panel_bytes":   58880131941,
+  "host_total_bytes":    1099511627776,
+  "host_used_bytes":     549755813888,
+  "computed_at":         "2026-04-28T15:50:00Z",
+  "cache_age_seconds":   0
+}
+```
+
+| Field | Type | Source |
+|---|---|---|
+| `configs_bytes` | int64 | `du -sb /var/lib/squad-panel/configs`, 0 when missing. |
+| `saved_total_bytes` | int64 | `du -sb /var/lib/squad-panel/saved`, 0 when missing. |
+| `saved_per_server` | array | `du -sb` per immediate subdirectory of `saved/`. Empty array when `saved/` is missing. |
+| `depot_volume_bytes` | int64 | Bytes attributed to the `squad-depot` Docker volume. Already counted inside `docker_volumes`; surfaced separately for the operator UI. |
+| `docker_volumes` | array | Docker volumes from `docker system df -v` filtered to `squad-depot`, `squad-panel_pg-data`, `squad-panel_redis-data`. Always non-null. |
+| `docker_images` | array | Docker images from the same source filtered to repos `squad-server`, `squad-panel/depot-init`, `squad-panel/api`, `squad-panel/web`, `squad-panel/worker`. Always non-null. |
+| `audit_archive_bytes` | int64 | `du -sb /var/lib/squad-panel/audit-archive`, 0 when missing. |
+| `total_panel_bytes` | int64 | `configs_bytes + saved_total_bytes + audit_archive_bytes + sum(docker_volumes.bytes) + sum(docker_images.bytes)`. The depot volume is already in `docker_volumes`, so it is **not** added a second time. |
+| `host_total_bytes` | int64 | `int64(statfs.Blocks) * int64(statfs.Bsize)` of `/var/lib/squad-panel` (or its parent if missing). |
+| `host_used_bytes` | int64 | `int64(statfs.Blocks - statfs.Bavail) * int64(statfs.Bsize)`. |
+| `computed_at` | string | RFC 3339 UTC timestamp; stable across cache hits. |
+| `cache_age_seconds` | int | `0` on a fresh compute, otherwise `floor(time.Since(stored).Seconds())`. |
+
+The full result is cached in-process for 5 minutes (`panelDiskCacheTTL`). Subsequent calls return the same payload with `cache_age_seconds` advanced; `du`, `statfs`, and `docker system df` are not re-invoked until the TTL expires.
 
 ---
 

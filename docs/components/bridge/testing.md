@@ -7,7 +7,7 @@
 | Unit (Go) | `apps/bridge/internal/**/*_test.go` | Validators (paths, image names, ufw args), wire framing, peer-cred checks, error mapping. |
 | Integration (TS) | [`apps/api/test/install-ws.test.ts`](../../../apps/api/test/install-ws.test.ts), `bridge-coverage.test.ts` | API → fake bridge plumbing: which RPCs the install flow calls, in what order, with what args. |
 | E2E | [`apps/api/test/e2e/bridge-rpc.e2e.test.ts`](../../../apps/api/test/e2e/bridge-rpc.e2e.test.ts) | Real bridge over the actual socket. Every method's success path AND its forbidden path. 10–30 s. |
-| Smoke | [`scripts/verify-bridge.sh`](../../../scripts/verify-bridge.sh) | Operator smoke after install: hits all 17 methods, prints `forbidden` / `ok` table. |
+| Smoke | [`scripts/verify-bridge.sh`](../../../scripts/verify-bridge.sh) | Operator smoke after install: hits all 19 methods, prints `forbidden` / `ok` table. |
 
 ## How to run
 
@@ -39,6 +39,11 @@ sg panel -c 'bash scripts/verify-bridge.sh'
 - Wire framing: oversized frame drops the connection; partial frames are buffered.
 - Stream multiplexing: `container_logs_follow` and `depot_update` interleave `stream:'stdout'` chunks with the final response.
 - `directory_delete`: forbidden paths (`/etc/passwd`, `…/ServerConfig/Server.cfg`, `…/configs/../etc`, `…/configs/not-a-uuid`), idempotent miss (`removed:false` for absent dir), invalid JSON → `invalid_args`. Go unit tests in `apps/bridge/internal/handlers/handlers_test.go` and validator tests in `apps/bridge/internal/validate/docker_test.go`. E2E success and forbidden cases in `apps/api/test/e2e/bridge-rpc.e2e.test.ts` `describe('directory_delete (e2e)')`.
+- `panel_disk_usage`: three Go unit tests in [`apps/bridge/internal/handlers/handlers_test.go`](../../../apps/bridge/internal/handlers/handlers_test.go) cover the full surface with stubbed `du`/`statfs`/`docker df` injectors:
+  - `TestPanelDiskUsage_AllowlistedAndComputed` — populates a tempdir with one configs file (100 B) and one saved file (250 B), asserts every result field including the `total_panel_bytes` formula (no double-counting of the depot volume) and `host_total_bytes = Blocks*Bsize`, `host_used_bytes = (Blocks-Bavail)*Bsize`.
+  - `TestPanelDiskUsage_CachesWithinTTL` — calls the handler twice; asserts `du`/`statfs`/`docker df` are invoked exactly once and that `computed_at` is byte-identical between the two responses.
+  - `TestPanelDiskUsage_MissingDirsReturnZero` — empty tempdir; asserts the response is `OK` with all zero byte counters and `saved_per_server == []`.
+  - The E2E success/forbidden cases against the real bridge are still forthcoming.
 
 ## What is not covered
 

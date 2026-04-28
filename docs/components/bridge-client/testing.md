@@ -6,7 +6,7 @@
 |---|---|---|
 | `packages/bridge-client/test/frame.test.ts` | Unit | Frame codec: encode/decode round-trip, multi-frame buffer, partial frame in remainder, oversized frame rejection |
 | `packages/bridge-client/test/lifecycle.test.ts` | Unit | `BridgeClient` lifecycle against a fake Unix socket: connect/response, split-frame reassembly, decode-error recovery, oversized header rejection, streaming callbacks, independent client teardown |
-| `apps/api/test/e2e/bridge-rpc.e2e.test.ts` | E2E | Whitelisted RPC method success/forbidden paths against a live socket (the `panel_disk_usage` case lands in a follow-up commit) |
+| `apps/api/test/e2e/bridge-rpc.e2e.test.ts` | E2E | Whitelisted RPC method success/forbidden paths against a live socket (the `panel_disk_usage` E2E case is still forthcoming) |
 
 ## Running unit tests
 
@@ -47,7 +47,7 @@ Seven cases:
 
 - All 19 RPC method param shapes — covered by E2E forbidden/success pairs.
 - `depotUpdate` streaming — structurally identical to `containerLogsFollow`; covered by E2E.
-- The Go-side computation behind `panel_disk_usage` and its E2E success/forbidden case will land in follow-up commits and are not yet covered.
+- The Go-side computation behind `panel_disk_usage` is now covered by Go unit tests in `apps/bridge/internal/handlers/handlers_test.go` (with stubbed `du`/`statfs`/`docker df` injectors). The E2E success/forbidden case against the real socket is still forthcoming.
 
 ## Mock socket pattern
 
