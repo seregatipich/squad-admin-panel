@@ -1,5 +1,25 @@
 # `api` — changelog
 
+## 2026-04-28 — server-lifecycle routes emit structured `server.*` diag events
+
+### Added
+
+- `apps/api/src/routes/server-install.ts` — install handler now emits `server.install.{requested,depot_seed,ufw_rule,container_run,verify,done,failed}` into `diag:queue`. Each emit carries `serverId`, `actorSteamId64` (when authenticated), `requestId`, and a structured `payload` (`durationMs`, `seededCount`, `proto/port/status`, `container_id`, etc.). Failures fire `server.install.failed` with `payload.stage` + `errorMessage`. Per-step ufw failures fire as `severity='error'` without aborting the install (matches the pre-existing behaviour).
+- `apps/api/src/routes/servers.ts` — start/stop/soft-delete handlers now emit `server.start.{requested,done,failed}`, `server.stop.{requested,broadcast,end_match,container_stop,done,failed}`, and `server.soft_delete.{requested,done,failed}`. The stop handler also `SET stop:requested:{server_id} EX 300` at request time so the status-reconciler (Task 8) can distinguish a planned stop from a crash. Broadcast / end-match RCON sub-steps emit per-attempt with `payload.ok`.
+- `apps/api/src/routes/server-archive.ts` — restore handler emits `server.restore.{requested,done}`. The `requested` event uses the OLD archived server's id; the `done` event uses the NEW server's id and includes `archive_id` + `new_server_id` in payload.
+- `apps/api/test/diag-lifecycle.test.ts` — focused integration test (5 cases) that stubs `app.diag.emit` with a capture array, drives each lifecycle endpoint via `app.inject()`, and asserts the expected `kind` strings appear plus the Redis fence is set on stop.
+
+### Changed
+
+- `docs/components/api/api.md` — new "Lifecycle event kinds emitted by API routes" section under "Decorations" listing every event kind per route family.
+- `docs/components/api/flows.md` — new "Lifecycle event sequences" subsection under "Diagnostic emission" with one ASCII flow per route (install / start / stop / soft-delete / restore).
+
+### Migration notes
+
+No DB schema changes. No new env vars. The new events flow through the existing `diag:queue` Redis Stream → `worker-diag-flush` → `diagnostic_events` table; consumers reading `diagnostic_events` will start seeing rows where `component='api'` and `kind` matches `server.*`.
+
+The Redis key `stop:requested:{server_id}` is set on every successful stop request with TTL 300 s. It is currently consumed only by the stop-flow itself; the reconciler will read it in Task 8 to choose between `container.exited` (planned) vs `container.unexpected_exit` (crash) when emitting its own diag events.
+
 ## 2026-04-28 — `app.diag` / `request.diag` Fastify decoration
 
 ### Added

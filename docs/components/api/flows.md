@@ -424,4 +424,94 @@ Route handlers reach the emitter via `req.diag.emit({...})`. The hook injects th
 
 Stub-friendly for tests: replacing `app.diag.emit` with a capture function reroutes both `app.diag` calls and per-request emits, because the hook reads `app.diag.emit` at emit time rather than capturing the original closure.
 
+### Lifecycle event sequences
+
+The server-lifecycle routes emit a fixed set of events into `diag:queue`. Source files are the contract — this section documents intent + ordering, not payload schemas (those live in [`api.md` § "Lifecycle event kinds"](api.md)).
+
+#### Install (POST /servers/:id/install)
+
+Source: [`routes/server-install.ts`](../../../apps/api/src/routes/server-install.ts). The handler enqueues an async install IIFE and returns `202`-ish immediately; events fire over the lifetime of the install (typically 25–30 min on a cold depot, ~5 s on a warm depot).
+
+```
+api emits server.install.requested        ← before IIFE; payload.display_name + kind='install'
+  ├─ ensureDepot(...)                     ← emits no diag itself; depot stream still goes to installProgress
+  ├─ seedConfigs(...)
+  │   └─ api emits server.install.depot_seed   ← payload.seededCount + durationMs
+  ├─ ufw rules (×4: udp game/query/beacon, tcp rcon)
+  │   └─ api emits server.install.ufw_rule     ← per port; severity='error' on failure
+  ├─ bridge.containerRun(...)
+  │   └─ api emits server.install.container_run ← payload.container_id + image
+  ├─ DB: UPDATE servers SET status='running', container_id=...
+  │   └─ api emits server.install.verify        ← payload.container_id
+  └─ api emits server.install.done              ← payload.totalDurationMs
+─────── on any throw above ───────
+api emits server.install.failed                 ← severity='error'; payload.stage + errorMessage
+```
+
+#### Start (POST /servers/:id/start)
+
+Source: [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). Synchronous — emits before returning to the caller.
+
+```
+api emits server.start.requested
+  ├─ bridge.containerInspect → if running: UPDATE servers SET status='running'
+  │   └─ api emits server.start.done (payload.note='already running')
+  └─ else:
+     ├─ DB: UPDATE servers SET status='starting'
+     ├─ liveBus.publish({type: 'server.status', status: 'starting'})
+     ├─ bridge.containerStart OR bridge.containerRun
+     └─ api emits server.start.done    ← payload.container_id + durationMs
+─────── on any throw above ───────
+api emits server.start.failed → re-throw
+```
+
+#### Stop (POST /servers/:id/stop)
+
+Source: [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). Synchronous, but blocks ~15 s on the graceful RCON wait. Sets a Redis fence at the start so the reconciler ([`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts)) can distinguish a planned stop from an unexpected exit.
+
+```
+api: SET stop:requested:{server_id} EX 300
+api emits server.stop.requested            ← payload.method='graceful'
+  ├─ DB: UPDATE servers SET status='stopping'
+  ├─ liveBus.publish({type: 'server.status', status: 'stopping'})
+  ├─ if creds + settings:
+  │   ├─ rcon AdminBroadcast → api emits server.stop.broadcast (ok + raw_response)
+  │   ├─ sleep 15s
+  │   └─ rcon AdminEndMatch → api emits server.stop.end_match (ok)
+  ├─ bridge.containerStop → api emits server.stop.container_stop (ok + durationMs)
+  └─ api emits server.stop.done              ← payload.totalDurationMs
+─────── on any throw above ───────
+api emits server.stop.failed → re-throw
+
+# later, asynchronously, when Docker reports Status=exited:
+reconciler emits server.stop.reconciler_confirmed (Task 8 — not in this route)
+```
+
+The reconciler-confirmed event is documented separately because it lives in `plugins/status-reconciler.ts`.
+
+#### Soft-delete (DELETE /servers/:id)
+
+Source: [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). Calls `softDeleteServer` from [`lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts), which performs config backup → container stop+rm → directory delete → ufw rule remove → set `deletedAt`.
+
+```
+api emits server.soft_delete.requested
+  ├─ softDeleteServer(...)                    ← reads + backs up configs, removes container, drops ufw rules
+  └─ liveBus.publish({type: 'server.deleted', ...})
+api emits server.soft_delete.done            ← payload.backup_id + files_backed_up + durationMs
+─────── on throw ───────
+api emits server.soft_delete.failed → 500 response
+```
+
+#### Restore (POST /servers/archive/:id/restore)
+
+Source: [`routes/server-archive.ts`](../../../apps/api/src/routes/server-archive.ts). Creates a NEW server row with a new uuid (`new_server_id`); the old archived server stays soft-deleted. The restored server is `pending` — operator must follow with `/install` + `/restore-configs` + `/start`.
+
+```
+api emits server.restore.requested            ← serverId = old archive id; payload.slug
+  ├─ verify slug is free
+  ├─ DB: insert new servers + serverSettings + serverCredentials rows
+  └─ liveBus.publish({type: 'server.restored', old_server_id, new_server_id})
+api emits server.restore.done                 ← serverId = NEW server id; payload.archive_id + new_server_id
+```
+
 `pnpm verify:audit-chain` walks the table in `id` order and recomputes hashes; it exits non-zero on the first mismatch.

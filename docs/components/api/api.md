@@ -220,6 +220,20 @@ app.post('/some-route', { config: { permissions: ['server:start'], audit: { acti
 });
 ```
 
+### Lifecycle event kinds emitted by API routes
+
+Server-lifecycle routes emit a fixed set of `server.*` diag events into the `diag:queue` Redis Stream. Each event carries `component='api'`, the affected `serverId`, the requesting `actorSteamId64` (if authenticated), and a `requestId` threaded from `req.id`. Source files are listed for traceability — they are the source of truth for ordering and payload shape.
+
+| Route | Source | Kinds emitted (in order on the success path) |
+|---|---|---|
+| `POST /servers/:id/install` | [`routes/server-install.ts`](../../../apps/api/src/routes/server-install.ts) | `server.install.requested` → `server.install.depot_seed` → `server.install.ufw_rule` (×4, one per port) → `server.install.container_run` → `server.install.verify` → `server.install.done`. Failures emit `server.install.failed` with `payload.stage` + `payload.errorMessage`; ufw step emits `severity: 'error'` per failed rule. |
+| `POST /servers/:id/start` | [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts) | `server.start.requested` → `server.start.done` (`payload.container_id`, `durationMs`). On failure emits `server.start.failed`. |
+| `POST /servers/:id/stop` | [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts) | Sets Redis key `stop:requested:{server_id}` (TTL 300 s) at request time so the reconciler can distinguish requested-vs-unexpected exits. Then: `server.stop.requested` → `server.stop.broadcast` (RCON `AdminBroadcast`) → `server.stop.end_match` (RCON `AdminEndMatch`) → `server.stop.container_stop` (bridge `containerStop`) → `server.stop.done`. RCON sub-steps emit `severity: 'error'` with `payload.ok=false` if the RCON command fails (the stop continues). The reconciler — not this route — emits `server.stop.reconciler_confirmed` once Docker reports `Status=exited`. |
+| `DELETE /servers/:id` (soft-delete) | [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts) | `server.soft_delete.requested` → `server.soft_delete.done` (`payload.backup_id`, `files_backed_up`, `durationMs`). On failure emits `server.soft_delete.failed`. |
+| `POST /servers/archive/:id/restore` | [`routes/server-archive.ts`](../../../apps/api/src/routes/server-archive.ts) | `server.restore.requested` (carries old archive id as `serverId`) → `server.restore.done` (carries new server id as `serverId`, `payload.archive_id` + `new_server_id`). |
+
+`payload.durationMs` is wall-clock duration of the immediate phase; `totalDurationMs` (on `done`/`failed`) is the duration of the entire route handler.
+
 ## Adding a route
 
 1. Register in the relevant file under [`apps/api/src/routes/`](../../../apps/api/src/routes/).
