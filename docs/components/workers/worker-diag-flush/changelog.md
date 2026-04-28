@@ -16,7 +16,8 @@
 
 ### Changed
 
-- _None._
+- Removed unused `@squad/diag` workspace dependency from `apps/workers/diag-flush/package.json`. The worker consumes the Redis Stream produced by `@squad/diag` but never imports the package itself; only `@squad/shared-config` (`DIAG_STREAM_KEY`, `startHeartbeat`) plus `ioredis`/`pino`/`postgres` are referenced from `src/index.ts`. Refreshed `pnpm-lock.yaml` to drop the dangling workspace link.
+- Graceful shutdown now awaits any in-flight `flushBatch` before tearing down the Postgres pool and closing Redis. The main loop assigns each iteration's batch work to an `inflight: Promise<void> | null`; `SIGINT`/`SIGTERM` flips `stopped`, awaits `inflight` (catching errors so teardown can proceed), then `sql.end({ timeout: 5 })` and `redis.quit()`. Prevents a SIGTERM-mid-batch from racing `XACK` against `redis.quit()` — re-delivery was harmless thanks to `ON CONFLICT (id, ts) DO NOTHING`, but the new ordering avoids the rerun on next startup.
 
 ### Fixed
 
@@ -24,7 +25,7 @@
 
 ### Removed
 
-- _None._
+- `@squad/diag` workspace dep from `apps/workers/diag-flush/package.json` (see Changed).
 
 ### Migration notes
 

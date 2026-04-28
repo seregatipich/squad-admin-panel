@@ -15,7 +15,6 @@
     "ioredis": "^5.4.1",
     "pino": "^9.5.0",
     "postgres": "^3.4.5",
-    "@squad/diag": "workspace:*",
     "@squad/shared-config": "workspace:*"
   },
   "devDependencies": {

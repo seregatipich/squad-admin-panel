@@ -38,7 +38,7 @@ apps/workers/diag-flush/
 ## Dependencies
 
 - [`@squad/shared-config`](../../shared-config/README.md) — `DIAG_STREAM_KEY`, `startHeartbeat`.
-- [`@squad/diag`](../../diag/README.md) — type contract for `DiagEvent` (consumed conceptually; the worker re-derives the shape from the flat XREAD field list).
+- [`@squad/diag`](../../diag/README.md) — wire-format contract only (NOT a package dependency). The worker re-derives the row shape from the flat XREAD field list and never imports `@squad/diag`. Producers must use `@squad/diag.emit` so the entries match what `parseEntry` accepts.
 - `ioredis` — Redis client (`xreadgroup`, `xack`, `xgroup`).
 - `postgres` — driver. The worker uses `sql.unsafe(text, args)` for batched INSERTs because Drizzle's tagged-template helpers do not compose well over a variable row count.
 - `pino` — structured logging.

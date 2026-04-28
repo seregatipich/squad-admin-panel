@@ -305,9 +305,6 @@ importers:
 
   apps/workers/diag-flush:
     dependencies:
-      '@squad/diag':
-        specifier: workspace:*
-        version: link:../../../packages/diag
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config

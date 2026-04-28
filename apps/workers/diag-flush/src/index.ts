@@ -136,10 +136,15 @@ async function main(): Promise<void> {
   });
 
   let stopped = false;
+  let inflight: Promise<void> | null = null;
   const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
     stopped = true;
     stopHeartbeat();
+    if (inflight) {
+      log.info('awaiting in-flight batch before teardown');
+      await inflight.catch(() => undefined);
+    }
     await sql.end({ timeout: 5 });
     await redis.quit().catch(() => undefined);
     process.exit(0);
@@ -164,8 +169,15 @@ async function main(): Promise<void> {
         '>',
       )) as [string, [string, string[]][]][] | null;
       if (!res) continue;
-      for (const [, entries] of res) {
-        await flushBatch({ sql, redis, group: GROUP, stream: DIAG_STREAM_KEY, entries });
+      inflight = (async () => {
+        for (const [, entries] of res) {
+          await flushBatch({ sql, redis, group: GROUP, stream: DIAG_STREAM_KEY, entries });
+        }
+      })();
+      try {
+        await inflight;
+      } finally {
+        inflight = null;
       }
     } catch (err) {
       log.error({ err: (err as Error).message }, 'flush iteration failed');

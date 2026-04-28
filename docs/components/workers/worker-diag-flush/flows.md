@@ -83,11 +83,12 @@ Independent of the main loop, `startHeartbeat({ redis, name: 'diag-flush', statu
 1. Log `{sig} shutdown`.
 2. Set `stopped = true` so the next iteration of the main loop exits cleanly.
 3. Stop the heartbeat publisher.
-4. Wait up to 5 s for `sql.end({ timeout: 5 })` to drain in-flight queries.
-5. `redis.quit()` (best-effort, swallow errors).
-6. `process.exit(0)`.
+4. If a batch is currently in flight, `await inflight` (errors swallowed so teardown still runs). The main loop tracks each iteration's `flushBatch` work in a module-local `inflight: Promise<void> | null`; this guarantees the active batch's `INSERT` + `XACK` complete before the clients close, so a SIGTERM mid-batch never races `XACK` against `redis.quit()`.
+5. Wait up to 5 s for `sql.end({ timeout: 5 })` to drain remaining queries.
+6. `redis.quit()` (best-effort, swallow errors).
+7. `process.exit(0)`.
 
-If the loop is currently inside a 1 s `BLOCK` `XREADGROUP`, the `redis.quit()` aborts the call — the loop's catch logs the error once, then `stopped` is `true` so the while exits. Total shutdown time is bounded at 5 s by the `sql.end` timeout.
+If the loop is currently inside a 1 s `BLOCK` `XREADGROUP` (no batch in flight, `inflight` is `null`), the `redis.quit()` aborts the call — the loop's catch logs the error once, then `stopped` is `true` so the while exits. Total shutdown time is bounded by the active batch (typically < 50 ms for an INSERT of ≤ 100 rows) plus the 5 s `sql.end` timeout.
 
 ## Crash recovery
 
