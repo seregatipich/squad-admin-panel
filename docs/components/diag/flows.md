@@ -20,7 +20,7 @@ producer ──emit(ev)──▶ @squad/diag ──XADD──▶ Redis Stream `d
                             └─▶ pino.debug (when enabled)
 ```
 
-The downstream consumer (`worker-diag-flush`, separate package) reads with `XREADGROUP`, batches into Postgres, and `XACK`s. That flow is out of scope here.
+The downstream consumer ([`worker-diag-flush`](../workers/worker-diag-flush/README.md), shipped in Task 4) reads with `XREADGROUP`, batches into Postgres with `ON CONFLICT (id, ts) DO NOTHING`, and `XACK`s. The full consumer flow is documented in [`worker-diag-flush/flows.md`](../workers/worker-diag-flush/flows.md); the producer never sees its progress and never blocks on it.
 
 ## Fallback flow — Redis throws
 
@@ -73,7 +73,7 @@ The recommended pattern (planned for `apps/api`, Task 5) is once-per-process at 
 |---|---|---|
 | `redis` (infra) | out | `XADD diag:queue …` |
 | pino (`Logger`) | out | `warn` on Redis failure, `debug` on success |
-| [`worker-diag-flush`](../workers/README.md) (planned, Task 4) | none direct | reads `diag:queue` via `XREADGROUP`; the producer never sees it |
+| [`worker-diag-flush`](../workers/worker-diag-flush/README.md) | none direct | reads `diag:queue` via `XREADGROUP`; the producer never sees it |
 | [`@squad/shared-config`](../shared-config/README.md) | out (re-exports) | `DIAG_STREAM_KEY`, `DIAG_STREAM_MAXLEN` are mirrored there for consumers that do not want a dep on `@squad/diag` |
 | [`@squad/api`](../api/README.md) (planned, Task 5) | in | will decorate Fastify with a per-request `Diag` instance |
 | every `@squad/worker-*` (planned, later tasks) | in | will instrument startup, RCON connect/disconnect, parser errors, etc. |

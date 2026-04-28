@@ -10,6 +10,7 @@
 - Constants `DIAG_STREAM_KEY = 'diag:queue'` and `DIAG_STREAM_MAXLEN = 100_000`.
 - Vitest unit suite: XADD wire-shape assertion + pino-fallback assertion.
 - `DIAG_STREAM_KEY` / `DIAG_STREAM_MAXLEN` re-exported from `@squad/shared-config` for consumers that do not want a runtime dep on `@squad/diag` (the wipe endpoint, `worker-diag-flush`).
+- Consumer `worker-diag-flush` shipped (Task 4 of the same plan); see [`docs/components/workers/worker-diag-flush/`](../workers/worker-diag-flush/README.md). It reads `diag:queue` with `XREADGROUP` and batches into `diagnostic_events`. The producer side of `@squad/diag` is unchanged by Task 4.
 
 ### Changed
 
