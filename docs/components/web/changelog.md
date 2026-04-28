@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-28 — Dashboard fetches /host/disk-usage in preparation for disk sub-segment
+
+### Added
+
+- `apps/web/src/app/(dashboard)/dashboard/page.tsx` — new `diskBreakdown` state populated by polling `GET /api/v1/host/disk-usage` every 30 s on mount. Failures are tolerated silently. The state is plumbed through `HostBlock` to `DiskCard` but not yet rendered — Task 6 will add the visual sub-segment that splits the disk bar into «панель» / «остальное» / «свободно».
+
 ## 2026-04-26 — Bundle F: archive UI + connection banner + live-bus client
 
 ### Added

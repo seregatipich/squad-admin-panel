@@ -77,6 +77,23 @@ interface Worker {
   status?: string;
 }
 
+interface DiskBreakdown {
+  configs_bytes: number;
+  saved_total_bytes: number;
+  saved_per_server: { uuid: string; bytes: number }[];
+  depot_volume_bytes: number;
+  docker_volumes: { name: string; bytes: number }[];
+  docker_images: { repository: string; tag: string; bytes: number }[];
+  audit_archive_bytes: number;
+  total_panel_bytes: number;
+  host_total_bytes: number;
+  host_used_bytes: number;
+  computed_at: string;
+  cache_age_seconds: number;
+  panel_pct: number;
+  other_pct: number;
+}
+
 const POLL_MS = 4000;
 const WORKER_STALE_MS = 15_000;
 const WORKER_OK_MS = 10_000;
@@ -165,6 +182,7 @@ export default function DashboardPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
+  const [diskBreakdown, setDiskBreakdown] = useState<DiskBreakdown | null>(null);
 
   const load = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -198,6 +216,29 @@ export default function DashboardPage() {
       clearInterval(t);
     };
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadDiskBreakdown() {
+      try {
+        const res = await fetch('/api/v1/host/disk-usage', {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        if (!res.ok) return;
+        const payload = (await res.json()) as DiskBreakdown;
+        if (!cancelled) setDiskBreakdown(payload);
+      } catch {
+        // tolerate transient errors — disk breakdown is auxiliary
+      }
+    }
+    void loadDiskBreakdown();
+    const t = setInterval(loadDiskBreakdown, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
 
   const runningCount = servers.filter((s) => s.status === 'running').length;
   const playersOnline = servers.reduce((acc, s) => acc + (s.player_count ?? 0), 0);
@@ -274,6 +315,7 @@ export default function DashboardPage() {
             metrics={metrics}
             health={health}
             lastUpdate={lastUpdate}
+            diskBreakdown={diskBreakdown}
           />
         </div>
       </section>
@@ -557,12 +599,14 @@ function HostBlock({
   metrics,
   health,
   lastUpdate,
+  diskBreakdown,
 }: {
   bridge: BridgeStatus | null;
   info: HostInfo | null;
   metrics: HostMetrics | null;
   health: ReturnType<typeof computeHostHealth>;
   lastUpdate: Date | null;
+  diskBreakdown: DiskBreakdown | null;
 }) {
   const isLoading = info === null || metrics === null;
   const [openMetric, setOpenMetric] = useState<MetricKey | null>(null);
@@ -648,7 +692,7 @@ function HostBlock({
               className="text-left transition hover:ring-2 hover:ring-purple-700/40 rounded-xl"
               aria-label="Открыть график диска за 24 часа"
             >
-              <DiskCard metrics={metrics} />
+              <DiskCard metrics={metrics} diskBreakdown={diskBreakdown} />
             </button>
             <button
               type="button"
@@ -727,7 +771,13 @@ function RamCard({ metrics }: { metrics: HostMetrics }) {
   );
 }
 
-function DiskCard({ metrics }: { metrics: HostMetrics }) {
+function DiskCard({
+  metrics,
+  diskBreakdown: _diskBreakdown,
+}: {
+  metrics: HostMetrics;
+  diskBreakdown: DiskBreakdown | null;
+}) {
   const total = metrics.disk_total_bytes;
   if (total <= 0) {
     return (
