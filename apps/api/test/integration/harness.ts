@@ -159,6 +159,20 @@ export interface FakeBridge {
   directoryDelete: (p: { path: string }) => Promise<{ removed: boolean }>;
   processInfo: (p: { pid: number }) => Promise<{ pid: number; exists: boolean }>;
   hostAgentRestart: () => Promise<{ status: 'restarting' }>;
+  panelDiskUsage: () => Promise<{
+    configs_bytes: number;
+    saved_total_bytes: number;
+    saved_per_server: Array<{ uuid: string; bytes: number }>;
+    depot_volume_bytes: number;
+    docker_volumes: Array<{ name: string; bytes: number }>;
+    docker_images: Array<{ repository: string; tag: string; bytes: number }>;
+    audit_archive_bytes: number;
+    total_panel_bytes: number;
+    host_total_bytes: number;
+    host_used_bytes: number;
+    computed_at: string;
+    cache_age_seconds: number;
+  }>;
   connect(): Promise<void>;
   close(): Promise<void>;
   /** Overridable in-memory file store; routes use /api/v1/servers/:id/configs
@@ -246,6 +260,20 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
     directoryDelete: async () => ({ removed: true }),
     processInfo: async ({ pid }) => ({ pid, exists: true }),
     hostAgentRestart: async () => ({ status: 'restarting' as const }),
+    panelDiskUsage: async () => ({
+      configs_bytes: 0,
+      saved_total_bytes: 0,
+      saved_per_server: [],
+      depot_volume_bytes: 0,
+      docker_volumes: [],
+      docker_images: [],
+      audit_archive_bytes: 0,
+      total_panel_bytes: 0,
+      host_total_bytes: 0,
+      host_used_bytes: 0,
+      computed_at: new Date().toISOString(),
+      cache_age_seconds: 0,
+    }),
   };
   return { ...base, ...overrides, files };
 }

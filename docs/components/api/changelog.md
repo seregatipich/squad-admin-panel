@@ -1,6 +1,15 @@
 # `api` — changelog
 
-## 2026-04-26 — Reconciler restart-resilience: parallel tick, watchdog, eager start/restart
+## 2026-04-28 — `GET /api/v1/host/disk-usage` (panel disk breakdown, Phase B1)
+
+### Added
+
+- `GET /api/v1/host/disk-usage` (RBAC `host:view`, no audit) — wraps `bridge.panelDiskUsage()` and appends two derived fields: `panel_pct` (panel's share of host total in percent) and `other_pct = max(0, host_used_bytes / host_total_bytes * 100 - panel_pct)`. Both fall back to `0` when `host_total_bytes <= 0` so a zero-capacity bridge response never produces `NaN`. No API-side cache — the bridge already caches the heavy `du`/`docker df` walk for 5 min.
+- `apps/api/test/host-disk-usage.test.ts` — 4 integration tests (happy path with derived percentages, `host_total_bytes=0` edge case, 403 for a session with no role, 401 without a session).
+
+### Changed
+
+- `apps/api/test/integration/harness.ts` — `FakeBridge` interface and `makeFakeBridge()` now expose `panelDiskUsage` so tests can stub the new bridge method without a type-error.
 
 ### Added
 
