@@ -39,6 +39,8 @@ If a migration shipped to production must be reverted, the path is:
 | 0010 | `0010_drop_servers_org_id` | Drops `servers.org_id` and its composite indexes, adds single-column replacements. Completes the multi-tenancy removal started in 0009. |
 | 0011 | `0011_servers_is_canary` | Carry-forward: ensures `servers.is_canary boolean DEFAULT false` exists (originally added on a parallel branch). `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` — safe on both fresh and existing DBs. |
 | 0012 | `0012_host_manage_permission` | Inserts `host:manage` permission for Owner and Senior Admin roles (`ON CONFLICT DO NOTHING`). |
+| 0013 | `0013_servers_soft_delete` | Adds `servers.deleted_at`, `servers.deleted_by_steam_id64`, `servers.deletion_backup_marker_id`, partial unique index on `slug` WHERE `deleted_at IS NULL`. |
+| 0017 | `0017_diagnostic_events` | Adds `diagnostic_events` table — range-partitioned by `ts` (one partition per UTC day), composite PK `(id, ts)`, severity check, FK → `servers.id` ON DELETE SET NULL. Bootstraps 25 day-partitions. Mutable; pruned to 24h by `worker-event-partition`. |
 
 ## Adding a migration
 

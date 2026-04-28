@@ -99,6 +99,13 @@
       "when": 1745982000000,
       "tag": "0013_servers_soft_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1777395649000,
+      "tag": "0017_diagnostic_events",
+      "breakpoints": true
     }
   ]
 }
