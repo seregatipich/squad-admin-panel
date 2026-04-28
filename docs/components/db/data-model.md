@@ -173,6 +173,7 @@ Per-day range-partitioned table for panel-internal diagnostic events emitted by 
 - `PARTITION BY RANGE (ts)`.
 - Partition naming: `diagnostic_events_YYYYMMDD`, one per UTC day.
 - Bootstrap creates 25 partitions: yesterday + today + 23 future days. `worker-event-partition` rotates new days in and drops anything older than 24h.
+- **UTC invariant**: partition bounds and names MUST be computed in UTC. The worker (`apps/workers/event-partition/src/index.ts`) uses `Date.toISOString()` (UTC) for both. Production Postgres MUST run with `TimeZone = 'UTC'` (or behave equivalently for date arithmetic). Migration `0018_diagnostic_events_utc_invariant.sql` documents this contract; any non-UTC bootstrap partitions written by the original `0017` `current_date` loop age out within 24h via the worker's drop-stale sweep.
 
 **Columns**
 
@@ -660,3 +661,5 @@ Applied in order by `pnpm db:migrate`. Journal: [`packages/db/drizzle/meta/_jour
 | 0011 | `0011_servers_is_canary` | 2026-04-29 | Carry-forward: `ALTER TABLE servers ADD COLUMN IF NOT EXISTS is_canary boolean NOT NULL DEFAULT false` |
 | 0012 | `0012_host_manage_permission` | 2026-04-29 | Grants `host:manage` permission to Owner and Senior Admin system roles |
 | 0013 | `0013_servers_soft_delete` | 2026-04-30 | Adds `servers.deleted_at` / `deleted_by_steam_id64` / `deletion_backup_marker_id`; replaces full unique `servers_slug_key` with partial `servers_slug_active_key` (where `deleted_at IS NULL`); adds `servers_deleted_at_idx` |
+| 0017 | `0017_diagnostic_events` | 2026-04-28 | Creates `diagnostic_events` partitioned table (range on `ts`, daily) with composite PK, severity check, FK → `servers.id` ON DELETE SET NULL, and 25-day bootstrap of partitions |
+| 0018 | `0018_diagnostic_events_utc_invariant` | 2026-04-28 | No-op (SELECT 1). Documents the UTC-bounds invariant for `diagnostic_events` partitions enforced by `worker-event-partition`. Required because `0017`'s bootstrap used session-TZ-dependent `current_date` |

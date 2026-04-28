@@ -41,6 +41,7 @@ If a migration shipped to production must be reverted, the path is:
 | 0012 | `0012_host_manage_permission` | Inserts `host:manage` permission for Owner and Senior Admin roles (`ON CONFLICT DO NOTHING`). |
 | 0013 | `0013_servers_soft_delete` | Adds `servers.deleted_at`, `servers.deleted_by_steam_id64`, `servers.deletion_backup_marker_id`, partial unique index on `slug` WHERE `deleted_at IS NULL`. |
 | 0017 | `0017_diagnostic_events` | Adds `diagnostic_events` table — range-partitioned by `ts` (one partition per UTC day), composite PK `(id, ts)`, severity check, FK → `servers.id` ON DELETE SET NULL. Bootstraps 25 day-partitions. Mutable; pruned to 24h by `worker-event-partition`. |
+| 0018 | `0018_diagnostic_events_utc_invariant` | No-op (`SELECT 1`). Documents the UTC-bounds invariant for `diagnostic_events` partitions: production Postgres MUST run with `TimeZone = 'UTC'`. The worker derives partition names/bounds in UTC via `Date.toISOString()`; `0017`'s bootstrap loop used session-TZ-dependent `current_date` and could clash with the worker on non-UTC deployments. Non-UTC bootstrap partitions naturally age out within 24h via the worker's drop-stale sweep. |
 
 ## Adding a migration
 

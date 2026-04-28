@@ -16,6 +16,7 @@ const log = pino({
  * land without a partition.
  */
 export async function ensureDiagPartitions(sql: postgres.Sql): Promise<void> {
+  // Partition bounds are computed in UTC; production Postgres MUST run with `TimeZone = 'UTC'` or equivalent for correctness.
   for (const offset of [-1, 0, 1, 2]) {
     const date = new Date(Date.now() + offset * 86_400_000);
     const yyyymmdd = date.toISOString().slice(0, 10).replace(/-/g, '');
@@ -73,8 +74,15 @@ async function main() {
   }
 
   async function tick() {
-    await ensurePartitions();
-    await ensureDiagPartitions(sql);
+    const results = await Promise.allSettled([ensurePartitions(), ensureDiagPartitions(sql)]);
+    for (const r of results) {
+      if (r.status === 'rejected') {
+        log.error(
+          { err: r.reason instanceof Error ? r.reason.message : String(r.reason) },
+          'partition rotation tick rejected',
+        );
+      }
+    }
   }
 
   await tick();

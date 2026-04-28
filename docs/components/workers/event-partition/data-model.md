@@ -24,6 +24,8 @@ Declared by migration `packages/db/drizzle/0017_diagnostic_events.sql`. Partitio
 
 Initial 25 daily partitions (yesterday + today + 23 future) are bootstrapped by the migration. The worker takes over from the next hourly tick and keeps `[-1, 0, +1, +2]` days from `current_date` present, dropping anything older than yesterday.
 
+**UTC invariant.** Partition bounds and names are computed in UTC by the worker (via `Date.toISOString()`). Production Postgres MUST run with `TimeZone = 'UTC'` (or behave equivalently for date arithmetic) so the worker's UTC-derived names align with any partitions created from session-TZ-dependent SQL. Migration `0018_diagnostic_events_utc_invariant.sql` documents this contract; any non-UTC bootstrap partitions written by the original `0017` loop age out within 24h via the worker's drop-stale sweep, after which the system converges.
+
 #### Partition naming convention
 
 ```

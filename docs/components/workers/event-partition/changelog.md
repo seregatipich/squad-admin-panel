@@ -16,6 +16,11 @@
 
 - The bootstrap partitions for `diagnostic_events` come from migration `0017_diagnostic_events.sql` (yesterday + today + 23 future days). After this change they are kept current by the worker; you no longer need to run the migration to extend the buffer.
 
+### Fixed (post-merge)
+
+- Documented and enforced the UTC invariant for `diagnostic_events` partitions. Migration `0017_diagnostic_events.sql` used session-TZ-dependent `current_date` for its bootstrap loop, while `ensureDiagPartitions` derives partition names and bounds from `Date.toISOString()` (UTC). On a non-UTC Postgres deployment the worker's `CREATE TABLE IF NOT EXISTS` would silently skip a clashing-name bootstrap partition with mismatched bounds, producing "data lands outside any partition" failures. Added new migration `0018_diagnostic_events_utc_invariant.sql` (no-op `SELECT 1` plus comment) and a one-line invariant comment at the top of `ensureDiagPartitions`. Production Postgres MUST run with `TimeZone = 'UTC'`. Any non-UTC bootstrap partitions age out within 24h via the worker's drop-stale logic, after which the system converges.
+- `tick()` now runs `ensurePartitions()` and `ensureDiagPartitions(sql)` via `Promise.allSettled` instead of sequential `await`. A transient pg failure in the events placeholder no longer starves diagnostic-events rotation; rejections are logged at `error` level individually.
+
 ## 2026-04-26
 
 ### Added
