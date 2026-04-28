@@ -14,14 +14,46 @@ export default fp<{ config: AppConfig }>(async (app, opts) => {
     retryStrategy: (times: number) => Math.min(2000, 200 * 2 ** Math.min(times, 6)),
     reconnectOnError: (err: Error) => err.message.includes('READONLY'),
   });
+  let redisDown = false;
   redis.on('error', (err: Error) => {
     app.log.warn({ err: err.message }, 'redis error (will retry)');
+    app.diag
+      ?.emit({
+        component: 'api',
+        kind: 'redis.ping.fail',
+        severity: 'error',
+        message: `redis error: ${err.message}`,
+        payload: { err: err.message },
+      })
+      .catch(() => undefined);
+    redisDown = true;
   });
   redis.on('reconnecting', (delay: number) => {
     app.log.info({ delay }, 'redis reconnecting');
+    app.diag
+      ?.emit({
+        component: 'api',
+        kind: 'redis.reconnect.attempt',
+        severity: 'warn',
+        message: 'redis reconnecting',
+        payload: { delayMs: delay },
+      })
+      .catch(() => undefined);
   });
   redis.on('ready', () => {
     app.log.info('redis ready');
+    if (redisDown) {
+      app.diag
+        ?.emit({
+          component: 'api',
+          kind: 'redis.reconnect.success',
+          severity: 'info',
+          message: 'redis ready after a prior failure',
+          payload: {},
+        })
+        .catch(() => undefined);
+      redisDown = false;
+    }
   });
   app.decorate('redis', redis);
   app.addHook('onClose', async () => {

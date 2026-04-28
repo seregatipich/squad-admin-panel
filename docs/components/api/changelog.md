@@ -1,5 +1,29 @@
 # `api` — changelog
 
+## 2026-04-28 — connector plugins emit diag events on pg/redis state changes
+
+### Added
+
+- `apps/api/src/plugins/redis.ts` — three new ioredis listeners translate connection-state events into diag emits. Each emit uses `app.diag?.emit(...).catch(() => undefined)` (optional chaining because the redis plugin registers BEFORE the diag plugin in [`server.ts`](../../../apps/api/src/server.ts)):
+  - `error` → `redis.ping.fail` (severity `error`, payload `{ err }`). Sets a module-local `redisDown` flag.
+  - `reconnecting` → `redis.reconnect.attempt` (severity `warn`, payload `{ delayMs }`).
+  - `ready` AFTER a prior `error` → `redis.reconnect.success` (severity `info`, payload `{}`). Resets `redisDown`. Clean startup is silent.
+- `apps/api/src/plugins/db-health.ts` — new plugin running a 30 s `setInterval` that executes `SELECT 1` against `app.db`. Emits `pg.ping.fail` (severity `error`, payload `{ err }`) on every throw and `pg.ping.ok` (severity `info`, payload `{}`) only as a recovery signal (first OK after a prior fail; clean startup is silent). Per-app `pgDown` state is tracked in a `WeakMap<FastifyInstance, boolean>`. The exported `pgHealthTick(app)` helper drives the tick deterministically for tests; the timer is `unref()`-ed so it does not block process exit, and the `onClose` hook clears it. Registered in [`server.ts`](../../../apps/api/src/server.ts) AFTER both `database` and `diag`.
+- `apps/api/test/diag-connector.test.ts` — focused integration test (9 cases):
+  - Three redis-listener cases: `error` → `redis.ping.fail` followed by `ready` → `redis.reconnect.success`; `ready` without prior error stays silent (clean-startup regression); `reconnecting` → `redis.reconnect.attempt`. Drives the real redis plugin against a live ioredis client and stubs `app.diag.emit` to capture events.
+  - Three pg-health cases: throw-then-success produces fail+ok; clean steady-state produces zero events; consecutive failures produce many `pg.ping.fail` but only one `pg.ping.ok` on recovery.
+  - Three plumbing-regression cases: `app.redis` is a real `Redis` instance after the redis plugin runs; `app.db` decoration is honoured by the db-health plugin without registering the database plugin.
+
+### Changed
+
+- `docs/components/api/api.md` — new "Connector listener event kinds" subsection under "Decorations" listing the five diag kinds (`redis.ping.fail`, `redis.reconnect.attempt`, `redis.reconnect.success`, `pg.ping.fail`, `pg.ping.ok`) + payload shapes + clean-startup-silent semantics.
+- `docs/components/api/flows.md` — new "Connector listeners" subsection under "Diagnostic emission" with ASCII flows for both redis and pg-health, including the `redisDown` flag rationale and the 30 s tick wiring.
+- `apps/api/src/server.ts` — registers `dbHealthPlugin` immediately after `diagPlugin`.
+
+### Migration notes
+
+No DB schema changes. No new env vars. The 30 s pg-health tick adds one `SELECT 1` per app process every 30 s — negligible load on a healthy postgres. Consumers reading `diagnostic_events` will start seeing rows where `component='api'` and `kind` matches `redis.{ping.fail,reconnect.attempt,reconnect.success}` / `pg.{ping.fail,ping.ok}`. Phase B detector logic keys off these kinds for the "infra degraded" panel.
+
 ## 2026-04-28 — bridge plugin emits diag events on connect / disconnect / rpc-error / rtt-outlier
 
 ### Added

@@ -257,6 +257,18 @@ The bridge plugin ([`apps/api/src/plugins/bridge.ts`](../../../apps/api/src/plug
 | `bridge.rpc.error` | Any RPC response with `ok: false` (path/image allowlist violation, runtime error, etc.). | `warn` | `{ method, code, message }` mirrors the `BridgeError` thrown to the caller. |
 | `bridge.rtt.outlier` | Successful RPC where `rttMs > 50`. The threshold is fixed in `apps/api/src/plugins/bridge.ts` (`RTT_OUTLIER_THRESHOLD_MS`). | `warn` | `{ rttMs, thresholdMs }` |
 
+### Connector listener event kinds
+
+The redis plugin ([`apps/api/src/plugins/redis.ts`](../../../apps/api/src/plugins/redis.ts)) attaches three listeners to the singleton `ioredis` client and translates each into a diag emit. The db-health plugin ([`apps/api/src/plugins/db-health.ts`](../../../apps/api/src/plugins/db-health.ts)) runs a 30 s `SELECT 1` loop and emits on transitions. All five kinds carry `component='api'`, no `serverId`, no `actorSteamId64`. Listener-side `app.diag?.emit(...)` rejections are swallowed via `.catch(() => undefined)` (redis listeners) and never thrown out of the tick (db-health) so a Redis hiccup never propagates back into the connector layer. The redis plugin is registered BEFORE the diag plugin, so it uses optional chaining (`app.diag?.emit`) — the diag handle binds at emit time, not at listener registration.
+
+| Kind | When | `severity` | Payload |
+|---|---|---|---|
+| `redis.ping.fail` | ioredis `error` event fires (connection refused, READONLY, socket reset, etc.). Fires on every error, no de-duplication. | `error` | `{ err }` — the error message string. |
+| `redis.reconnect.attempt` | ioredis `reconnecting` event fires (the retry-strategy is about to re-dial). | `warn` | `{ delayMs }` — the backoff delay in milliseconds the retry-strategy chose. |
+| `redis.reconnect.success` | ioredis `ready` event fires AFTER a prior `error`. The first `ready` of clean startup is silent. The internal `redisDown` flag is reset to `false` on each successful re-arm. | `info` | `{}` |
+| `pg.ping.fail` | The 30 s `SELECT 1` health-check throws (postgres-js wraps connection refused / timeout / query error). Fires on every failed tick. | `error` | `{ err }` — the error message string. |
+| `pg.ping.ok` | First successful `SELECT 1` AFTER a prior `pg.ping.fail`. Subsequent OK ticks are silent until the next failure. Clean startup is silent. | `info` | `{}` |
+
 ## Adding a route
 
 1. Register in the relevant file under [`apps/api/src/routes/`](../../../apps/api/src/routes/).
