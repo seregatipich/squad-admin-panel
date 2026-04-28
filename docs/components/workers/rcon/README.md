@@ -11,6 +11,7 @@ Maintains authenticated Valve-RCON connections to every Squad server whose DB st
 - Poll `ListPlayers` every 30 s and `ShowServerInfo` every 90 s (keepalive).
 - Write `rcon:status:{serverId}` Redis key (TTL 300 s) after every poll.
 - Publish `rcon.connected`, `rcon.disconnected`, `rcon.players_polled` envelopes to `events:server:{serverId}`.
+- Emit `rcon.connected` / `rcon.auth_failed` / `rcon.disconnected` / `rcon.reconnect_attempt` / `rcon.targets.changed` diag events to the `diag:queue` Redis Stream via `@squad/diag`.
 - Upsert `players` and `player_name_history` rows in Postgres.
 - Publish `worker:heartbeat:rcon` every 5 s (TTL 30 s).
 
@@ -25,8 +26,8 @@ Maintains authenticated Valve-RCON connections to every Squad server whose DB st
 ```
 apps/workers/rcon/
   src/
-    index.ts          — entry point, reconcile loop, shutdown
-    supervisor.ts     — RconSupervisor + PerServerSupervisor
+    index.ts          — entry point, reconcile loop, shutdown, createDiag wiring
+    supervisor.ts     — RconSupervisor + PerServerSupervisor (diag emits)
     client.ts         — RconClient (TCP + multi-packet framing)
     protocol.ts       — Valve RCON encoder/decoder, RconPacketStream
     parse-list-players.ts
@@ -36,11 +37,15 @@ apps/workers/rcon/
     parse-list-players.test.ts
     parse-server-info.test.ts
     protocol.test.ts
+    supervisor.test.ts
+    supervisor-diag.test.ts
+    contract.test.ts
 ```
 
 ## Dependencies
 
 - `@squad/db` — Drizzle client, `servers`, `serverCredentials`, `serverSettings` tables
+- `@squad/diag` — `createDiag({ redis, log })` for per-target lifecycle + targets-changed emits to `diag:queue`
 - `@squad/shared-config` — `startHeartbeat`, `resolveRconHost`, `redisSinkStream`
 - `@squad/shared-types` — `EventEnvelope`, `STREAM_NAME`, `CONSUMER_GROUP`
 - `ioredis` — Redis client

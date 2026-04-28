@@ -466,6 +466,9 @@ importers:
       '@squad/db':
         specifier: workspace:*
         version: link:../../../packages/db
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../../packages/diag
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config

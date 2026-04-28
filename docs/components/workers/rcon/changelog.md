@@ -1,5 +1,41 @@
 # Changelog — worker-rcon
 
+## 2026-04-28 — Diagnostic-bundle Phase A2: diag emits
+
+### Added
+
+- `@squad/diag` dependency (`workspace:*`) added to `apps/workers/rcon/package.json`. The worker constructs a single `Diag` with `createDiag({ redis, log })` at startup and threads it into `RconSupervisor` via the new optional `SupervisorOptions.diag` field.
+- Five new fire-and-forget emit kinds on `diag:queue`, all `component: 'worker-rcon'`:
+  - `rcon.connected` (info, per-target) — fires after AUTH succeeds. Payload `{ host, port }`.
+  - `rcon.auth_failed` (error, per-target) — fires when `RconClient.authenticate()` raises `rcon auth rejected` (id=-1) or `rcon auth timeout` (5 s). Payload `{ host, port, err }`.
+  - `rcon.disconnected` (warn, per-target) — fires whenever the connect-loop tears down a session (remote-close, explicit-close, 3-strike poll-failure circuit-breaker, supervisor stop). Payload `{ host, port, reason }`.
+  - `rcon.reconnect_attempt` (warn, per-target) — fires before each backoff sleep that precedes a reconnect. Payload `{ host, port, backoffMs }`.
+  - `rcon.targets.changed` (info, no `serverId`) — fires from `RconSupervisor.reconcile()` on a **net delta only** (zero emits when the polling set is unchanged across a tick). Payload `{ added: string[], removed: string[], total: number }`.
+- `apps/workers/rcon/test/supervisor-diag.test.ts`: 5 unit tests covering targets-changed delta semantics, no-emit-on-unchanged-set, no-diag-no-op, and live-TCP fixture verification of `rcon.connected` (good password) + `rcon.auth_failed` (rejected password) using a small in-process fake RCON server that speaks the Squad two-packet AUTH dance.
+
+### Changed
+
+- `RconSupervisor.reconcile()` now tracks `added`/`removed` arrays per tick and only emits `rcon.targets.changed` when at least one bucket is non-empty.
+- `PerServerSupervisor.connectLoop()` now records `lastDisconnectReason` from the `RconClient.onDisconnect` callback and the auth-failure path so `rcon.disconnected` carries a meaningful `reason` payload.
+
+### Fixed
+
+- _None._
+
+### Removed
+
+- _None._
+
+### Migration notes
+
+- No DB migration. No breaking change to existing envelopes — the `rcon.connected` / `rcon.disconnected` events on `events:server:{id}` (live-bus fan-out) are unchanged. The new emits live on the separate `diag:queue` stream consumed by `worker-diag-flush`.
+- `rcon.command.timeout` is **not** wired up here. Worker-rcon only runs auto-poll commands (`ListPlayers`, `ShowServerInfo`); manual RCON commands (`AdminBroadcast`, `AdminEndMatch`, `AdminKick`) are issued directly by the API via `apps/api/src/lib/rcon-send.ts` and never travel through this worker. The plan explicitly allows skipping the emit when "the worker doesn't currently have a manual-command path".
+
+### References
+
+- Plan: [`docs/superpowers/plans/2026-04-28-diagnostic-bundle.md`](../../../superpowers/plans/2026-04-28-diagnostic-bundle.md) Task 11
+- `@squad/diag` API: [`docs/components/diag/api.md`](../../diag/api.md)
+
 ## 2026-04-26 — Bundle E: live-bus fan-out
 
 ### Changed

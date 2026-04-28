@@ -77,3 +77,19 @@ Emitted after every successful `ListPlayers` + `ShowServerInfo` cycle.
 ## Heartbeat key: `worker:heartbeat:rcon`
 
 Published every 5 s, TTL 30 s. Value is a `HeartbeatPayload` JSON object (see `packages/shared-config/src/heartbeat.ts`). The `status` field contains `"targets=N"` where N is the number of active RCON connections.
+
+## Diagnostic events (`diag:queue` Redis Stream)
+
+The worker emits structured `DiagEvent`s via `@squad/diag` (`createDiag({ redis, log })` constructed once at startup, passed into the supervisor). Every emit is fire-and-forget — failures are swallowed so telemetry never derails the supervisor. All five kinds carry `component: 'worker-rcon'`. Lifecycle kinds carry `serverId` so the bundle's per-server brief can group them.
+
+| Kind | Severity | `serverId` | Trigger | Payload fields |
+|---|---|---|---|---|
+| `rcon.connected` | `info` | yes | AUTH succeeded against the target | `host`, `port` |
+| `rcon.auth_failed` | `error` | yes | `RconClient.authenticate()` raised `rcon auth rejected` (id=-1) or `rcon auth timeout` (5 s) | `host`, `port`, `err` |
+| `rcon.disconnected` | `warn` | yes | TCP close (remote-close / explicit-close), 3-strike poll-failure circuit-breaker, or supervisor stop | `host`, `port`, `reason` |
+| `rcon.reconnect_attempt` | `warn` | yes | Before each backoff sleep that precedes a reconnect | `host`, `port`, `backoffMs` |
+| `rcon.targets.changed` | `info` | no | Net delta in the polling set during `RconSupervisor.reconcile()` (no emit when the set is unchanged) | `added: string[]`, `removed: string[]`, `total: number` |
+
+`rcon.command.timeout` is intentionally **not** emitted by this worker. Worker-rcon only runs auto-poll commands (`ListPlayers` every 30 s, `ShowServerInfo` keepalive every 90 s) — emitting on those would generate persistent noise. Manual RCON commands (`AdminBroadcast`, `AdminEndMatch`, `AdminKick`, …) are issued directly by the API via `apps/api/src/lib/rcon-send.ts` and never travel through this worker, so the manual-command timeout signal lives on the API side.
+
+The `events:server:{serverId}` stream still carries the existing `rcon.connected` / `rcon.disconnected` envelope events for the live-bus fan-out — those are unchanged and orthogonal to the new `diag:queue` emits documented above.

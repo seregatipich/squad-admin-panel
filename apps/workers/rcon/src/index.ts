@@ -1,4 +1,5 @@
 import { createDatabaseClient, serverCredentials, serverSettings, servers } from '@squad/db';
+import { createDiag } from '@squad/diag';
 import { redisSinkStream, resolveRconHost, startHeartbeat } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
@@ -63,7 +64,8 @@ async function main() {
     process.exit(1);
   }
 
-  const supervisor = new RconSupervisor({ db, redis, log });
+  const diag = createDiag({ redis, log });
+  const supervisor = new RconSupervisor({ db, redis, log, diag });
 
   async function reconcile() {
     const rows = await db
