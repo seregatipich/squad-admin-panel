@@ -1,5 +1,24 @@
 # `api` — changelog
 
+## 2026-04-28 — status reconciler emits `container.exited` / `container.unexpected_exit`
+
+### Added
+
+- `apps/api/src/plugins/status-reconciler.ts` — every observed `running → stopped` transition now emits a diag event into `diag:queue`. Kind is `container.exited` when the Redis fence `stop:requested:{server_id}` (set by `POST /servers/:id/stop` with TTL 300 s, see Task 7) is present, otherwise `container.unexpected_exit`. Severity is `info` when `exit_code === 0`, else `error`. Payload: `{ exit_code, oom_killed, signal, finished_at, started_at }`. When the fence is set, the reconciler also emits a follow-up `server.stop.reconciler_confirmed` (info, payload `{ exit_code }`) — this is the cap-off the stop handler in [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts) deferred to the reconciler in Task 7.
+- The reconciler reads the fence with `GET` (non-consuming) and lets it expire naturally; the next `/stop` request refreshes the TTL, so a fast stop→start→stop cycle within 5 minutes still produces correct classification.
+- `apps/api/test/diag-reconciler.test.ts` — focused integration test (4 cases) seeding a `running` server, stubbing `app.bridge.containerInspect` to return an exited state with controllable `exit_code` / `oom_killed` / `error`, optionally setting the fence, and asserting `app.diag.emit` was called with the expected `kind` / `severity` / `payload`.
+
+### Changed
+
+- `packages/bridge-client/src/types.ts` — `ContainerInspectResult` gained two optional fields: `oom_killed?: boolean` and `error?: string`. Both default to undefined when omitted by the bridge; the reconciler defaults them to `false` and `null` respectively. The Go bridge does not yet populate these fields — surface area is in place so the future Go-side change (mapping Docker `State.OOMKilled` and `State.Error`) is a one-line wire-up. With today's bridge build `oom_killed` is always `false` and `signal` is always `null` in emitted events.
+- `apps/api/test/integration/harness.ts` — `FakeBridge.containerInspect` signature mirrors the new optional fields so tests can synthesize OOM/signal scenarios without a real Docker.
+- `docs/components/api/api.md` — new "Lifecycle event kinds emitted by the status reconciler" subsection covering the three new kinds + the non-consuming fence semantics.
+- `docs/components/api/flows.md` — new "Reconciler container-exit observation" subsection under "Lifecycle event sequences" with an ASCII flow describing the tick path that emits the events.
+
+### Migration notes
+
+No DB schema changes. No new env vars. Consumers reading `diagnostic_events` will start seeing rows where `component='reconciler'` and `kind` matches `container.exited` / `container.unexpected_exit` / `server.stop.reconciler_confirmed`. Detector logic in Phase B (Task 12) keys off these kinds.
+
 ## 2026-04-28 — server-lifecycle routes emit structured `server.*` diag events
 
 ### Added

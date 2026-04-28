@@ -234,6 +234,18 @@ Server-lifecycle routes emit a fixed set of `server.*` diag events into the `dia
 
 `payload.durationMs` is wall-clock duration of the immediate phase; `totalDurationMs` (on `done`/`failed`) is the duration of the entire route handler.
 
+### Lifecycle event kinds emitted by the status reconciler
+
+The reconciler ([`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts)) emits its own diag events on every observed `running → stopped` transition. Each event carries `component='reconciler'` and the affected `serverId`. The reconciler does **not** thread an `actorSteamId64` because it runs out-of-band of any HTTP request.
+
+| Kind | When | `severity` | Payload |
+|---|---|---|---|
+| `container.exited` | Reconciler observed Docker `Status=exited` AND the Redis fence `stop:requested:{server_id}` was present (planned stop). | `info` if `exit_code === 0`, else `error`. | `{ exit_code, oom_killed, signal, finished_at, started_at }`. `signal` is the Docker `State.Error` string (e.g. `"signal: killed"`) or `null`. `oom_killed` defaults to `false` when the bridge omits the field. |
+| `container.unexpected_exit` | Reconciler observed Docker `Status=exited` AND no fence (process crash, OOM kill, manual `docker stop` outside the panel). | `info` if `exit_code === 0`, else `error`. | Same shape as `container.exited`. |
+| `server.stop.reconciler_confirmed` | Cap-off emitted right after `container.exited` when the fence was found — proves the panel-initiated stop completed end-to-end. | `info` | `{ exit_code }` |
+
+The reconciler does **not** consume the fence on observation; it leaves it to expire naturally at TTL 300 s. The next `POST /servers/:id/stop` resets the TTL, so a stop→start→stop cycle within 5 min still produces correct `container.exited` (vs `container.unexpected_exit`) classification.
+
 ## Adding a route
 
 1. Register in the relevant file under [`apps/api/src/routes/`](../../../apps/api/src/routes/).

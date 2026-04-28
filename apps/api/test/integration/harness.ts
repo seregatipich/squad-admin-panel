@@ -127,6 +127,8 @@ export interface FakeBridge {
     image: string;
     restart_count: number;
     labels: Record<string, string>;
+    oom_killed?: boolean;
+    error?: string;
   }>;
   containerStats: (p: { name: string }) => Promise<{
     name: string;

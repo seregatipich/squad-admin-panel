@@ -1,5 +1,10 @@
 # `bridge-client` — changelog
 
+## 2026-04-28 — `ContainerInspectResult` gains optional `oom_killed` / `error`
+
+### Changed
+- `ContainerInspectResult` (in [`packages/bridge-client/src/types.ts`](../../../packages/bridge-client/src/types.ts)) declares two new optional fields: `oom_killed?: boolean` and `error?: string`. Mirrors Docker's `State.OOMKilled` and `State.Error`. The Go bridge does not yet populate either field; the wire format reserves them so the API status reconciler can emit `container.exited` diag events with structured exit metadata once the Go side wires up the mapping. Consumers must default missing values to `false` and `null` respectively. No breaking change — both fields are optional, all existing call sites keep working.
+
 ## 2026-04-28 — `panelDiskUsage` accepts `{ force?: boolean }`
 
 ### Changed

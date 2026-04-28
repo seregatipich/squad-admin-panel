@@ -514,4 +514,33 @@ api emits server.restore.requested            ← serverId = old archive id; pay
 api emits server.restore.done                 ← serverId = NEW server id; payload.archive_id + new_server_id
 ```
 
+#### Reconciler container-exit observation (background, every 4 s)
+
+Source: [`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts). Runs on every tick (`RECONCILE_INTERVAL_MS = 4 s`) and on every `POST /servers/:id/reconcile`. Whenever a row's previous status is `running` and the docker-derived state maps to `stopped` (i.e. the container exited between this tick and the previous one), the reconciler emits diag events alongside the existing DB update + `liveBus.publish({type:'server.status'})`.
+
+```
+reconciler.tick(server):
+  bridge.containerInspect → {state, exit_code, oom_killed, error, started_at, finished_at}
+  mapState(state, running) → 'stopped'
+  if previous === 'running' && next === 'stopped':
+    DB: UPDATE servers SET status='stopped'
+    liveBus.publish({type: 'server.status', source: 'reconciler', status: 'stopped'})
+
+    fence = redis.GET stop:requested:{server.id}
+    severity = exit_code === 0 ? 'info' : 'error'
+
+    if fence is set:
+      reconciler emits container.exited
+        payload: {exit_code, oom_killed, signal, finished_at, started_at}
+      reconciler emits server.stop.reconciler_confirmed   ← cap-off after a planned stop
+        payload: {exit_code}
+    else:
+      reconciler emits container.unexpected_exit
+        payload: {exit_code, oom_killed, signal, finished_at, started_at}
+```
+
+The fence `stop:requested:{server.id}` is `SET … EX 300` by the stop handler in [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). The reconciler reads it with `GET` (does NOT consume) and lets it expire naturally; the next `/stop` request refreshes the TTL. The reconciler emit fires AFTER the DB update + LiveBus publish so a downstream consumer joining `events:server:{id}` and `diag:queue` sees the status change before the diag explanation.
+
+`server.stop.reconciler_confirmed` only fires when the fence was set — if the panel never asked for a stop (a crash), the reconciler emits only `container.unexpected_exit`. This is what closes the loop opened in `POST /servers/:id/stop` (which emits `server.stop.requested` → `server.stop.done`); together they form: API requests stop → graceful RCON broadcast/end-match → bridge `containerStop` → reconciler observes the actual Docker exit and confirms it.
+
 `pnpm verify:audit-chain` walks the table in `id` order and recomputes hashes; it exits non-zero on the first mismatch.

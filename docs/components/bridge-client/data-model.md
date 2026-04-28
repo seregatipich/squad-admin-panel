@@ -114,8 +114,12 @@ type BridgeErrorCode =
   name: string; state: string; running: boolean; pid: number;
   started_at: string; finished_at: string; exit_code: number;
   image: string; restart_count: number; labels: Record<string, string>;
+  oom_killed?: boolean;   // Docker State.OOMKilled — omitted by older bridge builds
+  error?: string;         // Docker State.Error    — omitted by older bridge builds
 }
 ```
+
+`oom_killed` and `error` are optional because the Go bridge does not yet surface them (the field is reserved on the wire format so the API status-reconciler can differentiate OOM-kills from clean exits when emitting `container.exited` diag events; consumers must default missing values to `false` and `null` respectively).
 
 ### `ContainerStatsResult`
 
