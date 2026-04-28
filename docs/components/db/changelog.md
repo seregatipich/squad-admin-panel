@@ -24,6 +24,22 @@ Forward-only and additive — no existing data is touched. Unlike `audit_log` an
 
 The Drizzle journal entry uses `idx: 14` (next sequential after `0013_servers_soft_delete`); the file numbering jumps to `0017` to leave room for in-flight migrations on parallel feature branches (`0014`–`0016`) and to match the file path expected by the diagnostic-bundle plan.
 
+### Drizzle TS schema for `diagnostic_events`
+
+**File:** `packages/db/src/schema/diagnostic-events.ts`
+
+#### Added
+
+- `diagnosticEvents` Drizzle table binding mirroring migration `0017_diagnostic_events.sql` column-for-column (uuid `id`, timestamptz `ts`, text `component`/`severity`/`kind`, uuid FK `server_id`, bigint `actor_steam_id64`, text `request_id`, text `message`, jsonb `payload` defaulting to `{}`).
+- Composite primary key `(id, ts)` declared via `primaryKey({ columns: [table.id, table.ts] })` (same pattern as `events`).
+- Indexes (`diagnostic_events_ts_idx`, `diagnostic_events_server_ts_idx`, `diagnostic_events_kind_ts_idx`) and check constraint (`diagnostic_events_severity_chk`) named identically to the migration so DDL diffing stays clean.
+- `DiagnosticEventRow` and `NewDiagnosticEvent` type exports inferred from the schema.
+- Re-export wired into `packages/db/src/schema/index.ts` between `config-versions.js` and `events.js`.
+
+#### Migration notes
+
+No DDL change — the SQL migration shipped in commit `d68fb21` already created the table. This entry only registers the Drizzle binding so application code can use the typed query builder. Drizzle indexes do not encode `DESC` ordering on individual columns; this is cosmetic and does not affect query plans.
+
 ---
 
 ## 2026-04-30
