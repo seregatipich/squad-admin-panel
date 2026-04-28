@@ -43,7 +43,9 @@ sg panel -c 'bash scripts/verify-bridge.sh'
   - `TestPanelDiskUsage_AllowlistedAndComputed` — populates a tempdir with one configs file (100 B) and one saved file (250 B), asserts every result field including the `total_panel_bytes` formula (no double-counting of the depot volume) and `host_total_bytes = Blocks*Bsize`, `host_used_bytes = (Blocks-Bavail)*Bsize`.
   - `TestPanelDiskUsage_CachesWithinTTL` — calls the handler twice; asserts `du`/`statfs`/`docker df` are invoked exactly once and that `computed_at` is byte-identical between the two responses.
   - `TestPanelDiskUsage_MissingDirsReturnZero` — empty tempdir; asserts the response is `OK` with all zero byte counters and `saved_per_server == []`.
-  - The E2E success/forbidden cases against the real bridge are still forthcoming.
+  - E2E coverage in [`apps/api/test/e2e/bridge-rpc.e2e.test.ts`](../../../apps/api/test/e2e/bridge-rpc.e2e.test.ts):
+    - `panel_disk_usage returns a sane shape against the live host` — calls `bridge.panelDiskUsage()` and asserts `host_total_bytes > 0`, `total_panel_bytes >= 0`, `host_used_bytes >= total_panel_bytes - 1024` (statvfs rounding slop), array shape for `saved_per_server`/`docker_volumes`/`docker_images`, parseable `computed_at`, and `cache_age_seconds ∈ [0, 360)`.
+    - `panel_disk_usage caches results — two calls share computed_at and advance cache_age_seconds` — second call after a 1.1 s sleep returns the same `computed_at` and a strictly larger `cache_age_seconds`. There is no meaningful "forbidden" path: the handler takes no params and ignores any client-supplied object.
 
 ## What is not covered
 

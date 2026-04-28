@@ -1,5 +1,18 @@
 # `bridge` — changelog
 
+## 2026-04-28 — `panel_disk_usage` E2E coverage
+
+### Added
+
+- Two cases in [`apps/api/test/e2e/bridge-rpc.e2e.test.ts`](../../../apps/api/test/e2e/bridge-rpc.e2e.test.ts) inside `describe('bridge RPC surface (e2e)')`:
+  - `panel_disk_usage returns a sane shape against the live host` — asserts `host_total_bytes > 0`, `total_panel_bytes >= 0`, `host_used_bytes >= total_panel_bytes - 1024`, array-typed `saved_per_server`/`docker_volumes`/`docker_images`, parseable ISO `computed_at`, and `cache_age_seconds ∈ [0, 360)`.
+  - `panel_disk_usage caches results — two calls share computed_at and advance cache_age_seconds` — second call after a 1.1 s sleep returns the same `computed_at` with a strictly larger `cache_age_seconds`, proving the in-bridge 5-minute cache.
+
+### Notes
+
+- The handler takes no params and ignores client-supplied keys, so there is no meaningful "forbidden" case for this RPC. Forbidden-path coverage applies only to methods that accept paths or container names.
+- The new cases are excluded from `pnpm turbo run test` by `vitest.e2e.config.ts`. They run on the deployment host (or staging replica) via `pnpm --filter @squad/api test:e2e`.
+
 ## 2026-04-28 — `panel_disk_usage` RPC for operational visibility
 
 ### Added

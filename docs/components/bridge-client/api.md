@@ -215,7 +215,7 @@ const { cpu_percent, mem_used_bytes, mem_limit_bytes } = await client.containerS
 
 #### `panelDiskUsage(): Promise<PanelDiskUsage>`
 
-Returns a structured breakdown of the panel's disk footprint on the host. The Go-side computation lives in `apps/bridge/internal/handlers/handlers.go` (`panelDiskUsage`) and combines `du -sb` walks of the panel data root, a panel-owned filter on `docker system df`, and `syscall.Statfs` for whole-host capacity; results are cached inside the bridge for 5 minutes. The E2E success/forbidden case against the real socket is still forthcoming. Timeout: 30 s.
+Returns a structured breakdown of the panel's disk footprint on the host. The Go-side computation lives in `apps/bridge/internal/handlers/handlers.go` (`panelDiskUsage`) and combines `du -sb` walks of the panel data root, a panel-owned filter on `docker system df`, and `syscall.Statfs` for whole-host capacity; results are cached inside the bridge for 5 minutes. E2E coverage against the live socket is in `apps/api/test/e2e/bridge-rpc.e2e.test.ts` (shape assertions plus a caching idempotence case). The handler takes no parameters and silently ignores any client-supplied keys, so there is no forbidden-path variant. Timeout: 30 s.
 
 | Field | Type | Description |
 |---|---|---|
