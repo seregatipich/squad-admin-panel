@@ -2,6 +2,10 @@
 
 ## 2026-04-28 — connector plugins emit diag events on pg/redis state changes
 
+### Post-merge fixes
+
+- In-flight guard on `pgHealthTick` to prevent overlapping invocations during long pg hangs. The 30 s `setInterval` in `apps/api/src/plugins/db-health.ts` now checks an `inFlight` boolean closure flag before kicking off a new tick; if the previous tick is still pending (e.g. during an unreachable-postgres hang), the next interval fires a debug-level log and skips the call. The recovery-edge contract (`pg.ping.ok` only on the first OK after a prior fail) is preserved because two ticks can no longer race on the shared `PG_DOWN` WeakMap. Covered by a new vitest `vi.useFakeTimers()` case in `apps/api/test/diag-connector.test.ts` that drives the live `setInterval` against a never-resolving `app.db.execute` stub and asserts only one `execute` call lands across two 30 s windows.
+
 ### Added
 
 - `apps/api/src/plugins/redis.ts` — three new ioredis listeners translate connection-state events into diag emits. Each emit uses `app.diag?.emit(...).catch(() => undefined)` (optional chaining because the redis plugin registers BEFORE the diag plugin in [`server.ts`](../../../apps/api/src/server.ts)):

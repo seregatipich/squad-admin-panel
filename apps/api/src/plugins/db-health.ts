@@ -36,8 +36,18 @@ export async function pgHealthTick(app: FastifyInstance): Promise<void> {
 export default fp(
   async (app: FastifyInstance) => {
     PG_DOWN.set(app, false);
+    let inFlight = false;
     const handle = setInterval(() => {
-      void pgHealthTick(app).catch(() => undefined);
+      if (inFlight) {
+        app.log.debug('pgHealthTick skipped — prior tick still in flight');
+        return;
+      }
+      inFlight = true;
+      void pgHealthTick(app)
+        .catch(() => undefined)
+        .finally(() => {
+          inFlight = false;
+        });
     }, PG_HEALTHCHECK_INTERVAL_MS);
     handle.unref();
     app.addHook('onClose', async () => {

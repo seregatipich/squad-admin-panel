@@ -2,7 +2,7 @@ import type { DatabaseClient } from '@squad/db';
 import type { Diag, DiagEvent } from '@squad/diag';
 import Fastify, { type FastifyInstance } from 'fastify';
 import Redis from 'ioredis';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import diagPlugin from '../src/lib/diag.js';
 import dbHealthPlugin, { pgHealthTick } from '../src/plugins/db-health.js';
 import redisPlugin from '../src/plugins/redis.js';
@@ -157,6 +157,38 @@ describe('postgres health-check emits diag events', () => {
 
     expect(captured.some((e) => e.kind === 'pg.ping.ok')).toBe(false);
     expect(captured.some((e) => e.kind === 'pg.ping.fail')).toBe(false);
+  });
+
+  it('skips a second interval tick while a prior tick is still in flight (pg hang)', async () => {
+    vi.useFakeTimers();
+    let executeCalls = 0;
+    let resolveHang: (() => void) | undefined;
+    const hangingPromise = new Promise<unknown>((resolve) => {
+      resolveHang = () => resolve([]);
+    });
+    const stub = {
+      execute(_q: unknown) {
+        executeCalls += 1;
+        return hangingPromise;
+      },
+    };
+    const built = buildHealthApp(stub);
+    await built.app.register(diagPlugin);
+    await built.app.register(dbHealthPlugin);
+    activeApps.push(built.app);
+
+    (built.app as unknown as { diag: Diag }).diag.emit = async () => {};
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(executeCalls).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(executeCalls).toBe(1);
+
+    resolveHang?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    vi.useRealTimers();
   });
 
   it('emits pg.ping.fail on every consecutive failure but pg.ping.ok only once on recovery', async () => {
