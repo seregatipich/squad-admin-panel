@@ -1,5 +1,11 @@
 # `bridge-client` — changelog
 
+## 2026-04-28
+
+### Added
+- `panelDiskUsage()` method bound to the new `panel_disk_usage` RPC. Returns a `PanelDiskUsage` breakdown of configs/saved/depot/docker/audit-archive bytes plus host filesystem totals. Timeout: 30 s.
+- `PanelDiskUsage`, `PanelDiskUsageDockerVolume`, `PanelDiskUsageDockerImage`, `PanelDiskUsageSavedEntry` exported from `@squad/bridge-client`.
+
 ## 2026-04-25
 
 ### Added

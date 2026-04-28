@@ -16,6 +16,7 @@ export const BRIDGE_METHODS = [
   'container_stats',
   'container_logs_follow',
   'depot_update',
+  'panel_disk_usage',
   'host_agent_restart',
 ] as const;
 

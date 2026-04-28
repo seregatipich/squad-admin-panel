@@ -175,6 +175,53 @@ describe('streaming method', () => {
   });
 });
 
+describe('panel_disk_usage', () => {
+  it('panelDiskUsage sends method=panel_disk_usage and round-trips the response shape', async () => {
+    let receivedMethod: string | undefined;
+    server.on('connection', (conn) => {
+      conn.once('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as {
+          id: string;
+          method: string;
+        };
+        receivedMethod = req.method;
+        sendFrame(conn, {
+          id: req.id,
+          ok: true,
+          result: {
+            configs_bytes: 100,
+            saved_total_bytes: 200,
+            saved_per_server: [{ uuid: 's1', bytes: 50 }],
+            depot_volume_bytes: 1000,
+            docker_volumes: [],
+            docker_images: [],
+            audit_archive_bytes: 0,
+            total_panel_bytes: 1300,
+            host_total_bytes: 1_000_000,
+            host_used_bytes: 500_000,
+            computed_at: '2026-04-28T10:00:00Z',
+            cache_age_seconds: 0,
+          },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    try {
+      const result = await client.panelDiskUsage();
+      expect(receivedMethod).toBe('panel_disk_usage');
+      expect(result.total_panel_bytes).toBe(1300);
+      expect(result.saved_per_server).toHaveLength(1);
+      expect(result.saved_per_server[0]).toEqual({ uuid: 's1', bytes: 50 });
+      expect(result.host_used_bytes).toBe(500_000);
+      expect(result.computed_at).toBe('2026-04-28T10:00:00Z');
+    } finally {
+      await client.close();
+    }
+  });
+});
+
 describe('independent client teardown', () => {
   it('closing one client does not affect a second independent client', async () => {
     const respondPing = (conn: Socket) => {

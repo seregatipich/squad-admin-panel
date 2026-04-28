@@ -171,3 +171,34 @@ export interface ContainerLogsParams {
 export interface HostAgentRestartResult {
   status: 'restarting';
 }
+
+export interface PanelDiskUsageDockerVolume {
+  name: string;
+  bytes: number;
+}
+
+export interface PanelDiskUsageDockerImage {
+  repository: string;
+  tag: string;
+  bytes: number;
+}
+
+export interface PanelDiskUsageSavedEntry {
+  uuid: string;
+  bytes: number;
+}
+
+export interface PanelDiskUsage {
+  configs_bytes: number;
+  saved_total_bytes: number;
+  saved_per_server: PanelDiskUsageSavedEntry[];
+  depot_volume_bytes: number;
+  docker_volumes: PanelDiskUsageDockerVolume[];
+  docker_images: PanelDiskUsageDockerImage[];
+  audit_archive_bytes: number;
+  total_panel_bytes: number;
+  host_total_bytes: number;
+  host_used_bytes: number;
+  computed_at: string;
+  cache_age_seconds: number;
+}

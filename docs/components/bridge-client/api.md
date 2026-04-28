@@ -213,6 +213,32 @@ const { cpu_percent, mem_used_bytes, mem_limit_bytes } = await client.containerS
 
 ---
 
+#### `panelDiskUsage(): Promise<PanelDiskUsage>`
+
+Returns a structured breakdown of the panel's disk footprint on the host. Computed by the Go bridge from `du -sb` of `/var/lib/squad-panel/{configs,saved}`, `docker system df` for the Squad named volumes and images, and the audit-archive directory. Timeout: 30 s.
+
+| Field | Type | Description |
+|---|---|---|
+| `configs_bytes` | `number` | Bytes used by `/var/lib/squad-panel/configs/` |
+| `saved_total_bytes` | `number` | Bytes used by `/var/lib/squad-panel/saved/` |
+| `saved_per_server` | `{ uuid: string; bytes: number }[]` | Per-server breakdown of `saved/` (one entry per uuid sub-directory) |
+| `depot_volume_bytes` | `number` | Size of the `squad-depot` named volume |
+| `docker_volumes` | `{ name: string; bytes: number }[]` | Other panel-owned Docker volumes |
+| `docker_images` | `{ repository: string; tag: string; bytes: number }[]` | Squad-related Docker images |
+| `audit_archive_bytes` | `number` | Bytes used by the audit-archive directory |
+| `total_panel_bytes` | `number` | Sum of all panel-owned categories |
+| `host_total_bytes` | `number` | Total bytes on the filesystem hosting `/var/lib/squad-panel` |
+| `host_used_bytes` | `number` | Used bytes on that filesystem |
+| `computed_at` | `string` | ISO-8601 timestamp at which the bridge gathered the figures |
+| `cache_age_seconds` | `number` | Age of the cached result in seconds (0 = fresh) |
+
+```ts
+const usage = await client.panelDiskUsage();
+const panelShareOfHost = usage.total_panel_bytes / usage.host_total_bytes;
+```
+
+---
+
 #### `hostAgentRestart(): Promise<HostAgentRestartResult>`
 
 Asks the bridge to restart itself via systemd. Returns `{ status: 'restarting' }` before the socket closes. Timeout: 5 s.

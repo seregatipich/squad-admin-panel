@@ -20,6 +20,7 @@ import {
   type HostAgentRestartResult,
   type HostInfo,
   type HostMetrics,
+  type PanelDiskUsage,
   type PingResult,
   type ProcessInfoParams,
   type ProcessInfoResult,
@@ -135,6 +136,11 @@ export class BridgeClient {
     this.call<{ exit_code: number }>('depot_update', undefined, {
       onStream,
       timeoutMs: 3_600_000,
+    });
+
+  panelDiskUsage = () =>
+    this.call<PanelDiskUsage>('panel_disk_usage', undefined, {
+      timeoutMs: 30_000,
     });
 
   hostAgentRestart = () =>

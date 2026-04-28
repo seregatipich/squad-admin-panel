@@ -1,5 +1,10 @@
 # `shared-config` — changelog
 
+## 2026-04-28
+
+### Added
+- `panel_disk_usage` appended to `BRIDGE_METHODS` (between `depot_update` and `host_agent_restart`). Backs the host-disk-breakdown UI.
+
 ## 2026-04-26
 
 ### Added

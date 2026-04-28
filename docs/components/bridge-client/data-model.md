@@ -27,7 +27,7 @@ interface BridgeRequest<Params = unknown> {
 }
 ```
 
-`method` must be one of the 17 values in `BRIDGE_METHODS` (see [`shared-config/api.md`](../shared-config/api.md)).
+`method` must be one of the 18 values in `BRIDGE_METHODS` (see [`shared-config/api.md`](../shared-config/api.md)).
 
 ## Response shape (`BridgeResponse`)
 
@@ -141,6 +141,25 @@ type BridgeErrorCode =
 
 ```ts
 { status: 'restarting' }
+```
+
+### `PanelDiskUsage`
+
+```ts
+{
+  configs_bytes: number;
+  saved_total_bytes: number;
+  saved_per_server: { uuid: string; bytes: number }[];
+  depot_volume_bytes: number;
+  docker_volumes: { name: string; bytes: number }[];
+  docker_images: { repository: string; tag: string; bytes: number }[];
+  audit_archive_bytes: number;
+  total_panel_bytes: number;
+  host_total_bytes: number;
+  host_used_bytes: number;
+  computed_at: string;        // ISO-8601 UTC
+  cache_age_seconds: number;  // 0 when freshly computed
+}
 ```
 
 ## Params types
