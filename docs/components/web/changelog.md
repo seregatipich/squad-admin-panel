@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-04-28 — Playwright e2e for the disk breakdown modal
+
+### Added
+
+- `apps/web/e2e/disk-breakdown.spec.ts` — four-case Playwright spec exercised against the live panel via the existing `ownerPage` fixture: (1) `[data-testid="disk-card"]` click opens the `role="dialog"` named «Что занимает панель» and renders the «Всего:» line plus the «По типу» heading; (2) the «Обновить» button drives `cache_age_seconds` to 0 within 10 s, asserted via «обновлено 0 сек назад»; (3) pressing Escape hides the dialog; (4) clicking the backdrop hides the dialog. The spec follows the existing `apps/web/e2e/` layout (the plan's `apps/web/test/e2e/` path was a planning-only artifact — Playwright's `testDir` is `./e2e`).
+
+### Notes
+
+- The spec is shipped as code only — like the bridge e2e suite it gets exercised on the deployment host (or staging replica) where the live panel stack and seeded Owner cookies are available. It is NOT executed in this commit.
+
 ## 2026-04-28 — `<DiskBreakdownModal>` for the dashboard disk card
 
 ### Added
