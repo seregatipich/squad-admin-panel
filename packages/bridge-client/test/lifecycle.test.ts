@@ -267,6 +267,181 @@ describe('panel_disk_usage', () => {
   });
 });
 
+describe('event emission', () => {
+  it('emits connected with rttMs+version+hostname on the first ping response', async () => {
+    server.on('connection', (conn) => {
+      conn.once('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as { id: string };
+        sendFrame(conn, {
+          id: req.id,
+          ok: true,
+          result: { pong: true, version: 'v1.2.3', hostname: 'event-host' },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    const connectedEvents: Array<{ rttMs: number; version: string; hostname: string }> = [];
+    client.on('connected', (info) => connectedEvents.push(info));
+
+    try {
+      await client.ping();
+      expect(connectedEvents).toHaveLength(1);
+      expect(connectedEvents[0]?.version).toBe('v1.2.3');
+      expect(connectedEvents[0]?.hostname).toBe('event-host');
+      expect(typeof connectedEvents[0]?.rttMs).toBe('number');
+      expect(connectedEvents[0]?.rttMs).toBeGreaterThanOrEqual(0);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('does not emit connected twice for back-to-back pings on the same socket', async () => {
+    server.on('connection', (conn) => {
+      conn.on('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as { id: string };
+        sendFrame(conn, {
+          id: req.id,
+          ok: true,
+          result: { pong: true, version: 'v1.0.0', hostname: 'h' },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    const connectedEvents: unknown[] = [];
+    client.on('connected', (info) => connectedEvents.push(info));
+
+    try {
+      await client.ping();
+      await client.ping();
+      await client.ping();
+      expect(connectedEvents).toHaveLength(1);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('emits rtt for every successful RPC', async () => {
+    server.on('connection', (conn) => {
+      conn.on('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as { id: string };
+        sendFrame(conn, {
+          id: req.id,
+          ok: true,
+          result: { pong: true, version: 'v1', hostname: 'h' },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    const rttSamples: number[] = [];
+    client.on('rtt', (ms) => rttSamples.push(ms));
+
+    try {
+      await client.ping();
+      await client.ping();
+      expect(rttSamples).toHaveLength(2);
+      for (const sample of rttSamples) {
+        expect(typeof sample).toBe('number');
+        expect(sample).toBeGreaterThanOrEqual(0);
+      }
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('emits rpc-error with method/code/message on a non-ok response', async () => {
+    server.on('connection', (conn) => {
+      conn.once('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as {
+          id: string;
+          method: string;
+        };
+        sendFrame(conn, {
+          id: req.id,
+          ok: false,
+          error: { code: 'forbidden', message: 'path not allowlisted' },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    const rpcErrors: Array<{ method: string; code: string; message: string }> = [];
+    client.on('rpc-error', (info) => rpcErrors.push(info));
+
+    try {
+      await expect(client.fileRead({ path: '/etc/passwd' })).rejects.toThrow();
+      expect(rpcErrors).toHaveLength(1);
+      expect(rpcErrors[0]?.method).toBe('file_read');
+      expect(rpcErrors[0]?.code).toBe('forbidden');
+      expect(rpcErrors[0]?.message).toBe('path not allowlisted');
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('emits disconnected with client-closed when close() is called on a connected client', async () => {
+    server.on('connection', (conn) => {
+      conn.once('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as { id: string };
+        sendFrame(conn, {
+          id: req.id,
+          ok: true,
+          result: { pong: true, version: 'v1', hostname: 'h' },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    const reasons: string[] = [];
+    client.on('disconnected', (reason) => reasons.push(reason));
+
+    await client.ping();
+    await client.close();
+    expect(reasons).toContain('client-closed');
+  });
+
+  it('emits disconnected with frame-decode-error when the socket sends an oversized frame header', async () => {
+    let callCount = 0;
+    server.on('connection', (conn) => {
+      conn.on('data', (chunk) => {
+        callCount++;
+        if (callCount === 1) {
+          const size = chunk.readUInt32BE(0);
+          const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as { id: string };
+          sendFrame(conn, {
+            id: req.id,
+            ok: true,
+            result: { pong: true, version: 'v1', hostname: 'h' },
+          });
+          return;
+        }
+        const oversizedHeader = Buffer.alloc(4);
+        oversizedHeader.writeUInt32BE(BRIDGE_MAX_FRAME_BYTES + 1, 0);
+        conn.write(oversizedHeader);
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    const reasons: string[] = [];
+    client.on('disconnected', (reason) => reasons.push(reason));
+
+    try {
+      await client.ping();
+      await expect(client.ping()).rejects.toThrow();
+      expect(reasons).toContain('frame-decode-error');
+    } finally {
+      await client.close();
+    }
+  });
+});
+
 describe('independent client teardown', () => {
   it('closing one client does not affect a second independent client', async () => {
     const respondPing = (conn: Socket) => {

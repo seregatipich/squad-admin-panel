@@ -282,6 +282,31 @@ const done = client.depotUpdate((frame) => {
 
 ---
 
+## Events
+
+`BridgeClient` extends `EventEmitter`. Subscribers attach via the standard `on(event, handler)` / `off(event, handler)` API. All events are fire-and-forget — listener exceptions are caught and routed to `onLog`; the RPC dispatcher and reconnection logic do not depend on listener return values.
+
+```ts
+import { BridgeClient } from '@squad/bridge-client';
+
+const client = new BridgeClient({ socketPath: '/run/panel-host-bridge.sock' });
+client.on('connected', (info) => console.log('bridge up', info));
+client.on('disconnected', (reason) => console.warn('bridge down', reason));
+client.on('rpc-error', ({ method, code, message }) => console.warn(method, code, message));
+client.on('rtt', (ms) => { if (ms > 50) console.warn('slow RPC', ms); });
+```
+
+| Event | Args | When fired |
+|---|---|---|
+| `connected` | `{ rttMs: number; version: string; hostname: string }` | After the **first successful `ping()` response on a freshly-opened socket** — not on raw socket connect. The `version` and `hostname` fields are read from the ping result; `rttMs` is `Date.now() - request_started_at`. Fires at most once per socket lifetime; reconnect re-arms it. |
+| `disconnected` | `reason: 'socket-error' \| 'socket-closed' \| 'frame-decode-error' \| 'client-closed'` | Fired only if a `connected` event was previously emitted for the current socket — disconnects on a never-handshaked socket are silent. `client-closed` fires from `close()`; the other reasons fire from socket-level events / framing failures. |
+| `rpc-error` | `{ method: string; code: BridgeErrorCode; message: string }` | After every response with `ok: false`. The corresponding `call()` promise rejects with `BridgeError(code, message)` immediately afterwards. Use this for per-method error counters / structured logging. |
+| `rtt` | `rttMs: number` | After every successful (ok=true) response. `rttMs` is the wall-clock delay between dispatch and response handling. Streaming methods (`containerLogsFollow`, `depotUpdate`) only emit this when the final exit-code response arrives — per-frame RTT is not tracked. |
+
+The api wires these into `app.diag.emit` from [`apps/api/src/plugins/bridge.ts`](../../../apps/api/src/plugins/bridge.ts) so they show up as `bridge.client.connected` / `bridge.client.disconnected` / `bridge.rpc.error` / `bridge.rtt.outlier` (only when `rttMs > 50`) entries in the `diag:queue` Redis Stream. See [`docs/components/api/api.md`](../api/api.md#bridge-listener-event-kinds) for the API-side mapping.
+
+---
+
 ## `BridgeError`
 
 Thrown by every RPC method on failure.

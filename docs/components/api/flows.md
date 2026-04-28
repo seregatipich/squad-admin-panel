@@ -543,4 +543,45 @@ The fence `stop:requested:{server.id}` is `SET … EX 300` by the stop handler i
 
 `server.stop.reconciler_confirmed` only fires when the fence was set — if the panel never asked for a stop (a crash), the reconciler emits only `container.unexpected_exit`. This is what closes the loop opened in `POST /servers/:id/stop` (which emits `server.stop.requested` → `server.stop.done`); together they form: API requests stop → graceful RCON broadcast/end-match → bridge `containerStop` → reconciler observes the actual Docker exit and confirms it.
 
+#### Bridge listener (background, every RPC)
+
+Source: [`apps/api/src/plugins/bridge.ts`](../../../apps/api/src/plugins/bridge.ts). The plugin attaches four listeners to the singleton `BridgeClient` it constructs and translates each `BridgeClient` event (see [`docs/components/bridge-client/api.md`](../bridge-client/api.md#events)) into one diag emit. The listeners are process-global — they fire for every successful or failing RPC across the entire API, including the heartbeat plugin's 5 s ping loop, status-reconciler tick inspects, and per-route container/file calls.
+
+```
+bridge = new BridgeClient({socketPath, onLog})
+
+bridge.on('connected', ({rttMs, version, hostname}):
+  app.diag.emit({
+    component: 'api', kind: 'bridge.client.connected', severity: 'info',
+    message: `bridge connected (rtt=${rttMs}ms, version=${version})`,
+    payload: {rttMs, version, hostname},
+  }).catch(() => undefined)
+
+bridge.on('disconnected', reason:
+  app.diag.emit({
+    component: 'api', kind: 'bridge.client.disconnected', severity: 'error',
+    message: `bridge disconnected: ${reason}`,
+    payload: {reason},
+  }).catch(() => undefined)
+
+bridge.on('rpc-error', {method, code, message}:
+  app.diag.emit({
+    component: 'api', kind: 'bridge.rpc.error', severity: 'warn',
+    message: `${method} -> ${code}: ${message}`,
+    payload: {method, code, message},
+  }).catch(() => undefined)
+
+bridge.on('rtt', rttMs:
+  if rttMs > 50:
+    app.diag.emit({
+      component: 'api', kind: 'bridge.rtt.outlier', severity: 'warn',
+      message: `bridge RTT ${rttMs}ms exceeds 50ms threshold`,
+      payload: {rttMs, thresholdMs: 50},
+    }).catch(() => undefined)
+```
+
+The `.catch(() => undefined)` swallow is load-bearing: if Redis is unavailable the diag emit rejects, but the bridge plugin must never propagate that back into the underlying `EventEmitter` cycle (a thrown exception inside a listener would unwind the dispatcher mid-frame). The emit is fire-and-forget; the diag worker reads the stream and persists rows out-of-band.
+
+`bridge.client.connected` fires at most once per socket lifetime — a reconnect (after `client-closed` or `socket-closed`) re-arms it. `bridge.client.disconnected` only fires if a `connected` was previously emitted for that socket, so a `client.close()` on a never-handshaked client is silent on both ends. `bridge.rpc.error` fires immediately before the corresponding RPC call promise rejects with `BridgeError(code, message)`. `bridge.rtt.outlier` is gated at 50 ms (constant `RTT_OUTLIER_THRESHOLD_MS` in `apps/api/src/plugins/bridge.ts`); below that, `rtt` events from the BridgeClient are ignored.
+
 `pnpm verify:audit-chain` walks the table in `id` order and recomputes hashes; it exits non-zero on the first mismatch.

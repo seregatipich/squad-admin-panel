@@ -1,5 +1,27 @@
 # `api` — changelog
 
+## 2026-04-28 — bridge plugin emits diag events on connect / disconnect / rpc-error / rtt-outlier
+
+### Added
+
+- `apps/api/src/plugins/bridge.ts` — the singleton `BridgeClient` constructed by this plugin now has four listeners attached at registration time. Each listener translates a `BridgeClient` event into one `app.diag.emit` call:
+  - `connected` → `bridge.client.connected` (severity `info`, payload `{rttMs, version, hostname}`)
+  - `disconnected` → `bridge.client.disconnected` (severity `error`, payload `{reason}` where `reason ∈ {'socket-error', 'socket-closed', 'frame-decode-error', 'client-closed'}`)
+  - `rpc-error` → `bridge.rpc.error` (severity `warn`, payload `{method, code, message}`)
+  - `rtt` (only when > 50 ms) → `bridge.rtt.outlier` (severity `warn`, payload `{rttMs, thresholdMs: 50}`)
+  All four `app.diag.emit` calls are wrapped with `.catch(() => undefined)` so a Redis hiccup never propagates into the bridge layer. The 50 ms threshold is fixed in the constant `RTT_OUTLIER_THRESHOLD_MS` at the top of the plugin module.
+- `apps/api/test/diag-bridge.test.ts` — five-case integration test that registers the diag plugin + bridge plugin, captures `app.diag.emit` calls, drives the `BridgeClient` event surface directly via `bridge.emit('connected'|...)`, and asserts the expected diag events fire (kind / severity / payload). Includes a regression case proving listener-side diag failures do not throw.
+
+### Changed
+
+- `packages/bridge-client/src/client.ts` — `BridgeClient` now extends a `TypedEmitter<BridgeClientEvents>`-wrapped `EventEmitter`. See [`docs/components/bridge-client/changelog.md`](../bridge-client/changelog.md). The api side consumes those events via the listeners above.
+- `docs/components/api/api.md` — new "Bridge listener event kinds" subsection under "Decorations" listing the four diag kinds + payload shapes.
+- `docs/components/api/flows.md` — new "Bridge listener (background, every RPC)" subsection under "Diagnostic emission" with the listener wire-up flow.
+
+### Migration notes
+
+No DB schema changes. No new env vars. Consumers reading `diagnostic_events` will start seeing rows where `component='api'` and `kind` matches `bridge.client.connected` / `bridge.client.disconnected` / `bridge.rpc.error` / `bridge.rtt.outlier`. The bridge-heartbeat plugin's existing 5 s ping loop guarantees a steady stream of `bridge.rtt.outlier` events whenever the bridge is slow + a `bridge.client.connected` on the first heartbeat after each api restart.
+
 ## 2026-04-28 — status reconciler emits `container.exited` / `container.unexpected_exit`
 
 ### Added

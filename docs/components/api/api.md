@@ -246,6 +246,17 @@ The reconciler ([`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/s
 
 The reconciler does **not** consume the fence on observation; it leaves it to expire naturally at TTL 300 s. The next `POST /servers/:id/stop` resets the TTL, so a stop→start→stop cycle within 5 min still produces correct `container.exited` (vs `container.unexpected_exit`) classification.
 
+### Bridge listener event kinds
+
+The bridge plugin ([`apps/api/src/plugins/bridge.ts`](../../../apps/api/src/plugins/bridge.ts)) attaches four listeners to the singleton `BridgeClient` and translates each `BridgeClient` event into a diag emit. All four events carry `component='api'`, no `serverId` (the bridge connection is process-global, not per-server), and no `actorSteamId64`. Listener-side `app.diag.emit` rejections are swallowed via `.catch(() => undefined)` so a Redis hiccup never propagates back into the bridge layer. The underlying `BridgeClient` event surface is documented in [`docs/components/bridge-client/api.md`](../bridge-client/api.md#events).
+
+| Kind | When | `severity` | Payload |
+|---|---|---|---|
+| `bridge.client.connected` | First successful `ping()` response on a freshly-opened socket. Fires at most once per socket lifetime. | `info` | `{ rttMs, version, hostname }` |
+| `bridge.client.disconnected` | Underlying socket closed/errored, or `BridgeClient.close()` called on a previously-connected client. Fires only if a `bridge.client.connected` was previously emitted for that socket. | `error` | `{ reason }` where `reason ∈ { 'socket-error', 'socket-closed', 'frame-decode-error', 'client-closed' }` |
+| `bridge.rpc.error` | Any RPC response with `ok: false` (path/image allowlist violation, runtime error, etc.). | `warn` | `{ method, code, message }` mirrors the `BridgeError` thrown to the caller. |
+| `bridge.rtt.outlier` | Successful RPC where `rttMs > 50`. The threshold is fixed in `apps/api/src/plugins/bridge.ts` (`RTT_OUTLIER_THRESHOLD_MS`). | `warn` | `{ rttMs, thresholdMs }` |
+
 ## Adding a route
 
 1. Register in the relevant file under [`apps/api/src/routes/`](../../../apps/api/src/routes/).
