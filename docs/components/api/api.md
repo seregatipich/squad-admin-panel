@@ -192,6 +192,34 @@ Aggregated logs from every panel component (api, workers, bridge events, depot/i
 | GET | `/api/v1/health/workers` | Per-worker `worker:heartbeat:{name}` aggregate (alive / age_ms / details). |
 | GET | `/api/v1/health/reconciler` | Status-reconciler diagnostics — `last_tick_at`, `last_tick_duration_ms`, `last_tick_servers_inspected`, `consecutive_tick_errors`, `stuck_servers[]` (rows in `starting`/`stopping`/`installing` with `updated_at` older than 90 s — `{id, status, updated_at, age_ms}`), `bridge_failures_by_server` (per-id consecutive `container_inspect` failures), and a derived `healthy` boolean (true ⇔ last tick within 12 s, no consecutive errors, no stuck rows). Unauthenticated, no permission gate — same threat model as `/health`. |
 
+## Decorations
+
+Plugins decorate the Fastify instance and `FastifyRequest` so route handlers can reach shared infra without imports. The full type augmentation lives in [`apps/api/src/plugins/types.ts`](../../../apps/api/src/plugins/types.ts) and [`apps/api/src/lib/diag.ts`](../../../apps/api/src/lib/diag.ts).
+
+| Decoration | Type | Source | Purpose |
+|---|---|---|---|
+| `app.db` | `DatabaseClient` | [`plugins/database.ts`](../../../apps/api/src/plugins/database.ts) | Drizzle client. |
+| `app.redis` | `Redis` (ioredis) | [`plugins/redis.ts`](../../../apps/api/src/plugins/redis.ts) | Singleton ioredis. |
+| `app.bridge` / `app.makeBridgeClient()` | `BridgeClient` / `() => BridgeClient` | [`plugins/bridge.ts`](../../../apps/api/src/plugins/bridge.ts) | Shared host-bridge RPC client and per-WebSocket factory. |
+| `app.diag` | `Diag` (`{ emit(ev): Promise<void> }`) | [`lib/diag.ts`](../../../apps/api/src/lib/diag.ts) | Module-side diagnostic emitter. Pushes to Redis Stream `diag:queue`. See [`@squad/diag` API](../diag/api.md). |
+| `request.diag` | `Diag` | [`lib/diag.ts`](../../../apps/api/src/lib/diag.ts) | Per-request wrapper that auto-injects `requestId = req.id` into every emitted event unless the caller already set `requestId`. Set by an `onRequest` hook. |
+| `request.requestId` | `string` | [`plugins/request-context.ts`](../../../apps/api/src/plugins/request-context.ts) | UUIDv7 (or `x-request-id` header passthrough), echoed back as `x-request-id` response header. |
+| `request.user` / `request.session` / `request.apiTokenId` | see [`plugins/types.ts`](../../../apps/api/src/plugins/types.ts) | [`plugins/auth.ts`](../../../apps/api/src/plugins/auth.ts) | Authenticated identity (cookie session or API token). |
+| `app.encryptionKey` | `Buffer` (32 B) | server bootstrap | Symmetric key for `crypto.ts`. |
+| `app.config` | `AppConfig` | server bootstrap | Validated env. |
+| `app.statusReconciler` | reconciler stats handle | [`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts) | Polls `container_inspect` every 4 s. |
+
+The diag decoration is registered in [`server.ts`](../../../apps/api/src/server.ts) immediately after `redisPlugin` so it sees a live ioredis connection. Inside route handlers prefer `req.diag.emit(...)` so the request id is threaded automatically; module-level code (plugins, workers reused inside the API) may call `app.diag.emit(...)` directly with an explicit `requestId` or none.
+
+Example handler usage:
+
+```ts
+app.post('/some-route', { config: { permissions: ['server:start'], audit: { action: 'server.start', resource: 'server' } } }, async (req, reply) => {
+  await req.diag.emit({ component: 'api', kind: 'server.start.requested', severity: 'info', serverId, message: 'start requested' });
+  // ...
+});
+```
+
 ## Adding a route
 
 1. Register in the relevant file under [`apps/api/src/routes/`](../../../apps/api/src/routes/).

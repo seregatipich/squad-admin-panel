@@ -31,6 +31,7 @@
     "@oslojs/otp": "^1.0.0",
     "@squad/bridge-client": "workspace:*",
     "@squad/db": "workspace:*",
+    "@squad/diag": "workspace:*",
     "@squad/shared-config": "workspace:*",
     "@squad/shared-types": "workspace:*",
     "@types/diff": "^8.0.0",

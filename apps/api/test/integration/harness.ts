@@ -13,6 +13,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import Redis from 'ioredis';
 import postgres from 'postgres';
+import diagPlugin from '../../src/lib/diag.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import auditPluginFactory from '../../src/plugins/audit.js';
@@ -396,6 +397,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(cookie, { secret: TEST_SESSION_SECRET });
   await app.register(websocket);
   await app.register(requestContextPlugin);
+  await app.register(diagPlugin);
   await app.register(authPlugin);
   await app.register(auditPluginFactory);
   await app.register(installProgressPlugin);

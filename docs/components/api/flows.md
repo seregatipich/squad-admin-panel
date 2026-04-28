@@ -404,4 +404,24 @@ Every authed mutation route runs through [`plugins/audit.ts`](../../../apps/api/
 2. `INSERT INTO audit_log (...)`. The DB trigger acquires `pg_advisory_xact_lock(audit_log_lock)`, reads the previous `row_hash`, computes `sha256(prev_hash || canonical_json)`, and writes `row_hash` + `prev_hash`.
 3. `BEFORE UPDATE OR DELETE` triggers raise `audit_log is append-only`.
 
+## Diagnostic emission
+
+Plugin: [`apps/api/src/lib/diag.ts`](../../../apps/api/src/lib/diag.ts). Registered in [`server.ts`](../../../apps/api/src/server.ts) right after `redisPlugin` so the underlying ioredis connection is available.
+
+```
+registerDiag(app):
+  diag = createDiag({ redis: app.redis, log: app.log })   ← from @squad/diag
+  app.decorate('diag', diag)
+  app.decorateRequest('diag', null)
+  onRequest hook:
+    requestId = req.id     ← Fastify-generated or x-request-id header
+    req.diag = {
+      emit(ev): app.diag.emit({ ...ev, requestId: ev.requestId ?? requestId })
+    }
+```
+
+Route handlers reach the emitter via `req.diag.emit({...})`. The hook injects the request id on every emit unless the caller already supplied one. Each emit ends up as one `XADD` to the Redis Stream `diag:queue`; `worker-diag-flush` batches them into `diagnostic_events`. The full schema and event types live in [`@squad/diag` data model](../diag/data-model.md).
+
+Stub-friendly for tests: replacing `app.diag.emit` with a capture function reroutes both `app.diag` calls and per-request emits, because the hook reads `app.diag.emit` at emit time rather than capturing the original closure.
+
 `pnpm verify:audit-chain` walks the table in `id` order and recomputes hashes; it exits non-zero on the first mismatch.

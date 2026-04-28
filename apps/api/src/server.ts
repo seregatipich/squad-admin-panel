@@ -13,6 +13,7 @@ import {
 } from 'fastify-type-provider-zod';
 import type { AppConfig } from './config.js';
 import { loadEncryptionKey } from './lib/crypto.js';
+import diagPlugin from './lib/diag.js';
 import { buildLogger } from './lib/logger.js';
 import auditPlugin from './plugins/audit.js';
 import authPlugin from './plugins/auth.js';
@@ -89,6 +90,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(databasePlugin, { config });
   await app.register(redisPlugin, { config });
   lateSink.setInner(redisSinkStream({ redis: app.redis, defaultSource: 'api' }));
+  await app.register(diagPlugin);
   await app.register(liveBusPlugin);
   await app.register(bridgePlugin, { config });
   await app.register(bridgeHeartbeatPlugin);

@@ -11,6 +11,7 @@
 - Vitest unit suite: XADD wire-shape assertion + pino-fallback assertion.
 - `DIAG_STREAM_KEY` / `DIAG_STREAM_MAXLEN` re-exported from `@squad/shared-config` for consumers that do not want a runtime dep on `@squad/diag` (the wipe endpoint, `worker-diag-flush`).
 - Consumer `worker-diag-flush` shipped (Task 4 of the same plan); see [`docs/components/workers/worker-diag-flush/`](../workers/worker-diag-flush/README.md). It reads `diag:queue` with `XREADGROUP` and batches into `diagnostic_events`. The producer side of `@squad/diag` is unchanged by Task 4.
+- API consumes `@squad/diag` via `app.diag` and per-request `req.diag` decorations (Task 6); the request id is auto-injected into every emit by an `onRequest` hook unless the caller already set `requestId`. See [`docs/components/api/api.md`](../api/api.md#decorations) and [`docs/components/api/flows.md`](../api/flows.md#diagnostic-emission). The producer side of `@squad/diag` is unchanged by Task 6.
 
 ### Changed
 
