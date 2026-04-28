@@ -773,7 +773,7 @@ function RamCard({ metrics }: { metrics: HostMetrics }) {
 
 function DiskCard({
   metrics,
-  diskBreakdown: _diskBreakdown,
+  diskBreakdown,
 }: {
   metrics: HostMetrics;
   diskBreakdown: DiskBreakdown | null;
@@ -789,7 +789,22 @@ function DiskCard({
     );
   }
   const r = ratio(metrics.disk_used_bytes, total);
+  const usedPct = r * 100;
   const tone = thresholdTone(r, 0.75, 0.9);
+  const panelPct = diskBreakdown ? Math.min(diskBreakdown.panel_pct, usedPct) : 0;
+  const otherPct = diskBreakdown ? Math.max(0, usedPct - panelPct) : 0;
+  const splitSegments = diskBreakdown
+    ? [
+        { widthPct: panelPct, className: 'bg-purple-500' },
+        { widthPct: otherPct, className: 'bg-purple-300' },
+      ]
+    : undefined;
+  const legend = diskBreakdown
+    ? [
+        { label: 'Панель', pct: panelPct, swatchClassName: 'bg-purple-500' },
+        { label: 'Прочее', pct: otherPct, swatchClassName: 'bg-purple-300' },
+      ]
+    : undefined;
   return (
     <ResourceCard
       title="Диск"
@@ -799,8 +814,10 @@ function DiskCard({
           {formatBytes(metrics.disk_used_bytes)} / {formatBytes(total)}
         </span>
       }
-      progressPct={r * 100}
+      progressPct={usedPct}
       progressTone={tone}
+      progressSegments={splitSegments}
+      progressLegend={legend}
     />
   );
 }
@@ -833,12 +850,16 @@ function ResourceCard({
   sub,
   progressPct,
   progressTone,
+  progressSegments,
+  progressLegend,
 }: {
   title: string;
   mainValue: string;
   sub: React.ReactNode;
   progressPct?: number;
   progressTone?: 'emerald' | 'amber' | 'red';
+  progressSegments?: { widthPct: number; className: string }[];
+  progressLegend?: { label: string; pct: number; swatchClassName: string }[];
 }) {
   const fill: Record<string, string> = {
     emerald: 'bg-emerald-500',
@@ -853,11 +874,34 @@ function ResourceCard({
       </div>
       <div className="text-[11px] text-neutral-400 truncate">{sub}</div>
       {progressPct !== undefined && progressTone ? (
-        <div className="h-1.5 rounded-full bg-neutral-900 overflow-hidden mt-auto">
-          <div
-            className={`h-1.5 rounded-full ${fill[progressTone]}`}
-            style={{ width: `${Math.max(0, Math.min(100, progressPct))}%` }}
-          />
+        <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-neutral-900 mt-auto">
+          {progressSegments && progressSegments.length > 0 ? (
+            progressSegments.map((seg) => (
+              <div
+                key={seg.className}
+                className={`h-1.5 ${seg.className}`}
+                style={{ width: `${Math.max(0, Math.min(100, seg.widthPct))}%` }}
+              />
+            ))
+          ) : (
+            <div
+              className={`h-1.5 ${fill[progressTone]}`}
+              style={{ width: `${Math.max(0, Math.min(100, progressPct))}%` }}
+            />
+          )}
+        </div>
+      ) : null}
+      {progressLegend && progressLegend.length > 0 ? (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-neutral-400">
+          {progressLegend.map((entry) => (
+            <span key={entry.label} className="inline-flex items-center gap-1.5">
+              <span className={`h-1.5 w-1.5 rounded-sm ${entry.swatchClassName}`} />
+              <span>
+                {entry.label}{' '}
+                <span className="font-mono tabular-nums">{entry.pct.toFixed(1)}%</span>
+              </span>
+            </span>
+          ))}
         </div>
       ) : null}
     </div>

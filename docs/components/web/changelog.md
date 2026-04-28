@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-04-28 — Dashboard disk bar renders Панель / Прочее sub-segments
+
+### Changed
+
+- `apps/web/src/app/(dashboard)/dashboard/page.tsx` — `DiskCard` now consumes the `diskBreakdown` prop (renamed from the prior placeholder `_diskBreakdown`). When the payload is present the card's progress track stacks two segments inside it: `Панель` in `bg-purple-500` followed by `Прочее` in `bg-purple-300`, sized from `panel_pct` and `max(0, usedPct - panelPct)` so they always equal the total used % shown in the card title. A swatch legend below the bar shows both percentages with one-decimal precision. While `diskBreakdown` is `null` (initial load or transient fetch failure) the bar gracefully falls back to the existing single-segment threshold-tinted (emerald/amber/red) rendering and the legend is hidden.
+- `ResourceCard` gained two optional props — `progressSegments` (array of `{widthPct, className}`) and `progressLegend` (array of `{label, pct, swatchClassName}`) — that toggle the segmented variant. RAM and CPU cards continue to render the original single-segment bar untouched.
+
+### Notes
+
+- Purple was chosen over the threshold-tinted hues to stay consistent with the existing disk-card identity (the `MetricHistoryModal` open-button hover ring is already `purple-700/40`) and to avoid colliding with the emerald/amber/red traffic-light tones used by the threshold logic. Keeping the segmented bar in a single distinct hue family means the operator can read «Панель vs Прочее» without confusing it with «healthy vs warning».
+
 ## 2026-04-28 — Dashboard fetches /host/disk-usage in preparation for disk sub-segment
 
 ### Added

@@ -131,6 +131,14 @@ If the first-owner claim already happened and the user has no role, the API retu
 4. On WS close the banner turns red (`Связь с панелью потеряна — переподключаемся…`) and the singleton runs `BACKOFF_STEPS_MS` reconnect.
 5. On `bridge.connection: down` the banner turns amber. On `bridge.connection: up` it disappears.
 
+## Dashboard disk breakdown
+
+1. On mount the dashboard kicks off a one-shot fetch of `GET /api/v1/host/disk-usage` and starts a 30 s interval that re-fetches the same endpoint. The handler is independent from the 4 s host-metrics poll so the slower bridge sampling does not block the rest of the page.
+2. The response (`DiskBreakdown`) is stored in component state. On any non-OK status or thrown error the state stays at its previous value; transient failures are tolerated silently because the bar gracefully degrades to its single-segment threshold rendering.
+3. The `HostBlock` component receives the breakdown and forwards it to `DiskCard`.
+4. `DiskCard` computes `usedPct = (disk_used_bytes / disk_total_bytes) * 100` from `host_metrics` (the source of truth for the title number) and clamps `panelPct = min(diskBreakdown.panel_pct, usedPct)` and `otherPct = max(0, usedPct - panelPct)`. This absorbs any drift between the bridge's `panel_disk_usage` cache (5 min TTL) and the live `host_metrics` sample.
+5. The bar renders two stacked segments inside the existing track — `Панель` in `bg-purple-500` first, then `Прочее` in `bg-purple-300` — followed by a swatch legend with one-decimal percentages. While `diskBreakdown` is `null` the bar reverts to its single-segment threshold-tinted rendering and the legend is hidden.
+
 ## Server install wizard
 
 1. Admin navigates to `/servers/new`.
