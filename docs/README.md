@@ -21,6 +21,7 @@ Open-source, self-hosted control panel for Squad dedicated servers. Owns the ful
 - [`bridge`](components/bridge/README.md) — Go host daemon (the only privileged component)
 - [`workers`](components/workers/README.md) — RCON, log-ingest, archiver, partitioner, stubs
 - [`db`](components/db/README.md) — Drizzle schema + Postgres migrations
+- [`diag`](components/diag/README.md) — `@squad/diag` panel-internal diagnostic event emitter (Redis Stream `diag:queue`)
 - [`shared-types`](components/shared-types/README.md) — Zod schemas + `EventEnvelope`
 - [`shared-config`](components/shared-config/README.md) — permission keys, bridge-method allowlist
 - [`bridge-client`](components/bridge-client/README.md) — TS client for the Go bridge
