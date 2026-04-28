@@ -481,3 +481,66 @@ func TestPanelDiskUsage_MissingDirsReturnZero(t *testing.T) {
 		t.Fatalf("saved_per_server = %+v, expected empty", got.SavedPerServer)
 	}
 }
+
+func TestPanelDiskUsage_ForceBypassesCache(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "configs"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	d, duCalls, statfsCalls, dockerCalls := newDiskUsageDispatcher(t, tmp)
+
+	cachedReq := &rpc.Request{ID: "req-1", Method: "panel_disk_usage", Params: []byte("{}")}
+	resp1 := d.Handle(context.Background(), cachedReq, func(rpc.StreamFrame) {})
+	if !resp1.OK {
+		t.Fatalf("first call failed: %+v", resp1.Error)
+	}
+	firstDu := duCalls.Load()
+	firstStatfs := statfsCalls.Load()
+	firstDocker := dockerCalls.Load()
+	if firstDu == 0 || firstStatfs == 0 || firstDocker == 0 {
+		t.Fatalf("first call did not invoke probes (du=%d statfs=%d docker=%d)", firstDu, firstStatfs, firstDocker)
+	}
+
+	cacheHit := d.Handle(context.Background(), cachedReq, func(rpc.StreamFrame) {})
+	if !cacheHit.OK {
+		t.Fatalf("cache hit call failed: %+v", cacheHit.Error)
+	}
+	if duCalls.Load() != firstDu || statfsCalls.Load() != firstStatfs || dockerCalls.Load() != firstDocker {
+		t.Fatalf("non-force call re-ran probes")
+	}
+
+	forceReq := &rpc.Request{ID: "req-2", Method: "panel_disk_usage", Params: []byte(`{"force":true}`)}
+	respForce := d.Handle(context.Background(), forceReq, func(rpc.StreamFrame) {})
+	if !respForce.OK {
+		t.Fatalf("force call failed: %+v", respForce.Error)
+	}
+	if duCalls.Load() <= firstDu {
+		t.Fatalf("force did not re-invoke du (was %d, now %d)", firstDu, duCalls.Load())
+	}
+	if statfsCalls.Load() <= firstStatfs {
+		t.Fatalf("force did not re-invoke statfs (was %d, now %d)", firstStatfs, statfsCalls.Load())
+	}
+	if dockerCalls.Load() <= firstDocker {
+		t.Fatalf("force did not re-invoke docker df (was %d, now %d)", firstDocker, dockerCalls.Load())
+	}
+
+	var first, force panelDiskUsageResult
+	if err := json.Unmarshal(resp1.Result, &first); err != nil {
+		t.Fatalf("decode first: %v", err)
+	}
+	if err := json.Unmarshal(respForce.Result, &force); err != nil {
+		t.Fatalf("decode force: %v", err)
+	}
+	if force.CacheAgeSeconds != 0 {
+		t.Fatalf("force cache_age_seconds = %d, expected 0", force.CacheAgeSeconds)
+	}
+
+	cachedAfterForce := d.Handle(context.Background(), cachedReq, func(rpc.StreamFrame) {})
+	if !cachedAfterForce.OK {
+		t.Fatalf("post-force cache hit failed: %+v", cachedAfterForce.Error)
+	}
+	postForceDu := duCalls.Load()
+	if d.Handle(context.Background(), cachedReq, func(rpc.StreamFrame) {}); duCalls.Load() != postForceDu {
+		t.Fatalf("non-force call after force re-invoked du; cache write skipped")
+	}
+}

@@ -178,11 +178,17 @@ Spawns a transient `squad-panel/depot-init` container that runs `steamcmd +app_u
 
 ### Operational visibility
 
-#### `panel_disk_usage({})` → `PanelDiskUsageResult`
+#### `panel_disk_usage({ force? })` → `PanelDiskUsageResult`
 
 Reports panel-owned on-disk footprint by combining `du -sb` walks of `/var/lib/squad-panel/{configs,saved,audit-archive}`, `docker system df --format '{{json .}}' -v` filtered to panel-owned images and volumes, and `statfs(/var/lib/squad-panel)` for whole-host capacity. Result is computed at most once every 5 minutes and cached in-process; subsequent calls within the TTL return the same payload with `cache_age_seconds` advanced.
 
-The request payload is the empty object `{}` — no caller-controlled paths, so there is no allowlist for the wire input. The method's allowlist is internal:
+Optional params:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `force` | bool | `false` | When `true`, skip the cache read and recompute (`du` + `docker df` + `statfs`). The fresh result is still written into the cache so subsequent non-force calls within the TTL benefit immediately. The API exposes this as `?refresh=1` on `GET /api/v1/host/disk-usage`. |
+
+The wire input has no caller-controlled paths, so there is no path allowlist. The method's allowlist is internal:
 
 - Filesystem walks: `<panel_root>/configs`, `<panel_root>/saved` (plus per-server subdirs by listing immediate children), `<panel_root>/audit-archive`. Missing directories are reported as zero, never as an error. `panel_root` defaults to `/var/lib/squad-panel`.
 - Docker volumes counted: `squad-depot`, `squad-panel_pg-data`, `squad-panel_redis-data`. All other volumes are dropped.

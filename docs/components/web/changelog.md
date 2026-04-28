@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-04-28 — `<DiskBreakdownModal>` for the dashboard disk card
+
+### Added
+
+- `apps/web/src/components/DiskBreakdownModal.tsx` — controlled modal opened when the operator clicks the dashboard disk card. Props: `{ open, onOpenChange, initialData, onRefresh }`. Renders the «По типу» list (configs / saved-total / squad-depot / docker volumes / docker images / audit-archive sorted by bytes desc) and the «По серверам (saved)» scrollable table (linked first-8-chars UUIDs to `/servers/<uuid>`). Component-private `fmt(bytes)` formats sizes in `B/KB/MB/GB/TB` with magnitude-dependent precision. Refresh button calls `onRefresh()`, which is the parent-supplied closure that hits `GET /api/v1/host/disk-usage?refresh=1`. Backdrop click and Escape close the modal.
+
+### Changed
+
+- `apps/web/src/app/(dashboard)/dashboard/page.tsx` — disk-card click now opens the new `DiskBreakdownModal` instead of the metric-history modal. CPU / RAM / Network cards still open `MetricHistoryModal` unchanged. New state `diskModalOpen`, new callback `refreshDiskBreakdown` that hits `?refresh=1` and updates the dashboard's polled `diskBreakdown` state in addition to returning the fresh payload to the modal. Disk card's outer `<button>` now carries `data-testid="disk-card"` for the upcoming Playwright e2e.
+- `apps/api/src/routes/host.ts` — `GET /api/v1/host/disk-usage` now accepts an optional `?refresh=1` query (Zod-coerced boolean). When truthy the API passes `{ force: true }` to `bridge.panelDiskUsage()`.
+- `packages/bridge-client/src/client.ts` — `panelDiskUsage(opts?: { force?: boolean })` forwards the `force` flag to the bridge as a `{ force: true }` params payload.
+- `apps/bridge/internal/handlers/handlers.go` — `panelDiskUsage` decodes optional `{ force?: bool }` params; when `force` is true it skips the 5-minute cache read but still writes the fresh result back into the cache so subsequent non-force calls benefit.
+
 ## 2026-04-28 — Dashboard disk bar renders Панель / Прочее sub-segments
 
 ### Changed

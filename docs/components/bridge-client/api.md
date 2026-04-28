@@ -213,9 +213,11 @@ const { cpu_percent, mem_used_bytes, mem_limit_bytes } = await client.containerS
 
 ---
 
-#### `panelDiskUsage(): Promise<PanelDiskUsage>`
+#### `panelDiskUsage(opts?: { force?: boolean }): Promise<PanelDiskUsage>`
 
-Returns a structured breakdown of the panel's disk footprint on the host. The Go-side computation lives in `apps/bridge/internal/handlers/handlers.go` (`panelDiskUsage`) and combines `du -sb` walks of the panel data root, a panel-owned filter on `docker system df`, and `syscall.Statfs` for whole-host capacity; results are cached inside the bridge for 5 minutes. E2E coverage against the live socket is in `apps/api/test/e2e/bridge-rpc.e2e.test.ts` (shape assertions plus a caching idempotence case). The handler takes no parameters and silently ignores any client-supplied keys, so there is no forbidden-path variant. Timeout: 30 s.
+Returns a structured breakdown of the panel's disk footprint on the host. The Go-side computation lives in `apps/bridge/internal/handlers/handlers.go` (`panelDiskUsage`) and combines `du -sb` walks of the panel data root, a panel-owned filter on `docker system df`, and `syscall.Statfs` for whole-host capacity; results are cached inside the bridge for 5 minutes. E2E coverage against the live socket is in `apps/api/test/e2e/bridge-rpc.e2e.test.ts` (shape assertions plus a caching idempotence case). Timeout: 30 s.
+
+Pass `{ force: true }` to bypass the 5-minute bridge-side cache and force a fresh `du`/`docker df`/`statfs` recompute. The fresh result is still written back into the cache so the next non-force call sees it immediately. The API surfaces this as `?refresh=1` on `GET /api/v1/host/disk-usage`. With no argument or `{}`, the client sends `params: {}` and the bridge returns a cached result if one is fresh enough.
 
 | Field | Type | Description |
 |---|---|---|
@@ -235,6 +237,9 @@ Returns a structured breakdown of the panel's disk footprint on the host. The Go
 ```ts
 const usage = await client.panelDiskUsage();
 const panelShareOfHost = usage.total_panel_bytes / usage.host_total_bytes;
+
+const fresh = await client.panelDiskUsage({ force: true });
+console.log(fresh.cache_age_seconds); // 0
 ```
 
 ---

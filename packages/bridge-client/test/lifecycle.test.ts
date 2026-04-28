@@ -178,14 +178,17 @@ describe('streaming method', () => {
 describe('panel_disk_usage', () => {
   it('panelDiskUsage sends method=panel_disk_usage and round-trips the response shape', async () => {
     let receivedMethod: string | undefined;
+    let receivedParams: unknown;
     server.on('connection', (conn) => {
       conn.once('data', (chunk) => {
         const size = chunk.readUInt32BE(0);
         const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as {
           id: string;
           method: string;
+          params?: unknown;
         };
         receivedMethod = req.method;
+        receivedParams = req.params;
         sendFrame(conn, {
           id: req.id,
           ok: true,
@@ -211,11 +214,53 @@ describe('panel_disk_usage', () => {
     try {
       const result = await client.panelDiskUsage();
       expect(receivedMethod).toBe('panel_disk_usage');
+      expect(receivedParams).toEqual({});
       expect(result.total_panel_bytes).toBe(1300);
       expect(result.saved_per_server).toHaveLength(1);
       expect(result.saved_per_server[0]).toEqual({ uuid: 's1', bytes: 50 });
       expect(result.host_used_bytes).toBe(500_000);
       expect(result.computed_at).toBe('2026-04-28T10:00:00Z');
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('passes { force: true } when called with force=true', async () => {
+    let receivedParams: unknown;
+    server.on('connection', (conn) => {
+      conn.once('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as {
+          id: string;
+          method: string;
+          params?: unknown;
+        };
+        receivedParams = req.params;
+        sendFrame(conn, {
+          id: req.id,
+          ok: true,
+          result: {
+            configs_bytes: 0,
+            saved_total_bytes: 0,
+            saved_per_server: [],
+            depot_volume_bytes: 0,
+            docker_volumes: [],
+            docker_images: [],
+            audit_archive_bytes: 0,
+            total_panel_bytes: 0,
+            host_total_bytes: 0,
+            host_used_bytes: 0,
+            computed_at: '2026-04-28T10:00:00Z',
+            cache_age_seconds: 0,
+          },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    try {
+      await client.panelDiskUsage({ force: true });
+      expect(receivedParams).toEqual({ force: true });
     } finally {
       await client.close();
     }

@@ -1,5 +1,14 @@
 # `api` — changelog
 
+## 2026-04-28 — `GET /api/v1/host/disk-usage?refresh=1` (cache bypass)
+
+### Changed
+
+- `GET /api/v1/host/disk-usage` now accepts an optional Zod-coerced boolean query parameter `refresh`. When truthy (`?refresh=1`) the API forwards `{ force: true }` to `bridge.panelDiskUsage()`, instructing the bridge to bypass its 5-minute cache and recompute (`du -sb` + `docker system df` + `statvfs`). The fresh value is written back into the bridge cache so the next non-force call sees it immediately. No new permission check — the existing `host:view` requirement covers it.
+- `apps/api/src/routes/host.ts` — added the Zod querystring schema, threads `refresh` into the bridge call.
+- `apps/api/test/integration/harness.ts` — `FakeBridge.panelDiskUsage` now takes an optional `{ force?: boolean }` argument so tests can assert the API forwards the flag.
+- `apps/api/test/host-disk-usage.test.ts` — added a fifth case proving that `?refresh=1` causes a `{ force: true }` invocation and that the unflagged endpoint passes `undefined`.
+
 ## 2026-04-28 — `GET /api/v1/host/disk-usage` (panel disk breakdown, Phase B1)
 
 ### Added

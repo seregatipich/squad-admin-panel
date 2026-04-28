@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { DiskBreakdownModal } from '@/components/DiskBreakdownModal';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { MetricHistoryModal, type MetricKey } from '@/components/MetricHistoryModal';
 import { RestartBridgeButton } from '@/components/RestartBridgeButton';
@@ -183,6 +184,7 @@ export default function DashboardPage() {
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
   const [diskBreakdown, setDiskBreakdown] = useState<DiskBreakdown | null>(null);
+  const [diskModalOpen, setDiskModalOpen] = useState(false);
 
   const load = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -238,6 +240,21 @@ export default function DashboardPage() {
       cancelled = true;
       clearInterval(t);
     };
+  }, []);
+
+  const refreshDiskBreakdown = useCallback(async (): Promise<DiskBreakdown | null> => {
+    try {
+      const res = await fetch('/api/v1/host/disk-usage?refresh=1', {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!res.ok) return null;
+      const payload = (await res.json()) as DiskBreakdown;
+      setDiskBreakdown(payload);
+      return payload;
+    } catch {
+      return null;
+    }
   }, []);
 
   const runningCount = servers.filter((s) => s.status === 'running').length;
@@ -316,6 +333,7 @@ export default function DashboardPage() {
             health={health}
             lastUpdate={lastUpdate}
             diskBreakdown={diskBreakdown}
+            onDiskClick={() => setDiskModalOpen(true)}
           />
         </div>
       </section>
@@ -333,6 +351,13 @@ export default function DashboardPage() {
           />
         </div>
       </section>
+
+      <DiskBreakdownModal
+        open={diskModalOpen}
+        onOpenChange={setDiskModalOpen}
+        initialData={diskBreakdown}
+        onRefresh={refreshDiskBreakdown}
+      />
     </div>
   );
 }
@@ -600,6 +625,7 @@ function HostBlock({
   health,
   lastUpdate,
   diskBreakdown,
+  onDiskClick,
 }: {
   bridge: BridgeStatus | null;
   info: HostInfo | null;
@@ -607,6 +633,7 @@ function HostBlock({
   health: ReturnType<typeof computeHostHealth>;
   lastUpdate: Date | null;
   diskBreakdown: DiskBreakdown | null;
+  onDiskClick: () => void;
 }) {
   const isLoading = info === null || metrics === null;
   const [openMetric, setOpenMetric] = useState<MetricKey | null>(null);
@@ -688,9 +715,10 @@ function HostBlock({
             </button>
             <button
               type="button"
-              onClick={() => setOpenMetric('disk')}
+              onClick={onDiskClick}
+              data-testid="disk-card"
               className="text-left transition hover:ring-2 hover:ring-purple-700/40 rounded-xl"
-              aria-label="Открыть график диска за 24 часа"
+              aria-label="Открыть детализацию диска"
             >
               <DiskCard metrics={metrics} diskBreakdown={diskBreakdown} />
             </button>

@@ -1,5 +1,16 @@
 # `bridge` — changelog
 
+## 2026-04-28 — `panel_disk_usage` accepts optional `force` param
+
+### Changed
+
+- `apps/bridge/internal/handlers/handlers.go` — `panelDiskUsage` now decodes optional `{ force?: bool }` params. When `force` is `true` the handler skips the 5-minute cache read but still writes the fresh result back into the cache, so subsequent non-force calls within the TTL see the new value immediately. Empty params and a missing key both behave as before. Decode errors return `invalid_args`.
+- `apps/bridge/internal/handlers/handlers_test.go` — added `TestPanelDiskUsage_ForceBypassesCache` covering the cache-hit, force-bypass, and post-force-cache-warm sequence with the existing `duFn`/`statfsFn`/`dockerDfFn` test stubs counting probe invocations.
+
+### Notes
+
+- This is the bridge half of the dashboard's "обновить" button on `<DiskBreakdownModal>`; the API exposes it as `GET /api/v1/host/disk-usage?refresh=1`.
+
 ## 2026-04-28 — `panel_disk_usage` E2E coverage
 
 ### Added

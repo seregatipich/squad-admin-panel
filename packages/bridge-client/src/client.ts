@@ -138,8 +138,8 @@ export class BridgeClient {
       timeoutMs: 3_600_000,
     });
 
-  panelDiskUsage = () =>
-    this.call<PanelDiskUsage>('panel_disk_usage', undefined, {
+  panelDiskUsage = (opts: { force?: boolean } = {}) =>
+    this.call<PanelDiskUsage>('panel_disk_usage', opts.force ? { force: true } : {}, {
       timeoutMs: 30_000,
     });
 

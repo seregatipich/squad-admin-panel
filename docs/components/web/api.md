@@ -18,7 +18,7 @@ All require a valid session. Permission gating is noted where applicable.
 
 | Route | File | Required permission(s) | What it displays |
 |---|---|---|---|
-| `/dashboard` | `(dashboard)/dashboard/page.tsx` | none (all authenticated users) | Summary cards (server count, online players, host health, alerts). Host info/metrics widget with sparkline buttons that open `MetricHistoryModal`. The disk card splits the used portion of its bar into two sub-segments — `Панель` (deeper purple) and `Прочее` (lighter purple) — driven by `panel_pct` / `other_pct` from `GET /api/v1/host/disk-usage` (polled every 30 s, independent of the 4 s host-metrics poll). A swatch legend below the bar shows both percentages with one-decimal precision. While the breakdown payload is loading or failed, the bar falls back to the single-segment threshold-tinted rendering (emerald/amber/red) and the legend is hidden. The two sub-segments are clamped so they never visually exceed the total used % shown in the card title — if the bridge's `panel_disk_usage` and `host_metrics` samples drift, the panel sub-segment is the source of truth and `other = max(0, used_pct - panel_pct)` absorbs the rounding gap. Recent activity feed from `GET /api/v1/audit`. Connection health panel (PostgreSQL, Redis, bridge, workers). Polls every 4 s. |
+| `/dashboard` | `(dashboard)/dashboard/page.tsx` | none (all authenticated users) | Summary cards (server count, online players, host health, alerts). Host info/metrics widget with sparkline buttons that open `MetricHistoryModal` for CPU / RAM / Network. The disk card has its own click handler that opens `DiskBreakdownModal` instead of the metric-history modal — its outer `<button>` carries `data-testid="disk-card"` for the Playwright suite. The disk card splits the used portion of its bar into two sub-segments — `Панель` (deeper purple) and `Прочее` (lighter purple) — driven by `panel_pct` / `other_pct` from `GET /api/v1/host/disk-usage` (polled every 30 s, independent of the 4 s host-metrics poll). A swatch legend below the bar shows both percentages with one-decimal precision. While the breakdown payload is loading or failed, the bar falls back to the single-segment threshold-tinted rendering (emerald/amber/red) and the legend is hidden. The two sub-segments are clamped so they never visually exceed the total used % shown in the card title — if the bridge's `panel_disk_usage` and `host_metrics` samples drift, the panel sub-segment is the source of truth and `other = max(0, used_pct - panel_pct)` absorbs the rounding gap. Recent activity feed from `GET /api/v1/audit`. Connection health panel (PostgreSQL, Redis, bridge, workers). Polls every 4 s. |
 | `/servers` | `(dashboard)/servers/page.tsx` | none | Server list with status dot, player count, RCON state, last-poll time. Free-text search by name, slug, or id. Start / stop / restart action buttons. Polls every 4 s. |
 | `/servers/new` | `(dashboard)/servers/new/page.tsx` | `server:create` (enforced by API) | Two-step wizard: form (display_name, slug auto-transliterated from Cyrillic, ports, max_players) → POST /servers → POST /servers/:id/install → WebSocket log tail via `LogConsole`. |
 | `/servers/[id]` | `(dashboard)/servers/[id]/page.tsx` | none | Server detail: status, RCON state, container runtime, log tail (WebSocket), start/stop/restart buttons, links to configs and events tabs. Delete confirm modal warns that files will be wiped from disk and the cfg backup will live in `/servers/archive`. |
@@ -143,6 +143,29 @@ function MetricHistoryModal(props: {
 ```
 
 Modal wrapper around `MetricHistoryChart`. Fetches `GET /api/v1/host/metrics/history` when opened. Closes on Escape or backdrop click.
+
+### `DiskBreakdownModal`
+
+```ts
+function DiskBreakdownModal(props: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  initialData: DiskUsage | null;
+  onRefresh: () => Promise<DiskUsage | null>;
+}): JSX.Element | null
+```
+
+Mounted by `apps/web/src/app/(dashboard)/dashboard/page.tsx`; opened when the user clicks the disk card (`data-testid="disk-card"`). Controlled — the parent owns `open` and toggles it via `onOpenChange`. `initialData` is the dashboard's polled `diskBreakdown` state; the modal seeds its local state from this prop on open so there is no duplicate fetch. The refresh button (`↻`) calls `onRefresh`, which is the parent-supplied closure that does `fetch('/api/v1/host/disk-usage?refresh=1')`, parses the body, also writes back into the dashboard's `diskBreakdown` state, and returns the fresh payload (or `null` on failure). The button is disabled while the request is in flight and shows a spinning glyph. Closes on Escape or backdrop click.
+
+Render structure:
+
+- **Header**: «Что занимает панель» as the dialog title plus a close button.
+- **Summary line**: `Всего: <fmt(total_panel_bytes)> · X.X% диска · обновлено N сек назад` where `N = data.cache_age_seconds`. Refresh button to the right.
+- **Section "По типу"**: rows built from `configs_bytes`, `saved_total_bytes`, `depot_volume_bytes`, every entry in `docker_volumes` (label `volume:<name>`), every entry in `docker_images` (label `image:<repo>:<tag>`), and `audit_archive_bytes`. Sorted by bytes descending. Right column is monospace-formatted byte size.
+- **Section "По серверам (saved)"**: rendered only if `saved_per_server.length > 0`. Scrollable table (`max-h-72 overflow-y-auto`) with `Server` (Next `<Link>` to `/servers/<uuid>`, displaying first 8 chars of UUID) and right-aligned monospace `Saved` columns. Sorted by bytes descending.
+- **Loading / empty states**: when `data === null`, shows «Загрузка…» while a refresh is in-flight, otherwise «Нет данных». The latter never fires in practice because the parent always passes a non-null `initialData` once the dashboard's first poll completes.
+
+The component-private `fmt(bytes: number): string` helper picks a base-1024 unit (`B/KB/MB/GB/TB`) and formats with 0/1/2 decimals depending on magnitude. It is not exported.
 
 ### `RestartBridgeButton`
 

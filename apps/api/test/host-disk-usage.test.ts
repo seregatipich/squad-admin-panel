@@ -118,4 +118,31 @@ describe('GET /api/v1/host/disk-usage', () => {
     const resp = await h.app.inject({ method: 'GET', url: '/api/v1/host/disk-usage' });
     expect(resp.statusCode).toBe(401);
   });
+
+  it('passes { force: true } to bridge.panelDiskUsage when ?refresh=1', async () => {
+    const calls: Array<{ force?: boolean } | undefined> = [];
+    h.bridge.panelDiskUsage = async (opts) => {
+      calls.push(opts);
+      return { ...SAMPLE_USAGE };
+    };
+    const cookie = await loginAsOwner(h);
+
+    const cached = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/host/disk-usage',
+      headers: { cookie },
+    });
+    expect(cached.statusCode).toBe(200);
+
+    const refreshed = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/host/disk-usage?refresh=1',
+      headers: { cookie },
+    });
+    expect(refreshed.statusCode).toBe(200);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toBeUndefined();
+    expect(calls[1]).toEqual({ force: true });
+  });
 });

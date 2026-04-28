@@ -778,10 +778,19 @@ func realDockerDiskBreakdown() ([]dockerVol, []dockerImg, int64, error) {
 }
 
 func (d *Dispatcher) panelDiskUsage(req *rpc.Request) rpc.Response {
+	var params struct {
+		Force bool `json:"force,omitempty"`
+	}
+	if len(req.Params) > 0 {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, fmt.Sprintf("decode params: %v", err))
+		}
+	}
+
 	panelDiskCacheMu.Lock()
 	defer panelDiskCacheMu.Unlock()
 
-	if panelDiskCacheVal != nil && time.Since(panelDiskCacheStored) < panelDiskCacheTTL {
+	if !params.Force && panelDiskCacheVal != nil && time.Since(panelDiskCacheStored) < panelDiskCacheTTL {
 		cached := *panelDiskCacheVal
 		cached.CacheAgeSeconds = int(time.Since(panelDiskCacheStored).Seconds())
 		body, _ := json.Marshal(&cached)

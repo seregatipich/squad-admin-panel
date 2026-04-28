@@ -1,5 +1,11 @@
 # `bridge-client` — changelog
 
+## 2026-04-28 — `panelDiskUsage` accepts `{ force?: boolean }`
+
+### Changed
+- `panelDiskUsage(opts?: { force?: boolean })` — passing `{ force: true }` forwards a `{ force: true }` params payload to the bridge, instructing it to skip the 5-minute cache and recompute. With no argument the client still sends `params: {}` (existing behaviour preserved).
+- `packages/bridge-client/test/lifecycle.test.ts` — extended the existing `panel_disk_usage` round-trip test to assert the no-arg call sends `params: {}` and added a second case proving the `{ force: true }` invocation forwards the flag.
+
 ## 2026-04-28
 
 ### Added

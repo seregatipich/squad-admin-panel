@@ -159,7 +159,7 @@ export interface FakeBridge {
   directoryDelete: (p: { path: string }) => Promise<{ removed: boolean }>;
   processInfo: (p: { pid: number }) => Promise<{ pid: number; exists: boolean }>;
   hostAgentRestart: () => Promise<{ status: 'restarting' }>;
-  panelDiskUsage: () => Promise<{
+  panelDiskUsage: (opts?: { force?: boolean }) => Promise<{
     configs_bytes: number;
     saved_total_bytes: number;
     saved_per_server: Array<{ uuid: string; bytes: number }>;
