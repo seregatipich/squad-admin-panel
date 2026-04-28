@@ -1,5 +1,21 @@
 # Changelog — worker-event-partition
 
+## 2026-04-28
+
+### Added
+
+- `ensureDiagPartitions(sql)` exported from `src/index.ts`. Active hourly rotator for the `diagnostic_events` partitioned table introduced by migration `0017_diagnostic_events.sql`: keeps `[-1, 0, +1, +2]` days from today present (idempotent `CREATE TABLE IF NOT EXISTS`) and drops every child whose name sorts before yesterday (24h retention). Wired into the existing main loop so it runs alongside the events-table placeholder on each hourly tick.
+- New `test/diag-partition.test.ts` with a stub `postgres-js`-shaped `sql`. Two cases: full create+drop sweep, and naming/range-format regex on every emitted `CREATE TABLE`.
+- `isMainEntrypoint()` helper that compares `realpathSync(process.argv[1])` to `fileURLToPath(import.meta.url)`. Now gates the `main()` invocation so the file can be safely imported by unit tests without spawning a worker. Replaces the implicit "always run on import" pattern.
+
+### Changed
+
+- The hourly main loop now invokes a new `tick()` helper that runs `ensurePartitions()` and `ensureDiagPartitions(sql)` sequentially. Errors in either are caught and logged at `error` without killing the interval.
+
+### Migration notes
+
+- The bootstrap partitions for `diagnostic_events` come from migration `0017_diagnostic_events.sql` (yesterday + today + 23 future days). After this change they are kept current by the worker; you no longer need to run the migration to extend the buffer.
+
 ## 2026-04-26
 
 ### Added

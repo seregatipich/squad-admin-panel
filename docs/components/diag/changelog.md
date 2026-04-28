@@ -17,6 +17,7 @@
 - `packages/shared-config/src/index.ts` now re-exports `./diag.js` alongside the existing barrel entries.
 - `packages/diag/package.json` now follows the workspace convention used by `@squad/shared-config`: `exports` map with `types` / `development` / `default` conditions pointing at `./dist/*.{d.ts,js}` for production and `./src/*.ts` for dev/test runs (plus a `./types` subpath and `./package.json` passthrough). Replaces the legacy `main`/`types` form that pointed straight at TS source — the api/worker Docker images consume from `dist/` and would have broken at runtime otherwise.
 - `ioredis` and `pino` moved from `dependencies` to `devDependencies`. Both are imported via `import type` only (`Pick<Redis, 'xadd'>`, `Pick<Logger, 'warn' | 'debug'>`) so consumers bring their own client; `@squad/diag` no longer re-pins their major versions. `uuid` stays in `dependencies` because it is used at runtime via `v7 as uuidv7`.
+- Rotation of `diagnostic_events` partitions moved from migration bootstrap (`0017_diagnostic_events.sql` seeds yesterday + today + 23 future days exactly once) to active management by `worker-event-partition` (`ensureDiagPartitions(sql)`, hourly tick). The migration's bootstrap is still load-bearing — it ensures today's partition exists before the worker has had a chance to run — but the long-term rotation now lives in the worker. See [`docs/components/workers/event-partition/`](../workers/event-partition/README.md). Retention is **24h** (any partition whose entire range is more than 24h in the past is dropped).
 
 ### Fixed
 

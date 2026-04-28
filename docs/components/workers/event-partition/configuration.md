@@ -16,3 +16,7 @@
 | Postgres pool size | 1 connection | `index.ts` |
 | Heartbeat interval | 5 000 ms | `startHeartbeat` default |
 | Heartbeat TTL | 30 s | `HEARTBEAT_TTL_SECONDS` |
+| `diagnostic_events` retention | 24h (any partition older than yesterday is dropped) | `ensureDiagPartitions` in `index.ts` |
+| `diagnostic_events` create-buffer | `[-1, 0, +1, +2]` days from today | `ensureDiagPartitions` in `index.ts` |
+
+The `diagnostic_events` retention and buffer values are not currently exposed as env vars — change them in code if a tuning need arises.
