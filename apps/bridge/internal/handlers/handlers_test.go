@@ -657,6 +657,158 @@ func TestDispatcher_PanicEmitsDiagAndReturnsInternalError(t *testing.T) {
 	}
 }
 
+func TestFileReadTail_SnapsToNextNewline(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
+
+	logPath := filepath.Join(tmp, "SquadGame.log")
+	content := []byte("line1\nline2\nline3\nline4\n")
+	if err := os.WriteFile(logPath, content, 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]any{"path": logPath, "max_bytes": 10})
+	req := &rpc.Request{ID: "req-tail-1", Method: "file_read_tail", Params: params}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected OK, got %+v", resp.Error)
+	}
+	var got struct {
+		Content   string `json:"content"`
+		Offset    int64  `json:"offset"`
+		Size      int64  `json:"size"`
+		Truncated bool   `json:"truncated"`
+	}
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Size != int64(len(content)) {
+		t.Fatalf("size = %d, want %d", got.Size, len(content))
+	}
+	if !got.Truncated {
+		t.Fatalf("truncated = false, want true (file 24 bytes, max_bytes 10)")
+	}
+	if got.Content == "" {
+		t.Fatalf("content empty")
+	}
+	if !strings.HasPrefix(got.Content, "line") {
+		t.Fatalf("content = %q does not start at a line boundary", got.Content)
+	}
+	if !strings.HasSuffix(got.Content, "\n") {
+		t.Fatalf("content = %q does not end with newline", got.Content)
+	}
+	if got.Offset <= 0 || got.Offset >= got.Size {
+		t.Fatalf("offset = %d, want between 1 and %d", got.Offset, got.Size-1)
+	}
+	if content[got.Offset-1] != '\n' {
+		t.Fatalf("offset %d does not point to a byte right after a newline", got.Offset)
+	}
+}
+
+func TestFileReadTail_SmallFileReturnsWholeContent(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
+
+	logPath := filepath.Join(tmp, "small.log")
+	content := []byte("line1\nline2\n")
+	if err := os.WriteFile(logPath, content, 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]any{"path": logPath, "max_bytes": 1024})
+	req := &rpc.Request{ID: "req-tail-small", Method: "file_read_tail", Params: params}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected OK, got %+v", resp.Error)
+	}
+	var got struct {
+		Content   string `json:"content"`
+		Offset    int64  `json:"offset"`
+		Size      int64  `json:"size"`
+		Truncated bool   `json:"truncated"`
+	}
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Truncated {
+		t.Fatalf("truncated = true on under-cap file")
+	}
+	if got.Offset != 0 {
+		t.Fatalf("offset = %d, want 0", got.Offset)
+	}
+	if got.Content != string(content) {
+		t.Fatalf("content = %q, want %q", got.Content, string(content))
+	}
+}
+
+func TestFileReadTail_ForbiddenPath(t *testing.T) {
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]any{"path": "/etc/passwd", "max_bytes": 1024})
+	req := &rpc.Request{ID: "req-tail-forbid", Method: "file_read_tail", Params: params}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if resp.OK {
+		t.Fatalf("expected error response, got success")
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeForbidden {
+		t.Fatalf("expected CodeForbidden, got %+v", resp.Error)
+	}
+}
+
+func TestFileReadTail_DefaultCap(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
+
+	logPath := filepath.Join(tmp, "huge.log")
+	line := []byte("0123456789abcdef0123456789abcdef\n")
+	totalBytes := int64(0)
+	f, err := os.Create(logPath)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for totalBytes < 200*1024 {
+		n, err := f.Write(line)
+		if err != nil {
+			f.Close()
+			t.Fatalf("write: %v", err)
+		}
+		totalBytes += int64(n)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]any{"path": logPath, "max_bytes": 0})
+	req := &rpc.Request{ID: "req-tail-cap", Method: "file_read_tail", Params: params}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected OK, got %+v", resp.Error)
+	}
+	var got struct {
+		Content   string `json:"content"`
+		Offset    int64  `json:"offset"`
+		Size      int64  `json:"size"`
+		Truncated bool   `json:"truncated"`
+	}
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Size != totalBytes {
+		t.Fatalf("size = %d, want %d", got.Size, totalBytes)
+	}
+	if !got.Truncated {
+		t.Fatalf("truncated = false on 200 KB file with default cap")
+	}
+	if int64(len(got.Content)) > fileReadTailDefaultMaxBytes {
+		t.Fatalf("content length %d exceeds default cap %d", len(got.Content), fileReadTailDefaultMaxBytes)
+	}
+	if got.Size-got.Offset > fileReadTailDefaultMaxBytes {
+		t.Fatalf("read window %d exceeds default cap %d", got.Size-got.Offset, fileReadTailDefaultMaxBytes)
+	}
+}
+
 func TestDispatcher_HostAgentRestartEmitsDiag(t *testing.T) {
 	buf := withDiagSink(t)
 

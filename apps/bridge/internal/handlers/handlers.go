@@ -120,6 +120,8 @@ func (d *Dispatcher) Handle(
 		return d.hostMetrics(req)
 	case "file_read":
 		return d.fileRead(req)
+	case "file_read_tail":
+		return d.fileReadTail(req)
 	case "file_write":
 		return d.fileWrite(req)
 	case "file_atomic_write":
@@ -232,6 +234,65 @@ func (d *Dispatcher) fileRead(req *rpc.Request) rpc.Response {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
 	}
 	body, _ := json.Marshal(map[string]string{"content": string(b)})
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+const (
+	fileReadTailDefaultMaxBytes int64 = 64 * 1024
+	fileReadTailMaxAllowedBytes int64 = 1 << 20
+)
+
+type fileReadTailParams struct {
+	Path     string `json:"path"`
+	MaxBytes int64  `json:"max_bytes"`
+}
+
+func (d *Dispatcher) fileReadTail(req *rpc.Request) rpc.Response {
+	var p fileReadTailParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
+	}
+	if err := validateReadablePath(p.Path); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
+	}
+	maxBytes := p.MaxBytes
+	if maxBytes <= 0 || maxBytes > fileReadTailMaxAllowedBytes {
+		maxBytes = fileReadTailDefaultMaxBytes
+	}
+	f, err := os.Open(p.Path)
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	size := st.Size()
+	var off int64
+	if size > maxBytes {
+		off = size - maxBytes
+	}
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	buf := make([]byte, size-off)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	start := 0
+	if off > 0 {
+		if i := bytes.IndexByte(buf[:n], '\n'); i >= 0 {
+			start = i + 1
+		}
+	}
+	body, _ := json.Marshal(map[string]any{
+		"content":   string(buf[start:n]),
+		"offset":    off + int64(start),
+		"size":      size,
+		"truncated": off > 0,
+	})
 	return rpc.NewSuccessResponse(req.ID, body)
 }
 

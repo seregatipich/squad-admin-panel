@@ -2,11 +2,11 @@
 
 ## Bridge method allowlist
 
-19 RPC method names in declaration order (from `BRIDGE_METHODS`):
+20 RPC method names in declaration order (from `BRIDGE_METHODS`):
 
 ```
 ping  host_info  host_metrics
-file_read  file_write  file_atomic_write
+file_read  file_read_tail  file_write  file_atomic_write
 directory_delete
 ufw_rule  process_info
 container_run  container_start  container_stop  container_rm

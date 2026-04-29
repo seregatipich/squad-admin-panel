@@ -104,6 +104,41 @@ Throws `BridgeError('forbidden')` if the path is outside the allowlist.
 
 ---
 
+#### `fileReadTail(p: FileReadTailParams): Promise<FileReadTailResult>`
+
+Reads up to `max_bytes` from the **end** of an allowlisted file. When the file is larger than `max_bytes` the read snaps forward to the next `\n` so the result never starts mid-line. Used by the diagnostic-bundle builder to capture the tail of `SquadGame.log` without slurping multi-MB files.
+
+```ts
+interface FileReadTailParams {
+  path: string;
+  max_bytes?: number; // default 65536, max 1 MiB
+}
+
+interface FileReadTailResult {
+  content: string;
+  offset: number;     // byte offset where `content` starts in the source file
+  size: number;       // total file size in bytes at read time
+  truncated: boolean; // true iff size > max_bytes (some prefix was skipped)
+}
+```
+
+| Param | Type | Required | Default | Notes |
+|---|---|---:|---|---|
+| `path` | `string` | yes | — | Same allowlist as `fileRead`. |
+| `max_bytes` | `number` | no | `65536` | Values `<= 0` or `> 1048576` snap to the default. |
+
+```ts
+const tail = await client.fileReadTail({
+  path: '/var/lib/squad-panel/saved/<uuid>/SquadGame/Saved/Logs/SquadGame.log',
+  max_bytes: 65536,
+});
+// { content, offset: 12516352, size: 12582912, truncated: true }
+```
+
+Throws `BridgeError('forbidden')` if the path is outside the allowlist, `BridgeError('runtime_error')` if the file cannot be opened/seeked.
+
+---
+
 #### `fileWrite(p: FileWriteParams): Promise<{ status: string }>`
 
 Writes a file with standard `os.WriteFile`. Not atomic — use `fileAtomicWrite` for config edits.

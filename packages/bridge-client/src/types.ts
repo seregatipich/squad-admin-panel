@@ -77,6 +77,18 @@ export interface FileReadParams {
   path: string;
 }
 
+export interface FileReadTailParams {
+  path: string;
+  max_bytes?: number;
+}
+
+export interface FileReadTailResult {
+  content: string;
+  offset: number;
+  size: number;
+  truncated: boolean;
+}
+
 export interface FileWriteParams {
   path: string;
   content: string;

@@ -44,7 +44,7 @@ For every new connection the bridge reads `SO_PEERCRED` and looks up the caller'
 
 ## Methods
 
-All 18 RPC methods from `BRIDGE_METHODS`. Request shapes match the Go handlers; the TS client mirrors them in [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts).
+All 20 RPC methods from `BRIDGE_METHODS`. Request shapes match the Go handlers; the TS client mirrors them in [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts).
 
 ### Liveness / host
 
@@ -91,6 +91,40 @@ Allowed cfg filenames are pinned by `ALLOWED_CONFIG_FILES` in `shared-config` (1
 #### `file_read({ path })` → `{ content }`
 
 Up to 16 MiB. Anything outside the allowlist returns `forbidden`.
+
+#### `file_read_tail({ path, max_bytes? })` → `{ content, offset, size, truncated }`
+
+Reads up to `max_bytes` from the **end** of `path`. When `offset > 0` the read starts at the next `\n` after the truncation point so the caller never sees a partial first line. Used by the diagnostic-bundle builder to capture the tail of `SquadGame.log` without slurping multi-MB files.
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `string` | Required. Same allowlist as `file_read` (configs / saved / depot RO / sentinel). |
+| `max_bytes` | `number` | Optional. Default `65536` (64 KiB). Values `<= 0` or `> 1048576` (1 MiB) snap back to the default. |
+
+| Result field | Type | Description |
+|---|---|---|
+| `content` | `string` | Tail bytes after the newline-snap. Empty when the file is empty or the tail window contained no newline. |
+| `offset` | `number` | Byte offset where `content` begins in the source file (0 when the whole file fits, otherwise the position of the byte immediately after the snap newline). |
+| `size` | `number` | Total size of the file in bytes at read time. |
+| `truncated` | `boolean` | `true` iff `size > max_bytes` (i.e. some prefix of the file was skipped). |
+
+Errors: `forbidden` (path outside allowlist), `invalid_args` (params not JSON), `runtime_error` (open / stat / seek failed).
+
+```json
+// request
+{ "id": "req-1", "method": "file_read_tail", "params": {
+  "path": "/var/lib/squad-panel/saved/<uuid>/SquadGame/Saved/Logs/SquadGame.log",
+  "max_bytes": 65536
+} }
+
+// response (file is 12 MiB)
+{ "id": "req-1", "ok": true, "result": {
+  "content": "[2026.04.28-10.00.00:000][000]LogNet: ...\n...",
+  "offset": 12516352,
+  "size": 12582912,
+  "truncated": true
+} }
+```
 
 #### `file_write({ path, content, mode? })` → `{ status: 'written' }`
 

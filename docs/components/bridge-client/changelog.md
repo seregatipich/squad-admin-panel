@@ -1,5 +1,17 @@
 # `bridge-client` — changelog
 
+## 2026-04-29 — `fileReadTail` for bounded last-N-bytes reads
+
+### Added
+
+- `BridgeClient.fileReadTail({ path, max_bytes? }): Promise<FileReadTailResult>` — wraps the new `file_read_tail` RPC. Reads up to `max_bytes` from the end of an allowlisted file with newline-snap so the tail never starts mid-line. Default `max_bytes` is 64 KiB; values outside `(0, 1 MiB]` snap to the default on the bridge side.
+- `FileReadTailParams` and `FileReadTailResult` exports in `packages/bridge-client/src/types.ts`. Result fields: `content` (string), `offset` (number, byte offset of `content` in the source file), `size` (number, total file size), `truncated` (boolean, `true` iff some prefix was skipped).
+- `packages/bridge-client/test/lifecycle.test.ts` — round-trip case (`describe('file_read_tail')`) asserts the client serializes `method=file_read_tail` and the params shape on the wire and surfaces the result fields verbatim.
+
+### Notes
+
+- This is the client half of Task 18 (Phase A3) of `docs/superpowers/plans/2026-04-28-diagnostic-bundle.md`. Bridge handler + shared-config allowlist bump in the same commit.
+
 ## 2026-04-28 — `BridgeClient` extends `EventEmitter` — `connected` / `disconnected` / `rpc-error` / `rtt` events
 
 ### Added

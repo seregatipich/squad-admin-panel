@@ -39,6 +39,11 @@ sg panel -c 'bash scripts/verify-bridge.sh'
 - Wire framing: oversized frame drops the connection; partial frames are buffered.
 - Stream multiplexing: `container_logs_follow` and `depot_update` interleave `stream:'stdout'` chunks with the final response.
 - `directory_delete`: forbidden paths (`/etc/passwd`, `…/ServerConfig/Server.cfg`, `…/configs/../etc`, `…/configs/not-a-uuid`), idempotent miss (`removed:false` for absent dir), invalid JSON → `invalid_args`. Go unit tests in `apps/bridge/internal/handlers/handlers_test.go` and validator tests in `apps/bridge/internal/validate/docker_test.go`. E2E success and forbidden cases in `apps/api/test/e2e/bridge-rpc.e2e.test.ts` `describe('directory_delete (e2e)')`.
+- `file_read_tail`: four Go unit tests in [`apps/bridge/internal/handlers/handlers_test.go`](../../../apps/bridge/internal/handlers/handlers_test.go) using `t.Setenv("PANEL_DEPOT_HOST_PATH", t.TempDir())` to allowlist a per-test scratch dir:
+  - `TestFileReadTail_SnapsToNextNewline` — writes a 24 B file (`line1\n…line4\n`), calls with `max_bytes=10`, asserts `truncated=true`, `offset` lands on a byte right after a `\n`, `content` starts with `line` and ends with `\n`.
+  - `TestFileReadTail_SmallFileReturnsWholeContent` — file under cap → `truncated=false`, `offset=0`, `content` equals the entire file.
+  - `TestFileReadTail_ForbiddenPath` — `/etc/passwd` → `forbidden`.
+  - `TestFileReadTail_DefaultCap` — `max_bytes=0` against a 200 KiB file → `truncated=true`, read window ≤ 64 KiB (the default).
 - `panel_disk_usage`: three Go unit tests in [`apps/bridge/internal/handlers/handlers_test.go`](../../../apps/bridge/internal/handlers/handlers_test.go) cover the full surface with stubbed `du`/`statfs`/`docker df` injectors:
   - `TestPanelDiskUsage_AllowlistedAndComputed` — populates a tempdir with one configs file (100 B) and one saved file (250 B), asserts every result field including the `total_panel_bytes` formula (no double-counting of the depot volume) and `host_total_bytes = Blocks*Bsize`, `host_used_bytes = (Blocks-Bavail)*Bsize`.
   - `TestPanelDiskUsage_CachesWithinTTL` — calls the handler twice; asserts `du`/`statfs`/`docker df` are invoked exactly once and that `computed_at` is byte-identical between the two responses.

@@ -17,6 +17,8 @@ import {
   type DirectoryDeleteParams,
   type DirectoryDeleteResult,
   type FileReadParams,
+  type FileReadTailParams,
+  type FileReadTailResult,
   type FileWriteParams,
   type HostAgentRestartResult,
   type HostInfo,
@@ -161,6 +163,7 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
   hostMetrics = () => this.call<HostMetrics>('host_metrics');
 
   fileRead = (p: FileReadParams) => this.call<{ content: string }>('file_read', p);
+  fileReadTail = (p: FileReadTailParams) => this.call<FileReadTailResult>('file_read_tail', p);
   fileWrite = (p: FileWriteParams) => this.call<{ status: string }>('file_write', p);
   fileAtomicWrite = (p: FileWriteParams) => this.call<{ status: string }>('file_atomic_write', p);
 

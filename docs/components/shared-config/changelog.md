@@ -1,5 +1,13 @@
 # `shared-config` — changelog
 
+## 2026-04-29
+
+### Added
+- `file_read_tail` inserted into `BRIDGE_METHODS` (between `file_read` and `file_write`) — 20th allowed RPC method. Backs the diagnostic-bundle builder's bounded tail-read of `SquadGame.log`.
+
+### Changed
+- `BRIDGE_METHODS` length is now 20 (was 19). `BridgeMethod` union is correspondingly wider.
+
 ## 2026-04-28
 
 ### Added

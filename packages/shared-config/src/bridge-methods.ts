@@ -3,6 +3,7 @@ export const BRIDGE_METHODS = [
   'host_info',
   'host_metrics',
   'file_read',
+  'file_read_tail',
   'file_write',
   'file_atomic_write',
   'directory_delete',

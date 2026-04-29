@@ -267,6 +267,54 @@ describe('panel_disk_usage', () => {
   });
 });
 
+describe('file_read_tail', () => {
+  it('fileReadTail sends method=file_read_tail and round-trips the response shape', async () => {
+    let receivedMethod: string | undefined;
+    let receivedParams: unknown;
+    server.on('connection', (conn) => {
+      conn.once('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as {
+          id: string;
+          method: string;
+          params?: unknown;
+        };
+        receivedMethod = req.method;
+        receivedParams = req.params;
+        sendFrame(conn, {
+          id: req.id,
+          ok: true,
+          result: {
+            content: 'line2\nline3\n',
+            offset: 6,
+            size: 18,
+            truncated: true,
+          },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    try {
+      const result = await client.fileReadTail({
+        path: '/var/lib/squad-panel/saved/019dbaa5-1234-7abc-8def-0123456789ab/SquadGame/Saved/Logs/SquadGame.log',
+        max_bytes: 12,
+      });
+      expect(receivedMethod).toBe('file_read_tail');
+      expect(receivedParams).toEqual({
+        path: '/var/lib/squad-panel/saved/019dbaa5-1234-7abc-8def-0123456789ab/SquadGame/Saved/Logs/SquadGame.log',
+        max_bytes: 12,
+      });
+      expect(result.content).toBe('line2\nline3\n');
+      expect(result.offset).toBe(6);
+      expect(result.size).toBe(18);
+      expect(result.truncated).toBe(true);
+    } finally {
+      await client.close();
+    }
+  });
+});
+
 describe('event emission', () => {
   it('emits connected with rttMs+version+hostname on the first ping response', async () => {
     server.on('connection', (conn) => {
