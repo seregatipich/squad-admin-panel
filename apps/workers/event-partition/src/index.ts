@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createDiag, type Diag } from '@squad/diag';
 import { startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -9,6 +10,8 @@ const log = pino({
   level: process.env.LOG_LEVEL ?? 'info',
   base: { service: 'worker-event-partition' },
 });
+
+const COMPONENT = 'worker-event-partition';
 
 /**
  * Hourly cron replacement for pg_partman's run_maintenance. Creates the
@@ -45,6 +48,51 @@ export async function ensureDiagPartitions(sql: postgres.Sql): Promise<void> {
   }
 }
 
+export interface PartitionTickDeps {
+  sql: postgres.Sql;
+  diag: Diag;
+}
+
+export async function runPartitionTick(deps: PartitionTickDeps): Promise<void> {
+  const { sql, diag } = deps;
+  const failures: string[] = [];
+
+  async function ensureMonthlyPartitions() {
+    const toCreate = 2; // current + next month (plus existing bootstraps from 0000_init.sql)
+    for (let i = 0; i < toCreate; i++) {
+      await sql`SELECT 1`; // placeholder — real logic in Phase 1 when pg_partman ships
+    }
+    log.info({ createdUpTo: toCreate }, 'partitions ensured');
+  }
+
+  const results = await Promise.allSettled([ensureMonthlyPartitions(), ensureDiagPartitions(sql)]);
+  for (const r of results) {
+    if (r.status === 'rejected') {
+      const message = r.reason instanceof Error ? r.reason.message : String(r.reason);
+      log.error({ err: message }, 'partition rotation tick rejected');
+      failures.push(message);
+    }
+  }
+
+  if (failures.length > 0) {
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'event_partition.run_failed',
+      severity: 'error',
+      message: `partition rotation failed: ${failures.join('; ')}`,
+      payload: { failures },
+    });
+  } else {
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'event_partition.run_ok',
+      severity: 'info',
+      message: 'partition rotation ok',
+      payload: {},
+    });
+  }
+}
+
 async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -65,38 +113,37 @@ async function main() {
       })
     : () => {};
 
-  async function ensurePartitions() {
-    const toCreate = 2; // current + next month (plus existing bootstraps from 0000_init.sql)
-    for (let i = 0; i < toCreate; i++) {
-      await sql`SELECT 1`; // placeholder — real logic in Phase 1 when pg_partman ships
-    }
-    log.info({ createdUpTo: toCreate }, 'partitions ensured');
-  }
+  const diag: Diag = redis ? createDiag({ redis, log }) : { async emit() {} };
 
-  async function tick() {
-    const results = await Promise.allSettled([ensurePartitions(), ensureDiagPartitions(sql)]);
-    for (const r of results) {
-      if (r.status === 'rejected') {
-        log.error(
-          { err: r.reason instanceof Error ? r.reason.message : String(r.reason) },
-          'partition rotation tick rejected',
-        );
-      }
-    }
-  }
+  await diag.emit({
+    component: COMPONENT,
+    kind: 'event_partition.started',
+    severity: 'info',
+    message: 'event-partition started',
+    payload: { pid: process.pid },
+  });
 
-  await tick();
+  await runPartitionTick({ sql, diag });
   const interval = setInterval(
     () => {
-      tick().catch((err) => log.error({ err: (err as Error).message }, 'partition failed'));
+      runPartitionTick({ sql, diag }).catch((err) =>
+        log.error({ err: (err as Error).message }, 'partition failed'),
+      );
     },
     60 * 60 * 1000,
   );
 
   const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
-    stopHeartbeat();
     clearInterval(interval);
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'event_partition.stopped',
+      severity: 'info',
+      message: `event-partition received ${sig}`,
+      payload: { sig },
+    });
+    stopHeartbeat();
     await sql.end({ timeout: 5 });
     await redis?.quit().catch(() => undefined);
     process.exit(0);

@@ -251,6 +251,35 @@ SET worker:heartbeat:rcon "<json>" EX 30
 }
 ```
 
+## Heartbeat-watch (worker outage detector)
+
+Implemented in [`plugins/heartbeat-watch.ts`](../../../apps/api/src/plugins/heartbeat-watch.ts). Distinct from the read-only `/health/workers` aggregation — the heartbeat-watch plugin runs a 30 s `setInterval` ticker that detects worker outages and surfaces them as diagnostic events.
+
+State held in plugin closure:
+
+| Map | Type | Purpose |
+|---|---|---|
+| `lostSince` | `Map<string, number>` | First Date.now() at which the heartbeat key was observed missing. |
+| `reported` | `Set<string>` | Worker names for which `worker.heartbeat_lost` has already fired in the current outage. |
+| `inFlight` | `boolean` | Re-entrancy guard — a slow Redis `pttl` round-trip never lets a second tick overlap. |
+
+Per tick:
+
+1. If `inFlight` is set → return early.
+2. Set `inFlight = true`. For each `name` in the constant `KNOWN_WORKERS = ['rcon', 'log-ingest', 'audit-archiver', 'event-partition', 'diag-flush', 'metrics-sampler']`:
+   - `ttl = await app.redis.pttl('worker:heartbeat:' + name)`.
+   - **Key absent** (`ttl < 0`):
+     - `since = lostSince.get(name) ?? now`. Record/refresh `lostSince`.
+     - If `name` is NOT in `reported` AND `now - since > 30_000` ms → `app.diag.emit('worker.heartbeat_lost', severity: 'error', payload: { worker: name })` and add `name` to `reported`. Each outage produces exactly one emit.
+   - **Key present** (`ttl >= 0`):
+     - If `name` is in `reported` → `app.diag.emit('worker.heartbeat_recovered', severity: 'info', payload: { worker: name })` and remove `name` from `reported`.
+     - Drop the `lostSince` entry.
+3. Any exception in the tick is caught and logged at `warn` (`heartbeat-watch tick failed`); `inFlight` is always cleared in `finally`.
+
+The plugin decorates `app.heartbeatWatchTick` so the tick can be invoked synchronously from tests without waiting for the interval.
+
+Threshold rationale: heartbeat keys are written with a 30 s TTL by `startHeartbeat`. The 30 s detection threshold AND the 30 s tick cadence together mean an outage is reported within 30–60 s of a worker stalling, with no false positives during normal restarts (which complete in <5 s).
+
 ## Bridge heartbeat
 
 [`plugins/bridge-heartbeat.ts`](../../../apps/api/src/plugins/bridge-heartbeat.ts) starts a 5 s `setInterval` once the app is `onReady`. Each tick:

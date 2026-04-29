@@ -1,3 +1,6 @@
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { createDiag, type Diag } from '@squad/diag';
 import { startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -6,6 +9,34 @@ const log = pino({
   level: process.env.LOG_LEVEL ?? 'info',
   base: { service: 'worker-audit-archiver' },
 });
+
+const COMPONENT = 'worker-audit-archiver';
+const RUN_INTERVAL_MS = 60 * 60 * 1000;
+
+export interface ArchiverRunDeps {
+  diag: Diag;
+}
+
+export async function runArchiverCycle(deps: ArchiverRunDeps): Promise<void> {
+  try {
+    await Promise.resolve();
+    await deps.diag.emit({
+      component: COMPONENT,
+      kind: 'audit_archiver.run_ok',
+      severity: 'info',
+      message: 'archiver cycle ok (P0 stub)',
+      payload: {},
+    });
+  } catch (err) {
+    await deps.diag.emit({
+      component: COMPONENT,
+      kind: 'audit_archiver.run_failed',
+      severity: 'error',
+      message: `archiver cycle failed: ${(err as Error).message}`,
+      payload: { err: (err as Error).message },
+    });
+  }
+}
 
 /**
  * Phase 0 stub. The archiver will export a verified hash-chain snapshot
@@ -27,9 +58,33 @@ async function main() {
       })
     : () => {};
 
+  const diag: Diag = redis ? createDiag({ redis, log }) : { async emit() {} };
+
+  await diag.emit({
+    component: COMPONENT,
+    kind: 'audit_archiver.started',
+    severity: 'info',
+    message: 'audit-archiver started',
+    payload: { pid: process.pid },
+  });
+
   log.info('worker-audit-archiver idle — Phase 1 functionality deferred');
+
+  await runArchiverCycle({ diag });
+  const interval = setInterval(() => {
+    void runArchiverCycle({ diag });
+  }, RUN_INTERVAL_MS);
+
   const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
+    clearInterval(interval);
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'audit_archiver.stopped',
+      severity: 'info',
+      message: `audit-archiver received ${sig}`,
+      payload: { sig },
+    });
     stopHeartbeat();
     await redis?.quit().catch(() => undefined);
     process.exit(0);
@@ -38,7 +93,18 @@ async function main() {
   process.once('SIGTERM', shutdown);
 }
 
-main().catch((err) => {
-  log.fatal({ err: (err as Error).message }, 'fatal');
-  process.exit(1);
-});
+function isMainEntrypoint(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainEntrypoint()) {
+  main().catch((err) => {
+    log.fatal({ err: (err as Error).message }, 'fatal');
+    process.exit(1);
+  });
+}

@@ -19,6 +19,7 @@ import { createSession } from '../../src/lib/sessions.js';
 import auditPluginFactory from '../../src/plugins/audit.js';
 import authPlugin from '../../src/plugins/auth.js';
 import healthPlugin from '../../src/plugins/health.js';
+import heartbeatWatchPlugin from '../../src/plugins/heartbeat-watch.js';
 import installProgressPlugin from '../../src/plugins/install-progress.js';
 import liveBusPlugin from '../../src/plugins/live-bus.js';
 import requestContextPlugin from '../../src/plugins/request-context.js';
@@ -400,6 +401,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(websocket);
   await app.register(requestContextPlugin);
   await app.register(diagPlugin);
+  await app.register(heartbeatWatchPlugin);
   await app.register(authPlugin);
   await app.register(auditPluginFactory);
   await app.register(installProgressPlugin);

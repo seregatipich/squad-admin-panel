@@ -269,6 +269,15 @@ The redis plugin ([`apps/api/src/plugins/redis.ts`](../../../apps/api/src/plugin
 | `pg.ping.fail` | The 30 s `SELECT 1` health-check throws (postgres-js wraps connection refused / timeout / query error). Fires on every failed tick. | `error` | `{ err }` — the error message string. |
 | `pg.ping.ok` | First successful `SELECT 1` AFTER a prior `pg.ping.fail`. Subsequent OK ticks are silent until the next failure. Clean startup is silent. | `info` | `{}` |
 
+### Worker heartbeat-watch event kinds
+
+The heartbeat-watch plugin ([`apps/api/src/plugins/heartbeat-watch.ts`](../../../apps/api/src/plugins/heartbeat-watch.ts)) polls `worker:heartbeat:<name>` keys every 30 s for the six known workers (`rcon`, `log-ingest`, `audit-archiver`, `event-partition`, `diag-flush`, `metrics-sampler`). The tick uses an `inFlight` guard (mirroring `pgHealthTick`) so a slow Redis tick never overlaps a previous one. Both kinds carry `component='api'`, no `serverId`, no `actorSteamId64`. Listener-side `app.diag.emit(...)` rejections are caught and logged at `warn` (`heartbeat-watch tick failed`) so a Redis hiccup never propagates out of the interval.
+
+| Kind | When | `severity` | Payload |
+|---|---|---|---|
+| `worker.heartbeat_lost` | A worker's heartbeat key has been absent for more than 30 s AND the plugin has not yet reported the outage. Emitted exactly once per outage — the worker name is held in an internal `reported: Set<string>` until the key reappears. | `error` | `{ worker: string }` |
+| `worker.heartbeat_recovered` | A worker's heartbeat key reappears (via `pttl >= 0`) AFTER the plugin previously reported a `worker.heartbeat_lost` for it. Subsequent ticks while the key is healthy are silent until the next outage. | `info` | `{ worker: string }` |
+
 ## Adding a route
 
 1. Register in the relevant file under [`apps/api/src/routes/`](../../../apps/api/src/routes/).

@@ -1,5 +1,17 @@
 # Changelog — worker-event-partition
 
+## 2026-04-29
+
+### Added
+
+- Emits diagnostic events to `diag:queue` (`@squad/diag`):
+  - `event_partition.started` (info) — right after `startHeartbeat` at startup.
+  - `event_partition.run_ok` / `event_partition.run_failed` (info / error) — per hourly tick.
+  - `event_partition.stopped` (info) — inside the SIGTERM/SIGINT handler before `process.exit`.
+- New `runPartitionTick({ sql, diag })` exported from `src/index.ts` to keep the per-tick lifecycle emit logic unit-testable. The previous `tick()` helper has been folded into this exported version.
+- `test/diag-lifecycle.test.ts` asserting both the `run_ok` and `run_failed` paths.
+- Added `@squad/diag` workspace dependency.
+
 ## 2026-04-28
 
 ### Added

@@ -33,6 +33,15 @@ Decode with `unpackHostMetrics(v)` from `packages/shared-config/src/metrics-pack
 
 Published every 5 s, TTL 30 s.
 
+## Diagnostic events (`diag:queue` Redis Stream)
+
+The worker emits structured `DiagEvent`s via `@squad/diag` (`createDiag({ redis, log })` constructed once at startup). All kinds carry `component: 'worker-metrics-sampler'`. Per-cycle (`run_ok`/`run_failed`) emits are intentionally NOT produced — the 15 s sampler cadence would generate persistent noise. Connector-state errors surface via the API's pg/redis health-watch instead.
+
+| Kind | Severity | Trigger | Payload fields |
+|---|---|---|---|
+| `metrics_sampler.started` | `info` | Right after `startHeartbeat`, before `runSampler()` is started. | `pid: number` |
+| `metrics_sampler.stopped` | `info` | Inside the SIGTERM/SIGINT handler before `process.exit(0)`. | `sig: 'SIGTERM' \| 'SIGINT'` |
+
 ## Bridge RPC: `host_metrics`
 
 Called every 15 s. Returns `HostMetrics` as defined in `packages/bridge-client`. See [`docs/components/bridge/api.md`](../../bridge/api.md) for the full RPC spec.

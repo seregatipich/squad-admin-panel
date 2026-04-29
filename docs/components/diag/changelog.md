@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-04-29
+
+### Added
+
+- The remaining four workers (`audit-archiver`, `event-partition`, `metrics-sampler`, `diag-flush`) now produce lifecycle events into `diag:queue` (Task 13). `worker-rcon` and `worker-log-ingest` are intentionally unchanged because Tasks 11 and 12 already gave them richer per-target events.
+  - `audit-archiver`: `audit_archiver.started` / `audit_archiver.run_ok` / `audit_archiver.run_failed` / `audit_archiver.stopped`. Hourly cycle is sparse enough to emit `run_ok`/`run_failed` per tick.
+  - `event-partition`: `event_partition.started` / `event_partition.run_ok` / `event_partition.run_failed` / `event_partition.stopped`. Hourly cycle.
+  - `metrics-sampler`: `metrics_sampler.started` / `metrics_sampler.stopped` only — the 15 s cadence is too noisy for `run_ok`/`run_failed`.
+  - `diag-flush`: `diag_flush.started` / `diag_flush.stopped` only — the consumer loop is continuous.
+- New API plugin `apps/api/src/plugins/heartbeat-watch.ts` (Task 13) detects worker outages by polling `worker:heartbeat:<name>` keys every 30 s. Emits `worker.heartbeat_lost` (severity `error`) once per outage when a key has been absent for >30 s, then `worker.heartbeat_recovered` (severity `info`) when the key returns. Dedup is via a closure-local `Set<string>`; tick re-entrancy is guarded via `inFlight` (mirrors `pgHealthTick`). See [`docs/components/api/api.md`](../api/api.md#worker-heartbeat-watch-event-kinds) and [`docs/components/api/flows.md`](../api/flows.md#heartbeat-watch-worker-outage-detector). The `@squad/diag` package itself is unchanged by Task 13.
+
 ## 2026-04-28
 
 ### Added

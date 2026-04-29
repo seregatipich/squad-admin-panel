@@ -22,6 +22,7 @@ import bridgeHeartbeatPlugin from './plugins/bridge-heartbeat.js';
 import databasePlugin from './plugins/database.js';
 import dbHealthPlugin from './plugins/db-health.js';
 import healthPlugin from './plugins/health.js';
+import heartbeatWatchPlugin from './plugins/heartbeat-watch.js';
 import installProgressPlugin from './plugins/install-progress.js';
 import liveBusPlugin from './plugins/live-bus.js';
 import metricsPlugin from './plugins/metrics.js';
@@ -93,6 +94,7 @@ export async function buildServer(config: AppConfig) {
   lateSink.setInner(redisSinkStream({ redis: app.redis, defaultSource: 'api' }));
   await app.register(diagPlugin);
   await app.register(dbHealthPlugin);
+  await app.register(heartbeatWatchPlugin);
   await app.register(liveBusPlugin);
   await app.register(bridgePlugin, { config });
   await app.register(bridgeHeartbeatPlugin);

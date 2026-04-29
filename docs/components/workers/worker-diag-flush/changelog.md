@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-04-29
+
+### Added
+
+- Emits diagnostic events to `diag:queue` (`@squad/diag`):
+  - `diag_flush.started` (info) — right after the consumer-group create + `startHeartbeat`.
+  - `diag_flush.stopped` (info) — inside the SIGTERM/SIGINT handler before in-flight batches are awaited.
+- Per-iteration `run_ok`/`run_failed` are intentionally NOT emitted — the consumer loop is continuous and would saturate the stream.
+- New `emitStarted` / `emitStopped` helpers exported from `src/index.ts` to keep the emits unit-testable.
+- Re-added `@squad/diag` workspace dependency (it was removed in the 2026-04-28 changelog when the worker was a pure consumer; it now also produces lifecycle events).
+- `test/diag-lifecycle.test.ts` covering both helpers.
+
+### Changed
+
+- Replaced the `process.env.VITEST !== 'true'` guard around `main()` with the same `realpathSync` entrypoint check used by `worker-event-partition`. The previous guard prevented the spawned subprocess in the contract test from booting because `VITEST=true` leaks from the test runner into the spawn env.
+
 ## 2026-04-28
 
 ### Added

@@ -1,5 +1,25 @@
 # `api` — changelog
 
+## 2026-04-29 — heartbeat-watch plugin
+
+### Added
+
+- `apps/api/src/plugins/heartbeat-watch.ts` — new plugin that runs a 30 s `setInterval` polling `worker:heartbeat:<name>` keys for the six known workers (`rcon`, `log-ingest`, `audit-archiver`, `event-partition`, `diag-flush`, `metrics-sampler`). Emits two diag kinds:
+  - `worker.heartbeat_lost` (severity `error`) — fires exactly once per outage when a heartbeat key has been absent for more than 30 s. Tracked via a closure-local `Set<string> reported` so duplicate emits are impossible during the same outage.
+  - `worker.heartbeat_recovered` (severity `info`) — fires when the key reappears AFTER `worker.heartbeat_lost` was reported. Subsequent ticks while the key is healthy are silent until the next outage.
+- `inFlight` re-entrancy guard mirrors `pgHealthTick` — a slow Redis `pttl` round-trip cannot cause overlapping ticks. Tick errors are caught and logged at `warn` ("heartbeat-watch tick failed").
+- `app.heartbeatWatchTick: () => Promise<void>` decorator so tests can drive the tick deterministically without waiting for the interval.
+- `apps/api/test/diag-heartbeat-watch.test.ts` — 3 vitest cases covering: single-emit per outage (Date.now monkey-patched to advance past the 30 s threshold); recovery-edge after a reported outage; clean startup is silent.
+- `apps/api/test/integration/harness.ts` — registers `heartbeatWatchPlugin` after `diagPlugin` so integration tests can call `app.heartbeatWatchTick()`.
+
+### Changed
+
+- `apps/api/src/server.ts` — plugin registration order becomes `redis → diag → db-health → heartbeat-watch → live-bus → ...`. The new plugin is registered after `dbHealthPlugin` and depends only on `app.redis` (already decorated by `redisPlugin`) and `app.diag` (decorated by `diagPlugin`).
+
+### Migration notes
+
+No DB schema changes. No new env vars. One additional `pttl` round-trip per worker per 30 s tick (six round-trips total) — negligible Redis load. Consumers reading `diagnostic_events` will start seeing rows with `component='api'` and `kind` equal to `worker.heartbeat_lost` or `worker.heartbeat_recovered`.
+
 ## 2026-04-28 — connector plugins emit diag events on pg/redis state changes
 
 ### Post-merge fixes

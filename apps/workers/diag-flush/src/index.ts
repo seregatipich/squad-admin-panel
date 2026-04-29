@@ -1,3 +1,6 @@
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { createDiag, type Diag } from '@squad/diag';
 import { DIAG_STREAM_KEY, startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -7,6 +10,28 @@ const log = pino({
   level: process.env.LOG_LEVEL ?? 'info',
   base: { service: 'worker-diag-flush' },
 });
+
+const COMPONENT = 'worker-diag-flush';
+
+export async function emitStarted(diag: Diag): Promise<void> {
+  await diag.emit({
+    component: COMPONENT,
+    kind: 'diag_flush.started',
+    severity: 'info',
+    message: 'diag-flush started',
+    payload: { pid: process.pid },
+  });
+}
+
+export async function emitStopped(diag: Diag, sig: NodeJS.Signals): Promise<void> {
+  await diag.emit({
+    component: COMPONENT,
+    kind: 'diag_flush.stopped',
+    severity: 'info',
+    message: `diag-flush received ${sig}`,
+    payload: { sig },
+  });
+}
 
 const GROUP = 'diag-flush';
 const CONSUMER = `diag-flush-${process.pid}`;
@@ -135,11 +160,15 @@ async function main(): Promise<void> {
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
 
+  const diag = createDiag({ redis, log });
+  await emitStarted(diag);
+
   let stopped = false;
   let inflight: Promise<void> | null = null;
   const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
     stopped = true;
+    await emitStopped(diag, sig);
     stopHeartbeat();
     if (inflight) {
       log.info('awaiting in-flight batch before teardown');
@@ -186,7 +215,16 @@ async function main(): Promise<void> {
   }
 }
 
-if (process.env.VITEST !== 'true') {
+function isMainEntrypoint(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainEntrypoint()) {
   main().catch((err) => {
     log.fatal({ err: (err as Error).message }, 'fatal');
     process.exit(1);

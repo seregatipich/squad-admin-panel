@@ -8,6 +8,17 @@ Published every 5 s (default interval), TTL 30 s.
 
 `status` field: `"idle"`.
 
+## Diagnostic events (`diag:queue` Redis Stream)
+
+The worker emits structured `DiagEvent`s via `@squad/diag` (`createDiag({ redis, log })` constructed once at startup). All kinds carry `component: 'worker-event-partition'`. Each emit is `await`ed but never thrown — `Diag.emit` swallows Redis failures and falls back to pino, so telemetry never derails the rotation tick.
+
+| Kind | Severity | Trigger | Payload fields |
+|---|---|---|---|
+| `event_partition.started` | `info` | Right after `startHeartbeat`, before the first `runPartitionTick` | `pid: number` |
+| `event_partition.run_ok` | `info` | A successful hourly tick (both monthly + daily diag rotations resolved). | `{}` |
+| `event_partition.run_failed` | `error` | One or more sub-rotations rejected. The tick still continues — failures are isolated per-rotation via `Promise.allSettled`. | `failures: string[]` (the rejected error messages) |
+| `event_partition.stopped` | `info` | Inside the SIGTERM/SIGINT handler before `process.exit(0)`. | `sig: 'SIGTERM' \| 'SIGINT'` |
+
 ## Exported functions
 
 ### `ensureDiagPartitions(sql: postgres.Sql): Promise<void>`

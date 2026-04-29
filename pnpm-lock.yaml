@@ -208,6 +208,9 @@ importers:
 
   apps/workers/audit-archiver:
     dependencies:
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../../packages/diag
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config
@@ -308,6 +311,9 @@ importers:
 
   apps/workers/diag-flush:
     dependencies:
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../../packages/diag
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config
@@ -361,6 +367,9 @@ importers:
 
   apps/workers/event-partition:
     dependencies:
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../../packages/diag
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config
@@ -441,6 +450,9 @@ importers:
       '@squad/bridge-client':
         specifier: workspace:*
         version: link:../../../packages/bridge-client
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../../packages/diag
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config

@@ -1,5 +1,17 @@
 # Changelog — worker-metrics-sampler
 
+## 2026-04-29
+
+### Added
+
+- Emits diagnostic events to `diag:queue` (`@squad/diag`):
+  - `metrics_sampler.started` (info) — right after `startHeartbeat` at startup.
+  - `metrics_sampler.stopped` (info) — inside the SIGTERM/SIGINT handler before `process.exit`.
+- Per-cycle `run_ok`/`run_failed` are intentionally not emitted — 15 s cadence would be too noisy.
+- New `src/lifecycle.ts` exports `emitStarted(diag)` and `emitStopped(diag, sig)` so the lifecycle emits are unit-testable.
+- `test/diag-lifecycle.test.ts` covers both helpers.
+- Added `@squad/diag` workspace dependency.
+
 ## 2026-04-26
 
 ### Added

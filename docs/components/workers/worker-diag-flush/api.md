@@ -79,9 +79,16 @@ Used internally by `flushBatch`; exported because every required field, mapping 
 
 None. The worker is launched by `node --enable-source-maps dist/index.js` (the standard worker `CMD`).
 
-## Events
+## Diagnostic events (`diag:queue` Redis Stream)
 
-None emitted. The worker is a consumer.
+Although the worker's primary role is consumer, it also emits two lifecycle events to the same `diag:queue` it drains. These are intentionally minimal — per-iteration `run_ok`/`run_failed` would saturate the stream because the loop runs continuously. All kinds carry `component: 'worker-diag-flush'`.
+
+| Kind | Severity | Trigger | Payload fields |
+|---|---|---|---|
+| `diag_flush.started` | `info` | After `xgroup CREATE` and `startHeartbeat`, before the consumer loop begins. | `pid: number` |
+| `diag_flush.stopped` | `info` | Inside the SIGTERM/SIGINT handler before in-flight batches are awaited and `process.exit(0)` is called. | `sig: 'SIGTERM' \| 'SIGINT'` |
+
+`emitStarted(diag)` and `emitStopped(diag, sig)` are exported from `src/index.ts` so the lifecycle helpers can be unit-tested without standing up the full consumer loop.
 
 ## Configuration surface
 
