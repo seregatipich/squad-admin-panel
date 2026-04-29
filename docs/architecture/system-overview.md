@@ -16,7 +16,7 @@
 | `packages/db` | Drizzle schema + SQL migrations + seed data. |
 | `packages/shared-types` | Zod schemas, including the canonical [EventEnvelope](../components/shared-types/data-model.md). |
 | `packages/shared-config` | Permission keys, bridge-method allowlist, heartbeat util. |
-| `packages/bridge-client` | TS client for the Go bridge over `/run/panel-host-bridge.sock`. |
+| `packages/bridge-client` | TS client for the Go bridge over `/run/panel-host-bridge/bridge.sock`. |
 
 ## Main user scenarios
 

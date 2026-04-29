@@ -56,7 +56,7 @@ Unit tests for callers that use `BridgeClient` (e.g. `apps/api/test/server-logs.
 See [`docs/development/testing.md`](../../development/testing.md) and the root `CLAUDE.md` testing section. Requires:
 
 - Docker Compose stack running
-- Bridge daemon active at `/run/panel-host-bridge.sock`
+- Bridge daemon active at `/run/panel-host-bridge/bridge.sock`
 - `PANEL_TEST_URL` and `PANEL_TEST_COOKIE` environment variables set
 
 ```bash

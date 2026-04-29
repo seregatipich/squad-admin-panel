@@ -27,6 +27,11 @@ beforeAll(async () => {
   sql = postgres(dbUrl, { max: 3, onnotice: () => undefined });
   db = drizzle(sql, { schema });
 
+  // Migration 0015 dropped the legacy Viewer role; re-create it as a
+  // test fixture for tests that exercise narrow read-only permissions.
+  const { ensureViewerFixture } = await import('./helpers/viewer-fixture.js');
+  await ensureViewerFixture(db as unknown as Parameters<typeof ensureViewerFixture>[0]);
+
   const viewerRows = await db
     .select({ id: roles.id })
     .from(roles)

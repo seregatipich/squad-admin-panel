@@ -57,7 +57,7 @@ services:
       REDIS_URL: redis://redis:6379
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
       SESSION_SECRET: ${SESSION_SECRET}
-      BRIDGE_SOCKET: /run/panel-host-bridge.sock
+      BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       APP_DOMAIN: ${APP_DOMAIN:-admin.localhost}
       # Host-side path of the squad-depot volume. Must match the bind-mount
       # source used by install-host-bridge.sh AND the Environment= line in
@@ -77,9 +77,13 @@ services:
       SESSION_TOUCH_THROTTLE_SECONDS: ${SESSION_TOUCH_THROTTLE_SECONDS:-60}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
+    # this MUST be `user: "0:<panel-gid>"`, never `group_add: [<panel-gid>]`,
+    # otherwise every RPC fails with `rejected untrusted peer`. See
+    # docs/components/bridge/troubleshooting.md.
     user: "0:${PANEL_GID:-987}"
     volumes:
-      - /run/panel-host-bridge.sock:/run/panel-host-bridge.sock
+      - /run/panel-host-bridge:/run/panel-host-bridge
     depends_on:
       postgres:
         condition: service_healthy
@@ -119,11 +123,41 @@ services:
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
-      BRIDGE_SOCKET: /run/panel-host-bridge.sock
+      BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
+    # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
+    # this MUST be `user: "0:<panel-gid>"`, never `group_add: [<panel-gid>]`,
+    # otherwise every RPC fails with `rejected untrusted peer`. See
+    # docs/components/bridge/troubleshooting.md.
+    user: "0:${PANEL_GID:-987}"
     volumes:
-      - /run/panel-host-bridge.sock:/run/panel-host-bridge.sock
-    group_add:
-      - ${PANEL_GID:-987}
+      - /run/panel-host-bridge:/run/panel-host-bridge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  worker-config-sync:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      args:
+        WORKER: config-sync
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      PANEL_BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
+    # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
+    # this MUST be `user: "0:<panel-gid>"`, never `group_add: [<panel-gid>]`,
+    # otherwise every RPC fails with `rejected untrusted peer`. See
+    # docs/components/bridge/troubleshooting.md.
+    user: "0:${PANEL_GID:-987}"
+    volumes:
+      - /run/panel-host-bridge:/run/panel-host-bridge
     depends_on:
       postgres:
         condition: service_healthy
@@ -192,11 +226,15 @@ services:
     restart: unless-stopped
     environment:
       REDIS_URL: redis://redis:6379
-      BRIDGE_SOCKET: /run/panel-host-bridge.sock
+      BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       LOG_LEVEL: ${LOG_LEVEL:-info}
+    # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
+    # this MUST be `user: "0:<panel-gid>"`, never `group_add: [<panel-gid>]`,
+    # otherwise every RPC fails with `rejected untrusted peer`. See
+    # docs/components/bridge/troubleshooting.md.
     user: "0:${PANEL_GID:-987}"
     volumes:
-      - /run/panel-host-bridge.sock:/run/panel-host-bridge.sock
+      - /run/panel-host-bridge:/run/panel-host-bridge
     depends_on:
       redis:
         condition: service_healthy

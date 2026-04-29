@@ -9,14 +9,14 @@ Constructed with optional `BridgeClientOptions`. All RPC methods auto-connect on
 ```ts
 import { BridgeClient } from '@squad/bridge-client';
 
-const client = new BridgeClient({ socketPath: '/run/panel-host-bridge.sock' });
+const client = new BridgeClient({ socketPath: '/run/panel-host-bridge/bridge.sock' });
 ```
 
 ### Constructor options
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `socketPath` | `string` | `BRIDGE_SOCKET_DEFAULT` (`/run/panel-host-bridge.sock`) | Unix socket path |
+| `socketPath` | `string` | `BRIDGE_SOCKET_DEFAULT` (`/run/panel-host-bridge/bridge.sock`) | Unix socket path |
 | `defaultTimeoutMs` | `number` | `15_000` | Timeout for unary calls. Streaming calls set their own. |
 | `onLog` | `(msg, meta?) => void` | no-op | Receives structured log lines; wire into pino or console |
 
@@ -35,6 +35,19 @@ Gracefully closes the socket. Rejects all in-flight calls with `BridgeError('tra
 Do **not** call on the shared `app.bridge` instance from inside a per-request handler — use `app.makeBridgeClient()` for connections that should be closed per WebSocket.
 
 ---
+
+### Transport-level retry
+
+Idempotent unary methods perform exactly **one** transparent retry when the first attempt rejects with `BridgeError('transport', …)` (socket closed by peer, frame-decode error, write error). The client drops the broken socket, re-connects, and re-issues the request once. If the retry also fails, the error propagates.
+
+| Auto-retries | Pass-through |
+|---|---|
+| `ping`, `hostInfo`, `hostMetrics`, `processInfo` | `fileWrite` (non-atomic) |
+| `fileRead`, `fileAtomicWrite` | `containerRun`, `containerStart`, `containerStop`, `containerRm` |
+| `directoryDelete`, `listPanelDirs`, `listSquadContainers`, `ufwRule` | `hostAgentRestart` |
+| `containerInspect`, `containerStats` | streaming methods (`containerLogsFollow`, `depotUpdate`, `dockerPrune`) |
+
+Streaming methods are never retried — partial output would already have been delivered to the caller. State-changing container/host RPC's are not retried because we cannot safely tell whether the bridge processed the request before the socket dropped (e.g. `container_run` would risk creating a duplicate). Callers that need retry semantics for those should layer it themselves with appropriate idempotency guards.
 
 ### Unary methods
 

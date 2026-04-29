@@ -34,7 +34,7 @@ async function main() {
   redis.on('error', (err: Error) => log.warn({ err: err.message }, 'redis error (will retry)'));
   redis.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
   const bridge = new BridgeClient({
-    socketPath: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge.sock',
+    socketPath: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
     onLog: (m, meta) => log.info({ ...meta }, m),
   });
 

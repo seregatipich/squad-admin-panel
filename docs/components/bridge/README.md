@@ -1,6 +1,6 @@
 # `bridge` — host daemon
 
-The only privileged component. A Go binary listening on `/run/panel-host-bridge.sock` (systemd socket-activated, `0660 root:panel`). Containers reach it through the bind-mounted socket; the API decorates Fastify with `app.bridge` (singleton) and `app.makeBridgeClient()` (per-WebSocket dedicated connection).
+The only privileged component. A Go binary listening on `/run/panel-host-bridge/bridge.sock` (systemd socket-activated, `0660 root:panel`). Containers reach it through the bind-mounted socket; the API decorates Fastify with `app.bridge` (singleton) and `app.makeBridgeClient()` (per-WebSocket dedicated connection).
 
 ## Responsibilities
 
@@ -52,7 +52,7 @@ Runtime dependencies on the host:
 import { createBridgeClient } from '@squad/bridge-client';
 
 const client = await createBridgeClient({
-  socketPath: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge.sock',
+  socketPath: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
 });
 
 const info = await client.call('host_info', {});

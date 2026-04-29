@@ -129,6 +129,73 @@ Three-step orchestrator (no single endpoint glues them together — UI drives th
 
 Audit row at step 1 (`server.restore`), step 3 (`server.restore_configs`), and the existing audit on step 2/4. `Rcon.cfg` skip is intentional: backing up the old password works (it's just text), but copying it to the new server would defeat the rotation that happened during install.
 
+## Config edit (`PUT /api/v1/servers/:id/configs/:name`)
+
+Single source of truth: [`apps/api/src/routes/server-configs.ts`](../../../apps/api/src/routes/server-configs.ts) (`writeVersion` at line 403). Each edit pairs a host-filesystem write with a `config_versions` row — never one without the other.
+
+```
+PUT /api/v1/servers/:id/configs/:name   body={content, message?}
+  ↓ name ∈ ALLOWED_CONFIG_FILES (19, in @squad/shared-config)
+  ↓ content ≤ 1 MiB
+  ↓
+writeVersion():
+  Step 1 — read previous tip
+    SELECT id, sha256 FROM config_versions
+     WHERE server_id=$id AND filename=$name
+     ORDER BY created_at DESC LIMIT 1
+  Step 2 — sha-match short-circuit
+    if prev.sha256 == sha256(new content):
+      return { ok:true, unchanged:true, sha256, behavior }
+      ← NO disk write, NO DB row, NO RCON. History stays clean.
+  Step 3 — atomic disk write (synchronous)
+    bridge.fileAtomicWrite({path: "${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/${name}", content})
+    ← write to sibling ".new" → fsync → rename(2) → existing file → ".bak"
+    ← Squad sees the new content the instant rename(2) completes:
+      the host directory is bind-mounted RW into squad-${id} as
+      /squad/SquadGame/ServerConfig, so the kernel exposes the same
+      inode on both sides — no copy, no sync, no container restart.
+  Step 4 — INSERT config_versions
+    INSERT INTO config_versions (server_id, filename, content, sha256,
+                                 parent_version_id=prev.id|NULL,
+                                 author_steam_id64=actor|NULL,
+                                 author_label=actor?NULL:'system',
+                                 author_ip, message)
+  Step 5 — best-effort live reload (no audit on its own)
+    reloadServerConfig(app, serverId):
+      if status NOT IN (running, starting):
+        return { applied:false, reason:'not_running' }
+      if no decryptable rcon credentials:
+        return { applied:false, reason:'no_credentials' }
+      try:
+        rconSendOnce('AdminReloadServerConfig')
+        return { applied:true, via:'rcon', command, response }
+      catch err:
+        return { applied:false, reason:'rcon_failed', detail }
+  return {
+    ok:true, unchanged:false, version_id, sha256, previous_sha256,
+    created_at, behavior, reload
+  }
+
+audit plugin writes `config.write` row with before.sha256 / after.sha256
+(content NEVER recorded — Rcon.cfg holds the RCON password).
+```
+
+**Atomicity & instantaneity**: bridge writes through `os.WriteFile(temp)` → `fsync` → `rename(2)`. Because the cfg directory is a bind-mount (`-v ${PANEL_CONFIGS_ROOT}/${id}/ServerConfig:/squad/SquadGame/ServerConfig:rw` in [`apps/bridge/internal/runner/docker.go`](../../../apps/bridge/internal/runner/docker.go)), host and container reference the same inode. The container therefore sees the new file the moment `rename(2)` returns — no copy, no docker-cp, no restart needed for the file itself to be present. Squad **never** observes a half-written file: a concurrent reader either sees the old inode (full old content) or the new one (full new content).
+
+**Behavior classes** (`configFileClass` in `@squad/shared-config`) decide whether the file-being-present is enough or whether Squad needs a nudge:
+
+| Class | Files | What happens after step 3 |
+|---|---|---|
+| `hot_reload` | `Admins.cfg`, `Bans.cfg`, `RemoteAdminListHosts.cfg`, `RemoteBanListHosts.cfg` | Squad re-reads from disk on its own when a relevant command fires (e.g. an admin runs `/admin`). RCON reload in step 5 still fires but is effectively a no-op for these. |
+| `rotation` | `LayerRotation.cfg`, `LevelRotation.cfg`, `Excluded{Layers,Levels,Factions}.cfg`, `LayerVoting{,LowPlayers,Night}.cfg`, `VoteConfig.cfg` | RCON `AdminReloadServerConfig` (step 5) makes Squad re-parse them in-place. |
+| `requires_restart` | `CustomOptions.cfg`, `License.cfg`, `MOTD.cfg`, `Rcon.cfg`, `Server.cfg`, `ServerMessages.cfg` | File on disk is fresh, but Squad cached the old values at boot. Operator must restart the container; UI surfaces this via `behavior` + `reload.applied=false`. |
+
+**Failure modes**:
+
+- Step 3 fails (path forbidden, disk full, bridge down): the route returns the bridge error verbatim (typically 500), DB unchanged, no audit `config.write` row.
+- Step 4 fails after step 3 succeeded (DB unreachable mid-request): the file on disk is the new content but no `config_versions` row exists. The next successful PUT will see `prev.sha256` from the previous-but-one row and produce a normal lineage; the orphan-on-disk state is benign and self-heals on next save. There is **no rollback** of the disk write.
+- Step 5 fails: reported in the response (`reload.applied=false`, `reason`); the audit row is still written (the edit *did* happen). UI shows a warning suggesting a manual restart.
+
 ## Status reconciler
 
 [`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts) — fires once on `onReady` and then every `RECONCILE_INTERVAL_MS` (4 s):

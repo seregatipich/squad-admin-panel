@@ -1,5 +1,31 @@
 # `bridge` — changelog
 
+## 2026-04-28 — Socket moved into stable runtime directory
+
+### Changed
+
+- **Socket path moved**: `/run/panel-host-bridge.sock` → `/run/panel-host-bridge/bridge.sock`. The directory is created at boot by a `tmpfiles.d` snippet (`apps/bridge/deploy/panel-host-bridge.tmpfiles.conf`, deployed to `/etc/tmpfiles.d/panel-host-bridge.conf` by `scripts/install-host-bridge.sh`) with mode `0750 root:panel`.
+- **`apps/bridge/deploy/panel-host-bridge.socket`** `ListenStream` updated to the new path.
+- **`apps/bridge/deploy/panel-host-bridge.service`** `ReadWritePaths` now includes `/run/panel-host-bridge` so the bridge process can mutate its own socket file (required for clean shutdown / rebind).
+- **`apps/bridge/cmd/panel-host-bridge/main.go`** dev-mode fallback path updated.
+- **`packages/shared-config/src/bridge-methods.ts`** `BRIDGE_SOCKET_DEFAULT` updated.
+- **`apps/api/src/config.ts`**, **`apps/workers/{log-ingest,metrics-sampler,config-sync}/src/index.ts`**, **`scripts/{verify-bridge.sh,bootstrap.sh}`**, **`docker-compose.yml`** — all default-path references updated.
+- **`docker-compose.yml`** volumes for the api/web/worker-log-ingest/worker-config-sync/worker-metrics-sampler services switched from single-file bind-mount (`/run/panel-host-bridge.sock:/run/panel-host-bridge.sock`) to **directory bind-mount** (`/run/panel-host-bridge:/run/panel-host-bridge`).
+
+### Fixed
+
+- **Stale-inode bug after every bridge restart.** Previously the api / worker containers bind-mounted the socket *file* directly. A bind-mount of a single file resolves to the file's inode at container-start; if the file is unlinked and recreated on the host (which `RemoveOnStop=yes` plus any `systemctl restart panel-host-bridge` would do), the container kept opening the original orphan inode and got `connect ECONNREFUSED` until manually recreated. With the directory mount the kernel re-resolves the file by name on every `connect(2)`, so consumers transparently pick up the fresh inode. Verified end-to-end on the live stack: `systemctl stop panel-host-bridge.socket` followed by `start` rotates the host inode `361247 → 362503`; api and worker containers see the same new inode without any docker recreate; subsequent `force_sync` flows return `state: 'in_sync'`.
+
+### Migration notes
+
+- Run `sudo bash scripts/install-host-bridge.sh`. The script:
+  1. Drops `panel-host-bridge.tmpfiles.conf` into `/etc/tmpfiles.d/` and runs `systemd-tmpfiles --create` so `/run/panel-host-bridge/` is materialised before the .socket binds.
+  2. Stops `panel-host-bridge.{socket,service}` if they are still bound to the legacy `/run/panel-host-bridge.sock` and removes that file.
+  3. Reinstalls the unit files with the new `ListenStream`.
+  4. Restarts the .socket unit on the new path.
+- Then `docker compose up -d --force-recreate` to refresh the bind-mounts. Existing containers bound to the legacy `/run/panel-host-bridge.sock` will not see the new directory until recreated.
+- `RuntimeDirectory=` was **not** used on the .service unit because socket activation runs the .socket BEFORE the .service, and `RuntimeDirectory=` only fires on .service start — the socket would have failed to bind on first boot. tmpfiles.d runs at sysinit-target time, before sockets.target, which is the correct ordering for our setup.
+
 ## 2026-04-26 — `directory_delete` RPC for server soft-delete orchestrator
 
 ### Added

@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026-05-02 — Эпик 2 Phase 2 follow-up
+
+### Added
+
+- `/users` page now has a search box (nickname / SteamID64) and a role filter dropdown, plus a per-row "Снять" button (gated by `user:manage_roles`).
+- Player card role widget renders read-only for users without `user:manage_roles` — they see the current role + color but no Изменить / Снять buttons.
+
+### Changed
+
+- Player card role dropdown excludes Owner and the player's current role per spec §2.6.4.
+- Snять button on the player card now hits the new `DELETE /api/v1/players/:steamId/role` endpoint.
+
+## 2026-05-01 — Эпик 2 Phase 2: groups editor + members page + drift banner
+
+### Added
+
+- `apps/web/src/app/(dashboard)/settings/groups/page.tsx` — inline role editor. Stacked role cards with name + hex color picker + 3 access-flag switches + 21 Squad permissions in 3 columns with ⚠️ on dangerous ones. Debounced auto-save (500 ms after the last click), optimistic UI with rollback on save failure, "+ Создать роль" button, ⌫ delete with confirm, "Открыть список членов" link, collapsible "Как это выглядит в Admins.cfg" preview, link to Squad wiki Server Administration.
+- `apps/web/src/app/(dashboard)/settings/groups/[id]/members/page.tsx` — paginated members list per role with search by nickname/SteamID64, add-player modal with player search, remove button per row.
+- `apps/web/src/components/AdminsCfgDriftBanner.tsx` — drift alert on the server detail page. Polls `/api/v1/admins-cfg/drift?server_id=...` every 30 s; when the file's managed segment hash diverges from the DB's (or the bridge is unreachable), shows a banner with a Force-sync button.
+
+### Changed
+
+- `apps/web/src/components/SidebarNav.tsx` — sidebar entry "Роли" replaced with "Группы" pointing at `/settings/groups`. The legacy `/roles` page remains in the codebase as a deprecated route but is no longer linked.
+- `apps/web/src/components/RoleColorDot.tsx` — accepts hex color codes in addition to palette names; hex codes render via `style={{ backgroundColor: color }}`.
+
+## 2026-04-27 — Sidebar redesign: grouped nav + active-route indicator
+
+### Added
+
+- `apps/web/src/components/SidebarNav.tsx` — client component that owns dashboard navigation. Five permission-filtered groups with uppercase tracked-out headers; active route gets a sky-400 left bar + `bg-neutral-900` row via `usePathname()`; whole group hidden when its only items are gated out.
+
+### Changed
+
+- `apps/web/src/app/(dashboard)/layout.tsx` — sidebar markup extracted into `SidebarNav`; the layout server component now only fetches the session and forwards `permissions` + `canonical_name`.
+- `apps/web/src/styles/globals.css` — wrapped the global `a { @apply text-sky-400 ... }` rule in `@layer base` so per-component utility classes (e.g. `text-neutral-300` on nav links) actually win the cascade. Visual behaviour for plain `<a>` is unchanged.
+
+### Removed
+
+- "Серверы" link from the dashboard sidebar — the dashboard page already shows the live server table inline, so the entry was redundant. The `/servers` route still resolves; it is reachable from the dashboard "все →" CTA and from `/servers/[id]` deep links.
+
+### Migration notes
+
+- No env or API surface changes. `e2e/dashboard.spec.ts` continues to pass: `nav.toContainText('Серверы')` matches the new `СЕРВЕРЫ` group header.
+
 ## 2026-04-26 — Bundle F: archive UI + connection banner + live-bus client
 
 ### Added

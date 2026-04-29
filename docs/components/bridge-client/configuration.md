@@ -6,7 +6,7 @@
 
 | Option | Default | Description |
 |---|---|---|
-| `socketPath` | `BRIDGE_SOCKET_DEFAULT` = `/run/panel-host-bridge.sock` | Unix socket path to the host bridge daemon |
+| `socketPath` | `BRIDGE_SOCKET_DEFAULT` = `/run/panel-host-bridge/bridge.sock` | Unix socket path to the host bridge daemon |
 | `defaultTimeoutMs` | `15_000` | Timeout in milliseconds for unary calls. Streaming calls override this per method. |
 | `onLog` | no-op | Structured log callback; the API wires in the Fastify logger here |
 
@@ -15,7 +15,7 @@
 `BRIDGE_SOCKET_DEFAULT` is exported from `@squad/shared-config` (`packages/shared-config/src/bridge-methods.ts`):
 
 ```ts
-export const BRIDGE_SOCKET_DEFAULT = '/run/panel-host-bridge.sock';
+export const BRIDGE_SOCKET_DEFAULT = '/run/panel-host-bridge/bridge.sock';
 ```
 
 The bridge daemon is activated by systemd socket at that path, mode `0660 root:panel`. The Node process must belong to the `panel` group for `connect()` to succeed.
@@ -47,6 +47,6 @@ These are consumed by `apps/api`, not by the package itself, but affect how `Bri
 
 | Variable | Default | Description |
 |---|---|---|
-| `BRIDGE_SOCKET_PATH` | `/run/panel-host-bridge.sock` | Override the socket path in the API container |
+| `BRIDGE_SOCKET_PATH` | `/run/panel-host-bridge/bridge.sock` | Override the socket path in the API container |
 
 See [`docs/components/api/configuration.md`](../api/configuration.md) and [`docs/operations/environment-variables.md`](../../operations/environment-variables.md).

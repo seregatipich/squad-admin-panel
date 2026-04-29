@@ -3,7 +3,9 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
+import { revokeAllForPlayer } from '../lib/sessions.js';
 
 const playerIdParams = z.object({ steamId: z.string().regex(/^\d{17}$/) });
 const roleAssignBody = z.object({ role_id: z.string().uuid().nullable() });
@@ -145,9 +147,15 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       const steamId64 = BigInt(req.params.steamId);
       const newRoleId = req.body.role_id;
 
+      let newRolePanelAccess = false;
       if (newRoleId !== null) {
         const exists = await app.db
-          .select({ id: roles.id })
+          .select({
+            id: roles.id,
+            isSystemRole: roles.isSystemRole,
+            name: roles.name,
+            panelAccess: roles.panelAccess,
+          })
           .from(roles)
           .where(eq(roles.id, newRoleId))
           .limit(1);
@@ -155,6 +163,15 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
           reply.code(404);
           return { error: 'role_not_found' };
         }
+        // biome-ignore lint/style/noNonNullAssertion: guarded by length check
+        const target = exists[0]!;
+        // 2.6.4 — Owner cannot be assigned via UI; only the first-login
+        // trick or direct DB modification can grant Owner.
+        if (target.isSystemRole && target.name === 'Owner') {
+          reply.code(403);
+          return { error: 'owner_assignment_forbidden' };
+        }
+        newRolePanelAccess = target.panelAccess;
       }
 
       const ownerRow = await app.db
@@ -183,11 +200,78 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
-      await app.db
-        .update(players)
-        .set({ roleId: newRoleId })
-        .where(eq(players.steamId64, steamId64));
+      await app.db.transaction(async (tx) => {
+        await tx.update(players).set({ roleId: newRoleId }).where(eq(players.steamId64, steamId64));
+        // Spec §2.7.1 — sync-task is enqueued in the same transaction
+        // as the player.role mutation so a Redis failure aborts the DB
+        // write and keeps the file/DB invariant.
+        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+          reason: newRoleId === null ? 'player.role.unassign' : 'player.role.assign',
+          actor_steam_id64: req.user?.steamId64 ? String(req.user.steamId64) : null,
+          enqueued_at: new Date().toISOString(),
+          request_id: req.id,
+        });
+      });
       invalidatePermissionCache(steamId64);
+
+      // 2.6.1 — if the player just lost panel_access, kill all live
+      // sessions so the next request bounces them to /login.
+      if (!newRolePanelAccess) {
+        await revokeAllForPlayer(app.db, app.redis, steamId64);
+      }
+      return { ok: true };
+    },
+  );
+
+  fast.delete(
+    '/api/v1/players/:steamId/role',
+    {
+      schema: { params: playerIdParams },
+      config: {
+        permissions: ['user:manage_roles'],
+        audit: { action: 'player.role.unassign', resource: 'player' },
+      },
+    },
+    async (req, reply) => {
+      const steamId64 = BigInt(req.params.steamId);
+      // Self-protect last Owner.
+      const ownerRow = await app.db
+        .select({ id: roles.id })
+        .from(roles)
+        .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+        .limit(1);
+      const ownerId = ownerRow[0]?.id ?? null;
+      const current = await app.db
+        .select({ roleId: players.roleId })
+        .from(players)
+        .where(eq(players.steamId64, steamId64))
+        .limit(1);
+      if (current.length === 0) {
+        reply.code(404);
+        return { error: 'player_not_found' };
+      }
+      const wasOwner = current[0]?.roleId === ownerId && ownerId !== null;
+      if (wasOwner) {
+        const ownerCount = await app.db
+          .select({ c: sql<number>`count(*)::int` })
+          .from(players)
+          .where(eq(players.roleId, ownerId));
+        if ((ownerCount[0]?.c ?? 0) <= 1) {
+          reply.code(409);
+          return { error: 'cannot_remove_last_owner' };
+        }
+      }
+      await app.db.transaction(async (tx) => {
+        await tx.update(players).set({ roleId: null }).where(eq(players.steamId64, steamId64));
+        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+          reason: 'player.role.unassign',
+          actor_steam_id64: req.user?.steamId64 ? String(req.user.steamId64) : null,
+          enqueued_at: new Date().toISOString(),
+          request_id: req.id,
+        });
+      });
+      invalidatePermissionCache(steamId64);
+      await revokeAllForPlayer(app.db, app.redis, steamId64);
       return { ok: true };
     },
   );

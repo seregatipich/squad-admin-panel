@@ -168,14 +168,28 @@ func AtomicWrite(p string, content []byte, mode os.FileMode) error {
 		return fmt.Errorf("chmod new: %w", err)
 	}
 
-	if _, err := os.Stat(p); err == nil {
-		_ = os.Rename(p, p+".bak")
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat existing: %w", err)
+	// Atomic rename: tmp -> final. Existing file (if any) is overwritten
+	// atomically on POSIX; no .bak needed because the previous version
+	// is preserved by config_versions / role_squad_permissions snapshots.
+	if err := os.Rename(newPath, p); err != nil {
+		_ = os.Remove(newPath)
+		return fmt.Errorf("rename into place: %w", err)
 	}
 
-	if err := os.Rename(newPath, p); err != nil {
-		return fmt.Errorf("rename into place: %w", err)
+	// fsync the parent directory so the rename survives a power loss
+	// (POSIX requires the directory entry change to be flushed in a
+	// separate fsync from the file's data fsync).
+	dirF, err := os.Open(dir)
+	if err != nil {
+		// Non-fatal — the rename committed; we just couldn't fsync the
+		// directory. Worth logging but not failing the request.
+		return nil
+	}
+	defer func() { _ = dirF.Close() }()
+	if err := dirF.Sync(); err != nil {
+		// Best-effort; on filesystems where directory fsync is a no-op
+		// this can return EINVAL. Don't fail the request.
+		_ = err
 	}
 	return nil
 }

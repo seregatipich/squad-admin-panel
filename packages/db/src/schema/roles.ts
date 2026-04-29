@@ -8,6 +8,9 @@ export const roles = pgTable(
     description: text('description'),
     color: text('color').notNull().default('neutral'),
     isSystemRole: boolean('is_system_role').notNull().default(false),
+    panelAccess: boolean('panel_access').notNull().default(false),
+    canAssignRoles: boolean('can_assign_roles').notNull().default(false),
+    canEditRoles: boolean('can_edit_roles').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
   (table) => ({

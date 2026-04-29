@@ -1,5 +1,46 @@
 # `api` — changelog
 
+## 2026-04-28
+
+### Documentation
+
+- `flows.md` gained a dedicated **Config edit (`PUT /api/v1/servers/:id/configs/:name`)** section: full step ordering (sha-match short-circuit → atomic disk write → `config_versions` INSERT → best-effort RCON `AdminReloadServerConfig`), the bind-mount + `rename(2)` instantaneity guarantee, the three behavior classes (`hot_reload`, `rotation`, `requires_restart`) and what each does after the file lands on disk, and per-step failure modes (orphan-on-disk after a DB blip is benign and self-heals on the next save).
+- `api.md` config-route table: corrected permission keys to match `apps/api/src/routes/server-configs.ts` (`config:edit` for write, `config:view` for history/diff/blame/versions, `config:rollback` for restore — the previous `server:config:write` / `server:config:history` keys did not exist in the registry). PUT row now also notes the bind-mount instantaneity, RCON reload outcome shape, and audit-content semantics (sha-only).
+
+## 2026-05-02 — Эпик 2 Phase 2 follow-up: spec compliance round 2
+
+### Added
+
+- Explicit `DELETE /api/v1/players/:steamId/role` endpoint (audit `player.role.unassign`). The legacy `PUT { role_id: null }` is preserved for back-compat.
+- `GET /api/v1/users` accepts `q` (nickname/SteamID search) and `role_id` (filter) querystring params.
+- Owner is excluded from the player-card role dropdown and the /users assign modal client-side. Backend continues to reject Owner via `owner_assignment_forbidden` 403.
+- The /users page now renders a "Снять" button per row (gated by `user:manage_roles`).
+- Player card role widget renders for **all** viewers (read-only when no `user:manage_roles`), instead of being hidden entirely.
+
+### Changed
+
+- All admins-cfg-sync publishes now run **inside** the same DB transaction as the role/player mutation. Per spec §2.7.1: a Redis publish failure aborts the DB transaction so role state and stream state stay aligned. Affected handlers: `POST/PUT/DELETE /api/v1/roles`, `PUT/DELETE /api/v1/players/:steamId/role`, `POST/DELETE /api/v1/roles/:id/members[/:steamId]`.
+- `POST /api/v1/servers/:id/install` enqueues an initial sync event after install completes (spec §2.7.7 — fresh server gets its `Admins.cfg` written before Squad first boots).
+- The structural type `AdminsCfgSyncDb = Pick<DatabaseClient, 'select'>` lets the publish helper accept either a top-level client or a transaction handle.
+
+## 2026-05-01 — Эпик 2 Phase 2: roles + access flags + admins-cfg sync trigger
+
+### Added
+
+- `apps/api/src/routes/role-members.ts` — `GET /api/v1/roles/:id/members` (paginated, search-by-nickname/SteamID), `POST /api/v1/roles/:id/members` to assign, `DELETE /api/v1/roles/:id/members/:steamId` to unassign. Required permissions: `user:view` for read, `user:manage_roles` for mutations.
+- `apps/api/src/routes/admins-cfg.ts` — `GET /api/v1/admins-cfg/drift?server_id=<uuid>`, `GET /api/v1/admins-cfg/drift/all` (for ops dashboards), `POST /api/v1/admins-cfg/sync?server_id=<uuid>` (force-sync, audit-logged as `admins_cfg.force_sync`). Required: `admin_group:view` / `admin_group:edit`.
+- `apps/api/src/lib/admins-cfg-sync.ts` — `publishAdminsCfgSyncForAllServers` / `publishAdminsCfgSyncForServer` helpers. Used by every role / player-role mutation handler to enqueue events into `events:admins-cfg-sync:<server_id>` for the `worker-config-sync` consumer group.
+- `POST /api/v1/roles` and `PUT /api/v1/roles/:id` accept new fields: `squad_permissions: string[]` (validated against the 21-key catalogue), `panel_access: boolean`, `can_assign_roles: boolean`, `can_edit_roles: boolean`. Flag-dependency check returns 400 `panel_access_required_for_role_management` if `panel_access=false` is paired with one of the role-management flags.
+- `GET /api/v1/roles` response now includes `panel_access`, `can_assign_roles`, `can_edit_roles`, `squad_permissions` per row.
+- `PUT /api/v1/players/:steam_id64/role` rejects assigning the system Owner role with 403 `owner_assignment_forbidden`. The first-login Owner trick path remains intact and is the only way to grant Owner.
+
+### Changed
+
+- `apps/api/src/lib/rbac.ts` rewritten: derived permissions from access flags + union with explicit `role_permissions` grants. Owner hardcoded super-set (all panel keys + all 21 squad perms + all 3 flags). Cache shape extended with `panelAccess`, `canAssignRoles`, `canEditRoles`, `isOwner`, `roleName`, `squadPermissions` — backwards-compatible (existing `permissions: Set<...>` and `roleId` fields preserved).
+- `apps/api/src/routes/auth-steam.ts` callback now redirects to `/no-access` when `panelAccess === false` instead of the previous `permissions.size === 0` check.
+- Role and player-role mutations enqueue admins-cfg-sync events into Redis Streams in the same response cycle.
+- Role delete sweeps all permission caches (`invalidateAllPermissionCaches`) because we don't know which sessions still hold a now-NULL role.
+
 ## 2026-04-26 — Reconciler restart-resilience: parallel tick, watchdog, eager start/restart
 
 ### Added

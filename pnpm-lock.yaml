@@ -280,9 +280,18 @@ importers:
 
   apps/workers/config-sync:
     dependencies:
+      '@squad/bridge-client':
+        specifier: workspace:*
+        version: link:../../../packages/bridge-client
+      '@squad/db':
+        specifier: workspace:*
+        version: link:../../../packages/db
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config
+      drizzle-orm:
+        specifier: ^0.45.0
+        version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
       ioredis:
         specifier: ^5.4.1
         version: 5.10.1

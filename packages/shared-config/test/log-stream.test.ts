@@ -57,6 +57,7 @@ describe('log-stream encoding', () => {
       'depot',
       'install',
       'api',
+      'config-sync',
     ]);
     expect(LOG_LEVELS).toEqual(['debug', 'info', 'warn', 'error']);
   });

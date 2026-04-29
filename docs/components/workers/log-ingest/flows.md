@@ -3,7 +3,7 @@
 ## Startup
 
 1. Read `DATABASE_URL`, `REDIS_URL` from environment; fatal-exit if missing.
-2. Create `BridgeClient` (socket path from `BRIDGE_SOCKET` or `/run/panel-host-bridge.sock`).
+2. Create `BridgeClient` (socket path from `BRIDGE_SOCKET` or `/run/panel-host-bridge/bridge.sock`).
 3. Call `reconcile()` immediately.
 4. Start `setInterval(reconcile, 15_000)`.
 5. Start heartbeat (`worker:heartbeat:log-ingest`, every 5 s).

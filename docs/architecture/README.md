@@ -6,7 +6,7 @@ The panel is a single-host system with three privilege zones and narrow contract
 
 | Zone | What runs there | Privilege |
 |---|---|---|
-| **Host daemon** ([`apps/bridge`](../components/bridge/README.md)) | Go binary listening on `/run/panel-host-bridge.sock` | root, `CAP_NET_ADMIN` for `ufw` |
+| **Host daemon** ([`apps/bridge`](../components/bridge/README.md)) | Go binary listening on `/run/panel-host-bridge/bridge.sock` | root, `CAP_NET_ADMIN` for `ufw` |
 | **Containers** | API, web, workers, Postgres, Redis (via `docker compose`) | unprivileged users inside containers; talk to bridge over the unix socket only |
 | **Per-server containers** | One `squad-server:latest` container per game server, `--network host`, bind-mounted configs, shared depot volume | uid 1001 inside the container |
 
@@ -28,7 +28,7 @@ External services: only Steam CDN (read-only via `depot_update`) and Epic Online
             │             │              event-partition, stubs)      │
             │             │                                           │
             │             ▼                                           │
-            │   /run/panel-host-bridge.sock (unix, 0660 root:panel)   │
+            │   /run/panel-host-bridge/bridge.sock (unix, 0660 root:panel)   │
             │             │                                           │
             │             ▼                                           │
             │     panel-host-bridge (Go, root, systemd-managed)       │

@@ -1,3 +1,88 @@
 # worker-config-sync — Flows
 
-P2 stub. Current flow: log idle message → 60 s loop → shutdown on signal.
+## Main flow — event-driven sync
+
+```
+┌────────────────┐           ┌─────────────────────┐           ┌──────────────────┐
+│ API mutation   │  XADD     │ events:admins-cfg-  │ XREADGROUP│ worker-config-   │
+│ (role/player)  │──────────▶│ sync:<server_id>    │──────────▶│ sync             │
+└────────────────┘           └─────────────────────┘           └────────┬─────────┘
+                                                                        │
+                                                ┌───────────────────────┘
+                                                ▼
+        ┌──────────┐  fileRead    ┌──────────────┐  buildManagedSegment   ┌────────┐
+        │ bridge   │◀─────────────│ syncer.ts    │───────────────────────▶│ sha256 │
+        │ Go daemon│   path=…/    │              │       cmp DB hash      │ compare│
+        │          │   Admins.cfg │              │       vs file hash     └───┬────┘
+        └────┬─────┘              └──────┬───────┘                            │
+             │                           │ noop if equal                      │
+             │  fileAtomicWrite          │                                    │
+             ▼                           ▼                                    ▼
+        ┌──────────┐               ┌──────────────────┐               ┌──────────────┐
+        │ host fs  │               │ admins-cfg:      │               │ audit_log    │
+        │ Admins.  │               │ status:<srv_id>  │               │ admins_cfg.  │
+        │ cfg      │               │ (Redis)          │               │ synced row   │
+        └──────────┘               └──────────────────┘               └──────────────┘
+```
+
+Step-by-step:
+
+1. The API records a mutation (e.g. `PUT /api/v1/roles/:id` updates squad permissions). In the same response cycle it calls `publishAdminsCfgSyncForAllServers(db, redis, event)`.
+2. That helper queries `servers WHERE deleted_at IS NULL` and pipelines an `XADD` into `events:admins-cfg-sync:<server_id>` for every active server.
+3. The worker has a consumer group `config-sync` registered on each of those streams. `XREADGROUP` returns the new entries.
+4. `syncServerAdminsCfg(ctx, serverId, opts)` is invoked per entry:
+   - Publish `state: 'syncing'` to `admins-cfg:status:<server_id>`.
+   - Snapshot DB: `roles` (with `role_squad_permissions`) + `players WHERE role_id IS NOT NULL` mapped to role names.
+   - `buildManagedSegment(snapshot)` produces the deterministic byte body + sha256.
+   - `bridge.fileRead({ path })` reads the current file; `findManagedSegment` extracts the existing managed slice.
+   - If hashes match and `forceWrite=false`, set status `in_sync` and **skip the write** (idempotency).
+   - Otherwise `bridge.fileAtomicWrite({ path, content })` with the spliced body.
+   - Update status to `in_sync` with the fresh hash, group/admin counts, and a timestamp.
+   - Append an `admins_cfg.synced` (or `admins_cfg.force_synced`) row to `audit_log`.
+   - `XACK` the stream entry.
+5. Squad re-reads `Admins.cfg` once a minute on its own — no container restart needed.
+
+## Drift detection flow (every 5 min)
+
+A separate `setInterval` ticks every `ADMINS_CFG_DRIFT_INTERVAL_MS` (default 5 min). For each active server it runs `syncServerAdminsCfg(... { reason: 'drift_check', forceWrite: false })`. The passive `drift_check` reason changes behaviour vs. the event-driven path:
+
+- If the file's managed segment matches the DB hash → no-op, status stays `in_sync`.
+- **If they differ (someone edited the segment by hand) → the worker DOES NOT auto-overwrite. It publishes `state: 'drift'` with both hashes and a warn log `admins.cfg drift detected — awaiting force-sync`. The operator decides via the UI banner.** This matches spec §2.7.6: panel surfaces the divergence and asks the operator to "Force sync" or accept the change manually (P0 acceptance is "copy values into the UI").
+- If the bridge errors → status flips to `unreachable` and the server enters per-server backoff (5s → 10s → ... capped at 5 min).
+
+Active mutations (role.create/update/delete, player.role.assign/unassign, role.member.add/remove, force_sync) skip this passive branch and write through immediately — those are panel-initiated changes, not drift.
+
+The UI's `<AdminsCfgDriftBanner>` polls `/api/v1/admins-cfg/drift?server_id=...` every 30 s. When state ∈ {`drift`, `unreachable`}, the banner offers a "Force sync" button that POSTs to `/api/v1/admins-cfg/sync?server_id=...`. That endpoint enqueues a `force_sync` event onto the stream; the worker picks it up and overwrites unconditionally (`opts.forceWrite=true`).
+
+## Error / retry flow
+
+| Failure mode | Outcome | Recovery |
+|---|---|---|
+| `bridge.fileRead` returns `not_found` | Treated as empty file; managed segment is prepended on next write. | First-sync-after-install path. |
+| `bridge.fileRead` returns generic error | Status = `unreachable`, message **NOT** acked, per-server backoff (5s → 5min). `admins_cfg.sync_failed` audit row appended with `phase=file_read`. | Bridge comes back, next periodic reclaim (or drift sweep) retries. |
+| `bridge.fileAtomicWrite` fails | Same as above — status `unreachable`, no `XACK`, audit `phase=file_atomic_write`. | Auto-retry via reclaim. |
+| Audit append throws | Logged at error level, but the sync itself is committed. | Operator investigates DB connectivity; sync proceeds. |
+| Server deleted (`servers.deleted_at` set) | Worker drops it from the active set on next refresh (every 30 s); no further reads. | n/a |
+| Worker crash / SIGTERM | Heartbeat key expires within 30 s. In-flight messages stay in the crashed consumer's PEL. The next worker process — even with a fresh `consumer-${pid}-${rand}` name — picks them up via the periodic `XAUTOCLAIM` pass once they exceed `RECLAIM_MIN_IDLE_MS` (default 60 s). | systemd restart. |
+
+## Pending-message reclaim (XAUTOCLAIM)
+
+Spec §2.7.7 mandates that "при временной недоступности сервера … worker retry'ит with exponential backoff". Two layers cooperate:
+
+1. **In-flight retry inside the consumer**: when a message returns `state: 'unreachable'`, the worker logs the failure, records audit, and explicitly DOES NOT call `XACK`. The message stays in the current consumer's PEL.
+2. **Cross-consumer reclaim**: every `ADMINS_CFG_RECLAIM_INTERVAL_MS` (default 30 s), and once at boot, the worker runs `XAUTOCLAIM <stream> config-sync <self> MIN-IDLE-TIME=60000 0-0 COUNT 50` against every active server's stream. Any pending message older than 60 s — whether owned by a defunct consumer (process restart) or by the same consumer (still-unreachable) — is reclaimed by the calling consumer and replayed.
+
+Together they guarantee:
+- A persistently-unreachable server's messages keep retrying every reclaim cycle until the bridge recovers.
+- A consumer that crashed mid-handle does not orphan messages; the next process picks them up at boot.
+- The PEL never grows unboundedly: every entry is either acked on success or reclaimed and re-attempted.
+
+## Per-server lifecycle
+
+- **Server install** — when a new server's row appears in DB, the next 30-s `refreshServerList` tick adds it to the active set and creates the consumer group with `MKSTREAM`. The API enqueues an initial sync event so the file is populated before Squad first boots.
+- **Server soft-delete** — once `deleted_at` is set the worker drops the server from `activeServerIds` after the 30-s refresh, stops reading its stream, and never writes its file again.
+- **Server restore** — re-appears on the active list, the consumer group is (re-)created with `MKSTREAM`, the next reconcile rewrites the managed segment from current DB.
+
+## Background flow — heartbeat
+
+`startHeartbeat` from `@squad/shared-config` writes `worker:heartbeat:config-sync` to Redis with TTL 30 s; the panel `/api/v1/health/workers` endpoint reads this to surface liveness.

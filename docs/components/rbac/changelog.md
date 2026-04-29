@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-05-01 — Эпик 2 Phase 2: roles unified with Squad in-game permissions
+
+### Added
+
+- Three boolean access flags on `roles`: `panel_access`, `can_assign_roles`, `can_edit_roles`. The login flow now gates panel access on `panel_access=true` (replacing the prior "any panel permission ⇒ allowed" behaviour).
+- 21-key Squad in-game permission catalogue (`@squad/shared-config/squad-permissions`) and the `role_squad_permissions` storage table. These power the managed segment of `Admins.cfg` written by `worker-config-sync`.
+- `loadUserPermissions` (`apps/api/src/lib/rbac.ts`) now derives panel permissions from the flags at request time. `panel_access=true` grants the full panel permission set minus `role:create/edit/delete` (gated by `can_edit_roles`) and `user:manage_roles` (gated by `can_assign_roles`). Owner is hardcoded to all three flags + all 21 Squad permissions.
+- Explicit rows in `role_permissions` are still honoured and unioned with the flag-derived set — back-compat with the legacy fine-grained model.
+- New convenience `invalidateAllPermissionCaches()` exported for use after sweeping mutations (role delete, member removal).
+
+### Changed
+
+- Spec-default seed roles changed: was {Owner, Senior Admin, Admin, Moderator, Viewer}; is now {Owner, Admin, Moderator, QueuePriority, Cameraman, Intern}. Viewer was left in DB for test fixture back-compat; Senior Admin was removed.
+- Role colors are now hex codes (`#FF0000` etc.) for the spec roles. Back-compat tailwind palette names still validated.
+- `players.role_id` removal (role unassign) revokes all live sessions of the affected player; same for `DELETE /api/v1/roles/:id` and `DELETE /api/v1/roles/:id/members/:steamId`.
+- Owner is no longer assignable via the API: `PUT /api/v1/players/:steam_id64/role { role_id: <owner_id> }` returns 403 `owner_assignment_forbidden`. Direct DB modification is still required for ownership transfer.
+
 ## 2026-04-25 (later)
 
 ### Fixed

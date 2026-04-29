@@ -6,7 +6,7 @@ The bridge itself reads no env vars at runtime — its allowlists are compiled i
 
 | Name | Required | Default | Environment | Description | Sensitive |
 |---|---:|---|---|---|---|
-| `BRIDGE_SOCKET` | yes (clients) | `/run/panel-host-bridge.sock` | api / workers / docker compose | Path to the unix socket the bridge listens on. The compose file bind-mounts this into containers. | no |
+| `BRIDGE_SOCKET` | yes (clients) | `/run/panel-host-bridge/bridge.sock` | api / workers / docker compose | Path to the unix socket the bridge listens on. The compose file bind-mounts this into containers. | no |
 
 ## systemd unit
 

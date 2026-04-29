@@ -2,6 +2,48 @@
 
 Meaningful architectural choices, recorded as we make them.
 
+## 2026-05-01 — Roles unified with Squad permissions; Admins.cfg synthesized from DB
+
+### Context
+
+The panel's RBAC was a 47-key fine-grained per-role permission matrix. In parallel, every Squad server has its own `Admins.cfg` file with 21 in-game permission keys (`startvote`, `kick`, `ban`, …) hand-edited by SSH. Operators with five or six servers had to keep those files in sync by hand on every group change. The Эпик 2 Phase 2 spec (`task.md` §2) called for: a single role concept covering both panel-side access *and* in-game `Admins.cfg`, an inline editor at `/settings/groups`, members listing per role, force-sync + drift detection, and a managed segment in `Admins.cfg` so co-existing tools (sqstat, manual edits) are preserved.
+
+### Decision
+
+1. **Roles carry both axes.** Add three boolean access flags (`panel_access`, `can_assign_roles`, `can_edit_roles`) to `roles`. Add a separate M2M `role_squad_permissions(role_id, squad_permission_key)` for the 21 in-game keys. Hex colors for spec roles; back-compat with palette names for existing rows. Single Owner system role hardcoded to all flags + all 21 squad perms. `Никаких отдельных panel-permissions, никаких clearance levels` per the spec — panel permissions are derived from the flags by `loadUserPermissions`. Legacy rows in `role_permissions` remain honoured (unioned with the derived set) so existing tests and fine-grained overrides keep working.
+
+2. **Login gate flips to `panel_access`.** The Steam OpenID callback used to redirect to `/no-access` when `permissions.size === 0`; it now redirects when `panelAccess === false`. A role like `QueuePriority` (only `reserve`, no panel access) can be assigned to a player and lands them in `Admins.cfg` without granting them panel login.
+
+3. **Mutations enqueue, the worker writes.** Every role / player-role mutation handler calls `publishAdminsCfgSyncForAllServers(db, redis, event)` which `XADD`s into `events:admins-cfg-sync:<server_id>` for every active server. `worker-config-sync` (rewritten from a P2 stub) consumes the streams via consumer group `config-sync`, regenerates the marker-fenced managed segment from a fresh DB snapshot, compares sha256 against the file's current segment, and atomically writes via `bridge.fileAtomicWrite` only if the hash differs. Idempotent on repeat events.
+
+4. **Marker-fenced managed segment.** The worker only writes between `//SQUAD-PANEL BEGIN` and `//SQUAD-PANEL END`. Bytes outside the markers — including other tools' fenced sections like `//SQSTAT DELIMETER` — are preserved verbatim. CRLF inside the segment, untouched line endings outside.
+
+5. **Drift detection is a periodic sweep.** Every 5 min the worker re-reads each server's file, hashes the managed segment, and compares against the DB-derived hash. On mismatch it auto-rewrites (DB is the source of truth, manual edits inside the markers don't survive). It also pushes status (`in_sync` / `unreachable` / etc.) to `admins-cfg:status:<server_id>` so the UI banner on `/servers/<id>` can offer the operator a Force-sync button when needed.
+
+6. **No new bridge RPC.** The Go bridge already allows `file_read` and `file_atomic_write` on `/var/lib/squad-panel/configs/{uuid}/ServerConfig/*.cfg`. The whole feature ships without touching the bridge surface or its allowlist.
+
+### Rationale
+
+- **Single role concept** — operators thought of "Admin" as one entity; splitting it into "panel role" and "in-game role" was the friction the spec set out to remove.
+- **Async sync via Redis Streams** — keeps the API mutation path fast and decouples the file write from the request lifecycle. Stream's at-least-once delivery + sha256 idempotency means a redelivered message never corrupts the file.
+- **Markers + drift sweep** — co-exists with sqstat / manual ops without us writing a parser for `Admins.cfg`. Force-sync from UI is the escape hatch when the spec's "оператор паникует и правит руками" scenario occurs.
+- **Derived panel permissions** — keeps every existing route's `permissions: ['server:install']` guard valid. Nothing in the route layer had to change.
+
+### Consequences
+
+- The 47-key panel permission catalogue is now mostly informational — every panel_access role gets the full set minus `role:*` and `user:manage_roles`. The catalogue remains as the canonical list of permission keys for API token scoping (`me-tokens.ts`) and route-config typing.
+- The first-login Owner trick is unaffected; it now also seeds `panel_access=true` because the Owner row carries that flag (and code hardcodes it regardless).
+- One new worker dependency surface (DB + Redis Streams + bridge), one new component to operate. Heartbeat exposes liveness via `/api/v1/health/workers`.
+- One new audit action type pair: `admins_cfg.synced` and `admins_cfg.force_synced`. The chained-hash invariant is preserved because the worker uses the same canonical-JSON pre-hash.
+- The legacy "Senior Admin" seeded role is deleted; "Viewer" is preserved for back-compat with existing fixture-driven tests but is no longer in the spec set.
+
+### Alternatives considered
+
+- **Inline write from API request handler.** Rejected — would couple request latency to bridge round-trips on every mutation; under bridge stalls, role edits would block. Stream + worker decouples cleanly.
+- **Vendoring RNSquadJS.** Already-rejected per CLAUDE.md "RNSquadJS stance"; not revisited.
+- **Bidirectional sync (parse `Admins.cfg` back into DB).** Out of P0 scope — the spec calls it a P0-deferred item; force-sync is the deliberate escape hatch instead.
+- **Splitting roles into "panel role" + "squad group" entities.** Rejected — that's exactly the model the spec set out to dissolve.
+
 ## 2026-04-26 — Server lifecycle: soft-delete with mandatory backup, restore via re-install + overlay, panel-wide live-bus
 
 ### Context

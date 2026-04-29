@@ -1,15 +1,64 @@
 import type { DatabaseClient } from '@squad/db';
 import { players, rolePermissions } from '@squad/db/schema';
-import type { PermissionKey } from '@squad/shared-config';
-import { eq } from 'drizzle-orm';
+import {
+  isPermissionKey,
+  PERMISSION_KEYS,
+  type PermissionKey,
+  SQUAD_PERMISSION_KEYS,
+  type SquadPermissionKey,
+} from '@squad/shared-config';
+import { eq, sql } from 'drizzle-orm';
 
 export interface PermissionContext {
   permissions: Set<PermissionKey>;
+  squadPermissions: Set<SquadPermissionKey>;
   roleId: string | null;
+  roleName: string | null;
+  panelAccess: boolean;
+  canAssignRoles: boolean;
+  canEditRoles: boolean;
+  isOwner: boolean;
 }
 
 const cache = new Map<string, { value: PermissionContext; expiresAt: number }>();
 const TTL_MS = 30_000;
+
+const PANEL_PERMS_GATED_BY_ASSIGN: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'user:manage_roles',
+]);
+const PANEL_PERMS_GATED_BY_EDIT: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'role:create',
+  'role:edit',
+  'role:delete',
+]);
+const ALL_PANEL_PERMS: ReadonlySet<PermissionKey> = new Set<PermissionKey>(PERMISSION_KEYS);
+
+function derivePanelPermissions(
+  panelAccess: boolean,
+  canAssignRoles: boolean,
+  canEditRoles: boolean,
+  isOwner: boolean,
+): Set<PermissionKey> {
+  if (isOwner) return new Set(ALL_PANEL_PERMS);
+  if (!panelAccess) return new Set();
+  const out = new Set<PermissionKey>();
+  for (const key of ALL_PANEL_PERMS) {
+    if (PANEL_PERMS_GATED_BY_ASSIGN.has(key) && !canAssignRoles) continue;
+    if (PANEL_PERMS_GATED_BY_EDIT.has(key) && !canEditRoles) continue;
+    out.add(key);
+  }
+  return out;
+}
+
+interface RoleContextRow extends Record<string, unknown> {
+  role_id: string | null;
+  role_name: string | null;
+  is_system_role: boolean | null;
+  panel_access: boolean | null;
+  can_assign_roles: boolean | null;
+  can_edit_roles: boolean | null;
+  squad_permissions: string[] | null;
+}
 
 export async function loadUserPermissions(
   db: DatabaseClient,
@@ -19,26 +68,76 @@ export async function loadUserPermissions(
   const hit = cache.get(cacheKey);
   if (hit && hit.expiresAt > Date.now()) return hit.value;
 
-  const playerRows = await db
-    .select({ roleId: players.roleId })
-    .from(players)
-    .where(eq(players.steamId64, steamId64))
-    .limit(1);
-  const roleId = playerRows[0]?.roleId ?? null;
+  const rows = await db.execute<RoleContextRow>(sql`
+    SELECT
+      r.id   AS role_id,
+      r.name AS role_name,
+      r.is_system_role,
+      r.panel_access,
+      r.can_assign_roles,
+      r.can_edit_roles,
+      COALESCE(
+        (SELECT array_agg(rsp.squad_permission_key ORDER BY rsp.squad_permission_key)
+         FROM role_squad_permissions rsp WHERE rsp.role_id = r.id),
+        ARRAY[]::text[]
+      ) AS squad_permissions
+    FROM players p
+    LEFT JOIN roles r ON r.id = p.role_id
+    WHERE p.steam_id64 = ${steamId64}
+    LIMIT 1
+  `);
+  const row = (rows as unknown as RoleContextRow[])[0];
 
-  if (!roleId) {
-    const empty: PermissionContext = { permissions: new Set(), roleId: null };
+  if (!row || !row.role_id) {
+    const empty: PermissionContext = {
+      permissions: new Set(),
+      squadPermissions: new Set(),
+      roleId: null,
+      roleName: null,
+      panelAccess: false,
+      canAssignRoles: false,
+      canEditRoles: false,
+      isOwner: false,
+    };
     cache.set(cacheKey, { value: empty, expiresAt: Date.now() + TTL_MS });
     return empty;
   }
 
-  const perms = await db
+  const isOwner = row.role_name === 'Owner' && row.is_system_role === true;
+  const panelAccess = isOwner ? true : (row.panel_access ?? false);
+  const canAssignRoles = isOwner ? true : (row.can_assign_roles ?? false);
+  const canEditRoles = isOwner ? true : (row.can_edit_roles ?? false);
+  const squadPermissions = isOwner
+    ? new Set<SquadPermissionKey>(SQUAD_PERMISSION_KEYS)
+    : new Set<SquadPermissionKey>(
+        ((row.squad_permissions ?? []) as SquadPermissionKey[]).filter(Boolean),
+      );
+
+  // Legacy explicit grants in role_permissions still take effect — they
+  // are unioned with the flag-derived defaults so a role can opt into a
+  // single fine-grained key (e.g. `audit:export`) without flipping
+  // `panel_access`. The seeded roles (Owner/Admin/Moderator/...) carry
+  // no rows in this table; their access is purely flag-derived.
+  const explicit = await db
     .select({ key: rolePermissions.permissionKey })
     .from(rolePermissions)
-    .where(eq(rolePermissions.roleId, roleId));
+    .where(eq(rolePermissions.roleId, row.role_id));
 
-  const permissions = new Set(perms.map((p) => p.key as PermissionKey));
-  const value: PermissionContext = { permissions, roleId };
+  const permissions = derivePanelPermissions(panelAccess, canAssignRoles, canEditRoles, isOwner);
+  for (const entry of explicit) {
+    if (isPermissionKey(entry.key)) permissions.add(entry.key);
+  }
+
+  const value: PermissionContext = {
+    permissions,
+    squadPermissions,
+    roleId: row.role_id,
+    roleName: row.role_name,
+    panelAccess,
+    canAssignRoles,
+    canEditRoles,
+    isOwner,
+  };
   cache.set(cacheKey, { value, expiresAt: Date.now() + TTL_MS });
   return value;
 }
@@ -56,6 +155,10 @@ export async function invalidatePermissionCacheForRole(
     .from(players)
     .where(eq(players.roleId, roleId));
   for (const r of rows) cache.delete(String(r.steamId64));
+}
+
+export function invalidateAllPermissionCaches(): void {
+  cache.clear();
 }
 
 export function hasPermission(ctx: PermissionContext, required: readonly PermissionKey[]): boolean {

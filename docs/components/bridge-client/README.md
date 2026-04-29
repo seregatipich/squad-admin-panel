@@ -4,7 +4,7 @@ Wraps the unix socket and JSON-RPC framing. Importable as `@squad/bridge-client`
 
 ## Responsibilities
 
-- Open a unix socket to `BRIDGE_SOCKET` (default `/run/panel-host-bridge.sock`).
+- Open a unix socket to `BRIDGE_SOCKET` (default `/run/panel-host-bridge/bridge.sock`).
 - Frame requests as 4-byte BE length + UTF-8 JSON.
 - Multiplex by `id` (UUIDv7) — each call gets its own promise.
 - Expose `call(method, params)` and `stream(method, params)` for streaming methods.

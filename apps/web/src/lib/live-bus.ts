@@ -39,19 +39,22 @@ export interface LiveBusHandle {
   bridgeState(): BridgeState;
   onStateChange(cb: (state: LiveBusState) => void): () => void;
   onBridgeChange(cb: (state: BridgeState) => void): () => void;
+  /** Force the singleton's WS connection to be opened (or kept alive)
+   *  while the caller is mounted. Returns a release function — call it
+   *  in the cleanup of useEffect to allow idle-close. */
+  retain(): () => void;
+  /** Tear down the current socket and immediately reopen. Used by the
+   *  ConnectionBanner's manual "Переподключить" button to bypass the
+   *  exponential backoff loop after a long disconnection. */
+  forceReconnect(): void;
 }
 
 const BACKOFF_STEPS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 const IDLE_CLOSE_DELAY_MS = 5_000;
 
-interface LiveBusInternal extends LiveBusHandle {
-  retain(): void;
-  release(): void;
-}
+let singleton: LiveBusHandle | null = null;
 
-let singleton: LiveBusInternal | null = null;
-
-function makeLiveBus(): LiveBusInternal {
+function makeLiveBus(): LiveBusHandle {
   const eventSubs = new Set<(event: LiveEvent) => void>();
   const stateSubs = new Set<(state: LiveBusState) => void>();
   const bridgeSubs = new Set<(state: BridgeState) => void>();
@@ -241,9 +244,23 @@ function makeLiveBus(): LiveBusInternal {
     if (refCount() === 0) scheduleIdleClose();
   };
 
+  const forceReconnect = (): void => {
+    debug('forceReconnect requested');
+    clearReconnect();
+    attempts = 0;
+    teardownSocket();
+    setState('closed');
+    if (refCount() > 0) {
+      open();
+    }
+  };
+
   return {
-    retain,
-    release,
+    retain: () => {
+      retain();
+      return () => release();
+    },
+    forceReconnect,
     subscribe(cb) {
       eventSubs.add(cb);
       retain();
@@ -285,6 +302,8 @@ export function getLiveBus(): LiveBusHandle {
       bridgeState: () => 'unknown',
       onStateChange: () => () => {},
       onBridgeChange: () => () => {},
+      retain: () => () => {},
+      forceReconnect: () => {},
     };
   }
   if (!singleton) singleton = makeLiveBus();

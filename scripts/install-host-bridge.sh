@@ -61,6 +61,24 @@ log "installing systemd units"
 install -m 0644 "${REPO_DIR}/apps/bridge/deploy/panel-host-bridge.service" "$UNIT_DIR/"
 install -m 0644 "${REPO_DIR}/apps/bridge/deploy/panel-host-bridge.socket"  "$UNIT_DIR/"
 
+# tmpfiles snippet — creates the /run/panel-host-bridge runtime directory at
+# boot (root:panel 0750) so that Docker bind-mounts of the directory pick up
+# the live socket inode on every restart. Bind-mounting the socket file
+# directly froze consumers on the original inode.
+install -m 0644 "${REPO_DIR}/apps/bridge/deploy/panel-host-bridge.tmpfiles.conf" \
+  /etc/tmpfiles.d/panel-host-bridge.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/panel-host-bridge.conf
+
+# Migrate any stale legacy socket file from the old single-file layout — its
+# presence at /run/panel-host-bridge.sock would either confuse operators or
+# cause socket-activation conflicts if the .socket unit is still pointing
+# at it after a botched upgrade.
+if [[ -S /run/panel-host-bridge.sock ]]; then
+  log "removing legacy socket /run/panel-host-bridge.sock (replaced by /run/panel-host-bridge/bridge.sock)"
+  systemctl stop panel-host-bridge.socket panel-host-bridge.service 2>/dev/null || true
+  rm -f /run/panel-host-bridge.sock
+fi
+
 mkdir -p /etc/squad-server
 chmod 0755 /etc/squad-server
 
@@ -155,7 +173,7 @@ if ! systemctl is-enabled --quiet panel-host-bridge.socket; then
   systemctl enable panel-host-bridge.socket
 fi
 systemctl start panel-host-bridge.socket
-log "panel-host-bridge.socket active on /run/panel-host-bridge.sock"
+log "panel-host-bridge.socket active on /run/panel-host-bridge/bridge.sock"
 
 # -------- 6. add invoking user (SUDO_USER) to the 'panel' group ------------
 

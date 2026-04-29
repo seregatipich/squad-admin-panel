@@ -32,7 +32,7 @@ async function main(): Promise<void> {
   redis.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
 
   const bridge = new BridgeClient({
-    socketPath: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge.sock',
+    socketPath: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
     onLog: (m, meta) => log.debug({ src: 'bridge', ...meta }, m),
   });
 

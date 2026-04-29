@@ -27,20 +27,55 @@ interface PlayerHit {
 export default function UsersPage() {
   const [users, setUsers] = useState<UserRow[] | null>(null);
   const [me, setMe] = useState<Me | null>(null);
+  const [roleOptions, setRoleOptions] = useState<RoleOption[] | null>(null);
   const [showAssign, setShowAssign] = useState(false);
+  const [q, setQ] = useState('');
+  const [filterRoleId, setFilterRoleId] = useState('');
 
   const load = useCallback(async () => {
-    const r = await fetch('/api/v1/users', { credentials: 'include', cache: 'no-store' });
+    const url = new URL('/api/v1/users', window.location.origin);
+    if (q.trim()) url.searchParams.set('q', q.trim());
+    if (filterRoleId) url.searchParams.set('role_id', filterRoleId);
+    const path = url.toString().replace(window.location.origin, '');
+    const r = await fetch(path, { credentials: 'include', cache: 'no-store' });
     if (r.ok) setUsers((await r.json()) as UserRow[]);
     const m = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
     if (m.ok) setMe((await m.json()) as Me);
-  }, []);
+    const ro = await fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' });
+    if (ro.ok) setRoleOptions((await ro.json()) as RoleOption[]);
+  }, [q, filterRoleId]);
+
   useEffect(() => {
     void load();
   }, [load]);
 
+  const canManage = me?.permissions.includes('user:manage_roles') ?? false;
+
+  async function unassign(steamId64: string, name: string) {
+    if (!canManage) return;
+    if (!confirm(`Снять роль с пользователя «${name}»?`)) return;
+    const r = await fetch(`/api/v1/players/${steamId64}/role`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    if (r.status === 409) {
+      const e = (await r.json().catch(() => ({}))) as { error?: string };
+      if (e.error === 'cannot_remove_last_owner') {
+        alert('Вы единственный Owner. Сначала выдайте роль Owner другому пользователю.');
+      } else {
+        alert(`Ошибка: ${e.error ?? r.status}`);
+      }
+      return;
+    }
+    if (!r.ok) {
+      const e = (await r.json().catch(() => ({}))) as { error?: string };
+      alert(`Ошибка: ${e.error ?? r.status}`);
+      return;
+    }
+    await load();
+  }
+
   if (!users || !me) return <div className="text-neutral-500">Загрузка…</div>;
-  const canManage = me.permissions.includes('user:manage_roles');
 
   return (
     <div className="space-y-4">
@@ -56,6 +91,39 @@ export default function UsersPage() {
           </button>
         ) : null}
       </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          type="text"
+          placeholder="Поиск по нику или SteamID64…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          className="w-72 rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm"
+        />
+        <select
+          value={filterRoleId}
+          onChange={(e) => setFilterRoleId(e.target.value)}
+          className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm"
+        >
+          <option value="">Все роли</option>
+          {(roleOptions ?? []).map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}
+            </option>
+          ))}
+        </select>
+        {q || filterRoleId ? (
+          <button
+            type="button"
+            onClick={() => {
+              setQ('');
+              setFilterRoleId('');
+            }}
+            className="text-xs text-neutral-400 underline hover:text-neutral-200"
+          >
+            Сбросить
+          </button>
+        ) : null}
+      </div>
       <div className="overflow-hidden rounded border border-neutral-800">
         <table className="w-full text-sm">
           <thead className="bg-neutral-900 text-xs uppercase tracking-widest text-neutral-400">
@@ -64,9 +132,17 @@ export default function UsersPage() {
               <th className="p-2 text-left">SteamID64</th>
               <th className="p-2 text-left">Роль</th>
               <th className="p-2 text-left">Last seen</th>
+              {canManage ? <th className="w-32 p-2 text-right">Действие</th> : null}
             </tr>
           </thead>
           <tbody>
+            {users.length === 0 ? (
+              <tr>
+                <td colSpan={canManage ? 5 : 4} className="p-3 text-neutral-500">
+                  Нет пользователей по фильтру
+                </td>
+              </tr>
+            ) : null}
             {users.map((u) => (
               <tr key={u.steam_id64} className="border-t border-neutral-900">
                 <td className="p-2">
@@ -87,6 +163,21 @@ export default function UsersPage() {
                 <td className="p-2 text-neutral-500">
                   {new Date(u.last_seen_at).toLocaleString()}
                 </td>
+                {canManage ? (
+                  <td className="p-2 text-right">
+                    {u.role.is_system_role && u.role.name === 'Owner' ? (
+                      <span className="text-xs text-neutral-600">—</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => unassign(u.steam_id64, u.canonical_name)}
+                        className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-300 hover:bg-red-950"
+                      >
+                        Снять
+                      </button>
+                    )}
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>
@@ -139,16 +230,15 @@ function AssignModal({ onClose }: { onClose: () => void }) {
     return () => clearTimeout(t);
   }, [q]);
 
-  const ownerRoleId = useMemo(
-    () => roles?.find((r) => r.is_system_role && r.name === 'Owner')?.id ?? null,
+  // 2.6.4 — Owner is excluded from the assignable roles set; only the
+  // first-login trick or a direct DB modification can grant it.
+  const assignableRoles = useMemo(
+    () => (roles ?? []).filter((r) => !(r.is_system_role && r.name === 'Owner')),
     [roles],
   );
 
   async function assign() {
     if (!picked || !roleId) return;
-    if (roleId === ownerRoleId) {
-      if (!confirm('Это даст пользователю полный доступ к панели. Подтвердить?')) return;
-    }
     setBusy(true);
     setErr(null);
     try {
@@ -158,7 +248,10 @@ function AssignModal({ onClose }: { onClose: () => void }) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ role_id: roleId }),
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) {
+        const e = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(e.error ?? `HTTP ${r.status}`);
+      }
       onClose();
     } catch (e) {
       setErr((e as Error).message);
@@ -222,7 +315,7 @@ function AssignModal({ onClose }: { onClose: () => void }) {
             className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-2 text-sm"
           >
             <option value="">— выберите —</option>
-            {(roles ?? []).map((r) => (
+            {assignableRoles.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.name}
               </option>

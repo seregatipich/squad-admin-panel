@@ -6,6 +6,8 @@ export const BRIDGE_METHODS = [
   'file_write',
   'file_atomic_write',
   'directory_delete',
+  'list_panel_dirs',
+  'list_squad_containers',
   'ufw_rule',
   'process_info',
   'container_run',
@@ -16,6 +18,7 @@ export const BRIDGE_METHODS = [
   'container_stats',
   'container_logs_follow',
   'depot_update',
+  'docker_prune',
   'host_agent_restart',
 ] as const;
 
@@ -24,9 +27,10 @@ export type BridgeMethod = (typeof BRIDGE_METHODS)[number];
 export const BRIDGE_STREAMING_METHODS: readonly BridgeMethod[] = [
   'container_logs_follow',
   'depot_update',
+  'docker_prune',
 ];
 
-export const BRIDGE_SOCKET_DEFAULT = '/run/panel-host-bridge.sock';
+export const BRIDGE_SOCKET_DEFAULT = '/run/panel-host-bridge/bridge.sock';
 export const BRIDGE_MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 export const SQUAD_APP_ID = 403240;

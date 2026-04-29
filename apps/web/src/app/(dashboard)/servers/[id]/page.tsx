@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
+import { AdminsCfgDriftBanner } from '@/components/AdminsCfgDriftBanner';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
 import { useLiveSubscription } from '@/lib/use-live-bus';
@@ -355,6 +356,8 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       {err ? (
         <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{err}</div>
       ) : null}
+
+      <AdminsCfgDriftBanner serverId={server.id} />
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat

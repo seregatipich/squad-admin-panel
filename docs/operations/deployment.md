@@ -31,7 +31,7 @@ The `scripts/install-host-bridge.sh` script handles all one-time host setup. Run
 
 ### Bridge daemon (host, not Docker)
 
-`panel-host-bridge` runs as a systemd service outside compose. It listens on `/run/panel-host-bridge.sock` (Unix socket, 0660 `root:panel`). Containers that need bridge access bind-mount the socket and run with primary GID = `panel` GID.
+`panel-host-bridge` runs as a systemd service outside compose. It listens on `/run/panel-host-bridge/bridge.sock` (Unix socket, 0660 `root:panel`). Containers that need bridge access bind-mount the socket and run with primary GID = `panel` GID.
 
 ## Volumes
 

@@ -12,7 +12,7 @@ const envSchema = z.object({
   SESSION_SECRET: z.string().min(32),
   SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(21600),
   SESSION_TOUCH_THROTTLE_SECONDS: z.coerce.number().int().positive().default(60),
-  BRIDGE_SOCKET: z.string().default('/run/panel-host-bridge.sock'),
+  BRIDGE_SOCKET: z.string().default('/run/panel-host-bridge/bridge.sock'),
   COOKIE_SECURE: z.coerce.boolean().default(true),
   APP_DOMAIN: z.string().default('admin.localhost'),
   PANEL_PUBLIC_URL: z.string().url(),

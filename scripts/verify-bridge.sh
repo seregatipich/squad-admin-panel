@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-SOCKET="${BRIDGE_SOCKET:-/run/panel-host-bridge.sock}"
+SOCKET="${BRIDGE_SOCKET:-/run/panel-host-bridge/bridge.sock}"
 
 die() { printf '\033[31m[verify-bridge]\033[0m %s\n' "$*" >&2; exit 1; }
 log() { printf '\033[32m[verify-bridge]\033[0m %s\n' "$*"; }

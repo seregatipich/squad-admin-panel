@@ -28,7 +28,7 @@ describe(`${WORKER} worker contract`, () => {
       env: {
         ...process.env,
         REDIS_URL: TEST_REDIS_URL,
-        BRIDGE_SOCKET: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge.sock',
+        BRIDGE_SOCKET: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
         NODE_ENV: 'test',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -52,7 +52,7 @@ describe(`${WORKER} worker contract`, () => {
       env: {
         ...process.env,
         REDIS_URL: TEST_REDIS_URL,
-        BRIDGE_SOCKET: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge.sock',
+        BRIDGE_SOCKET: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
         NODE_ENV: 'test',
       },
       stdio: ['ignore', 'pipe', 'pipe'],

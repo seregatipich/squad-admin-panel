@@ -5,6 +5,7 @@ import Redis from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const TEST_REDIS_URL = 'redis://127.0.0.1:6379/14';
+const PASS = 'g3rlRkR6QTfGoN4svPLjEA7dCDbS553C';
 const ENTRY = path.resolve(import.meta.dirname, '../dist/index.js');
 const WORKER = 'config-sync';
 const HB_KEY = `worker:heartbeat:${WORKER}`;
@@ -25,7 +26,14 @@ afterEach(async () => {
 describe(`${WORKER} worker contract`, () => {
   it('publishes heartbeat within 30s of start', async () => {
     child = spawn('node', [ENTRY], {
-      env: { ...process.env, REDIS_URL: TEST_REDIS_URL, NODE_ENV: 'test' },
+      env: {
+        ...process.env,
+        REDIS_URL: TEST_REDIS_URL,
+        DATABASE_URL: `postgres://admin:${PASS}@127.0.0.1:5432/admin`,
+        PANEL_BRIDGE_SOCKET:
+          process.env.PANEL_BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
+        NODE_ENV: 'test',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     redis = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: null });
@@ -44,7 +52,14 @@ describe(`${WORKER} worker contract`, () => {
 
   it('exits 0 on SIGTERM within 5s', async () => {
     child = spawn('node', [ENTRY], {
-      env: { ...process.env, REDIS_URL: TEST_REDIS_URL, NODE_ENV: 'test' },
+      env: {
+        ...process.env,
+        REDIS_URL: TEST_REDIS_URL,
+        DATABASE_URL: `postgres://admin:${PASS}@127.0.0.1:5432/admin`,
+        PANEL_BRIDGE_SOCKET:
+          process.env.PANEL_BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
+        NODE_ENV: 'test',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     await sleep(2000);

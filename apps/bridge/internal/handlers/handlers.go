@@ -67,6 +67,10 @@ func (d *Dispatcher) Handle(
 		return d.fileAtomicWrite(req)
 	case "directory_delete":
 		return d.directoryDelete(req)
+	case "list_panel_dirs":
+		return d.listPanelDirs(req)
+	case "list_squad_containers":
+		return d.listSquadContainers(ctx, req)
 	case "ufw_rule":
 		return d.ufwRule(ctx, req)
 	case "process_info":
@@ -87,6 +91,8 @@ func (d *Dispatcher) Handle(
 		return d.containerLogsFollow(ctx, req, onStream)
 	case "depot_update":
 		return d.depotUpdate(ctx, req, onStream)
+	case "docker_prune":
+		return d.dockerPrune(ctx, req, onStream)
 	case "host_agent_restart":
 		return d.hostAgentRestart(req)
 	}
@@ -247,6 +253,53 @@ func validateDeletableDir(p string) (string, error) {
 		return cleaned, nil
 	}
 	return "", fmt.Errorf("%w: directory_delete only allows %s/{uuid} or %s/{uuid}", validate.ErrForbidden, validate.PanelConfigsRoot, validate.PanelSavedRoot)
+}
+
+// listSquadContainers returns the names of every container matching
+// `squad-{uuid}`. The API uses this to detect orphan running containers
+// whose UUID has no row in the `servers` DB and stop+rm them.
+func (d *Dispatcher) listSquadContainers(ctx context.Context, req *rpc.Request) rpc.Response {
+	names, err := d.Docker.ListSquadContainers(ctx)
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	body, _ := json.Marshal(map[string][]string{"containers": names})
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+// listPanelDirs returns the immediate child directory names of the two
+// allowlisted panel roots. Read-only, no path traversal — callers cannot
+// pass a path; the roots are hard-coded constants. Used by the API to
+// detect orphan directories whose UUID is no longer present in the DB.
+func (d *Dispatcher) listPanelDirs(req *rpc.Request) rpc.Response {
+	configs, err := readImmediateDirs(validate.PanelConfigsRoot)
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, "configs: "+err.Error())
+	}
+	saved, err := readImmediateDirs(validate.PanelSavedRoot)
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, "saved: "+err.Error())
+	}
+	body, _ := json.Marshal(map[string][]string{"configs": configs, "saved": saved})
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+func readImmediateDirs(root string) ([]string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		out = append(out, e.Name())
+	}
+	return out, nil
 }
 
 // Accept: any config file under /var/lib/squad-panel/configs/{uuid}/ServerConfig/,
@@ -497,6 +550,96 @@ func (d *Dispatcher) depotUpdate(
 	}
 	body, _ := json.Marshal(map[string]int{"exit_code": exit})
 	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+// dockerPrune runs `docker system prune -af` and streams progress.
+// Volumes are NOT pruned (the squad-depot volume + server data must
+// survive). Caller (the API) parses the trailing "Total reclaimed
+// space:" line from stdout for the final freed-bytes figure.
+func (d *Dispatcher) dockerPrune(
+	ctx context.Context,
+	req *rpc.Request,
+	onStream func(rpc.StreamFrame),
+) rpc.Response {
+	var stdoutBuf, stderrBuf strings.Builder
+	push := func(stream string, sink *strings.Builder) func([]byte) {
+		return func(chunk []byte) {
+			sink.Write(chunk)
+			raw, _ := json.Marshal(string(chunk))
+			onStream(rpc.StreamFrame{ID: req.ID, Stream: stream, Data: raw})
+		}
+	}
+	exit, err := d.Docker.SystemPrune(ctx, push("stdout", &stdoutBuf), push("stderr", &stderrBuf))
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	reclaimed := parseReclaimed(stdoutBuf.String())
+	body, _ := json.Marshal(map[string]any{
+		"exit_code":       exit,
+		"reclaimed_bytes": reclaimed,
+		"reclaimed_human": humanReclaimed(stdoutBuf.String()),
+	})
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+// parseReclaimed extracts the byte count from docker's "Total reclaimed
+// space: 146.9GB" trailing line, returning 0 if not found.
+func parseReclaimed(s string) int64 {
+	const marker = "Total reclaimed space:"
+	idx := strings.LastIndex(s, marker)
+	if idx < 0 {
+		return 0
+	}
+	tail := strings.TrimSpace(s[idx+len(marker):])
+	// take just the first whitespace-separated field
+	if i := strings.IndexAny(tail, " \t\r\n"); i >= 0 {
+		tail = tail[:i]
+	}
+	return parseHumanSize(tail)
+}
+
+func humanReclaimed(s string) string {
+	const marker = "Total reclaimed space:"
+	idx := strings.LastIndex(s, marker)
+	if idx < 0 {
+		return ""
+	}
+	tail := strings.TrimSpace(s[idx+len(marker):])
+	if i := strings.IndexAny(tail, "\r\n"); i >= 0 {
+		tail = tail[:i]
+	}
+	return strings.TrimSpace(tail)
+}
+
+// parseHumanSize parses docker's "146.9GB" / "256MB" / "0B" notation.
+// Returns 0 on parse failure.
+func parseHumanSize(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	units := map[string]float64{
+		"B":  1,
+		"KB": 1 << 10, "K": 1 << 10,
+		"MB": 1 << 20, "M": 1 << 20,
+		"GB": 1 << 30, "G": 1 << 30,
+		"TB": 1 << 40, "T": 1 << 40,
+		"KiB": 1 << 10,
+		"MiB": 1 << 20,
+		"GiB": 1 << 30,
+		"TiB": 1 << 40,
+	}
+	for _, suf := range []string{"TiB", "GiB", "MiB", "KiB", "TB", "GB", "MB", "KB", "T", "G", "M", "K", "B"} {
+		if strings.HasSuffix(s, suf) {
+			numStr := strings.TrimSuffix(s, suf)
+			var n float64
+			_, err := fmt.Sscanf(numStr, "%f", &n)
+			if err != nil {
+				return 0
+			}
+			return int64(n * units[suf])
+		}
+	}
+	return 0
 }
 
 // --- process inspection ---

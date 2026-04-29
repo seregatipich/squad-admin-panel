@@ -114,7 +114,7 @@ sudo systemctl restart panel-host-bridge
 
 **Symptom:** Banner shows «Bridge не отвечает — операции с сервером временно недоступны».
 
-**Cause:** API is fine and the WS is open, but `bridge-heartbeat` reports `bridge.connection: down`. The Go daemon at `/run/panel-host-bridge.sock` died or the systemd unit failed.
+**Cause:** API is fine and the WS is open, but `bridge-heartbeat` reports `bridge.connection: down`. The Go daemon at `/run/panel-host-bridge/bridge.sock` died or the systemd unit failed.
 
 **Fix:** `sudo systemctl status panel-host-bridge` and `sudo systemctl restart panel-host-bridge.service`. The banner clears within ~5 s of the next successful ping.
 

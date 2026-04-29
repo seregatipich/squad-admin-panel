@@ -120,7 +120,7 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const ctx = await loadUserPermissions(app.db, steamId64);
-      if (ctx.permissions.size === 0) {
+      if (!ctx.panelAccess) {
         return reply.redirect(`/no-access?steam_id64=${String(steamId64)}`, 302);
       }
 

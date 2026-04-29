@@ -118,13 +118,13 @@ type FakeCall struct {
 
 // Fake is an in-memory Runner used by tests.
 type Fake struct {
-	mu      sync.Mutex
-	Calls   []FakeCall
-	Stdout  []byte
-	Stderr  []byte
-	Exit    int
-	Err     error
-	OnRun   func(FakeCall)
+	mu     sync.Mutex
+	Calls  []FakeCall
+	Stdout []byte
+	Stderr []byte
+	Exit   int
+	Err    error
+	OnRun  func(FakeCall)
 }
 
 // Run implements Runner.

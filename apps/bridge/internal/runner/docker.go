@@ -397,3 +397,50 @@ func (d *DockerRunner) DepotUpdate(
 	}
 	return d.R.Stream(ctx, d.Bin, args, nil, onStdout, onStderr)
 }
+
+// ListSquadContainers returns the names of every container whose name
+// matches the per-server `squad-{uuid}` regex, regardless of running
+// state (so the API can detect orphans whose UUID is no longer in DB).
+func (d *DockerRunner) ListSquadContainers(ctx context.Context) ([]string, error) {
+	so, se, exit, err := d.R.Run(ctx, d.Bin,
+		[]string{"ps", "-a", "--no-trunc", "--filter", "name=^squad-", "--format", "{{.Names}}"}, nil)
+	if err != nil {
+		return nil, err
+	}
+	if exit != 0 {
+		return nil, fmt.Errorf("docker ps failed: %s", strings.TrimSpace(string(se)))
+	}
+	out := []string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(so)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// docker ps `name=^squad-` is a substring match (no real anchor),
+		// so revalidate against the strict squad-<uuid> regex.
+		if validate.ContainerName(line) == nil {
+			out = append(out, line)
+		}
+	}
+	return out, nil
+}
+
+// SystemPrune removes stopped containers, unused images and the build
+// cache. Volumes are deliberately NOT pruned — the panel's persistent
+// state lives in the squad-depot volume and any per-server saved/configs
+// volumes that should be cleaned via directory_delete + soft-delete.
+//
+// Streams stdout/stderr live like DepotUpdate; callers can use it to
+// drive a progress UI. Returns the docker exit code.
+func (d *DockerRunner) SystemPrune(
+	ctx context.Context,
+	onStdout, onStderr func([]byte),
+) (int, error) {
+	args := []string{
+		"system", "prune",
+		"-a", // unused images, not just dangling
+		"-f", // no confirmation prompt
+		"--filter", "label!=panel.preserve=true",
+	}
+	return d.R.Stream(ctx, d.Bin, args, nil, onStdout, onStderr)
+}

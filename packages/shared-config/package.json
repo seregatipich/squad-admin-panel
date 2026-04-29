@@ -18,6 +18,11 @@
       "types": "./dist/permissions.d.ts",
       "development": "./src/permissions.ts",
       "default": "./dist/permissions.js"
+    },
+    "./squad-permissions": {
+      "types": "./dist/squad-permissions.d.ts",
+      "development": "./src/squad-permissions.ts",
+      "default": "./dist/squad-permissions.js"
     }
   },
   "scripts": {

@@ -1,0 +1,162 @@
+import { describe, expect, it } from 'vitest';
+import {
+  BEGIN_MARKER,
+  buildManagedSegment,
+  END_MARKER,
+  findManagedSegment,
+  hashSegment,
+  spliceManagedSegment,
+} from '../src/segment.js';
+
+describe('buildManagedSegment', () => {
+  it('emits Group= per role with permissions and Admin= per assignment, sorted', () => {
+    const out = buildManagedSegment({
+      roles: [
+        { name: 'Admin', squadPermissions: ['kick', 'ban', 'cameraman'] },
+        { name: 'QueuePriority', squadPermissions: ['reserve'] },
+        { name: 'NoPerms', squadPermissions: [] },
+      ],
+      admins: [
+        { steamId64: '76561198000000002', roleName: 'Admin' },
+        { steamId64: '76561198000000001', roleName: 'Admin' },
+        { steamId64: '76561198000000003', roleName: 'QueuePriority' },
+        { steamId64: '76561198000000004', roleName: 'NoPerms' },
+      ],
+    });
+    expect(out.body).toContain(BEGIN_MARKER);
+    expect(out.body).toContain(END_MARKER);
+    expect(out.body).toContain('Group=Admin:ban,cameraman,kick');
+    expect(out.body).toContain('Group=QueuePriority:reserve');
+    expect(out.body).not.toContain('Group=NoPerms');
+    // admins sorted by role then steam_id64
+    const adminLines = out.body
+      .split('\r\n')
+      .filter((l) => l.startsWith('Admin='))
+      .map((l) => l.replace('Admin=', ''));
+    expect(adminLines).toEqual([
+      '76561198000000001:Admin',
+      '76561198000000002:Admin',
+      '76561198000000003:QueuePriority',
+    ]);
+    expect(out.groupsCount).toBe(2);
+    expect(out.adminsCount).toBe(3);
+  });
+
+  it('uses CRLF line endings', () => {
+    const out = buildManagedSegment({
+      roles: [{ name: 'Admin', squadPermissions: ['kick'] }],
+      admins: [{ steamId64: '76561198000000001', roleName: 'Admin' }],
+    });
+    expect(out.body.split('\r\n').length).toBeGreaterThan(2);
+    expect(out.body.includes('\n\n')).toBe(false);
+  });
+
+  it('produces a stable sha256 hash for identical inputs', () => {
+    const a = buildManagedSegment({
+      roles: [{ name: 'Admin', squadPermissions: ['kick', 'ban'] }],
+      admins: [{ steamId64: '76561198000000001', roleName: 'Admin' }],
+    });
+    const b = buildManagedSegment({
+      roles: [{ name: 'Admin', squadPermissions: ['ban', 'kick'] }],
+      admins: [{ steamId64: '76561198000000001', roleName: 'Admin' }],
+    });
+    expect(a.hash).toBe(b.hash);
+  });
+
+  it('emits empty body with markers when no roles or admins', () => {
+    const out = buildManagedSegment({ roles: [], admins: [] });
+    expect(out.body.startsWith(BEGIN_MARKER)).toBe(true);
+    expect(out.body.endsWith(END_MARKER)).toBe(true);
+    expect(out.groupsCount).toBe(0);
+    expect(out.adminsCount).toBe(0);
+  });
+
+  it('appends comment after Admin= line when provided', () => {
+    const out = buildManagedSegment({
+      roles: [{ name: 'Admin', squadPermissions: ['kick'] }],
+      admins: [
+        {
+          steamId64: '76561198000000001',
+          roleName: 'Admin',
+          comment: 'manual addition',
+        },
+      ],
+    });
+    expect(out.body).toContain('Admin=76561198000000001:Admin // manual addition');
+  });
+});
+
+describe('findManagedSegment', () => {
+  it('returns null when no markers', () => {
+    expect(findManagedSegment('plain old config')).toBeNull();
+  });
+
+  it('finds the segment between markers', () => {
+    const text = `keep\nthis\n${BEGIN_MARKER}\nfoo\n${END_MARKER}\ntail`;
+    const out = findManagedSegment(text);
+    expect(out).not.toBeNull();
+    expect(out?.segment.startsWith(BEGIN_MARKER)).toBe(true);
+    expect(out?.segment.endsWith(END_MARKER)).toBe(true);
+  });
+});
+
+describe('spliceManagedSegment', () => {
+  it('replaces existing segment in place leaving the rest untouched', () => {
+    const before = `prelude\r\n${BEGIN_MARKER}\r\nold\r\n${END_MARKER}\r\ntail\r\n`;
+    const newSegment = `${BEGIN_MARKER}\r\nfresh\r\n${END_MARKER}`;
+    const result = spliceManagedSegment(before, newSegment);
+    expect(result).toBe(`prelude\r\n${newSegment}\r\ntail\r\n`);
+    expect(result.includes('old')).toBe(false);
+  });
+
+  it('emits the segment alone when content is empty', () => {
+    const newSegment = `${BEGIN_MARKER}\r\n${END_MARKER}`;
+    const result = spliceManagedSegment('', newSegment);
+    expect(result.startsWith(BEGIN_MARKER)).toBe(true);
+  });
+
+  it('prepends the segment to existing content when no markers exist', () => {
+    const newSegment = `${BEGIN_MARKER}\r\n${END_MARKER}`;
+    const result = spliceManagedSegment('user content\r\n', newSegment);
+    expect(result.startsWith(BEGIN_MARKER)).toBe(true);
+    expect(result).toContain('user content');
+  });
+});
+
+describe('hashSegment', () => {
+  it('returns 64-char hex sha256', () => {
+    expect(hashSegment('foo')).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe('drift detection (passive vs active)', () => {
+  it('hash differs ⇒ caller treats it as drift on a passive sweep', () => {
+    const original = `${BEGIN_MARKER}\r\nGroup=Old:kick\r\n${END_MARKER}\r\nUserBoundedSection=keepme\r\n`;
+    const located = findManagedSegment(original);
+    expect(located).not.toBeNull();
+    const fresh = buildManagedSegment({
+      roles: [{ name: 'New', squadPermissions: ['ban'] }],
+      admins: [],
+    });
+    const oldHash = hashSegment(located?.segment ?? '');
+    expect(oldHash).not.toBe(fresh.hash);
+    // simulate the syncer's "drift detected on passive check" branch
+    const isPassiveCheck = true;
+    const hashesMatch = oldHash === fresh.hash;
+    const willWrite = !isPassiveCheck && !hashesMatch;
+    expect(willWrite).toBe(false);
+  });
+
+  it('preserves user content outside markers (e.g. //SQSTAT DELIMETER blocks)', () => {
+    const sqstat = '//SQSTAT DELIMETER START\r\nSomeStat=42\r\n//SQSTAT DELIMETER END\r\n';
+    const original = `${BEGIN_MARKER}\r\nGroup=Old:kick\r\n${END_MARKER}\r\n${sqstat}`;
+    const fresh = buildManagedSegment({
+      roles: [{ name: 'New', squadPermissions: ['ban'] }],
+      admins: [],
+    });
+    const out = spliceManagedSegment(original, fresh.body);
+    expect(out).toContain(sqstat);
+    expect(out).toContain('Group=New:ban');
+    expect(out).not.toContain('Group=Old:kick');
+  });
+});

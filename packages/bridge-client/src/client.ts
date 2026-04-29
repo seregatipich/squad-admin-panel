@@ -91,21 +91,38 @@ export class BridgeClient {
     this.pending.clear();
   }
 
-  ping = () => this.call<PingResult>('ping');
+  ping = () => this.call<PingResult>('ping', undefined, { retryOnTransport: true });
 
-  hostInfo = () => this.call<HostInfo>('host_info');
-  hostMetrics = () => this.call<HostMetrics>('host_metrics');
+  hostInfo = () => this.call<HostInfo>('host_info', undefined, { retryOnTransport: true });
+  hostMetrics = () => this.call<HostMetrics>('host_metrics', undefined, { retryOnTransport: true });
 
-  fileRead = (p: FileReadParams) => this.call<{ content: string }>('file_read', p);
+  fileRead = (p: FileReadParams) =>
+    this.call<{ content: string }>('file_read', p, { retryOnTransport: true });
   fileWrite = (p: FileWriteParams) => this.call<{ status: string }>('file_write', p);
-  fileAtomicWrite = (p: FileWriteParams) => this.call<{ status: string }>('file_atomic_write', p);
+  fileAtomicWrite = (p: FileWriteParams) =>
+    this.call<{ status: string }>('file_atomic_write', p, { retryOnTransport: true });
 
   directoryDelete = (p: DirectoryDeleteParams) =>
-    this.call<DirectoryDeleteResult>('directory_delete', p, { timeoutMs: 60_000 });
+    this.call<DirectoryDeleteResult>('directory_delete', p, {
+      timeoutMs: 60_000,
+      retryOnTransport: true,
+    });
 
-  ufwRule = (p: UfwRuleParams) => this.call<{ output: string; status: string }>('ufw_rule', p);
+  listPanelDirs = () =>
+    this.call<{ configs: string[]; saved: string[] }>('list_panel_dirs', undefined, {
+      retryOnTransport: true,
+    });
 
-  processInfo = (p: ProcessInfoParams) => this.call<ProcessInfoResult>('process_info', p);
+  listSquadContainers = () =>
+    this.call<{ containers: string[] }>('list_squad_containers', undefined, {
+      retryOnTransport: true,
+    });
+
+  ufwRule = (p: UfwRuleParams) =>
+    this.call<{ output: string; status: string }>('ufw_rule', p, { retryOnTransport: true });
+
+  processInfo = (p: ProcessInfoParams) =>
+    this.call<ProcessInfoResult>('process_info', p, { retryOnTransport: true });
 
   containerRun = (p: ContainerRunParams) =>
     this.call<ContainerRunResult>('container_run', p, { timeoutMs: 60_000 });
@@ -120,10 +137,16 @@ export class BridgeClient {
     this.call<{ status: string }>('container_rm', p, { timeoutMs: 30_000 });
 
   containerInspect = (p: ContainerControlParams) =>
-    this.call<ContainerInspectResult>('container_inspect', p, { timeoutMs: 10_000 });
+    this.call<ContainerInspectResult>('container_inspect', p, {
+      timeoutMs: 10_000,
+      retryOnTransport: true,
+    });
 
   containerStats = (p: ContainerControlParams) =>
-    this.call<ContainerStatsResult>('container_stats', p, { timeoutMs: 10_000 });
+    this.call<ContainerStatsResult>('container_stats', p, {
+      timeoutMs: 10_000,
+      retryOnTransport: true,
+    });
 
   containerLogsFollow = (p: ContainerLogsParams, onStream: (frame: BridgeStreamFrame) => void) =>
     this.call<{ exit_code: number }>('container_logs_follow', p, {
@@ -137,34 +160,65 @@ export class BridgeClient {
       timeoutMs: 3_600_000,
     });
 
+  dockerPrune = (onStream?: (frame: BridgeStreamFrame) => void) =>
+    this.call<{ exit_code: number; reclaimed_bytes: number; reclaimed_human: string }>(
+      'docker_prune',
+      undefined,
+      { onStream, timeoutMs: 600_000 },
+    );
+
   hostAgentRestart = () =>
     this.call<HostAgentRestartResult>('host_agent_restart', undefined, { timeoutMs: 5_000 });
 
   private async call<Result, Params = unknown>(
     method: BridgeRequest['method'],
     params?: Params,
-    opts: { onStream?: (frame: BridgeStreamFrame) => void; timeoutMs?: number } = {},
+    opts: {
+      onStream?: (frame: BridgeStreamFrame) => void;
+      timeoutMs?: number;
+      retryOnTransport?: boolean;
+    } = {},
   ): Promise<Result> {
     const t0 = Date.now();
     this.onLog(`rpc ${method} start`, { src: 'bridge', method });
-    try {
-      const result = await this.callImpl<Result, Params>(method, params, opts);
-      this.onLog(`rpc ${method} ${Date.now() - t0}ms ok`, {
-        src: 'bridge',
-        method,
-        ms: Date.now() - t0,
-      });
-      return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.onLog(`rpc ${method} ${Date.now() - t0}ms err: ${message}`, {
-        src: 'bridge',
-        method,
-        ms: Date.now() - t0,
-        err: message,
-      });
-      throw err;
+    const maxAttempts = opts.retryOnTransport && !opts.onStream ? 2 : 1;
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const result = await this.callImpl<Result, Params>(method, params, opts);
+        this.onLog(`rpc ${method} ${Date.now() - t0}ms ok`, {
+          src: 'bridge',
+          method,
+          ms: Date.now() - t0,
+          attempt,
+        });
+        return result;
+      } catch (err) {
+        lastErr = err;
+        const message = err instanceof Error ? err.message : String(err);
+        const isTransport = err instanceof BridgeError && err.code === 'transport';
+        const willRetry = isTransport && attempt < maxAttempts && !this.closed;
+        this.onLog(
+          willRetry
+            ? `rpc ${method} ${Date.now() - t0}ms transport err (will retry): ${message}`
+            : `rpc ${method} ${Date.now() - t0}ms err: ${message}`,
+          {
+            src: 'bridge',
+            method,
+            ms: Date.now() - t0,
+            err: message,
+            attempt,
+            ...(willRetry ? { retrying: true } : {}),
+          },
+        );
+        if (!willRetry) throw err;
+        if (this.socket) {
+          this.socket.destroy();
+          this.socket = undefined;
+        }
+      }
     }
+    throw lastErr;
   }
 
   private async callImpl<Result, Params = unknown>(

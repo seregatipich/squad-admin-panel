@@ -42,7 +42,8 @@
       },
       "suspicious": {
         "noExplicitAny": "error",
-        "noConsole": "off"
+        "noConsole": "off",
+        "noUnknownAtRules": "off"
       },
       "complexity": {
         "noForEach": "off"

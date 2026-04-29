@@ -23,7 +23,7 @@ BridgeClient.call(method)
        └─ BridgeResponse    → pending.resolve / pending.reject; clearTimeout(timer)
 ```
 
-Authentication is implicit: the Go bridge validates the caller's Unix credentials via `SO_PEERCRED`. The connecting process must belong to the `panel` group (`/run/panel-host-bridge.sock` is mode `0660 root:panel`). No token is transmitted over the wire.
+Authentication is implicit: the Go bridge validates the caller's Unix credentials via `SO_PEERCRED`. The connecting process must belong to the `panel` group (`/run/panel-host-bridge/bridge.sock` is mode `0660 root:panel`). No token is transmitted over the wire.
 
 ## Unary call timeout
 

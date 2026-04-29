@@ -12,6 +12,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
+import { fireAutoPrune } from '../lib/auto-prune.js';
 import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
 import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
@@ -562,6 +563,12 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             by: req.user ? String(req.user.steamId64) : null,
           },
         });
+        // Spec §"deleted means deleted": after the per-server cleanup
+        // succeeded we additionally reclaim docker build cache and any
+        // dangling images that the squad-server stack left behind. Fire
+        // and forget — the response to the operator returns immediately
+        // and the prune logs/audits when it completes.
+        fireAutoPrune(app, `server.delete:${row.id}`, req.user?.steamId64 ?? null, req.ip ?? null);
         return { ok: true, ...result };
       } catch (err) {
         reply.code(500);

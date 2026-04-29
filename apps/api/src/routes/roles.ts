@@ -1,30 +1,37 @@
 import type { DatabaseClient } from '@squad/db';
-import { rolePermissions, roles } from '@squad/db/schema';
-import { isPermissionKey, isRoleColor, PERMISSIONS } from '@squad/shared-config';
-import { eq, sql } from 'drizzle-orm';
+import { rolePermissions, roleSquadPermissions, roles } from '@squad/db/schema';
+import { isRoleColor, isSquadPermissionKey, SQUAD_PERMISSIONS } from '@squad/shared-config';
+import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
-import { invalidatePermissionCacheForRole } from '../lib/rbac.js';
+import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
+import { invalidateAllPermissionCaches, invalidatePermissionCacheForRole } from '../lib/rbac.js';
 
 const colorSchema = z.string().refine(isRoleColor, { message: 'invalid color' });
-const permissionsArraySchema = z
-  .array(z.string().refine(isPermissionKey, { message: 'unknown permission key' }))
-  .max(PERMISSIONS.length);
+const squadPermissionsArraySchema = z
+  .array(z.string().refine(isSquadPermissionKey, { message: 'unknown squad permission key' }))
+  .max(SQUAD_PERMISSIONS.length);
 
 const createBody = z.object({
   name: z.string().min(1).max(64),
   color: colorSchema,
   description: z.string().max(256).optional(),
-  permissions: permissionsArraySchema,
+  squad_permissions: squadPermissionsArraySchema.default([]),
+  panel_access: z.boolean().default(false),
+  can_assign_roles: z.boolean().default(false),
+  can_edit_roles: z.boolean().default(false),
 });
 
 const updateBody = z.object({
   name: z.string().min(1).max(64).optional(),
   color: colorSchema.optional(),
   description: z.string().max(256).nullable().optional(),
-  permissions: permissionsArraySchema.optional(),
+  squad_permissions: squadPermissionsArraySchema.optional(),
+  panel_access: z.boolean().optional(),
+  can_assign_roles: z.boolean().optional(),
+  can_edit_roles: z.boolean().optional(),
 });
 
 const idParam = z.object({ id: z.string().uuid() });
@@ -35,22 +42,37 @@ interface RoleWithCount extends Record<string, unknown> {
   color: string;
   description: string | null;
   is_system_role: boolean;
-  permissions: string[];
+  panel_access: boolean;
+  can_assign_roles: boolean;
+  can_edit_roles: boolean;
+  squad_permissions: string[];
   assigned_users_count: number;
 }
 
 async function listRolesWithCounts(db: DatabaseClient): Promise<RoleWithCount[]> {
   const rows = await db.execute<RoleWithCount>(sql`
     SELECT r.id, r.name, r.color, r.description, r.is_system_role,
+      r.panel_access, r.can_assign_roles, r.can_edit_roles,
       COALESCE(
-        (SELECT array_agg(rp.permission_key ORDER BY rp.permission_key)
-         FROM role_permissions rp WHERE rp.role_id = r.id), ARRAY[]::text[]
-      ) AS permissions,
+        (SELECT array_agg(rsp.squad_permission_key ORDER BY rsp.squad_permission_key)
+         FROM role_squad_permissions rsp WHERE rsp.role_id = r.id), ARRAY[]::text[]
+      ) AS squad_permissions,
       (SELECT count(*)::int FROM players p WHERE p.role_id = r.id) AS assigned_users_count
     FROM roles r
     ORDER BY r.is_system_role DESC, r.name ASC
   `);
   return rows as unknown as RoleWithCount[];
+}
+
+function ensureFlagDependency(body: {
+  panel_access?: boolean;
+  can_assign_roles?: boolean;
+  can_edit_roles?: boolean;
+}): string | null {
+  if (body.panel_access === false && (body.can_assign_roles || body.can_edit_roles)) {
+    return 'panel_access_required_for_role_management';
+  }
+  return null;
 }
 
 const rolesRoutes: FastifyPluginAsync = async (app) => {
@@ -81,6 +103,11 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
       config: { permissions: ['role:create'], audit: { action: 'role.create', resource: 'role' } },
     },
     async (req, reply) => {
+      const dep = ensureFlagDependency(req.body);
+      if (dep) {
+        reply.code(400);
+        return { error: dep };
+      }
       const id = uuidv7();
       try {
         await app.db.transaction(async (tx) => {
@@ -90,12 +117,27 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
             color: req.body.color,
             description: req.body.description ?? null,
             isSystemRole: false,
+            panelAccess: req.body.panel_access,
+            canAssignRoles: req.body.can_assign_roles,
+            canEditRoles: req.body.can_edit_roles,
           });
-          if (req.body.permissions.length > 0) {
-            await tx
-              .insert(rolePermissions)
-              .values(req.body.permissions.map((permissionKey) => ({ roleId: id, permissionKey })));
+          if (req.body.squad_permissions.length > 0) {
+            await tx.insert(roleSquadPermissions).values(
+              req.body.squad_permissions.map((squadPermissionKey) => ({
+                roleId: id,
+                squadPermissionKey,
+              })),
+            );
           }
+          // Spec §2.7.1 — sync-task is enqueued in the same transaction
+          // as the DB write. If Redis publish fails, the transaction
+          // rolls back and the role change is not persisted.
+          await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+            reason: 'role.create',
+            actor_steam_id64: req.user?.steamId64 ? String(req.user.steamId64) : null,
+            enqueued_at: new Date().toISOString(),
+            request_id: req.id,
+          });
         });
       } catch (err) {
         if (
@@ -131,26 +173,48 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: 'owner_role_immutable' };
       }
+      const merged = {
+        panel_access: req.body.panel_access ?? roleRow.panelAccess,
+        can_assign_roles: req.body.can_assign_roles ?? roleRow.canAssignRoles,
+        can_edit_roles: req.body.can_edit_roles ?? roleRow.canEditRoles,
+      };
+      const dep = ensureFlagDependency(merged);
+      if (dep) {
+        reply.code(400);
+        return { error: dep };
+      }
       try {
         await app.db.transaction(async (tx) => {
           const updates: Partial<typeof roles.$inferInsert> = {};
           if (req.body.name !== undefined) updates.name = req.body.name;
           if (req.body.color !== undefined) updates.color = req.body.color;
           if (req.body.description !== undefined) updates.description = req.body.description;
+          if (req.body.panel_access !== undefined) updates.panelAccess = req.body.panel_access;
+          if (req.body.can_assign_roles !== undefined)
+            updates.canAssignRoles = req.body.can_assign_roles;
+          if (req.body.can_edit_roles !== undefined) updates.canEditRoles = req.body.can_edit_roles;
           if (Object.keys(updates).length > 0) {
             await tx.update(roles).set(updates).where(eq(roles.id, req.params.id));
           }
-          if (req.body.permissions !== undefined) {
-            await tx.delete(rolePermissions).where(eq(rolePermissions.roleId, req.params.id));
-            if (req.body.permissions.length > 0) {
-              await tx.insert(rolePermissions).values(
-                req.body.permissions.map((permissionKey) => ({
+          if (req.body.squad_permissions !== undefined) {
+            await tx
+              .delete(roleSquadPermissions)
+              .where(eq(roleSquadPermissions.roleId, req.params.id));
+            if (req.body.squad_permissions.length > 0) {
+              await tx.insert(roleSquadPermissions).values(
+                req.body.squad_permissions.map((squadPermissionKey) => ({
                   roleId: req.params.id,
-                  permissionKey,
+                  squadPermissionKey,
                 })),
               );
             }
           }
+          await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+            reason: 'role.update',
+            actor_steam_id64: req.user?.steamId64 ? String(req.user.steamId64) : null,
+            enqueued_at: new Date().toISOString(),
+            request_id: req.id,
+          });
         });
       } catch (err) {
         if (
@@ -189,11 +253,27 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: 'owner_role_immutable' };
       }
+      // role_permissions/role_squad_permissions cascade; players.role_id is
+      // SET NULL via FK. We invalidate per-role cache *first* so outstanding
+      // requests see the new (NULL) effective role on next lookup.
       await invalidatePermissionCacheForRole(app.db, req.params.id);
-      await app.db.delete(roles).where(eq(roles.id, req.params.id));
+      await app.db.transaction(async (tx) => {
+        await tx.delete(roles).where(eq(roles.id, req.params.id));
+        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+          reason: 'role.delete',
+          actor_steam_id64: req.user?.steamId64 ? String(req.user.steamId64) : null,
+          enqueued_at: new Date().toISOString(),
+          request_id: req.id,
+        });
+      });
+      // Players who lost their role no longer have panel_access; sweep
+      // caches because we don't know exactly which sessions remain valid.
+      invalidateAllPermissionCaches();
       return { ok: true };
     },
   );
 };
 
 export default rolesRoutes;
+void rolePermissions;
+void and;

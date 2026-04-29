@@ -1,6 +1,6 @@
 # `bridge` — RPC API
 
-The bridge speaks length-prefixed JSON-RPC over `/run/panel-host-bridge.sock`. Method names are pinned by [`packages/shared-config/src/bridge-methods.ts`](../../../packages/shared-config/src/bridge-methods.ts) — keep that file, [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts), and [`apps/bridge/internal/handlers/handlers.go`](../../../apps/bridge/internal/handlers/handlers.go) in sync in the same commit.
+The bridge speaks length-prefixed JSON-RPC over `/run/panel-host-bridge/bridge.sock`. Method names are pinned by [`packages/shared-config/src/bridge-methods.ts`](../../../packages/shared-config/src/bridge-methods.ts) — keep that file, [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts), and [`apps/bridge/internal/handlers/handlers.go`](../../../apps/bridge/internal/handlers/handlers.go) in sync in the same commit.
 
 ## Wire format
 

@@ -26,6 +26,9 @@ beforeAll(async () => {
   sql = postgres(dbUrl, { max: 3, onnotice: () => undefined });
   db = drizzle(sql, { schema });
 
+  const { ensureViewerFixture } = await import('./helpers/viewer-fixture.js');
+  await ensureViewerFixture(db as unknown as Parameters<typeof ensureViewerFixture>[0]);
+
   const viewerRows = await db
     .select({ id: roles.id })
     .from(roles)

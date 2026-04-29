@@ -5,13 +5,13 @@
  *
  * This test deliberately sits under test/e2e/ because it requires the
  * Go daemon to be running on the host (sgid-on-panel-group access to
- * /run/panel-host-bridge.sock).
+ * /run/panel-host-bridge/bridge.sock).
  */
 import { existsSync, readdirSync } from 'node:fs';
 import { BridgeClient } from '@squad/bridge-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const SOCKET = '/run/panel-host-bridge.sock';
+const SOCKET = '/run/panel-host-bridge/bridge.sock';
 const CONFIGS_ROOT = '/var/lib/squad-panel/configs';
 const SAVED_ROOT = '/var/lib/squad-panel/saved';
 

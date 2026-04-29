@@ -10,14 +10,14 @@
 
 ## `EACCES` or `ENOENT` on connect
 
-**Symptom**: `BridgeError('transport', 'connect EACCES /run/panel-host-bridge.sock')` or `ENOENT`.
+**Symptom**: `BridgeError('transport', 'connect EACCES /run/panel-host-bridge/bridge.sock')` or `ENOENT`.
 
 **Cause** (EACCES): The Node process's user is not in the `panel` group. The socket is `0660 root:panel`.
 
 **Diagnostic**:
 ```bash
 id                                         # check current user groups
-ls -la /run/panel-host-bridge.sock         # verify permissions and existence
+ls -la /run/panel-host-bridge/bridge.sock         # verify permissions and existence
 ```
 
 **Fix**:
@@ -83,6 +83,6 @@ sudo journalctl -u panel-host-bridge --since 5min
 sudo systemctl status panel-host-bridge
 sudo journalctl -u panel-host-bridge -n 100
 sg panel -c 'bash scripts/verify-bridge.sh'   # RPC smoke test (all 17 methods)
-ls -la /run/panel-host-bridge.sock
+ls -la /run/panel-host-bridge/bridge.sock
 docker ps --filter name=squad-               # verify Squad containers
 ```

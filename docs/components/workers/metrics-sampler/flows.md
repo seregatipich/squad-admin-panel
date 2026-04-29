@@ -4,7 +4,7 @@
 
 1. Read `REDIS_URL` from environment; fatal-exit if missing.
 2. Connect to Redis.
-3. Create `BridgeClient` (socket path from `BRIDGE_SOCKET` or `/run/panel-host-bridge.sock`).
+3. Create `BridgeClient` (socket path from `BRIDGE_SOCKET` or `/run/panel-host-bridge/bridge.sock`).
 4. Start heartbeat (`worker:heartbeat:metrics-sampler`, every 5 s).
 5. Call `runSampler({ bridge, redis, log })`.
 

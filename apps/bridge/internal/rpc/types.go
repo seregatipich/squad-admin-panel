@@ -31,7 +31,7 @@ type StreamFrame struct {
 
 // ErrorObject maps application-level errors (not transport).
 type ErrorObject struct {
-	Code    string          `json:"code"`    // forbidden | invalid_args | runtime_error | timeout | internal
+	Code    string          `json:"code"` // forbidden | invalid_args | runtime_error | timeout | internal
 	Message string          `json:"message"`
 	Detail  json.RawMessage `json:"detail,omitempty"`
 }

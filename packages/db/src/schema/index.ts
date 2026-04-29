@@ -7,6 +7,7 @@ export * from './player-ip-history.js';
 export * from './player-name-history.js';
 export * from './players.js';
 export * from './role-permissions.js';
+export * from './role-squad-permissions.js';
 export * from './roles.js';
 export * from './server-credentials.js';
 export * from './server-settings.js';

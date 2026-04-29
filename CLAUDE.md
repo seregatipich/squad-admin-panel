@@ -28,7 +28,7 @@ packages/
   shared-types/     Zod schemas + EventEnvelope
   shared-config/    Permission keys, bridge-method allowlist, heartbeat util
   db/               Drizzle schema + SQL migrations (packages/db/drizzle/)
-  bridge-client/    TS client for the Go bridge over /run/panel-host-bridge.sock
+  bridge-client/    TS client for the Go bridge over /run/panel-host-bridge/bridge.sock
 docker/             Dockerfiles (api/web/worker/squad-server/depot-init) + Caddyfile + entrypoints
 scripts/            install-host-bridge.sh, verify-bridge.sh, verify-audit-chain.ts
 docs/               README.md + architecture/ + components/<name>/ + operations/ + development/
@@ -82,7 +82,7 @@ Three privilege zones with narrow contracts between them.
 
 ### 1. Host daemon `apps/bridge/` (Go, root)
 
-Listens on `/run/panel-host-bridge.sock` (systemd socket activation, 0660 root:panel). Auth by `SO_PEERCRED` + primary-GID check — only the `panel` group can connect. 17 whitelisted RPC methods (full set in `packages/shared-config/src/bridge-methods.ts`: ping, host_info, host_metrics, file_read|write|atomic_write, ufw_rule, process_info, container_run|start|stop|rm|inspect|stats|logs_follow, depot_update, host_agent_restart). Length-prefixed JSON framing (16 MiB max), each request dispatched in its own goroutine so long-running streams (`container_logs_follow`, `depot_update`) don't block other calls.
+Listens on `/run/panel-host-bridge/bridge.sock` (systemd socket activation, 0660 root:panel). Auth by `SO_PEERCRED` + primary-GID check — only the `panel` group can connect. 17 whitelisted RPC methods (full set in `packages/shared-config/src/bridge-methods.ts`: ping, host_info, host_metrics, file_read|write|atomic_write, ufw_rule, process_info, container_run|start|stop|rm|inspect|stats|logs_follow, depot_update, host_agent_restart). Length-prefixed JSON framing (16 MiB max), each request dispatched in its own goroutine so long-running streams (`container_logs_follow`, `depot_update`) don't block other calls.
 
 Current method set (`packages/shared-config/src/bridge-methods.ts` is the source of truth):
 - `ping`, `host_info`, `host_metrics`, `process_info`
@@ -156,7 +156,7 @@ The e2e suite has two files that must both stay green:
 | File | What it proves |
 |---|---|
 | `install-lifecycle.e2e.test.ts` | POST /servers → /install seeds 19 cfg files from depot → ufw rules added → `container_run` starts `squad-{uuid}` → status-reconciler flips DB `running` → worker-rcon reports `rcon_status.state=connected` → Monaco-backed PUT /configs/Admins.cfg updates sha256 → POST /stop triggers RCON AdminBroadcast→AdminEndMatch→container_stop → DELETE removes row + container. 2-3 min per run. |
-| `bridge-rpc.e2e.test.ts` | Hits `/run/panel-host-bridge.sock` directly through `@squad/bridge-client`. Exercises every whitelisted RPC method's success path AND its forbidden path (path allowlists, image allowlist, bad container names). 10-30 s. |
+| `bridge-rpc.e2e.test.ts` | Hits `/run/panel-host-bridge/bridge.sock` directly through `@squad/bridge-client`. Exercises every whitelisted RPC method's success path AND its forbidden path (path allowlists, image allowlist, bad container names). 10-30 s. |
 
 The e2e runner (`vitest.e2e.config.ts`) runs serially, 15 min global timeout, and is **excluded from `pnpm turbo run test`** on purpose — the CI `node` job stays fast. E2E runs on the target host (or a staging replica) and is the blocker before cutting a release tag.
 

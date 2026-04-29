@@ -110,7 +110,7 @@ func pickListener() (net.Listener, error) {
 	// Fallback for local development.
 	sock := os.Getenv("PANEL_BRIDGE_SOCK")
 	if sock == "" {
-		sock = "/run/panel-host-bridge.sock"
+		sock = "/run/panel-host-bridge/bridge.sock"
 	}
 	_ = os.Remove(sock)
 	l, err := net.Listen("unix", sock)

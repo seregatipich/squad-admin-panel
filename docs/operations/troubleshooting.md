@@ -44,7 +44,7 @@ docker compose exec worker-metrics-sampler id        # gid= must equal PANEL_GID
 sudo getent group panel | cut -d: -f3                 # the host gid
 ```
 
-If `gid=0`, the bridge will refuse the connection. Apply `user: "0:${PANEL_GID:-987}"` to the service in `docker-compose.yml`, then `docker compose up -d worker-metrics-sampler`. The same requirement applies to any other worker that bind-mounts `/run/panel-host-bridge.sock` (`worker-log-ingest`, `api`).
+If `gid=0`, the bridge will refuse the connection. Apply `user: "0:${PANEL_GID:-987}"` to the service in `docker-compose.yml`, then `docker compose up -d worker-metrics-sampler`. The same requirement applies to any other worker that bind-mounts `/run/panel-host-bridge/bridge.sock` (`worker-log-ingest`, `api`).
 
 ## The `/logs` page is empty even though servers are running
 

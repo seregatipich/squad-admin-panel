@@ -6,3 +6,4 @@ export * from './metrics-pack.js';
 export * from './permissions.js';
 export * from './rcon-host.js';
 export * from './role-colors.js';
+export * from './squad-permissions.js';

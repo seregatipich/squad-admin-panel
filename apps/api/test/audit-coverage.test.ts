@@ -21,6 +21,7 @@ import installProgressPlugin from '../src/plugins/install-progress.js';
 import redisPlugin from '../src/plugins/redis.js';
 import requestContextPlugin from '../src/plugins/request-context.js';
 
+import adminsCfgRoutes from '../src/routes/admins-cfg.js';
 import auditRoutes from '../src/routes/audit.js';
 import authRoutes from '../src/routes/auth.js';
 import steamRoutes from '../src/routes/auth-steam.js';
@@ -29,6 +30,7 @@ import hostActionsRoutes from '../src/routes/host-actions.js';
 import meTokensRoutes from '../src/routes/me-tokens.js';
 import permissionsRoutes from '../src/routes/permissions.js';
 import playerRoutes from '../src/routes/players.js';
+import roleMembersRoutes from '../src/routes/role-members.js';
 import rolesRoutes from '../src/routes/roles.js';
 import archiveRoutes from '../src/routes/server-archive.js';
 import serverInstallRoutes from '../src/routes/server-install.js';
@@ -88,8 +90,10 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   await app.register(serverInstallRoutes);
   await app.register(permissionsRoutes);
   await app.register(rolesRoutes);
+  await app.register(roleMembersRoutes);
   await app.register(usersRoutes);
   await app.register(playerRoutes);
+  await app.register(adminsCfgRoutes);
   await app.register(auditRoutes);
   await app.register(steamRoutes);
 

@@ -1,6 +1,10 @@
-import type { RoleColor } from '@squad/shared-config/role-colors';
+import {
+  isRoleColorHex,
+  isRoleColorPaletteName,
+  type RoleColor,
+} from '@squad/shared-config/role-colors';
 
-const CLASS_MAP: Record<RoleColor, string> = {
+const CLASS_MAP: Record<string, string> = {
   red: 'bg-red-500',
   rose: 'bg-rose-500',
   pink: 'bg-pink-500',
@@ -19,8 +23,23 @@ const CLASS_MAP: Record<RoleColor, string> = {
   neutral: 'bg-neutral-500',
 };
 
-export function RoleColorDot({ color, size = 'md' }: { color: RoleColor; size?: 'sm' | 'md' }) {
-  const cls = CLASS_MAP[color] ?? 'bg-neutral-500';
+export function RoleColorDot({
+  color,
+  size = 'md',
+}: {
+  color: RoleColor | string;
+  size?: 'sm' | 'md';
+}) {
   const dim = size === 'sm' ? 'h-2 w-2' : 'h-2.5 w-2.5';
-  return <span className={`inline-block rounded-full ${dim} ${cls}`} aria-hidden />;
+  if (typeof color === 'string' && isRoleColorHex(color)) {
+    return (
+      <span
+        aria-hidden
+        className={`inline-block rounded-full ${dim}`}
+        style={{ backgroundColor: color }}
+      />
+    );
+  }
+  const cls = isRoleColorPaletteName(color) ? CLASS_MAP[color] : 'bg-neutral-500';
+  return <span aria-hidden className={`inline-block rounded-full ${dim} ${cls}`} />;
 }

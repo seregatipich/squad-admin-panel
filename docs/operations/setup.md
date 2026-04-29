@@ -28,7 +28,7 @@ sudo ./scripts/install-host-bridge.sh
 
 sudo usermod -aG panel "$USER"
 newgrp panel
-# Now the current shell can talk to /run/panel-host-bridge.sock.
+# Now the current shell can talk to /run/panel-host-bridge/bridge.sock.
 
 docker compose up -d --build
 # wait ~2 min, then browse to https://${APP_DOMAIN}/

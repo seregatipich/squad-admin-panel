@@ -95,7 +95,7 @@ describe('length-prefix framing', () => {
 });
 
 describe('decode error recovery', () => {
-  it('does not permanently close client when server sends corrupt bytes', async () => {
+  it('transparently recovers from corrupt bytes via the transport-retry path', async () => {
     let callCount = 0;
 
     server.on('connection', (conn) => {
@@ -118,11 +118,10 @@ describe('decode error recovery', () => {
 
     const client = new BridgeClient({ socketPath });
     try {
-      await expect(client.ping()).rejects.toThrow();
-
       const result = await client.ping();
       expect(result.pong).toBe(true);
       expect(result.hostname).toBe('recovered');
+      expect(callCount).toBe(2);
     } finally {
       await client.close();
     }
@@ -169,6 +168,107 @@ describe('streaming method', () => {
       });
       expect(result.exit_code).toBe(0);
       expect(received).toEqual(['line one\n', 'line two\n']);
+    } finally {
+      await client.close();
+    }
+  });
+});
+
+describe('transport retry on socket close', () => {
+  it('idempotent rpc auto-retries when the bridge drops the socket mid-call', async () => {
+    let connectionCount = 0;
+
+    server.on('connection', (conn) => {
+      connectionCount++;
+      if (connectionCount === 1) {
+        conn.once('data', () => {
+          conn.destroy();
+        });
+        return;
+      }
+      conn.on('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as { id: string };
+        sendFrame(conn, {
+          id: req.id,
+          ok: true,
+          result: { pong: true, version: '1.0', hostname: 'retried' },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    try {
+      const result = await client.ping();
+      expect(result.hostname).toBe('retried');
+      expect(connectionCount).toBe(2);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('fileRead retries on socket close (covers the config-sync drift path)', async () => {
+    let connectionCount = 0;
+
+    server.on('connection', (conn) => {
+      connectionCount++;
+      if (connectionCount === 1) {
+        conn.once('data', () => {
+          conn.destroy();
+        });
+        return;
+      }
+      conn.on('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as { id: string };
+        sendFrame(conn, {
+          id: req.id,
+          ok: true,
+          result: { content: 'admins-cfg-body' },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    try {
+      const result = await client.fileRead({ path: '/var/lib/squad-panel/configs/x/y.cfg' });
+      expect(result.content).toBe('admins-cfg-body');
+      expect(connectionCount).toBe(2);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('non-idempotent rpc (host_agent_restart) does NOT auto-retry', async () => {
+    let connectionCount = 0;
+
+    server.on('connection', (conn) => {
+      connectionCount++;
+      conn.once('data', () => {
+        conn.destroy();
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    try {
+      await expect(client.hostAgentRestart()).rejects.toThrow(BridgeError);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(connectionCount).toBe(1);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('propagates the transport error if the retry also fails', async () => {
+    server.on('connection', (conn) => {
+      conn.once('data', () => {
+        conn.destroy();
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    try {
+      await expect(client.ping()).rejects.toThrow(BridgeError);
     } finally {
       await client.close();
     }

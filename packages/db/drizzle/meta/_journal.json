@@ -99,6 +99,27 @@
       "when": 1745982000000,
       "tag": "0013_servers_soft_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1746000000000,
+      "tag": "0014_role_access_flags_and_squad_perms",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1746003600000,
+      "tag": "0015_reseed_roles_squad",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1746007200000,
+      "tag": "0016_drop_legacy_viewer",
+      "breakpoints": true
     }
   ]
 }

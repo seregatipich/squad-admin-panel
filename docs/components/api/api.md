@@ -120,12 +120,12 @@ Errors:
 |---|---|---|---|
 | GET | `/api/v1/servers/:id/configs` | List 19 allowed cfg files with `{name, size, sha256, behavior, exists}`. `behavior` is `hot_reload` / `rotation` / `requires_restart`. | `server:view` |
 | GET | `/api/v1/servers/:id/configs/:name` | Tip content + sha256 + behavior class. | `server:view` |
-| PUT | `/api/v1/servers/:id/configs/:name` | Atomic write + INSERT into `config_versions`. No-op (sha unchanged) short-circuits. Body: `{ content, message? }`. | `server:config:write` |
-| GET | `/api/v1/servers/:id/configs/:name/history` | Versions (newest first). Includes `author_email`, `author_ip`, `message`, `sha256`, `size`. Query: `limit` (≤500). | `server:config:history` |
-| GET | `/api/v1/servers/:id/configs/:name/versions/:vid` | Full content of a single past version. | `server:config:history` |
-| GET | `/api/v1/servers/:id/configs/:name/diff?from=:vid&to=:vid` | Unified-diff patch text between two versions. | `server:config:history` |
-| GET | `/api/v1/servers/:id/configs/:name/blame` | Tip content with per-line attribution. Cached in Redis (`config-blame:{tip_id}`, TTL 24 h). | `server:config:history` |
-| POST | `/api/v1/servers/:id/configs/:name/restore/:vid` | Creates a NEW version with the old content (never destructive). Body: `{ message? }`. | `server:config:write` |
+| PUT | `/api/v1/servers/:id/configs/:name` | Atomic write + INSERT into `config_versions`. No-op (sha unchanged) short-circuits without touching disk or DB. After write: best-effort `AdminReloadServerConfig` over RCON; outcome surfaced as `reload: { applied, reason? }` so UI can warn that a restart is still needed (e.g. `requires_restart` files). Container sees the new content the instant `rename(2)` completes — the cfg directory is bind-mounted, so no copy/sync. Body: `{ content, message? }`. Audit `config.write` (sha-only, content never persisted). See [flows.md → Config edit](flows.md#config-edit-put-apiv1serversidconfigsname). | `config:edit` |
+| GET | `/api/v1/servers/:id/configs/:name/history` | Versions (newest first). Includes `author_email`, `author_ip`, `message`, `sha256`, `size`. Query: `limit` (≤500). | `config:view` |
+| GET | `/api/v1/servers/:id/configs/:name/versions/:vid` | Full content of a single past version. | `config:view` |
+| GET | `/api/v1/servers/:id/configs/:name/diff?from=:vid&to=:vid` | Unified-diff patch text between two versions. | `config:view` |
+| GET | `/api/v1/servers/:id/configs/:name/blame` | Tip content with per-line attribution. Cached in Redis (`config-blame:{tip_id}`, TTL 24 h, key auto-invalidates because the tip id changes on the next write). | `config:view` |
+| POST | `/api/v1/servers/:id/configs/:name/restore/:vid` | Creates a NEW version with the old content (never destructive). Body: `{ message? }`. | `config:rollback` |
 
 ## Server logs (per-server)
 

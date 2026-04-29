@@ -44,7 +44,7 @@ apps/workers/log-ingest/
 
 ## Bridge socket requirement
 
-The worker bind-mounts `/run/panel-host-bridge.sock` and must run with primary GID `panel` (`user: "0:${PANEL_GID:-987}"` in `compose.yml`).
+The worker bind-mounts `/run/panel-host-bridge/bridge.sock` and must run with primary GID `panel` (`user: "0:${PANEL_GID:-987}"` in `compose.yml`).
 
 ## Components that depend on it
 

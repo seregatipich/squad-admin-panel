@@ -6,6 +6,7 @@ export const LOG_SOURCES = [
   'depot',
   'install',
   'api',
+  'config-sync',
 ] as const;
 export type LogSource = (typeof LOG_SOURCES)[number];
 
@@ -20,6 +21,7 @@ const SOURCE_TO_CODE: Record<LogSource, string> = {
   depot: 'D',
   install: 'I',
   api: 'A',
+  'config-sync': 'C',
 };
 const CODE_TO_SOURCE: Record<string, LogSource> = Object.fromEntries(
   Object.entries(SOURCE_TO_CODE).map(([k, v]) => [v, k as LogSource]),

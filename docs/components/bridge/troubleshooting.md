@@ -1,10 +1,16 @@
 # `bridge` — troubleshooting
 
-## "bridge: disconnected" banner in the dashboard
+## "bridge: disconnected" / "Admins.cfg недоступен" / `rejected untrusted peer` in journal
 
 1. On the host: `systemctl status panel-host-bridge.socket` — should be `active (listening)`.
-2. `ls -l /run/panel-host-bridge.sock` — must be `srw-rw---- root panel`.
-3. From inside an api container: `getent group panel` should list the container's UID. If it doesn't, the compose service is missing `group_add: [panel]`.
+2. `ls -l /run/panel-host-bridge/` — must show `bridge.sock` as `srw-rw---- root panel`. Directory itself is `drwxr-x--- root panel 0750`. Maintained by `tmpfiles.d` snippet at `/etc/tmpfiles.d/panel-host-bridge.conf`.
+2a. **Verify containers see the live inode**:
+   ```bash
+   stat -c "host:%i" /run/panel-host-bridge/bridge.sock
+   docker compose exec api stat -c "api:%i" /run/panel-host-bridge/bridge.sock
+   ```
+   The two must be equal. If they differ, the container is bind-mounting a stale inode — only happens if a container was created with the **legacy single-file mount** (`/run/panel-host-bridge.sock:/run/panel-host-bridge.sock`). Fix: ensure `docker-compose.yml` mounts the **directory** (`/run/panel-host-bridge:/run/panel-host-bridge`) and `docker compose up -d --force-recreate` the affected services. The `apps/api/test/compose-bridge-perms.test.ts` contract test guards this.
+3. **Inside the misbehaving container, `id` must report `gid=987(panel)` as the *primary* GID, not in `groups=`.** SO_PEERCRED in `apps/bridge/internal/server.go` reads `(uid, gid)` from the kernel and matches the primary GID against the `panel` group; supplementary group membership is **not** checked. In `docker-compose.yml`, that means the service must use `user: "0:${PANEL_GID:-987}"` — **not** `group_add: [${PANEL_GID:-987}]`. The `group_add` form leaves the primary GID as `0` (root) and the bridge will log `rejected untrusted peer ... uid:0, user:root` for every call. This was the original cause of the `Admins.cfg недоступен / socket closed` UX bug; the worker's bridge-client retry kicks in but the second attempt is rejected for the same reason, so the worker publishes `state: 'unreachable'`.
 4. `sudo systemctl restart panel-host-bridge.socket panel-host-bridge.service`.
 
 Useful logs:

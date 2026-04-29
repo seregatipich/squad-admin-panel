@@ -4,6 +4,29 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-05-02
+
+### Migration 0016 — drop legacy "Viewer" role from production seed
+
+- Spec §2.5 lists exactly six default roles (Owner + Admin + Moderator + QueuePriority + Cameraman + Intern). The Viewer row from migration 0009 is not in that set and is now removed.
+- Tests that need a "narrow read-only" fixture call `ensureViewerFixture` from `apps/api/test/helpers/viewer-fixture.ts`; the integration harness ensures it once per build.
+- Active player assignments to Viewer become `role_id = NULL` via the existing FK `ON DELETE SET NULL`.
+
+## 2026-05-01
+
+### Migration 0014 — role access flags + `role_squad_permissions` table
+
+- `roles` gains three boolean columns: `panel_access`, `can_assign_roles`, `can_edit_roles`. Default `false`. CHECK constraint `roles_flag_dependency` enforces `panel_access OR (NOT can_assign_roles AND NOT can_edit_roles)` — i.e. role-management flags only meaningful when panel access is on.
+- Color CHECK loosened to accept either a Tailwind palette name or a `#RRGGBB` hex code (back-compat with palette-named seed roles).
+- New table `role_squad_permissions(role_id uuid → roles, squad_permission_key text)` with a CHECK enumerating the 21 Squad in-game permission keys.
+
+### Migration 0015 — re-seed roles per Эпик 2 Phase 2 spec
+
+- Owner row updated: `color='#FF0000'`, all three access flags `true`.
+- Five new non-system roles created (or upserted by name): **Admin** `#CD5C5C` (panel_access), **Moderator** `#2E8B57` (panel_access), **QueuePriority** `#DAA520`, **Cameraman** `#8B008B`, **Intern** `#005EC2`. Each gets a distinct Squad-permission set per spec — see `docs/components/rbac/data-model.md`.
+- Legacy "Senior Admin" row removed (no spec analogue, no consumers). Legacy "Viewer" row preserved for back-compat with the existing test fixture.
+- Spec roles carry **no** rows in `role_permissions`; their panel-side permissions are derived in code by `apps/api/src/lib/rbac.ts` from the access flags.
+
 ## 2026-04-30
 
 ### Migration 0013 — soft-delete on `servers`

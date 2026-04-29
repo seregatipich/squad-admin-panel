@@ -6,7 +6,7 @@
 |---|---:|---|---|---|
 | `DATABASE_URL` | yes | — | PostgreSQL connection string | yes |
 | `REDIS_URL` | yes | — | ioredis connection string | yes |
-| `BRIDGE_SOCKET` | no | `/run/panel-host-bridge.sock` | Path to the host bridge Unix socket | no |
+| `BRIDGE_SOCKET` | no | `/run/panel-host-bridge/bridge.sock` | Path to the host bridge Unix socket | no |
 | `LOG_LEVEL` | no | `info` | Pino log level | no |
 
 ## Hard-coded constants

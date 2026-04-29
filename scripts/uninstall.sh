@@ -27,9 +27,12 @@ if confirm "Stop + remove panel-host-bridge.service + .socket + binary + drop-in
   rm -f /etc/systemd/system/panel-host-bridge.service
   rm -f /etc/systemd/system/panel-host-bridge.socket
   rm -rf /etc/systemd/system/panel-host-bridge.service.d
+  rm -f /etc/tmpfiles.d/panel-host-bridge.conf
+  rm -rf /run/panel-host-bridge
+  rm -f /run/panel-host-bridge.sock  # legacy single-file socket
   rm -f /usr/local/bin/panel-host-bridge
   systemctl daemon-reload
-  log "removed bridge daemon, unit, drop-in, socket"
+  log "removed bridge daemon, unit, drop-in, socket, tmpfiles"
 fi
 
 if confirm "Remove /var/lib/squad-panel symlink?"; then

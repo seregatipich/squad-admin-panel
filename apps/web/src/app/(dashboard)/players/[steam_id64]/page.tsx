@@ -117,7 +117,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ steam_id64:
         </dl>
       </section>
 
-      {canManageRoles ? <PanelAccessSection steamId64={steam_id64} /> : null}
+      <PanelAccessSection steamId64={steam_id64} canManage={canManageRoles} />
 
       <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
         <h2 className="text-xs uppercase tracking-widest text-neutral-400">
@@ -194,7 +194,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ steam_id64:
   );
 }
 
-function PanelAccessSection({ steamId64 }: { steamId64: string }) {
+function PanelAccessSection({ steamId64, canManage }: { steamId64: string; canManage: boolean }) {
   const [current, setCurrent] = useState<SingleRole | null>(null);
   const [editing, setEditing] = useState(false);
   const [allRoles, setAllRoles] = useState<SingleRole[]>([]);
@@ -205,36 +205,53 @@ function PanelAccessSection({ steamId64 }: { steamId64: string }) {
   const reload = useCallback(async () => {
     const [rRes, listRes] = await Promise.all([
       fetch(`/api/v1/players/${steamId64}/role`, { credentials: 'include', cache: 'no-store' }),
-      fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' }),
+      // Only managers need the full role list; viewers don't query it.
+      canManage
+        ? fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' })
+        : Promise.resolve(null),
     ]);
     if (rRes.ok) {
       const body = (await rRes.json()) as { role: SingleRole | null };
       setCurrent(body.role);
     }
-    if (listRes.ok) setAllRoles((await listRes.json()) as SingleRole[]);
-  }, [steamId64]);
+    if (listRes?.ok) setAllRoles((await listRes.json()) as SingleRole[]);
+  }, [steamId64, canManage]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
 
-  const ownerId = allRoles.find((r) => r.is_system_role && r.name === 'Owner')?.id ?? null;
+  // 2.6.4 — dropdown excludes Owner and the player's current role; the
+  // backend also rejects Owner assignment with 403 owner_assignment_forbidden.
+  const assignableRoles = allRoles.filter(
+    (r) => !(r.is_system_role && r.name === 'Owner') && r.id !== current?.id,
+  );
 
   async function save(roleId: string | null) {
-    if (roleId === ownerId && roleId !== null) {
-      if (!confirm('Это даст пользователю полный доступ к панели. Подтвердить?')) return;
-    }
     setBusy(true);
     setMsg(null);
     try {
-      const r = await fetch(`/api/v1/players/${steamId64}/role`, {
-        method: 'PUT',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ role_id: roleId }),
-      });
+      const r =
+        roleId === null
+          ? await fetch(`/api/v1/players/${steamId64}/role`, {
+              method: 'DELETE',
+              credentials: 'include',
+            })
+          : await fetch(`/api/v1/players/${steamId64}/role`, {
+              method: 'PUT',
+              credentials: 'include',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ role_id: roleId }),
+            });
       if (r.status === 409) {
-        setMsg({ kind: 'err', text: 'Нельзя снять роль у последнего Owner.' });
+        setMsg({
+          kind: 'err',
+          text: 'Вы единственный Owner. Сначала выдайте роль Owner другому пользователю.',
+        });
+        return;
+      }
+      if (r.status === 403) {
+        setMsg({ kind: 'err', text: 'Нельзя выдать роль Owner через UI.' });
         return;
       }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -250,7 +267,7 @@ function PanelAccessSection({ steamId64 }: { steamId64: string }) {
 
   return (
     <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">Доступ к панели</h2>
+      <h2 className="text-xs uppercase tracking-widest text-neutral-400">Роль</h2>
       {msg ? (
         <div
           className={`rounded border p-2 text-xs ${
@@ -268,27 +285,43 @@ function PanelAccessSection({ steamId64 }: { steamId64: string }) {
             <span className="inline-flex items-center gap-2">
               <RoleColorDot color={current.color} />
               <span className="font-medium">{current.name}</span>
+              {current.is_system_role && current.name === 'Owner' ? (
+                <span className="rounded bg-red-950 px-2 py-0.5 text-[10px] uppercase text-red-300">
+                  system
+                </span>
+              ) : null}
             </span>
           ) : (
-            <span className="text-neutral-500">— нет доступа в панель</span>
+            <span className="text-neutral-500">—</span>
           )}
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            className="rounded border border-neutral-800 px-3 py-0.5 text-xs hover:border-neutral-600"
-          >
-            Изменить
-          </button>
-          {current ? (
-            <button
-              type="button"
-              onClick={() => save(null)}
-              disabled={busy}
-              className="rounded border border-red-900 px-3 py-0.5 text-xs text-red-400 hover:border-red-700 disabled:opacity-40"
-            >
-              Снять роль
-            </button>
-          ) : null}
+          {canManage ? (
+            <>
+              {!(current?.is_system_role && current.name === 'Owner') ? (
+                <button
+                  type="button"
+                  onClick={() => setEditing(true)}
+                  className="rounded border border-neutral-800 px-3 py-0.5 text-xs hover:border-neutral-600"
+                >
+                  Выдать роль
+                </button>
+              ) : null}
+              {current ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!confirm(`Снять роль «${current.name}» с этого игрока?`)) return;
+                    void save(null);
+                  }}
+                  disabled={busy}
+                  className="rounded border border-red-900 px-3 py-0.5 text-xs text-red-400 hover:border-red-700 disabled:opacity-40"
+                >
+                  Снять роль
+                </button>
+              ) : null}
+            </>
+          ) : (
+            <span className="text-xs text-neutral-600">read-only</span>
+          )}
         </div>
       ) : (
         <div className="flex gap-2">
@@ -298,7 +331,7 @@ function PanelAccessSection({ steamId64 }: { steamId64: string }) {
             className="flex-1 rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
           >
             <option value="">— выберите —</option>
-            {allRoles.map((r) => (
+            {assignableRoles.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.name}
               </option>

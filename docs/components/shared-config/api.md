@@ -18,7 +18,7 @@ import { ... } from '@squad/shared-config/role-colors';   // browser-safe
 |---|---|---|
 | `BRIDGE_METHODS` | `readonly string[]` | 17-element tuple of all allowed RPC method names |
 | `BRIDGE_STREAMING_METHODS` | `readonly BridgeMethod[]` | `['container_logs_follow', 'depot_update']` |
-| `BRIDGE_SOCKET_DEFAULT` | `string` | `/run/panel-host-bridge.sock` |
+| `BRIDGE_SOCKET_DEFAULT` | `string` | `/run/panel-host-bridge/bridge.sock` |
 | `BRIDGE_MAX_FRAME_BYTES` | `number` | `16777216` (16 MiB) |
 | `SQUAD_APP_ID` | `number` | `403240` (Steam app ID) |
 | `PANEL_DATA_ROOT` | `string` | `/var/lib/squad-panel` |

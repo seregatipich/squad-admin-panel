@@ -2,7 +2,12 @@
 Description=panel-host-bridge control socket (squad-admin-panel)
 
 [Socket]
-ListenStream=/run/panel-host-bridge.sock
+# Socket lives inside a stable per-service runtime directory so that
+# Docker containers bind-mounting the directory keep seeing the live
+# inode through any restart. Bind-mounting the file directly froze the
+# inode at container start — every bridge restart rotated the inode and
+# every consumer container fell off until manually recreated.
+ListenStream=/run/panel-host-bridge/bridge.sock
 SocketMode=0660
 SocketUser=root
 SocketGroup=panel

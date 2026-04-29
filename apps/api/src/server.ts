@@ -23,9 +23,11 @@ import healthPlugin from './plugins/health.js';
 import installProgressPlugin from './plugins/install-progress.js';
 import liveBusPlugin from './plugins/live-bus.js';
 import metricsPlugin from './plugins/metrics.js';
+import orphanSweepPlugin from './plugins/orphan-sweep.js';
 import redisPlugin from './plugins/redis.js';
 import requestContextPlugin from './plugins/request-context.js';
 import statusReconcilerPlugin from './plugins/status-reconciler.js';
+import adminsCfgRoutes from './routes/admins-cfg.js';
 import auditRoutes from './routes/audit.js';
 import authRoutes from './routes/auth.js';
 import steamRoutes from './routes/auth-steam.js';
@@ -37,6 +39,7 @@ import logsRoutes from './routes/logs.js';
 import meTokensRoutes from './routes/me-tokens.js';
 import permissionsRoutes from './routes/permissions.js';
 import playerRoutes from './routes/players.js';
+import roleMembersRoutes from './routes/role-members.js';
 import rolesRoutes from './routes/roles.js';
 import archiveRoutes from './routes/server-archive.js';
 import serverConfigRoutes from './routes/server-configs.js';
@@ -98,6 +101,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(auditPlugin);
   await app.register(installProgressPlugin);
   await app.register(statusReconcilerPlugin);
+  await app.register(orphanSweepPlugin);
 
   await app.register(authRoutes);
   await app.register(meTokensRoutes);
@@ -111,8 +115,10 @@ export async function buildServer(config: AppConfig) {
   await app.register(depotRoutes);
   await app.register(permissionsRoutes);
   await app.register(rolesRoutes);
+  await app.register(roleMembersRoutes);
   await app.register(usersRoutes);
   await app.register(playerRoutes);
+  await app.register(adminsCfgRoutes);
   await app.register(auditRoutes);
   await app.register(logsRoutes);
   await app.register(liveRoutes);

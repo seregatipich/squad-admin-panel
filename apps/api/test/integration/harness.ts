@@ -22,6 +22,7 @@ import installProgressPlugin from '../../src/plugins/install-progress.js';
 import liveBusPlugin from '../../src/plugins/live-bus.js';
 import requestContextPlugin from '../../src/plugins/request-context.js';
 import statusReconcilerPlugin from '../../src/plugins/status-reconciler.js';
+import adminsCfgRoutes from '../../src/routes/admins-cfg.js';
 import auditRoutes from '../../src/routes/audit.js';
 import authRoutes from '../../src/routes/auth.js';
 import depotRoutes from '../../src/routes/depot.js';
@@ -31,6 +32,7 @@ import logsRoutes from '../../src/routes/logs.js';
 import meTokensRoutes from '../../src/routes/me-tokens.js';
 import permissionsRoutes from '../../src/routes/permissions.js';
 import playerRoutes from '../../src/routes/players.js';
+import roleMembersRoutes from '../../src/routes/role-members.js';
 import rolesRoutes from '../../src/routes/roles.js';
 import archiveRoutes from '../../src/routes/server-archive.js';
 import serverConfigRoutes from '../../src/routes/server-configs.js';
@@ -400,6 +402,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(meTokensRoutes);
   await app.register(permissionsRoutes);
   await app.register(rolesRoutes);
+  await app.register(roleMembersRoutes);
   await app.register(usersRoutes);
   await app.register(hostRoutes);
   await app.register(hostActionsRoutes);
@@ -412,6 +415,14 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(playerRoutes);
   await app.register(auditRoutes);
   await app.register(logsRoutes);
+  await app.register(adminsCfgRoutes);
+
+  // Test fixture: legacy "Viewer" role used by older permission-bound
+  // tests (depot, host-actions, logs, rbac, ...). The production seed
+  // (migration 0015) intentionally does not include Viewer; we (re)create
+  // it here for every integration harness so those tests keep passing
+  // without each having to call the helper themselves.
+  await (await import('../helpers/viewer-fixture.js')).ensureViewerFixture(db);
 
   const seed: IntegrationHarness['seed'] = {};
   if (opts.seedOwner) {
@@ -497,7 +508,8 @@ export async function assertAuditRow(
       .where(filters())
       .orderBy(desc(auditLog.createdAt))
       .limit(1);
-    if (rows.length > 0) return rows[0]!;
+    const first = rows[0];
+    if (first) return first;
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error(

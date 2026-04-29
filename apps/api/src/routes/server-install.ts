@@ -11,6 +11,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { publishAdminsCfgSyncForServer } from '../lib/admins-cfg-sync.js';
 import { writeAuditEntry } from '../lib/audit.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
 
@@ -297,6 +298,15 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             context: { durationMs: Date.now() - startedAt },
             statusCode: 200,
             durationMs: Date.now() - startedAt,
+          });
+          // Spec §2.7.7 — push initial Admins.cfg with the current managed
+          // segment to the freshly installed server. Worker config-sync
+          // picks this up and writes the marker-fenced section into the
+          // baseline Admins.cfg the seedConfigs step just created.
+          await publishAdminsCfgSyncForServer(app.redis, id, {
+            reason: 'server.install.completed',
+            actor_steam_id64: actor.kind === 'steam' ? String(actor.steamId64) : null,
+            enqueued_at: new Date().toISOString(),
           });
         } catch (err) {
           app.log.error({ err, server_id: id }, 'install failed');

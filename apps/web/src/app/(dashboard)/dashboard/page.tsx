@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { DockerPruneButton } from '@/components/DockerPruneButton';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { MetricHistoryModal, type MetricKey } from '@/components/MetricHistoryModal';
 import { RestartBridgeButton } from '@/components/RestartBridgeButton';
@@ -608,6 +609,10 @@ function HostBlock({
           </span>
           <LiveIndicator
             lastUpdate={metrics?.sampled_at ? new Date(metrics.sampled_at) : lastUpdate}
+          />
+          <DockerPruneButton
+            disabled={!bridgeConnected}
+            disabledReason="Сначала восстановите соединение."
           />
           <RestartBridgeButton
             disabled={!bridgeConnected}
