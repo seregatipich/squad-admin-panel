@@ -90,6 +90,53 @@ Although the worker's primary role is consumer, it also emits two lifecycle even
 
 `emitStarted(diag)` and `emitStopped(diag, sig)` are exported from `src/index.ts` so the lifecycle helpers can be unit-tested without standing up the full consumer loop.
 
+## Journald forwarder
+
+The worker also runs a child `journalctl -u panel-host-bridge -o json -f --since "30s ago"` subprocess (Task 17, Phase A2) and `XADD`s every line whose wrapped `MESSAGE` JSON contains `DIAG_EVENT: "1"` into `diag:queue`. The Go bridge writes those marker lines via `handlers.DiagLog(...)`; see [`docs/components/bridge/api.md`](../../bridge/api.md#diagnostic-events-journald) for the producer side.
+
+The forwarder lives in [`apps/workers/diag-flush/src/journald-bridge.ts`](../../../../apps/workers/diag-flush/src/journald-bridge.ts) and exports three pieces:
+
+### `startJournaldForwarder(opts)`
+
+```ts
+export interface JournaldForwarderOpts {
+  redis: Pick<Redis, 'xadd'>;
+  log: Pick<Logger, 'warn' | 'error' | 'info' | 'debug'>;
+  unitName?: string;       // default 'panel-host-bridge'
+  since?: string;          // default '30s ago'
+  spawnFn?: typeof spawn;  // tests inject a stub
+}
+
+export function startJournaldForwarder(opts: JournaldForwarderOpts): { stop(): void };
+```
+
+Spawns `journalctl` with `stdio: ['ignore', 'pipe', 'pipe']`, splits the stdout stream on `\n`, and feeds each line to `handleJournaldLine`. Logs `warn` on per-line failures (continuing the loop), `error` if the spawn itself fails, and `info` on subprocess exit.
+
+The returned handle exposes `stop()` which sends `SIGTERM` to the child. `index.ts::shutdown` calls it before awaiting the in-flight batch and tearing down the SQL/Redis pools. `stop()` swallows kill errors (no-op if the child has already exited).
+
+### `parseJournaldLine(line) → ParsedDiagLine | null`
+
+Pure function. Parses the outer journald JSON, extracts `MESSAGE`, parses MESSAGE as JSON, and returns the diag fields if `DIAG_EVENT === '1'` AND all required fields (`component`, `kind`, `severity`, `message`) are present strings. Returns `null` for blank lines, non-JSON lines, lines without `MESSAGE`, lines whose `MESSAGE` is not our DIAG_EVENT JSON, lines with `DIAG_EVENT !== '1'`, or lines missing required fields. The `ts` field falls back to `new Date().toISOString()` when absent. Payload keys are everything in `inner` except the six reserved fields (`DIAG_EVENT`, `component`, `kind`, `severity`, `message`, `ts`).
+
+### `handleJournaldLine(line, opts) → Promise<boolean>`
+
+Calls `parseJournaldLine`; if it returns a parsed entry, issues:
+
+```ts
+redis.xadd(
+  'diag:queue', 'MAXLEN', '~', 100_000, '*',
+  'id', uuidv7(),
+  'ts', parsed.ts,
+  'component', parsed.component,
+  'severity', parsed.severity,
+  'kind', parsed.kind,
+  'message', parsed.message,
+  'payload', JSON.stringify(parsed.payload),
+)
+```
+
+This matches the field-list shape that `parseEntry` (and the producer-side `@squad/diag.emit`) uses. Returns `true` on XADD, `false` on skip. Throws if `redis.xadd` rejects (the caller's `void handleJournaldLine(...).catch(...)` swallows it into a `warn` log line so a transient redis failure does not kill the forwarder loop).
+
 ## Configuration surface
 
 See [configuration.md](./configuration.md) for env vars.

@@ -219,6 +219,46 @@ Errors: returns `runtime_error` with a descriptive message when `du`, `statfs`, 
 
 Asks systemd to restart `panel-host-bridge.service`. Used by the panel's "rotate bridge" admin action; the socket stays activated so callers reconnect transparently.
 
+## Diagnostic events (journald)
+
+The bridge does NOT connect to Redis directly — pulling Redis credentials into the privileged daemon would widen the attack surface. Instead the bridge writes structured JSON lines to **stderr**, which systemd captures into the journal. `worker-diag-flush` runs `journalctl -u panel-host-bridge -o json -f` as a subprocess, parses each line, and `XADD`s entries with `DIAG_EVENT == '1'` into `diag:queue` under the same shape as native producers.
+
+Every emit is a single line of JSON on `os.Stderr`:
+
+```json
+{
+  "DIAG_EVENT": "1",
+  "ts": "2026-04-29T10:00:00Z",
+  "component": "bridge",
+  "kind": "bridge.client.connected",
+  "severity": "info",
+  "message": "panel peer connected",
+  "uid": 1000,
+  "pid": 4242,
+  "user": "squad"
+}
+```
+
+The `DIAG_EVENT` field is the marker the forwarder filters on — any other stderr line (slog logs, journald metadata) is ignored. Payload keys are merged flat into the top-level record; the forwarder splits them back out into the `payload` JSON field on the Redis Stream.
+
+Helper: [`handlers.DiagLog(component, kind, severity, message, payload)`](../../../apps/bridge/internal/handlers/handlers.go) in `apps/bridge/internal/handlers/handlers.go`. Its writer is `handlers.DiagSink` (defaults to `os.Stderr`; tests swap it for a buffer).
+
+### Emitted kinds
+
+| Kind | Severity | When | Payload |
+|---|---|---|---|
+| `bridge.client.connected` | `info` | After `auth.ResolvePeer` succeeds in `cmd/panel-host-bridge/main.go::serveConn`. | `{ uid, pid, user }` |
+| `bridge.client.disconnected` | `info` (peer EOF) / `warn` (untrusted-peer reject) | `defer` inside `serveConn`. | `{ reason: 'eof' \| 'shutdown' \| 'read_frame_error' \| 'untrusted_peer', uid, pid, user, err? }` |
+| `bridge.panic` | `fatal` | Inside the `defer recover()` block of `Dispatcher.Handle`. The handler still returns `rpc.NewErrorResponse(req.ID, internal, ...)` so the client sees a normal error frame. | `{ method, request_id, recovered }` |
+| `bridge.signal.sigterm` | `info` | First line of the SIGTERM/SIGINT handler in `main.go`, before the listener is closed. | `{ signal, version }` |
+| `bridge.host_agent_restart` | `info` | First line of the `host_agent_restart` handler, before the delayed `systemctl restart` goroutine is scheduled. | `{ request_id }` |
+
+These are complementary to the API-side `bridge.client.connected` / `bridge.client.disconnected` / `bridge.rpc.error` emits produced by `apps/api/src/plugins/bridge.ts` from the TS bridge-client perspective. The Go-side emits cover the case where the API is offline or the bridge restarts independently.
+
+### Forwarder requirements
+
+`worker-diag-flush` runs the forwarder; see [`docs/components/workers/worker-diag-flush/configuration.md`](../workers/worker-diag-flush/configuration.md) for the journald bind-mounts and the `DIAG_JOURNALD_*` knobs.
+
 ## Adding a new method
 
 If you add a method, three sources must change in the same commit:

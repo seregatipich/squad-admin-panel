@@ -11,8 +11,9 @@ Drains the `diag:queue` Redis Stream into the partitioned Postgres table `diagno
 - Parse each entry's flat `[key, value, key, value, ...]` field list back into a `DiagEvent`-shaped row.
 - Build a single multi-row `INSERT INTO diagnostic_events ... ON CONFLICT (id, ts) DO NOTHING` per batch.
 - `XACK` every entry id (valid AND malformed) after the insert, so a poison row never blocks the pipeline.
+- Run a `journalctl -u panel-host-bridge -o json -f` subprocess and forward Go-side `DIAG_EVENT: "1"` lines into `diag:queue` (so the same consumer loop drains both API/worker emits AND bridge emits).
 - Publish `worker:heartbeat:diag-flush` every 5 s with TTL 30 s.
-- Drain on `SIGTERM`: stop the loop, end the pg pool, quit Redis, exit 0.
+- Drain on `SIGTERM`: stop the loop, stop the journald subprocess, end the pg pool, quit Redis, exit 0.
 
 ## What it does not do
 
@@ -27,9 +28,12 @@ Drains the `diag:queue` Redis Stream into the partitioned Postgres table `diagno
 ```
 apps/workers/diag-flush/
   src/
-    index.ts          — entry point + flushBatch() exported for unit tests
+    index.ts                — entry point + flushBatch() / emitStarted / emitStopped exports
+    journald-bridge.ts      — journalctl subprocess + XADD forwarder (parseJournaldLine, handleJournaldLine)
   test/
-    contract.test.ts  — flushBatch() unit tests (parse, INSERT shape, XACK behaviour)
+    contract.test.ts        — flushBatch() unit tests (parse, INSERT shape, XACK behaviour)
+    diag-lifecycle.test.ts  — emitStarted / emitStopped
+    journald.test.ts        — parseJournaldLine + handleJournaldLine
   package.json
   tsconfig.json
   vitest.config.ts

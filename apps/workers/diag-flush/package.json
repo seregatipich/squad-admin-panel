@@ -15,6 +15,7 @@
     "ioredis": "^5.4.1",
     "pino": "^9.5.0",
     "postgres": "^3.4.5",
+    "uuid": "^14.0.0",
     "@squad/diag": "workspace:*",
     "@squad/shared-config": "workspace:*"
   },

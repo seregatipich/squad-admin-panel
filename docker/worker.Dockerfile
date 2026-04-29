@@ -23,6 +23,11 @@ FROM base AS runtime
 ENV NODE_ENV=production
 ARG WORKER
 ENV WORKER=$WORKER
+RUN if [ "$WORKER" = "diag-flush" ]; then \
+      apt-get update && \
+      apt-get install -y --no-install-recommends systemd && \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
 COPY --from=builder /app /app
 RUN pnpm install --frozen-lockfile --prod
 WORKDIR /app/apps/workers/$WORKER

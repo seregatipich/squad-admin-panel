@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -542,5 +543,141 @@ func TestPanelDiskUsage_ForceBypassesCache(t *testing.T) {
 	postForceDu := duCalls.Load()
 	if d.Handle(context.Background(), cachedReq, func(rpc.StreamFrame) {}); duCalls.Load() != postForceDu {
 		t.Fatalf("non-force call after force re-invoked du; cache write skipped")
+	}
+}
+
+func withDiagSink(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	prev := DiagSink
+	DiagSink = buf
+	t.Cleanup(func() { DiagSink = prev })
+	return buf
+}
+
+func TestDiagLog_ShapeMergesPayloadAndRequiredFields(t *testing.T) {
+	buf := withDiagSink(t)
+
+	DiagLog("bridge", "bridge.panic", "fatal", "test panic", map[string]any{"foo": "bar", "n": 42})
+
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {
+		t.Fatalf("decode: %v (raw=%q)", err, buf.String())
+	}
+	if rec["DIAG_EVENT"] != "1" {
+		t.Fatalf("DIAG_EVENT = %v, want '1'", rec["DIAG_EVENT"])
+	}
+	if rec["component"] != "bridge" {
+		t.Fatalf("component = %v, want 'bridge'", rec["component"])
+	}
+	if rec["kind"] != "bridge.panic" {
+		t.Fatalf("kind = %v, want 'bridge.panic'", rec["kind"])
+	}
+	if rec["severity"] != "fatal" {
+		t.Fatalf("severity = %v, want 'fatal'", rec["severity"])
+	}
+	if rec["message"] != "test panic" {
+		t.Fatalf("message = %v, want 'test panic'", rec["message"])
+	}
+	if rec["foo"] != "bar" {
+		t.Fatalf("payload not merged: %v", rec)
+	}
+	if rec["n"] != float64(42) {
+		t.Fatalf("payload n not merged: %v", rec["n"])
+	}
+	if _, ok := rec["ts"].(string); !ok {
+		t.Fatalf("ts missing or not a string: %v", rec["ts"])
+	}
+}
+
+func TestDiagLog_PayloadCannotOverrideReservedKeys(t *testing.T) {
+	buf := withDiagSink(t)
+
+	DiagLog("bridge", "bridge.test", "info", "hi", map[string]any{
+		"DIAG_EVENT": "0",
+		"kind":       "evil",
+		"component":  "evil",
+		"severity":   "evil",
+		"message":    "evil",
+		"ts":         "evil",
+	})
+
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if rec["DIAG_EVENT"] != "1" || rec["kind"] != "bridge.test" || rec["component"] != "bridge" || rec["severity"] != "info" || rec["message"] != "hi" {
+		t.Fatalf("reserved keys overridden: %+v", rec)
+	}
+	if rec["ts"] == "evil" {
+		t.Fatalf("ts overridden by payload")
+	}
+}
+
+func TestDispatcher_PanicEmitsDiagAndReturnsInternalError(t *testing.T) {
+	buf := withDiagSink(t)
+
+	resetPanelDiskUsageCache()
+	t.Cleanup(resetPanelDiskUsageCache)
+
+	d := &Dispatcher{
+		duFn:     func(string) (int64, error) { panic("synthetic-du-panic") },
+		statfsFn: func(string, *syscall.Statfs_t) error { return nil },
+		dockerDfFn: func() ([]dockerVol, []dockerImg, int64, error) {
+			return []dockerVol{}, []dockerImg{}, 0, nil
+		},
+		panelRoot: t.TempDir(),
+	}
+
+	resp := d.Handle(context.Background(), &rpc.Request{
+		ID:     "req-panic-1",
+		Method: "panel_disk_usage",
+		Params: json.RawMessage(`{}`),
+	}, func(rpc.StreamFrame) {})
+
+	if resp.OK {
+		t.Fatalf("expected error response after panic, got success")
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeInternal {
+		t.Fatalf("expected internal error, got %+v", resp.Error)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, `"DIAG_EVENT":"1"`) {
+		t.Fatalf("expected DIAG_EVENT line in stderr, got %q", out)
+	}
+	if !strings.Contains(out, `"kind":"bridge.panic"`) {
+		t.Fatalf("expected kind=bridge.panic, got %q", out)
+	}
+	if !strings.Contains(out, `"recovered":"synthetic-du-panic"`) {
+		t.Fatalf("expected recovered field with the panic value, got %q", out)
+	}
+	if !strings.Contains(out, `"request_id":"req-panic-1"`) {
+		t.Fatalf("expected request_id field, got %q", out)
+	}
+}
+
+func TestDispatcher_HostAgentRestartEmitsDiag(t *testing.T) {
+	buf := withDiagSink(t)
+
+	d := &Dispatcher{
+		RestartCommand: func() *exec.Cmd { return exec.Command("true") },
+		restartDelay:   time.Millisecond,
+	}
+
+	resp := d.Handle(context.Background(), &rpc.Request{
+		ID:     "req-restart-1",
+		Method: "host_agent_restart",
+	}, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected success, got %+v", resp.Error)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, `"kind":"bridge.host_agent_restart"`) {
+		t.Fatalf("expected kind=bridge.host_agent_restart, got %q", out)
+	}
+	if !strings.Contains(out, `"request_id":"req-restart-1"`) {
+		t.Fatalf("expected request_id field, got %q", out)
 	}
 }

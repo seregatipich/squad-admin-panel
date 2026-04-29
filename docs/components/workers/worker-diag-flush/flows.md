@@ -74,6 +74,44 @@ Field-list missing one or more of `id`, `ts`, `component`, `severity`, `kind`, `
 3. The `streamId` is still added to `ackIds` so the entry leaves the pending list.
 4. The bad row is dropped permanently. There is no dead-letter queue; we accept the loss because the row was never well-formed in the first place. Operators can grep `docker logs worker-diag-flush | grep "malformed diag entry"` to inventory drops.
 
+## Background — journald forwarder
+
+Independent of the consumer loop, `startJournaldForwarder({ redis, log })` runs as a side-process. Producer side: the Go bridge writes structured JSON lines to stderr via `handlers.DiagLog(...)` (see [`docs/components/bridge/api.md`](../../bridge/api.md#diagnostic-events-journald)), captured by systemd into the journal.
+
+```
+panel-host-bridge stderr (DIAG_EVENT JSON line)
+        │
+        ▼
+systemd-journald (per-unit log buffer)
+        │
+        ▼
+worker-diag-flush spawns:
+   journalctl -u panel-host-bridge -o json -f --since "30s ago"
+        │
+        ▼  stdout (one journald JSON record per line)
+parseJournaldLine(line)
+        │  unwraps MESSAGE → inner JSON → checks DIAG_EVENT === '1'
+        ▼
+handleJournaldLine → redis.xadd diag:queue MAXLEN ~ 100000 ...
+        │
+        ▼
+Same diag:queue stream consumed by the main XREADGROUP loop above.
+```
+
+Tunables (env, all optional):
+
+- `DIAG_JOURNALD_FORWARD=false` disables the subprocess entirely — useful for local dev where the bridge isn't running.
+- `DIAG_JOURNALD_UNIT` overrides the unit name (default `panel-host-bridge`).
+- `DIAG_JOURNALD_SINCE` overrides the `--since` window (default `30s ago`).
+
+Failure modes:
+
+- **`journalctl` binary missing**: `child.on('error')` logs `error: journalctl spawn failed` once. The forwarder is dead but the main consumer loop and the heartbeat keep running. The container will keep restarting only if `journalctl` is the *first* failure — by design we don't crash on it because the consumer half is the worker's primary job.
+- **Per-line parse failure** (malformed journald JSON, MESSAGE that isn't our DIAG_EVENT shape): `parseJournaldLine` returns `null` and the line is silently skipped. No log spam — non-DIAG_EVENT journal entries are the common case.
+- **`redis.xadd` rejects** (Redis disconnected, network blip): `handleJournaldLine` rejects, the surrounding `.catch(...)` logs `warn: diag journald-forward failed`. The next line resumes normally because each call is independent. There is no replay — losing a few lines during a Redis outage is acceptable since both halves of the panel can independently observe the bridge.
+- **Subprocess exit** (host journald restarts, container OOM-killed-but-recovered): `child.on('exit')` logs `info: journalctl exited`. The subprocess does NOT auto-restart inside this worker; compose's `restart: unless-stopped` catches container-level deaths but a journalctl exit alone does not crash the worker. **This is a deliberate trade-off** — restart-loop logic is deferred to Phase A3 if it becomes a real issue.
+- **Shutdown**: `shutdown(sig)` calls `journald?.stop()` which sends `SIGTERM` to the child before awaiting the in-flight batch. The child usually exits in <100 ms.
+
 ## Background — heartbeat
 
 Independent of the main loop, `startHeartbeat({ redis, name: 'diag-flush', statusFn: () => 'ok' })` publishes `worker:heartbeat:diag-flush` every 5 s with a 30 s TTL. If the loop is wedged (e.g. a 30 s pg-statement-timeout), the heartbeat keeps writing — `statusFn` returns `'ok'` regardless. A truly dead worker stops writing and the key expires within 30 s.
@@ -105,7 +143,10 @@ If the process crashes (uncaught exception, OOM, host reboot):
 |---|---|---|
 | Redis (`diag:queue`) | in | `XREADGROUP > BLOCK 1000` |
 | Redis (`diag:queue`) | out | `XACK` |
+| Redis (`diag:queue`) | out | `XADD` from journald forwarder (one per `DIAG_EVENT` line on `panel-host-bridge` journal) |
 | Redis (heartbeat) | out | `SET worker:heartbeat:diag-flush ... EX 30` |
 | Postgres (`diagnostic_events`) | out | batched `INSERT ... ON CONFLICT DO NOTHING` |
+| systemd-journald (`panel-host-bridge.service`) | in | `journalctl -u panel-host-bridge -o json -f --since "30s ago"` subprocess stdout |
 | API `/api/v1/health/workers` | indirect | reads the heartbeat key |
 | `@squad/diag` (producer) | none direct | both sides talk to Redis only |
+| `apps/bridge` (`handlers.DiagLog`) | indirect | bridge writes JSON lines to stderr; journald captures; the forwarder reads + replays into `diag:queue` |

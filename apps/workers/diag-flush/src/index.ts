@@ -5,6 +5,7 @@ import { DIAG_STREAM_KEY, startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
+import { startJournaldForwarder } from './journald-bridge.js';
 
 const log = pino({
   level: process.env.LOG_LEVEL ?? 'info',
@@ -163,6 +164,16 @@ async function main(): Promise<void> {
   const diag = createDiag({ redis, log });
   await emitStarted(diag);
 
+  const journaldEnabled = process.env.DIAG_JOURNALD_FORWARD !== 'false';
+  const journald = journaldEnabled
+    ? startJournaldForwarder({
+        redis,
+        log,
+        unitName: process.env.DIAG_JOURNALD_UNIT,
+        since: process.env.DIAG_JOURNALD_SINCE,
+      })
+    : null;
+
   let stopped = false;
   let inflight: Promise<void> | null = null;
   const shutdown = async (sig: NodeJS.Signals) => {
@@ -170,6 +181,7 @@ async function main(): Promise<void> {
     stopped = true;
     await emitStopped(diag, sig);
     stopHeartbeat();
+    journald?.stop();
     if (inflight) {
       log.info('awaiting in-flight batch before teardown');
       await inflight.catch(() => undefined);

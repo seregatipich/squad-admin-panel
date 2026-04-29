@@ -4,16 +4,21 @@
 
 ### Added
 
-- Emits diagnostic events to `diag:queue` (`@squad/diag`):
-  - `diag_flush.started` (info) — right after the consumer-group create + `startHeartbeat`.
-  - `diag_flush.stopped` (info) — inside the SIGTERM/SIGINT handler before in-flight batches are awaited.
-- Per-iteration `run_ok`/`run_failed` are intentionally NOT emitted — the consumer loop is continuous and would saturate the stream.
-- New `emitStarted` / `emitStopped` helpers exported from `src/index.ts` to keep the emits unit-testable.
+- New journald-bridge forwarder ([`apps/workers/diag-flush/src/journald-bridge.ts`](../../../../apps/workers/diag-flush/src/journald-bridge.ts), Task 17 — Phase A2 final task). The worker now spawns `journalctl -u panel-host-bridge -o json -f --since "30s ago"` as a child process at startup, parses each line, and `XADD`s entries that contain `DIAG_EVENT: "1"` into `diag:queue` so they merge with the rest of the diag stream consumed by the same worker. The Go bridge writes the marker lines via `handlers.DiagLog(...)`; see [`docs/components/bridge/api.md`](../../bridge/api.md#diagnostic-events-journald). This avoids giving the privileged daemon a Redis connection.
+- Three new exports from `src/journald-bridge.ts`: `startJournaldForwarder({ redis, log, unitName?, since?, spawnFn? })`, `parseJournaldLine(line)`, `handleJournaldLine(line, opts)`.
+- New env vars `DIAG_JOURNALD_FORWARD` (default `true`), `DIAG_JOURNALD_UNIT` (default `panel-host-bridge`), `DIAG_JOURNALD_SINCE` (default `30s ago`).
+- New compose service mounts: `/var/log/journal:/var/log/journal:ro` and `/etc/machine-id:/etc/machine-id:ro` so `journalctl` can read the host journal from inside the container.
+- `worker.Dockerfile` now installs the `systemd` package (which provides `journalctl`) when `WORKER=diag-flush`. Other worker images stay slim.
+- New unit suite [`test/journald.test.ts`](../../../../apps/workers/diag-flush/test/journald.test.ts) — 8 cases on `parseJournaldLine` (happy path, blank, non-JSON, missing MESSAGE, plain log line, missing DIAG_EVENT, missing required field, default `ts`) and 3 cases on `handleJournaldLine` (XADD wire shape with `MAXLEN ~ 100_000`, skip non-diag lines, skip blank lines).
+- New `uuid` runtime dependency on the diag-flush package (forwarder uses `v7 as uuidv7` to mint stream entry ids).
+- Earlier on the same day: emits `diag_flush.started` / `diag_flush.stopped` (added pre-Task-17). Per-iteration `run_ok`/`run_failed` are intentionally NOT emitted — the consumer loop is continuous and would saturate the stream.
+- `emitStarted` / `emitStopped` helpers exported from `src/index.ts` to keep the emits unit-testable.
 - Re-added `@squad/diag` workspace dependency (it was removed in the 2026-04-28 changelog when the worker was a pure consumer; it now also produces lifecycle events).
 - `test/diag-lifecycle.test.ts` covering both helpers.
 
 ### Changed
 
+- `main()` shutdown handler now calls `journald?.stop()` before awaiting the in-flight batch and tearing down the SQL/Redis pools. The forwarder receives `SIGTERM` and exits cleanly.
 - Replaced the `process.env.VITEST !== 'true'` guard around `main()` with the same `realpathSync` entrypoint check used by `worker-event-partition`. The previous guard prevented the spawned subprocess in the contract test from booting because `VITEST=true` leaks from the test runner into the spawn env.
 
 ## 2026-04-28

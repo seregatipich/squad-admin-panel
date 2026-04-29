@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -29,6 +30,38 @@ import (
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/sysd"
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
 )
+
+// DiagSink is the io.Writer that diagLog writes structured JSON lines to. It
+// defaults to os.Stderr (captured by systemd into the journal) and tests swap
+// it for a buffer to assert the wire format.
+var DiagSink io.Writer = os.Stderr
+
+// DiagLog writes a single structured journal line that the worker-diag-flush
+// journald forwarder picks up. We intentionally write to stderr (journald-
+// captured) instead of touching Redis from the privileged daemon — keeps the
+// attack surface minimal. Payload keys are merged into the top-level record so
+// they appear flat in the journald JSON view.
+func DiagLog(component, kind, severity, message string, payload map[string]any) {
+	rec := map[string]any{
+		"DIAG_EVENT": "1",
+		"component":  component,
+		"kind":       kind,
+		"severity":   severity,
+		"message":    message,
+		"ts":         time.Now().UTC().Format(time.RFC3339),
+	}
+	for k, v := range payload {
+		if _, reserved := rec[k]; reserved {
+			continue
+		}
+		rec[k] = v
+	}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return
+	}
+	fmt.Fprintln(DiagSink, string(b))
+}
 
 var Version = "dev"
 
@@ -67,7 +100,17 @@ func (d *Dispatcher) Handle(
 	ctx context.Context,
 	req *rpc.Request,
 	onStream func(rpc.StreamFrame),
-) rpc.Response {
+) (resp rpc.Response) {
+	defer func() {
+		if r := recover(); r != nil {
+			DiagLog("bridge", "bridge.panic", "fatal", fmt.Sprintf("dispatcher panic: %v", r), map[string]any{
+				"method":     req.Method,
+				"request_id": req.ID,
+				"recovered":  fmt.Sprintf("%v", r),
+			})
+			resp = rpc.NewErrorResponse(req.ID, rpc.CodeInternal, fmt.Sprintf("dispatcher panic: %v", r))
+		}
+	}()
 	switch req.Method {
 	case "ping":
 		return d.ping(req)
@@ -112,6 +155,9 @@ func (d *Dispatcher) Handle(
 }
 
 func (d *Dispatcher) hostAgentRestart(req *rpc.Request) rpc.Response {
+	DiagLog("bridge", "bridge.host_agent_restart", "info", "host_agent_restart invoked", map[string]any{
+		"request_id": req.ID,
+	})
 	delay := d.restartDelay
 	if delay <= 0 {
 		delay = restartFlushDelay

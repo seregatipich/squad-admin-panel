@@ -1,5 +1,22 @@
 # `bridge` — changelog
 
+## 2026-04-29 — DIAG_EVENT emit on connect / disconnect / panic / sigterm / host_agent_restart
+
+### Added
+
+- `handlers.DiagLog(component, kind, severity, message, payload)` ([`apps/bridge/internal/handlers/handlers.go`](../../../apps/bridge/internal/handlers/handlers.go)) — writes a single JSON line to `handlers.DiagSink` (`os.Stderr` by default) with `DIAG_EVENT: "1"`, the required `component`/`kind`/`severity`/`message`/`ts` fields, and any caller-supplied payload merged flat into the record. Reserved keys (`DIAG_EVENT`, `component`, `kind`, `severity`, `message`, `ts`) cannot be overridden by the payload. The bridge does NOT connect to Redis; `worker-diag-flush` reads journald and forwards entries into `diag:queue`.
+- Connection-accept emit `bridge.client.connected` (info, payload `{ uid, pid, user }`) right after `auth.ResolvePeer` succeeds in `cmd/panel-host-bridge/main.go::serveConn`.
+- Connection-close emit `bridge.client.disconnected` via a `defer` in `serveConn`. `reason` is one of `eof` (peer EOF), `shutdown` (listener closed during SIGTERM), `read_frame_error` (frame-decode failure), or `untrusted_peer` (the `auth.ResolvePeer` reject path; severity `warn`).
+- Dispatcher panic recovery: `Dispatcher.Handle` now wraps the method dispatch in a `defer recover()` block. On panic it emits `bridge.panic` (fatal, payload `{ method, request_id, recovered }`) and returns `rpc.NewErrorResponse(req.ID, internal, ...)` so the caller sees a normal error frame instead of the connection wedging.
+- SIGTERM/SIGINT handler in `cmd/panel-host-bridge/main.go` emits `bridge.signal.sigterm` (info, payload `{ signal, version }`) as its first action, before closing the listener.
+- `host_agent_restart` handler emits `bridge.host_agent_restart` (info, payload `{ request_id }`) as its first action, before the delayed `systemctl restart` goroutine is scheduled.
+- `apps/bridge/internal/handlers/handlers_test.go` — three new cases covering: helper shape (`DIAG_EVENT="1"`, `ts` injected, payload merged), reserved keys cannot be overridden by payload, and dispatcher panic recovery emits `bridge.panic` AND returns `internal` error to the caller.
+
+### Notes
+
+- This is the bridge half of Task 17 (Phase A2 final task) of `docs/superpowers/plans/2026-04-28-diagnostic-bundle.md`. The forwarder half lives in `worker-diag-flush`; see [`docs/components/workers/worker-diag-flush/changelog.md`](../workers/worker-diag-flush/changelog.md#2026-04-29).
+- API-side `bridge.client.connected` / `bridge.client.disconnected` / `bridge.rpc.error` emits (Task 9, [`apps/api/src/plugins/bridge.ts`](../../../apps/api/src/plugins/bridge.ts)) are unchanged and complementary — the Go-side emits cover the case where the API is offline or the bridge restarts independently.
+
 ## 2026-04-28 — `panel_disk_usage` accepts optional `force` param
 
 ### Changed

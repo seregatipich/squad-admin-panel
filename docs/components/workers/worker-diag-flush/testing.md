@@ -5,6 +5,8 @@
 | Path | Tier | What it covers | What it does NOT cover |
 |---|---|---|---|
 | [`apps/workers/diag-flush/test/contract.test.ts`](../../../../apps/workers/diag-flush/test/contract.test.ts) | Unit (Tier 1) | `flushBatch()` parses XREAD entries, builds the INSERT shape, ACKs both valid and malformed entries, and short-circuits on empty input. | The main `XREADGROUP` loop, the consumer-group creation, the heartbeat publisher, the SIGTERM handler. |
+| [`apps/workers/diag-flush/test/diag-lifecycle.test.ts`](../../../../apps/workers/diag-flush/test/diag-lifecycle.test.ts) | Unit (Tier 1) | `emitStarted` / `emitStopped` produce the expected `diag.emit` payloads. | The full `main()` boot sequence — these helpers are exported for unit-testability. |
+| [`apps/workers/diag-flush/test/journald.test.ts`](../../../../apps/workers/diag-flush/test/journald.test.ts) | Unit (Tier 1) | `parseJournaldLine` (8 cases) and `handleJournaldLine` (3 cases) — wraps/unwraps the journald `MESSAGE` field, filters on `DIAG_EVENT === '1'`, validates required fields, defaults `ts`, and asserts the resulting `redis.xadd('diag:queue', 'MAXLEN', '~', 100_000, '*', ...)` field-list shape. | The `journalctl` subprocess itself — not spawned in unit tests. End-to-end coverage requires a live `panel-host-bridge` journal. |
 
 ## How to run
 
