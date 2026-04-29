@@ -7,6 +7,10 @@
 - `file_read_tail({ path, max_bytes? }) → { content, offset, size, truncated }` — 20th whitelisted method. Opens `path`, seeks to `max(0, size - max_bytes)`, reads to EOF, then snaps to the next `\n` so the tail never starts mid-line. `offset` reports where `content` begins in the source file; `truncated` is `true` whenever the read window omitted any prefix. Path validation reuses `validateReadablePath` (same allowlist as `file_read`). Default `max_bytes` is 65536 (64 KiB); values `<= 0` or `> 1048576` (1 MiB) snap back to the default. Designed for the diagnostic-bundle builder to capture the tail of `SquadGame.log` without slurping a multi-MB file.
 - `apps/bridge/internal/handlers/handlers_test.go` — four cases (`TestFileReadTail_SnapsToNextNewline`, `TestFileReadTail_SmallFileReturnsWholeContent`, `TestFileReadTail_ForbiddenPath`, `TestFileReadTail_DefaultCap`) using `t.Setenv("PANEL_DEPOT_HOST_PATH", t.TempDir())` to allowlist a per-test scratch dir.
 
+### Fixed
+
+- post-merge fix: `file_read_tail` `max_bytes` now clamps to 1 MiB ceiling instead of resetting to default. Callers passing `max_bytes > 1 MiB` (e.g. 2 MiB asking for "as much as you can") used to silently fall back to the 64 KiB default; they now get the full 1 MiB ceiling. Logic split into two branches (`<= 0` → default, `> ceiling` → ceiling). Two new tests in `apps/bridge/internal/handlers/handlers_test.go`: `TestFileReadTail_ClampsToCeiling` (passes 2 MiB on a 2 MiB file, asserts content length is within `[1 MiB - 33B, 1 MiB]` and strictly larger than the 64 KiB default) and `TestFileReadTail_HonorsExplicitMaxBytes` (passes 32 KiB on a 200 KiB file, asserts the read window is within `[32 KiB - 33B, 32 KiB]`).
+
 ### Notes
 
 - This is the bridge half of Task 18 (Phase A3) of `docs/superpowers/plans/2026-04-28-diagnostic-bundle.md`. TS allowlist + client method bumped in the same commit.

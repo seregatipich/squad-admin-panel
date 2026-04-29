@@ -99,7 +99,7 @@ Reads up to `max_bytes` from the **end** of `path`. When `offset > 0` the read s
 | Field | Type | Description |
 |---|---|---|
 | `path` | `string` | Required. Same allowlist as `file_read` (configs / saved / depot RO / sentinel). |
-| `max_bytes` | `number` | Optional. Default `65536` (64 KiB). Values `<= 0` or `> 1048576` (1 MiB) snap back to the default. |
+| `max_bytes` | `number` | Optional. Clamp semantics: `<= 0` (or unset) defaults to `65536` (64 KiB); values in `(0, 1048576]` (1 MiB) are honored as-is; values `> 1048576` are clamped down to the 1 MiB ceiling. |
 
 | Result field | Type | Description |
 |---|---|---|

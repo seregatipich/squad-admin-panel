@@ -256,8 +256,10 @@ func (d *Dispatcher) fileReadTail(req *rpc.Request) rpc.Response {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
 	}
 	maxBytes := p.MaxBytes
-	if maxBytes <= 0 || maxBytes > fileReadTailMaxAllowedBytes {
+	if maxBytes <= 0 {
 		maxBytes = fileReadTailDefaultMaxBytes
+	} else if maxBytes > fileReadTailMaxAllowedBytes {
+		maxBytes = fileReadTailMaxAllowedBytes
 	}
 	f, err := os.Open(p.Path)
 	if err != nil {
