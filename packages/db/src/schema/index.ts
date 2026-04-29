@@ -1,5 +1,6 @@
 export * from './audit-log.js';
 export * from './config-versions.js';
+export * from './diagnostic-events.js';
 export * from './events.js';
 export * from './panel-meta.js';
 export * from './player-api-tokens.js';

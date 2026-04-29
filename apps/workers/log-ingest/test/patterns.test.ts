@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { LogIngestor } from '../src/parser/ingest.js';
-import { isBenignNoise, parseLine } from '../src/parser/patterns.js';
+import { describe, expect, it, vi } from 'vitest';
+import { LogIngestor, type SquadFatalReport } from '../src/parser/ingest.js';
+import { detectSquadFatal, isBenignNoise, parseLine } from '../src/parser/patterns.js';
 
 const SERVER_ID = '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c5';
 
@@ -92,5 +92,66 @@ describe('LogIngestor event extraction', () => {
         '[2026.04.23-11.24.41:079][141]LogStreaming: Error: CreateExport: /Game/Vehicles/RHIB/BP_RHIB_Logistics - Could not find template object for EngineFailedStartAudio',
       ),
     ).toHaveLength(0);
+  });
+});
+
+describe('Squad fatal/log-exit/assertion detection', () => {
+  it('detects LogExit lines and exposes ts + msg', () => {
+    const line = '[2026.04.23-11.40.00:001][999]LogExit: Game engine shut down with exit code 0';
+    const match = detectSquadFatal(line);
+    expect(match).not.toBeNull();
+    expect(match?.ts).toBe('2026.04.23-11.40.00:001');
+    expect(match?.message).toBe('Game engine shut down with exit code 0');
+    expect(match?.file).toBeNull();
+    expect(match?.line).toBeNull();
+  });
+
+  it('detects Fatal error lines and exposes ts + msg', () => {
+    const line =
+      '[2026.04.23-11.41.10:500][123]Fatal error: Array index out of bounds: 5 from an array of size 3';
+    const match = detectSquadFatal(line);
+    expect(match?.ts).toBe('2026.04.23-11.41.10:500');
+    expect(match?.message).toBe('Array index out of bounds: 5 from an array of size 3');
+    expect(match?.file).toBeNull();
+    expect(match?.line).toBeNull();
+  });
+
+  it('detects Assertion failed lines and exposes file + line', () => {
+    const line =
+      'Assertion failed: !Children.Contains(Other) [File:/SquadGame/SCharacter.cpp Line: 1842]';
+    const match = detectSquadFatal(line);
+    expect(match?.message).toBe('!Children.Contains(Other)');
+    expect(match?.file).toBe('/SquadGame/SCharacter.cpp');
+    expect(match?.line).toBe(1842);
+    expect(match?.ts).toBeNull();
+  });
+
+  it('LogIngestor invokes onSquadFatal once per matching line for each pattern', () => {
+    const onSquadFatal = vi.fn();
+    const ing = new LogIngestor({ serverId: SERVER_ID, beaconPort: 15000, onSquadFatal });
+
+    ing.ingest('[2026.04.23-11.40.00:001][999]LogExit: Game engine shut down');
+    ing.ingest('[2026.04.23-11.41.10:500][123]Fatal error: nullptr deref in FStreamingManager');
+    ing.ingest('Assertion failed: bIsValid [File:/SquadGame/Foo.cpp Line: 42]');
+
+    expect(onSquadFatal).toHaveBeenCalledTimes(3);
+    const calls = onSquadFatal.mock.calls.map((c) => c[0] as SquadFatalReport);
+    expect(calls[0]?.message).toBe('Game engine shut down');
+    expect(calls[0]?.ts).toBe('2026.04.23-11.40.00:001');
+    expect(calls[0]?.file).toBeNull();
+    expect(calls[0]?.line).toBeNull();
+    expect(calls[1]?.message).toBe('nullptr deref in FStreamingManager');
+    expect(calls[2]?.file).toBe('/SquadGame/Foo.cpp');
+    expect(calls[2]?.line).toBe(42);
+    expect(calls[2]?.raw).toBe('Assertion failed: bIsValid [File:/SquadGame/Foo.cpp Line: 42]');
+  });
+
+  it('does not invoke onSquadFatal for ordinary log lines', () => {
+    const onSquadFatal = vi.fn();
+    const ing = new LogIngestor({ serverId: SERVER_ID, beaconPort: 15000, onSquadFatal });
+    ing.ingest(
+      '[2026.04.23-11.30.20:485][  0]LogGameMode: Display: Match State Changed from X to Y',
+    );
+    expect(onSquadFatal).not.toHaveBeenCalled();
   });
 });

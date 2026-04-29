@@ -1,9 +1,11 @@
 import type { BridgeClient } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
 import { servers } from '@squad/db/schema';
+import type { Diag } from '@squad/diag';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import fp from 'fastify-plugin';
+import type Redis from 'ioredis';
 import type { LiveBus } from './live-bus.js';
 
 /**
@@ -113,6 +115,8 @@ interface TickDeps {
   bridge: Pick<BridgeClient, 'containerInspect'>;
   liveBus?: LiveBus;
   log: Pick<FastifyBaseLogger, 'info' | 'warn' | 'error' | 'debug'>;
+  redis: Pick<Redis, 'get'>;
+  diag: Pick<Diag, 'emit'>;
   bridgeFailures: Map<string, number>;
   state: {
     lastTickAt: number | null;
@@ -175,6 +179,54 @@ async function reconcileServer(deps: TickDeps, row: { id: string; status: string
     ts: new Date().toISOString(),
     data: { server_id: row.id, status: mapped.status, source: 'reconciler' },
   });
+  if (row.status === 'running' && mapped.status === 'stopped') {
+    await emitContainerExitDiag(deps, row.id, res);
+  }
+}
+
+async function emitContainerExitDiag(
+  deps: TickDeps,
+  serverId: string,
+  res: Awaited<ReturnType<BridgeClient['containerInspect']>>,
+): Promise<void> {
+  const { redis, diag, log } = deps;
+  let wasRequested = false;
+  try {
+    wasRequested = (await redis.get(`stop:requested:${serverId}`)) !== null;
+  } catch (err) {
+    log.warn(
+      { err: (err as Error).message, serverId },
+      'reconciler: failed to read stop fence; treating exit as unexpected',
+    );
+  }
+  const exitCode = res.exit_code ?? -1;
+  const oomKilled = !!res.oom_killed;
+  const errorString = res.error ?? '';
+  const signal = errorString === '' ? null : errorString;
+  await diag.emit({
+    component: 'reconciler',
+    kind: wasRequested ? 'container.exited' : 'container.unexpected_exit',
+    severity: exitCode === 0 ? 'info' : 'error',
+    serverId,
+    message: `container exited (code=${exitCode}${oomKilled ? ', oom' : ''})`,
+    payload: {
+      exit_code: exitCode,
+      oom_killed: oomKilled,
+      signal,
+      finished_at: res.finished_at || null,
+      started_at: res.started_at || null,
+    },
+  });
+  if (wasRequested) {
+    await diag.emit({
+      component: 'reconciler',
+      kind: 'server.stop.reconciler_confirmed',
+      severity: 'info',
+      serverId,
+      message: 'stop request confirmed by reconciler',
+      payload: { exit_code: exitCode },
+    });
+  }
 }
 
 export default fp(async (app) => {
@@ -196,6 +248,8 @@ export default fp(async (app) => {
       bridge: app.bridge,
       liveBus: app.liveBus,
       log: app.log,
+      redis: app.redis,
+      diag: app.diag,
       bridgeFailures,
       state: tickState,
     };
@@ -338,6 +392,9 @@ export default fp(async (app) => {
         ts: new Date().toISOString(),
         data: { server_id: serverId, status: mapped.status, source: 'reconciler' },
       });
+      if (row.status === 'running' && mapped.status === 'stopped') {
+        await emitContainerExitDiag(deps(), serverId, inspected);
+      }
     }
     return {
       inspected_state: inspected.state,

@@ -13,11 +13,14 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import Redis from 'ioredis';
 import postgres from 'postgres';
+import diagPlugin from '../../src/lib/diag.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import auditPluginFactory from '../../src/plugins/audit.js';
 import authPlugin from '../../src/plugins/auth.js';
+import errorDiagPlugin from '../../src/plugins/error-diag.js';
 import healthPlugin from '../../src/plugins/health.js';
+import heartbeatWatchPlugin from '../../src/plugins/heartbeat-watch.js';
 import installProgressPlugin from '../../src/plugins/install-progress.js';
 import liveBusPlugin from '../../src/plugins/live-bus.js';
 import requestContextPlugin from '../../src/plugins/request-context.js';
@@ -128,6 +131,8 @@ export interface FakeBridge {
     image: string;
     restart_count: number;
     labels: Record<string, string>;
+    oom_killed?: boolean;
+    error?: string;
   }>;
   containerStats: (p: { name: string }) => Promise<{
     name: string;
@@ -161,6 +166,20 @@ export interface FakeBridge {
   directoryDelete: (p: { path: string }) => Promise<{ removed: boolean }>;
   processInfo: (p: { pid: number }) => Promise<{ pid: number; exists: boolean }>;
   hostAgentRestart: () => Promise<{ status: 'restarting' }>;
+  panelDiskUsage: (opts?: { force?: boolean }) => Promise<{
+    configs_bytes: number;
+    saved_total_bytes: number;
+    saved_per_server: Array<{ uuid: string; bytes: number }>;
+    depot_volume_bytes: number;
+    docker_volumes: Array<{ name: string; bytes: number }>;
+    docker_images: Array<{ repository: string; tag: string; bytes: number }>;
+    audit_archive_bytes: number;
+    total_panel_bytes: number;
+    host_total_bytes: number;
+    host_used_bytes: number;
+    computed_at: string;
+    cache_age_seconds: number;
+  }>;
   connect(): Promise<void>;
   close(): Promise<void>;
   /** Overridable in-memory file store; routes use /api/v1/servers/:id/configs
@@ -248,6 +267,20 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
     directoryDelete: async () => ({ removed: true }),
     processInfo: async ({ pid }) => ({ pid, exists: true }),
     hostAgentRestart: async () => ({ status: 'restarting' as const }),
+    panelDiskUsage: async () => ({
+      configs_bytes: 0,
+      saved_total_bytes: 0,
+      saved_per_server: [],
+      depot_volume_bytes: 0,
+      docker_volumes: [],
+      docker_images: [],
+      audit_archive_bytes: 0,
+      total_panel_bytes: 0,
+      host_total_bytes: 0,
+      host_used_bytes: 0,
+      computed_at: new Date().toISOString(),
+      cache_age_seconds: 0,
+    }),
   };
   return { ...base, ...overrides, files };
 }
@@ -370,6 +403,9 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(cookie, { secret: TEST_SESSION_SECRET });
   await app.register(websocket);
   await app.register(requestContextPlugin);
+  await app.register(diagPlugin);
+  await app.register(errorDiagPlugin);
+  await app.register(heartbeatWatchPlugin);
   await app.register(authPlugin);
   await app.register(auditPluginFactory);
   await app.register(installProgressPlugin);

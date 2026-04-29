@@ -5,6 +5,31 @@
 ### Fixed
 
 - `docker-compose.yml`: replaced `group_add: [${PANEL_GID:-987}]` with `user: "0:${PANEL_GID:-987}"`. The previous form left the container running with `gid=0(root)` as primary GID; the bridge's SO_PEERCRED check inspects the primary GID and rejected every `containerLogsFollow` call with `rejected untrusted peer`. See [`docs/components/bridge/troubleshooting.md`](../../bridge/troubleshooting.md) and the matching [`config-sync` changelog entry](../config-sync/changelog.md#2026-04-28).
+### Added
+
+- Wired `@squad/diag` into the worker (`createDiag({ redis, log })` constructed once at startup, threaded into `TailManager` and per-server `LogIngestor`).
+- `tail.started` (info, per-server) emitted when the docker-logs-follow stream is opened.
+- `tail.stopped` (info, per-server) emitted when the stream ends, with `payload.reason ∈ {'aborted','stream-end','stream-error'}` and an optional `error` field for the error path.
+- `tails.changed` (info) emitted on net delta in the active tail set during `TailManager.reconcile()` — payload `{ added, removed, total }`. Unchanged reconciliation ticks emit nothing, mirroring the `worker-rcon` pattern.
+- `parser_error` (warn, per-server) emitted when a `[`-prefixed line fails the prefix regex or a category handler throws. Payload includes `lineSample` (≤200 chars), `regex` name, and `errorMessage`.
+- `squad.log.fatal` (fatal, per-server) emitted for every line matching `LogExit:`, `Fatal error:`, or `Assertion failed: … [File:… Line:…]`. Payload `{ ts, file, line, raw }` — `file`/`line` only populated for the assertion variant. No producer-side de-dupe; bundle render handles dedupe.
+- `src/manager.ts` extracts the aborters-map / reconcile-delta logic into a small testable `TailManager` class, mirroring `RconSupervisor`.
+- `LogIngestor` now accepts optional `onParseError` and `onSquadFatal` callbacks; the worker plumbs both into diag emits.
+- `detectSquadFatal(line)` exported from `src/parser/patterns.ts`; runs before the prefix parser so assertion lines (no timestamp prefix) still surface.
+- New unit tests:
+  - `test/patterns.test.ts` — three Squad-fatal pattern fixtures + LogIngestor callback invocation count.
+  - `test/manager.test.ts` — `TailManager.reconcile` net-delta correctness across add / remove / unchanged / swap, including the no-diag fallback.
+
+### Changed
+
+- `package.json` adds `@squad/diag: workspace:*` to `dependencies`.
+- `index.ts` reconcile loop now delegates to `TailManager.reconcile(wanted)` instead of mutating an inline `aborters` Map.
+- `tail.ts` exposes optional `onStarted` / `onStopped` callbacks; `onStopped` carries `{ reason, error? }`.
+
+### References
+
+- Spec: [`docs/superpowers/specs/2026-04-28-diagnostic-bundle-and-panel-disk-breakdown-design.md`](../../../superpowers/specs/2026-04-28-diagnostic-bundle-and-panel-disk-breakdown-design.md) §3.2
+- Plan: [`docs/superpowers/plans/2026-04-28-diagnostic-bundle.md`](../../../superpowers/plans/2026-04-28-diagnostic-bundle.md) Task 12
 
 ## 2026-04-26
 

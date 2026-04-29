@@ -217,6 +217,29 @@ services:
         condition: service_completed_successfully
     logging: *default-logging
 
+  worker-diag-flush:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: diag-flush } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      DIAG_FLUSH_BATCH_SIZE: ${DIAG_FLUSH_BATCH_SIZE:-100}
+      DIAG_JOURNALD_FORWARD: ${DIAG_JOURNALD_FORWARD:-true}
+      DIAG_JOURNALD_UNIT: ${DIAG_JOURNALD_UNIT:-panel-host-bridge}
+      DIAG_JOURNALD_SINCE: ${DIAG_JOURNALD_SINCE:-30s ago}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
   worker-metrics-sampler:
     build:
       context: .

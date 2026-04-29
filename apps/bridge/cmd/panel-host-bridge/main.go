@@ -66,8 +66,12 @@ func main() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
-		<-sigs
-		log.Info("shutdown signal received")
+		sig := <-sigs
+		handlers.DiagLog("bridge", "bridge.signal.sigterm", "info", "shutdown signal received", map[string]any{
+			"signal":  sig.String(),
+			"version": Version,
+		})
+		log.Info("shutdown signal received", "signal", sig.String())
 		_ = listener.Close()
 		cancel()
 	}()
@@ -155,10 +159,31 @@ func serveConn(ctx context.Context, log *slog.Logger, conn *net.UnixConn, disp *
 	if err != nil {
 		log.Warn("rejected untrusted peer",
 			"err", err, "uid", peer.UID, "user", peer.User, "pid", peer.PID)
+		handlers.DiagLog("bridge", "bridge.client.disconnected", "warn", "peer rejected — not in panel group", map[string]any{
+			"reason": "untrusted_peer",
+			"uid":    peer.UID,
+			"pid":    peer.PID,
+			"user":   peer.User,
+			"err":    err.Error(),
+		})
 		writeError(conn, "", rpc.CodeForbidden, "caller is not in the 'panel' group")
 		return
 	}
 	log.Info("peer connected", "uid", peer.UID, "pid", peer.PID, "user", peer.User)
+	handlers.DiagLog("bridge", "bridge.client.connected", "info", "panel peer connected", map[string]any{
+		"uid":  peer.UID,
+		"pid":  peer.PID,
+		"user": peer.User,
+	})
+	disconnectReason := "eof"
+	defer func() {
+		handlers.DiagLog("bridge", "bridge.client.disconnected", "info", "panel peer disconnected", map[string]any{
+			"reason": disconnectReason,
+			"uid":    peer.UID,
+			"pid":    peer.PID,
+			"user":   peer.User,
+		})
+	}()
 
 	var writeMu sync.Mutex
 	writeResp := func(resp rpc.Response) {
@@ -191,9 +216,15 @@ func serveConn(ctx context.Context, log *slog.Logger, conn *net.UnixConn, disp *
 		payload, err := rpc.ReadFrame(reader)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				disconnectReason = "eof"
+				return
+			}
+			if errors.Is(err, net.ErrClosed) {
+				disconnectReason = "shutdown"
 				return
 			}
 			log.Warn("read frame", "err", err)
+			disconnectReason = "read_frame_error"
 			return
 		}
 		var req rpc.Request

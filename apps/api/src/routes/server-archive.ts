@@ -201,6 +201,17 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
       schema: { params: idParam, body: restoreBody },
     },
     async (req, reply) => {
+      const actorSteamId64 = req.user?.steamId64?.toString();
+      const restoreT0 = Date.now();
+      await req.diag.emit({
+        component: 'api',
+        kind: 'server.restore.requested',
+        severity: 'info',
+        serverId: req.params.id,
+        actorSteamId64,
+        message: 'restore requested',
+        payload: { slug: req.body.slug },
+      });
       const archive = await app.db.query.servers.findFirst({
         where: and(eq(servers.id, req.params.id), isNotNull(servers.deletedAt)),
       });
@@ -276,6 +287,21 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
         type: 'server.restored',
         ts: new Date().toISOString(),
         data: { old_server_id: archive.id, new_server_id: newId },
+      });
+
+      await req.diag.emit({
+        component: 'api',
+        kind: 'server.restore.done',
+        severity: 'info',
+        serverId: newId,
+        actorSteamId64,
+        message: 'restore complete',
+        payload: {
+          archive_id: archive.id,
+          new_server_id: newId,
+          slug,
+          durationMs: Date.now() - restoreT0,
+        },
       });
 
       reply.code(201);

@@ -20,6 +20,26 @@ const hostRoutes: FastifyPluginAsync = async (app) => {
   );
 
   app.get(
+    '/api/v1/host/disk-usage',
+    {
+      config: { permissions: ['host:view'], audit: false },
+      schema: {
+        querystring: z.object({
+          refresh: z.coerce.boolean().optional(),
+        }),
+      },
+    },
+    async (req) => {
+      const { refresh } = req.query as { refresh?: boolean };
+      const usage = await app.bridge.panelDiskUsage(refresh ? { force: true } : undefined);
+      const hasCapacity = usage.host_total_bytes > 0;
+      const panelPct = hasCapacity ? (usage.total_panel_bytes / usage.host_total_bytes) * 100 : 0;
+      const usedPct = hasCapacity ? (usage.host_used_bytes / usage.host_total_bytes) * 100 : 0;
+      return { ...usage, panel_pct: panelPct, other_pct: Math.max(0, usedPct - panelPct) };
+    },
+  );
+
+  app.get(
     '/api/v1/host/bridge-status',
     {
       config: { audit: false },

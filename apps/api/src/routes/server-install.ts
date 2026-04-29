@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
+import type { Diag } from '@squad/diag';
 import {
   ALLOWED_CONFIG_FILES,
   DEPOT_VOLUME_NAME,
@@ -89,7 +90,7 @@ async function seedConfigs(
   rconPort: number,
   rconPassword: string,
   sink: Sink,
-): Promise<void> {
+): Promise<{ seededCount: number }> {
   const destDir = `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig`;
   sink({ ts: new Date().toISOString(), step: 'configs', message: `seeding ${destDir}` });
   for (const file of ALLOWED_CONFIG_FILES) {
@@ -130,9 +131,20 @@ async function seedConfigs(
     step: 'configs',
     message: `seeded ${ALLOWED_CONFIG_FILES.length} files + initial version baseline (saved/ auto-created by docker on container_run)`,
   });
+  return { seededCount: ALLOWED_CONFIG_FILES.length };
 }
 
-async function runInstall(app: FastifyInstance, serverId: string, sink: Sink): Promise<void> {
+interface InstallEmitContext {
+  diag: Diag;
+  actorSteamId64: string | undefined;
+}
+
+async function runInstall(
+  app: FastifyInstance,
+  serverId: string,
+  sink: Sink,
+  emitCtx: InstallEmitContext,
+): Promise<void> {
   const emit = (step: string, message: string, stream?: 'stdout' | 'stderr') =>
     sink({ ts: new Date().toISOString(), step, message, stream });
 
@@ -160,7 +172,24 @@ async function runInstall(app: FastifyInstance, serverId: string, sink: Sink): P
     app.encryptionKey,
     deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
   );
-  await seedConfigs(app, serverId, srv.displayName, settings.rconPort, rconPassword, sink);
+  const seedT0 = Date.now();
+  const { seededCount } = await seedConfigs(
+    app,
+    serverId,
+    srv.displayName,
+    settings.rconPort,
+    rconPassword,
+    sink,
+  );
+  await emitCtx.diag.emit({
+    component: 'api',
+    kind: 'server.install.depot_seed',
+    severity: 'info',
+    serverId,
+    actorSteamId64: emitCtx.actorSteamId64,
+    message: `seeded ${seededCount} cfg files`,
+    payload: { seededCount, durationMs: Date.now() - seedT0 },
+  });
 
   emit(
     'ufw',
@@ -172,6 +201,7 @@ async function runInstall(app: FastifyInstance, serverId: string, sink: Sink): P
     ['udp', settings.beaconPort, 'squad-beacon'],
     ['tcp', settings.rconPort, 'squad-rcon'],
   ] as const) {
+    const ufwT0 = Date.now();
     try {
       const r = await app.bridge.ufwRule({
         action: 'add',
@@ -180,12 +210,32 @@ async function runInstall(app: FastifyInstance, serverId: string, sink: Sink): P
         comment: `${comment}-${serverId.slice(0, 8)}`,
       });
       emit('ufw', `${proto}/${port} ${r.status}`, 'stdout');
+      await emitCtx.diag.emit({
+        component: 'api',
+        kind: 'server.install.ufw_rule',
+        severity: 'info',
+        serverId,
+        actorSteamId64: emitCtx.actorSteamId64,
+        message: `${proto}/${port} ${r.status}`,
+        payload: { proto, port, status: r.status, durationMs: Date.now() - ufwT0 },
+      });
     } catch (err) {
-      emit('ufw', `${proto}/${port} skipped: ${(err as Error).message}`, 'stderr');
+      const errorMessage = (err as Error).message;
+      emit('ufw', `${proto}/${port} skipped: ${errorMessage}`, 'stderr');
+      await emitCtx.diag.emit({
+        component: 'api',
+        kind: 'server.install.ufw_rule',
+        severity: 'error',
+        serverId,
+        actorSteamId64: emitCtx.actorSteamId64,
+        message: `${proto}/${port} failed: ${errorMessage}`,
+        payload: { proto, port, errorMessage, durationMs: Date.now() - ufwT0 },
+      });
     }
   }
 
   emit('container', `docker run --network host --name squad-${serverId} ${SERVER_IMAGE}`);
+  const containerT0 = Date.now();
   const res = await app.bridge.containerRun({
     server_id: serverId,
     image: SERVER_IMAGE,
@@ -201,6 +251,19 @@ async function runInstall(app: FastifyInstance, serverId: string, sink: Sink): P
     depot_volume: DEPOT_VOLUME_NAME,
   });
   emit('container', `started ${res.container_id}`);
+  await emitCtx.diag.emit({
+    component: 'api',
+    kind: 'server.install.container_run',
+    severity: 'info',
+    serverId,
+    actorSteamId64: emitCtx.actorSteamId64,
+    message: `container started ${res.container_id}`,
+    payload: {
+      container_id: res.container_id,
+      image: SERVER_IMAGE,
+      durationMs: Date.now() - containerT0,
+    },
+  });
 
   await app.db
     .update(servers)
@@ -210,6 +273,15 @@ async function runInstall(app: FastifyInstance, serverId: string, sink: Sink): P
       updatedAt: new Date(),
     })
     .where(eq(servers.id, serverId));
+  await emitCtx.diag.emit({
+    component: 'api',
+    kind: 'server.install.verify',
+    severity: 'info',
+    serverId,
+    actorSteamId64: emitCtx.actorSteamId64,
+    message: 'server row marked running',
+    payload: { container_id: res.container_id },
+  });
   emit('done', 'install complete; container running');
 }
 
@@ -282,13 +354,32 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
         ? { kind: 'steam' as const, steamId64: req.user.steamId64, tokenId: null }
         : { kind: 'system' as const, label: 'http-anonymous' };
       const actorIp = req.ip ?? null;
+      const actorSteamId64 = req.user?.steamId64?.toString();
+      const requestId = req.requestId;
+      const installDiag: Diag = {
+        emit: (ev) => app.diag.emit({ ...ev, requestId: ev.requestId ?? requestId }),
+      };
+      await installDiag.emit({
+        component: 'api',
+        kind: 'server.install.requested',
+        severity: 'info',
+        serverId: id,
+        actorSteamId64,
+        message: 'install requested',
+        payload: { display_name: srv.displayName, kind: 'install' },
+      });
       (async () => {
         const startedAt = Date.now();
         try {
-          await runInstall(app, id, (line) => {
-            app.log.info({ server_id: id, ...line }, 'install progress');
-            app.installProgress.publish(id, line);
-          });
+          await runInstall(
+            app,
+            id,
+            (line) => {
+              app.log.info({ server_id: id, ...line }, 'install progress');
+              app.installProgress.publish(id, line);
+            },
+            { diag: installDiag, actorSteamId64 },
+          );
           await writeAuditEntry(app.db, {
             actor,
             actorIp,
@@ -298,6 +389,15 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             context: { durationMs: Date.now() - startedAt },
             statusCode: 200,
             durationMs: Date.now() - startedAt,
+          });
+          await installDiag.emit({
+            component: 'api',
+            kind: 'server.install.done',
+            severity: 'info',
+            serverId: id,
+            actorSteamId64,
+            message: 'install complete',
+            payload: { totalDurationMs: Date.now() - startedAt },
           });
           // Spec §2.7.7 — push initial Admins.cfg with the current managed
           // segment to the freshly installed server. Worker config-sync
@@ -309,11 +409,12 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             enqueued_at: new Date().toISOString(),
           });
         } catch (err) {
+          const errorMessage = (err as Error).message;
           app.log.error({ err, server_id: id }, 'install failed');
           app.installProgress.publish(id, {
             ts: new Date().toISOString(),
             step: 'error',
-            message: (err as Error).message,
+            message: errorMessage,
             stream: 'stderr',
           });
           await app.db
@@ -326,9 +427,22 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             actionType: 'server.install.failed',
             targetType: 'server',
             targetId: id,
-            context: { error: (err as Error).message, durationMs: Date.now() - startedAt },
+            context: { error: errorMessage, durationMs: Date.now() - startedAt },
             statusCode: 500,
             durationMs: Date.now() - startedAt,
+          });
+          await installDiag.emit({
+            component: 'api',
+            kind: 'server.install.failed',
+            severity: 'error',
+            serverId: id,
+            actorSteamId64,
+            message: `install failed: ${errorMessage}`,
+            payload: {
+              stage: 'runInstall',
+              errorMessage,
+              totalDurationMs: Date.now() - startedAt,
+            },
           });
         }
       })();
@@ -361,6 +475,18 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
         socket.close();
         return;
       }
+
+      app.diag
+        .emit({
+          component: 'api',
+          kind: 'ws.connected',
+          severity: 'info',
+          serverId: id,
+          message: `ws ${req.url} connected`,
+          payload: { url: req.url, serverId: id },
+        })
+        .catch(() => undefined);
+
       for (const line of app.installProgress.snapshot(id)) {
         socket.send(JSON.stringify(line));
       }
@@ -375,7 +501,36 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
           // socket gone
         }
       });
-      socket.on('close', () => unsubscribe());
+      socket.on('close', (code, reason) => {
+        unsubscribe();
+        app.diag
+          .emit({
+            component: 'api',
+            kind: 'ws.disconnected',
+            severity: 'info',
+            serverId: id,
+            message: `ws ${req.url} closed code=${code}`,
+            payload: {
+              code,
+              reason: reason?.toString().slice(0, 200) ?? '',
+              url: req.url,
+              serverId: id,
+            },
+          })
+          .catch(() => undefined);
+      });
+      socket.on('error', (err) => {
+        app.diag
+          .emit({
+            component: 'api',
+            kind: 'ws.error',
+            severity: 'warn',
+            serverId: id,
+            message: `ws error: ${err.message}`,
+            payload: { errorMessage: err.message, url: req.url },
+          })
+          .catch(() => undefined);
+      });
     },
   );
 };

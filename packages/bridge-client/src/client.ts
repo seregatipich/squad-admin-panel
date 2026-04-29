@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { createConnection, type Socket } from 'node:net';
 import { BRIDGE_SOCKET_DEFAULT } from '@squad/shared-config';
 import { v7 as uuidv7 } from 'uuid';
@@ -16,10 +17,13 @@ import {
   type DirectoryDeleteParams,
   type DirectoryDeleteResult,
   type FileReadParams,
+  type FileReadTailParams,
+  type FileReadTailResult,
   type FileWriteParams,
   type HostAgentRestartResult,
   type HostInfo,
   type HostMetrics,
+  type PanelDiskUsage,
   type PingResult,
   type ProcessInfoParams,
   type ProcessInfoResult,
@@ -33,13 +37,54 @@ export interface BridgeClientOptions {
 }
 
 interface PendingCall {
+  method: BridgeRequest['method'];
+  startedAt: number;
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   onStream?: (frame: BridgeStreamFrame) => void;
   timer?: NodeJS.Timeout;
 }
 
-export class BridgeClient {
+export interface BridgeClientConnectedInfo {
+  rttMs: number;
+  version: string;
+  hostname: string;
+}
+
+export interface BridgeClientRpcErrorInfo {
+  method: string;
+  code: string;
+  message: string;
+}
+
+export type BridgeClientDisconnectReason =
+  | 'socket-error'
+  | 'socket-closed'
+  | 'frame-decode-error'
+  | 'client-closed';
+
+export interface BridgeClientEvents {
+  connected: [info: BridgeClientConnectedInfo];
+  disconnected: [reason: BridgeClientDisconnectReason];
+  'rpc-error': [info: BridgeClientRpcErrorInfo];
+  rtt: [rttMs: number];
+}
+
+type EventArgs<Events, E extends keyof Events> = Events[E] extends unknown[] ? Events[E] : never;
+
+interface TypedEmitter<Events> {
+  on<E extends keyof Events>(event: E, listener: (...args: EventArgs<Events, E>) => void): this;
+  off<E extends keyof Events>(event: E, listener: (...args: EventArgs<Events, E>) => void): this;
+  once<E extends keyof Events>(event: E, listener: (...args: EventArgs<Events, E>) => void): this;
+  emit<E extends keyof Events>(event: E, ...args: EventArgs<Events, E>): boolean;
+  removeListener<E extends keyof Events>(
+    event: E,
+    listener: (...args: EventArgs<Events, E>) => void,
+  ): this;
+  removeAllListeners<E extends keyof Events>(event?: E): this;
+}
+
+export class BridgeClient extends (EventEmitter as new () => TypedEmitter<BridgeClientEvents>) {
   private readonly socketPath: string;
   private readonly defaultTimeoutMs: number;
   private readonly onLog: (msg: string, meta?: Record<string, unknown>) => void;
@@ -48,8 +93,10 @@ export class BridgeClient {
   private readonly pending = new Map<string, PendingCall>();
   private closed = false;
   private connecting?: Promise<void>;
+  private hasEmittedConnectedForCurrentSocket = false;
 
   constructor(opts: BridgeClientOptions = {}) {
+    super();
     this.socketPath = opts.socketPath ?? BRIDGE_SOCKET_DEFAULT;
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 15_000;
     this.onLog = opts.onLog ?? (() => undefined);
@@ -81,14 +128,33 @@ export class BridgeClient {
   }
 
   async close(): Promise<void> {
+    const wasConnected = this.hasEmittedConnectedForCurrentSocket;
     this.closed = true;
     this.socket?.end();
     this.socket = undefined;
+    this.hasEmittedConnectedForCurrentSocket = false;
     for (const [, pending] of this.pending) {
       if (pending.timer) clearTimeout(pending.timer);
       pending.reject(new BridgeError('transport', 'client closed'));
     }
     this.pending.clear();
+    if (wasConnected) {
+      this.safeEmit('disconnected', 'client-closed');
+    }
+  }
+
+  private safeEmit<E extends keyof BridgeClientEvents>(
+    event: E,
+    ...args: EventArgs<BridgeClientEvents, E>
+  ): void {
+    try {
+      this.emit(event, ...args);
+    } catch (err) {
+      this.onLog('bridge event listener threw', {
+        event,
+        err: (err as Error).message,
+      });
+    }
   }
 
   ping = () => this.call<PingResult>('ping', undefined, { retryOnTransport: true });
@@ -98,6 +164,8 @@ export class BridgeClient {
 
   fileRead = (p: FileReadParams) =>
     this.call<{ content: string }>('file_read', p, { retryOnTransport: true });
+  fileReadTail = (p: FileReadTailParams) =>
+    this.call<FileReadTailResult>('file_read_tail', p, { retryOnTransport: true });
   fileWrite = (p: FileWriteParams) => this.call<{ status: string }>('file_write', p);
   fileAtomicWrite = (p: FileWriteParams) =>
     this.call<{ status: string }>('file_atomic_write', p, { retryOnTransport: true });
@@ -166,6 +234,11 @@ export class BridgeClient {
       undefined,
       { onStream, timeoutMs: 600_000 },
     );
+
+  panelDiskUsage = (opts: { force?: boolean } = {}) =>
+    this.call<PanelDiskUsage>('panel_disk_usage', opts.force ? { force: true } : {}, {
+      timeoutMs: 30_000,
+    });
 
   hostAgentRestart = () =>
     this.call<HostAgentRestartResult>('host_agent_restart', undefined, { timeoutMs: 5_000 });
@@ -236,6 +309,8 @@ export class BridgeClient {
     const timeoutMs = opts.timeoutMs ?? this.defaultTimeoutMs;
     return await new Promise<Result>((resolve, reject) => {
       const pending: PendingCall = {
+        method,
+        startedAt: Date.now(),
         resolve: (v) => resolve(v as Result),
         reject,
         onStream: opts.onStream,
@@ -280,6 +355,11 @@ export class BridgeClient {
         this.pending.clear();
         sock.destroy();
         this.socket = undefined;
+        const wasConnected = this.hasEmittedConnectedForCurrentSocket;
+        this.hasEmittedConnectedForCurrentSocket = false;
+        if (wasConnected) {
+          this.safeEmit('disconnected', 'frame-decode-error');
+        }
         return;
       }
       this.buffer = decoded.remainder;
@@ -294,10 +374,22 @@ export class BridgeClient {
         pending.reject(new BridgeError('transport', 'socket closed'));
       }
       this.pending.clear();
-      this.socket = undefined;
+      const wasConnected = this.hasEmittedConnectedForCurrentSocket;
+      this.hasEmittedConnectedForCurrentSocket = false;
+      if (this.socket === sock) {
+        this.socket = undefined;
+      }
+      if (wasConnected && !this.closed) {
+        this.safeEmit('disconnected', 'socket-closed');
+      }
     });
     sock.on('error', (err) => {
       this.onLog('bridge socket error', { err: err.message });
+      const wasConnected = this.hasEmittedConnectedForCurrentSocket;
+      this.hasEmittedConnectedForCurrentSocket = false;
+      if (wasConnected && !this.closed) {
+        this.safeEmit('disconnected', 'socket-error');
+      }
     });
   }
 
@@ -318,10 +410,33 @@ export class BridgeClient {
     if (!p) return;
     this.pending.delete(obj.id);
     if (p.timer) clearTimeout(p.timer);
+    const rttMs = Date.now() - p.startedAt;
     if (obj.ok) {
+      if (
+        !this.hasEmittedConnectedForCurrentSocket &&
+        p.method === 'ping' &&
+        obj.result &&
+        typeof obj.result === 'object'
+      ) {
+        const pingResult = obj.result as Partial<PingResult>;
+        if (pingResult.pong === true && typeof pingResult.version === 'string') {
+          this.hasEmittedConnectedForCurrentSocket = true;
+          this.safeEmit('connected', {
+            rttMs,
+            version: pingResult.version,
+            hostname: typeof pingResult.hostname === 'string' ? pingResult.hostname : '',
+          });
+        }
+      }
+      this.safeEmit('rtt', rttMs);
       p.resolve(obj.result);
     } else {
       const err = obj.error ?? { code: 'internal', message: 'no error object' };
+      this.safeEmit('rpc-error', {
+        method: p.method,
+        code: err.code,
+        message: err.message,
+      });
       p.reject(new BridgeError(err.code, err.message, err.detail));
     }
   }

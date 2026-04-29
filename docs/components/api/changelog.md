@@ -42,6 +42,217 @@
 - Role delete sweeps all permission caches (`invalidateAllPermissionCaches`) because we don't know which sessions still hold a now-NULL role.
 
 ## 2026-04-26 — Reconciler restart-resilience: parallel tick, watchdog, eager start/restart
+## 2026-04-29 — Status-flip diag-emit CI gate
+
+### Added
+
+- [`apps/api/test/audit-coverage.test.ts`](../../../apps/api/test/audit-coverage.test.ts) (Phase A2 Task 16) gains a third assertion: for the closed set of routes that flip `servers.status` (`POST /api/v1/servers/:id/start`, `POST /api/v1/servers/:id/stop`, `POST /api/v1/servers/:id/install`, `DELETE /api/v1/servers/:id`, `POST /api/v1/servers/archive/:id/restore`) the test reads the matching handler source file and asserts it still contains a `diag.emit({ ... kind: 'server.<...>' ... })` literal. The check is a regex-based static scan — no live infra needed — and treats `req.diag.emit` / `app.diag.emit` / `installDiag.emit` callsites as equivalent. The test also verifies that every route in the closed set is actually registered (catches drift if a URL is renamed without updating the gate). Failure message names the route AND the handler file so a regression points the developer at the right `.ts`. Today the test passes because Tasks 7 and the soft-delete/restore epic already wired all five emits — its value is regression prevention.
+- The new assertion was smoke-tested against the failure path by temporarily renaming every `kind: 'server.*'` literal in `server-install.ts` to `kind: 'svr_renamed.*'`; the test failed with `route POST /api/v1/servers/:id/install flips server.status but does not emit a server.* diag event in .../server-install.ts` as expected, and was reverted before commit.
+
+### Changed
+
+- _None._
+
+### Fixed
+
+- _None._
+
+### Removed
+
+- _None._
+
+### Migration notes
+
+No schema, no env, no public API change. Pure CI guard. If a future change moves the install / start / stop / soft-delete / restore handlers to a new file, update the `STATUS_FLIPPING_ROUTES` map in `audit-coverage.test.ts` accordingly.
+
+## 2026-04-29 — HTTP error layer diag emits
+
+### Added
+
+- `apps/api/src/plugins/error-diag.ts` (Phase A2 Task 15) — new Fastify plugin that registers a `setErrorHandler` and a `process.on('unhandledRejection', ...)` listener. Two new diag kinds enter `diag:queue`:
+  - `http.5xx` (severity `error`) — emitted for any thrown response with `reply.statusCode || err.statusCode || 500 >= 500`. Payload `{ method, url, status, err, stack }`; `stack` truncated to 2000 chars. Threads `requestId = req.id` and (when authenticated) `actorSteamId64 = req.user.steamId64.toString()`.
+  - `http.unhandled_rejection` (severity `fatal`) — emitted from a process-level `unhandledRejection` listener. Payload `{ reason }`; `reason` and `message` are truncated to 2000 / 200 chars respectively. The listener is attached exactly once per Node process via a module-level guard so a second `errorDiagPlugin` registration (e.g. inside the integration harness) does not duplicate the global handler.
+- The error handler preserves Fastify's default reply by calling `reply.send(err)` AFTER the diag emit, so the `{ statusCode, error, message }` JSON envelope clients depend on is unchanged. 4xx errors (auth/rbac/validation/not-found) are intentionally NOT emitted as `http.5xx` — the kind targets true server-side faults only.
+- `apps/api/test/diag-http-errors.test.ts` — 4 vitest cases: a synthetic throwing route emits `http.5xx` with the expected payload shape and `requestId`; 4xx responses (403 / 404) do NOT emit `http.5xx`; `stack` is truncated to exactly 2000 chars when the thrown error has a 5000-char stack; the Fastify default JSON envelope is preserved on 5xx (`{ statusCode, error, message }`). The `http.unhandled_rejection` path is covered by code review only — Node's global rejection listener is shared mutable state that cannot be exercised cleanly inside a vitest worker without leaking to sibling tests.
+
+### Changed
+
+- `apps/api/src/server.ts` — registers `errorDiagPlugin` immediately after `diagPlugin` so `app.diag` is decorated when the error handler binds. Plugin registration order becomes `redis → diag → error-diag → db-health → heartbeat-watch → ...`.
+- `apps/api/test/integration/harness.ts` — registers `errorDiagPlugin` after `diagPlugin` so integration tests covering 5xx code paths surface the new emits.
+
+### Migration notes
+
+No DB schema changes. No new env vars. Consumers reading `diagnostic_events` will start seeing rows where `component='api'` and `kind` matches `http.5xx` / `http.unhandled_rejection`. The Phase B incident builder keys off `http.unhandled_rejection` as a process-fatality marker.
+
+## 2026-04-29 — WebSocket lifecycle diag emits
+
+### Post-merge fixes
+
+- Invalid-id WS branch no longer emits `ws.connected` (preserves connect/disconnect matching invariant). Previously, the early-return path in [`server-logs.ts`](../../../apps/api/src/routes/server-logs.ts) and [`server-install.ts`](../../../apps/api/src/routes/server-install.ts) emitted `ws.connected` then immediately closed the socket and returned BEFORE registering the `socket.on('close', ...)` listener — the close event fired without a listener, so no `ws.disconnected` was ever produced. This broke the documented invariant that every connect has a matching disconnect. Fix: drop the `ws.connected` emit on the invalid-id branch entirely. Observability for malformed-uuid sockets is low value, and the route still sends `{error:'invalid_id'}` and closes the socket. Covered by a new vitest case in [`apps/api/test/diag-ws.test.ts`](../../../apps/api/test/diag-ws.test.ts) that drives both `/logs/ws` and `/install/ws` with `INVALID` as the `:id` and asserts neither `ws.connected` nor `ws.disconnected` fires.
+
+### Added
+
+- `apps/api/src/routes/live.ts`, `apps/api/src/routes/server-logs.ts`, `apps/api/src/routes/server-install.ts` (Phase A2 Task 14) now emit three new diag kinds covering the WebSocket connection lifecycle:
+  - `ws.connected` (severity `info`, payload `{ url, [serverId] }`) — fires on connection handler entry, before any application-level frame.
+  - `ws.disconnected` (severity `info`, payload `{ code, reason, url, [serverId] }`) — fires from `socket.on('close', ...)`. `reason` is `Buffer.toString().slice(0, 200)` so malformed clients cannot bloat `diag:queue` payloads.
+  - `ws.error` (severity `warn`, payload `{ errorMessage, url, [serverId] }`) — fires from `socket.on('error', ...)`. Does NOT replace `ws.disconnected`; both fire when an error also drops the socket.
+- The per-server routes (`/api/v1/servers/:id/logs/ws`, `/api/v1/servers/:id/install/ws`) populate `serverId` from the `:id` URL param; the global `/api/v1/ws/live` route leaves `serverId` unset. Invalid `:id` strings produce NO diag events at all (see post-merge fix above) — the route closes the socket with `{error:'invalid_id'}` without emitting.
+- Each `app.diag.emit(...)` is wrapped with `.catch(() => undefined)` so a Redis hiccup never propagates back into the WebSocket handler.
+- `apps/api/test/diag-ws.test.ts` — three vitest cases driving the WebSocket protocol against a real Fastify server (started with `app.listen({ port: 0 })`) and asserting the captured diag emits include `ws.connected` and `ws.disconnected` with the expected `serverId` and payload shape. `ws.error` is exercised by code review only because simulating a real socket error from the client side is flaky.
+
+### Changed
+
+- `apps/api/test/install-ws.test.ts`, `apps/api/test/live-bus.test.ts`, `apps/api/test/server-logs.test.ts` — register `diagPlugin` and decorate `app.redis` with a no-op `xadd` stub so the new emits fire without throwing. The previous empty-redis-stub fixture broke the moment the WS routes started calling `app.diag.emit(...)` from their lifecycle handlers.
+
+### Migration notes
+
+No DB schema changes. No new env vars. Consumers reading `diagnostic_events` will start seeing rows where `component='api'` and `kind` matches `ws.connected` / `ws.disconnected` / `ws.error`. The Phase B detector keys off these kinds for the "WS storm" panel.
+
+## 2026-04-29 — heartbeat-watch plugin
+
+### Added
+
+- `apps/api/src/plugins/heartbeat-watch.ts` — new plugin that runs a 30 s `setInterval` polling `worker:heartbeat:<name>` keys for the six known workers (`rcon`, `log-ingest`, `audit-archiver`, `event-partition`, `diag-flush`, `metrics-sampler`). Emits two diag kinds:
+  - `worker.heartbeat_lost` (severity `error`) — fires exactly once per outage when a heartbeat key has been absent for more than 30 s. Tracked via a closure-local `Set<string> reported` so duplicate emits are impossible during the same outage.
+  - `worker.heartbeat_recovered` (severity `info`) — fires when the key reappears AFTER `worker.heartbeat_lost` was reported. Subsequent ticks while the key is healthy are silent until the next outage.
+- `inFlight` re-entrancy guard mirrors `pgHealthTick` — a slow Redis `pttl` round-trip cannot cause overlapping ticks. Tick errors are caught and logged at `warn` ("heartbeat-watch tick failed").
+- `app.heartbeatWatchTick: () => Promise<void>` decorator so tests can drive the tick deterministically without waiting for the interval.
+- `apps/api/test/diag-heartbeat-watch.test.ts` — 3 vitest cases covering: single-emit per outage (Date.now monkey-patched to advance past the 30 s threshold); recovery-edge after a reported outage; clean startup is silent.
+- `apps/api/test/integration/harness.ts` — registers `heartbeatWatchPlugin` after `diagPlugin` so integration tests can call `app.heartbeatWatchTick()`.
+
+### Changed
+
+- `apps/api/src/server.ts` — plugin registration order becomes `redis → diag → db-health → heartbeat-watch → live-bus → ...`. The new plugin is registered after `dbHealthPlugin` and depends only on `app.redis` (already decorated by `redisPlugin`) and `app.diag` (decorated by `diagPlugin`).
+
+### Migration notes
+
+No DB schema changes. No new env vars. One additional `pttl` round-trip per worker per 30 s tick (six round-trips total) — negligible Redis load. Consumers reading `diagnostic_events` will start seeing rows with `component='api'` and `kind` equal to `worker.heartbeat_lost` or `worker.heartbeat_recovered`.
+
+## 2026-04-28 — connector plugins emit diag events on pg/redis state changes
+
+### Post-merge fixes
+
+- In-flight guard on `pgHealthTick` to prevent overlapping invocations during long pg hangs. The 30 s `setInterval` in `apps/api/src/plugins/db-health.ts` now checks an `inFlight` boolean closure flag before kicking off a new tick; if the previous tick is still pending (e.g. during an unreachable-postgres hang), the next interval fires a debug-level log and skips the call. The recovery-edge contract (`pg.ping.ok` only on the first OK after a prior fail) is preserved because two ticks can no longer race on the shared `PG_DOWN` WeakMap. Covered by a new vitest `vi.useFakeTimers()` case in `apps/api/test/diag-connector.test.ts` that drives the live `setInterval` against a never-resolving `app.db.execute` stub and asserts only one `execute` call lands across two 30 s windows.
+
+### Added
+
+- `apps/api/src/plugins/redis.ts` — three new ioredis listeners translate connection-state events into diag emits. Each emit uses `app.diag?.emit(...).catch(() => undefined)` (optional chaining because the redis plugin registers BEFORE the diag plugin in [`server.ts`](../../../apps/api/src/server.ts)):
+  - `error` → `redis.ping.fail` (severity `error`, payload `{ err }`). Sets a module-local `redisDown` flag.
+  - `reconnecting` → `redis.reconnect.attempt` (severity `warn`, payload `{ delayMs }`).
+  - `ready` AFTER a prior `error` → `redis.reconnect.success` (severity `info`, payload `{}`). Resets `redisDown`. Clean startup is silent.
+- `apps/api/src/plugins/db-health.ts` — new plugin running a 30 s `setInterval` that executes `SELECT 1` against `app.db`. Emits `pg.ping.fail` (severity `error`, payload `{ err }`) on every throw and `pg.ping.ok` (severity `info`, payload `{}`) only as a recovery signal (first OK after a prior fail; clean startup is silent). Per-app `pgDown` state is tracked in a `WeakMap<FastifyInstance, boolean>`. The exported `pgHealthTick(app)` helper drives the tick deterministically for tests; the timer is `unref()`-ed so it does not block process exit, and the `onClose` hook clears it. Registered in [`server.ts`](../../../apps/api/src/server.ts) AFTER both `database` and `diag`.
+- `apps/api/test/diag-connector.test.ts` — focused integration test (9 cases):
+  - Three redis-listener cases: `error` → `redis.ping.fail` followed by `ready` → `redis.reconnect.success`; `ready` without prior error stays silent (clean-startup regression); `reconnecting` → `redis.reconnect.attempt`. Drives the real redis plugin against a live ioredis client and stubs `app.diag.emit` to capture events.
+  - Three pg-health cases: throw-then-success produces fail+ok; clean steady-state produces zero events; consecutive failures produce many `pg.ping.fail` but only one `pg.ping.ok` on recovery.
+  - Three plumbing-regression cases: `app.redis` is a real `Redis` instance after the redis plugin runs; `app.db` decoration is honoured by the db-health plugin without registering the database plugin.
+
+### Changed
+
+- `docs/components/api/api.md` — new "Connector listener event kinds" subsection under "Decorations" listing the five diag kinds (`redis.ping.fail`, `redis.reconnect.attempt`, `redis.reconnect.success`, `pg.ping.fail`, `pg.ping.ok`) + payload shapes + clean-startup-silent semantics.
+- `docs/components/api/flows.md` — new "Connector listeners" subsection under "Diagnostic emission" with ASCII flows for both redis and pg-health, including the `redisDown` flag rationale and the 30 s tick wiring.
+- `apps/api/src/server.ts` — registers `dbHealthPlugin` immediately after `diagPlugin`.
+
+### Migration notes
+
+No DB schema changes. No new env vars. The 30 s pg-health tick adds one `SELECT 1` per app process every 30 s — negligible load on a healthy postgres. Consumers reading `diagnostic_events` will start seeing rows where `component='api'` and `kind` matches `redis.{ping.fail,reconnect.attempt,reconnect.success}` / `pg.{ping.fail,ping.ok}`. Phase B detector logic keys off these kinds for the "infra degraded" panel.
+
+## 2026-04-28 — bridge plugin emits diag events on connect / disconnect / rpc-error / rtt-outlier
+
+### Added
+
+- `apps/api/src/plugins/bridge.ts` — the singleton `BridgeClient` constructed by this plugin now has four listeners attached at registration time. Each listener translates a `BridgeClient` event into one `app.diag.emit` call:
+  - `connected` → `bridge.client.connected` (severity `info`, payload `{rttMs, version, hostname}`)
+  - `disconnected` → `bridge.client.disconnected` (severity `error`, payload `{reason}` where `reason ∈ {'socket-error', 'socket-closed', 'frame-decode-error', 'client-closed'}`)
+  - `rpc-error` → `bridge.rpc.error` (severity `warn`, payload `{method, code, message}`)
+  - `rtt` (only when > 50 ms) → `bridge.rtt.outlier` (severity `warn`, payload `{rttMs, thresholdMs: 50}`)
+  All four `app.diag.emit` calls are wrapped with `.catch(() => undefined)` so a Redis hiccup never propagates into the bridge layer. The 50 ms threshold is fixed in the constant `RTT_OUTLIER_THRESHOLD_MS` at the top of the plugin module.
+- `apps/api/test/diag-bridge.test.ts` — five-case integration test that registers the diag plugin + bridge plugin, captures `app.diag.emit` calls, drives the `BridgeClient` event surface directly via `bridge.emit('connected'|...)`, and asserts the expected diag events fire (kind / severity / payload). Includes a regression case proving listener-side diag failures do not throw.
+
+### Changed
+
+- `packages/bridge-client/src/client.ts` — `BridgeClient` now extends a `TypedEmitter<BridgeClientEvents>`-wrapped `EventEmitter`. See [`docs/components/bridge-client/changelog.md`](../bridge-client/changelog.md). The api side consumes those events via the listeners above.
+- `docs/components/api/api.md` — new "Bridge listener event kinds" subsection under "Decorations" listing the four diag kinds + payload shapes.
+- `docs/components/api/flows.md` — new "Bridge listener (background, every RPC)" subsection under "Diagnostic emission" with the listener wire-up flow.
+
+### Migration notes
+
+No DB schema changes. No new env vars. Consumers reading `diagnostic_events` will start seeing rows where `component='api'` and `kind` matches `bridge.client.connected` / `bridge.client.disconnected` / `bridge.rpc.error` / `bridge.rtt.outlier`. The bridge-heartbeat plugin's existing 5 s ping loop guarantees a steady stream of `bridge.rtt.outlier` events whenever the bridge is slow + a `bridge.client.connected` on the first heartbeat after each api restart.
+
+## 2026-04-28 — status reconciler emits `container.exited` / `container.unexpected_exit`
+
+### Added
+
+- `apps/api/src/plugins/status-reconciler.ts` — every observed `running → stopped` transition now emits a diag event into `diag:queue`. Kind is `container.exited` when the Redis fence `stop:requested:{server_id}` (set by `POST /servers/:id/stop` with TTL 300 s, see Task 7) is present, otherwise `container.unexpected_exit`. Severity is `info` when `exit_code === 0`, else `error`. Payload: `{ exit_code, oom_killed, signal, finished_at, started_at }`. When the fence is set, the reconciler also emits a follow-up `server.stop.reconciler_confirmed` (info, payload `{ exit_code }`) — this is the cap-off the stop handler in [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts) deferred to the reconciler in Task 7.
+- The reconciler reads the fence with `GET` (non-consuming) and lets it expire naturally; the next `/stop` request refreshes the TTL, so a fast stop→start→stop cycle within 5 minutes still produces correct classification.
+- `apps/api/test/diag-reconciler.test.ts` — focused integration test (4 cases) seeding a `running` server, stubbing `app.bridge.containerInspect` to return an exited state with controllable `exit_code` / `oom_killed` / `error`, optionally setting the fence, and asserting `app.diag.emit` was called with the expected `kind` / `severity` / `payload`.
+
+### Changed
+
+- `packages/bridge-client/src/types.ts` — `ContainerInspectResult` gained two optional fields: `oom_killed?: boolean` and `error?: string`. Both default to undefined when omitted by the bridge; the reconciler defaults them to `false` and `null` respectively. The Go bridge does not yet populate these fields — surface area is in place so the future Go-side change (mapping Docker `State.OOMKilled` and `State.Error`) is a one-line wire-up. With today's bridge build `oom_killed` is always `false` and `signal` is always `null` in emitted events.
+- `apps/api/test/integration/harness.ts` — `FakeBridge.containerInspect` signature mirrors the new optional fields so tests can synthesize OOM/signal scenarios without a real Docker.
+- `docs/components/api/api.md` — new "Lifecycle event kinds emitted by the status reconciler" subsection covering the three new kinds + the non-consuming fence semantics.
+- `docs/components/api/flows.md` — new "Reconciler container-exit observation" subsection under "Lifecycle event sequences" with an ASCII flow describing the tick path that emits the events.
+
+### Migration notes
+
+No DB schema changes. No new env vars. Consumers reading `diagnostic_events` will start seeing rows where `component='reconciler'` and `kind` matches `container.exited` / `container.unexpected_exit` / `server.stop.reconciler_confirmed`. Detector logic in Phase B (Task 12) keys off these kinds.
+
+## 2026-04-28 — server-lifecycle routes emit structured `server.*` diag events
+
+### Added
+
+- `apps/api/src/routes/server-install.ts` — install handler now emits `server.install.{requested,depot_seed,ufw_rule,container_run,verify,done,failed}` into `diag:queue`. Each emit carries `serverId`, `actorSteamId64` (when authenticated), `requestId`, and a structured `payload` (`durationMs`, `seededCount`, `proto/port/status`, `container_id`, etc.). Failures fire `server.install.failed` with `payload.stage` + `errorMessage`. Per-step ufw failures fire as `severity='error'` without aborting the install (matches the pre-existing behaviour).
+- `apps/api/src/routes/servers.ts` — start/stop/soft-delete handlers now emit `server.start.{requested,done,failed}`, `server.stop.{requested,broadcast,end_match,container_stop,done,failed}`, and `server.soft_delete.{requested,done,failed}`. The stop handler also `SET stop:requested:{server_id} EX 300` at request time so the status-reconciler (Task 8) can distinguish a planned stop from a crash. Broadcast / end-match RCON sub-steps emit per-attempt with `payload.ok`.
+- `apps/api/src/routes/server-archive.ts` — restore handler emits `server.restore.{requested,done}`. The `requested` event uses the OLD archived server's id; the `done` event uses the NEW server's id and includes `archive_id` + `new_server_id` in payload.
+- `apps/api/test/diag-lifecycle.test.ts` — focused integration test (5 cases) that stubs `app.diag.emit` with a capture array, drives each lifecycle endpoint via `app.inject()`, and asserts the expected `kind` strings appear plus the Redis fence is set on stop.
+
+### Changed
+
+- `docs/components/api/api.md` — new "Lifecycle event kinds emitted by API routes" section under "Decorations" listing every event kind per route family.
+- `docs/components/api/flows.md` — new "Lifecycle event sequences" subsection under "Diagnostic emission" with one ASCII flow per route (install / start / stop / soft-delete / restore).
+
+### Migration notes
+
+No DB schema changes. No new env vars. The new events flow through the existing `diag:queue` Redis Stream → `worker-diag-flush` → `diagnostic_events` table; consumers reading `diagnostic_events` will start seeing rows where `component='api'` and `kind` matches `server.*`.
+
+The Redis key `stop:requested:{server_id}` is set on every successful stop request with TTL 300 s. It is currently consumed only by the stop-flow itself; the reconciler will read it in Task 8 to choose between `container.exited` (planned) vs `container.unexpected_exit` (crash) when emitting its own diag events.
+
+## 2026-04-28 — `app.diag` / `request.diag` Fastify decoration
+
+### Added
+
+- `apps/api/src/lib/diag.ts` — fastify-plugin that wires `@squad/diag` into the API. Decorates `app.diag: Diag` and adds an `onRequest` hook that builds a per-request `req.diag` wrapper auto-injecting `requestId = req.id` (or honouring an explicit `requestId` in the event payload). Registered in [`server.ts`](../../../apps/api/src/server.ts) immediately after `redisPlugin` and before any routes. Also wired into the integration test harness ([`apps/api/test/integration/harness.ts`](../../../apps/api/test/integration/harness.ts)).
+- `apps/api/test/diag-plugin.test.ts` — focused unit test that proves the decoration installs both `app.diag` and `request.diag`, and that `req.diag.emit` threads `req.id` while preserving an explicit `requestId` set by the caller.
+
+### Changed
+
+- `apps/api/package.json` — added `@squad/diag` workspace dependency.
+- `docs/components/api/api.md` — new "Decorations" reference table covering `app.db / app.redis / app.bridge / app.diag / request.diag / request.requestId / …`.
+- `docs/components/api/flows.md` — new "Diagnostic emission" flow describing how the plugin is registered, how `req.diag.emit` is built per-request, and the test-stub contract (`app.diag.emit = …` reroutes both module-level and per-request emits because the hook re-reads `app.diag` at emit time).
+
+### Migration notes
+
+No DB or runtime configuration changes. No new env vars. Existing routes are unchanged — they will start emitting events in subsequent tasks (Task 7+) by calling `req.diag.emit({...})`.
+
+## 2026-04-28 — `GET /api/v1/host/disk-usage?refresh=1` (cache bypass)
+
+### Changed
+
+- `GET /api/v1/host/disk-usage` now accepts an optional Zod-coerced boolean query parameter `refresh`. When truthy (`?refresh=1`) the API forwards `{ force: true }` to `bridge.panelDiskUsage()`, instructing the bridge to bypass its 5-minute cache and recompute (`du -sb` + `docker system df` + `statvfs`). The fresh value is written back into the bridge cache so the next non-force call sees it immediately. No new permission check — the existing `host:view` requirement covers it.
+- `apps/api/src/routes/host.ts` — added the Zod querystring schema, threads `refresh` into the bridge call.
+- `apps/api/test/integration/harness.ts` — `FakeBridge.panelDiskUsage` now takes an optional `{ force?: boolean }` argument so tests can assert the API forwards the flag.
+- `apps/api/test/host-disk-usage.test.ts` — added a fifth case proving that `?refresh=1` causes a `{ force: true }` invocation and that the unflagged endpoint passes `undefined`.
+
+## 2026-04-28 — `GET /api/v1/host/disk-usage` (panel disk breakdown, Phase B1)
+
+### Added
+
+- `GET /api/v1/host/disk-usage` (RBAC `host:view`, no audit) — wraps `bridge.panelDiskUsage()` and appends two derived fields: `panel_pct` (panel's share of host total in percent) and `other_pct = max(0, host_used_bytes / host_total_bytes * 100 - panel_pct)`. Both fall back to `0` when `host_total_bytes <= 0` so a zero-capacity bridge response never produces `NaN`. No API-side cache — the bridge already caches the heavy `du`/`docker df` walk for 5 min.
+- `apps/api/test/host-disk-usage.test.ts` — 4 integration tests (happy path with derived percentages, `host_total_bytes=0` edge case, 403 for a session with no role, 401 without a session).
+
+### Changed
+
+- `apps/api/test/integration/harness.ts` — `FakeBridge` interface and `makeFakeBridge()` now expose `panelDiskUsage` so tests can stub the new bridge method without a type-error.
 
 ### Added
 

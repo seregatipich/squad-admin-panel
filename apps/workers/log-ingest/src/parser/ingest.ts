@@ -2,6 +2,7 @@ import { type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
 import { v7 as uuidv7 } from 'uuid';
 import {
   BEACON_BIND,
+  detectSquadFatal,
   isBenignNoise,
   MATCH_STATE_CHANGED,
   PLAYER_DISCONNECT,
@@ -12,28 +13,81 @@ import {
   SERVER_EXIT_CODE,
 } from './patterns.js';
 
+export interface ParseErrorReport {
+  lineSample: string;
+  regex: string;
+  errorMessage: string;
+}
+
+export interface SquadFatalReport {
+  message: string;
+  ts: string | null;
+  file: string | null;
+  line: number | null;
+  raw: string;
+}
+
+export interface IngestorCallbacks {
+  onParseError?: (report: ParseErrorReport) => void;
+  onSquadFatal?: (report: SquadFatalReport) => void;
+}
+
 /** One instance per Squad server under observation. */
 export class LogIngestor {
   private readonly serverId: string;
   private readonly beaconPort: number;
   private recentJoin: { name: string; ts: number } | null = null;
   private readonly joinCorrelationWindowMs: number;
+  private readonly onParseError?: (report: ParseErrorReport) => void;
+  private readonly onSquadFatal?: (report: SquadFatalReport) => void;
 
   constructor(params: {
     serverId: string;
     beaconPort: number;
     joinCorrelationWindowMs?: number;
+    onParseError?: (report: ParseErrorReport) => void;
+    onSquadFatal?: (report: SquadFatalReport) => void;
   }) {
     this.serverId = params.serverId;
     this.beaconPort = params.beaconPort;
     this.joinCorrelationWindowMs = params.joinCorrelationWindowMs ?? 2500;
+    this.onParseError = params.onParseError;
+    this.onSquadFatal = params.onSquadFatal;
   }
 
   ingest(line: string): EventEnvelope[] {
     if (isBenignNoise(line)) return [];
+    const fatal = detectSquadFatal(line);
+    if (fatal && this.onSquadFatal) {
+      this.onSquadFatal({
+        message: fatal.message,
+        ts: fatal.ts,
+        file: fatal.file,
+        line: fatal.line,
+        raw: line,
+      });
+    }
     const parsed = parseLine(line);
-    if (!parsed) return [];
-    return this.handleMessage(parsed.category, parsed.message, parsed.ts.toISOString());
+    if (!parsed) {
+      if (!fatal && this.onParseError && line.startsWith('[')) {
+        this.onParseError({
+          lineSample: line.slice(0, 200),
+          regex: 'PREFIX',
+          errorMessage: 'log line did not match the timestamp/category prefix',
+        });
+      }
+      return [];
+    }
+    try {
+      return this.handleMessage(parsed.category, parsed.message, parsed.ts.toISOString());
+    } catch (err) {
+      this.onParseError?.({
+        lineSample: line.slice(0, 200),
+        regex: parsed.category,
+        errorMessage: (err as Error).message,
+      });
+      return [];
+    }
   }
 
   private handleMessage(category: string, message: string, ts: string): EventEnvelope[] {

@@ -14,6 +14,16 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
       let lastPongAt = Date.now();
       let closed = false;
 
+      app.diag
+        .emit({
+          component: 'api',
+          kind: 'ws.connected',
+          severity: 'info',
+          message: `ws ${req.url} connected`,
+          payload: { url: req.url },
+        })
+        .catch(() => undefined);
+
       const safeSend = (payload: unknown): void => {
         if (closed) return;
         try {
@@ -50,10 +60,35 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
         }
       });
 
-      socket.on('close', () => {
+      socket.on('close', (code, reason) => {
         closed = true;
         clearInterval(pinger);
         unsubscribe();
+        app.diag
+          .emit({
+            component: 'api',
+            kind: 'ws.disconnected',
+            severity: 'info',
+            message: `ws ${req.url} closed code=${code}`,
+            payload: {
+              code,
+              reason: reason?.toString().slice(0, 200) ?? '',
+              url: req.url,
+            },
+          })
+          .catch(() => undefined);
+      });
+
+      socket.on('error', (err) => {
+        app.diag
+          .emit({
+            component: 'api',
+            kind: 'ws.error',
+            severity: 'warn',
+            message: `ws error: ${err.message}`,
+            payload: { errorMessage: err.message, url: req.url },
+          })
+          .catch(() => undefined);
       });
     },
   );

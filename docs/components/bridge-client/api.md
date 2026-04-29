@@ -117,6 +117,41 @@ Throws `BridgeError('forbidden')` if the path is outside the allowlist.
 
 ---
 
+#### `fileReadTail(p: FileReadTailParams): Promise<FileReadTailResult>`
+
+Reads up to `max_bytes` from the **end** of an allowlisted file. When the file is larger than `max_bytes` the read snaps forward to the next `\n` so the result never starts mid-line. Used by the diagnostic-bundle builder to capture the tail of `SquadGame.log` without slurping multi-MB files.
+
+```ts
+interface FileReadTailParams {
+  path: string;
+  max_bytes?: number; // default 65536, max 1 MiB
+}
+
+interface FileReadTailResult {
+  content: string;
+  offset: number;     // byte offset where `content` starts in the source file
+  size: number;       // total file size in bytes at read time
+  truncated: boolean; // true iff size > max_bytes (some prefix was skipped)
+}
+```
+
+| Param | Type | Required | Default | Notes |
+|---|---|---:|---|---|
+| `path` | `string` | yes | — | Same allowlist as `fileRead`. |
+| `max_bytes` | `number` | no | `65536` | Values `<= 0` or `> 1048576` snap to the default. |
+
+```ts
+const tail = await client.fileReadTail({
+  path: '/var/lib/squad-panel/saved/<uuid>/SquadGame/Saved/Logs/SquadGame.log',
+  max_bytes: 65536,
+});
+// { content, offset: 12516352, size: 12582912, truncated: true }
+```
+
+Throws `BridgeError('forbidden')` if the path is outside the allowlist, `BridgeError('runtime_error')` if the file cannot be opened/seeked.
+
+---
+
 #### `fileWrite(p: FileWriteParams): Promise<{ status: string }>`
 
 Writes a file with standard `os.WriteFile`. Not atomic — use `fileAtomicWrite` for config edits.
@@ -226,6 +261,37 @@ const { cpu_percent, mem_used_bytes, mem_limit_bytes } = await client.containerS
 
 ---
 
+#### `panelDiskUsage(opts?: { force?: boolean }): Promise<PanelDiskUsage>`
+
+Returns a structured breakdown of the panel's disk footprint on the host. The Go-side computation lives in `apps/bridge/internal/handlers/handlers.go` (`panelDiskUsage`) and combines `du -sb` walks of the panel data root, a panel-owned filter on `docker system df`, and `syscall.Statfs` for whole-host capacity; results are cached inside the bridge for 5 minutes. E2E coverage against the live socket is in `apps/api/test/e2e/bridge-rpc.e2e.test.ts` (shape assertions plus a caching idempotence case). Timeout: 30 s.
+
+Pass `{ force: true }` to bypass the 5-minute bridge-side cache and force a fresh `du`/`docker df`/`statfs` recompute. The fresh result is still written back into the cache so the next non-force call sees it immediately. The API surfaces this as `?refresh=1` on `GET /api/v1/host/disk-usage`. With no argument or `{}`, the client sends `params: {}` and the bridge returns a cached result if one is fresh enough.
+
+| Field | Type | Description |
+|---|---|---|
+| `configs_bytes` | `number` | Bytes used by `/var/lib/squad-panel/configs/` |
+| `saved_total_bytes` | `number` | Bytes used by `/var/lib/squad-panel/saved/` |
+| `saved_per_server` | `{ uuid: string; bytes: number }[]` | Per-server breakdown of `saved/` (one entry per uuid sub-directory) |
+| `depot_volume_bytes` | `number` | Size of the `squad-depot` named volume |
+| `docker_volumes` | `{ name: string; bytes: number }[]` | Other panel-owned Docker volumes |
+| `docker_images` | `{ repository: string; tag: string; bytes: number }[]` | Squad-related Docker images |
+| `audit_archive_bytes` | `number` | Bytes used by the audit-archive directory |
+| `total_panel_bytes` | `number` | Sum of all panel-owned categories |
+| `host_total_bytes` | `number` | Total bytes on the filesystem hosting `/var/lib/squad-panel` |
+| `host_used_bytes` | `number` | Used bytes on that filesystem |
+| `computed_at` | `string` | ISO-8601 timestamp at which the bridge gathered the figures |
+| `cache_age_seconds` | `number` | Age of the cached result in seconds (0 = fresh) |
+
+```ts
+const usage = await client.panelDiskUsage();
+const panelShareOfHost = usage.total_panel_bytes / usage.host_total_bytes;
+
+const fresh = await client.panelDiskUsage({ force: true });
+console.log(fresh.cache_age_seconds); // 0
+```
+
+---
+
 #### `hostAgentRestart(): Promise<HostAgentRestartResult>`
 
 Asks the bridge to restart itself via systemd. Returns `{ status: 'restarting' }` before the socket closes. Timeout: 5 s.
@@ -261,6 +327,31 @@ const done = client.depotUpdate((frame) => {
   installSocket.send(frame.data);
 });
 ```
+
+---
+
+## Events
+
+`BridgeClient` extends `EventEmitter`. Subscribers attach via the standard `on(event, handler)` / `off(event, handler)` API. All events are fire-and-forget — listener exceptions are caught and routed to `onLog`; the RPC dispatcher and reconnection logic do not depend on listener return values.
+
+```ts
+import { BridgeClient } from '@squad/bridge-client';
+
+const client = new BridgeClient({ socketPath: '/run/panel-host-bridge.sock' });
+client.on('connected', (info) => console.log('bridge up', info));
+client.on('disconnected', (reason) => console.warn('bridge down', reason));
+client.on('rpc-error', ({ method, code, message }) => console.warn(method, code, message));
+client.on('rtt', (ms) => { if (ms > 50) console.warn('slow RPC', ms); });
+```
+
+| Event | Args | When fired |
+|---|---|---|
+| `connected` | `{ rttMs: number; version: string; hostname: string }` | After the **first successful `ping()` response on a freshly-opened socket** — not on raw socket connect. The `version` and `hostname` fields are read from the ping result; `rttMs` is `Date.now() - request_started_at`. Fires at most once per socket lifetime; reconnect re-arms it. |
+| `disconnected` | `reason: 'socket-error' \| 'socket-closed' \| 'frame-decode-error' \| 'client-closed'` | Fired only if a `connected` event was previously emitted for the current socket — disconnects on a never-handshaked socket are silent. `client-closed` fires from `close()`; the other reasons fire from socket-level events / framing failures. |
+| `rpc-error` | `{ method: string; code: BridgeErrorCode; message: string }` | After every response with `ok: false`. The corresponding `call()` promise rejects with `BridgeError(code, message)` immediately afterwards. Use this for per-method error counters / structured logging. |
+| `rtt` | `rttMs: number` | After every successful (ok=true) response. `rttMs` is the wall-clock delay between dispatch and response handling. Streaming methods (`containerLogsFollow`, `depotUpdate`) only emit this when the final exit-code response arrives — per-frame RTT is not tracked. |
+
+The api wires these into `app.diag.emit` from [`apps/api/src/plugins/bridge.ts`](../../../apps/api/src/plugins/bridge.ts) so they show up as `bridge.client.connected` / `bridge.client.disconnected` / `bridge.rpc.error` / `bridge.rtt.outlier` (only when `rttMs > 50`) entries in the `diag:queue` Redis Stream. See [`docs/components/api/api.md`](../api/api.md#bridge-listener-event-kinds) for the API-side mapping.
 
 ---
 

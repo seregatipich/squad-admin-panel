@@ -27,7 +27,7 @@ interface BridgeRequest<Params = unknown> {
 }
 ```
 
-`method` must be one of the 17 values in `BRIDGE_METHODS` (see [`shared-config/api.md`](../shared-config/api.md)).
+`method` must be one of the 19 values in `BRIDGE_METHODS` (see [`shared-config/api.md`](../shared-config/api.md)).
 
 ## Response shape (`BridgeResponse`)
 
@@ -114,8 +114,12 @@ type BridgeErrorCode =
   name: string; state: string; running: boolean; pid: number;
   started_at: string; finished_at: string; exit_code: number;
   image: string; restart_count: number; labels: Record<string, string>;
+  oom_killed?: boolean;   // Docker State.OOMKilled — omitted by older bridge builds
+  error?: string;         // Docker State.Error    — omitted by older bridge builds
 }
 ```
+
+`oom_killed` and `error` are optional because the Go bridge does not yet surface them (the field is reserved on the wire format so the API status-reconciler can differentiate OOM-kills from clean exits when emitting `container.exited` diag events; consumers must default missing values to `false` and `null` respectively).
 
 ### `ContainerStatsResult`
 
@@ -141,6 +145,25 @@ type BridgeErrorCode =
 
 ```ts
 { status: 'restarting' }
+```
+
+### `PanelDiskUsage`
+
+```ts
+{
+  configs_bytes: number;
+  saved_total_bytes: number;
+  saved_per_server: { uuid: string; bytes: number }[];
+  depot_volume_bytes: number;
+  docker_volumes: { name: string; bytes: number }[];
+  docker_images: { repository: string; tag: string; bytes: number }[];
+  audit_archive_bytes: number;
+  total_panel_bytes: number;
+  host_total_bytes: number;
+  host_used_bytes: number;
+  computed_at: string;        // ISO-8601 UTC
+  cache_age_seconds: number;  // 0 when freshly computed
+}
 ```
 
 ## Params types

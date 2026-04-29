@@ -47,6 +47,18 @@ Unit tests for `RconSupervisor` reconcile lifecycle.
 | Removes stopped target on reconcile | `size()` decrements when target removed from reconcile list |
 | Does not re-add existing target on repeated reconcile | Idempotent reconcile does not double-count targets |
 
+### `supervisor-diag.test.ts`
+
+Unit tests for the diag-emit surface added in Task 11 of the diagnostic-bundle plan. Uses a `vi.fn()` `Diag` stub plus a small in-process `net.createServer()` fixture that speaks the Squad two-packet AUTH dance to drive the connect-loop.
+
+| Test | What it verifies |
+|---|---|
+| Emits `rcon.targets.changed` on net delta with `added`/`removed`/`total` | Adds, additions, and removals each produce one emit with the right payload |
+| Does not emit `rcon.targets.changed` when the polling set is unchanged | Repeated reconcile of the same target list emits exactly once (initial add) and stays silent thereafter |
+| Omits diag emits entirely when no `diag` is provided | `SupervisorOptions.diag` is optional; absence is a clean no-op |
+| Emits `rcon.connected` with `serverId` when AUTH succeeds | Real TCP fixture, payload `{ host, port }`, severity `info` |
+| Emits `rcon.auth_failed` with `error` severity when AUTH is rejected | Real TCP fixture replies with id=-1, payload `{ host, port, err }` |
+
 ### `contract.test.ts`
 
 Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
@@ -58,8 +70,9 @@ Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
 
 ## Coverage gaps
 
-- `client.ts` is not unit-tested (requires a real TCP server or a mock). The e2e suite in `apps/api/test/e2e/install-lifecycle.e2e.test.ts` exercises it through the full stack.
+- `client.ts` is not unit-tested (requires a real TCP server or a mock). The new `supervisor-diag.test.ts` exercises it indirectly via a `net.createServer()` fixture for the connect/auth-fail paths; the e2e suite in `apps/api/test/e2e/install-lifecycle.e2e.test.ts` exercises it through the full stack.
 - `persist.ts` has no isolated test; covered indirectly by e2e tests that verify player rows appear after a poll cycle.
+- `rcon.disconnected` and `rcon.reconnect_attempt` diag emits are not asserted in unit tests because the connect loop's backoff sleep makes their timing brittle in fake-timer mode; the e2e suite exercises them end-to-end during graceful-stop.
 
 ## Test data
 

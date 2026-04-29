@@ -16,6 +16,7 @@ Heartbeat keys are aggregated by the API at `/api/v1/health/workers`.
 | [audit-archiver](./audit-archiver/README.md) | Cold-archives `audit_log` rows older than 90 days (P1 stub, heartbeat only in P0) | [`apps/workers/audit-archiver/`](../../../apps/workers/audit-archiver/) |
 | [event-partition](./event-partition/README.md) | Monthly Postgres partition rotation for the `events` table | [`apps/workers/event-partition/`](../../../apps/workers/event-partition/) |
 | [metrics-sampler](./metrics-sampler/README.md) | Polls `bridge.host_metrics` every 15 s, writes packed 8-int tuple to `host:metrics` Redis Stream | [`apps/workers/metrics-sampler/`](../../../apps/workers/metrics-sampler/) |
+| [worker-diag-flush](./worker-diag-flush/README.md) | Reads `diag:queue` Redis Stream via `XREADGROUP`, batches inserts into `diagnostic_events` Postgres table | [`apps/workers/diag-flush/`](../../../apps/workers/diag-flush/) |
 
 ## Stub workers (P2, not implemented)
 

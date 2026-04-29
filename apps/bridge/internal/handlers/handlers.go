@@ -7,14 +7,20 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/fsx"
@@ -24,6 +30,38 @@ import (
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/sysd"
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
 )
+
+// DiagSink is the io.Writer that diagLog writes structured JSON lines to. It
+// defaults to os.Stderr (captured by systemd into the journal) and tests swap
+// it for a buffer to assert the wire format.
+var DiagSink io.Writer = os.Stderr
+
+// DiagLog writes a single structured journal line that the worker-diag-flush
+// journald forwarder picks up. We intentionally write to stderr (journald-
+// captured) instead of touching Redis from the privileged daemon — keeps the
+// attack surface minimal. Payload keys are merged into the top-level record so
+// they appear flat in the journald JSON view.
+func DiagLog(component, kind, severity, message string, payload map[string]any) {
+	rec := map[string]any{
+		"DIAG_EVENT": "1",
+		"component":  component,
+		"kind":       kind,
+		"severity":   severity,
+		"message":    message,
+		"ts":         time.Now().UTC().Format(time.RFC3339),
+	}
+	for k, v := range payload {
+		if _, reserved := rec[k]; reserved {
+			continue
+		}
+		rec[k] = v
+	}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return
+	}
+	fmt.Fprintln(DiagSink, string(b))
+}
 
 var Version = "dev"
 
@@ -45,13 +83,34 @@ type Dispatcher struct {
 	// restartDelay overrides restartFlushDelay; tests use this to bring the
 	// observation window down to a few milliseconds.
 	restartDelay time.Duration
+
+	// panelRoot overrides the panel data root (production default
+	// /var/lib/squad-panel) for panel_disk_usage. Tests inject a t.TempDir.
+	panelRoot string
+	// duFn measures bytes used at a path. Tests stub it; production uses du -sb.
+	duFn func(path string) (int64, error)
+	// statfsFn samples the filesystem at a path. Tests stub it; production uses syscall.Statfs.
+	statfsFn func(path string, st *syscall.Statfs_t) error
+	// dockerDfFn returns panel-owned volumes/images and the squad-depot byte total.
+	// Tests stub it; production shells out to `docker system df --format '{{json .}}' -v`.
+	dockerDfFn func() ([]dockerVol, []dockerImg, int64, error)
 }
 
 func (d *Dispatcher) Handle(
 	ctx context.Context,
 	req *rpc.Request,
 	onStream func(rpc.StreamFrame),
-) rpc.Response {
+) (resp rpc.Response) {
+	defer func() {
+		if r := recover(); r != nil {
+			DiagLog("bridge", "bridge.panic", "fatal", fmt.Sprintf("dispatcher panic: %v", r), map[string]any{
+				"method":     req.Method,
+				"request_id": req.ID,
+				"recovered":  fmt.Sprintf("%v", r),
+			})
+			resp = rpc.NewErrorResponse(req.ID, rpc.CodeInternal, fmt.Sprintf("dispatcher panic: %v", r))
+		}
+	}()
 	switch req.Method {
 	case "ping":
 		return d.ping(req)
@@ -61,6 +120,8 @@ func (d *Dispatcher) Handle(
 		return d.hostMetrics(req)
 	case "file_read":
 		return d.fileRead(req)
+	case "file_read_tail":
+		return d.fileReadTail(req)
 	case "file_write":
 		return d.fileWrite(req)
 	case "file_atomic_write":
@@ -93,6 +154,8 @@ func (d *Dispatcher) Handle(
 		return d.depotUpdate(ctx, req, onStream)
 	case "docker_prune":
 		return d.dockerPrune(ctx, req, onStream)
+	case "panel_disk_usage":
+		return d.panelDiskUsage(req)
 	case "host_agent_restart":
 		return d.hostAgentRestart(req)
 	}
@@ -100,6 +163,9 @@ func (d *Dispatcher) Handle(
 }
 
 func (d *Dispatcher) hostAgentRestart(req *rpc.Request) rpc.Response {
+	DiagLog("bridge", "bridge.host_agent_restart", "info", "host_agent_restart invoked", map[string]any{
+		"request_id": req.ID,
+	})
 	delay := d.restartDelay
 	if delay <= 0 {
 		delay = restartFlushDelay
@@ -174,6 +240,67 @@ func (d *Dispatcher) fileRead(req *rpc.Request) rpc.Response {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
 	}
 	body, _ := json.Marshal(map[string]string{"content": string(b)})
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+const (
+	fileReadTailDefaultMaxBytes int64 = 64 * 1024
+	fileReadTailMaxAllowedBytes int64 = 1 << 20
+)
+
+type fileReadTailParams struct {
+	Path     string `json:"path"`
+	MaxBytes int64  `json:"max_bytes"`
+}
+
+func (d *Dispatcher) fileReadTail(req *rpc.Request) rpc.Response {
+	var p fileReadTailParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
+	}
+	if err := validateReadablePath(p.Path); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
+	}
+	maxBytes := p.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = fileReadTailDefaultMaxBytes
+	} else if maxBytes > fileReadTailMaxAllowedBytes {
+		maxBytes = fileReadTailMaxAllowedBytes
+	}
+	f, err := os.Open(p.Path)
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	size := st.Size()
+	var off int64
+	if size > maxBytes {
+		off = size - maxBytes
+	}
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	buf := make([]byte, size-off)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	start := 0
+	if off > 0 {
+		if i := bytes.IndexByte(buf[:n], '\n'); i >= 0 {
+			start = i + 1
+		}
+	}
+	body, _ := json.Marshal(map[string]any{
+		"content":   string(buf[start:n]),
+		"offset":    off + int64(start),
+		"size":      size,
+		"truncated": off > 0,
+	})
 	return rpc.NewSuccessResponse(req.ID, body)
 }
 
@@ -595,7 +722,8 @@ func parseReclaimed(s string) int64 {
 	if i := strings.IndexAny(tail, " \t\r\n"); i >= 0 {
 		tail = tail[:i]
 	}
-	return parseHumanSize(tail)
+	n, _ := parseHumanSize(tail)
+	return n
 }
 
 func humanReclaimed(s string) string {
@@ -611,36 +739,8 @@ func humanReclaimed(s string) string {
 	return strings.TrimSpace(tail)
 }
 
-// parseHumanSize parses docker's "146.9GB" / "256MB" / "0B" notation.
-// Returns 0 on parse failure.
-func parseHumanSize(s string) int64 {
-	if s == "" {
-		return 0
-	}
-	units := map[string]float64{
-		"B":  1,
-		"KB": 1 << 10, "K": 1 << 10,
-		"MB": 1 << 20, "M": 1 << 20,
-		"GB": 1 << 30, "G": 1 << 30,
-		"TB": 1 << 40, "T": 1 << 40,
-		"KiB": 1 << 10,
-		"MiB": 1 << 20,
-		"GiB": 1 << 30,
-		"TiB": 1 << 40,
-	}
-	for _, suf := range []string{"TiB", "GiB", "MiB", "KiB", "TB", "GB", "MB", "KB", "T", "G", "M", "K", "B"} {
-		if strings.HasSuffix(s, suf) {
-			numStr := strings.TrimSuffix(s, suf)
-			var n float64
-			_, err := fmt.Sscanf(numStr, "%f", &n)
-			if err != nil {
-				return 0
-			}
-			return int64(n * units[suf])
-		}
-	}
-	return 0
-}
+// parseHumanSize is defined later in this file (the feat-branch variant
+// returning (int64, error)). The reclaimed-space parser above wraps it.
 
 // --- process inspection ---
 
@@ -706,4 +806,298 @@ func isForbidden(err error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), "forbidden")
+}
+
+// --- panel disk usage ---
+
+type savedEntry struct {
+	UUID  string `json:"uuid"`
+	Bytes int64  `json:"bytes"`
+}
+
+type dockerVol struct {
+	Name  string `json:"name"`
+	Bytes int64  `json:"bytes"`
+}
+
+type dockerImg struct {
+	Repository string `json:"repository"`
+	Tag        string `json:"tag"`
+	Bytes      int64  `json:"bytes"`
+}
+
+type panelDiskUsageResult struct {
+	ConfigsBytes      int64        `json:"configs_bytes"`
+	SavedTotalBytes   int64        `json:"saved_total_bytes"`
+	SavedPerServer    []savedEntry `json:"saved_per_server"`
+	DepotVolumeBytes  int64        `json:"depot_volume_bytes"`
+	DockerVolumes     []dockerVol  `json:"docker_volumes"`
+	DockerImages      []dockerImg  `json:"docker_images"`
+	AuditArchiveBytes int64        `json:"audit_archive_bytes"`
+	TotalPanelBytes   int64        `json:"total_panel_bytes"`
+	HostTotalBytes    int64        `json:"host_total_bytes"`
+	HostUsedBytes     int64        `json:"host_used_bytes"`
+	ComputedAt        string       `json:"computed_at"`
+	CacheAgeSeconds   int          `json:"cache_age_seconds"`
+}
+
+const (
+	defaultPanelRoot  = "/var/lib/squad-panel"
+	panelDiskCacheTTL = 5 * time.Minute
+	depotVolumeName   = "squad-depot"
+	pgDataVolumeName  = "squad-panel_pg-data"
+	redisVolumeName   = "squad-panel_redis-data"
+)
+
+var panelOwnedImages = map[string]struct{}{
+	"squad-server":           {},
+	"squad-panel/depot-init": {},
+	"squad-panel/api":        {},
+	"squad-panel/web":        {},
+	"squad-panel/worker":     {},
+}
+
+var panelOwnedVolumes = map[string]struct{}{
+	depotVolumeName:  {},
+	pgDataVolumeName: {},
+	redisVolumeName:  {},
+}
+
+var (
+	panelDiskCacheMu     sync.Mutex
+	panelDiskCacheVal    *panelDiskUsageResult
+	panelDiskCacheStored time.Time
+)
+
+func resetPanelDiskUsageCache() {
+	panelDiskCacheMu.Lock()
+	panelDiskCacheVal = nil
+	panelDiskCacheStored = time.Time{}
+	panelDiskCacheMu.Unlock()
+}
+
+func realDuBytes(path string) (int64, error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	out, err := exec.Command("du", "-sb", path).Output()
+	if err != nil {
+		return 0, err
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return 0, fmt.Errorf("du produced no output for %q", path)
+	}
+	n, err := strconv.ParseInt(fields[0], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse du output %q: %w", fields[0], err)
+	}
+	return n, nil
+}
+
+func realStatfs(path string, st *syscall.Statfs_t) error {
+	return syscall.Statfs(path, st)
+}
+
+// parseHumanSize parses a human-readable byte string like "1.2GB", "512MB", "0B"
+// produced by `docker system df --format '{{json .}}'`. Returns 0 on empty input.
+func parseHumanSize(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "0" || s == "0B" {
+		return 0, nil
+	}
+	suffixes := []struct {
+		unit  string
+		scale float64
+	}{
+		{"TB", 1 << 40},
+		{"GB", 1 << 30},
+		{"MB", 1 << 20},
+		{"kB", 1 << 10},
+		{"KB", 1 << 10},
+		{"B", 1},
+	}
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(s, suffix.unit) {
+			num := strings.TrimSpace(strings.TrimSuffix(s, suffix.unit))
+			val, err := strconv.ParseFloat(num, 64)
+			if err != nil {
+				return 0, fmt.Errorf("parse human size %q: %w", s, err)
+			}
+			return int64(val * suffix.scale), nil
+		}
+	}
+	val, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("unrecognized size format %q", s)
+	}
+	return val, nil
+}
+
+func realDockerDiskBreakdown() ([]dockerVol, []dockerImg, int64, error) {
+	out, err := exec.Command("docker", "system", "df", "--format", "{{json .}}", "-v").Output()
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("docker system df: %w", err)
+	}
+	volumes := []dockerVol{}
+	images := []dockerImg{}
+	var depotBytes int64
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal(line, &record); err != nil {
+			continue
+		}
+		if name, ok := record["Name"].(string); ok && name != "" {
+			if _, owned := panelOwnedVolumes[name]; !owned {
+				continue
+			}
+			sizeStr, _ := record["Size"].(string)
+			size, err := parseHumanSize(sizeStr)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			volumes = append(volumes, dockerVol{Name: name, Bytes: size})
+			if name == depotVolumeName {
+				depotBytes = size
+			}
+			continue
+		}
+		if repo, ok := record["Repository"].(string); ok && repo != "" {
+			if _, owned := panelOwnedImages[repo]; !owned {
+				continue
+			}
+			tag, _ := record["Tag"].(string)
+			sizeStr, _ := record["Size"].(string)
+			size, err := parseHumanSize(sizeStr)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			images = append(images, dockerImg{Repository: repo, Tag: tag, Bytes: size})
+		}
+	}
+	return volumes, images, depotBytes, nil
+}
+
+func (d *Dispatcher) panelDiskUsage(req *rpc.Request) rpc.Response {
+	var params struct {
+		Force bool `json:"force,omitempty"`
+	}
+	if len(req.Params) > 0 {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, fmt.Sprintf("decode params: %v", err))
+		}
+	}
+
+	panelDiskCacheMu.Lock()
+	defer panelDiskCacheMu.Unlock()
+
+	if !params.Force && panelDiskCacheVal != nil && time.Since(panelDiskCacheStored) < panelDiskCacheTTL {
+		cached := *panelDiskCacheVal
+		cached.CacheAgeSeconds = int(time.Since(panelDiskCacheStored).Seconds())
+		body, _ := json.Marshal(&cached)
+		return rpc.NewSuccessResponse(req.ID, body)
+	}
+
+	root := d.panelRoot
+	if root == "" {
+		root = defaultPanelRoot
+	}
+	du := d.duFn
+	if du == nil {
+		du = realDuBytes
+	}
+	statfs := d.statfsFn
+	if statfs == nil {
+		statfs = realStatfs
+	}
+	dockerDf := d.dockerDfFn
+	if dockerDf == nil {
+		dockerDf = realDockerDiskBreakdown
+	}
+
+	configsBytes, err := du(filepath.Join(root, "configs"))
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, fmt.Sprintf("du configs: %v", err))
+	}
+	savedRoot := filepath.Join(root, "saved")
+	savedTotal, err := du(savedRoot)
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, fmt.Sprintf("du saved: %v", err))
+	}
+	auditBytes, err := du(filepath.Join(root, "audit-archive"))
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, fmt.Sprintf("du audit-archive: %v", err))
+	}
+
+	savedDirs, err := readImmediateDirs(savedRoot)
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, fmt.Sprintf("read saved: %v", err))
+	}
+	savedPerServer := make([]savedEntry, 0, len(savedDirs))
+	for _, name := range savedDirs {
+		size, err := du(filepath.Join(savedRoot, name))
+		if err != nil {
+			return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, fmt.Sprintf("du saved/%s: %v", name, err))
+		}
+		savedPerServer = append(savedPerServer, savedEntry{UUID: name, Bytes: size})
+	}
+
+	dockerVolumes, dockerImages, depotBytes, err := dockerDf()
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	if dockerVolumes == nil {
+		dockerVolumes = []dockerVol{}
+	}
+	if dockerImages == nil {
+		dockerImages = []dockerImg{}
+	}
+
+	statfsTarget := root
+	if _, statErr := os.Stat(root); statErr != nil && os.IsNotExist(statErr) {
+		statfsTarget = filepath.Dir(root)
+	}
+	var st syscall.Statfs_t
+	if err := statfs(statfsTarget, &st); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, fmt.Sprintf("statfs %s: %v", statfsTarget, err))
+	}
+	hostTotal := int64(st.Blocks) * int64(st.Bsize)
+	hostUsed := int64(st.Blocks-st.Bavail) * int64(st.Bsize)
+
+	total := configsBytes + savedTotal + auditBytes
+	for _, v := range dockerVolumes {
+		total += v.Bytes
+	}
+	for _, im := range dockerImages {
+		total += im.Bytes
+	}
+
+	res := panelDiskUsageResult{
+		ConfigsBytes:      configsBytes,
+		SavedTotalBytes:   savedTotal,
+		SavedPerServer:    savedPerServer,
+		DepotVolumeBytes:  depotBytes,
+		DockerVolumes:     dockerVolumes,
+		DockerImages:      dockerImages,
+		AuditArchiveBytes: auditBytes,
+		TotalPanelBytes:   total,
+		HostTotalBytes:    hostTotal,
+		HostUsedBytes:     hostUsed,
+		ComputedAt:        time.Now().UTC().Format(time.RFC3339),
+		CacheAgeSeconds:   0,
+	}
+
+	cached := res
+	panelDiskCacheVal = &cached
+	panelDiskCacheStored = time.Now()
+
+	body, _ := json.Marshal(&res)
+	return rpc.NewSuccessResponse(req.ID, body)
 }

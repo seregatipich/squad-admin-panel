@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@squad/bridge-client": "workspace:*",
+    "@squad/diag": "workspace:*",
     "@squad/shared-config": "workspace:*",
     "ioredis": "^5.4.1",
     "pino": "^9.5.0"

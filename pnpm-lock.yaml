@@ -75,6 +75,9 @@ importers:
       '@squad/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../packages/diag
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../packages/shared-config
@@ -205,6 +208,9 @@ importers:
 
   apps/workers/audit-archiver:
     dependencies:
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../../packages/diag
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config
@@ -312,6 +318,40 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
 
+  apps/workers/diag-flush:
+    dependencies:
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../../packages/diag
+      '@squad/shared-config':
+        specifier: workspace:*
+        version: link:../../../packages/shared-config
+      ioredis:
+        specifier: ^5.4.1
+        version: 5.10.1
+      pino:
+        specifier: ^9.5.0
+        version: 9.14.0
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.9
+      uuid:
+        specifier: ^14.0.0
+        version: 14.0.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.1
+        version: 22.19.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
+
   apps/workers/discord:
     dependencies:
       '@squad/shared-config':
@@ -339,6 +379,9 @@ importers:
 
   apps/workers/event-partition:
     dependencies:
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../../packages/diag
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config
@@ -373,6 +416,9 @@ importers:
       '@squad/db':
         specifier: workspace:*
         version: link:../../../packages/db
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../../packages/diag
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config
@@ -416,6 +462,9 @@ importers:
       '@squad/bridge-client':
         specifier: workspace:*
         version: link:../../../packages/bridge-client
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../../packages/diag
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config
@@ -444,6 +493,9 @@ importers:
       '@squad/db':
         specifier: workspace:*
         version: link:../../../packages/db
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../../packages/diag
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config
@@ -584,6 +636,28 @@ importers:
       tsx:
         specifier: ^4.19.2
         version: 4.21.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
+
+  packages/diag:
+    dependencies:
+      uuid:
+        specifier: ^14.0.0
+        version: 14.0.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.1
+        version: 22.19.17
+      ioredis:
+        specifier: ^5.4.1
+        version: 5.10.1
+      pino:
+        specifier: ^9.5.0
+        version: 9.14.0
       typescript:
         specifier: ^5.7.2
         version: 5.9.3

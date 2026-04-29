@@ -10,6 +10,10 @@
  * static UI) are excluded.
  */
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { describe, expect, it } from 'vitest';
@@ -138,6 +142,48 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
     );
     for (const r of falsy) {
       expect(allowlist.has(r.url), `unexpected audit:false on ${r.method} ${r.url}`).toBe(true);
+    }
+  });
+
+  it('every status-flipping route emits a server.* diag event in its handler source', async () => {
+    const STATUS_FLIPPING_ROUTES = new Map<string, string>([
+      ['POST /api/v1/servers/:id/start', 'servers.ts'],
+      ['POST /api/v1/servers/:id/stop', 'servers.ts'],
+      ['POST /api/v1/servers/:id/install', 'server-install.ts'],
+      ['DELETE /api/v1/servers/:id', 'servers.ts'],
+      ['POST /api/v1/servers/archive/:id/restore', 'server-archive.ts'],
+    ]);
+
+    const routes = await collectRoutes();
+    const seen = new Set<string>();
+    for (const r of routes) {
+      const key = `${r.method} ${r.url}`;
+      if (STATUS_FLIPPING_ROUTES.has(key)) seen.add(key);
+    }
+    for (const key of STATUS_FLIPPING_ROUTES.keys()) {
+      expect(
+        seen.has(key),
+        `status-flipping route ${key} is not registered — STATUS_FLIPPING_ROUTES is stale`,
+      ).toBe(true);
+    }
+
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const routesDir = path.resolve(here, '..', 'src', 'routes');
+    // Tolerate single/double quotes and arbitrary whitespace + newlines between
+    // diag.emit( and the kind: 'server.<x>' literal. Matches both
+    // `req.diag.emit({ ... kind: 'server.foo' ... })` and the
+    // `app.diag.emit(...)` / `emitCtx.diag.emit(...)` variants used in
+    // server-install.ts.
+    const DIAG_EMIT_SERVER_RE = /diag\.emit\(\s*\{[\s\S]*?kind:\s*['"]server\.[a-z_.]+['"]/m;
+
+    for (const [key, file] of STATUS_FLIPPING_ROUTES) {
+      const handlerFile = path.join(routesDir, file);
+      const source = readFileSync(handlerFile, 'utf8');
+      if (!DIAG_EMIT_SERVER_RE.test(source)) {
+        throw new Error(
+          `route ${key} flips server.status but does not emit a server.* diag event in ${handlerFile}`,
+        );
+      }
     }
   });
 });

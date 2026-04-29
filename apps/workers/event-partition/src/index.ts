@@ -1,3 +1,6 @@
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { createDiag, type Diag } from '@squad/diag';
 import { startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -8,11 +11,88 @@ const log = pino({
   base: { service: 'worker-event-partition' },
 });
 
+const COMPONENT = 'worker-event-partition';
+
 /**
  * Hourly cron replacement for pg_partman's run_maintenance. Creates the
  * next month's events partition a week before it is needed so writes never
  * land without a partition.
  */
+export async function ensureDiagPartitions(sql: postgres.Sql): Promise<void> {
+  // Partition bounds are computed in UTC; production Postgres MUST run with `TimeZone = 'UTC'` or equivalent for correctness.
+  for (const offset of [-1, 0, 1, 2]) {
+    const date = new Date(Date.now() + offset * 86_400_000);
+    const yyyymmdd = date.toISOString().slice(0, 10).replace(/-/g, '');
+    const partname = `diagnostic_events_${yyyymmdd}`;
+    const from = date.toISOString().slice(0, 10);
+    const to = new Date(date.getTime() + 86_400_000).toISOString().slice(0, 10);
+    await sql.unsafe(
+      `CREATE TABLE IF NOT EXISTS ${partname} PARTITION OF diagnostic_events FOR VALUES FROM ('${from}') TO ('${to}');`,
+    );
+    log.info({ partname }, 'ensured diag partition');
+  }
+
+  const cutoff = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10).replace(/-/g, '');
+  const cutoffName = `diagnostic_events_${cutoff}`;
+  const stale = (await sql`
+    SELECT p.relname AS partname
+    FROM pg_inherits
+    JOIN pg_class p  ON p.oid = inhrelid
+    JOIN pg_class pp ON pp.oid = inhparent
+    WHERE pp.relname = 'diagnostic_events'
+      AND p.relname < ${cutoffName}
+  `) as unknown as { partname: string }[];
+  for (const { partname } of stale) {
+    await sql.unsafe(`DROP TABLE IF EXISTS ${partname};`);
+    log.info({ partname }, 'dropped stale diag partition');
+  }
+}
+
+export interface PartitionTickDeps {
+  sql: postgres.Sql;
+  diag: Diag;
+}
+
+export async function runPartitionTick(deps: PartitionTickDeps): Promise<void> {
+  const { sql, diag } = deps;
+  const failures: string[] = [];
+
+  async function ensureMonthlyPartitions() {
+    const toCreate = 2; // current + next month (plus existing bootstraps from 0000_init.sql)
+    for (let i = 0; i < toCreate; i++) {
+      await sql`SELECT 1`; // placeholder — real logic in Phase 1 when pg_partman ships
+    }
+    log.info({ createdUpTo: toCreate }, 'partitions ensured');
+  }
+
+  const results = await Promise.allSettled([ensureMonthlyPartitions(), ensureDiagPartitions(sql)]);
+  for (const r of results) {
+    if (r.status === 'rejected') {
+      const message = r.reason instanceof Error ? r.reason.message : String(r.reason);
+      log.error({ err: message }, 'partition rotation tick rejected');
+      failures.push(message);
+    }
+  }
+
+  if (failures.length > 0) {
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'event_partition.run_failed',
+      severity: 'error',
+      message: `partition rotation failed: ${failures.join('; ')}`,
+      payload: { failures },
+    });
+  } else {
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'event_partition.run_ok',
+      severity: 'info',
+      message: 'partition rotation ok',
+      payload: {},
+    });
+  }
+}
+
 async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -33,18 +113,20 @@ async function main() {
       })
     : () => {};
 
-  async function ensurePartitions() {
-    const toCreate = 2; // current + next month (plus existing bootstraps from 0000_init.sql)
-    for (let i = 0; i < toCreate; i++) {
-      await sql`SELECT 1`; // placeholder — real logic in Phase 1 when pg_partman ships
-    }
-    log.info({ createdUpTo: toCreate }, 'partitions ensured');
-  }
+  const diag: Diag = redis ? createDiag({ redis, log }) : { async emit() {} };
 
-  await ensurePartitions();
+  await diag.emit({
+    component: COMPONENT,
+    kind: 'event_partition.started',
+    severity: 'info',
+    message: 'event-partition started',
+    payload: { pid: process.pid },
+  });
+
+  await runPartitionTick({ sql, diag });
   const interval = setInterval(
     () => {
-      ensurePartitions().catch((err) =>
+      runPartitionTick({ sql, diag }).catch((err) =>
         log.error({ err: (err as Error).message }, 'partition failed'),
       );
     },
@@ -53,8 +135,15 @@ async function main() {
 
   const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
-    stopHeartbeat();
     clearInterval(interval);
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'event_partition.stopped',
+      severity: 'info',
+      message: `event-partition received ${sig}`,
+      payload: { sig },
+    });
+    stopHeartbeat();
     await sql.end({ timeout: 5 });
     await redis?.quit().catch(() => undefined);
     process.exit(0);
@@ -63,7 +152,18 @@ async function main() {
   process.once('SIGTERM', shutdown);
 }
 
-main().catch((err) => {
-  log.fatal({ err: (err as Error).message }, 'fatal');
-  process.exit(1);
-});
+function isMainEntrypoint(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainEntrypoint()) {
+  main().catch((err) => {
+    log.fatal({ err: (err as Error).message }, 'fatal');
+    process.exit(1);
+  });
+}

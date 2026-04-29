@@ -1,7 +1,9 @@
 import { BridgeClient } from '@squad/bridge-client';
+import { createDiag } from '@squad/diag';
 import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
+import { emitStarted, emitStopped } from './lifecycle.js';
 import { runSampler } from './sampler.js';
 
 function requiredEnv(name: string): string {
@@ -42,11 +44,16 @@ async function main(): Promise<void> {
     intervalMs: 5_000,
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
+
+  const diag = createDiag({ redis, log });
+  await emitStarted(diag);
+
   const stopSampler = runSampler({ bridge, redis, log });
 
   const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
     stopSampler();
+    await emitStopped(diag, sig);
     stopHeartbeat();
     await redis.quit().catch(() => undefined);
     await bridge.close();

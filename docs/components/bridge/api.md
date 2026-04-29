@@ -44,7 +44,7 @@ For every new connection the bridge reads `SO_PEERCRED` and looks up the caller'
 
 ## Methods
 
-All 18 RPC methods from `BRIDGE_METHODS`. Request shapes match the Go handlers; the TS client mirrors them in [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts).
+All 20 RPC methods from `BRIDGE_METHODS`. Request shapes match the Go handlers; the TS client mirrors them in [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts).
 
 ### Liveness / host
 
@@ -91,6 +91,40 @@ Allowed cfg filenames are pinned by `ALLOWED_CONFIG_FILES` in `shared-config` (1
 #### `file_read({ path })` → `{ content }`
 
 Up to 16 MiB. Anything outside the allowlist returns `forbidden`.
+
+#### `file_read_tail({ path, max_bytes? })` → `{ content, offset, size, truncated }`
+
+Reads up to `max_bytes` from the **end** of `path`. When `offset > 0` the read starts at the next `\n` after the truncation point so the caller never sees a partial first line. Used by the diagnostic-bundle builder to capture the tail of `SquadGame.log` without slurping multi-MB files.
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `string` | Required. Same allowlist as `file_read` (configs / saved / depot RO / sentinel). |
+| `max_bytes` | `number` | Optional. Clamp semantics: `<= 0` (or unset) defaults to `65536` (64 KiB); values in `(0, 1048576]` (1 MiB) are honored as-is; values `> 1048576` are clamped down to the 1 MiB ceiling. |
+
+| Result field | Type | Description |
+|---|---|---|
+| `content` | `string` | Tail bytes after the newline-snap. Empty when the file is empty or the tail window contained no newline. |
+| `offset` | `number` | Byte offset where `content` begins in the source file (0 when the whole file fits, otherwise the position of the byte immediately after the snap newline). |
+| `size` | `number` | Total size of the file in bytes at read time. |
+| `truncated` | `boolean` | `true` iff `size > max_bytes` (i.e. some prefix of the file was skipped). |
+
+Errors: `forbidden` (path outside allowlist), `invalid_args` (params not JSON), `runtime_error` (open / stat / seek failed).
+
+```json
+// request
+{ "id": "req-1", "method": "file_read_tail", "params": {
+  "path": "/var/lib/squad-panel/saved/<uuid>/SquadGame/Saved/Logs/SquadGame.log",
+  "max_bytes": 65536
+} }
+
+// response (file is 12 MiB)
+{ "id": "req-1", "ok": true, "result": {
+  "content": "[2026.04.28-10.00.00:000][000]LogNet: ...\n...",
+  "offset": 12516352,
+  "size": 12582912,
+  "truncated": true
+} }
+```
 
 #### `file_write({ path, content, mode? })` → `{ status: 'written' }`
 
@@ -176,11 +210,88 @@ Long-lived — clients should use a per-WebSocket bridge connection (`app.makeBr
 
 Spawns a transient `squad-panel/depot-init` container that runs `steamcmd +app_update 403240 [validate] +quit` against the shared `squad-depot` volume. `steamcmd` arg composition happens **inside the bridge** — callers don't pass tokens. Initial run takes ~25 minutes.
 
+### Operational visibility
+
+#### `panel_disk_usage({ force? })` → `PanelDiskUsageResult`
+
+Reports panel-owned on-disk footprint by combining `du -sb` walks of `/var/lib/squad-panel/{configs,saved,audit-archive}`, `docker system df --format '{{json .}}' -v` filtered to panel-owned images and volumes, and `statfs(/var/lib/squad-panel)` for whole-host capacity. Result is computed at most once every 5 minutes and cached in-process; subsequent calls within the TTL return the same payload with `cache_age_seconds` advanced.
+
+Optional params:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `force` | bool | `false` | When `true`, skip the cache read and recompute (`du` + `docker df` + `statfs`). The fresh result is still written into the cache so subsequent non-force calls within the TTL benefit immediately. The API exposes this as `?refresh=1` on `GET /api/v1/host/disk-usage`. |
+
+The wire input has no caller-controlled paths, so there is no path allowlist. The method's allowlist is internal:
+
+- Filesystem walks: `<panel_root>/configs`, `<panel_root>/saved` (plus per-server subdirs by listing immediate children), `<panel_root>/audit-archive`. Missing directories are reported as zero, never as an error. `panel_root` defaults to `/var/lib/squad-panel`.
+- Docker volumes counted: `squad-depot`, `squad-panel_pg-data`, `squad-panel_redis-data`. All other volumes are dropped.
+- Docker images counted (any tag): `squad-server`, `squad-panel/depot-init`, `squad-panel/api`, `squad-panel/web`, `squad-panel/worker`. All other images are dropped.
+
+Response shape:
+
+| Field | Type | Description |
+|---|---|---|
+| `configs_bytes` | int64 | `du -sb /var/lib/squad-panel/configs` |
+| `saved_total_bytes` | int64 | `du -sb /var/lib/squad-panel/saved` |
+| `saved_per_server` | array of `{ uuid, bytes }` | Per-server `du` of each immediate subdir of `saved/`. Empty array when `saved/` is missing or has no children. |
+| `depot_volume_bytes` | int64 | Bytes attributed to the `squad-depot` Docker named volume. Already included in `docker_volumes`; surfaced separately for convenience. **Not added to `total_panel_bytes` to avoid double-counting.** |
+| `docker_volumes` | array of `{ name, bytes }` | Panel-owned Docker volume sizes. Always a non-null JSON array. |
+| `docker_images` | array of `{ repository, tag, bytes }` | Panel-owned Docker image sizes. Always a non-null JSON array. |
+| `audit_archive_bytes` | int64 | `du -sb /var/lib/squad-panel/audit-archive`, 0 when missing. |
+| `total_panel_bytes` | int64 | `configs_bytes + saved_total_bytes + audit_archive_bytes + sum(docker_volumes.bytes) + sum(docker_images.bytes)`. Depot volume is **not** added separately. |
+| `host_total_bytes` | int64 | `statfs.Blocks * statfs.Bsize` for `panel_root` (or its parent if `panel_root` is missing). |
+| `host_used_bytes` | int64 | `(statfs.Blocks - statfs.Bavail) * statfs.Bsize` for the same target. |
+| `computed_at` | string | RFC 3339 UTC timestamp of the underlying compute. Stable across cache hits within the 5-minute TTL. |
+| `cache_age_seconds` | int | `0` on a fresh compute; `floor(seconds since computed_at)` on a cache hit. |
+
+Errors: returns `runtime_error` with a descriptive message when `du`, `statfs`, or `docker system df` fail. There is no `forbidden` path because no caller input feeds into a path or shell argument.
+
 ### Self
 
 #### `host_agent_restart()` → `{ status: 'restarting' }`
 
 Asks systemd to restart `panel-host-bridge.service`. Used by the panel's "rotate bridge" admin action; the socket stays activated so callers reconnect transparently.
+
+## Diagnostic events (journald)
+
+The bridge does NOT connect to Redis directly — pulling Redis credentials into the privileged daemon would widen the attack surface. Instead the bridge writes structured JSON lines to **stderr**, which systemd captures into the journal. `worker-diag-flush` runs `journalctl -u panel-host-bridge -o json -f` as a subprocess, parses each line, and `XADD`s entries with `DIAG_EVENT == '1'` into `diag:queue` under the same shape as native producers.
+
+Every emit is a single line of JSON on `os.Stderr`:
+
+```json
+{
+  "DIAG_EVENT": "1",
+  "ts": "2026-04-29T10:00:00Z",
+  "component": "bridge",
+  "kind": "bridge.client.connected",
+  "severity": "info",
+  "message": "panel peer connected",
+  "uid": 1000,
+  "pid": 4242,
+  "user": "squad"
+}
+```
+
+The `DIAG_EVENT` field is the marker the forwarder filters on — any other stderr line (slog logs, journald metadata) is ignored. Payload keys are merged flat into the top-level record; the forwarder splits them back out into the `payload` JSON field on the Redis Stream.
+
+Helper: [`handlers.DiagLog(component, kind, severity, message, payload)`](../../../apps/bridge/internal/handlers/handlers.go) in `apps/bridge/internal/handlers/handlers.go`. Its writer is `handlers.DiagSink` (defaults to `os.Stderr`; tests swap it for a buffer).
+
+### Emitted kinds
+
+| Kind | Severity | When | Payload |
+|---|---|---|---|
+| `bridge.client.connected` | `info` | After `auth.ResolvePeer` succeeds in `cmd/panel-host-bridge/main.go::serveConn`. | `{ uid, pid, user }` |
+| `bridge.client.disconnected` | `info` (peer EOF) / `warn` (untrusted-peer reject) | `defer` inside `serveConn`. | `{ reason: 'eof' \| 'shutdown' \| 'read_frame_error' \| 'untrusted_peer', uid, pid, user, err? }` |
+| `bridge.panic` | `fatal` | Inside the `defer recover()` block of `Dispatcher.Handle`. The handler still returns `rpc.NewErrorResponse(req.ID, internal, ...)` so the client sees a normal error frame. | `{ method, request_id, recovered }` |
+| `bridge.signal.sigterm` | `info` | First line of the SIGTERM/SIGINT handler in `main.go`, before the listener is closed. | `{ signal, version }` |
+| `bridge.host_agent_restart` | `info` | First line of the `host_agent_restart` handler, before the delayed `systemctl restart` goroutine is scheduled. | `{ request_id }` |
+
+These are complementary to the API-side `bridge.client.connected` / `bridge.client.disconnected` / `bridge.rpc.error` emits produced by `apps/api/src/plugins/bridge.ts` from the TS bridge-client perspective. The Go-side emits cover the case where the API is offline or the bridge restarts independently.
+
+### Forwarder requirements
+
+`worker-diag-flush` runs the forwarder; see [`docs/components/workers/worker-diag-flush/configuration.md`](../workers/worker-diag-flush/configuration.md) for the journald bind-mounts and the `DIAG_JOURNALD_*` knobs.
 
 ## Adding a new method
 

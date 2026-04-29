@@ -120,6 +120,20 @@
       "when": 1746007200000,
       "tag": "0016_drop_legacy_viewer",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1777395649000,
+      "tag": "0017_diagnostic_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1777482049000,
+      "tag": "0018_diagnostic_events_utc_invariant",
+      "breakpoints": true
     }
   ]
 }

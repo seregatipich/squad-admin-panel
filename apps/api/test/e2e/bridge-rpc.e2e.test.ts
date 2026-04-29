@@ -254,6 +254,30 @@ describe('bridge RPC surface (e2e)', () => {
       expect(errored || errored === false).toBe(true);
     }
   });
+
+  it('panel_disk_usage returns a sane shape against the live host', async () => {
+    const r = await bridge.panelDiskUsage();
+    expect(r.host_total_bytes).toBeGreaterThan(0);
+    expect(r.total_panel_bytes).toBeGreaterThanOrEqual(0);
+    // Panel footprint must fit inside what statvfs reports as used; allow 1 KiB
+    // slop for filesystem block-rounding between `du -sb` and `Statfs`.
+    expect(r.host_used_bytes).toBeGreaterThanOrEqual(r.total_panel_bytes - 1024);
+    expect(Array.isArray(r.saved_per_server)).toBe(true);
+    expect(Array.isArray(r.docker_volumes)).toBe(true);
+    expect(Array.isArray(r.docker_images)).toBe(true);
+    expect(Number.isNaN(Date.parse(r.computed_at))).toBe(false);
+    expect(r.cache_age_seconds).toBeGreaterThanOrEqual(0);
+    expect(r.cache_age_seconds).toBeLessThan(360);
+  });
+
+  it('panel_disk_usage caches results — two calls share computed_at and advance cache_age_seconds', async () => {
+    const first = await bridge.panelDiskUsage();
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const second = await bridge.panelDiskUsage();
+    expect(second.computed_at).toBe(first.computed_at);
+    expect(second.cache_age_seconds).toBeGreaterThanOrEqual(first.cache_age_seconds);
+    expect(second.cache_age_seconds).toBeGreaterThan(0);
+  });
 });
 
 describe('directory_delete (e2e)', () => {

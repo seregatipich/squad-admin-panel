@@ -26,6 +26,43 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 - Five new non-system roles created (or upserted by name): **Admin** `#CD5C5C` (panel_access), **Moderator** `#2E8B57` (panel_access), **QueuePriority** `#DAA520`, **Cameraman** `#8B008B`, **Intern** `#005EC2`. Each gets a distinct Squad-permission set per spec — see `docs/components/rbac/data-model.md`.
 - Legacy "Senior Admin" row removed (no spec analogue, no consumers). Legacy "Viewer" row preserved for back-compat with the existing test fixture.
 - Spec roles carry **no** rows in `role_permissions`; their panel-side permissions are derived in code by `apps/api/src/lib/rbac.ts` from the access flags.
+## 2026-04-28
+
+### Migration 0017 — `diagnostic_events` partitioned table
+
+**File:** `packages/db/drizzle/0017_diagnostic_events.sql`
+
+#### Added
+
+- `diagnostic_events` parent table, range-partitioned by `ts`, with composite primary key `(id, ts)`.
+- Columns: `id uuid`, `ts timestamptz`, `component text`, `severity text`, `kind text`, `server_id uuid` (FK → `servers.id` ON DELETE SET NULL), `actor_steam_id64 bigint`, `request_id text`, `message text`, `payload jsonb DEFAULT '{}'::jsonb`.
+- Severity check constraint `diagnostic_events_severity_chk` restricting values to `('debug','info','warn','error','fatal')`.
+- Indexes `diagnostic_events_ts_idx (ts DESC)`, `diagnostic_events_server_ts_idx (server_id, ts DESC)`, `diagnostic_events_kind_ts_idx (component, severity, ts DESC)`.
+- 25 bootstrap partitions named `diagnostic_events_YYYYMMDD` covering yesterday + today + 23 future UTC days, created via a `DO` block using `format(... %I ... %L ... %L)`.
+
+#### Migration notes
+
+Forward-only and additive — no existing data is touched. Unlike `audit_log` and `config_versions`, this table is **mutable**: the partition pruner (`worker-event-partition`, future task) DROPs day-partitions older than 24h, and the wipe endpoint (future task) issues `TRUNCATE` against partitions. The `(id, ts)` composite PK is required by Postgres because `ts` is the partition key. The FK to `servers(id)` uses `ON DELETE SET NULL` so deleting a server does not cascade-delete its diagnostic trail; orphaned rows remain readable.
+
+The Drizzle journal entry uses `idx: 14` (next sequential after `0013_servers_soft_delete`); the file numbering jumps to `0017` to leave room for in-flight migrations on parallel feature branches (`0014`–`0016`) and to match the file path expected by the diagnostic-bundle plan.
+
+### Drizzle TS schema for `diagnostic_events`
+
+**File:** `packages/db/src/schema/diagnostic-events.ts`
+
+#### Added
+
+- `diagnosticEvents` Drizzle table binding mirroring migration `0017_diagnostic_events.sql` column-for-column (uuid `id`, timestamptz `ts`, text `component`/`severity`/`kind`, uuid FK `server_id`, bigint `actor_steam_id64`, text `request_id`, text `message`, jsonb `payload` defaulting to `{}`).
+- Composite primary key `(id, ts)` declared via `primaryKey({ columns: [table.id, table.ts] })` (same pattern as `events`).
+- Indexes (`diagnostic_events_ts_idx`, `diagnostic_events_server_ts_idx`, `diagnostic_events_kind_ts_idx`) and check constraint (`diagnostic_events_severity_chk`) named identically to the migration so DDL diffing stays clean.
+- `DiagnosticEventRow` and `NewDiagnosticEvent` type exports inferred from the schema.
+- Re-export wired into `packages/db/src/schema/index.ts` between `config-versions.js` and `events.js`.
+
+#### Migration notes
+
+No DDL change — the SQL migration shipped in commit `d68fb21` already created the table. This entry only registers the Drizzle binding so application code can use the typed query builder. Drizzle indexes do not encode `DESC` ordering on individual columns; this is cosmetic and does not affect query plans.
+
+---
 
 ## 2026-04-30
 

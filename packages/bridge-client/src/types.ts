@@ -77,6 +77,18 @@ export interface FileReadParams {
   path: string;
 }
 
+export interface FileReadTailParams {
+  path: string;
+  max_bytes?: number;
+}
+
+export interface FileReadTailResult {
+  content: string;
+  offset: number;
+  size: number;
+  truncated: boolean;
+}
+
 export interface FileWriteParams {
   path: string;
   content: string;
@@ -150,6 +162,13 @@ export interface ContainerInspectResult {
   image: string;
   restart_count: number;
   labels: Record<string, string>;
+  /** Set by the bridge when Docker reports the container was OOM-killed. Older
+   *  bridge builds omit the field entirely; consumers must default to `false`. */
+  oom_killed?: boolean;
+  /** Docker's `State.Error` string. Usually empty; populated with values like
+   *  `"signal: killed"` when the runtime sends the container a signal. Older
+   *  bridge builds omit the field; consumers must default to `null`. */
+  error?: string;
 }
 
 export interface ContainerStatsResult {
@@ -170,4 +189,35 @@ export interface ContainerLogsParams {
 
 export interface HostAgentRestartResult {
   status: 'restarting';
+}
+
+export interface PanelDiskUsageDockerVolume {
+  name: string;
+  bytes: number;
+}
+
+export interface PanelDiskUsageDockerImage {
+  repository: string;
+  tag: string;
+  bytes: number;
+}
+
+export interface PanelDiskUsageSavedEntry {
+  uuid: string;
+  bytes: number;
+}
+
+export interface PanelDiskUsage {
+  configs_bytes: number;
+  saved_total_bytes: number;
+  saved_per_server: PanelDiskUsageSavedEntry[];
+  depot_volume_bytes: number;
+  docker_volumes: PanelDiskUsageDockerVolume[];
+  docker_images: PanelDiskUsageDockerImage[];
+  audit_archive_bytes: number;
+  total_panel_bytes: number;
+  host_total_bytes: number;
+  host_used_bytes: number;
+  computed_at: string;
+  cache_age_seconds: number;
 }

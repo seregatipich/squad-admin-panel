@@ -318,6 +318,35 @@ SET worker:heartbeat:rcon "<json>" EX 30
 }
 ```
 
+## Heartbeat-watch (worker outage detector)
+
+Implemented in [`plugins/heartbeat-watch.ts`](../../../apps/api/src/plugins/heartbeat-watch.ts). Distinct from the read-only `/health/workers` aggregation — the heartbeat-watch plugin runs a 30 s `setInterval` ticker that detects worker outages and surfaces them as diagnostic events.
+
+State held in plugin closure:
+
+| Map | Type | Purpose |
+|---|---|---|
+| `lostSince` | `Map<string, number>` | First Date.now() at which the heartbeat key was observed missing. |
+| `reported` | `Set<string>` | Worker names for which `worker.heartbeat_lost` has already fired in the current outage. |
+| `inFlight` | `boolean` | Re-entrancy guard — a slow Redis `pttl` round-trip never lets a second tick overlap. |
+
+Per tick:
+
+1. If `inFlight` is set → return early.
+2. Set `inFlight = true`. For each `name` in the constant `KNOWN_WORKERS = ['rcon', 'log-ingest', 'audit-archiver', 'event-partition', 'diag-flush', 'metrics-sampler']`:
+   - `ttl = await app.redis.pttl('worker:heartbeat:' + name)`.
+   - **Key absent** (`ttl < 0`):
+     - `since = lostSince.get(name) ?? now`. Record/refresh `lostSince`.
+     - If `name` is NOT in `reported` AND `now - since > 30_000` ms → `app.diag.emit('worker.heartbeat_lost', severity: 'error', payload: { worker: name })` and add `name` to `reported`. Each outage produces exactly one emit.
+   - **Key present** (`ttl >= 0`):
+     - If `name` is in `reported` → `app.diag.emit('worker.heartbeat_recovered', severity: 'info', payload: { worker: name })` and remove `name` from `reported`.
+     - Drop the `lostSince` entry.
+3. Any exception in the tick is caught and logged at `warn` (`heartbeat-watch tick failed`); `inFlight` is always cleared in `finally`.
+
+The plugin decorates `app.heartbeatWatchTick` so the tick can be invoked synchronously from tests without waiting for the interval.
+
+Threshold rationale: heartbeat keys are written with a 30 s TTL by `startHeartbeat`. The 30 s detection threshold AND the 30 s tick cadence together mean an outage is reported within 30–60 s of a worker stalling, with no false positives during normal restarts (which complete in <5 s).
+
 ## Bridge heartbeat
 
 [`plugins/bridge-heartbeat.ts`](../../../apps/api/src/plugins/bridge-heartbeat.ts) starts a 5 s `setInterval` once the app is `onReady`. Each tick:
@@ -366,6 +395,61 @@ ui WS connect →
 ui WS close →
   client.close()    ← critical: tears down the bridge subprocess on the host
 ```
+
+## WebSocket lifecycle diagnostic emits
+
+Each of the three WebSocket routes ([`live.ts`](../../../apps/api/src/routes/live.ts), [`server-logs.ts`](../../../apps/api/src/routes/server-logs.ts), [`server-install.ts`](../../../apps/api/src/routes/server-install.ts)) emits `ws.connected` on the connection handler entry, `ws.disconnected` from the `socket.on('close', (code, reason) => ...)` callback, and `ws.error` from the `socket.on('error', err => ...)` callback. The per-server routes (`server-logs.ts`, `server-install.ts`) populate `serverId` from the `:id` URL param; the global route (`live.ts`) leaves `serverId` undefined.
+
+```
+client.upgrade →
+  app.diag.emit('ws.connected', severity='info',
+                payload: { url, [serverId] })
+  ... (route-specific handlers run) ...
+  socket.on('close', (code, reason) ⇒
+    app.diag.emit('ws.disconnected', severity='info',
+                  payload: { code, reason.slice(0,200), url, [serverId] }))
+  socket.on('error', (err) ⇒
+    app.diag.emit('ws.error', severity='warn',
+                  payload: { errorMessage, url, [serverId] }))
+```
+
+Notes:
+- The `reason` Buffer is sliced to 200 chars so a misbehaving client cannot bloat `diag:queue` payloads.
+- All three emits use `.catch(() => undefined)` so a Redis hiccup never propagates back into the WebSocket handler.
+- For invalid `:id` URL params on the per-server routes, NO diag event fires for the connection lifecycle. The handler sends `{error:'invalid_id'}` and closes the socket immediately, before the `socket.on('close', ...)` listener is registered. Skipping the `ws.connected` emit on this branch preserves the connect/disconnect matching invariant — an emitted `ws.connected` is always paired with a `ws.disconnected`.
+- `ws.error` does NOT replace `ws.disconnected` — both fire when the error also drops the socket.
+
+## HTTP error boundary diagnostic emits
+
+[`apps/api/src/plugins/error-diag.ts`](../../../apps/api/src/plugins/error-diag.ts) wires two emit paths: a Fastify `setErrorHandler` for any 5xx response, and a `process.on('unhandledRejection', ...)` listener for orphaned promise rejections. Both run AFTER the `diagPlugin` registration so `app.diag` is decorated when the error handler fires.
+
+```
+route handler throws err →
+  Fastify error handler runs:
+    status = reply.statusCode || err.statusCode || 500
+    if status >= 500:
+      app.diag.emit('http.5xx', severity='error',
+                    requestId: req.id,
+                    actorSteamId64: req.user?.steamId64?.toString(),
+                    payload: { method, url, status,
+                               err: err.message,
+                               stack: err.stack?.slice(0, 2000) })
+    reply.send(err)   ← preserves Fastify default JSON envelope
+```
+
+```
+process emits 'unhandledRejection' (any promise rejected without a .catch()) →
+  app.diag.emit('http.unhandled_rejection', severity='fatal',
+                message: String(reason).slice(0, 200),
+                payload: { reason: String(reason).slice(0, 2000) })
+```
+
+Notes:
+- 4xx errors are NOT emitted as `http.5xx`. Auth (401), RBAC (403), validation (400/422), and not-found (404) are normal client-side faults; emitting on every one would flood `diag:queue`.
+- The error handler preserves the existing reply shape (`{ statusCode, error, message }`) by calling `reply.send(err)` AFTER the diag emit — the diag emit is purely additive.
+- The `stack` field is sliced to 2000 chars so a deep stack from a recursive failure cannot bloat `diag:queue` payloads. The `reason` field for unhandled rejections is sliced the same way; the `message` field uses 200 chars so the bundle's per-event header line stays compact.
+- Both emits use `.catch(() => undefined)` so a Redis hiccup never propagates back into the error path. The `app.diag?.emit(...)` call uses optional chaining for symmetry with the redis plugin pattern, even though `errorDiagPlugin` is registered after `diagPlugin`.
+- The `unhandledRejection` listener is attached exactly once per Node process via a module-level boolean guard (`unhandledRejectionListenerAttached`). When `errorDiagPlugin` is also registered by the integration harness for tests, the second registration only sets up the per-app `setErrorHandler` and skips re-attaching the global listener — duplicate emits would otherwise fire on every test rejection.
 
 ## First-owner claim
 
@@ -470,5 +554,253 @@ Every authed mutation route runs through [`plugins/audit.ts`](../../../apps/api/
 1. Compute canonical JSON of the audit row (without `id`/`row_hash`).
 2. `INSERT INTO audit_log (...)`. The DB trigger acquires `pg_advisory_xact_lock(audit_log_lock)`, reads the previous `row_hash`, computes `sha256(prev_hash || canonical_json)`, and writes `row_hash` + `prev_hash`.
 3. `BEFORE UPDATE OR DELETE` triggers raise `audit_log is append-only`.
+
+## Diagnostic emission
+
+Plugin: [`apps/api/src/lib/diag.ts`](../../../apps/api/src/lib/diag.ts). Registered in [`server.ts`](../../../apps/api/src/server.ts) right after `redisPlugin` so the underlying ioredis connection is available.
+
+```
+registerDiag(app):
+  diag = createDiag({ redis: app.redis, log: app.log })   ← from @squad/diag
+  app.decorate('diag', diag)
+  app.decorateRequest('diag', null)
+  onRequest hook:
+    requestId = req.id     ← Fastify-generated or x-request-id header
+    req.diag = {
+      emit(ev): app.diag.emit({ ...ev, requestId: ev.requestId ?? requestId })
+    }
+```
+
+Route handlers reach the emitter via `req.diag.emit({...})`. The hook injects the request id on every emit unless the caller already supplied one. Each emit ends up as one `XADD` to the Redis Stream `diag:queue`; `worker-diag-flush` batches them into `diagnostic_events`. The full schema and event types live in [`@squad/diag` data model](../diag/data-model.md).
+
+Stub-friendly for tests: replacing `app.diag.emit` with a capture function reroutes both `app.diag` calls and per-request emits, because the hook reads `app.diag.emit` at emit time rather than capturing the original closure.
+
+### Lifecycle event sequences
+
+The server-lifecycle routes emit a fixed set of events into `diag:queue`. Source files are the contract — this section documents intent + ordering, not payload schemas (those live in [`api.md` § "Lifecycle event kinds"](api.md)).
+
+#### Install (POST /servers/:id/install)
+
+Source: [`routes/server-install.ts`](../../../apps/api/src/routes/server-install.ts). The handler enqueues an async install IIFE and returns `202`-ish immediately; events fire over the lifetime of the install (typically 25–30 min on a cold depot, ~5 s on a warm depot).
+
+```
+api emits server.install.requested        ← before IIFE; payload.display_name + kind='install'
+  ├─ ensureDepot(...)                     ← emits no diag itself; depot stream still goes to installProgress
+  ├─ seedConfigs(...)
+  │   └─ api emits server.install.depot_seed   ← payload.seededCount + durationMs
+  ├─ ufw rules (×4: udp game/query/beacon, tcp rcon)
+  │   └─ api emits server.install.ufw_rule     ← per port; severity='error' on failure
+  ├─ bridge.containerRun(...)
+  │   └─ api emits server.install.container_run ← payload.container_id + image
+  ├─ DB: UPDATE servers SET status='running', container_id=...
+  │   └─ api emits server.install.verify        ← payload.container_id
+  └─ api emits server.install.done              ← payload.totalDurationMs
+─────── on any throw above ───────
+api emits server.install.failed                 ← severity='error'; payload.stage + errorMessage
+```
+
+#### Start (POST /servers/:id/start)
+
+Source: [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). Synchronous — emits before returning to the caller.
+
+```
+api emits server.start.requested
+  ├─ bridge.containerInspect → if running: UPDATE servers SET status='running'
+  │   └─ api emits server.start.done (payload.note='already running')
+  └─ else:
+     ├─ DB: UPDATE servers SET status='starting'
+     ├─ liveBus.publish({type: 'server.status', status: 'starting'})
+     ├─ bridge.containerStart OR bridge.containerRun
+     └─ api emits server.start.done    ← payload.container_id + durationMs
+─────── on any throw above ───────
+api emits server.start.failed → re-throw
+```
+
+#### Stop (POST /servers/:id/stop)
+
+Source: [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). Synchronous, but blocks ~15 s on the graceful RCON wait. Sets a Redis fence at the start so the reconciler ([`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts)) can distinguish a planned stop from an unexpected exit.
+
+```
+api: SET stop:requested:{server_id} EX 300
+api emits server.stop.requested            ← payload.method='graceful'
+  ├─ DB: UPDATE servers SET status='stopping'
+  ├─ liveBus.publish({type: 'server.status', status: 'stopping'})
+  ├─ if creds + settings:
+  │   ├─ rcon AdminBroadcast → api emits server.stop.broadcast (ok + raw_response)
+  │   ├─ sleep 15s
+  │   └─ rcon AdminEndMatch → api emits server.stop.end_match (ok)
+  ├─ bridge.containerStop → api emits server.stop.container_stop (ok + durationMs)
+  └─ api emits server.stop.done              ← payload.totalDurationMs
+─────── on any throw above ───────
+api emits server.stop.failed → re-throw
+
+# later, asynchronously, when Docker reports Status=exited:
+reconciler emits server.stop.reconciler_confirmed (Task 8 — not in this route)
+```
+
+The reconciler-confirmed event is documented separately because it lives in `plugins/status-reconciler.ts`.
+
+#### Soft-delete (DELETE /servers/:id)
+
+Source: [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). Calls `softDeleteServer` from [`lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts), which performs config backup → container stop+rm → directory delete → ufw rule remove → set `deletedAt`.
+
+```
+api emits server.soft_delete.requested
+  ├─ softDeleteServer(...)                    ← reads + backs up configs, removes container, drops ufw rules
+  └─ liveBus.publish({type: 'server.deleted', ...})
+api emits server.soft_delete.done            ← payload.backup_id + files_backed_up + durationMs
+─────── on throw ───────
+api emits server.soft_delete.failed → 500 response
+```
+
+#### Restore (POST /servers/archive/:id/restore)
+
+Source: [`routes/server-archive.ts`](../../../apps/api/src/routes/server-archive.ts). Creates a NEW server row with a new uuid (`new_server_id`); the old archived server stays soft-deleted. The restored server is `pending` — operator must follow with `/install` + `/restore-configs` + `/start`.
+
+```
+api emits server.restore.requested            ← serverId = old archive id; payload.slug
+  ├─ verify slug is free
+  ├─ DB: insert new servers + serverSettings + serverCredentials rows
+  └─ liveBus.publish({type: 'server.restored', old_server_id, new_server_id})
+api emits server.restore.done                 ← serverId = NEW server id; payload.archive_id + new_server_id
+```
+
+#### Reconciler container-exit observation (background, every 4 s)
+
+Source: [`plugins/status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts). Runs on every tick (`RECONCILE_INTERVAL_MS = 4 s`) and on every `POST /servers/:id/reconcile`. Whenever a row's previous status is `running` and the docker-derived state maps to `stopped` (i.e. the container exited between this tick and the previous one), the reconciler emits diag events alongside the existing DB update + `liveBus.publish({type:'server.status'})`.
+
+```
+reconciler.tick(server):
+  bridge.containerInspect → {state, exit_code, oom_killed, error, started_at, finished_at}
+  mapState(state, running) → 'stopped'
+  if previous === 'running' && next === 'stopped':
+    DB: UPDATE servers SET status='stopped'
+    liveBus.publish({type: 'server.status', source: 'reconciler', status: 'stopped'})
+
+    fence = redis.GET stop:requested:{server.id}
+    severity = exit_code === 0 ? 'info' : 'error'
+
+    if fence is set:
+      reconciler emits container.exited
+        payload: {exit_code, oom_killed, signal, finished_at, started_at}
+      reconciler emits server.stop.reconciler_confirmed   ← cap-off after a planned stop
+        payload: {exit_code}
+    else:
+      reconciler emits container.unexpected_exit
+        payload: {exit_code, oom_killed, signal, finished_at, started_at}
+```
+
+The fence `stop:requested:{server.id}` is `SET … EX 300` by the stop handler in [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). The reconciler reads it with `GET` (does NOT consume) and lets it expire naturally; the next `/stop` request refreshes the TTL. The reconciler emit fires AFTER the DB update + LiveBus publish so a downstream consumer joining `events:server:{id}` and `diag:queue` sees the status change before the diag explanation.
+
+`server.stop.reconciler_confirmed` only fires when the fence was set — if the panel never asked for a stop (a crash), the reconciler emits only `container.unexpected_exit`. This is what closes the loop opened in `POST /servers/:id/stop` (which emits `server.stop.requested` → `server.stop.done`); together they form: API requests stop → graceful RCON broadcast/end-match → bridge `containerStop` → reconciler observes the actual Docker exit and confirms it.
+
+#### Bridge listener (background, every RPC)
+
+Source: [`apps/api/src/plugins/bridge.ts`](../../../apps/api/src/plugins/bridge.ts). The plugin attaches four listeners to the singleton `BridgeClient` it constructs and translates each `BridgeClient` event (see [`docs/components/bridge-client/api.md`](../bridge-client/api.md#events)) into one diag emit. The listeners are process-global — they fire for every successful or failing RPC across the entire API, including the heartbeat plugin's 5 s ping loop, status-reconciler tick inspects, and per-route container/file calls.
+
+```
+bridge = new BridgeClient({socketPath, onLog})
+
+bridge.on('connected', ({rttMs, version, hostname}):
+  app.diag.emit({
+    component: 'api', kind: 'bridge.client.connected', severity: 'info',
+    message: `bridge connected (rtt=${rttMs}ms, version=${version})`,
+    payload: {rttMs, version, hostname},
+  }).catch(() => undefined)
+
+bridge.on('disconnected', reason:
+  app.diag.emit({
+    component: 'api', kind: 'bridge.client.disconnected', severity: 'error',
+    message: `bridge disconnected: ${reason}`,
+    payload: {reason},
+  }).catch(() => undefined)
+
+bridge.on('rpc-error', {method, code, message}:
+  app.diag.emit({
+    component: 'api', kind: 'bridge.rpc.error', severity: 'warn',
+    message: `${method} -> ${code}: ${message}`,
+    payload: {method, code, message},
+  }).catch(() => undefined)
+
+bridge.on('rtt', rttMs:
+  if rttMs > 50:
+    app.diag.emit({
+      component: 'api', kind: 'bridge.rtt.outlier', severity: 'warn',
+      message: `bridge RTT ${rttMs}ms exceeds 50ms threshold`,
+      payload: {rttMs, thresholdMs: 50},
+    }).catch(() => undefined)
+```
+
+The `.catch(() => undefined)` swallow is load-bearing: if Redis is unavailable the diag emit rejects, but the bridge plugin must never propagate that back into the underlying `EventEmitter` cycle (a thrown exception inside a listener would unwind the dispatcher mid-frame). The emit is fire-and-forget; the diag worker reads the stream and persists rows out-of-band.
+
+`bridge.client.connected` fires at most once per socket lifetime — a reconnect (after `client-closed` or `socket-closed`) re-arms it. `bridge.client.disconnected` only fires if a `connected` was previously emitted for that socket, so a `client.close()` on a never-handshaked client is silent on both ends. `bridge.rpc.error` fires immediately before the corresponding RPC call promise rejects with `BridgeError(code, message)`. `bridge.rtt.outlier` is gated at 50 ms (constant `RTT_OUTLIER_THRESHOLD_MS` in `apps/api/src/plugins/bridge.ts`); below that, `rtt` events from the BridgeClient are ignored.
+
+#### Connector listeners (background, on every state change)
+
+Sources: [`apps/api/src/plugins/redis.ts`](../../../apps/api/src/plugins/redis.ts) and [`apps/api/src/plugins/db-health.ts`](../../../apps/api/src/plugins/db-health.ts). The redis plugin attaches three event listeners to the ioredis client; the db-health plugin runs a 30 s `SELECT 1` loop. Both translate connector state changes into diag emits.
+
+The redis plugin is registered BEFORE diag in [`server.ts`](../../../apps/api/src/server.ts) (diag uses `app.redis` as its xadd target — see the "Diagnostic emission" section above), so the listeners use optional chaining `app.diag?.emit(...)` to handle the brief window during boot where redis events fire before the diag decorator exists. After the diag plugin registers, the lookup sees the live decorator on every emit because the listeners read `app.diag` lazily at fire time.
+
+```
+redis = new Redis(REDIS_URL, {...})
+redisDown = false   ← module-local flag
+
+redis.on('error', err):
+  app.log.warn(...)
+  app.diag?.emit({
+    component: 'api', kind: 'redis.ping.fail', severity: 'error',
+    message: `redis error: ${err.message}`,
+    payload: { err: err.message },
+  }).catch(() => undefined)
+  redisDown = true
+
+redis.on('reconnecting', delay):
+  app.log.info(...)
+  app.diag?.emit({
+    component: 'api', kind: 'redis.reconnect.attempt', severity: 'warn',
+    message: 'redis reconnecting',
+    payload: { delayMs: delay },
+  }).catch(() => undefined)
+
+redis.on('ready'):
+  app.log.info(...)
+  if redisDown:
+    app.diag?.emit({
+      component: 'api', kind: 'redis.reconnect.success', severity: 'info',
+      message: 'redis ready after a prior failure',
+      payload: {},
+    }).catch(() => undefined)
+    redisDown = false
+```
+
+The `redisDown` flag is the load-bearing piece: on a clean startup ioredis fires exactly one `ready` event (no prior `error`/`reconnecting`), and we want that to be silent — the `redis.reconnect.success` kind is reserved for actual recovery transitions. Any subsequent `error` arms the flag, the next `ready` consumes it, and the cycle repeats.
+
+The db-health plugin uses a separate 30 s `setInterval` because postgres-js (the driver behind `app.db`) does not expose connection-state events the way ioredis does. The plugin tracks `pgDown` per-app via a `WeakMap<FastifyInstance, boolean>`; the exported `pgHealthTick(app)` helper drives the loop deterministically in tests.
+
+```
+pgDown = false   ← per-app, in module-level WeakMap
+
+every 30s: pgHealthTick(app):
+  try:
+    await app.db.execute(sql`SELECT 1`)
+    if pgDown:
+      await app.diag.emit({
+        component: 'api', kind: 'pg.ping.ok', severity: 'info',
+        message: 'postgres responding after a prior failure',
+        payload: {},
+      })
+      pgDown = false
+  catch err:
+    await app.diag.emit({
+      component: 'api', kind: 'pg.ping.fail', severity: 'error',
+      message: `postgres ping failed: ${err.message}`,
+      payload: { err: err.message },
+    })
+    pgDown = true
+```
+
+`pg.ping.ok` is emitted ONLY as a recovery signal (first OK after a prior fail), so a healthy api in steady state produces zero pg events. `pg.ping.fail` fires on every failed tick — so a 5-minute postgres outage produces ~10 fail events plus 1 ok event when the connection returns. The `setInterval` handle is `unref()`-ed so it does not keep the Node process alive past `app.close()`, and the `onClose` hook clears the timer cleanly.
+
+The db-health plugin is registered AFTER both `database` and `diag` in [`server.ts`](../../../apps/api/src/server.ts) so `app.db` and `app.diag` are guaranteed live at registration. There is no plugin-order dependency for the redis listeners themselves because the listeners only read `app.diag` lazily.
 
 `pnpm verify:audit-chain` walks the table in `id` order and recomputes hashes; it exits non-zero on the first mismatch.

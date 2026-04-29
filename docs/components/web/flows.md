@@ -131,6 +131,23 @@ If the first-owner claim already happened and the user has no role, the API retu
 4. On WS close the banner turns red (`Связь с панелью потеряна — переподключаемся…`) and the singleton runs `BACKOFF_STEPS_MS` reconnect.
 5. On `bridge.connection: down` the banner turns amber. On `bridge.connection: up` it disappears.
 
+## Dashboard disk breakdown
+
+1. On mount the dashboard kicks off a one-shot fetch of `GET /api/v1/host/disk-usage` and starts a 30 s interval that re-fetches the same endpoint. The handler is independent from the 4 s host-metrics poll so the slower bridge sampling does not block the rest of the page.
+2. The response (`DiskBreakdown`) is stored in component state. On any non-OK status or thrown error the state stays at its previous value; transient failures are tolerated silently because the bar gracefully degrades to its single-segment threshold rendering.
+3. The `HostBlock` component receives the breakdown and forwards it to `DiskCard`.
+4. `DiskCard` computes `usedPct = (disk_used_bytes / disk_total_bytes) * 100` from `host_metrics` (the source of truth for the title number) and clamps `panelPct = min(diskBreakdown.panel_pct, usedPct)` and `otherPct = max(0, usedPct - panelPct)`. This absorbs any drift between the bridge's `panel_disk_usage` cache (5 min TTL) and the live `host_metrics` sample.
+5. The bar renders two stacked segments inside the existing track — `Панель` in `bg-purple-500` first, then `Прочее` in `bg-purple-300` — followed by a swatch legend with one-decimal percentages. While `diskBreakdown` is `null` the bar reverts to its single-segment threshold-tinted rendering and the legend is hidden.
+
+## Dashboard disk-card click → DiskBreakdownModal
+
+1. The disk card is wrapped in a `<button data-testid="disk-card">`. Clicking it does NOT open `MetricHistoryModal` (CPU/RAM/Network cards still do). Instead it sets the dashboard-local `diskModalOpen` state to `true`.
+2. `<DiskBreakdownModal>` is mounted near the bottom of the dashboard JSX with `open={diskModalOpen}`, `onOpenChange={setDiskModalOpen}`, `initialData={diskBreakdown}` (the polled state from the 30 s interval), and `onRefresh={refreshDiskBreakdown}`.
+3. On `open` flipping to `true` the modal seeds its own local `data` from `initialData` — no network call. It renders the summary line, the per-type list (configs / saved-total / squad-depot / docker volumes / docker images / audit-archive sorted by bytes descending) and the per-server saved table (only when `saved_per_server.length > 0`).
+4. The refresh button calls `onRefresh`, which fires `GET /api/v1/host/disk-usage?refresh=1`. The API forwards `{ force: true }` to `bridge.panelDiskUsage`, the bridge skips its 5-min cache, recomputes (`du -sb` + `docker system df` + `statvfs`), updates the cache, and returns the fresh payload. The dashboard's `diskBreakdown` state is also updated so closing and re-opening the modal sees the latest data, and the disk card's sub-segment bar updates too.
+5. While the refresh is in flight the button is disabled and the `↻` glyph spins. Failures (non-OK or thrown) leave the previous data intact.
+6. Backdrop click and Escape both close the modal via `onOpenChange(false)`.
+
 ## Server install wizard
 
 1. Admin navigates to `/servers/new`.

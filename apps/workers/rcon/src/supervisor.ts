@@ -1,4 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
+import type { Diag } from '@squad/diag';
 import { CONSUMER_GROUP, type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
 import type Redis from 'ioredis';
 import type { Logger } from 'pino';
@@ -19,6 +20,7 @@ export interface SupervisorOptions {
   db: DatabaseClient;
   redis: Redis;
   log: Logger;
+  diag?: Diag;
   pollIntervalMs?: number;
   initialBackoffMs?: number;
   maxBackoffMs?: number;
@@ -32,11 +34,14 @@ export class RconSupervisor {
 
   async reconcile(targets: Target[]): Promise<void> {
     const incoming = new Map(targets.map((t) => [t.serverId, t]));
+    const added: string[] = [];
+    const removed: string[] = [];
     for (const [id, t] of incoming) {
       if (!this.supervisors.has(id)) {
         const sup = new PerServerSupervisor(t, this.opts);
         this.supervisors.set(id, sup);
         this.targets.set(id, t);
+        added.push(id);
         sup.start();
       } else {
         this.targets.set(id, t);
@@ -47,7 +52,20 @@ export class RconSupervisor {
         await this.supervisors.get(id)?.stop();
         this.supervisors.delete(id);
         this.targets.delete(id);
+        removed.push(id);
       }
+    }
+    if ((added.length || removed.length) && this.opts.diag) {
+      const total = this.supervisors.size;
+      this.opts.diag
+        .emit({
+          component: 'worker-rcon',
+          kind: 'rcon.targets.changed',
+          severity: 'info',
+          message: `targets changed: +${added.length}, -${removed.length}, total=${total}`,
+          payload: { added, removed, total },
+        })
+        .catch(() => undefined);
     }
   }
 
@@ -123,6 +141,7 @@ class PerServerSupervisor {
 
   private async connectLoop(): Promise<void> {
     while (!this.stopped) {
+      let lastDisconnectReason: string | undefined;
       try {
         await this.writeStatus('connecting', { backoffMs: this.backoffMs });
         const disconnected = new Promise<void>((resolve) => {
@@ -138,6 +157,7 @@ class PerServerSupervisor {
               { serverId: this.target.serverId, reason },
               'rcon client disconnected',
             );
+            lastDisconnectReason = reason;
             this.onDisconnect?.();
           },
         });
@@ -152,6 +172,12 @@ class PerServerSupervisor {
         );
         this.backoffMs = this.opts.initialBackoffMs ?? 1000;
         await this.emitEvent('rcon.connected', {});
+        await this.emitDiag({
+          kind: 'rcon.connected',
+          severity: 'info',
+          message: `rcon connected ${this.target.host}:${this.target.port}`,
+          payload: { host: this.target.host, port: this.target.port },
+        });
         await this.writeStatus('connected');
         this.schedulePoll();
         await Promise.race([
@@ -166,9 +192,10 @@ class PerServerSupervisor {
           }),
         ]);
       } catch (err) {
+        const msg = (err as Error).message;
         this.opts.log.warn(
           {
-            err: (err as Error).message,
+            err: msg,
             serverId: this.target.serverId,
             backoffMs: this.backoffMs,
           },
@@ -181,11 +208,30 @@ class PerServerSupervisor {
           },
           `reconnect in ${this.backoffMs}ms`,
         );
+        if (msg === 'rcon auth rejected' || msg === 'rcon auth timeout') {
+          await this.emitDiag({
+            kind: 'rcon.auth_failed',
+            severity: 'error',
+            message: 'rcon auth failed',
+            payload: { host: this.target.host, port: this.target.port, err: msg },
+          });
+        }
+        lastDisconnectReason = msg;
       } finally {
         if (this.pollTimer) clearInterval(this.pollTimer);
         await this.client?.close().catch(() => undefined);
         this.client = undefined;
         await this.emitEvent('rcon.disconnected', {});
+        await this.emitDiag({
+          kind: 'rcon.disconnected',
+          severity: 'warn',
+          message: `rcon disconnected: ${lastDisconnectReason ?? 'unknown'}`,
+          payload: {
+            host: this.target.host,
+            port: this.target.port,
+            reason: lastDisconnectReason ?? 'unknown',
+          },
+        });
       }
       if (!this.stopped) {
         // Stay in 'connecting' (not 'disconnected') during backoff so the
@@ -194,6 +240,16 @@ class PerServerSupervisor {
         await this.writeStatus('connecting', {
           backoffMs: this.backoffMs,
           reason: 'reconnect-backoff',
+        });
+        await this.emitDiag({
+          kind: 'rcon.reconnect_attempt',
+          severity: 'warn',
+          message: `reconnect in ${this.backoffMs}ms`,
+          payload: {
+            host: this.target.host,
+            port: this.target.port,
+            backoffMs: this.backoffMs,
+          },
         });
         await new Promise((r) => setTimeout(r, this.backoffMs));
         this.backoffMs = Math.min(this.backoffMs * 2, this.opts.maxBackoffMs ?? 60_000);
@@ -269,6 +325,27 @@ class PerServerSupervisor {
         }
       }
     }, interval);
+  }
+
+  private async emitDiag(args: {
+    kind: string;
+    severity: 'info' | 'warn' | 'error' | 'fatal';
+    message: string;
+    payload: Record<string, unknown>;
+  }): Promise<void> {
+    if (!this.opts.diag) return;
+    try {
+      await this.opts.diag.emit({
+        component: 'worker-rcon',
+        kind: args.kind,
+        severity: args.severity,
+        serverId: this.target.serverId,
+        message: args.message,
+        payload: args.payload,
+      });
+    } catch {
+      // diag is fire-and-forget; do not let telemetry derail the supervisor
+    }
   }
 
   private async emitEvent(

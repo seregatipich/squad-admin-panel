@@ -15,6 +15,7 @@
   "dependencies": {
     "@squad/bridge-client": "workspace:*",
     "@squad/db": "workspace:*",
+    "@squad/diag": "workspace:*",
     "@squad/shared-types": "workspace:*",
     "drizzle-orm": "^0.45.0",
     "ioredis": "^5.4.1",

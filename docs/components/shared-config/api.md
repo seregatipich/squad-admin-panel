@@ -16,7 +16,7 @@ import { ... } from '@squad/shared-config/role-colors';   // browser-safe
 
 | Export | Type | Value |
 |---|---|---|
-| `BRIDGE_METHODS` | `readonly string[]` | 17-element tuple of all allowed RPC method names |
+| `BRIDGE_METHODS` | `readonly string[]` | 20-element tuple of all allowed RPC method names |
 | `BRIDGE_STREAMING_METHODS` | `readonly BridgeMethod[]` | `['container_logs_follow', 'depot_update']` |
 | `BRIDGE_SOCKET_DEFAULT` | `string` | `/run/panel-host-bridge/bridge.sock` |
 | `BRIDGE_MAX_FRAME_BYTES` | `number` | `16777216` (16 MiB) |
@@ -37,7 +37,7 @@ import { ... } from '@squad/shared-config/role-colors';   // browser-safe
 
 | Export | Description |
 |---|---|
-| `BridgeMethod` | Union of the 17 method name strings |
+| `BridgeMethod` | Union of the 20 method name strings |
 | `AllowedConfigFile` | Union of the 19 allowed `.cfg` filenames |
 
 ### `configFileClass(name: AllowedConfigFile): 'hot_reload' | 'rotation' | 'requires_restart'`

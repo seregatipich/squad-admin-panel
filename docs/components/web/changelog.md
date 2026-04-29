@@ -43,6 +43,45 @@
 ### Migration notes
 
 - No env or API surface changes. `e2e/dashboard.spec.ts` continues to pass: `nav.toContainText('Серверы')` matches the new `СЕРВЕРЫ` group header.
+## 2026-04-28 — Playwright e2e for the disk breakdown modal
+
+### Added
+
+- `apps/web/e2e/disk-breakdown.spec.ts` — four-case Playwright spec exercised against the live panel via the existing `ownerPage` fixture: (1) `[data-testid="disk-card"]` click opens the `role="dialog"` named «Что занимает панель» and renders the «Всего:» line plus the «По типу» heading; (2) the «Обновить» button drives `cache_age_seconds` to 0 within 10 s, asserted via «обновлено 0 сек назад»; (3) pressing Escape hides the dialog; (4) clicking the backdrop hides the dialog. The spec follows the existing `apps/web/e2e/` layout (the plan's `apps/web/test/e2e/` path was a planning-only artifact — Playwright's `testDir` is `./e2e`).
+
+### Notes
+
+- The spec is shipped as code only — like the bridge e2e suite it gets exercised on the deployment host (or staging replica) where the live panel stack and seeded Owner cookies are available. It is NOT executed in this commit.
+
+## 2026-04-28 — `<DiskBreakdownModal>` for the dashboard disk card
+
+### Added
+
+- `apps/web/src/components/DiskBreakdownModal.tsx` — controlled modal opened when the operator clicks the dashboard disk card. Props: `{ open, onOpenChange, initialData, onRefresh }`. Renders the «По типу» list (configs / saved-total / squad-depot / docker volumes / docker images / audit-archive sorted by bytes desc) and the «По серверам (saved)» scrollable table (linked first-8-chars UUIDs to `/servers/<uuid>`). Component-private `fmt(bytes)` formats sizes in `B/KB/MB/GB/TB` with magnitude-dependent precision. Refresh button calls `onRefresh()`, which is the parent-supplied closure that hits `GET /api/v1/host/disk-usage?refresh=1`. Backdrop click and Escape close the modal.
+
+### Changed
+
+- `apps/web/src/app/(dashboard)/dashboard/page.tsx` — disk-card click now opens the new `DiskBreakdownModal` instead of the metric-history modal. CPU / RAM / Network cards still open `MetricHistoryModal` unchanged. New state `diskModalOpen`, new callback `refreshDiskBreakdown` that hits `?refresh=1` and updates the dashboard's polled `diskBreakdown` state in addition to returning the fresh payload to the modal. Disk card's outer `<button>` now carries `data-testid="disk-card"` for the upcoming Playwright e2e.
+- `apps/api/src/routes/host.ts` — `GET /api/v1/host/disk-usage` now accepts an optional `?refresh=1` query (Zod-coerced boolean). When truthy the API passes `{ force: true }` to `bridge.panelDiskUsage()`.
+- `packages/bridge-client/src/client.ts` — `panelDiskUsage(opts?: { force?: boolean })` forwards the `force` flag to the bridge as a `{ force: true }` params payload.
+- `apps/bridge/internal/handlers/handlers.go` — `panelDiskUsage` decodes optional `{ force?: bool }` params; when `force` is true it skips the 5-minute cache read but still writes the fresh result back into the cache so subsequent non-force calls benefit.
+
+## 2026-04-28 — Dashboard disk bar renders Панель / Прочее sub-segments
+
+### Changed
+
+- `apps/web/src/app/(dashboard)/dashboard/page.tsx` — `DiskCard` now consumes the `diskBreakdown` prop (renamed from the prior placeholder `_diskBreakdown`). When the payload is present the card's progress track stacks two segments inside it: `Панель` in `bg-purple-500` followed by `Прочее` in `bg-purple-300`, sized from `panel_pct` and `max(0, usedPct - panelPct)` so they always equal the total used % shown in the card title. A swatch legend below the bar shows both percentages with one-decimal precision. While `diskBreakdown` is `null` (initial load or transient fetch failure) the bar gracefully falls back to the existing single-segment threshold-tinted (emerald/amber/red) rendering and the legend is hidden.
+- `ResourceCard` gained two optional props — `progressSegments` (array of `{widthPct, className}`) and `progressLegend` (array of `{label, pct, swatchClassName}`) — that toggle the segmented variant. RAM and CPU cards continue to render the original single-segment bar untouched.
+
+### Notes
+
+- Purple was chosen over the threshold-tinted hues to stay consistent with the existing disk-card identity (the `MetricHistoryModal` open-button hover ring is already `purple-700/40`) and to avoid colliding with the emerald/amber/red traffic-light tones used by the threshold logic. Keeping the segmented bar in a single distinct hue family means the operator can read «Панель vs Прочее» without confusing it with «healthy vs warning».
+
+## 2026-04-28 — Dashboard fetches /host/disk-usage in preparation for disk sub-segment
+
+### Added
+
+- `apps/web/src/app/(dashboard)/dashboard/page.tsx` — new `diskBreakdown` state populated by polling `GET /api/v1/host/disk-usage` every 30 s on mount. Failures are tolerated silently. The state is plumbed through `HostBlock` to `DiskCard` but not yet rendered — Task 6 will add the visual sub-segment that splits the disk bar into «панель» / «остальное» / «свободно».
 
 ## 2026-04-26 — Bundle F: archive UI + connection banner + live-bus client
 

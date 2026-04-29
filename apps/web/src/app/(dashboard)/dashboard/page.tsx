@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { DiskBreakdownModal } from '@/components/DiskBreakdownModal';
 import { DockerPruneButton } from '@/components/DockerPruneButton';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { MetricHistoryModal, type MetricKey } from '@/components/MetricHistoryModal';
@@ -76,6 +77,23 @@ interface Worker {
   started_at: string;
   age_ms: number;
   status?: string;
+}
+
+interface DiskBreakdown {
+  configs_bytes: number;
+  saved_total_bytes: number;
+  saved_per_server: { uuid: string; bytes: number }[];
+  depot_volume_bytes: number;
+  docker_volumes: { name: string; bytes: number }[];
+  docker_images: { repository: string; tag: string; bytes: number }[];
+  audit_archive_bytes: number;
+  total_panel_bytes: number;
+  host_total_bytes: number;
+  host_used_bytes: number;
+  computed_at: string;
+  cache_age_seconds: number;
+  panel_pct: number;
+  other_pct: number;
 }
 
 const POLL_MS = 4000;
@@ -166,6 +184,8 @@ export default function DashboardPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
+  const [diskBreakdown, setDiskBreakdown] = useState<DiskBreakdown | null>(null);
+  const [diskModalOpen, setDiskModalOpen] = useState(false);
 
   const load = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -199,6 +219,44 @@ export default function DashboardPage() {
       clearInterval(t);
     };
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadDiskBreakdown() {
+      try {
+        const res = await fetch('/api/v1/host/disk-usage', {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        if (!res.ok) return;
+        const payload = (await res.json()) as DiskBreakdown;
+        if (!cancelled) setDiskBreakdown(payload);
+      } catch {
+        // tolerate transient errors — disk breakdown is auxiliary
+      }
+    }
+    void loadDiskBreakdown();
+    const t = setInterval(loadDiskBreakdown, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
+
+  const refreshDiskBreakdown = useCallback(async (): Promise<DiskBreakdown | null> => {
+    try {
+      const res = await fetch('/api/v1/host/disk-usage?refresh=1', {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!res.ok) return null;
+      const payload = (await res.json()) as DiskBreakdown;
+      setDiskBreakdown(payload);
+      return payload;
+    } catch {
+      return null;
+    }
+  }, []);
 
   const runningCount = servers.filter((s) => s.status === 'running').length;
   const playersOnline = servers.reduce((acc, s) => acc + (s.player_count ?? 0), 0);
@@ -275,6 +333,8 @@ export default function DashboardPage() {
             metrics={metrics}
             health={health}
             lastUpdate={lastUpdate}
+            diskBreakdown={diskBreakdown}
+            onDiskClick={() => setDiskModalOpen(true)}
           />
         </div>
       </section>
@@ -292,6 +352,13 @@ export default function DashboardPage() {
           />
         </div>
       </section>
+
+      <DiskBreakdownModal
+        open={diskModalOpen}
+        onOpenChange={setDiskModalOpen}
+        initialData={diskBreakdown}
+        onRefresh={refreshDiskBreakdown}
+      />
     </div>
   );
 }
@@ -558,12 +625,16 @@ function HostBlock({
   metrics,
   health,
   lastUpdate,
+  diskBreakdown,
+  onDiskClick,
 }: {
   bridge: BridgeStatus | null;
   info: HostInfo | null;
   metrics: HostMetrics | null;
   health: ReturnType<typeof computeHostHealth>;
   lastUpdate: Date | null;
+  diskBreakdown: DiskBreakdown | null;
+  onDiskClick: () => void;
 }) {
   const isLoading = info === null || metrics === null;
   const [openMetric, setOpenMetric] = useState<MetricKey | null>(null);
@@ -649,11 +720,12 @@ function HostBlock({
             </button>
             <button
               type="button"
-              onClick={() => setOpenMetric('disk')}
+              onClick={onDiskClick}
+              data-testid="disk-card"
               className="text-left transition hover:ring-2 hover:ring-purple-700/40 rounded-xl"
-              aria-label="Открыть график диска за 24 часа"
+              aria-label="Открыть детализацию диска"
             >
-              <DiskCard metrics={metrics} />
+              <DiskCard metrics={metrics} diskBreakdown={diskBreakdown} />
             </button>
             <button
               type="button"
@@ -732,7 +804,13 @@ function RamCard({ metrics }: { metrics: HostMetrics }) {
   );
 }
 
-function DiskCard({ metrics }: { metrics: HostMetrics }) {
+function DiskCard({
+  metrics,
+  diskBreakdown,
+}: {
+  metrics: HostMetrics;
+  diskBreakdown: DiskBreakdown | null;
+}) {
   const total = metrics.disk_total_bytes;
   if (total <= 0) {
     return (
@@ -744,7 +822,22 @@ function DiskCard({ metrics }: { metrics: HostMetrics }) {
     );
   }
   const r = ratio(metrics.disk_used_bytes, total);
+  const usedPct = r * 100;
   const tone = thresholdTone(r, 0.75, 0.9);
+  const panelPct = diskBreakdown ? Math.min(diskBreakdown.panel_pct, usedPct) : 0;
+  const otherPct = diskBreakdown ? Math.max(0, usedPct - panelPct) : 0;
+  const splitSegments = diskBreakdown
+    ? [
+        { widthPct: panelPct, className: 'bg-purple-500' },
+        { widthPct: otherPct, className: 'bg-purple-300' },
+      ]
+    : undefined;
+  const legend = diskBreakdown
+    ? [
+        { label: 'Панель', pct: panelPct, swatchClassName: 'bg-purple-500' },
+        { label: 'Прочее', pct: otherPct, swatchClassName: 'bg-purple-300' },
+      ]
+    : undefined;
   return (
     <ResourceCard
       title="Диск"
@@ -754,8 +847,10 @@ function DiskCard({ metrics }: { metrics: HostMetrics }) {
           {formatBytes(metrics.disk_used_bytes)} / {formatBytes(total)}
         </span>
       }
-      progressPct={r * 100}
+      progressPct={usedPct}
       progressTone={tone}
+      progressSegments={splitSegments}
+      progressLegend={legend}
     />
   );
 }
@@ -788,12 +883,16 @@ function ResourceCard({
   sub,
   progressPct,
   progressTone,
+  progressSegments,
+  progressLegend,
 }: {
   title: string;
   mainValue: string;
   sub: React.ReactNode;
   progressPct?: number;
   progressTone?: 'emerald' | 'amber' | 'red';
+  progressSegments?: { widthPct: number; className: string }[];
+  progressLegend?: { label: string; pct: number; swatchClassName: string }[];
 }) {
   const fill: Record<string, string> = {
     emerald: 'bg-emerald-500',
@@ -808,11 +907,34 @@ function ResourceCard({
       </div>
       <div className="text-[11px] text-neutral-400 truncate">{sub}</div>
       {progressPct !== undefined && progressTone ? (
-        <div className="h-1.5 rounded-full bg-neutral-900 overflow-hidden mt-auto">
-          <div
-            className={`h-1.5 rounded-full ${fill[progressTone]}`}
-            style={{ width: `${Math.max(0, Math.min(100, progressPct))}%` }}
-          />
+        <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-neutral-900 mt-auto">
+          {progressSegments && progressSegments.length > 0 ? (
+            progressSegments.map((seg) => (
+              <div
+                key={seg.className}
+                className={`h-1.5 ${seg.className}`}
+                style={{ width: `${Math.max(0, Math.min(100, seg.widthPct))}%` }}
+              />
+            ))
+          ) : (
+            <div
+              className={`h-1.5 ${fill[progressTone]}`}
+              style={{ width: `${Math.max(0, Math.min(100, progressPct))}%` }}
+            />
+          )}
+        </div>
+      ) : null}
+      {progressLegend && progressLegend.length > 0 ? (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-neutral-400">
+          {progressLegend.map((entry) => (
+            <span key={entry.label} className="inline-flex items-center gap-1.5">
+              <span className={`h-1.5 w-1.5 rounded-sm ${entry.swatchClassName}`} />
+              <span>
+                {entry.label}{' '}
+                <span className="font-mono tabular-nums">{entry.pct.toFixed(1)}%</span>
+              </span>
+            </span>
+          ))}
         </div>
       ) : null}
     </div>
