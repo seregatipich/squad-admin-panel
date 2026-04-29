@@ -278,6 +278,16 @@ The heartbeat-watch plugin ([`apps/api/src/plugins/heartbeat-watch.ts`](../../..
 | `worker.heartbeat_lost` | A worker's heartbeat key has been absent for more than 30 s AND the plugin has not yet reported the outage. Emitted exactly once per outage — the worker name is held in an internal `reported: Set<string>` until the key reappears. | `error` | `{ worker: string }` |
 | `worker.heartbeat_recovered` | A worker's heartbeat key reappears (via `pttl >= 0`) AFTER the plugin previously reported a `worker.heartbeat_lost` for it. Subsequent ticks while the key is healthy are silent until the next outage. | `info` | `{ worker: string }` |
 
+### WebSocket lifecycle event kinds
+
+Each WebSocket route ([`apps/api/src/routes/live.ts`](../../../apps/api/src/routes/live.ts), [`apps/api/src/routes/server-logs.ts`](../../../apps/api/src/routes/server-logs.ts), [`apps/api/src/routes/server-install.ts`](../../../apps/api/src/routes/server-install.ts)) emits diag events on connection lifecycle so the bundle's per-server brief can correlate disconnect storms with backend errors. All three kinds carry `component='api'`. The two per-server routes (`/api/v1/servers/:id/logs/ws`, `/api/v1/servers/:id/install/ws`) populate `serverId` from the URL params; `/api/v1/ws/live` is global so `serverId` stays unset. Each `app.diag.emit(...)` is wrapped with `.catch(() => undefined)` so a Redis hiccup never propagates back into the WebSocket handler. The `reason` buffer on `ws.disconnected` is sliced to 200 chars to keep `diag:queue` payloads small.
+
+| Kind | When | `severity` | Payload |
+|---|---|---|---|
+| `ws.connected` | A client has completed the WebSocket upgrade handshake. Emitted before any application-level frame is sent. For the per-server routes, an invalid `:id` URL param still emits this kind (without `serverId`) before the handler closes the socket with `{error:'invalid_id'}` — so the bundle can see bad client traffic. | `info` | `{ url, [serverId] }` |
+| `ws.disconnected` | The underlying socket fired `close`. Always paired with a prior `ws.connected` for the same connection. | `info` | `{ code, reason, url, [serverId] }` — `code` is the WebSocket close code (1000 normal, 1006 abnormal, 4000 panel pong-timeout, etc.); `reason` is `Buffer.toString().slice(0, 200)` (empty string when the client did not provide one). |
+| `ws.error` | The underlying socket fired `error` (transport fault, malformed frame, etc.). Does NOT replace `ws.disconnected` — both fire when the error also drops the socket. | `warn` | `{ errorMessage, url, [serverId] }` |
+
 ## Adding a route
 
 1. Register in the relevant file under [`apps/api/src/routes/`](../../../apps/api/src/routes/).

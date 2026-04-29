@@ -461,10 +461,31 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
       const params = (req.params ?? {}) as { id?: string };
       const id = params.id;
       if (!id || !/^[0-9a-f-]{36}$/.test(id)) {
+        app.diag
+          .emit({
+            component: 'api',
+            kind: 'ws.connected',
+            severity: 'info',
+            message: `ws ${req.url} connected`,
+            payload: { url: req.url },
+          })
+          .catch(() => undefined);
         socket.send(JSON.stringify({ error: 'invalid_id' }));
         socket.close();
         return;
       }
+
+      app.diag
+        .emit({
+          component: 'api',
+          kind: 'ws.connected',
+          severity: 'info',
+          serverId: id,
+          message: `ws ${req.url} connected`,
+          payload: { url: req.url, serverId: id },
+        })
+        .catch(() => undefined);
+
       for (const line of app.installProgress.snapshot(id)) {
         socket.send(JSON.stringify(line));
       }
@@ -479,7 +500,36 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
           // socket gone
         }
       });
-      socket.on('close', () => unsubscribe());
+      socket.on('close', (code, reason) => {
+        unsubscribe();
+        app.diag
+          .emit({
+            component: 'api',
+            kind: 'ws.disconnected',
+            severity: 'info',
+            serverId: id,
+            message: `ws ${req.url} closed code=${code}`,
+            payload: {
+              code,
+              reason: reason?.toString().slice(0, 200) ?? '',
+              url: req.url,
+              serverId: id,
+            },
+          })
+          .catch(() => undefined);
+      });
+      socket.on('error', (err) => {
+        app.diag
+          .emit({
+            component: 'api',
+            kind: 'ws.error',
+            severity: 'warn',
+            serverId: id,
+            message: `ws error: ${err.message}`,
+            payload: { errorMessage: err.message, url: req.url },
+          })
+          .catch(() => undefined);
+      });
     },
   );
 };

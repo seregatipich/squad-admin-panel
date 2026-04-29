@@ -329,6 +329,29 @@ ui WS close →
   client.close()    ← critical: tears down the bridge subprocess on the host
 ```
 
+## WebSocket lifecycle diagnostic emits
+
+Each of the three WebSocket routes ([`live.ts`](../../../apps/api/src/routes/live.ts), [`server-logs.ts`](../../../apps/api/src/routes/server-logs.ts), [`server-install.ts`](../../../apps/api/src/routes/server-install.ts)) emits `ws.connected` on the connection handler entry, `ws.disconnected` from the `socket.on('close', (code, reason) => ...)` callback, and `ws.error` from the `socket.on('error', err => ...)` callback. The per-server routes (`server-logs.ts`, `server-install.ts`) populate `serverId` from the `:id` URL param; the global route (`live.ts`) leaves `serverId` undefined.
+
+```
+client.upgrade →
+  app.diag.emit('ws.connected', severity='info',
+                payload: { url, [serverId] })
+  ... (route-specific handlers run) ...
+  socket.on('close', (code, reason) ⇒
+    app.diag.emit('ws.disconnected', severity='info',
+                  payload: { code, reason.slice(0,200), url, [serverId] }))
+  socket.on('error', (err) ⇒
+    app.diag.emit('ws.error', severity='warn',
+                  payload: { errorMessage, url, [serverId] }))
+```
+
+Notes:
+- The `reason` Buffer is sliced to 200 chars so a misbehaving client cannot bloat `diag:queue` payloads.
+- All three emits use `.catch(() => undefined)` so a Redis hiccup never propagates back into the WebSocket handler.
+- For invalid `:id` URL params on the per-server routes, `ws.connected` still fires (without `serverId`) before the handler closes the socket with `{error:'invalid_id'}`.
+- `ws.error` does NOT replace `ws.disconnected` — both fire when the error also drops the socket.
+
 ## First-owner claim
 
 [`lib/first-owner.ts`](../../../apps/api/src/lib/first-owner.ts) — called once during the Steam OAuth callback when no owner exists yet. DB anchor is `panel_meta.first_owner_claimed` (singleton row, id=1, created by migration 0009).

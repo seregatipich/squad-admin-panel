@@ -3,6 +3,7 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
+import diagPlugin from '../src/lib/diag.js';
 import liveBusPlugin, { type LiveEvent } from '../src/plugins/live-bus.js';
 import liveRoutes from '../src/routes/live.js';
 
@@ -14,9 +15,11 @@ beforeAll(async () => {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   // Minimal redis stub: live-bus skips duplicate()/publish when missing.
+  // diag plugin needs `xadd`; provide a no-op so emits are silent.
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
-  (app as any).decorate('redis', {});
+  (app as any).decorate('redis', { xadd: async () => '0-0' });
   await app.register(await import('@fastify/websocket').then((m) => m.default));
+  await app.register(diagPlugin);
   await app.register(liveBusPlugin);
   await app.register(liveRoutes);
   await app.listen({ port: 0, host: '127.0.0.1' });

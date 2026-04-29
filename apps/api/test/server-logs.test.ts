@@ -10,6 +10,7 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
+import diagPlugin from '../src/lib/diag.js';
 import serverLogsRoutes from '../src/routes/server-logs.js';
 
 const testId = '019dbac8-ceb0-77ab-859b-bfa9a282ee2c';
@@ -34,8 +35,9 @@ beforeAll(async () => {
       },
     },
   });
+  // diag plugin needs `xadd`; provide a no-op so emits are silent.
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
-  (app as any).decorate('redis', {});
+  (app as any).decorate('redis', { xadd: async () => '0-0' });
   const fakeBridge = {
     connect: async () => undefined,
     close: async () => undefined,
@@ -58,6 +60,7 @@ beforeAll(async () => {
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
   (app as any).decorate('encryptionKey', Buffer.alloc(32));
   await app.register(await import('@fastify/websocket').then((m) => m.default));
+  await app.register(diagPlugin);
   await app.register(serverLogsRoutes);
   await app.listen({ port: 0, host: '127.0.0.1' });
   const addr = app.server.address();

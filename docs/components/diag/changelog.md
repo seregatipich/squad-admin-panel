@@ -4,6 +4,7 @@
 
 ### Added
 
+- API WebSocket routes ([`apps/api/src/routes/live.ts`](../../../apps/api/src/routes/live.ts), [`apps/api/src/routes/server-logs.ts`](../../../apps/api/src/routes/server-logs.ts), [`apps/api/src/routes/server-install.ts`](../../../apps/api/src/routes/server-install.ts)) now produce `ws.connected` / `ws.disconnected` / `ws.error` events into `diag:queue` (Task 14). The per-server routes thread the `:id` URL param into `serverId`; the global `/api/v1/ws/live` route leaves it unset. `ws.disconnected` payload includes the WebSocket close `code`, the `reason` (sliced to 200 chars), and the request `url`. See [`docs/components/api/api.md`](../api/api.md#websocket-lifecycle-event-kinds) and [`docs/components/api/flows.md`](../api/flows.md#websocket-lifecycle-diagnostic-emits). The `@squad/diag` package itself is unchanged by Task 14.
 - The remaining four workers (`audit-archiver`, `event-partition`, `metrics-sampler`, `diag-flush`) now produce lifecycle events into `diag:queue` (Task 13). `worker-rcon` and `worker-log-ingest` are intentionally unchanged because Tasks 11 and 12 already gave them richer per-target events.
   - `audit-archiver`: `audit_archiver.started` / `audit_archiver.run_ok` / `audit_archiver.run_failed` / `audit_archiver.stopped`. Hourly cycle is sparse enough to emit `run_ok`/`run_failed` per tick.
   - `event-partition`: `event_partition.started` / `event_partition.run_ok` / `event_partition.run_failed` / `event_partition.stopped`. Hourly cycle.

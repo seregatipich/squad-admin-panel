@@ -8,6 +8,7 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
+import diagPlugin from '../src/lib/diag.js';
 import installProgressPlugin from '../src/plugins/install-progress.js';
 import serverInstallRoutes from '../src/routes/server-install.js';
 
@@ -21,8 +22,9 @@ beforeAll(async () => {
   app.setSerializerCompiler(serializerCompiler);
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
   (app as any).decorate('db', {});
+  // diag plugin needs `xadd`; provide a no-op so emits are silent.
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
-  (app as any).decorate('redis', {});
+  (app as any).decorate('redis', { xadd: async () => '0-0' });
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
   (app as any).decorate('bridge', {});
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
@@ -32,6 +34,7 @@ beforeAll(async () => {
   // handshake directly. The CI guard separately verifies that route
   // config declares permissions.
   await app.register(await import('@fastify/websocket').then((m) => m.default));
+  await app.register(diagPlugin);
   await app.register(installProgressPlugin);
   await app.register(serverInstallRoutes);
   await app.listen({ port: 0, host: '127.0.0.1' });

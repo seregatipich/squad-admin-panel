@@ -1,5 +1,25 @@
 # `api` — changelog
 
+## 2026-04-29 — WebSocket lifecycle diag emits
+
+### Added
+
+- `apps/api/src/routes/live.ts`, `apps/api/src/routes/server-logs.ts`, `apps/api/src/routes/server-install.ts` (Phase A2 Task 14) now emit three new diag kinds covering the WebSocket connection lifecycle:
+  - `ws.connected` (severity `info`, payload `{ url, [serverId] }`) — fires on connection handler entry, before any application-level frame.
+  - `ws.disconnected` (severity `info`, payload `{ code, reason, url, [serverId] }`) — fires from `socket.on('close', ...)`. `reason` is `Buffer.toString().slice(0, 200)` so malformed clients cannot bloat `diag:queue` payloads.
+  - `ws.error` (severity `warn`, payload `{ errorMessage, url, [serverId] }`) — fires from `socket.on('error', ...)`. Does NOT replace `ws.disconnected`; both fire when an error also drops the socket.
+- The per-server routes (`/api/v1/servers/:id/logs/ws`, `/api/v1/servers/:id/install/ws`) populate `serverId` from the `:id` URL param; the global `/api/v1/ws/live` route leaves `serverId` unset. Invalid `:id` strings still produce a `ws.connected` emit (without `serverId`) before the handler closes the socket with `{error:'invalid_id'}` — operators can spot bad client traffic in the bundle.
+- Each `app.diag.emit(...)` is wrapped with `.catch(() => undefined)` so a Redis hiccup never propagates back into the WebSocket handler.
+- `apps/api/test/diag-ws.test.ts` — three vitest cases driving the WebSocket protocol against a real Fastify server (started with `app.listen({ port: 0 })`) and asserting the captured diag emits include `ws.connected` and `ws.disconnected` with the expected `serverId` and payload shape. `ws.error` is exercised by code review only because simulating a real socket error from the client side is flaky.
+
+### Changed
+
+- `apps/api/test/install-ws.test.ts`, `apps/api/test/live-bus.test.ts`, `apps/api/test/server-logs.test.ts` — register `diagPlugin` and decorate `app.redis` with a no-op `xadd` stub so the new emits fire without throwing. The previous empty-redis-stub fixture broke the moment the WS routes started calling `app.diag.emit(...)` from their lifecycle handlers.
+
+### Migration notes
+
+No DB schema changes. No new env vars. Consumers reading `diagnostic_events` will start seeing rows where `component='api'` and `kind` matches `ws.connected` / `ws.disconnected` / `ws.error`. The Phase B detector keys off these kinds for the "WS storm" panel.
+
 ## 2026-04-29 — heartbeat-watch plugin
 
 ### Added
