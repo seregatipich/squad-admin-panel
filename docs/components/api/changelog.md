@@ -1,5 +1,24 @@
 # `api` — changelog
 
+## 2026-04-29 — HTTP error layer diag emits
+
+### Added
+
+- `apps/api/src/plugins/error-diag.ts` (Phase A2 Task 15) — new Fastify plugin that registers a `setErrorHandler` and a `process.on('unhandledRejection', ...)` listener. Two new diag kinds enter `diag:queue`:
+  - `http.5xx` (severity `error`) — emitted for any thrown response with `reply.statusCode || err.statusCode || 500 >= 500`. Payload `{ method, url, status, err, stack }`; `stack` truncated to 2000 chars. Threads `requestId = req.id` and (when authenticated) `actorSteamId64 = req.user.steamId64.toString()`.
+  - `http.unhandled_rejection` (severity `fatal`) — emitted from a process-level `unhandledRejection` listener. Payload `{ reason }`; `reason` and `message` are truncated to 2000 / 200 chars respectively. The listener is attached exactly once per Node process via a module-level guard so a second `errorDiagPlugin` registration (e.g. inside the integration harness) does not duplicate the global handler.
+- The error handler preserves Fastify's default reply by calling `reply.send(err)` AFTER the diag emit, so the `{ statusCode, error, message }` JSON envelope clients depend on is unchanged. 4xx errors (auth/rbac/validation/not-found) are intentionally NOT emitted as `http.5xx` — the kind targets true server-side faults only.
+- `apps/api/test/diag-http-errors.test.ts` — 4 vitest cases: a synthetic throwing route emits `http.5xx` with the expected payload shape and `requestId`; 4xx responses (403 / 404) do NOT emit `http.5xx`; `stack` is truncated to exactly 2000 chars when the thrown error has a 5000-char stack; the Fastify default JSON envelope is preserved on 5xx (`{ statusCode, error, message }`). The `http.unhandled_rejection` path is covered by code review only — Node's global rejection listener is shared mutable state that cannot be exercised cleanly inside a vitest worker without leaking to sibling tests.
+
+### Changed
+
+- `apps/api/src/server.ts` — registers `errorDiagPlugin` immediately after `diagPlugin` so `app.diag` is decorated when the error handler binds. Plugin registration order becomes `redis → diag → error-diag → db-health → heartbeat-watch → ...`.
+- `apps/api/test/integration/harness.ts` — registers `errorDiagPlugin` after `diagPlugin` so integration tests covering 5xx code paths surface the new emits.
+
+### Migration notes
+
+No DB schema changes. No new env vars. Consumers reading `diagnostic_events` will start seeing rows where `component='api'` and `kind` matches `http.5xx` / `http.unhandled_rejection`. The Phase B incident builder keys off `http.unhandled_rejection` as a process-fatality marker.
+
 ## 2026-04-29 — WebSocket lifecycle diag emits
 
 ### Post-merge fixes

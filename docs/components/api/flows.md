@@ -352,6 +352,38 @@ Notes:
 - For invalid `:id` URL params on the per-server routes, NO diag event fires for the connection lifecycle. The handler sends `{error:'invalid_id'}` and closes the socket immediately, before the `socket.on('close', ...)` listener is registered. Skipping the `ws.connected` emit on this branch preserves the connect/disconnect matching invariant — an emitted `ws.connected` is always paired with a `ws.disconnected`.
 - `ws.error` does NOT replace `ws.disconnected` — both fire when the error also drops the socket.
 
+## HTTP error boundary diagnostic emits
+
+[`apps/api/src/plugins/error-diag.ts`](../../../apps/api/src/plugins/error-diag.ts) wires two emit paths: a Fastify `setErrorHandler` for any 5xx response, and a `process.on('unhandledRejection', ...)` listener for orphaned promise rejections. Both run AFTER the `diagPlugin` registration so `app.diag` is decorated when the error handler fires.
+
+```
+route handler throws err →
+  Fastify error handler runs:
+    status = reply.statusCode || err.statusCode || 500
+    if status >= 500:
+      app.diag.emit('http.5xx', severity='error',
+                    requestId: req.id,
+                    actorSteamId64: req.user?.steamId64?.toString(),
+                    payload: { method, url, status,
+                               err: err.message,
+                               stack: err.stack?.slice(0, 2000) })
+    reply.send(err)   ← preserves Fastify default JSON envelope
+```
+
+```
+process emits 'unhandledRejection' (any promise rejected without a .catch()) →
+  app.diag.emit('http.unhandled_rejection', severity='fatal',
+                message: String(reason).slice(0, 200),
+                payload: { reason: String(reason).slice(0, 2000) })
+```
+
+Notes:
+- 4xx errors are NOT emitted as `http.5xx`. Auth (401), RBAC (403), validation (400/422), and not-found (404) are normal client-side faults; emitting on every one would flood `diag:queue`.
+- The error handler preserves the existing reply shape (`{ statusCode, error, message }`) by calling `reply.send(err)` AFTER the diag emit — the diag emit is purely additive.
+- The `stack` field is sliced to 2000 chars so a deep stack from a recursive failure cannot bloat `diag:queue` payloads. The `reason` field for unhandled rejections is sliced the same way; the `message` field uses 200 chars so the bundle's per-event header line stays compact.
+- Both emits use `.catch(() => undefined)` so a Redis hiccup never propagates back into the error path. The `app.diag?.emit(...)` call uses optional chaining for symmetry with the redis plugin pattern, even though `errorDiagPlugin` is registered after `diagPlugin`.
+- The `unhandledRejection` listener is attached exactly once per Node process via a module-level boolean guard (`unhandledRejectionListenerAttached`). When `errorDiagPlugin` is also registered by the integration harness for tests, the second registration only sets up the per-app `setErrorHandler` and skips re-attaching the global listener — duplicate emits would otherwise fire on every test rejection.
+
 ## First-owner claim
 
 [`lib/first-owner.ts`](../../../apps/api/src/lib/first-owner.ts) — called once during the Steam OAuth callback when no owner exists yet. DB anchor is `panel_meta.first_owner_claimed` (singleton row, id=1, created by migration 0009).

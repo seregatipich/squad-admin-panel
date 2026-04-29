@@ -288,6 +288,15 @@ Each WebSocket route ([`apps/api/src/routes/live.ts`](../../../apps/api/src/rout
 | `ws.disconnected` | The underlying socket fired `close`. Always paired with a prior `ws.connected` for the same connection. | `info` | `{ code, reason, url, [serverId] }` — `code` is the WebSocket close code (1000 normal, 1006 abnormal, 4000 panel pong-timeout, etc.); `reason` is `Buffer.toString().slice(0, 200)` (empty string when the client did not provide one). |
 | `ws.error` | The underlying socket fired `error` (transport fault, malformed frame, etc.). Does NOT replace `ws.disconnected` — both fire when the error also drops the socket. | `warn` | `{ errorMessage, url, [serverId] }` |
 
+### HTTP error layer event kinds
+
+The `error-diag` plugin ([`apps/api/src/plugins/error-diag.ts`](../../../apps/api/src/plugins/error-diag.ts)) registers a Fastify `setErrorHandler` and a `process.on('unhandledRejection', ...)` listener so any thrown 5xx and any orphaned promise rejection becomes a diag event. Both kinds carry `component='api'`. The 5xx emit threads `requestId = req.id` and `actorSteamId64 = req.user?.steamId64?.toString()` when an authenticated identity is attached to the request; the unhandled-rejection emit cannot bind to a request and leaves both unset. Each `app.diag?.emit(...)` is wrapped with `.catch(() => undefined)` so a Redis hiccup never propagates back into the error path. The error handler preserves Fastify's default reply behaviour by calling `reply.send(err)` after the diag emit — the JSON envelope (`{ statusCode, error, message }`) shape is unchanged. The `unhandledRejection` listener is registered exactly once per process via a module-level `unhandledRejectionListenerAttached` guard so a second `errorDiagPlugin` registration (e.g. inside the integration harness) does not duplicate the global handler.
+
+| Kind | When | `severity` | Payload |
+|---|---|---|---|
+| `http.5xx` | A route handler threw, OR `reply.send(err)` was called with `statusCode >= 500`. Status is computed as `reply.statusCode || err.statusCode || 500`. 4xx errors (400/401/403/404/422) are **not** emitted — only true server-side faults. | `error` | `{ method, url, status, err, stack }` — `method` is the HTTP verb, `url` is `req.url` including the query string, `status` is the resolved status code, `err` is `err.message`, `stack` is `err.stack?.slice(0, 2000)`. The 2000-char truncation prevents oversized `diag:queue` payloads from very deep stacks. |
+| `http.unhandled_rejection` | Node's `process.on('unhandledRejection')` fires (a promise rejected without a `.catch()` and without an `await` upstream that would have surfaced it). Survives even if no Fastify request was in flight. | `fatal` | `{ reason }` — `String(reason).slice(0, 2000)`. The `message` field is `String(reason).slice(0, 200)` so the bundle's per-event header line stays compact. |
+
 ## Adding a route
 
 1. Register in the relevant file under [`apps/api/src/routes/`](../../../apps/api/src/routes/).
