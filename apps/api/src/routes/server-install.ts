@@ -461,15 +461,6 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
       const params = (req.params ?? {}) as { id?: string };
       const id = params.id;
       if (!id || !/^[0-9a-f-]{36}$/.test(id)) {
-        app.diag
-          .emit({
-            component: 'api',
-            kind: 'ws.connected',
-            severity: 'info',
-            message: `ws ${req.url} connected`,
-            payload: { url: req.url },
-          })
-          .catch(() => undefined);
         socket.send(JSON.stringify({ error: 'invalid_id' }));
         socket.close();
         return;

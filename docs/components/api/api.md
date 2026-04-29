@@ -284,7 +284,7 @@ Each WebSocket route ([`apps/api/src/routes/live.ts`](../../../apps/api/src/rout
 
 | Kind | When | `severity` | Payload |
 |---|---|---|---|
-| `ws.connected` | A client has completed the WebSocket upgrade handshake. Emitted before any application-level frame is sent. For the per-server routes, an invalid `:id` URL param still emits this kind (without `serverId`) before the handler closes the socket with `{error:'invalid_id'}` — so the bundle can see bad client traffic. | `info` | `{ url, [serverId] }` |
+| `ws.connected` | A client has completed the WebSocket upgrade handshake. Emitted before any application-level frame is sent. For the per-server routes, an invalid `:id` URL param produces NO emit at all — neither `ws.connected` nor `ws.disconnected` — so the connect/disconnect pairing invariant holds for every emitted lifecycle. | `info` | `{ url, [serverId] }` |
 | `ws.disconnected` | The underlying socket fired `close`. Always paired with a prior `ws.connected` for the same connection. | `info` | `{ code, reason, url, [serverId] }` — `code` is the WebSocket close code (1000 normal, 1006 abnormal, 4000 panel pong-timeout, etc.); `reason` is `Buffer.toString().slice(0, 200)` (empty string when the client did not provide one). |
 | `ws.error` | The underlying socket fired `error` (transport fault, malformed frame, etc.). Does NOT replace `ws.disconnected` — both fire when the error also drops the socket. | `warn` | `{ errorMessage, url, [serverId] }` |
 

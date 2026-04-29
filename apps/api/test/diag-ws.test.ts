@@ -164,4 +164,20 @@ describe('Phase A2 Task 14 — WS lifecycle diag emits', () => {
     const disconnected = captured.find((e) => e.kind === 'ws.disconnected');
     expect(disconnected?.serverId).toBe(testId);
   });
+
+  it('does not emit ws.connected for an invalid-id WebSocket', async () => {
+    captured.length = 0;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/servers/INVALID/logs/ws`);
+    await new Promise<void>((resolve) => ws.on('close', () => resolve()));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(captured.some((e) => e.kind === 'ws.connected')).toBe(false);
+    expect(captured.some((e) => e.kind === 'ws.disconnected')).toBe(false);
+
+    captured.length = 0;
+    const wsInstall = new WebSocket(`ws://127.0.0.1:${port}/api/v1/servers/INVALID/install/ws`);
+    await new Promise<void>((resolve) => wsInstall.on('close', () => resolve()));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(captured.some((e) => e.kind === 'ws.connected')).toBe(false);
+    expect(captured.some((e) => e.kind === 'ws.disconnected')).toBe(false);
+  });
 });

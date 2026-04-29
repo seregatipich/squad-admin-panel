@@ -2,13 +2,17 @@
 
 ## 2026-04-29 — WebSocket lifecycle diag emits
 
+### Post-merge fixes
+
+- Invalid-id WS branch no longer emits `ws.connected` (preserves connect/disconnect matching invariant). Previously, the early-return path in [`server-logs.ts`](../../../apps/api/src/routes/server-logs.ts) and [`server-install.ts`](../../../apps/api/src/routes/server-install.ts) emitted `ws.connected` then immediately closed the socket and returned BEFORE registering the `socket.on('close', ...)` listener — the close event fired without a listener, so no `ws.disconnected` was ever produced. This broke the documented invariant that every connect has a matching disconnect. Fix: drop the `ws.connected` emit on the invalid-id branch entirely. Observability for malformed-uuid sockets is low value, and the route still sends `{error:'invalid_id'}` and closes the socket. Covered by a new vitest case in [`apps/api/test/diag-ws.test.ts`](../../../apps/api/test/diag-ws.test.ts) that drives both `/logs/ws` and `/install/ws` with `INVALID` as the `:id` and asserts neither `ws.connected` nor `ws.disconnected` fires.
+
 ### Added
 
 - `apps/api/src/routes/live.ts`, `apps/api/src/routes/server-logs.ts`, `apps/api/src/routes/server-install.ts` (Phase A2 Task 14) now emit three new diag kinds covering the WebSocket connection lifecycle:
   - `ws.connected` (severity `info`, payload `{ url, [serverId] }`) — fires on connection handler entry, before any application-level frame.
   - `ws.disconnected` (severity `info`, payload `{ code, reason, url, [serverId] }`) — fires from `socket.on('close', ...)`. `reason` is `Buffer.toString().slice(0, 200)` so malformed clients cannot bloat `diag:queue` payloads.
   - `ws.error` (severity `warn`, payload `{ errorMessage, url, [serverId] }`) — fires from `socket.on('error', ...)`. Does NOT replace `ws.disconnected`; both fire when an error also drops the socket.
-- The per-server routes (`/api/v1/servers/:id/logs/ws`, `/api/v1/servers/:id/install/ws`) populate `serverId` from the `:id` URL param; the global `/api/v1/ws/live` route leaves `serverId` unset. Invalid `:id` strings still produce a `ws.connected` emit (without `serverId`) before the handler closes the socket with `{error:'invalid_id'}` — operators can spot bad client traffic in the bundle.
+- The per-server routes (`/api/v1/servers/:id/logs/ws`, `/api/v1/servers/:id/install/ws`) populate `serverId` from the `:id` URL param; the global `/api/v1/ws/live` route leaves `serverId` unset. Invalid `:id` strings produce NO diag events at all (see post-merge fix above) — the route closes the socket with `{error:'invalid_id'}` without emitting.
 - Each `app.diag.emit(...)` is wrapped with `.catch(() => undefined)` so a Redis hiccup never propagates back into the WebSocket handler.
 - `apps/api/test/diag-ws.test.ts` — three vitest cases driving the WebSocket protocol against a real Fastify server (started with `app.listen({ port: 0 })`) and asserting the captured diag emits include `ws.connected` and `ws.disconnected` with the expected `serverId` and payload shape. `ws.error` is exercised by code review only because simulating a real socket error from the client side is flaky.
 

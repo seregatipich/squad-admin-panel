@@ -349,7 +349,7 @@ client.upgrade →
 Notes:
 - The `reason` Buffer is sliced to 200 chars so a misbehaving client cannot bloat `diag:queue` payloads.
 - All three emits use `.catch(() => undefined)` so a Redis hiccup never propagates back into the WebSocket handler.
-- For invalid `:id` URL params on the per-server routes, `ws.connected` still fires (without `serverId`) before the handler closes the socket with `{error:'invalid_id'}`.
+- For invalid `:id` URL params on the per-server routes, NO diag event fires for the connection lifecycle. The handler sends `{error:'invalid_id'}` and closes the socket immediately, before the `socket.on('close', ...)` listener is registered. Skipping the `ws.connected` emit on this branch preserves the connect/disconnect matching invariant — an emitted `ws.connected` is always paired with a `ws.disconnected`.
 - `ws.error` does NOT replace `ws.disconnected` — both fire when the error also drops the socket.
 
 ## First-owner claim
