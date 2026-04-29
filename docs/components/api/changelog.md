@@ -1,5 +1,28 @@
 # `api` — changelog
 
+## 2026-04-29 — Status-flip diag-emit CI gate
+
+### Added
+
+- [`apps/api/test/audit-coverage.test.ts`](../../../apps/api/test/audit-coverage.test.ts) (Phase A2 Task 16) gains a third assertion: for the closed set of routes that flip `servers.status` (`POST /api/v1/servers/:id/start`, `POST /api/v1/servers/:id/stop`, `POST /api/v1/servers/:id/install`, `DELETE /api/v1/servers/:id`, `POST /api/v1/servers/archive/:id/restore`) the test reads the matching handler source file and asserts it still contains a `diag.emit({ ... kind: 'server.<...>' ... })` literal. The check is a regex-based static scan — no live infra needed — and treats `req.diag.emit` / `app.diag.emit` / `installDiag.emit` callsites as equivalent. The test also verifies that every route in the closed set is actually registered (catches drift if a URL is renamed without updating the gate). Failure message names the route AND the handler file so a regression points the developer at the right `.ts`. Today the test passes because Tasks 7 and the soft-delete/restore epic already wired all five emits — its value is regression prevention.
+- The new assertion was smoke-tested against the failure path by temporarily renaming every `kind: 'server.*'` literal in `server-install.ts` to `kind: 'svr_renamed.*'`; the test failed with `route POST /api/v1/servers/:id/install flips server.status but does not emit a server.* diag event in .../server-install.ts` as expected, and was reverted before commit.
+
+### Changed
+
+- _None._
+
+### Fixed
+
+- _None._
+
+### Removed
+
+- _None._
+
+### Migration notes
+
+No schema, no env, no public API change. Pure CI guard. If a future change moves the install / start / stop / soft-delete / restore handlers to a new file, update the `STATUS_FLIPPING_ROUTES` map in `audit-coverage.test.ts` accordingly.
+
 ## 2026-04-29 — HTTP error layer diag emits
 
 ### Added
