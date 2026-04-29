@@ -14,6 +14,7 @@ export interface JournaldForwarderOpts {
 
 export interface JournaldForwarderHandle {
   stop(): void;
+  drain(): Promise<void>;
 }
 
 export function startJournaldForwarder(opts: JournaldForwarderOpts): JournaldForwarderHandle {
@@ -28,15 +29,21 @@ export function startJournaldForwarder(opts: JournaldForwarderOpts): JournaldFor
     throw new Error('journalctl stdio pipes unavailable');
   }
 
+  const inflight = new Set<Promise<void>>();
   let stdoutBuf = '';
   child.stdout.on('data', (chunk: Buffer) => {
     stdoutBuf += chunk.toString('utf8');
     const lines = stdoutBuf.split('\n');
     stdoutBuf = lines.pop() ?? '';
     for (const line of lines) {
-      void handleJournaldLine(line, opts).catch((err) => {
-        opts.log.warn({ err: (err as Error).message }, 'diag journald-forward failed');
-      });
+      const p = handleJournaldLine(line, opts).then(
+        () => undefined,
+        (err) => {
+          opts.log.warn({ err: (err as Error).message }, 'diag journald-forward failed');
+        },
+      );
+      inflight.add(p);
+      void p.finally(() => inflight.delete(p));
     }
   });
 
@@ -57,6 +64,20 @@ export function startJournaldForwarder(opts: JournaldForwarderOpts): JournaldFor
         child.kill('SIGTERM');
       } catch {
         // already dead
+      }
+    },
+    drain: async () => {
+      await new Promise<void>((resolve) => {
+        if (child.exitCode !== null || child.signalCode !== null) {
+          resolve();
+          return;
+        }
+        const done = () => resolve();
+        child.once('exit', done);
+        child.once('close', done);
+      });
+      if (inflight.size > 0) {
+        await Promise.allSettled(Array.from(inflight));
       }
     },
   };

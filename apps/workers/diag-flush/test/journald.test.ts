@@ -1,5 +1,10 @@
+import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import { handleJournaldLine, parseJournaldLine } from '../src/journald-bridge.js';
+import {
+  handleJournaldLine,
+  parseJournaldLine,
+  startJournaldForwarder,
+} from '../src/journald-bridge.js';
 
 const SAMPLE_DIAG_INNER = JSON.stringify({
   DIAG_EVENT: '1',
@@ -148,6 +153,79 @@ describe('handleJournaldLine', () => {
     const redis = { xadd } as never;
     const ok = await handleJournaldLine('', { redis, log });
     expect(ok).toBe(false);
+    expect(xadd).not.toHaveBeenCalled();
+  });
+});
+
+describe('startJournaldForwarder.drain()', () => {
+  function makeFakeChild() {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+      exitCode: number | null;
+      signalCode: NodeJS.Signals | null;
+    };
+    child.stdout = stdout;
+    child.stderr = stderr;
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => {
+      child.exitCode = 0;
+      child.emit('exit', 0, 'SIGTERM');
+      child.emit('close', 0, 'SIGTERM');
+      return true;
+    });
+    return child;
+  }
+
+  it('awaits in-flight handlers before resolving', async () => {
+    let releaseXadd: (id: string) => void = () => {};
+    const xaddPromise = new Promise<string>((resolve) => {
+      releaseXadd = resolve;
+    });
+    const xadd = vi.fn(() => xaddPromise);
+    const redis = { xadd } as never;
+    const child = makeFakeChild();
+    const spawnFn = vi.fn(() => child) as never;
+
+    const handle = startJournaldForwarder({ redis, log, spawnFn });
+
+    const diagLine = JSON.stringify({
+      _SYSTEMD_UNIT: 'panel-host-bridge.service',
+      MESSAGE: SAMPLE_DIAG_INNER,
+    });
+    child.stdout.emit('data', Buffer.from(`${diagLine}\n`));
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(xadd).toHaveBeenCalledTimes(1);
+
+    handle.stop();
+    const drainPromise = handle.drain();
+
+    let drained = false;
+    void drainPromise.then(() => {
+      drained = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(drained).toBe(false);
+
+    releaseXadd('1700-0');
+    await drainPromise;
+    expect(drained).toBe(true);
+  });
+
+  it('resolves immediately when child has already exited and no in-flight work remains', async () => {
+    const child = makeFakeChild();
+    const spawnFn = vi.fn(() => child) as never;
+    const xadd = vi.fn();
+    const redis = { xadd } as never;
+
+    const handle = startJournaldForwarder({ redis, log, spawnFn });
+    handle.stop();
+    await handle.drain();
     expect(xadd).not.toHaveBeenCalled();
   });
 });

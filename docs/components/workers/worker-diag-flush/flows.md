@@ -110,7 +110,7 @@ Failure modes:
 - **Per-line parse failure** (malformed journald JSON, MESSAGE that isn't our DIAG_EVENT shape): `parseJournaldLine` returns `null` and the line is silently skipped. No log spam — non-DIAG_EVENT journal entries are the common case.
 - **`redis.xadd` rejects** (Redis disconnected, network blip): `handleJournaldLine` rejects, the surrounding `.catch(...)` logs `warn: diag journald-forward failed`. The next line resumes normally because each call is independent. There is no replay — losing a few lines during a Redis outage is acceptable since both halves of the panel can independently observe the bridge.
 - **Subprocess exit** (host journald restarts, container OOM-killed-but-recovered): `child.on('exit')` logs `info: journalctl exited`. The subprocess does NOT auto-restart inside this worker; compose's `restart: unless-stopped` catches container-level deaths but a journalctl exit alone does not crash the worker. **This is a deliberate trade-off** — restart-loop logic is deferred to Phase A3 if it becomes a real issue.
-- **Shutdown**: `shutdown(sig)` calls `journald?.stop()` which sends `SIGTERM` to the child before awaiting the in-flight batch. The child usually exits in <100 ms.
+- **Shutdown**: `shutdown(sig)` calls `journald?.stop()` (sends `SIGTERM` to the child) then `await journald?.drain()` which waits for the child's `exit`/`close` event AND for every in-flight `handleJournaldLine` promise to settle (the forwarder tracks them in an internal `Set<Promise<void>>`). Only after that do `sql.end(...)` and `redis.quit()` run. This guarantees no buffered DIAG line can race a late `redis.xadd(...)` against `redis.quit()` and produce "redis closed" noise during teardown. The child usually exits in <100 ms.
 
 ## Background — heartbeat
 
@@ -121,10 +121,12 @@ Independent of the main loop, `startHeartbeat({ redis, name: 'diag-flush', statu
 1. Log `{sig} shutdown`.
 2. Set `stopped = true` so the next iteration of the main loop exits cleanly.
 3. Stop the heartbeat publisher.
-4. If a batch is currently in flight, `await inflight` (errors swallowed so teardown still runs). The main loop tracks each iteration's `flushBatch` work in a module-local `inflight: Promise<void> | null`; this guarantees the active batch's `INSERT` + `XACK` complete before the clients close, so a SIGTERM mid-batch never races `XACK` against `redis.quit()`.
-5. Wait up to 5 s for `sql.end({ timeout: 5 })` to drain remaining queries.
-6. `redis.quit()` (best-effort, swallow errors).
-7. `process.exit(0)`.
+4. `journald?.stop()` — send `SIGTERM` to the `journalctl` child.
+5. `await journald?.drain()` — wait for the child to exit (`exit` or `close` event) AND for every in-flight `handleJournaldLine` promise to settle. This eliminates the race where a buffered DIAG line dispatched into `void handleJournaldLine(...)` would call `redis.xadd(...)` after `redis.quit()`.
+6. If a batch is currently in flight, `await inflight` (errors swallowed so teardown still runs). The main loop tracks each iteration's `flushBatch` work in a module-local `inflight: Promise<void> | null`; this guarantees the active batch's `INSERT` + `XACK` complete before the clients close, so a SIGTERM mid-batch never races `XACK` against `redis.quit()`.
+7. Wait up to 5 s for `sql.end({ timeout: 5 })` to drain remaining queries.
+8. `redis.quit()` (best-effort, swallow errors).
+9. `process.exit(0)`.
 
 If the loop is currently inside a 1 s `BLOCK` `XREADGROUP` (no batch in flight, `inflight` is `null`), the `redis.quit()` aborts the call — the loop's catch logs the error once, then `stopped` is `true` so the while exits. Total shutdown time is bounded by the active batch (typically < 50 ms for an INSERT of ≤ 100 rows) plus the 5 s `sql.end` timeout.
 

@@ -107,12 +107,20 @@ export interface JournaldForwarderOpts {
   spawnFn?: typeof spawn;  // tests inject a stub
 }
 
-export function startJournaldForwarder(opts: JournaldForwarderOpts): { stop(): void };
+export interface JournaldForwarderHandle {
+  stop(): void;
+  drain(): Promise<void>;
+}
+
+export function startJournaldForwarder(opts: JournaldForwarderOpts): JournaldForwarderHandle;
 ```
 
-Spawns `journalctl` with `stdio: ['ignore', 'pipe', 'pipe']`, splits the stdout stream on `\n`, and feeds each line to `handleJournaldLine`. Logs `warn` on per-line failures (continuing the loop), `error` if the spawn itself fails, and `info` on subprocess exit.
+Spawns `journalctl` with `stdio: ['ignore', 'pipe', 'pipe']`, splits the stdout stream on `\n`, and feeds each line to `handleJournaldLine`. Each dispatched handler is tracked in an internal `Set<Promise<void>>` so `drain()` can await it. Logs `warn` on per-line failures (continuing the loop), `error` if the spawn itself fails, and `info` on subprocess exit.
 
-The returned handle exposes `stop()` which sends `SIGTERM` to the child. `index.ts::shutdown` calls it before awaiting the in-flight batch and tearing down the SQL/Redis pools. `stop()` swallows kill errors (no-op if the child has already exited).
+The returned handle exposes:
+
+- `stop()` — sends `SIGTERM` to the child; swallows kill errors (no-op if the child has already exited).
+- `drain(): Promise<void>` — resolves once the child has exited (`exit` or `close`) AND every in-flight `handleJournaldLine` promise has settled (`Promise.allSettled` over the tracked set). If the child has already exited (`exitCode !== null` or `signalCode !== null`) and no handlers are pending, resolves immediately. `index.ts::shutdown` invokes `stop()` then `await drain()` BEFORE `sql.end(...)`/`redis.quit()` so a buffered DIAG line cannot race a late `redis.xadd(...)` against the client teardown.
 
 ### `parseJournaldLine(line) → ParsedDiagLine | null`
 

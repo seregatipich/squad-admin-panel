@@ -2,6 +2,10 @@
 
 ## 2026-04-29
 
+### Fixed
+
+- Post-merge fix: `JournaldForwarderHandle.drain()` awaits in-flight journald handlers + child exit before Redis teardown. Previously, the shutdown sequence sent SIGTERM to the `journalctl` child but did not await `handleJournaldLine` promises that had already been dispatched from buffered stdout chunks; those promises could call `redis.xadd(...)` after `redis.quit()` and emit "redis closed" warnings during teardown. The forwarder now tracks each in-flight handler in a `Set<Promise<void>>`, exposes a `drain()` method that waits for the child's `exit`/`close` event and `Promise.allSettled` over the in-flight set, and `main()` calls `await journald?.drain()` between `journald.stop()` and `sql.end(...)`. Two new test cases in [`test/journald.test.ts`](../../../../apps/workers/diag-flush/test/journald.test.ts) cover the drain behaviour with a fake child + a controllable slow `xadd`.
+
 ### Added
 
 - New journald-bridge forwarder ([`apps/workers/diag-flush/src/journald-bridge.ts`](../../../../apps/workers/diag-flush/src/journald-bridge.ts), Task 17 — Phase A2 final task). The worker now spawns `journalctl -u panel-host-bridge -o json -f --since "30s ago"` as a child process at startup, parses each line, and `XADD`s entries that contain `DIAG_EVENT: "1"` into `diag:queue` so they merge with the rest of the diag stream consumed by the same worker. The Go bridge writes the marker lines via `handlers.DiagLog(...)`; see [`docs/components/bridge/api.md`](../../bridge/api.md#diagnostic-events-journald). This avoids giving the privileged daemon a Redis connection.

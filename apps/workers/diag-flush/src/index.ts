@@ -182,6 +182,7 @@ async function main(): Promise<void> {
     await emitStopped(diag, sig);
     stopHeartbeat();
     journald?.stop();
+    await journald?.drain();
     if (inflight) {
       log.info('awaiting in-flight batch before teardown');
       await inflight.catch(() => undefined);
