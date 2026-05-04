@@ -5,8 +5,25 @@
 | Tier | Location | Status |
 |---|---|---|
 | Property | `apps/web/test/property/` | Active. `@fast-check/vitest` fuzz tests for pure utility modules. |
-| Unit | `apps/web/src/**/__tests__/` (none yet) | `pnpm --filter @squad/web test` is wired with `--passWithNoTests`. Component-level Vitest tests will land with the first non-trivial client-side logic. |
+| Unit | `apps/web/src/lib/*.test.ts`, `apps/web/test/*.test.ts` | Active. Vitest unit tests for `api`, `dal`, `format`, `host-health`, `live-bus`, `use-live-bus`, `ws-backoff`, and `middleware`. |
 | E2E | `apps/web/e2e/` | Active. 7 critical-page specs + live-refresh + server-detail + server-logs-resilience suites. Run with `pnpm --filter @squad/web test:e2e` against a live stack. |
+
+## Unit tests
+
+### `src/lib/api.test.ts` (9 tests)
+Tests `apiFetch<T>`: URL construction from `API_URL` env var (default `http://api:3000`), `accept: application/json` header, `cache: no-store`, `cookie` header forwarding, `content-type` header injection for body requests, and error throwing with `"API <path> <status>: <text>"` on non-ok responses. Mocks `globalThis.fetch`.
+
+### `src/lib/dal.test.ts` (8 tests)
+Tests the server-side DAL: `SESSION_COOKIE` constant equals `__Host-sid`, `getSession` returns a `Me` object when session cookie is present, returns `null` on missing cookie and on `apiFetch` failure, and `requireSession` returns `Me` or throws with `NEXT_REDIRECT:/login`. Mocks `server-only`, `next/headers`, `next/navigation`, `./api`, and `react.cache`.
+
+### `src/lib/live-bus.test.ts` (8 tests)
+Tests the SSR no-op stub returned by `getLiveBus()` when `window` is undefined: `state()` returns `'closed'`, `bridgeState()` returns `'unknown'`, `subscribe`/`onStateChange`/`onBridgeChange` each return a callable unsubscribe, `retain` returns a callable release, and `forceReconnect` does not throw.
+
+### `src/lib/use-live-bus.test.ts` (3 tests)
+Validates that `useLiveSubscription`, `useLiveBusState`, and `useBridgeState` are exported as functions without invoking them outside a React render context.
+
+### `test/middleware.test.ts` (10 tests)
+Tests the Next.js middleware redirect logic using a mocked `next/server` and fake `NextRequest` objects. Covers: unauthenticated redirect from `/dashboard` and `/servers/:id` (verifying `307` status and `?next=<path>`), redirect target is `/login`, authenticated pass-through, public path pass-through, and all 5 `config.matcher` patterns.
 
 ## Property-based tests
 
@@ -60,7 +77,12 @@ The `seedOwner` helper in `helpers.ts` creates test isolation without Steam OAut
 
 ## What is covered
 
-- All 7 highest-leverage pages verified against the live stack (19 tests).
+- `apiFetch` URL/header/error behaviour (unit, 9 tests).
+- DAL `getSession` + `requireSession` happy and error paths (unit, 8 tests).
+- Next.js middleware redirect logic for all 5 protected path prefixes (unit, 10 tests).
+- `getLiveBus` SSR stub interface (unit, 8 tests).
+- `useLiveSubscription`, `useLiveBusState`, `useBridgeState` export presence (unit, 3 tests).
+- All 7 highest-leverage pages verified against the live stack (E2E, 19 tests).
 - Pre-existing breakage repaired: `auth.spec.ts`, `live-refresh.spec.ts`, `server-detail-live.spec.ts`, `server-logs-resilience.spec.ts` were broken by the RBAC migration that removed the `users` table and `org_id` columns.
 
 ## What is not yet covered

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-05-04 — Unit test coverage for lib utilities and middleware
+
+### Added
+
+- `src/lib/api.test.ts` — 9 unit tests for `apiFetch`: URL construction, headers, error throwing.
+- `src/lib/dal.test.ts` — 8 unit tests for `getSession`, `requireSession`, and `SESSION_COOKIE`.
+- `src/lib/live-bus.test.ts` — 8 unit tests for the SSR no-op stub returned by `getLiveBus()`.
+- `src/lib/use-live-bus.test.ts` — 3 unit tests verifying hook exports.
+- `test/middleware.test.ts` — 10 unit tests for `middleware` redirect logic and `config.matcher`.
+
 ## 2026-05-02 — Эпик 2 Phase 2 follow-up
 
 ### Added
