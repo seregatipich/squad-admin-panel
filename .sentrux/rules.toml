@@ -1,0 +1,143 @@
+# Architectural rules for squad-admin-panel
+# Enforced via `sentrux check_rules` — violations block merges.
+#
+# Three privilege zones: host daemon (Go bridge), API/workers (Node Docker),
+# per-server Squad containers. The TS layer has strict layering:
+#
+#   Level 0 (leaves):  shared-types, shared-config, diag
+#   Level 1 (libs):    db, bridge-client
+#   Level 2 (apps):    api, web, workers/*
+#
+# No app-to-app imports. Packages never import apps.
+
+# ─── FORBIDDEN: app-to-app cross-imports ───────────────────────────────────────
+
+[[rules]]
+name = "web must not import api"
+source = "apps/web"
+target = "apps/api"
+type = "forbidden"
+
+[[rules]]
+name = "web must not import bridge"
+source = "apps/web"
+target = "apps/bridge"
+type = "forbidden"
+
+[[rules]]
+name = "web must not import workers"
+source = "apps/web"
+target = "apps/workers"
+type = "forbidden"
+
+[[rules]]
+name = "api must not import web"
+source = "apps/api"
+target = "apps/web"
+type = "forbidden"
+
+[[rules]]
+name = "api must not import bridge Go source"
+source = "apps/api"
+target = "apps/bridge"
+type = "forbidden"
+
+[[rules]]
+name = "api must not import workers"
+source = "apps/api"
+target = "apps/workers"
+type = "forbidden"
+
+[[rules]]
+name = "workers must not import api"
+source = "apps/workers"
+target = "apps/api"
+type = "forbidden"
+
+[[rules]]
+name = "workers must not import web"
+source = "apps/workers"
+target = "apps/web"
+type = "forbidden"
+
+[[rules]]
+name = "workers must not import bridge Go source"
+source = "apps/workers"
+target = "apps/bridge"
+type = "forbidden"
+
+# ─── FORBIDDEN: packages must never import apps ───────────────────────────────
+
+[[rules]]
+name = "packages must not import apps"
+source = "packages"
+target = "apps"
+type = "forbidden"
+
+# ─── FORBIDDEN: leaf packages must stay leaf ───────────────────────────────────
+
+[[rules]]
+name = "shared-types is a leaf — no @squad deps"
+source = "packages/shared-types"
+target = "packages"
+type = "forbidden"
+
+[[rules]]
+name = "shared-config is a leaf — no @squad deps"
+source = "packages/shared-config"
+target = "packages"
+type = "forbidden"
+
+[[rules]]
+name = "diag is a leaf — no @squad deps"
+source = "packages/diag"
+target = "packages"
+type = "forbidden"
+
+# ─── FORBIDDEN: level-1 packages must not import each other ────────────────────
+
+[[rules]]
+name = "db must not import bridge-client"
+source = "packages/db"
+target = "packages/bridge-client"
+type = "forbidden"
+
+[[rules]]
+name = "bridge-client must not import db"
+source = "packages/bridge-client"
+target = "packages/db"
+type = "forbidden"
+
+# ─── FORBIDDEN: web must not use privileged Node APIs ──────────────────────────
+
+[[rules]]
+name = "web must not import child_process"
+source = "apps/web/src"
+target = "node:child_process"
+type = "forbidden"
+
+[[rules]]
+name = "web must not import dockerode"
+source = "apps/web/src"
+target = "dockerode"
+type = "forbidden"
+
+# ─── ALLOWED: explicit approved dependency arrows ─────────────────────────────
+
+[[rules]]
+name = "apps may import packages"
+source = "apps"
+target = "packages"
+type = "allowed"
+
+[[rules]]
+name = "db may import shared-config"
+source = "packages/db"
+target = "packages/shared-config"
+type = "allowed"
+
+[[rules]]
+name = "bridge-client may import shared-config"
+source = "packages/bridge-client"
+target = "packages/shared-config"
+type = "allowed"

@@ -162,6 +162,81 @@ The e2e runner (`vitest.e2e.config.ts`) runs serially, 15 min global timeout, an
 
 **What "fixed" means here**: if you claim a bug is fixed or a feature is shipped, the corresponding test is in the right tier and passes on your machine. "Works on my manual retry" is not fixed. `test:e2e` + `pnpm turbo run test` both green is fixed.
 
+**100% coverage for new code — NON-NEGOTIABLE**: every new function, route, handler, parser, or flow introduced by a change MUST have a corresponding test. `sentrux test_gaps` must not show new untested files after the change. If the AFTER scan shows more untested files than the BEFORE scan, the work is NOT done — write the missing tests before committing. No exceptions, no "will add tests later", no "this is too simple to test".
+
+## After editing code — REBUILD AND RESTART
+
+Code lives inside Docker images and the Go bridge binary, not on the host filesystem at runtime. **A code edit is invisible to the running stack until you rebuild the relevant container (or the bridge binary) and restart it.** Stop guessing — the table below is the source of truth. After every code edit, find the row and run the listed commands.
+
+| Code path | What runs it | Rebuild & restart |
+|---|---|---|
+| `apps/api/**`, `packages/{db,shared-config,shared-types,bridge-client,diag}/**` (when consumed by api) | `squad-admin-panel-api-1` (+ its workers) | `docker compose build api && docker compose up -d api` |
+| `apps/web/**`, `packages/shared-config/**` (when consumed by web) | `squad-admin-panel-web-1` | `docker compose build web && docker compose up -d web` |
+| `apps/workers/<name>/**` | `squad-admin-panel-worker-<name>-1` | `docker compose build worker-<name> && docker compose up -d worker-<name>` |
+| `apps/bridge/**` (Go) | privileged `panel-host-bridge.service` on the host (NOT a container) | `cd apps/bridge && make build && echo "squad" \| sudo -S install -m 0755 apps/bridge/bin/panel-host-bridge /usr/local/bin/ && echo "squad" \| sudo -S systemctl restart panel-host-bridge.socket` |
+| `docker/squad-server.Dockerfile`, `docker/squad-server-entrypoint.sh` | per-server `squad-{uuid}` containers (bridge-launched) | `docker compose --profile images build squad-server-image` (re-tags `squad-server:latest`) — existing per-server containers must be recreated by the user via UI Stop+Start |
+| `docker/depot-init.Dockerfile`, `docker/depot-init-entrypoint.sh` | transient depot-init container | `docker compose --profile images build depot-init-image` |
+| `packages/db/drizzle/*.sql` (new migration) | one-shot migrator | `docker compose run --rm migrator` |
+| `docker-compose.yml` itself | the whole stack | `docker compose up -d` (compose detects which services need recreation) |
+| Touched 4+ services or you're not sure | full sweep | `docker compose up -d --build` (rebuilds anything stale + restarts changed services; safe default; ~30 s when nothing changed) |
+
+**Rules:**
+- After ANY code edit you make, rebuild + restart the matching container BEFORE telling the user "ready". Don't push the burden onto them.
+- If multiple packages were touched and you're unsure of the dependency closure, just run `docker compose up -d --build` — it's safe and idempotent.
+- Bridge changes additionally require `sg panel -c 'bash scripts/verify-bridge.sh'` after restart to confirm the RPC surface still works.
+- Cross-cutting `packages/shared-config` changes: rebuild **all** images (`docker compose up -d --build`) because every service consumes it.
+
+## Structural Quality Gate — NON-NEGOTIABLE
+
+> # ⛔ HARD-GATE — SENTRUX STRUCTURAL ANALYSIS IS LOAD-BEARING
+>
+> **Every code change must pass structural analysis. An agent that ships code without running `/sentrux:scan` before AND after implementation has not finished work.**
+>
+> 1. **Before touching code**: run `/sentrux:scan` (invokes `scan` → `health` → `test_gaps` → `check_rules`). Record the baseline quality signal, health scores, test gap count, and rule violations. This is the **BEFORE snapshot**.
+> 2. **After all code + tests are written**: run `/sentrux:scan` again. This is the **AFTER snapshot**. Compare both snapshots.
+> 3. **Blockers — the change MUST NOT ship if any of these are true**:
+>    - `check_rules` reports ANY violation (architectural boundary breach)
+>    - `quality_signal` decreased from the BEFORE snapshot
+>    - `health` bottleneck score worsened (e.g. depth increased, modularity dropped)
+>    - `test_gaps` count increased (new untested source files introduced)
+>    - Any new circular dependency appeared (acyclicity score dropped)
+> 4. **If a blocker fires**: fix the issue before committing. Add missing tests, fix boundary violations, reduce coupling. Do NOT commit with regressions and "plan to fix later".
+> 5. **Report format** — every task completion MUST include:
+>    ```
+>    ## Structural Quality Report
+>
+>    ### BEFORE
+>    - Quality signal: <number>
+>    - Health bottleneck: <dimension> (<score>)
+>    - Test gaps: <N> untested / <M> total source files
+>    - Rule violations: <count>
+>
+>    ### AFTER
+>    - Quality signal: <number> (Δ +/-N)
+>    - Health bottleneck: <dimension> (<score>)
+>    - Test gaps: <N> untested / <M> total source files (Δ +/-N)
+>    - Rule violations: <count>
+>
+>    ### Verdict: PASS / FAIL
+>    ```
+>
+> **Sentrux tools available via `/sentrux:scan`:**
+> - `scan` — full metric computation (must run first)
+> - `health` — quality signal with root-cause breakdown (modularity, acyclicity, depth, equality, redundancy)
+> - `test_gaps` — high-risk untested source files cross-referenced with import graph and complexity
+> - `check_rules` — validates `.sentrux/rules.toml` architectural constraints (layer boundaries, forbidden imports)
+> - `dsm` — dependency structure matrix for coupling visualization
+> - `rescan` — re-scan after code changes without restarting the session
+>
+> **Architectural rules are defined in `.sentrux/rules.toml`** — source of truth for layer boundaries. The rules enforce:
+> - No app-to-app cross-imports (`web ↛ api`, `api ↛ web`, `workers ↛ api`, etc.)
+> - Packages never import apps (dependency flows upward only)
+> - Leaf packages (`shared-types`, `shared-config`, `diag`) have zero `@squad` dependencies
+> - Level-1 packages (`db`, `bridge-client`) do not import each other
+> - `apps/web/src` does not use `child_process` or `dockerode` (privileged ops go through API)
+>
+> **This gate is non-negotiable.** "The tests pass" is necessary but not sufficient. "The architecture is clean" is also required. Both must be true.
+
 ## Before shipping a change
 
 1. Read `docs/architecture/data-flow.md` if touching cross-component data flow, `docs/components/bridge/api.md` if changing the bridge surface, `docs/architecture/rbac.md` if adding a permission key.
@@ -169,6 +244,7 @@ The e2e runner (`vitest.e2e.config.ts`) runs serially, 15 min global timeout, an
 3. If adding a bridge RPC method, keep three sources in sync: `packages/shared-config/src/bridge-methods.ts`, `packages/bridge-client/src/client.ts`, and the Go handlers in `apps/bridge/internal/handlers/handlers.go`. The `validate.*` allowlist must be tightened in the same commit. Add a case to `test/e2e/bridge-rpc.e2e.test.ts` covering both the success and the forbidden path.
 4. Critical-path changes (install flow, container_run spec, config editor, RCON AUTH, depot seeding) require a test in `test/e2e/install-lifecycle.e2e.test.ts` or a new file under `test/e2e/` — the suite must stay green after the change.
 5. `pnpm turbo run typecheck && pnpm turbo run test` green AND `pnpm --filter @squad/api test:e2e` green are both prerequisites for a commit touching the critical path.
+6. **Structural quality gate**: `/sentrux:scan` AFTER snapshot must not regress from the BEFORE snapshot (see §"Structural Quality Gate" above).
 
 ## Documentation System
 
