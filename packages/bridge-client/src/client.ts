@@ -284,7 +284,7 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
             ...(willRetry ? { retrying: true } : {}),
           },
         );
-        if (!willRetry) throw err;
+        if (!willRetry) break;
         if (this.socket) {
           this.socket.destroy();
           this.socket = undefined;
@@ -301,7 +301,6 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
   ): Promise<Result> {
     if (this.closed) throw new BridgeError('transport', 'client is closed');
     if (!this.socket) await this.connect();
-    if (!this.socket) throw new BridgeError('transport', 'socket unavailable after connect');
 
     const id = uuidv7();
     const req: BridgeRequest = { id, method, params };
@@ -324,7 +323,8 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
         }, timeoutMs);
       }
       this.pending.set(id, pending);
-      this.socket?.write(encodeFrame(req), (err) => {
+      const sock = this.socket as Socket;
+      sock.write(encodeFrame(req), (err) => {
         if (err) {
           this.pending.delete(id);
           if (pending.timer) clearTimeout(pending.timer);

@@ -34,4 +34,33 @@ describe('frame codec', () => {
     const big = 'x'.repeat(17 * 1024 * 1024);
     expect(() => encodeFrame({ big })).toThrow(FrameTooLargeError);
   });
+
+  it('rejects oversized decode (declared size exceeds max)', () => {
+    const buf = Buffer.alloc(4);
+    buf.writeUInt32BE(17 * 1024 * 1024, 0);
+    expect(() => decodeFrames(buf)).toThrow(FrameTooLargeError);
+  });
+
+  it('returns no frames when fewer than 4 bytes are available', () => {
+    const { frames, remainder } = decodeFrames(Buffer.from([0x01, 0x02]));
+    expect(frames).toHaveLength(0);
+    expect(remainder.byteLength).toBe(2);
+  });
+
+  it('decodes a frame followed by a partial header (returns 1 frame, remainder = partial)', () => {
+    const a = encodeFrame({ a: 1 });
+    const partial = Buffer.from([0x00, 0x00]);
+    const { frames, remainder } = decodeFrames(Buffer.concat([a, partial]));
+    expect(frames).toHaveLength(1);
+    expect(remainder.equals(partial)).toBe(true);
+  });
+
+  it('decodes an empty payload (size = 0)', () => {
+    const buf = Buffer.alloc(4);
+    buf.writeUInt32BE(0, 0);
+    const { frames, remainder } = decodeFrames(buf);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]?.byteLength).toBe(0);
+    expect(remainder.byteLength).toBe(0);
+  });
 });
