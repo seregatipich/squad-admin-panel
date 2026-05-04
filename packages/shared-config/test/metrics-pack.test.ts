@@ -56,4 +56,46 @@ describe('metrics-pack', () => {
     });
     expect(v[0]).toBe(0);
   });
+
+  it('treats NaN values as 0 in every slot', () => {
+    const v = packHostMetrics({
+      cpu_percent: Number.NaN,
+      ram_used_bytes: Number.NaN,
+      disk_used_bytes: Number.NaN,
+      net_rx_bytes_per_sec: Number.NaN,
+      net_tx_bytes_per_sec: Number.NaN,
+      load_avg_1m: Number.NaN,
+      load_avg_5m: Number.NaN,
+      load_avg_15m: Number.NaN,
+    });
+    expect(v).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+  });
+
+  it('clamps negative byte counters to 0 (not just cpu_percent)', () => {
+    const v = packHostMetrics({
+      cpu_percent: 0,
+      ram_used_bytes: -1,
+      disk_used_bytes: -2,
+      net_rx_bytes_per_sec: -3,
+      net_tx_bytes_per_sec: -4,
+      load_avg_1m: -0.1,
+      load_avg_5m: -0.2,
+      load_avg_15m: -0.3,
+    });
+    expect(v).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+  });
+
+  it('unpack defaults every missing slot to 0 when given a short array', () => {
+    const v = unpackHostMetrics([]);
+    expect(v).toEqual({
+      cpu_percent: 0,
+      ram_used_bytes: 0,
+      disk_used_bytes: 0,
+      net_rx_bytes_per_sec: 0,
+      net_tx_bytes_per_sec: 0,
+      load_avg_1m: 0,
+      load_avg_5m: 0,
+      load_avg_15m: 0,
+    });
+  });
 });

@@ -13,7 +13,7 @@
  */
 export function resolveRconHost(
   credsHost: string | null | undefined,
-  env: { RCON_HOST_DEFAULT?: string } = typeof process !== 'undefined' ? process.env : {},
+  env: { RCON_HOST_DEFAULT?: string } = process.env,
 ): string {
   if (credsHost) return credsHost;
   if (env.RCON_HOST_DEFAULT) return env.RCON_HOST_DEFAULT;

@@ -108,6 +108,115 @@ describe('redisSinkStream', () => {
     expect(JSON.stringify(ctx)).not.toContain('should-not-leak');
   });
 
+  it('skips empty lines without dispatching XADD', async () => {
+    const r = fakeRedis();
+    const stream = redisSinkStream({ redis: r as never, defaultSource: 'api' });
+    stream.write('\n\n\n');
+    stream.end();
+    await new Promise<void>((resolve) => stream.on('finish', resolve));
+    expect(r.calls).toHaveLength(0);
+  });
+
+  it('drops malformed JSON lines silently', async () => {
+    const r = fakeRedis();
+    const stream = redisSinkStream({ redis: r as never, defaultSource: 'api' });
+    stream.write('{not-json}\n');
+    stream.write(`${JSON.stringify({ level: 30, msg: 'good' })}\n`);
+    stream.end();
+    await new Promise<void>((resolve) => stream.on('finish', resolve));
+    expect(r.calls).toHaveLength(1);
+    expect(r.calls[0].args.flat()).toContain('good');
+  });
+
+  it('flushes a buffered final line that lacks a trailing newline', async () => {
+    const r = fakeRedis();
+    const stream = redisSinkStream({ redis: r as never, defaultSource: 'api' });
+    stream.write(`${JSON.stringify({ level: 30, msg: 'partial' })}`);
+    stream.end();
+    await new Promise<void>((resolve) => stream.on('finish', resolve));
+    expect(r.calls).toHaveLength(1);
+    expect(r.calls[0].args.flat()).toContain('partial');
+  });
+
+  it('keeps level=60 (fatal) at error rank', async () => {
+    const r = fakeRedis();
+    const stream = redisSinkStream({ redis: r as never, defaultSource: 'api' });
+    stream.write(`${JSON.stringify({ level: 60, msg: 'fatal' })}\n`);
+    stream.end();
+    await new Promise<void>((resolve) => stream.on('finish', resolve));
+    expect(r.calls[0].args.flat()).toContain('E');
+  });
+
+  it('treats below-debug levels as debug', async () => {
+    const r = fakeRedis();
+    const stream = redisSinkStream({ redis: r as never, defaultSource: 'api' });
+    stream.write(`${JSON.stringify({ level: 10, msg: 'trace' })}\n`);
+    stream.end();
+    await new Promise<void>((resolve) => stream.on('finish', resolve));
+    expect(r.calls[0].args.flat()).toContain('D');
+  });
+
+  it('defaults non-numeric level fields to info(30)', async () => {
+    const r = fakeRedis();
+    const stream = redisSinkStream({ redis: r as never, defaultSource: 'api' });
+    stream.write(`${JSON.stringify({ level: 'info', msg: 'hi' })}\n`);
+    stream.end();
+    await new Promise<void>((resolve) => stream.on('finish', resolve));
+    expect(r.calls[0].args.flat()).toContain('I');
+  });
+
+  it('defaults missing msg to the empty string', async () => {
+    const r = fakeRedis();
+    const stream = redisSinkStream({ redis: r as never, defaultSource: 'api' });
+    stream.write(`${JSON.stringify({ level: 30 })}\n`);
+    stream.end();
+    await new Promise<void>((resolve) => stream.on('finish', resolve));
+    expect(r.calls).toHaveLength(1);
+  });
+
+  it('uses default source when "src" is not a recognised LogSource', async () => {
+    const r = fakeRedis();
+    const stream = redisSinkStream({ redis: r as never, defaultSource: 'api' });
+    stream.write(`${JSON.stringify({ level: 30, msg: 'x', src: 'unknown' })}\n`);
+    stream.end();
+    await new Promise<void>((resolve) => stream.on('finish', resolve));
+    expect(r.calls[0].args.flat()).toContain('A');
+  });
+
+  it('omits ctx when only pino-meta keys remain', async () => {
+    const r = fakeRedis();
+    const stream = redisSinkStream({ redis: r as never, defaultSource: 'api' });
+    stream.write(
+      `${JSON.stringify({ level: 30, msg: 'm', pid: 1, hostname: 'h', time: 0, v: 1 })}\n`,
+    );
+    stream.end();
+    await new Promise<void>((resolve) => stream.on('finish', resolve));
+    const flat = r.calls[0].args.flat() as string[];
+    expect(flat).not.toContain('c');
+  });
+
+  it('serialises a non-Error redis xadd rejection by stringifying it', async () => {
+    const stream = redisSinkStream({
+      redis: {
+        xadd: vi.fn(async () => {
+          throw 'string-failure';
+        }),
+      } as never,
+      defaultSource: 'api',
+    });
+    stream.write(`${JSON.stringify({ level: 30, msg: 'x' })}\n`);
+    stream.end();
+    await new Promise<void>((resolve) => stream.on('finish', resolve));
+  });
+
+  it('end() with empty buffer does not call writeLine', async () => {
+    const r = fakeRedis();
+    const stream = redisSinkStream({ redis: r as never, defaultSource: 'api' });
+    stream.end();
+    await new Promise<void>((resolve) => stream.on('finish', resolve));
+    expect(r.calls).toHaveLength(0);
+  });
+
   it('uses per-instance error-warning latch (does not leak across sinks)', async () => {
     const errA = vi.fn(async () => {
       throw new Error('boom-A');

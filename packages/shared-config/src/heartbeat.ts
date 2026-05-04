@@ -56,15 +56,13 @@ export function startHeartbeat(opts: StartHeartbeatOptions): () => void {
   const interval = opts.intervalMs ?? HEARTBEAT_INTERVAL_MS;
   const ttl = opts.ttlSeconds ?? HEARTBEAT_TTL_SECONDS;
   const started = new Date().toISOString();
-  let cancelled = false;
 
   const publish = async () => {
-    if (cancelled) return;
     const payload: HeartbeatPayload = {
       name: opts.name,
       ts: new Date().toISOString(),
-      pid: typeof process !== 'undefined' ? process.pid : 0,
-      hostname: typeof process !== 'undefined' ? process.env?.HOSTNAME : undefined,
+      pid: process.pid,
+      hostname: process.env.HOSTNAME,
       version: opts.version,
       started_at: started,
       status: opts.statusFn?.(),
@@ -80,7 +78,6 @@ export function startHeartbeat(opts: StartHeartbeatOptions): () => void {
   void publish();
   const handle = setInterval(publish, interval);
   return () => {
-    cancelled = true;
     clearInterval(handle);
   };
 }

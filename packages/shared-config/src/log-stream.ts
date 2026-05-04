@@ -60,7 +60,7 @@ export function encodeLogEntry(e: Omit<LogEntry, 'ts'>): Record<string, string> 
 }
 
 export function decodeLogEntry(streamId: string, fields: Record<string, string>): LogEntry {
-  const tsStr = streamId.split('-')[0] ?? '0';
+  const tsStr = streamId.split('-')[0] as string;
   const ts = Number.parseInt(tsStr, 10);
   const sCode = fields.s ?? '';
   const lCode = fields.l ?? '';

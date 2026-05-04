@@ -109,7 +109,7 @@ export function redisSinkStream(opts: RedisSinkOptions): Writable {
     write(chunk, _enc, cb) {
       buffer += String(chunk);
       const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
+      buffer = lines.pop() as string;
       Promise.all(lines.map((line) => writeLine(line))).then(
         () => cb(),
         () => cb(),

@@ -33,4 +33,15 @@ describe('resolveRconHost', () => {
       'pinned.host',
     );
   });
+
+  it('reads from process.env when env arg is omitted', () => {
+    const previous = process.env.RCON_HOST_DEFAULT;
+    process.env.RCON_HOST_DEFAULT = 'env-default.internal';
+    try {
+      expect(resolveRconHost(null)).toBe('env-default.internal');
+    } finally {
+      if (previous === undefined) delete process.env.RCON_HOST_DEFAULT;
+      else process.env.RCON_HOST_DEFAULT = previous;
+    }
+  });
 });

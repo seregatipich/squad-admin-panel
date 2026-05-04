@@ -45,6 +45,33 @@ describe('log-stream encoding', () => {
     expect(() => decodeLogEntry('1-0', { s: 'Z', l: 'I', m: 'x' })).toThrow(/source/);
   });
 
+  it('throws on unknown level code', () => {
+    expect(() => decodeLogEntry('1-0', { s: 'A', l: 'Z', m: 'x' })).toThrow(/level/);
+  });
+
+  it('throws when sourceFromCode receives an unknown short code', () => {
+    expect(() => sourceFromCode('Z')).toThrow(/source/);
+  });
+
+  it('treats malformed ctx JSON as { _raw } so a corrupt entry never throws', () => {
+    const decoded = decodeLogEntry('1700000000000-0', {
+      s: 'A',
+      l: 'I',
+      m: 'x',
+      c: '{not json',
+    });
+    expect(decoded.ctx).toEqual({ _raw: '{not json' });
+  });
+
+  it('decodes a missing msg field as the empty string', () => {
+    const decoded = decodeLogEntry('1700000000000-0', { s: 'A', l: 'I' });
+    expect(decoded.msg).toBe('');
+  });
+
+  it('decodes missing source/level codes as undefined sentinels that throw', () => {
+    expect(() => decodeLogEntry('1-0', {})).toThrow(/source/);
+  });
+
   it('exposes stable source codes', () => {
     expect(sourceCode('bridge')).toBe('B');
     expect(sourceCode('rcon')).toBe('R');
