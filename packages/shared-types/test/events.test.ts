@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  EVENT_TYPES,
   eventEnvelope,
+  matchStateChangedPayload,
   playerConnectedPayload,
+  playerDisconnectedPayload,
   rconPlayersPolledPayload,
+  serverLifecyclePayload,
   validatePayload,
 } from '../src/events.js';
 
@@ -81,5 +85,198 @@ describe('validatePayload dispatcher', () => {
   it('returns errors for mismatched payload', () => {
     const res = validatePayload('player.connected', { steam_id64: 'short' });
     expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.errors.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('returns ok=true with parsed data for a known + valid payload', () => {
+    const res = validatePayload('player.connected', {
+      steam_id64: '76561198012345678',
+      eos_id: null,
+      name: 'P',
+      ip: null,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect((res.data as { name: string }).name).toBe('P');
+    }
+  });
+
+  it('handles every entry in PAYLOAD_SCHEMAS dispatch table', () => {
+    const lifecycleOk = { pid: 1, reason: null, exit_code: null };
+    const lifecycleTypes = [
+      'server.ready',
+      'server.starting',
+      'server.running',
+      'server.stopping',
+      'server.stopped',
+      'server.crashed',
+    ] as const;
+    for (const t of lifecycleTypes) {
+      expect(validatePayload(t, lifecycleOk).ok).toBe(true);
+    }
+    const matchOk = { from_state: 'pre', to_state: 'live', layer: null, game_mode: null };
+    expect(validatePayload('match.started', matchOk).ok).toBe(true);
+    expect(validatePayload('match.ended', matchOk).ok).toBe(true);
+    expect(
+      validatePayload('player.disconnected', {
+        steam_id64: '76561198012345678',
+        eos_id: null,
+        reason: null,
+      }).ok,
+    ).toBe(true);
+    expect(
+      validatePayload('rcon.players_polled', {
+        players: [],
+        polled_at: '2026-04-23T11:20:00.000Z',
+        latency_ms: 1,
+      }).ok,
+    ).toBe(true);
+  });
+});
+
+describe('exhaustive payload schemas', () => {
+  it('player.disconnected accepts a Steam-only payload', () => {
+    expect(
+      playerDisconnectedPayload.safeParse({
+        steam_id64: '76561198012345678',
+        eos_id: null,
+        reason: 'kicked',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('player.disconnected rejects bad eos_id format', () => {
+    expect(
+      playerDisconnectedPayload.safeParse({
+        steam_id64: '76561198012345678',
+        eos_id: 'NOT-HEX',
+        reason: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('matchStateChangedPayload accepts nullable layer/game_mode', () => {
+    expect(
+      matchStateChangedPayload.safeParse({
+        from_state: 'pre',
+        to_state: 'live',
+        layer: null,
+        game_mode: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('matchStateChangedPayload rejects missing to_state', () => {
+    expect(
+      matchStateChangedPayload.safeParse({
+        from_state: 'pre',
+        layer: null,
+        game_mode: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('serverLifecyclePayload rejects pid = 0 (must be positive)', () => {
+    expect(
+      serverLifecyclePayload.safeParse({ pid: 0, reason: null, exit_code: null }).success,
+    ).toBe(false);
+  });
+
+  it('serverLifecyclePayload accepts all-null lifecycle fields', () => {
+    expect(
+      serverLifecyclePayload.safeParse({ pid: null, reason: null, exit_code: null }).success,
+    ).toBe(true);
+  });
+
+  it('rcon.players_polled exercises optional is_leader / role keys', () => {
+    expect(
+      rconPlayersPolledPayload.safeParse({
+        players: [
+          {
+            steam_id64: '76561198012345678',
+            eos_id: null,
+            name: 'Squad Lead',
+            team_id: 1,
+            squad_id: 2,
+            is_leader: true,
+            role: 'Rifleman',
+          },
+        ],
+        polled_at: '2026-04-23T11:20:00.000Z',
+        latency_ms: 9,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rcon.players_polled rejects negative latency_ms', () => {
+    expect(
+      rconPlayersPolledPayload.safeParse({
+        players: [],
+        polled_at: '2026-04-23T11:20:00.000Z',
+        latency_ms: -1,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('player.connected enforces non-empty name', () => {
+    expect(
+      playerConnectedPayload.safeParse({
+        steam_id64: '76561198012345678',
+        eos_id: null,
+        name: '',
+        ip: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('player.connected rejects 129-char name', () => {
+    expect(
+      playerConnectedPayload.safeParse({
+        steam_id64: '76561198012345678',
+        eos_id: null,
+        name: 'x'.repeat(129),
+        ip: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('eventEnvelope accepts every type in EVENT_TYPES', () => {
+    for (const t of EVENT_TYPES) {
+      const env = {
+        ...baseEnvelope,
+        type: t,
+        payload: t === 'player.connected' ? baseEnvelope.payload : {},
+      };
+      expect(eventEnvelope.safeParse(env).success).toBe(true);
+    }
+  });
+
+  it('eventEnvelope rejects negative version', () => {
+    expect(eventEnvelope.safeParse({ ...baseEnvelope, version: -1 }).success).toBe(false);
+  });
+
+  it('eventEnvelope rejects bad correlation_id uuid', () => {
+    expect(eventEnvelope.safeParse({ ...baseEnvelope, correlation_id: 'nope' }).success).toBe(
+      false,
+    );
+  });
+
+  it('eventEnvelope accepts server_id = null (host-level events)', () => {
+    expect(eventEnvelope.safeParse({ ...baseEnvelope, server_id: null }).success).toBe(true);
+  });
+
+  it('eventEnvelope accepts actor = null (system event)', () => {
+    expect(eventEnvelope.safeParse({ ...baseEnvelope, actor: null }).success).toBe(true);
+  });
+
+  it('eventEnvelope rejects bad actor.kind', () => {
+    expect(
+      eventEnvelope.safeParse({
+        ...baseEnvelope,
+        actor: { kind: 'bot', id: null },
+      }).success,
+    ).toBe(false);
   });
 });
