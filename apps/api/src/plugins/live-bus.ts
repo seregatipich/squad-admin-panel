@@ -8,7 +8,7 @@ export type LiveEvent =
       data: {
         server_id: string;
         status: string;
-        source: 'reconciler' | 'install' | 'delete' | 'stop' | 'start' | 'restart';
+        source: 'reconciler' | 'install' | 'delete' | 'stop' | 'start' | 'restart' | 'force_stop';
       };
     }
   | {

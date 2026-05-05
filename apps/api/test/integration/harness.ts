@@ -39,6 +39,7 @@ import roleMembersRoutes from '../../src/routes/role-members.js';
 import rolesRoutes from '../../src/routes/roles.js';
 import archiveRoutes from '../../src/routes/server-archive.js';
 import serverConfigRoutes from '../../src/routes/server-configs.js';
+import forceStopRoutes from '../../src/routes/server-force-stop.js';
 import serverInstallRoutes from '../../src/routes/server-install.js';
 import serverLogsRoutes from '../../src/routes/server-logs.js';
 import serverSettingsRoutes from '../../src/routes/server-settings.js';
@@ -150,7 +151,7 @@ export interface FakeBridge {
   ) => Promise<{ container_id: string; status: 'started' }>;
   containerStart: (p: { name: string }) => Promise<{ status: string }>;
   containerStop: (p: { name: string; timeout_sec?: number }) => Promise<{ status: string }>;
-  containerRm: (p: { name: string }) => Promise<{ status: string }>;
+  containerRm: (p: { name: string; force?: boolean }) => Promise<{ status: string }>;
   containerLogsFollow: (
     p: { name: string; tail?: number },
     onStream: (frame: { id: string; stream: 'stdout' | 'stderr' | 'event'; data: unknown }) => void,
@@ -447,6 +448,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(serverSettingsRoutes);
   await app.register(archiveRoutes);
   await app.register(serverInstallRoutes);
+  await app.register(forceStopRoutes);
   await app.register(serverLogsRoutes);
   await app.register(serverConfigRoutes);
   await app.register(depotRoutes);

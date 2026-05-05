@@ -47,6 +47,7 @@ import roleMembersRoutes from './routes/role-members.js';
 import rolesRoutes from './routes/roles.js';
 import archiveRoutes from './routes/server-archive.js';
 import serverConfigRoutes from './routes/server-configs.js';
+import forceStopRoutes from './routes/server-force-stop.js';
 import serverInstallRoutes from './routes/server-install.js';
 import serverLogsRoutes from './routes/server-logs.js';
 import serverSettingsRoutes from './routes/server-settings.js';
@@ -120,6 +121,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(serverSettingsRoutes);
   await app.register(archiveRoutes);
   await app.register(serverInstallRoutes);
+  await app.register(forceStopRoutes);
   await app.register(serverLogsRoutes);
   await app.register(serverConfigRoutes);
   await app.register(depotRoutes);

@@ -149,6 +149,7 @@ export interface ContainerRunResult {
 export interface ContainerControlParams {
   name: string;
   timeout_sec?: number;
+  force?: boolean;
 }
 
 export interface ContainerInspectResult {
