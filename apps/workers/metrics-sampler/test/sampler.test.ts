@@ -6,7 +6,11 @@ interface XaddCall {
   entries: Array<[string, string]>;
 }
 
-function makeRedis(): { calls: XaddCall[]; xadd: (...a: unknown[]) => Promise<string> } {
+function makeRedis(getResponses?: Record<string, string | null>): {
+  calls: XaddCall[];
+  xadd: (...a: unknown[]) => Promise<string>;
+  get: (key: string) => Promise<string | null>;
+} {
   const calls: XaddCall[] = [];
   return {
     calls,
@@ -20,6 +24,7 @@ function makeRedis(): { calls: XaddCall[]; xadd: (...a: unknown[]) => Promise<st
       calls.push({ stream: String(stream), entries });
       return '0-0';
     },
+    get: async (key: string) => getResponses?.[key] ?? null,
   };
 }
 
@@ -205,6 +210,7 @@ describe('collectContainerMetrics', () => {
         xaddArgs.push(args);
         return '0-0';
       },
+      get: async () => null,
     };
     const bridge = {
       containerStats: vi.fn(async () => ({
@@ -221,5 +227,66 @@ describe('collectContainerMetrics', () => {
     expect(xaddArgs[0][1]).toBe('MAXLEN');
     expect(xaddArgs[0][2]).toBe('~');
     expect(xaddArgs[0][3]).toBe('2880');
+  });
+
+  it('includes tickrate when rcon:status contains tickrate_rt', async () => {
+    const redis = makeRedis({
+      'rcon:status:s1': JSON.stringify({ state: 'connected', tickrate_rt: 48.5 }),
+    });
+    const bridge = {
+      containerStats: vi.fn(async () => ({
+        found: true,
+        cpu_percent: 10,
+        mem_used_bytes: 500,
+        mem_percent: 5,
+        pids: 2,
+        sampled_at: '2026-04-25T00:00:00Z',
+      })),
+    };
+    await collectContainerMetrics(bridge as never, redis as never, ['s1'], log);
+    expect(redis.calls.length).toBe(1);
+    const parsed = JSON.parse(redis.calls[0].entries.find(([k]) => k === 'v')?.[1] ?? '');
+    expect(parsed.tickrate).toBe(48.5);
+  });
+
+  it('tickrate is undefined when rcon:status has no tickrate_rt', async () => {
+    const redis = makeRedis({
+      'rcon:status:s1': JSON.stringify({ state: 'connected' }),
+    });
+    const bridge = {
+      containerStats: vi.fn(async () => ({
+        found: true,
+        cpu_percent: 10,
+        mem_used_bytes: 500,
+        mem_percent: 5,
+        pids: 2,
+        sampled_at: '2026-04-25T00:00:00Z',
+      })),
+    };
+    await collectContainerMetrics(bridge as never, redis as never, ['s1'], log);
+    const parsed = JSON.parse(redis.calls[0].entries.find(([k]) => k === 'v')?.[1] ?? '');
+    expect(parsed.tickrate).toBeUndefined();
+  });
+
+  it('tickrate is undefined when redis.get fails', async () => {
+    const redis = makeRedis();
+    // Override get to throw
+    redis.get = async () => {
+      throw new Error('redis down');
+    };
+    const bridge = {
+      containerStats: vi.fn(async () => ({
+        found: true,
+        cpu_percent: 10,
+        mem_used_bytes: 500,
+        mem_percent: 5,
+        pids: 2,
+        sampled_at: '2026-04-25T00:00:00Z',
+      })),
+    };
+    await collectContainerMetrics(bridge as never, redis as never, ['s1'], log);
+    expect(redis.calls.length).toBe(1);
+    const parsed = JSON.parse(redis.calls[0].entries.find(([k]) => k === 'v')?.[1] ?? '');
+    expect(parsed.tickrate).toBeUndefined();
   });
 });

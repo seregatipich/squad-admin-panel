@@ -34,7 +34,7 @@ export async function getRunningServerIds(redis: Pick<Redis, 'scan' | 'get'>): P
 
 export async function collectContainerMetrics(
   bridge: Pick<BridgeClient, 'containerStats'>,
-  redis: Pick<Redis, 'xadd'>,
+  redis: Pick<Redis, 'xadd' | 'get'>,
   serverIds: string[],
   log: Logger,
 ): Promise<void> {
@@ -42,6 +42,20 @@ export async function collectContainerMetrics(
     try {
       const stats = await bridge.containerStats({ name: `squad-${serverId}` });
       if (!stats.found) continue;
+
+      let tickrate: number | undefined;
+      try {
+        const rconRaw = await redis.get(`rcon:status:${serverId}`);
+        if (rconRaw) {
+          const parsed = JSON.parse(rconRaw);
+          if (typeof parsed.tickrate_rt === 'number') {
+            tickrate = parsed.tickrate_rt;
+          }
+        }
+      } catch {
+        /* non-critical */
+      }
+
       await redis.xadd(
         `container:metrics:${serverId}`,
         'MAXLEN',
@@ -55,6 +69,7 @@ export async function collectContainerMetrics(
           mem_percent: stats.mem_percent,
           pids: stats.pids,
           timestamp: stats.sampled_at,
+          tickrate,
         }),
       );
     } catch (err) {

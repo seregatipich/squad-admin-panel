@@ -15,6 +15,7 @@ export interface Target {
   host: string;
   port: number;
   queryPort: number;
+  tickrate?: number;
   password: string;
 }
 
@@ -90,6 +91,7 @@ class PerServerSupervisor {
   private onDisconnect?: () => void;
   private consecutivePollFails = 0;
   private consecutiveA2SFails = 0;
+  private consecutiveLowTick = 0;
 
   constructor(
     private readonly target: Target,
@@ -304,6 +306,34 @@ class PerServerSupervisor {
           next_layer: info?.next_layer ?? undefined,
           game_mode: info?.game_mode ?? undefined,
         });
+
+        if (typeof info?.tickrate === 'number') {
+          const configured = this.target.tickrate ?? 50;
+          const threshold = configured * 0.8;
+          if (info.tickrate < threshold) {
+            this.consecutiveLowTick++;
+            if (this.consecutiveLowTick >= 3) {
+              this.opts.log.warn(
+                {
+                  serverId: this.target.serverId,
+                  tickrate: info.tickrate,
+                  threshold,
+                  configured,
+                  consecutive_low: this.consecutiveLowTick,
+                },
+                'performance degraded: tickrate below threshold',
+              );
+              await this.emitEvent('performance.degraded', {
+                tickrate: info.tickrate,
+                threshold,
+                configured,
+                consecutive_low: this.consecutiveLowTick,
+              });
+            }
+          } else {
+            this.consecutiveLowTick = 0;
+          }
+        }
       } catch (err) {
         this.consecutivePollFails += 1;
         const reason = (err as Error).message;

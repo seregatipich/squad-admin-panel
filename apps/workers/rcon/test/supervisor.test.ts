@@ -27,6 +27,8 @@ const target: Target = {
   serverId: 'srv-001',
   host: '127.0.0.1',
   port: 29100,
+  queryPort: 27165,
+  tickrate: 50,
   password: 'testpass',
 };
 
