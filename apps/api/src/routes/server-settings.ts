@@ -1,9 +1,10 @@
-import { serverSettings, servers } from '@squad/db/schema';
+import { serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import { serverPatch, serverSettingsUpdate } from '@squad/shared-types';
 import { and, eq, isNull, ne, or } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { encrypt, serialize } from '../lib/crypto.js';
 
 const idParam = z.object({ id: z.string().uuid() });
 
@@ -260,6 +261,22 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
       if (body.tags !== undefined) updateSet.tags = body.tags;
 
       await app.db.update(servers).set(updateSet).where(eq(servers.id, id));
+
+      if (body.license_id !== undefined || body.license_key !== undefined) {
+        const credUpdate: Record<string, unknown> = {};
+        if (body.license_id !== undefined) credUpdate.licenseId = body.license_id;
+        if (body.license_key !== undefined) {
+          credUpdate.licenseKeyEncrypted = body.license_key
+            ? serialize(encrypt(app.encryptionKey, body.license_key))
+            : null;
+        }
+        if (Object.keys(credUpdate).length > 0) {
+          await app.db
+            .update(serverCredentials)
+            .set(credUpdate)
+            .where(eq(serverCredentials.serverId, id));
+        }
+      }
 
       const updated = await app.db.query.servers.findFirst({
         where: eq(servers.id, id),

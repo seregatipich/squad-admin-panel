@@ -1,6 +1,7 @@
 'use client';
 
 import { use, useCallback, useEffect, useState } from 'react';
+import { TagInput } from '@/components/TagInput';
 
 interface Settings {
   server_id: string;
@@ -35,6 +36,9 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const [saved, setSaved] = useState(false);
 
   const [draft, setDraft] = useState<Partial<Settings>>({});
+  const [tags, setTags] = useState<string[]>([]);
+  const [licenseId, setLicenseId] = useState('');
+  const [licenseKey, setLicenseKey] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -46,6 +50,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         display_name: data.server.display_name,
         tags: data.server.tags ?? [],
       });
+      setTags(data.server.tags ?? []);
       setSettings(data.settings);
       setDraft({});
     } catch (e) {
@@ -90,6 +95,54 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     }
   }
 
+  async function saveLicense() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await fetch(`/api/v1/servers/${id}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ license_id: licenseId, license_key: licenseKey }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.message ?? body.error ?? `HTTP ${r.status}`);
+      }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function detachLicense() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await fetch(`/api/v1/servers/${id}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ license_id: null, license_key: null }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.message ?? body.error ?? `HTTP ${r.status}`);
+      }
+      setLicenseId('');
+      setLicenseKey('');
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!settings) {
     return <div className="p-6 text-neutral-500">Загрузка...</div>;
   }
@@ -115,6 +168,28 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
           Сохранено
         </div>
       )}
+
+      <section className="mb-6">
+        <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
+          Теги
+        </h2>
+        <TagInput
+          tags={tags}
+          onChange={async (newTags) => {
+            setTags(newTags);
+            try {
+              await fetch(`/api/v1/servers/${id}`, {
+                method: 'PATCH',
+                credentials: 'include',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ tags: newTags }),
+              });
+            } catch {
+              /* best effort */
+            }
+          }}
+        />
+      </section>
 
       <section className="mb-6">
         <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
@@ -218,6 +293,52 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
               className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
             />
           </label>
+        </div>
+      </section>
+
+      <section className="mb-6">
+        <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
+          Лицензия
+        </h2>
+        <p className="mb-2 text-xs text-neutral-500">Требуется перезапуск сервера</p>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="text-xs text-neutral-500">License ID</span>
+            <input
+              value={licenseId}
+              onChange={(e) => setLicenseId(e.target.value)}
+              placeholder="Не указан"
+              className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs text-neutral-500">License Key</span>
+            <input
+              type="password"
+              value={licenseKey}
+              onChange={(e) => setLicenseKey(e.target.value)}
+              placeholder="Не указан"
+              className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
+            />
+          </label>
+        </div>
+        <div className="mt-2 flex gap-2">
+          <button
+            type="button"
+            disabled={!licenseId || !licenseKey || busy}
+            onClick={saveLicense}
+            className="rounded bg-sky-700 px-3 py-1.5 text-xs text-white hover:bg-sky-600 disabled:opacity-40"
+          >
+            Привязать
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={detachLicense}
+            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-300 hover:border-red-700 hover:text-red-300"
+          >
+            Отвязать
+          </button>
         </div>
       </section>
 

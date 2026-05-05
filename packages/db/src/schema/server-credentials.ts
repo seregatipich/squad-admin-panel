@@ -17,6 +17,7 @@ export const serverCredentials = pgTable('server_credentials', {
   rconHost: text('rcon_host'),
   rconPort: integer('rcon_port').notNull(),
   rconPasswordEncrypted: bytea('rcon_password_encrypted').notNull(),
+  licenseId: text('license_id'),
   licenseKeyEncrypted: bytea('license_key_encrypted'),
   keyVersion: integer('key_version').notNull().default(1),
 });
