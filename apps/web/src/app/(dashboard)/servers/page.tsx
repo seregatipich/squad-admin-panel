@@ -14,6 +14,7 @@ interface Server {
   rcon_state: string | null;
   player_count: number | null;
   last_poll_at: string | null;
+  tags?: string[];
 }
 
 interface ServersResponse {
@@ -28,6 +29,7 @@ export default function ServersPage() {
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [actingId, setActingId] = useState<string | null>(null);
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   useEffect(() => {
@@ -99,17 +101,26 @@ export default function ServersPage() {
   );
   useLiveSubscription('rcon.status', onRcon);
 
+  const allTags = useMemo(() => {
+    if (!data) return [];
+    return Array.from(new Set(data.items.flatMap((s) => s.tags ?? [])));
+  }, [data]);
+
   const rows = useMemo(() => {
     if (!data) return [];
+    let filtered = data.items;
+    if (tagFilter) {
+      filtered = filtered.filter((s) => (s.tags ?? []).includes(tagFilter));
+    }
     const needle = q.trim().toLowerCase();
-    if (!needle) return data.items;
-    return data.items.filter(
+    if (!needle) return filtered;
+    return filtered.filter(
       (s) =>
         s.display_name.toLowerCase().includes(needle) ||
         s.slug.toLowerCase().includes(needle) ||
         s.id.toLowerCase().includes(needle),
     );
-  }, [data, q]);
+  }, [data, q, tagFilter]);
 
   async function runAction(id: string, action: 'start' | 'stop' | 'restart') {
     setActingId(`${id}:${action}`);
@@ -147,13 +158,29 @@ export default function ServersPage() {
         <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{err}</div>
       ) : null}
 
-      <input
-        type="search"
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="Поиск по имени, slug или id…"
-        className="w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-sm"
-      />
+      <div className="flex items-center gap-2">
+        <input
+          type="search"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Поиск по имени, slug или id…"
+          className="flex-1 rounded border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-sm"
+        />
+        {allTags.length > 0 && (
+          <select
+            value={tagFilter ?? ''}
+            onChange={(e) => setTagFilter(e.target.value || null)}
+            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm"
+          >
+            <option value="">Все теги</option>
+            {allTags.map((tag) => (
+              <option key={tag} value={tag}>
+                {tag}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
 
       {rows.length === 0 ? (
         <div className="rounded border border-neutral-800 bg-neutral-950 p-6 text-center text-neutral-500 text-sm">
@@ -186,6 +213,18 @@ export default function ServersPage() {
                       {row.display_name}
                     </Link>
                     <div className="text-[11px] text-neutral-500 font-mono">{row.slug}</div>
+                    {(row.tags ?? []).length > 0 && (
+                      <div className="mt-0.5 flex flex-wrap gap-1">
+                        {(row.tags ?? []).map((tag) => (
+                          <span
+                            key={tag}
+                            className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </td>
                   <td className="p-2 font-mono text-sm">
                     {row.player_count == null ? '—' : row.player_count}
