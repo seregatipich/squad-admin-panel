@@ -5,7 +5,7 @@
 | Tier | Location | Status |
 |---|---|---|
 | Property | `apps/web/test/property/` | Active. `@fast-check/vitest` fuzz tests for pure utility modules. |
-| Unit | `apps/web/src/lib/*.test.ts`, `apps/web/test/*.test.ts` | Active. Vitest unit tests for `api`, `dal`, `format`, `host-health`, `live-bus`, `use-live-bus`, `ws-backoff`, and `middleware`. |
+| Unit | `apps/web/src/lib/*.test.ts`, `apps/web/test/*.test.ts`, `apps/web/src/app/**/*.test.tsx` | Active. Vitest unit tests for `api`, `dal`, `format`, `host-health`, `live-bus`, `use-live-bus`, `ws-backoff`, middleware, and page component validation. |
 | E2E | `apps/web/e2e/` | Active. 7 critical-page specs + live-refresh + server-detail + server-logs-resilience suites. Run with `pnpm --filter @squad/web test:e2e` against a live stack. |
 
 ## Unit tests
@@ -92,7 +92,8 @@ The `seedOwner` helper in `helpers.ts` creates test isolation without Steam OAut
 - Live log viewer WebSocket on a running server.
 - RCON send flow.
 - Audit log export.
-- Settings / API tokens pages.
+- Settings page E2E save → verify round-trip (covered by unit component-validation test; E2E pending).
+- API tokens pages.
 - Archive / restore wizard UI flow (covered at the API layer by `server-delete-restore-lifecycle.e2e.test.ts`; UI flow remains a manual smoke until a Playwright spec lands).
 
 These are covered at the API layer in `apps/api/test/e2e/install-lifecycle.e2e.test.ts` and `apps/api/test/e2e/server-delete-restore-lifecycle.e2e.test.ts`.

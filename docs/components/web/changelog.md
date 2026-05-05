@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-05-05 — Server settings editor page
+
+### Added
+
+- `apps/web/src/app/(dashboard)/servers/[id]/settings/page.tsx` — new settings editor page at `/servers/:id/settings` with three sections: Сеть (network ports, disabled when server is running), Игра (maxPlayers, tickrate), and Ресурсы (memory, CPU, IO resource limits). Fetches from `GET /api/v1/servers/:id`, saves via `PUT /api/v1/servers/:id/settings`.
+- "Настройки →" link added to the server detail page header alongside existing "Конфиги →" and "События →" links.
+- `apps/web/src/app/(dashboard)/servers/[id]/settings/page.test.tsx` — unit test validating the component export.
+
 ## 2026-05-04 — Unit test coverage for lib utilities and middleware
 
 ### Added

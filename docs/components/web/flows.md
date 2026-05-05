@@ -164,6 +164,20 @@ If the first-owner claim already happened and the user has no role, the API retu
 
 ---
 
+## Settings editor (`/servers/:id/settings`)
+
+1. Admin opens `/servers/:id` and clicks "Настройки →" in the header action links.
+2. Browser navigates to `/servers/:id/settings`.
+3. `GET /api/v1/servers/:id` fires; the response populates `serverInfo` (status, display_name, tags) and `settings` (ports, game params, resource limits).
+4. The page renders three sections:
+   - **Сеть** — `game_port`, `query_port`, `beacon_port`, `rcon_port`. All four inputs are disabled when `isRunning` is true (server status is not `stopped`, `ready`, or `pending`). An amber warning "Остановите сервер для изменения портов" appears.
+   - **Игра** — `max_players` (1–100), `tickrate` (10–60).
+   - **Ресурсы** — `memory_high_mb`, `memory_max_mb`, `cpu_weight`, `io_weight`, `niceness` (all nullable number inputs with "Нет лимита" placeholder), `cpu_affinity` (nullable text input with "Нет ограничения" placeholder). A note reads "Применяется при следующем запуске".
+5. Editing any field adds it to a `draft` object; the "Сохранить" button is disabled until `draft` is non-empty.
+6. On save: `PUT /api/v1/servers/:id/settings` fires with only the changed fields. On success the response replaces the local `settings` state, the draft resets, and a green "Сохранено" banner appears for 2 seconds. On error an error banner shows the API message.
+
+---
+
 ## Config editor — Editor tab
 
 1. Admin opens `/servers/:id/configs` (requires `config:view`).
