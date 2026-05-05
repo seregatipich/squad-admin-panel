@@ -93,6 +93,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             player_count: playerCount,
             last_poll_at: lastPollAt,
             a2s_status: a2sRaw ? (JSON.parse(a2sRaw) as unknown) : null,
+            crash_loop: r.status === 'failed',
           };
         }),
       );
@@ -230,6 +231,10 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             }
           : null;
 
+      const crashRaw = await app.redis.zrevrange(`crashes:${row.id}`, 0, 9);
+      const crash_history = crashRaw.map((c: string) => JSON.parse(c) as unknown);
+      const crash_loop = row.status === 'failed';
+
       return {
         server: {
           id: row.id,
@@ -262,6 +267,8 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         a2s_status,
         container,
         host,
+        crash_history,
+        crash_loop,
       };
     },
   );

@@ -32,6 +32,8 @@ export const RECONCILE_INTERVAL_MS = 4_000;
 export const STUCK_AFTER_MS = 90_000;
 export const TICK_BUDGET_MS = 12_000;
 export const STALE_INSTALL_AFTER_MS = 30 * 60_000;
+export const CRASH_LOOP_THRESHOLD = 3;
+export const CRASH_LOOP_WINDOW_MS = 5 * 60_000; // 5 minutes
 
 // Rows in these statuses are owned by docker — the reconciler reads
 // container_inspect and writes back the docker-derived state. `installing`
@@ -45,6 +47,40 @@ export const TRANSIENT_STATES = new Set(['starting', 'stopping', 'running', 'sto
 // (separate code path) flips it to `failed` after STALE_INSTALL_AFTER_MS,
 // but ops still want visibility on rows installing for >90s.
 export const STUCK_CANDIDATE_STATES = new Set(['starting', 'stopping', 'installing']);
+
+export interface CrashInfo {
+  restart_count: number;
+  oom_killed: boolean;
+  exit_code: number;
+  finished_at: string;
+}
+
+export function detectCrash(
+  serverId: string,
+  inspect: { restart_count: number; oom_killed?: boolean; exit_code: number; finished_at: string },
+  knownRestartCounts: Map<string, number>,
+): CrashInfo | null {
+  const prev = knownRestartCounts.get(serverId);
+  knownRestartCounts.set(serverId, inspect.restart_count);
+  if (prev === undefined) return null; // first observation sets baseline
+  if (inspect.restart_count <= prev) return null; // no new restart
+  return {
+    restart_count: inspect.restart_count,
+    oom_killed: inspect.oom_killed ?? false,
+    exit_code: inspect.exit_code,
+    finished_at: inspect.finished_at,
+  };
+}
+
+export function detectCrashLoop(
+  crashes: Array<{ timestamp: number }>,
+  windowMs: number,
+  threshold: number,
+): boolean {
+  const now = Date.now();
+  const recent = crashes.filter((c) => now - c.timestamp < windowMs);
+  return recent.length >= threshold;
+}
 
 export type DockerStateLabel =
   | 'running'
@@ -115,9 +151,10 @@ interface TickDeps {
   bridge: Pick<BridgeClient, 'containerInspect'>;
   liveBus?: LiveBus;
   log: Pick<FastifyBaseLogger, 'info' | 'warn' | 'error' | 'debug'>;
-  redis: Pick<Redis, 'get'>;
+  redis: Pick<Redis, 'get' | 'zadd' | 'zremrangebyscore' | 'zrangebyscore'>;
   diag: Pick<Diag, 'emit'>;
   bridgeFailures: Map<string, number>;
+  knownRestartCounts: Map<string, number>;
   state: {
     lastTickAt: number | null;
     lastTickDurationMs: number | null;
@@ -128,7 +165,7 @@ interface TickDeps {
 }
 
 async function reconcileServer(deps: TickDeps, row: { id: string; status: string }): Promise<void> {
-  const { db, bridge, liveBus, log, bridgeFailures } = deps;
+  const { db, bridge, liveBus, log, bridgeFailures, knownRestartCounts, redis } = deps;
   let res: Awaited<ReturnType<BridgeClient['containerInspect']>>;
   try {
     res = await bridge.containerInspect({ name: `squad-${row.id}` });
@@ -182,6 +219,56 @@ async function reconcileServer(deps: TickDeps, row: { id: string; status: string
   if (row.status === 'running' && mapped.status === 'stopped') {
     await emitContainerExitDiag(deps, row.id, res);
   }
+
+  // Crash detection: check if restart_count incremented since last observation.
+  const crashInfo = detectCrash(
+    row.id,
+    {
+      restart_count: res.restart_count,
+      oom_killed: res.oom_killed,
+      exit_code: res.exit_code,
+      finished_at: res.finished_at ?? '',
+    },
+    knownRestartCounts,
+  );
+  if (crashInfo) {
+    const wasRequested = await redis.get(`stop:requested:${row.id}`);
+    if (!wasRequested) {
+      log.warn({ serverId: row.id, ...crashInfo }, 'reconciler: crash detected');
+
+      const crashEntry = JSON.stringify({ ...crashInfo, timestamp: new Date().toISOString() });
+      await redis.zadd(`crashes:${row.id}`, String(Date.now()), crashEntry);
+      await redis.zremrangebyscore(`crashes:${row.id}`, '-inf', String(Date.now() - 86_400_000));
+
+      liveBus?.publish({
+        type: 'server.status',
+        ts: new Date().toISOString(),
+        data: { server_id: row.id, status: row.status, source: 'crash_detected' },
+      });
+
+      // Check for crash loop
+      const crashScores = await redis.zrangebyscore(
+        `crashes:${row.id}`,
+        String(Date.now() - CRASH_LOOP_WINDOW_MS),
+        '+inf',
+      );
+      if (crashScores.length >= CRASH_LOOP_THRESHOLD) {
+        log.error(
+          { serverId: row.id, count: crashScores.length },
+          'reconciler: crash loop detected',
+        );
+        await db
+          .update(servers)
+          .set({ status: 'failed', updatedAt: new Date() })
+          .where(eq(servers.id, row.id));
+        liveBus?.publish({
+          type: 'server.status',
+          ts: new Date().toISOString(),
+          data: { server_id: row.id, status: 'failed', source: 'crash_loop' },
+        });
+      }
+    }
+  }
 }
 
 async function emitContainerExitDiag(
@@ -234,6 +321,7 @@ export default fp(async (app) => {
   let inFlight = false;
   let consecutiveTickErrors = 0;
   const bridgeFailures = new Map<string, number>();
+  const knownRestartCounts = new Map<string, number>();
   const tickState: TickDeps['state'] = {
     lastTickAt: null,
     lastTickDurationMs: null,
@@ -251,6 +339,7 @@ export default fp(async (app) => {
       redis: app.redis,
       diag: app.diag,
       bridgeFailures,
+      knownRestartCounts,
       state: tickState,
     };
   }
