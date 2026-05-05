@@ -14,6 +14,7 @@ vi.mock('@/lib/dal', () => ({
   }),
 }));
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn().mockResolvedValue([]) }));
+vi.mock('@/components/DepotUpdateModal', () => ({ DepotUpdateModal: () => null }));
 vi.mock('@/components/DiskBreakdownModal', () => ({ DiskBreakdownModal: () => null }));
 vi.mock('@/components/DockerPruneButton', () => ({ DockerPruneButton: () => null }));
 vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));

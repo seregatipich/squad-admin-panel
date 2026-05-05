@@ -6,7 +6,10 @@ vi.mock('next/navigation', () => ({
   usePathname: vi.fn(() => '/servers/abc'),
   useSearchParams: vi.fn(() => new URLSearchParams()),
 }));
+vi.mock('@/components/A2SIndicator', () => ({ A2SIndicator: () => null }));
 vi.mock('@/components/AdminsCfgDriftBanner', () => ({ AdminsCfgDriftBanner: () => null }));
+vi.mock('@/components/CrashBadge', () => ({ CrashBadge: () => null }));
+vi.mock('@/components/ForceStopDialog', () => ({ ForceStopDialog: () => null }));
 vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 vi.mock('@/components/LogConsole', () => ({ LogConsole: () => null }));
 vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));

@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { DepotUpdateModal } from '@/components/DepotUpdateModal';
 import { DiskBreakdownModal } from '@/components/DiskBreakdownModal';
 import { DockerPruneButton } from '@/components/DockerPruneButton';
 import { LiveIndicator } from '@/components/LiveIndicator';
@@ -186,6 +187,7 @@ export default function DashboardPage() {
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
   const [diskBreakdown, setDiskBreakdown] = useState<DiskBreakdown | null>(null);
   const [diskModalOpen, setDiskModalOpen] = useState(false);
+  const [depotModalOpen, setDepotModalOpen] = useState(false);
 
   const load = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -281,14 +283,24 @@ export default function DashboardPage() {
     <div className="space-y-5">
       <header className="flex items-center justify-between gap-3 border-b border-neutral-900 pb-4">
         <h1 className="text-2xl font-semibold tracking-tight">Дашборд</h1>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:border-sky-700 hover:text-sky-300"
-          title="Обновить сейчас"
-        >
-          ↻ Обновить
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setDepotModalOpen(true)}
+            className="rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:border-sky-700 hover:text-sky-300"
+            title="Обновить Squad через SteamCMD"
+          >
+            Обновить Squad
+          </button>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:border-sky-700 hover:text-sky-300"
+            title="Обновить сейчас"
+          >
+            ↻ Обновить
+          </button>
+        </div>
       </header>
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -358,6 +370,26 @@ export default function DashboardPage() {
         onOpenChange={setDiskModalOpen}
         initialData={diskBreakdown}
         onRefresh={refreshDiskBreakdown}
+      />
+
+      <DepotUpdateModal
+        open={depotModalOpen}
+        onOpenChange={setDepotModalOpen}
+        servers={servers.map((s) => ({
+          id: s.id,
+          display_name: s.display_name,
+          status: s.status,
+          player_count: s.player_count ?? 0,
+        }))}
+        onStart={async (serverIds) => {
+          await fetch('/api/v1/depot/update', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ stop_server_ids: serverIds }),
+          });
+          void load();
+        }}
       />
     </div>
   );
@@ -828,14 +860,14 @@ function DiskCard({
   const otherPct = diskBreakdown ? Math.max(0, usedPct - panelPct) : 0;
   const splitSegments = diskBreakdown
     ? [
-        { widthPct: panelPct, className: 'bg-purple-500' },
         { widthPct: otherPct, className: 'bg-purple-300' },
+        { widthPct: panelPct, className: 'bg-purple-500' },
       ]
     : undefined;
   const legend = diskBreakdown
     ? [
-        { label: 'Панель', pct: panelPct, swatchClassName: 'bg-purple-500' },
         { label: 'Прочее', pct: otherPct, swatchClassName: 'bg-purple-300' },
+        { label: 'Панель', pct: panelPct, swatchClassName: 'bg-purple-500' },
       ]
     : undefined;
   return (

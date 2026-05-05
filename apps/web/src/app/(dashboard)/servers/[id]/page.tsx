@@ -2,7 +2,10 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
+import { A2SIndicator } from '@/components/A2SIndicator';
 import { AdminsCfgDriftBanner } from '@/components/AdminsCfgDriftBanner';
+import { CrashBadge } from '@/components/CrashBadge';
+import { ForceStopDialog } from '@/components/ForceStopDialog';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
 import { useLiveSubscription } from '@/lib/use-live-bus';
@@ -58,12 +61,22 @@ interface HostInfo {
   hostname: string;
 }
 
+interface A2sStatus {
+  visible: boolean;
+  server_name?: string;
+  latency_ms?: number;
+  reason?: string;
+}
+
 interface ServerResponse {
   server: ServerRow;
   settings: ServerSettings | null;
   rcon_status: RconStatus;
   container: ContainerRuntime | null;
   host: HostInfo | null;
+  a2s_status?: A2sStatus | null;
+  crash_loop?: boolean;
+  crash_count?: number;
 }
 
 const POLL_INTERVAL_MS = 3000;
@@ -81,6 +94,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
     reason: string | null;
     retryInMs: number | null;
   } | null>(null);
+  const [forceStopOpen, setForceStopOpen] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<number>(() => Date.now());
   const [now, setNow] = useState<number>(() => Date.now());
   const wsRef = useRef<WebSocket | null>(null);
@@ -315,6 +329,8 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-semibold">{server.display_name}</h1>
             <StatusBadge status={server.status} />
+            <A2SIndicator a2sStatus={data.a2s_status ?? null} serverStatus={server.status} />
+            <CrashBadge crashLoop={data.crash_loop ?? false} crashCount={data.crash_count ?? 0} />
           </div>
           <div className="flex items-center gap-3 text-xs text-neutral-500">
             <span className="font-mono">{server.id}</span>
@@ -351,6 +367,12 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
             Настройки →
           </Link>
           <Link
+            href={`/servers/${server.id}/monitoring`}
+            className="text-xs text-sky-400 hover:text-sky-300"
+          >
+            Мониторинг →
+          </Link>
+          <Link
             href={`/servers/${server.id}/events`}
             className="text-xs text-sky-400 hover:text-sky-300"
           >
@@ -364,6 +386,12 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       ) : null}
 
       <AdminsCfgDriftBanner serverId={server.id} />
+
+      {data.crash_loop && (
+        <div className="mb-4 rounded border border-red-900 bg-red-950 p-3 text-sm text-red-300">
+          Сервер в цикле аварий — автоперезапуск отключён. Проверьте логи и запустите вручную.
+        </div>
+      )}
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat
@@ -450,13 +478,24 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           loading={acting === 'start'}
           tone="sky"
         />
-        <ActionButton
-          label="Стоп (graceful)"
-          onClick={() => action('stop')}
-          disabled={!canStop || !!acting}
-          loading={acting === 'stop'}
-          tone="amber"
-        />
+        <div className="inline-flex">
+          <ActionButton
+            label="Стоп (graceful)"
+            onClick={() => action('stop')}
+            disabled={!canStop || !!acting}
+            loading={acting === 'stop'}
+            tone="amber"
+          />
+          <button
+            type="button"
+            disabled={!canStop || !!acting}
+            onClick={() => setForceStopOpen(true)}
+            className="rounded-l-none rounded-r border-l border-amber-800 bg-amber-600 px-2 py-2 text-sm text-white hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Принудительная остановка"
+          >
+            ▾
+          </button>
+        </div>
         <ActionButton
           label="Рестарт"
           onClick={() => action('restart')}
@@ -506,6 +545,20 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           }
         />
       </section>
+
+      <ForceStopDialog
+        open={forceStopOpen}
+        onOpenChange={setForceStopOpen}
+        serverName={data?.server.display_name ?? ''}
+        onConfirm={async () => {
+          const r = await fetch(`/api/v1/servers/${id}/force-stop`, {
+            method: 'POST',
+            credentials: 'include',
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          void refresh();
+        }}
+      />
     </div>
   );
 }
