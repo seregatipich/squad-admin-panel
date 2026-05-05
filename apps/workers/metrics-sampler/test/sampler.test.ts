@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { runSampler } from '../src/sampler.js';
+import { collectContainerMetrics, getRunningServerIds, runSampler } from '../src/sampler.js';
 
 interface XaddCall {
   stream: string;
@@ -87,5 +87,139 @@ describe('runSampler', () => {
     await vi.advanceTimersByTimeAsync(305);
     stop();
     expect(redis.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('getRunningServerIds', () => {
+  function makeScanRedis(data: Record<string, string>) {
+    const keys = Object.keys(data);
+    return {
+      scan: async (cursor: string | number, ..._args: unknown[]): Promise<[string, string[]]> => {
+        // Return all keys on first call, then '0' cursor to stop
+        if (String(cursor) === '0') return ['0', keys];
+        return ['0', []];
+      },
+      get: async (key: string): Promise<string | null> => data[key] ?? null,
+    };
+  }
+
+  it('returns IDs for connected/connecting servers', async () => {
+    const redis = makeScanRedis({
+      'rcon:status:aaa': JSON.stringify({ state: 'connected' }),
+      'rcon:status:bbb': JSON.stringify({ state: 'connecting' }),
+    });
+    const ids = await getRunningServerIds(redis as never);
+    expect(ids.sort()).toEqual(['aaa', 'bbb']);
+  });
+
+  it('skips servers with other states', async () => {
+    const redis = makeScanRedis({
+      'rcon:status:aaa': JSON.stringify({ state: 'connected' }),
+      'rcon:status:bbb': JSON.stringify({ state: 'not_polled' }),
+      'rcon:status:ccc': JSON.stringify({ state: 'disconnected' }),
+    });
+    const ids = await getRunningServerIds(redis as never);
+    expect(ids).toEqual(['aaa']);
+  });
+
+  it('handles empty keys result', async () => {
+    const redis = makeScanRedis({});
+    const ids = await getRunningServerIds(redis as never);
+    expect(ids).toEqual([]);
+  });
+
+  it('skips malformed JSON values', async () => {
+    const redis = makeScanRedis({
+      'rcon:status:aaa': '{bad json',
+      'rcon:status:bbb': JSON.stringify({ state: 'connected' }),
+    });
+    const ids = await getRunningServerIds(redis as never);
+    expect(ids).toEqual(['bbb']);
+  });
+});
+
+describe('collectContainerMetrics', () => {
+  const log = { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} } as never;
+
+  it('calls containerStats for each server ID and writes to stream', async () => {
+    const redis = makeRedis();
+    const bridge = {
+      containerStats: vi.fn(async () => ({
+        found: true,
+        cpu_percent: 12.5,
+        mem_used_bytes: 1_000_000,
+        mem_percent: 25.0,
+        pids: 10,
+        sampled_at: '2026-04-25T00:00:00Z',
+      })),
+    };
+    await collectContainerMetrics(bridge as never, redis as never, ['s1', 's2'], log);
+    expect(bridge.containerStats).toHaveBeenCalledTimes(2);
+    expect(bridge.containerStats).toHaveBeenCalledWith({ name: 'squad-s1' });
+    expect(bridge.containerStats).toHaveBeenCalledWith({ name: 'squad-s2' });
+    expect(redis.calls.length).toBe(2);
+    expect(redis.calls[0].stream).toBe('container:metrics:s1');
+    expect(redis.calls[1].stream).toBe('container:metrics:s2');
+    const parsed = JSON.parse(redis.calls[0].entries.find(([k]) => k === 'v')?.[1] ?? '');
+    expect(parsed.cpu_percent).toBe(12.5);
+  });
+
+  it('skips servers where stats.found is false', async () => {
+    const redis = makeRedis();
+    const bridge = {
+      containerStats: vi.fn(async () => ({ found: false })),
+    };
+    await collectContainerMetrics(bridge as never, redis as never, ['s1'], log);
+    expect(bridge.containerStats).toHaveBeenCalledTimes(1);
+    expect(redis.calls.length).toBe(0);
+  });
+
+  it('continues on error for individual servers', async () => {
+    const redis = makeRedis();
+    let callCount = 0;
+    const bridge = {
+      containerStats: vi.fn(async () => {
+        callCount++;
+        if (callCount === 1) throw new Error('boom');
+        return {
+          found: true,
+          cpu_percent: 5,
+          mem_used_bytes: 500,
+          mem_percent: 10,
+          pids: 3,
+          sampled_at: '2026-04-25T00:00:00Z',
+        };
+      }),
+    };
+    await collectContainerMetrics(bridge as never, redis as never, ['s1', 's2'], log);
+    expect(bridge.containerStats).toHaveBeenCalledTimes(2);
+    // Only s2 wrote (s1 threw)
+    expect(redis.calls.length).toBe(1);
+    expect(redis.calls[0].stream).toBe('container:metrics:s2');
+  });
+
+  it('writes correct MAXLEN to stream', async () => {
+    const xaddArgs: unknown[][] = [];
+    const redis = {
+      xadd: async (...args: unknown[]) => {
+        xaddArgs.push(args);
+        return '0-0';
+      },
+    };
+    const bridge = {
+      containerStats: vi.fn(async () => ({
+        found: true,
+        cpu_percent: 1,
+        mem_used_bytes: 1,
+        mem_percent: 1,
+        pids: 1,
+        sampled_at: '2026-04-25T00:00:00Z',
+      })),
+    };
+    await collectContainerMetrics(bridge as never, redis as never, ['s1'], log);
+    // args: [streamKey, 'MAXLEN', '~', '2880', '*', 'v', json]
+    expect(xaddArgs[0][1]).toBe('MAXLEN');
+    expect(xaddArgs[0][2]).toBe('~');
+    expect(xaddArgs[0][3]).toBe('2880');
   });
 });

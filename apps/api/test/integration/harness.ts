@@ -42,6 +42,7 @@ import serverConfigRoutes from '../../src/routes/server-configs.js';
 import forceStopRoutes from '../../src/routes/server-force-stop.js';
 import serverInstallRoutes from '../../src/routes/server-install.js';
 import serverLogsRoutes from '../../src/routes/server-logs.js';
+import serverMetricsRoutes from '../../src/routes/server-metrics.js';
 import serverSettingsRoutes from '../../src/routes/server-settings.js';
 import serverRoutes from '../../src/routes/servers.js';
 import usersRoutes from '../../src/routes/users.js';
@@ -450,6 +451,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(serverInstallRoutes);
   await app.register(forceStopRoutes);
   await app.register(serverLogsRoutes);
+  await app.register(serverMetricsRoutes);
   await app.register(serverConfigRoutes);
   await app.register(depotRoutes);
   await app.register(playerRoutes);
