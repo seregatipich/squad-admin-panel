@@ -74,6 +74,7 @@ async function main() {
         status: servers.status,
         host: serverCredentials.rconHost,
         port: serverCredentials.rconPort,
+        queryPort: serverSettings.queryPort,
         blob: serverCredentials.rconPasswordEncrypted,
       })
       .from(servers)
@@ -90,6 +91,7 @@ async function main() {
           serverId: row.serverId,
           host: resolveRconHost(row.host),
           port: row.port,
+          queryPort: row.queryPort,
           password: decrypt(key, blob),
         });
       } catch (err) {

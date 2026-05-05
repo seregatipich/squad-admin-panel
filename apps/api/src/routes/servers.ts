@@ -86,11 +86,13 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
               // ignore
             }
           }
+          const a2sRaw = await app.redis.get(`a2s:status:${r.id}`);
           return {
             ...r,
             rcon_state: rconState,
             player_count: playerCount,
             last_poll_at: lastPollAt,
+            a2s_status: a2sRaw ? (JSON.parse(a2sRaw) as unknown) : null,
           };
         }),
       );
@@ -189,6 +191,8 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           rcon_status = { state: 'not_polled' };
         }
       }
+      const a2sRaw = await app.redis.get(`a2s:status:${row.id}`);
+      const a2s_status: unknown = a2sRaw ? (JSON.parse(a2sRaw) as unknown) : null;
 
       const name = containerName(row.id);
       const [inspect, host] = await Promise.all([
@@ -255,6 +259,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             }
           : null,
         rcon_status,
+        a2s_status,
         container,
         host,
       };
