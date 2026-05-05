@@ -503,6 +503,29 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           loading={acting === 'restart'}
           tone="neutral"
         />
+        {data?.server.status === 'stopped' && (
+          <button
+            type="button"
+            onClick={async () => {
+              setActing('update');
+              try {
+                const r = await fetch(`/api/v1/servers/${id}/update`, {
+                  method: 'POST',
+                  credentials: 'include',
+                });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+              } catch (e) {
+                setErr((e as Error).message);
+              } finally {
+                setActing(null);
+              }
+            }}
+            disabled={acting !== null}
+            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 hover:border-sky-700 hover:text-sky-300 disabled:opacity-40"
+          >
+            {acting === 'update' ? 'Обновление...' : 'Обновить игру'}
+          </button>
+        )}
         <div className="ml-auto">
           <DangerMenu
             disabled={!!acting}
