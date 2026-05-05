@@ -136,3 +136,16 @@ export const paginated = <T extends z.ZodTypeAny>(item: T) =>
       page_size: z.number().int().positive(),
     })
     .strict();
+
+export {
+  type A2SStatus,
+  a2sStatus,
+  type CrashEntry,
+  crashEntry,
+  type MetricsPoint,
+  metricsPoint,
+  type ServerPatch,
+  type ServerSettingsUpdate,
+  serverPatch,
+  serverSettingsUpdate,
+} from './server-settings.js';
