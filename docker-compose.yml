@@ -324,6 +324,18 @@ services:
     command: ['/bin/true']
     restart: 'no'
 
+  # The bridge launches one rnsquadjs sidecar per cutover server with
+  # `--pull never`, so the tag MUST already exist locally. Context is the repo
+  # root (not ./docker) because the Dockerfile COPYs `docker/rnsquadjs/...`.
+  rnsquadjs-image:
+    build:
+      context: .
+      dockerfile: docker/rnsquadjs.Dockerfile
+    image: squad-panel/rnsquadjs:latest
+    profiles: ['images']
+    command: ['/bin/true']
+    restart: 'no'
+
   backup:
     image: mazzolino/restic:latest
     restart: unless-stopped

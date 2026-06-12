@@ -428,7 +428,7 @@ exec node lib/index.js
 - [ ] **Step 2: Check the Dockerfile still applies** — `curl` may now be removable from the runtime stage; if `docker/rnsquadjs.Dockerfile` installs curl only for the entrypoint, drop it. Build:
 
 ```bash
-docker build -f docker/rnsquadjs.Dockerfile -t squad-panel/rnsquadjs:latest docker/rnsquadjs
+docker build -f docker/rnsquadjs.Dockerfile -t squad-panel/rnsquadjs:latest .
 docker run --rm --entrypoint cat squad-panel/rnsquadjs:latest /UPSTREAM_SHA
 ```
 
@@ -1245,7 +1245,7 @@ d /run/squad-panel/rnsquadjs 2775 root panel -
 pnpm turbo run typecheck && pnpm turbo run test
 cd apps/bridge && gofmt -l -s . && go vet ./... && go test -race -count=1 ./... && cd -
 cd docker/rnsquadjs/plugins/panelBridge && npx vitest run && npx tsc -p tsconfig.json --noEmit && cd -
-docker build -f docker/rnsquadjs.Dockerfile -t squad-panel/rnsquadjs:latest docker/rnsquadjs
+docker build -f docker/rnsquadjs.Dockerfile -t squad-panel/rnsquadjs:latest .
 pnpm exec biome check --no-errors-on-unmatched .
 ```
 
@@ -1289,7 +1289,7 @@ ls -ld /run/squad-panel/rnsquadjs   # expect drwxrwsr-x root panel
 
 ```bash
 docker compose build api && docker compose up -d api
-docker build -f docker/rnsquadjs.Dockerfile -t squad-panel/rnsquadjs:latest docker/rnsquadjs
+docker build -f docker/rnsquadjs.Dockerfile -t squad-panel/rnsquadjs:latest .
 ```
 
 - [ ] **Step 3: Live e2e**
