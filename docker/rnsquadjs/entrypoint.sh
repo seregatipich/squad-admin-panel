@@ -18,6 +18,8 @@ until [ -f "${LOG_FILE}" ]; do
   fi
   sleep 1
 done
-echo "[panelBridge] log file present; upstream SHA: $(cat /UPSTREAM_SHA 2>/dev/null || echo unknown)"
+UPSTREAM_SHA="$(cat /UPSTREAM_SHA 2>/dev/null || echo unknown)"
+export UPSTREAM_SHA
+echo "[panelBridge] log file present; upstream SHA: ${UPSTREAM_SHA}"
 
 exec node lib/index.js

@@ -1,9 +1,9 @@
 import type { EventEmitter } from 'node:events';
 import { Redis } from 'ioredis';
-import { mapEvent } from './eventMap.js';
-import { Heartbeat } from './heartbeat.js';
-import { RconUnixServer } from './rconUnixServer.js';
-import { type Mode, RedisPublisher } from './redisPublisher.js';
+import { mapEvent } from './eventMap';
+import { Heartbeat } from './heartbeat';
+import { RconUnixServer } from './rconUnixServer';
+import { type Mode, RedisPublisher } from './redisPublisher';
 
 export interface PanelBridgeContext {
   serverId: string;

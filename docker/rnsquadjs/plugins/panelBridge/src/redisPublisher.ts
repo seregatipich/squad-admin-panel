@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { EventEnvelope } from './eventMap.js';
+import type { EventEnvelope } from './eventMap';
 
 export type Mode = 'production' | 'shadow';
 
