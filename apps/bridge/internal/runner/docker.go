@@ -124,15 +124,55 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 // rcon.sock inside the read-only container.
 const sidecarUID = 1001
 
-// sidecarDirMode keeps group rwx + setgid and denies others. The setgid bit
+// sidecarSockMode keeps group rwx + setgid and denies others. The setgid bit
 // is carried via os.ModeSetgid (NOT the raw 0o2000 octal bit, which Go's
-// FileMode does not interpret) so os.Chmod emits S_ISGID.
-const sidecarDirMode = os.FileMode(0o770) | os.ModeSetgid
+// FileMode does not interpret) so os.Chmod emits S_ISGID. This is the only
+// level chowned to the sidecar uid and the only level it can write.
+const sidecarSockMode = os.FileMode(0o770) | os.ModeSetgid
+
+// sidecarServerDirMode applies to the per-server parent dir, which holds the
+// host-authored config.json. It stays root-owned (no chown) and denies group
+// write so the sidecar (uid 1001) cannot rewrite config.json through the rw
+// bind; only the nested sock subdir is sidecar-writable.
+const sidecarServerDirMode = os.FileMode(0o750) | os.ModeSetgid
+
+// allowedSidecarEnv is the exhaustive set of environment keys the API may
+// pass through to the rnsquadjs sidecar. A compromised API container cannot
+// inject loader/runtime overrides (LD_PRELOAD, NODE_OPTIONS, ...) because the
+// bridge drops any key outside this allowlist before composing docker args.
+var allowedSidecarEnv = map[string]struct{}{
+	"SERVER_ID":           {},
+	"LOG_FILE":            {},
+	"PANEL_BRIDGE_MODE":   {},
+	"PANEL_BRIDGE_SOCKET": {},
+	"REDIS_URL":           {},
+}
 
 // RNSquadJSRunSpec describes a per-server rnsquadjs sidecar launch.
 type RNSquadJSRunSpec struct {
 	ServerID string            `json:"server_id"`
 	Env      map[string]string `json:"env"`
+}
+
+// validateSidecarEnv enforces the env allowlist and rejects keys or values
+// that could break out of a single `-e KEY=VALUE` docker token. '=' is barred
+// in keys only; values legitimately carry ':' '/' '@' (e.g. a redis URL).
+func validateSidecarEnv(env map[string]string) error {
+	for key, value := range env {
+		if key == "" {
+			return fmt.Errorf("%w: empty sidecar env key", validate.ErrForbidden)
+		}
+		if _, ok := allowedSidecarEnv[key]; !ok {
+			return fmt.Errorf("%w: sidecar env key %q not in allowlist", validate.ErrForbidden, key)
+		}
+		if strings.ContainsAny(key, "=\x00\n\r") {
+			return fmt.Errorf("%w: sidecar env key %q contains a forbidden character", validate.ErrForbidden, key)
+		}
+		if strings.ContainsAny(value, "\x00\n\r") {
+			return fmt.Errorf("%w: sidecar env value for %q contains a forbidden character", validate.ErrForbidden, key)
+		}
+	}
+	return nil
 }
 
 // socketRoot returns the configured rnsquadjs socket/config root, defaulting
@@ -152,9 +192,12 @@ func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, er
 	if err := validate.ContainerName(name); err != nil {
 		return nil, err
 	}
+	if err := validateSidecarEnv(spec.Env); err != nil {
+		return nil, err
+	}
 	serverDir := d.socketRoot() + "/" + spec.ServerID
 	logsBind := fmt.Sprintf("%s/%s/SquadGame/Saved/Logs:/squad/Logs:ro", validate.PanelSavedRoot, spec.ServerID)
-	socketBind := fmt.Sprintf("%s:/run/panelBridge:rw", serverDir)
+	socketBind := fmt.Sprintf("%s/sock:/run/panelBridge:rw", serverDir)
 	configBind := fmt.Sprintf("%s/config.json:/app/config.json:ro", serverDir)
 
 	args := []string{
@@ -183,26 +226,75 @@ func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, er
 	return args, nil
 }
 
-// ensureSidecarDir creates the per-server socket/config dir the sidecar needs.
-// MkdirAll honours the process umask (which strips the setgid bit and group
-// write), so the mode is forced afterwards with Chmod. The dir is then chowned
-// to the sidecar uid; the group is left inherited from the setgid parent
-// (tmpfiles.d creates the root as 2775 root:panel). The bridge runs as root in
-// production where the Chown succeeds; a non-root caller (dev/test) hits EPERM,
-// which is tolerated because a non-root bridge cannot drive containers anyway.
+// ensureSidecarDir builds the two-level per-server tree the sidecar needs:
+//
+//	{root}/{id}/       0o2750, root-owned        — holds host-authored config.json
+//	{root}/{id}/sock/  0o2770, chown uid 1001    — the only sidecar-writable level
+//
+// Splitting the levels keeps config.json out of any sidecar-writable mount: the
+// container sees {id}/sock bound rw at /run/panelBridge and config.json bound
+// :ro, so a compromised sidecar cannot rewrite the host config. In production
+// the per-server parent additionally must resolve under PanelSocketRoot; the
+// check is skipped when SocketRoot is test-overridden to a temp dir.
 func (d *DockerRunner) ensureSidecarDir(serverID string) error {
-	dir := d.socketRoot() + "/" + serverID
-	if err := os.MkdirAll(dir, sidecarDirMode); err != nil {
+	serverDir := d.socketRoot() + "/" + serverID
+	if d.SocketRoot == "" {
+		if _, err := validate.PanelSocketPath(serverDir); err != nil {
+			return err
+		}
+	}
+	if err := prepareSidecarDir(serverDir, sidecarServerDirMode, false); err != nil {
+		return err
+	}
+	return prepareSidecarDir(serverDir+"/sock", sidecarSockMode, true)
+}
+
+// prepareSidecarDir creates a single tree level with the given mode. Root's
+// chmod/chown follow symlinks, so it Lstats before and after MkdirAll and
+// refuses to operate on anything that is not a real directory (a planted
+// symlink, a file, ...), wrapping validate.ErrForbidden. MkdirAll honours the
+// umask (stripping setgid and group bits), so the mode is forced with Chmod.
+// chownToSidecar chowns the level to the sidecar uid; a non-root caller
+// (dev/test) hits EPERM, tolerated because a non-root bridge cannot drive
+// containers anyway.
+func prepareSidecarDir(path string, mode os.FileMode, chownToSidecar bool) error {
+	if err := assertRealDir(path); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(path, mode); err != nil {
 		return fmt.Errorf("create sidecar dir: %w", err)
 	}
-	if err := os.Chmod(dir, sidecarDirMode); err != nil {
+	if err := assertRealDir(path); err != nil {
+		return err
+	}
+	if err := os.Chmod(path, mode); err != nil {
 		return fmt.Errorf("chmod sidecar dir: %w", err)
 	}
-	if err := os.Chown(dir, sidecarUID, -1); err != nil {
+	if !chownToSidecar {
+		return nil
+	}
+	if err := os.Chown(path, sidecarUID, -1); err != nil {
 		if errors.Is(err, syscall.EPERM) && os.Geteuid() != 0 {
 			return nil
 		}
 		return fmt.Errorf("chown sidecar dir: %w", err)
+	}
+	return nil
+}
+
+// assertRealDir requires path to be absent or a real directory. A symlink (or
+// any non-directory) is rejected with a forbidden error so a planted symlink
+// cannot redirect root's subsequent chmod/chown to an attacker-chosen target.
+func assertRealDir(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lstat sidecar dir: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsDir() {
+		return fmt.Errorf("%w: sidecar path %q is not a real directory", validate.ErrForbidden, path)
 	}
 	return nil
 }
@@ -214,6 +306,13 @@ func (d *DockerRunner) RunRNSquadJS(ctx context.Context, spec RNSquadJSRunSpec) 
 	}
 	if err := d.ensureSidecarDir(spec.ServerID); err != nil {
 		return "", err
+	}
+	// config.json is rendered by the API into the server dir. If it is absent
+	// when docker runs the :ro bind, docker (root) silently creates a DIRECTORY
+	// there, so fail loudly before launching the sidecar.
+	configPath := d.socketRoot() + "/" + spec.ServerID + "/config.json"
+	if info, err := os.Lstat(configPath); err != nil || !info.Mode().IsRegular() {
+		return "", fmt.Errorf("config.json not rendered for %s", spec.ServerID)
 	}
 	so, se, exit, err := d.R.Run(ctx, d.Bin, args, nil)
 	if err != nil {

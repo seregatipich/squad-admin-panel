@@ -121,9 +121,9 @@ func TestContainerNameRejectsRnsquadjsGarbage(t *testing.T) {
 	}
 }
 
-func TestContainerImageAllowsRnsquadjs(t *testing.T) {
-	if err := ContainerImage(RNSquadJSImage); err != nil {
-		t.Fatalf("expected rnsquadjs image allowed, got %v", err)
+func TestContainerImageRejectsRnsquadjs(t *testing.T) {
+	if err := ContainerImage(RNSquadJSImage); err == nil || !errors.Is(err, ErrForbidden) {
+		t.Fatalf("rnsquadjs image must NOT be launchable via generic container_run, got %v", err)
 	}
 }
 

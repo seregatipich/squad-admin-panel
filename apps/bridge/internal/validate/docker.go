@@ -23,10 +23,16 @@ var (
 	depotJobRegex           = regexp.MustCompile(`^squad-depot-init-[0-9]{14}$`)
 	rnsquadjsContainerRegex = regexp.MustCompile(`^rnsquadjs-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 	cfgFileRegex            = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}\.cfg$`)
-	allowedImages           = map[string]struct{}{
+	// allowedImages gates the caller-supplied image of the generic
+	// container_run RPC. RNSquadJSImage is deliberately absent: the sidecar
+	// image is launchable ONLY via container_run_rnsquadjs, which hardcodes
+	// the image and applies sidecar-specific hardening (read-only rootfs,
+	// uid 1001, isolated socket subdir). Allowing it here would let a
+	// compromised API container launch the sidecar image with squad-server
+	// mounts and bypass that hardening.
+	allowedImages = map[string]struct{}{
 		ServerImage:    {},
 		DepotInitImage: {},
-		RNSquadJSImage: {},
 	}
 	allowedCfgFiles = map[string]struct{}{
 		"Admins.cfg":                {},
