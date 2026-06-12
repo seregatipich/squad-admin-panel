@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +12,8 @@ let server: Server | undefined;
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), 'rcon-'));
-  socketPath = join(tmp, `${SERVER_ID}.sock`);
+  socketPath = join(tmp, SERVER_ID, 'sock', 'rcon.sock');
+  mkdirSync(join(tmp, SERVER_ID, 'sock'), { recursive: true });
 });
 afterEach(async () => {
   await new Promise<void>((r) => (server ? server.close(() => r()) : r()));

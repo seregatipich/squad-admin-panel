@@ -22,7 +22,7 @@ export function createRconClient(opts: RconClientOptions = {}): RconClient {
 
   return {
     async exec(serverId, method, args) {
-      const socketPath = join(socketDir, `${serverId}.sock`);
+      const socketPath = join(socketDir, serverId, 'sock', 'rcon.sock');
       const dispatcher = new Agent({ connect: { socketPath } });
       const deadline = Date.now() + retryMs;
       let lastErr: unknown;
