@@ -2,9 +2,10 @@ import { chown, mkdir, rename, writeFile } from 'node:fs/promises';
 import type { BridgeClient } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
 import { serverCredentials } from '@squad/db/schema';
-import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
+import { PANEL_CONFIGS_ROOT, RNSQUADJS_CUTOVER_SET } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
+import type Redis from 'ioredis';
 
 const RNSQUADJS_ROOT = '/run/squad-panel/rnsquadjs';
 const SIDECAR_UID = 1001;
@@ -154,4 +155,26 @@ export async function writeSidecarConfig(
   // Atomic rename: the bridge requires a regular file at sidecar launch;
   // a half-written tmp file must never be visible at the final path.
   await deps.rename(tmpPath, finalPath);
+}
+
+export interface SidecarLaunchContext extends RnsquadjsContext {
+  redis: Pick<Redis, 'sismember'>;
+  bridge: RnsquadjsContext['bridge'] & Pick<BridgeClient, 'containerRm' | 'containerRunRnsquadjs'>;
+}
+
+/** Create-or-recreate the per-server sidecar in the mode dictated by the cutover set. */
+export async function relaunchSidecar(
+  app: SidecarLaunchContext,
+  serverId: string,
+  fsDeps?: FsOps,
+): Promise<{ containerId: string; mode: BridgeMode }> {
+  await writeSidecarConfig(app, serverId, fsDeps);
+  const mode: BridgeMode =
+    (await app.redis.sismember(RNSQUADJS_CUTOVER_SET, serverId)) === 1 ? 'production' : 'shadow';
+  await app.bridge.containerRm({ name: sidecarContainerName(serverId) }).catch(() => undefined);
+  const run = await app.bridge.containerRunRnsquadjs({
+    server_id: serverId,
+    env: { ...buildSidecarEnv(serverId, mode, process.env.RNSQUADJS_REDIS_URL) },
+  });
+  return { containerId: run.container_id, mode };
 }

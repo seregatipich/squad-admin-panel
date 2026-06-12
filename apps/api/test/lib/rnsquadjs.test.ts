@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { FsOps, RnsquadjsContext } from '../../src/lib/rnsquadjs.js';
+import type { FsOps, RnsquadjsContext, SidecarLaunchContext } from '../../src/lib/rnsquadjs.js';
 import {
   buildSidecarEnv,
+  relaunchSidecar,
   renderRnsquadjsConfig,
   sidecarConfigPath,
   sidecarContainerName,
@@ -39,6 +40,31 @@ function makeFsOps(): FsOps {
     rename: vi.fn().mockResolvedValue(undefined),
     chown: vi.fn().mockResolvedValue(undefined),
   } as unknown as FsOps;
+}
+
+function makeLaunchApp(opts: {
+  sismember?: number;
+  containerRm?: ReturnType<typeof vi.fn>;
+  containerRunRnsquadjs?: ReturnType<typeof vi.fn>;
+}): SidecarLaunchContext {
+  return {
+    db: {
+      query: {
+        serverCredentials: {
+          findFirst: vi.fn(async () => ({ serverId: SERVER_ID, rconPort: 21114 })),
+        },
+      },
+    },
+    bridge: {
+      fileRead: vi.fn(async () => ({ content: 'Password=s3cret\n' })),
+      containerRm: opts.containerRm ?? vi.fn().mockResolvedValue({ status: 'ok' }),
+      containerRunRnsquadjs:
+        opts.containerRunRnsquadjs ??
+        vi.fn().mockResolvedValue({ container_id: 'rnsquadjs-new', status: 'started' }),
+    },
+    redis: { sismember: vi.fn(async () => opts.sismember ?? 0) },
+    log: { warn: vi.fn() },
+  } as unknown as SidecarLaunchContext;
 }
 
 describe('sidecarConfigPath', () => {
@@ -228,5 +254,65 @@ describe('writeSidecarConfig', () => {
 
     await expect(writeSidecarConfig(app, SERVER_ID, ops)).rejects.toThrow('Permission denied');
     expect(ops.rename).not.toHaveBeenCalled();
+  });
+});
+
+describe('relaunchSidecar', () => {
+  it('launches in shadow mode when the server is not in the cutover set', async () => {
+    const app = makeLaunchApp({ sismember: 0 });
+    const result = await relaunchSidecar(app, SERVER_ID, makeFsOps());
+
+    expect(result).toEqual({ containerId: 'rnsquadjs-new', mode: 'shadow' });
+    const runArg = (app.bridge.containerRunRnsquadjs as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as { server_id: string; env: Record<string, string> };
+    expect(runArg.server_id).toBe(SERVER_ID);
+    expect(runArg.env.PANEL_BRIDGE_MODE).toBe('shadow');
+  });
+
+  it('launches in production mode when the server is in the cutover set', async () => {
+    const app = makeLaunchApp({ sismember: 1 });
+    const result = await relaunchSidecar(app, SERVER_ID, makeFsOps());
+
+    expect(result.mode).toBe('production');
+    const runArg = (app.bridge.containerRunRnsquadjs as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as { env: Record<string, string> };
+    expect(runArg.env.PANEL_BRIDGE_MODE).toBe('production');
+  });
+
+  it('removes the existing sidecar before running the new one (recreate)', async () => {
+    const containerRm = vi.fn().mockResolvedValue({ status: 'ok' });
+    const containerRunRnsquadjs = vi
+      .fn()
+      .mockResolvedValue({ container_id: 'rnsquadjs-new', status: 'started' });
+    const app = makeLaunchApp({ containerRm, containerRunRnsquadjs });
+
+    await relaunchSidecar(app, SERVER_ID, makeFsOps());
+
+    expect(containerRm).toHaveBeenCalledWith({ name: `rnsquadjs-${SERVER_ID}` });
+    const rmOrder = containerRm.mock.invocationCallOrder[0]!;
+    const runOrder = containerRunRnsquadjs.mock.invocationCallOrder[0]!;
+    expect(rmOrder).toBeLessThan(runOrder);
+  });
+
+  it('swallows a containerRm failure (old sidecar may not exist) and still runs', async () => {
+    const containerRm = vi.fn().mockRejectedValue(new Error('No such container'));
+    const containerRunRnsquadjs = vi
+      .fn()
+      .mockResolvedValue({ container_id: 'rnsquadjs-new', status: 'started' });
+    const app = makeLaunchApp({ containerRm, containerRunRnsquadjs });
+
+    const result = await relaunchSidecar(app, SERVER_ID, makeFsOps());
+    expect(result.containerId).toBe('rnsquadjs-new');
+    expect(containerRunRnsquadjs).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes the sidecar config before launching', async () => {
+    const app = makeLaunchApp({ sismember: 0 });
+    const ops = makeFsOps();
+    await relaunchSidecar(app, SERVER_ID, ops);
+    expect(ops.rename).toHaveBeenCalledWith(
+      `/run/squad-panel/rnsquadjs/${SERVER_ID}/config.json.tmp`,
+      `/run/squad-panel/rnsquadjs/${SERVER_ID}/config.json`,
+    );
   });
 });

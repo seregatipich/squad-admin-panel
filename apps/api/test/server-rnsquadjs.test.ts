@@ -170,6 +170,7 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
       // NOT swap the sidecar, or it would resurrect a duplicate publisher.
       const findFirst = vi.fn().mockResolvedValue({ id: SERVER_ID });
       const sadd = vi.fn().mockResolvedValue(1);
+      const srem = vi.fn().mockResolvedValue(1);
       const sismember = vi.fn().mockResolvedValue(0);
       const containerRm = vi.fn().mockResolvedValue({ status: 'ok' });
       const containerRunRnsquadjs = vi
@@ -177,7 +178,7 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
         .mockResolvedValue({ container_id: 'rnsquadjs-prod', status: 'started' });
       const { app } = await buildApp({
         findFirst,
-        redis: { sadd, srem: vi.fn(), sismember },
+        redis: { sadd, srem, sismember },
         bridge: { containerRm, containerRunRnsquadjs },
       });
 
@@ -192,6 +193,10 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
         expect(writeSidecarConfig).not.toHaveBeenCalled();
         expect(containerRm).not.toHaveBeenCalled();
         expect(containerRunRnsquadjs).not.toHaveBeenCalled();
+        // A supersession abort is the rollback's own doing (it already SREMd):
+        // the aborted continuation must NOT srem again, or it would race a
+        // freshly re-SADDed cutover.
+        expect(srem).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }
@@ -203,6 +208,7 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
       // pre-launch re-check (0): config + rm already ran, but the production
       // sidecar must NOT start — that would duplicate the resumed legacy tailer.
       const findFirst = vi.fn().mockResolvedValue({ id: SERVER_ID });
+      const srem = vi.fn().mockResolvedValue(1);
       const sismember = vi.fn().mockResolvedValueOnce(1).mockResolvedValue(0);
       const containerRm = vi.fn().mockResolvedValue({ status: 'ok' });
       const containerRunRnsquadjs = vi
@@ -210,7 +216,7 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
         .mockResolvedValue({ container_id: 'rnsquadjs-prod', status: 'started' });
       const { app } = await buildApp({
         findFirst,
-        redis: { sadd: vi.fn().mockResolvedValue(1), srem: vi.fn(), sismember },
+        redis: { sadd: vi.fn().mockResolvedValue(1), srem, sismember },
         bridge: { containerRm, containerRunRnsquadjs },
       });
 
@@ -224,20 +230,26 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
         expect(writeSidecarConfig).toHaveBeenCalledTimes(1);
         expect(containerRm).toHaveBeenCalledTimes(1);
         expect(containerRunRnsquadjs).not.toHaveBeenCalled();
+        // Pre-launch supersession abort — not a failure, so no auto-rollback.
+        expect(srem).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }
       await app.close();
     });
 
-    it('a rejecting containerRunRnsquadjs does not fail the 202 — the continuation logs it', async () => {
+    it('auto-rolls back (SREM) and logs when the continuation fails, after the 202 is sent', async () => {
+      // The 202 is already returned; a genuine failure in the detached
+      // continuation must SREM the cutover set so log-ingest re-adopts the
+      // server's legacy tailer instead of stranding it with no publisher.
       const findFirst = vi.fn().mockResolvedValue({ id: SERVER_ID });
+      const srem = vi.fn().mockResolvedValue(1);
       const containerRunRnsquadjs = vi.fn().mockRejectedValue(new Error('rnsquadjs image missing'));
       const { app, errorLog } = await buildApp({
         findFirst,
         redis: {
           sadd: vi.fn().mockResolvedValue(1),
-          srem: vi.fn(),
+          srem,
           sismember: vi.fn().mockResolvedValue(1),
         },
         bridge: { containerRm: vi.fn().mockResolvedValue({ status: 'ok' }), containerRunRnsquadjs },
@@ -249,6 +261,7 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
         expect(res.statusCode).toBe(202);
         await vi.advanceTimersByTimeAsync(CUTOVER_TICK_MS);
         expect(containerRunRnsquadjs).toHaveBeenCalledTimes(1);
+        expect(srem).toHaveBeenCalledWith(RNSQUADJS_CUTOVER_SET, SERVER_ID);
         expect(errorLog).toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
@@ -313,6 +326,27 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
       const res = await inject(app, 'shadow');
       expect(res.statusCode).toBe(200);
       expect(containerRunRnsquadjs).toHaveBeenCalledTimes(1);
+      expect(srem).toHaveBeenCalledWith(RNSQUADJS_CUTOVER_SET, SERVER_ID);
+
+      await app.close();
+    });
+
+    it('still SREMs and rejects with a 500 when the shadow relaunch throws', async () => {
+      // A dead shadow sidecar with the legacy tailer resumed is the safe
+      // degraded state: SREM must run even when the relaunch throws, and the
+      // failure must surface to the caller as a 5xx (not a silent success).
+      const findFirst = vi.fn().mockResolvedValue({ id: SERVER_ID });
+      const srem = vi.fn().mockResolvedValue(1);
+      const containerRm = vi.fn().mockResolvedValue({ status: 'ok' });
+      const containerRunRnsquadjs = vi.fn().mockRejectedValue(new Error('rnsquadjs image missing'));
+      const { app } = await buildApp({
+        findFirst,
+        redis: { sadd: vi.fn(), srem, sismember: vi.fn() },
+        bridge: { containerRm, containerRunRnsquadjs },
+      });
+
+      const res = await inject(app, 'shadow');
+      expect(res.statusCode).toBeGreaterThanOrEqual(500);
       expect(srem).toHaveBeenCalledWith(RNSQUADJS_CUTOVER_SET, SERVER_ID);
 
       await app.close();

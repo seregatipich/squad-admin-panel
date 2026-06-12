@@ -66,8 +66,13 @@ const serverRnsquadjsRoutes: FastifyPluginAsync = async (app) => {
             server_id: serverId,
             env: { ...buildSidecarEnv(serverId, 'production', redisUrl) },
           });
-        })().catch((err) => {
-          log.error({ err, id: serverId }, 'rnsquadjs production cutover failed');
+        })().catch(async (err) => {
+          // A supersession abort resolves (early `return`) and never lands here,
+          // so this only fires on a genuine failure. log-ingest already dropped
+          // this server's legacy tailer on SADD; without the SREM it would be
+          // stranded with no publisher. Roll the desired state back to legacy.
+          await app.redis.srem(RNSQUADJS_CUTOVER_SET, serverId).catch(() => undefined);
+          log.error({ err, id: serverId }, 'rnsquadjs cutover failed; rolled back to legacy');
         });
         reply.code(202);
         return { server_id: serverId, mode: 'production', status: 'switching' };
@@ -76,14 +81,22 @@ const serverRnsquadjsRoutes: FastifyPluginAsync = async (app) => {
       // Rollback: stand the shadow sidecar back up BEFORE SREM so the legacy
       // tailer only resumes once a publisher exists. A brief event gap is
       // acceptable; overlapping publishers (duplicates) are not.
-      await writeSidecarConfig(app, serverId);
-      await app.bridge.containerRm({ name: sidecarContainerName(serverId) }).catch(() => undefined);
-      const sidecar = await app.bridge.containerRunRnsquadjs({
-        server_id: serverId,
-        env: { ...buildSidecarEnv(serverId, 'shadow', redisUrl) },
-      });
-      await app.redis.srem(RNSQUADJS_CUTOVER_SET, serverId);
-      return { server_id: serverId, mode: 'shadow', container_id: sidecar.container_id };
+      try {
+        await writeSidecarConfig(app, serverId);
+        await app.bridge
+          .containerRm({ name: sidecarContainerName(serverId) })
+          .catch(() => undefined);
+        const sidecar = await app.bridge.containerRunRnsquadjs({
+          server_id: serverId,
+          env: { ...buildSidecarEnv(serverId, 'shadow', redisUrl) },
+        });
+        return { server_id: serverId, mode: 'shadow', container_id: sidecar.container_id };
+      } finally {
+        // SREM even when the relaunch throws: a dead sidecar with the legacy
+        // tailer resumed is the safe degraded state. On a throw the error still
+        // propagates after this (5xx), so the caller learns the relaunch failed.
+        await app.redis.srem(RNSQUADJS_CUTOVER_SET, serverId);
+      }
     },
   );
 };
