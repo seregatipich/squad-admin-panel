@@ -107,6 +107,26 @@ func TestPanelConfigsServerRoot(t *testing.T) {
 	}
 }
 
+func TestContainerNameAcceptsRnsquadjsSidecar(t *testing.T) {
+	if err := ContainerName("rnsquadjs-0196f0a2-1111-2222-3333-444444444444"); err != nil {
+		t.Fatalf("expected sidecar name to be allowed, got %v", err)
+	}
+}
+
+func TestContainerNameRejectsRnsquadjsGarbage(t *testing.T) {
+	for _, name := range []string{"rnsquadjs-", "rnsquadjs-notauuid", "rnsquadjs-0196f0a2-1111-2222-3333-44444444444Z", "rnsquadjs-0196F0A2-1111-2222-3333-444444444444"} {
+		if err := ContainerName(name); err == nil {
+			t.Fatalf("expected %q to be rejected", name)
+		}
+	}
+}
+
+func TestContainerImageAllowsRnsquadjs(t *testing.T) {
+	if err := ContainerImage(RNSquadJSImage); err != nil {
+		t.Fatalf("expected rnsquadjs image allowed, got %v", err)
+	}
+}
+
 func TestPanelSavedServerRoot(t *testing.T) {
 	uuid := "019dbb45-3556-751f-9124-d4cf0e6b0053"
 	ok := "/var/lib/squad-panel/saved/" + uuid

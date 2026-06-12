@@ -52,6 +52,17 @@ func TestPathRejectsNullByte(t *testing.T) {
 	}
 }
 
+func TestPanelSocketPath(t *testing.T) {
+	if _, err := PanelSocketPath("/run/squad-panel/rnsquadjs/0196f0a2-1111-2222-3333-444444444444"); err != nil {
+		t.Fatalf("expected socket subdir allowed, got %v", err)
+	}
+	for _, p := range []string{"/etc/passwd", "/run/squad-panel/rnsquadjs/../../../etc", "relative/path"} {
+		if _, err := PanelSocketPath(p); err == nil {
+			t.Fatalf("expected %q rejected", p)
+		}
+	}
+}
+
 func TestPathAcceptsUnderRoot(t *testing.T) {
 	good := "/var/lib/squad-panel/configs/abcdef01-0000-1111-2222-333344445555/ServerConfig/Rcon.cfg"
 	got, err := Path(good, PanelDataRoot)
