@@ -52,6 +52,7 @@ import forceStopRoutes from './routes/server-force-stop.js';
 import serverInstallRoutes from './routes/server-install.js';
 import serverLogsRoutes from './routes/server-logs.js';
 import serverMetricsRoutes from './routes/server-metrics.js';
+import serverRnsquadjsRoutes from './routes/server-rnsquadjs.js';
 import serverSettingsRoutes from './routes/server-settings.js';
 import serverUpdateRoutes from './routes/server-update.js';
 import serverRoutes from './routes/servers.js';
@@ -127,6 +128,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(serverUpdateRoutes);
   await app.register(archiveRoutes);
   await app.register(serverInstallRoutes);
+  await app.register(serverRnsquadjsRoutes);
   await app.register(forceStopRoutes);
   await app.register(serverLogsRoutes);
   await app.register(serverMetricsRoutes);
