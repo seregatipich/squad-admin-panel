@@ -24,7 +24,9 @@ export class RedisPublisher {
   }
 
   private statusKey(): string {
-    return `rcon:status:${this.serverId}${this.suffix()}`;
+    // D4: worker-rcon owns the legacy per-server status key; the sidecar
+    // publishes under its own prefix and must never clobber the worker's.
+    return `rnsquadjs:status:${this.serverId}${this.suffix()}`;
   }
 
   async publishEvent(envelope: EventEnvelope): Promise<void> {

@@ -38,7 +38,7 @@ const ENVELOPE: EventEnvelope = {
 };
 
 describe('RedisPublisher (production mode)', () => {
-  it('XADDs to events:server:{id} and SETs rcon:status:{id}', async () => {
+  it('XADDs to events:server:{id} and SETs rnsquadjs:status:{id}', async () => {
     const r = fakeRedis();
     const pub = new RedisPublisher(asRedis(r), SERVER_ID, 'production');
     await pub.publishEvent(ENVELOPE);
@@ -48,7 +48,7 @@ describe('RedisPublisher (production mode)', () => {
       args: [`events:server:${SERVER_ID}`, '*', 'envelope', JSON.stringify(ENVELOPE)],
     });
     expect(r.calls[1].cmd).toBe('set');
-    expect(r.calls[1].args[0]).toBe(`rcon:status:${SERVER_ID}`);
+    expect(r.calls[1].args[0]).toBe(`rnsquadjs:status:${SERVER_ID}`);
     expect(r.calls[1].args[2]).toBe('EX');
     expect(r.calls[1].args[3]).toBe(300);
   });
@@ -61,7 +61,35 @@ describe('RedisPublisher (shadow mode)', () => {
     await pub.publishEvent(ENVELOPE);
     await pub.publishRconStatus({ state: 'connected', lastChange: '2026-04-24T10:00:00.000Z' });
     expect(r.calls[0].args[0]).toBe(`events:server:${SERVER_ID}:shadow`);
-    expect(r.calls[1].args[0]).toBe(`rcon:status:${SERVER_ID}:shadow`);
+    expect(r.calls[1].args[0]).toBe(`rnsquadjs:status:${SERVER_ID}:shadow`);
+  });
+});
+
+const NOW = '2026-04-24T10:00:00.000Z';
+
+describe('RedisPublisher status key namespace (D4)', () => {
+  it('production status goes to rnsquadjs:status, never rcon:status', async () => {
+    const redis = fakeRedis();
+    const pub = new RedisPublisher(redis as never, SERVER_ID, 'production');
+    await pub.publishRconStatus({ state: 'connected', lastChange: NOW });
+    expect(redis.set).toHaveBeenCalledWith(
+      `rnsquadjs:status:${SERVER_ID}`,
+      expect.any(String),
+      'EX',
+      300,
+    );
+  });
+
+  it('shadow status key keeps the :shadow suffix', async () => {
+    const redis = fakeRedis();
+    const pub = new RedisPublisher(redis as never, SERVER_ID, 'shadow');
+    await pub.publishRconStatus({ state: 'connected', lastChange: NOW });
+    expect(redis.set).toHaveBeenCalledWith(
+      `rnsquadjs:status:${SERVER_ID}:shadow`,
+      expect.any(String),
+      'EX',
+      300,
+    );
   });
 });
 

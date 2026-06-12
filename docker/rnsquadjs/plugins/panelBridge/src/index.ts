@@ -35,7 +35,7 @@ const RN_EVENTS = [
 export async function startPanelBridge(
   ctx: PanelBridgeContext,
 ): Promise<{ stop: () => Promise<void> }> {
-  const mode: Mode = process.env.PANEL_BRIDGE_MODE === 'shadow' ? 'shadow' : 'production';
+  const mode: Mode = process.env.PANEL_BRIDGE_MODE === 'production' ? 'production' : 'shadow';
   const redis = new Redis(process.env.REDIS_URL ?? 'redis://redis:6379');
   const publisher = new RedisPublisher(redis, ctx.serverId, mode);
   const heartbeat = new Heartbeat(redis, ctx.serverId);
