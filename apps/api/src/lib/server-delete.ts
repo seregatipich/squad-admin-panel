@@ -5,6 +5,7 @@ import { configVersions, serverSettings, servers } from '@squad/db/schema';
 import { ALLOWED_CONFIG_FILES, PANEL_CONFIGS_ROOT, PANEL_SAVED_ROOT } from '@squad/shared-config';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
+import { sidecarContainerName } from './rnsquadjs.js';
 
 export interface DeleteResult {
   backup_marker_id: string | null;
@@ -130,6 +131,10 @@ export async function softDeleteServer(
       result.errors.push({ phase: 'container_rm', error: msg });
     }
   }
+
+  // Tear down the RNSquadJS sidecar symmetrically. It is best-effort: a
+  // missing or never-launched sidecar must not block the server deletion.
+  await ctx.bridge.containerRm({ name: sidecarContainerName(serverId) }).catch(() => {});
 
   try {
     const r = await ctx.bridge.directoryDelete({ path: `${PANEL_CONFIGS_ROOT}/${serverId}` });

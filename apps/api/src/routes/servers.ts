@@ -16,6 +16,7 @@ import { fireAutoPrune } from '../lib/auto-prune.js';
 import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
 import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
+import { sidecarContainerName } from '../lib/rnsquadjs.js';
 import { softDeleteServer } from '../lib/server-delete.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
@@ -540,6 +541,16 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           message: 'container_stop succeeded',
           payload: { ok: containerStopOk, durationMs: Date.now() - containerStopT0 },
         });
+        // Stop the RNSquadJS sidecar too. It is not load-bearing for the
+        // server lifecycle, so a failure here must not fail the stop.
+        await app.bridge
+          .containerStop({ name: sidecarContainerName(s.id), timeout_sec: 30 })
+          .catch((err: unknown) => {
+            req.log.warn(
+              { err: (err as Error).message, id: s.id },
+              'rnsquadjs sidecar stop failed (continuing)',
+            );
+          });
         await req.diag.emit({
           component: 'api',
           kind: 'server.stop.done',

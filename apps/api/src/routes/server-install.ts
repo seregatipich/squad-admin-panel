@@ -6,6 +6,7 @@ import {
   DEPOT_VOLUME_NAME,
   PANEL_CONFIGS_ROOT,
   PANEL_SAVED_ROOT,
+  RNSQUADJS_CUTOVER_SET,
   SERVER_IMAGE,
 } from '@squad/shared-config';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -15,6 +16,7 @@ import { z } from 'zod';
 import { publishAdminsCfgSyncForServer } from '../lib/admins-cfg-sync.js';
 import { writeAuditEntry } from '../lib/audit.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
+import { buildSidecarEnv, writeSidecarConfig } from '../lib/rnsquadjs.js';
 
 const paramsSchema = z.object({ id: z.string().uuid() });
 
@@ -282,6 +284,29 @@ async function runInstall(
     message: 'server row marked running',
     payload: { container_id: res.container_id },
   });
+
+  // Launch the RNSquadJS sidecar. A shadow sidecar is not load-bearing for
+  // the install, so any failure here is logged to the progress stream and
+  // swallowed — the server is already running and the install must succeed.
+  try {
+    // The bridge bind-mounts <saved>/<id>/SquadGame/Saved/Logs read-only;
+    // touch a .keep so that directory exists before the sidecar starts.
+    await app.bridge.fileAtomicWrite({
+      path: `${PANEL_SAVED_ROOT}/${serverId}/SquadGame/Saved/Logs/.keep`,
+      content: '',
+    });
+    await writeSidecarConfig(app, serverId);
+    const mode =
+      (await app.redis.sismember(RNSQUADJS_CUTOVER_SET, serverId)) === 1 ? 'production' : 'shadow';
+    const sidecar = await app.bridge.containerRunRnsquadjs({
+      server_id: serverId,
+      env: { ...buildSidecarEnv(serverId, mode, process.env.RNSQUADJS_REDIS_URL) },
+    });
+    emit('rnsquadjs', `sidecar ${sidecar.container_id} started (${mode})`);
+  } catch (err) {
+    emit('rnsquadjs', `sidecar launch failed (non-fatal): ${(err as Error).message}`, 'stderr');
+  }
+
   emit('done', 'install complete; container running');
 }
 

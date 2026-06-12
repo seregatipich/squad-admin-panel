@@ -15,6 +15,7 @@ import type { AppConfig } from './config.js';
 import { loadEncryptionKey } from './lib/crypto.js';
 import diagPlugin from './lib/diag.js';
 import { buildLogger } from './lib/logger.js';
+import { createRconClient } from './lib/rcon.js';
 import auditPlugin from './plugins/audit.js';
 import authPlugin from './plugins/auth.js';
 import bridgePlugin from './plugins/bridge.js';
@@ -76,6 +77,7 @@ export async function buildServer(config: AppConfig) {
 
   app.decorate('encryptionKey', loadEncryptionKey(config.APP_ENCRYPTION_KEY));
   app.decorate('config', config);
+  app.decorate('rcon', createRconClient());
 
   await app.register(helmet, { global: true });
   await app.register(cookie, { secret: config.SESSION_SECRET });

@@ -1,6 +1,6 @@
 import { players, roles, serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import {
   assertAuditRow,
@@ -319,6 +319,56 @@ describe('POST /api/v1/servers/:id/stop', () => {
     });
     expect(resp.statusCode).toBe(200);
     expect(statusAtStopCall).toBe('stopping');
+  });
+
+  it('stops the rnsquadjs sidecar alongside the squad container', async () => {
+    const containerStop = vi.fn(async () => ({ status: 'ok' }));
+    h.bridge.containerStop = containerStop;
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug: 'stop-sidecar-test' },
+      })
+    ).json<{ id: string }>();
+    await h.db.delete(serverCredentials).where(eq(serverCredentials.serverId, id));
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/stop`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(containerStop).toHaveBeenCalledWith({ name: `squad-${id}`, timeout_sec: 60 });
+    expect(containerStop).toHaveBeenCalledWith({ name: `rnsquadjs-${id}`, timeout_sec: 30 });
+  });
+
+  it('still returns 200 when the sidecar stop rejects', async () => {
+    const containerStop = vi.fn(async ({ name }: { name: string }) => {
+      if (name.startsWith('rnsquadjs-')) throw new Error('sidecar gone');
+      return { status: 'ok' };
+    });
+    h.bridge.containerStop = containerStop;
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug: 'stop-sidecar-reject' },
+      })
+    ).json<{ id: string }>();
+    await h.db.delete(serverCredentials).where(eq(serverCredentials.serverId, id));
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/stop`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(resp.json()).toEqual({ status: 'stopping' });
   });
 });
 
