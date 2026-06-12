@@ -22,7 +22,8 @@ RUN corepack enable && yarn install --frozen-lockfile --network-timeout 600000
 # ioredis/uuid are panelBridge runtime deps absent from upstream's manifest.
 # `yarn add` mutates upstream's package.json + lockfile, but that mutation is
 # confined to this image layer (the lockfile is never copied back into the repo).
-RUN yarn add ioredis@^5.4.1 uuid@^14 --network-timeout 600000
+# Versions are exact so rebuilds resolve the same graph the plugin was tested with.
+RUN yarn add ioredis@5.10.1 uuid@14.0.0 --exact --network-timeout 600000
 # panelBridge sources compile inside upstream's tree. Their relative imports are
 # extensionless to match upstream's moduleResolution:node so rollup resolves them.
 COPY docker/rnsquadjs/plugins/panelBridge/src/ src/plugins/panelBridge/
