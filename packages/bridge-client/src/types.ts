@@ -146,6 +146,16 @@ export interface ContainerRunResult {
   status: 'started';
 }
 
+export interface ContainerRunRnsquadjsParams {
+  server_id: string;
+  env: Record<string, string>;
+}
+
+export interface ContainerRunRnsquadjsResult {
+  container_id: string;
+  status: 'started';
+}
+
 export interface ContainerControlParams {
   name: string;
   timeout_sec?: number;

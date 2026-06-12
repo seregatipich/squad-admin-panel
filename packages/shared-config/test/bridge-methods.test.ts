@@ -35,6 +35,7 @@ describe('bridge methods constants', () => {
       'ufw_rule',
       'process_info',
       'container_run',
+      'container_run_rnsquadjs',
       'container_start',
       'container_stop',
       'container_rm',
