@@ -86,6 +86,7 @@ services:
     user: "0:${PANEL_GID:-987}"
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
+      - /run/squad-panel/rnsquadjs:/run/squad-panel/rnsquadjs:rw
     depends_on:
       postgres:
         condition: service_healthy
