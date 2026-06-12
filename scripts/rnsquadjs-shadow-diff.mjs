@@ -4,6 +4,7 @@
 // Prereq: build the plugin first — cd docker/rnsquadjs/plugins/panelBridge && npx tsc -p tsconfig.json
 //
 // Gate (exit 1 on any failure, 0 only when all pass):
+//   - corrupt-data:      zero valid prod events while malformed records were skipped
 //   - insufficient-data: prod event count below the minEvents floor
 //   - extras-exceeded:   shadow has more than max(5, 1% of prod) unmatched extras
 //   - parity-failed:     parity < 99% or a prod event type is missing in shadow
@@ -27,6 +28,10 @@ if (!serverId) {
 }
 const since = Date.now() - Number(sinceMsRaw ?? 24 * 3600 * 1000);
 const minEvents = Number(minEventsRaw ?? process.env.MIN_EVENTS ?? 100);
+if (!Number.isInteger(minEvents) || minEvents < 0) {
+  console.error(`invalid minEvents: ${minEventsRaw ?? process.env.MIN_EVENTS}`);
+  process.exit(2);
+}
 const redis = new Redis(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379');
 
 let badRecords = 0;
@@ -70,7 +75,9 @@ try {
   const extraAllowed = Math.max(5, prod.length * 0.01);
 
   let gate = 'pass';
-  if (prod.length < minEvents) {
+  if (prod.length === 0 && badRecords > 0) {
+    gate = 'corrupt-data';
+  } else if (prod.length < minEvents) {
     gate = 'insufficient-data';
   } else if (r.extraInShadow.length > extraAllowed) {
     gate = 'extras-exceeded';

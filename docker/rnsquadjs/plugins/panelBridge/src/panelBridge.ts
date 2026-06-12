@@ -24,6 +24,12 @@ const resolveServerId = (state: UpstreamState): string => {
   );
 };
 
+// Upstream has no plugin teardown lifecycle at the pinned SHA (plugins are
+// fire-and-forget functions), so the handle's only job is to prevent a second
+// construction for the same server from leaking a duplicate Redis connection,
+// heartbeat, and listeners.
+const activeBridges = new Map<string, Promise<{ stop: () => Promise<void> }>>();
+
 export const panelBridge = (state: UpstreamState, _options: Record<string, unknown>): void => {
   const log = (message: string): void => {
     if (state.logger && typeof state.logger.log === 'function') {
@@ -34,6 +40,11 @@ export const panelBridge = (state: UpstreamState, _options: Record<string, unkno
   };
 
   const serverId = resolveServerId(state);
+
+  if (activeBridges.has(serverId)) {
+    log(`[panelBridge] already running for ${serverId}; ignoring duplicate init`);
+    return;
+  }
 
   const rconExec = (method: string, args: unknown[]): Promise<string> =>
     state.execute([method, ...args.map((arg) => String(arg))].join(' '));
@@ -62,12 +73,15 @@ export const panelBridge = (state: UpstreamState, _options: Record<string, unkno
     };
   };
 
-  void startPanelBridge({
+  const bridgePromise = startPanelBridge({
     serverId,
     emitter: state.listener,
     rconExec,
     onStatus,
-  }).catch((error: unknown) => {
+  });
+  activeBridges.set(serverId, bridgePromise);
+  bridgePromise.catch((error: unknown) => {
+    activeBridges.delete(serverId);
     log(`[panelBridge] failed to start: ${String(error)}`);
   });
 };
