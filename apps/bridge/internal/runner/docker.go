@@ -3,8 +3,12 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
@@ -13,6 +17,10 @@ import (
 type DockerRunner struct {
 	Bin string
 	R   Runner
+	// SocketRoot overrides the rnsquadjs per-server socket/config root
+	// (production default validate.PanelSocketRoot). Tests point it at a
+	// temp dir so ensureSidecarDir does not touch the real /run tree.
+	SocketRoot string
 }
 
 func NewDocker(r Runner) *DockerRunner {
@@ -107,6 +115,112 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	}
 	if exit != 0 {
 		return strings.TrimSpace(string(so)), fmt.Errorf("docker run exit %d: %s", exit, strings.TrimSpace(string(se)))
+	}
+	return strings.TrimSpace(string(so)), nil
+}
+
+// sidecarUID is the unprivileged uid the rnsquadjs sidecar runs as. The
+// per-server socket dir must be owned by it so the sidecar can create
+// rcon.sock inside the read-only container.
+const sidecarUID = 1001
+
+// sidecarDirMode keeps group rwx + setgid and denies others. The setgid bit
+// is carried via os.ModeSetgid (NOT the raw 0o2000 octal bit, which Go's
+// FileMode does not interpret) so os.Chmod emits S_ISGID.
+const sidecarDirMode = os.FileMode(0o770) | os.ModeSetgid
+
+// RNSquadJSRunSpec describes a per-server rnsquadjs sidecar launch.
+type RNSquadJSRunSpec struct {
+	ServerID string            `json:"server_id"`
+	Env      map[string]string `json:"env"`
+}
+
+// socketRoot returns the configured rnsquadjs socket/config root, defaulting
+// to the production constant when SocketRoot is unset.
+func (d *DockerRunner) socketRoot() string {
+	if d.SocketRoot != "" {
+		return d.SocketRoot
+	}
+	return validate.PanelSocketRoot
+}
+
+func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, error) {
+	if err := validate.ServerUUID(spec.ServerID); err != nil {
+		return nil, err
+	}
+	name := "rnsquadjs-" + spec.ServerID
+	if err := validate.ContainerName(name); err != nil {
+		return nil, err
+	}
+	serverDir := d.socketRoot() + "/" + spec.ServerID
+	logsBind := fmt.Sprintf("%s/%s/SquadGame/Saved/Logs:/squad/Logs:ro", validate.PanelSavedRoot, spec.ServerID)
+	socketBind := fmt.Sprintf("%s:/run/panelBridge:rw", serverDir)
+	configBind := fmt.Sprintf("%s/config.json:/app/config.json:ro", serverDir)
+
+	args := []string{
+		"run", "-d",
+		"--pull", "never",
+		"--name", name,
+		"--label", "panel.server_id=" + spec.ServerID,
+		"--label", "panel.kind=rnsquadjs",
+		"--network", "host",
+		"--user", "1001:1001",
+		"--read-only",
+		"--restart", "unless-stopped",
+		"-v", logsBind,
+		"-v", socketBind,
+		"-v", configBind,
+	}
+	keys := make([]string, 0, len(spec.Env))
+	for k := range spec.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", k, spec.Env[k]))
+	}
+	args = append(args, validate.RNSquadJSImage)
+	return args, nil
+}
+
+// ensureSidecarDir creates the per-server socket/config dir the sidecar needs.
+// MkdirAll honours the process umask (which strips the setgid bit and group
+// write), so the mode is forced afterwards with Chmod. The dir is then chowned
+// to the sidecar uid; the group is left inherited from the setgid parent
+// (tmpfiles.d creates the root as 2775 root:panel). The bridge runs as root in
+// production where the Chown succeeds; a non-root caller (dev/test) hits EPERM,
+// which is tolerated because a non-root bridge cannot drive containers anyway.
+func (d *DockerRunner) ensureSidecarDir(serverID string) error {
+	dir := d.socketRoot() + "/" + serverID
+	if err := os.MkdirAll(dir, sidecarDirMode); err != nil {
+		return fmt.Errorf("create sidecar dir: %w", err)
+	}
+	if err := os.Chmod(dir, sidecarDirMode); err != nil {
+		return fmt.Errorf("chmod sidecar dir: %w", err)
+	}
+	if err := os.Chown(dir, sidecarUID, -1); err != nil {
+		if errors.Is(err, syscall.EPERM) && os.Geteuid() != 0 {
+			return nil
+		}
+		return fmt.Errorf("chown sidecar dir: %w", err)
+	}
+	return nil
+}
+
+func (d *DockerRunner) RunRNSquadJS(ctx context.Context, spec RNSquadJSRunSpec) (string, error) {
+	args, err := d.composeRNSquadJSArgs(spec)
+	if err != nil {
+		return "", err
+	}
+	if err := d.ensureSidecarDir(spec.ServerID); err != nil {
+		return "", err
+	}
+	so, se, exit, err := d.R.Run(ctx, d.Bin, args, nil)
+	if err != nil {
+		return strings.TrimSpace(string(so)), err
+	}
+	if exit != 0 {
+		return strings.TrimSpace(string(so)), fmt.Errorf("docker run rnsquadjs exit %d: %s", exit, strings.TrimSpace(string(se)))
 	}
 	return strings.TrimSpace(string(so)), nil
 }

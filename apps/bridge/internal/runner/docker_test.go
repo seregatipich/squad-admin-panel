@@ -2,6 +2,9 @@ package runner
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -212,5 +215,116 @@ func TestDockerRmLowercaseNoSuchContainerIsIdempotent(t *testing.T) {
 	d := NewDocker(f)
 	if err := d.Rm(context.Background(), "squad-019dbb45-3556-751f-9124-d4cf0e6b0053"); err != nil {
 		t.Errorf("expected idempotent rm on missing container (lowercase), got %v", err)
+	}
+}
+
+func TestComposeRNSquadJSArgs(t *testing.T) {
+	d := &DockerRunner{}
+	spec := RNSquadJSRunSpec{
+		ServerID: "0196f0a2-1111-2222-3333-444444444444",
+		Env: map[string]string{
+			"SERVER_ID":         "0196f0a2-1111-2222-3333-444444444444",
+			"PANEL_BRIDGE_MODE": "shadow",
+		},
+	}
+	args, err := d.composeRNSquadJSArgs(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"--name rnsquadjs-0196f0a2-1111-2222-3333-444444444444",
+		"--network host",
+		"--read-only",
+		"--user 1001:1001",
+		"--restart unless-stopped",
+		"--pull never",
+		"-v /var/lib/squad-panel/saved/0196f0a2-1111-2222-3333-444444444444/SquadGame/Saved/Logs:/squad/Logs:ro",
+		"-v /run/squad-panel/rnsquadjs/0196f0a2-1111-2222-3333-444444444444:/run/panelBridge:rw",
+		"-v /run/squad-panel/rnsquadjs/0196f0a2-1111-2222-3333-444444444444/config.json:/app/config.json:ro",
+		"-e PANEL_BRIDGE_MODE=shadow",
+		"-e SERVER_ID=0196f0a2-1111-2222-3333-444444444444",
+		"squad-panel/rnsquadjs:latest",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("args missing %q\nargs: %s", want, joined)
+		}
+	}
+	// env must be deterministic (sorted by key)
+	modeIdx := strings.Index(joined, "PANEL_BRIDGE_MODE")
+	idIdx := strings.Index(joined, "SERVER_ID=")
+	if modeIdx > idIdx {
+		t.Fatal("env args must be sorted by key")
+	}
+}
+
+func TestComposeRNSquadJSArgsRejectsBadUUID(t *testing.T) {
+	d := &DockerRunner{}
+	if _, err := d.composeRNSquadJSArgs(RNSquadJSRunSpec{ServerID: "not-a-uuid"}); err == nil {
+		t.Fatal("expected bad uuid rejected")
+	}
+}
+
+func TestRunRNSquadJS(t *testing.T) {
+	root := t.TempDir()
+	f := &Fake{Stdout: []byte("rns-container-id\n")}
+	d := NewDocker(f)
+	d.SocketRoot = root
+	spec := RNSquadJSRunSpec{
+		ServerID: "0196f0a2-1111-2222-3333-444444444444",
+		Env:      map[string]string{"PANEL_BRIDGE_MODE": "shadow"},
+	}
+	wantArgs, err := d.composeRNSquadJSArgs(spec)
+	if err != nil {
+		t.Fatalf("composeRNSquadJSArgs: %v", err)
+	}
+	id, err := d.RunRNSquadJS(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("RunRNSquadJS: %v", err)
+	}
+	if id != "rns-container-id" {
+		t.Errorf("id = %q, want rns-container-id", id)
+	}
+	if len(f.Calls) != 1 {
+		t.Fatalf("expected 1 docker call, got %d", len(f.Calls))
+	}
+	if !reflect.DeepEqual(f.Calls[0].Args, wantArgs) {
+		t.Fatalf("docker called with\n  %v\nwant\n  %v", f.Calls[0].Args, wantArgs)
+	}
+	// The per-server socket dir must exist so the sidecar (uid 1001) can
+	// create rcon.sock there, with mode 02770 so the panel group keeps rwx
+	// (and the setgid bit) while others get nothing.
+	dir := filepath.Join(root, spec.ServerID)
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat sidecar dir: %v", err)
+	}
+	if info.Mode().Perm() != 0o770 {
+		t.Errorf("dir perm = %o, want 770", info.Mode().Perm())
+	}
+	if info.Mode()&os.ModeSetgid == 0 {
+		t.Errorf("dir missing setgid bit: mode %v", info.Mode())
+	}
+}
+
+// TestEnsureSidecarDirSetsModeAndToleratesNonRootChown documents the non-root
+// contract: the bridge runs as root in production where the Chown to uid 1001
+// succeeds. Under a non-root test process the Chown returns EPERM, which
+// ensureSidecarDir tolerates (a non-root bridge cannot drive containers
+// anyway); the dir and its 02770 mode must still be set so the assertion is on
+// the directory state, not the Chown error.
+func TestEnsureSidecarDirSetsModeAndToleratesNonRootChown(t *testing.T) {
+	root := t.TempDir()
+	d := &DockerRunner{SocketRoot: root}
+	serverID := "0196f0a2-1111-2222-3333-444444444444"
+	if err := d.ensureSidecarDir(serverID); err != nil {
+		t.Fatalf("ensureSidecarDir: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(root, serverID))
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o770 || info.Mode()&os.ModeSetgid == 0 {
+		t.Fatalf("mode = %v, want drwxrws--- (02770)", info.Mode())
 	}
 }
