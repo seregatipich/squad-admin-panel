@@ -5,6 +5,7 @@ import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
+import { dropCutoverServers } from './cutover.js';
 import { TailManager } from './manager.js';
 import { LogIngestor } from './parser/ingest.js';
 import { publish } from './publish.js';
@@ -137,7 +138,8 @@ async function main() {
     const wanted = rows
       .filter((r) => r.status === 'running' || r.status === 'starting')
       .map((r) => ({ serverId: r.id, beaconPort: r.beaconPort }));
-    manager.reconcile(wanted);
+    const active = await dropCutoverServers(redis, wanted);
+    manager.reconcile(active);
   }
 
   await reconcile();
