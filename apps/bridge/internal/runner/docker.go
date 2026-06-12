@@ -124,17 +124,19 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 // rcon.sock inside the read-only container.
 const sidecarUID = 1001
 
-// sidecarSockMode keeps group rwx + setgid and denies others. The setgid bit
-// is carried via os.ModeSetgid (NOT the raw 0o2000 octal bit, which Go's
-// FileMode does not interpret) so os.Chmod emits S_ISGID. This is the only
-// level chowned to the sidecar uid and the only level it can write.
-const sidecarSockMode = os.FileMode(0o770) | os.ModeSetgid
+// sidecarSockModeRaw is the raw syscall mode for the only sidecar-writable
+// level: group rwx + setgid, nothing for others. In a raw syscall mode the
+// setgid bit is octal 0o2000 (S_ISGID); os.ModeSetgid (a high FileMode bit)
+// must NOT be used here because Fchmod takes the raw bitmask, not a FileMode.
+// os.Stat still surfaces 0o2000 as os.ModeSetgid, which the tests assert.
+const sidecarSockModeRaw uint32 = 0o2770
 
-// sidecarServerDirMode applies to the per-server parent dir, which holds the
-// host-authored config.json. It stays root-owned (no chown) and denies group
-// write so the sidecar (uid 1001) cannot rewrite config.json through the rw
-// bind; only the nested sock subdir is sidecar-writable.
-const sidecarServerDirMode = os.FileMode(0o750) | os.ModeSetgid
+// sidecarServerDirModeRaw is the raw syscall mode for the per-server parent
+// dir holding the host-authored config.json: group r-x + setgid, no group
+// write. It stays root-owned (never chowned) so the sidecar (uid 1001) cannot
+// rewrite config.json through the rw bind; only the nested sock subdir is
+// sidecar-writable.
+const sidecarServerDirModeRaw uint32 = 0o2750
 
 // allowedSidecarEnv is the exhaustive set of environment keys the API may
 // pass through to the rnsquadjs sidecar. A compromised API container cannot
@@ -236,67 +238,82 @@ func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, er
 // :ro, so a compromised sidecar cannot rewrite the host config. In production
 // the per-server parent additionally must resolve under PanelSocketRoot; the
 // check is skipped when SocketRoot is test-overridden to a temp dir.
+//
+// Every mutation is anchored to a verified file descriptor, never a reusable
+// path string. The root is opened O_NOFOLLOW|O_DIRECTORY, each level is created
+// with Mkdirat and reopened O_NOFOLLOW|O_DIRECTORY relative to its parent fd,
+// and chmod/chown run as Fchmod/Fchown on that fd. A racer with rename access
+// to the parents (the API container bind-mounts the tree rw as uid 0)
+// therefore cannot swap a verified directory for a symlink between the check
+// and the privileged chmod/chown: a swapped-in symlink makes the O_NOFOLLOW
+// reopen fail closed with ELOOP/ENOTDIR.
 func (d *DockerRunner) ensureSidecarDir(serverID string) error {
-	serverDir := d.socketRoot() + "/" + serverID
+	root := d.socketRoot()
 	if d.SocketRoot == "" {
-		if _, err := validate.PanelSocketPath(serverDir); err != nil {
+		if _, err := validate.PanelSocketPath(root + "/" + serverID); err != nil {
 			return err
 		}
 	}
-	if err := prepareSidecarDir(serverDir, sidecarServerDirMode, false); err != nil {
+	rootFd, err := syscall.Open(root, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return forbidNonDir("sidecar root", root, err)
+	}
+	defer syscall.Close(rootFd)
+
+	idFd, err := openVerifiedSidecarDir(rootFd, serverID, sidecarServerDirModeRaw, false)
+	if err != nil {
 		return err
 	}
-	return prepareSidecarDir(serverDir+"/sock", sidecarSockMode, true)
+	defer syscall.Close(idFd)
+
+	sockFd, err := openVerifiedSidecarDir(idFd, "sock", sidecarSockModeRaw, true)
+	if err != nil {
+		return err
+	}
+	return syscall.Close(sockFd)
 }
 
-// prepareSidecarDir creates a single tree level with the given mode. Root's
-// chmod/chown follow symlinks, so it Lstats before and after MkdirAll and
-// refuses to operate on anything that is not a real directory (a planted
-// symlink, a file, ...), wrapping validate.ErrForbidden. MkdirAll honours the
-// umask (stripping setgid and group bits), so the mode is forced with Chmod.
-// chownToSidecar chowns the level to the sidecar uid; a non-root caller
-// (dev/test) hits EPERM, tolerated because a non-root bridge cannot drive
-// containers anyway.
-func prepareSidecarDir(path string, mode os.FileMode, chownToSidecar bool) error {
-	if err := assertRealDir(path); err != nil {
-		return err
+// openVerifiedSidecarDir creates name under parentFd (tolerating an existing
+// entry), reopens it O_NOFOLLOW|O_DIRECTORY relative to parentFd so a planted
+// symlink fails closed, then forces the exact mode with Fchmod (Mkdirat honours
+// the umask, which strips setgid and group bits). When chownToSidecar it
+// Fchowns the inode to the sidecar uid; a non-root caller (dev/test) hits
+// EPERM, tolerated because a non-root bridge cannot drive containers anyway.
+// Returns the open fd; the caller owns closing it.
+func openVerifiedSidecarDir(parentFd int, name string, mode uint32, chownToSidecar bool) (int, error) {
+	if err := syscall.Mkdirat(parentFd, name, mode); err != nil && !errors.Is(err, syscall.EEXIST) {
+		return -1, fmt.Errorf("create sidecar dir %q: %w", name, err)
 	}
-	if err := os.MkdirAll(path, mode); err != nil {
-		return fmt.Errorf("create sidecar dir: %w", err)
+	fd, err := syscall.Openat(parentFd, name, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, forbidNonDir("sidecar path", name, err)
 	}
-	if err := assertRealDir(path); err != nil {
-		return err
-	}
-	if err := os.Chmod(path, mode); err != nil {
-		return fmt.Errorf("chmod sidecar dir: %w", err)
+	if err := syscall.Fchmod(fd, mode); err != nil {
+		syscall.Close(fd)
+		return -1, fmt.Errorf("chmod sidecar dir %q: %w", name, err)
 	}
 	if !chownToSidecar {
-		return nil
+		return fd, nil
 	}
-	if err := os.Chown(path, sidecarUID, -1); err != nil {
+	if err := syscall.Fchown(fd, sidecarUID, -1); err != nil {
 		if errors.Is(err, syscall.EPERM) && os.Geteuid() != 0 {
-			return nil
+			return fd, nil
 		}
-		return fmt.Errorf("chown sidecar dir: %w", err)
+		syscall.Close(fd)
+		return -1, fmt.Errorf("chown sidecar dir %q: %w", name, err)
 	}
-	return nil
+	return fd, nil
 }
 
-// assertRealDir requires path to be absent or a real directory. A symlink (or
-// any non-directory) is rejected with a forbidden error so a planted symlink
-// cannot redirect root's subsequent chmod/chown to an attacker-chosen target.
-func assertRealDir(path string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+// forbidNonDir maps the "not a real directory" open failures (a planted
+// symlink yields ELOOP under O_NOFOLLOW; a non-directory yields ENOTDIR under
+// O_DIRECTORY) onto validate.ErrForbidden so callers can match the policy
+// error, and wraps any other open failure verbatim.
+func forbidNonDir(what, path string, err error) error {
+	if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.ENOTDIR) {
+		return fmt.Errorf("%w: %s %q is not a real directory", validate.ErrForbidden, what, path)
 	}
-	if err != nil {
-		return fmt.Errorf("lstat sidecar dir: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsDir() {
-		return fmt.Errorf("%w: sidecar path %q is not a real directory", validate.ErrForbidden, path)
-	}
-	return nil
+	return fmt.Errorf("open %s %q: %w", what, path, err)
 }
 
 func (d *DockerRunner) RunRNSquadJS(ctx context.Context, spec RNSquadJSRunSpec) (string, error) {
@@ -307,9 +324,16 @@ func (d *DockerRunner) RunRNSquadJS(ctx context.Context, spec RNSquadJSRunSpec) 
 	if err := d.ensureSidecarDir(spec.ServerID); err != nil {
 		return "", err
 	}
-	// config.json is rendered by the API into the server dir. If it is absent
-	// when docker runs the :ro bind, docker (root) silently creates a DIRECTORY
-	// there, so fail loudly before launching the sidecar.
+	// config.json is rendered by the API into the (root-owned) server dir. If it
+	// is absent when docker runs the :ro bind, docker (root) silently creates a
+	// DIRECTORY at the bind source, so fail loudly before launching the sidecar.
+	//
+	// This check stays a path-based Lstat (not fd-anchored) on purpose: unlike
+	// the chmod/chown in ensureSidecarDir it drives no privileged mutation, so
+	// the surviving check-to-bind race is non-escalating. The config content is
+	// API-supplied by design, and the worst a delete race can do is let docker
+	// create an empty dir at the bind source, which the sidecar entrypoint
+	// rejects so the container exits — a nuisance, never a privilege escalation.
 	configPath := d.socketRoot() + "/" + spec.ServerID + "/config.json"
 	if info, err := os.Lstat(configPath); err != nil || !info.Mode().IsRegular() {
 		return "", fmt.Errorf("config.json not rendered for %s", spec.ServerID)

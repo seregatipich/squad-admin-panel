@@ -319,6 +319,54 @@ func TestComposeRNSquadJSArgsEnvAllowlist(t *testing.T) {
 	}
 }
 
+// TestValidateSidecarEnvControlCharacters is the regression guard for the
+// broken-charset bug: the forbidden set must be the Go escape "\x00\n\r" (real
+// NUL/LF/CR), not the literal letters 'x','0','n','r'. With the buggy literal
+// form every redis URL is rejected (it contains 'r' and '0') while a real
+// newline would slip through. The plain redis URL acceptance below FAILS
+// against the buggy literal charset, proving the bug, and the real-control-char
+// rejections FAIL if the charset is ever weakened to literals.
+func TestValidateSidecarEnvControlCharacters(t *testing.T) {
+	if err := validateSidecarEnv(map[string]string{"REDIS_URL": "redis://127.0.0.1:6379"}); err != nil {
+		t.Fatalf("plain redis URL must be accepted (contains 'r' and '0'), got %v", err)
+	}
+
+	rejected := []struct {
+		name string
+		env  map[string]string
+	}{
+		{"value newline", map[string]string{"LOG_FILE": "a\nb"}},
+		{"value carriage return", map[string]string{"LOG_FILE": "a\rb"}},
+		{"value NUL", map[string]string{"LOG_FILE": "a\x00b"}},
+		{"key newline", map[string]string{"LOG_FILE\nINJECT": "x"}},
+		{"key equals", map[string]string{"PANEL_BRIDGE_MODE=x": "y"}},
+	}
+	for _, tc := range rejected {
+		err := validateSidecarEnv(tc.env)
+		if err == nil || !errors.Is(err, validate.ErrForbidden) {
+			t.Fatalf("%s: expected ErrForbidden, got %v", tc.name, err)
+		}
+	}
+}
+
+// TestEnsureSidecarDirRejectsSymlinkedRoot covers the rename-TOCTOU hardening:
+// when the socket ROOT itself is a symlink, the fd-anchored open (O_NOFOLLOW)
+// must refuse it instead of creating the per-server tree inside the symlink
+// target. The previous path-based implementation followed the intermediate
+// symlink silently.
+func TestEnsureSidecarDirRejectsSymlinkedRoot(t *testing.T) {
+	realRoot := t.TempDir()
+	parent := t.TempDir()
+	symRoot := filepath.Join(parent, "root")
+	if err := os.Symlink(realRoot, symRoot); err != nil {
+		t.Fatalf("plant symlinked root: %v", err)
+	}
+	d := &DockerRunner{SocketRoot: symRoot}
+	if err := d.ensureSidecarDir("0196f0a2-1111-2222-3333-444444444444"); err == nil {
+		t.Fatal("expected error when the socket root is a symlink")
+	}
+}
+
 func TestRunRNSquadJS(t *testing.T) {
 	root := t.TempDir()
 	f := &Fake{Stdout: []byte("rns-container-id\n")}
