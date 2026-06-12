@@ -23,4 +23,27 @@ describe('Heartbeat', () => {
     expect(typeof payload.hostname).toBe('string');
     expect(payload.version).toBe('unknown');
   });
+
+  it('logs and swallows tick rejections instead of producing an unhandled rejection', async () => {
+    const set = vi.fn().mockRejectedValue(new Error('redis down'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const hb = new Heartbeat({ set } as never, 'srv-1', 1000);
+    hb.start();
+    await vi.advanceTimersByTimeAsync(2000);
+    hb.stop();
+    expect(set).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('does not fire new ticks after stop()', async () => {
+    const set = vi.fn().mockResolvedValue('OK');
+    const hb = new Heartbeat({ set } as never, 'srv-1', 1000);
+    hb.start();
+    await vi.advanceTimersByTimeAsync(0);
+    hb.stop();
+    set.mockClear();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(set).not.toHaveBeenCalled();
+  });
 });

@@ -1,11 +1,13 @@
 import { v7 as uuidv7 } from 'uuid';
 
 export interface EventEnvelope {
-  id: string;
-  serverId: string;
-  type: string;
+  event_id: string;
   version: number;
+  type: string;
+  server_id: string;
   ts: string;
+  actor: { kind: 'system'; id: null };
+  correlation_id: null;
   payload: Record<string, unknown>;
 }
 
@@ -15,11 +17,11 @@ type Mapper = (raw: RawEvent) => { type: string; payload: Record<string, unknown
 const MAPPERS: Record<string, Mapper> = {
   PLAYER_CONNECTED: (r) => ({
     type: 'player.connected',
-    payload: { steamId: r.steamID, eosId: r.eosID, name: r.name },
+    payload: { steam_id64: r.steamID, eos_id: r.eosID, name: r.name, ip: null },
   }),
   PLAYER_DISCONNECTED: (r) => ({
     type: 'player.disconnected',
-    payload: { steamId: r.steamID, eosId: r.eosID, name: r.name },
+    payload: { steam_id64: r.steamID, eos_id: r.eosID, reason: null },
   }),
   PLAYER_DAMAGED: (r) => ({
     type: 'player.damaged',
@@ -45,17 +47,20 @@ const MAPPERS: Record<string, Mapper> = {
     type: 'player.unpossess',
     payload: { player: r.player, vehicle: r.possessClassname },
   }),
-  NEW_GAME: (r) => ({
+  // The legacy parser derives these from the match state machine and always
+  // emits the same constant transition per event type, so the sidecar can
+  // mirror it exactly even though RNSquadJS does not expose the states.
+  NEW_GAME: () => ({
     type: 'match.started',
-    payload: { layer: r.layer },
+    payload: { from_state: 'WaitingToStart', to_state: 'InProgress' },
   }),
-  ROUND_ENDED: (r) => ({
+  ROUND_ENDED: () => ({
     type: 'match.ended',
-    payload: { winner: r.winner, layer: r.layer },
+    payload: { from_state: 'InProgress', to_state: 'WaitingPostMatch' },
   }),
   SQUAD_CREATED: (r) => ({
     type: 'squad.created',
-    payload: { player: r.player, squadId: r.squadID, squadName: r.squadName, team: r.team },
+    payload: { player: r.player, squad_id: r.squadID, squad_name: r.squadName, team: r.team },
   }),
   DEPLOYABLE_DAMAGED: (r) => ({
     type: 'deployable.damaged',
@@ -63,7 +68,7 @@ const MAPPERS: Record<string, Mapper> = {
   }),
   TICK_RATE: (r) => ({
     type: 'server.tick_rate',
-    payload: { tickRate: r.tickRate },
+    payload: { tick_rate: r.tickRate },
   }),
   ADMIN_BROADCAST: (r) => ({
     type: 'admin.broadcast',
@@ -71,7 +76,7 @@ const MAPPERS: Record<string, Mapper> = {
   }),
   CHAT_MESSAGE: (r) => ({
     type: 'chat.message',
-    payload: { channel: r.chat, steamId: r.steamID, name: r.name, message: r.message },
+    payload: { channel: r.chat, steam_id: r.steamID, name: r.name, message: r.message },
   }),
   POSSESSED_ADMIN_CAMERA: (r) => ({
     type: 'admin.camera_entered',
@@ -83,17 +88,27 @@ const MAPPERS: Record<string, Mapper> = {
   }),
 };
 
+function toIsoTimestamp(time: unknown): string {
+  if (typeof time === 'string' || time instanceof Date) {
+    const ms = new Date(time).getTime();
+    if (!Number.isNaN(ms)) return new Date(ms).toISOString();
+  }
+  return new Date().toISOString();
+}
+
 export function mapEvent(serverId: string, rnType: string, raw: RawEvent): EventEnvelope | null {
   const mapper = MAPPERS[rnType];
   if (!mapper) return null;
   const mapped = mapper(raw);
   if (!mapped) return null;
   return {
-    id: uuidv7(),
-    serverId,
-    type: mapped.type,
+    event_id: uuidv7(),
     version: 1,
-    ts: typeof raw.time === 'string' ? raw.time : new Date().toISOString(),
+    type: mapped.type,
+    server_id: serverId,
+    ts: toIsoTimestamp(raw.time),
+    actor: { kind: 'system', id: null },
+    correlation_id: null,
     payload: mapped.payload,
   };
 }

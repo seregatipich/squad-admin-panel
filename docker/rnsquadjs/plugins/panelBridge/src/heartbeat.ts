@@ -3,6 +3,7 @@ import type { Redis } from 'ioredis';
 
 export class Heartbeat {
   private timer?: NodeJS.Timeout;
+  private stopped = false;
   private readonly startedAt = new Date().toISOString();
 
   constructor(
@@ -12,16 +13,27 @@ export class Heartbeat {
   ) {}
 
   start(): void {
-    void this.tick();
+    this.stopped = false;
+    void this.runTick();
     this.timer = setInterval(() => {
-      void this.tick();
+      void this.runTick();
     }, this.intervalMs);
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
+    }
+  }
+
+  private async runTick(): Promise<void> {
+    if (this.stopped) return;
+    try {
+      await this.tick();
+    } catch (err) {
+      console.error('panelBridge heartbeat tick', err);
     }
   }
 

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Agent, request } from 'undici';
@@ -52,6 +52,23 @@ describe('RconUnixServer', () => {
     const body = (await res.body.json()) as { ok: boolean; error: string };
     expect(body).toEqual({ ok: false, error: 'missing method' });
     expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the socket cannot be bound (missing directory)', async () => {
+    const missing = new RconUnixServer(
+      join(tmp, 'no-such-dir', 'rcon.sock'),
+      vi.fn<RconExecutor>(async () => 'unused'),
+    );
+    await expect(missing.listen()).rejects.toThrow();
+  });
+
+  it('chmods the bound socket to 0o770 so the panel-group peer can connect', async () => {
+    server = new RconUnixServer(
+      sock,
+      vi.fn<RconExecutor>(async () => 'ok'),
+    );
+    await server.listen();
+    expect(statSync(sock).mode & 0o777).toBe(0o770);
   });
 });
 

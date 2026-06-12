@@ -29,12 +29,14 @@ const asRedis = (fake: FakeRedis): Redis => fake as unknown as Redis;
 
 const SERVER_ID = '019dbaa5-1234-7abc-8def-0123456789ab';
 const ENVELOPE: EventEnvelope = {
-  id: 'evt',
-  serverId: SERVER_ID,
-  type: 'player.connected',
+  event_id: '019dbaa5-1234-7abc-8def-0123456789ac',
   version: 1,
+  type: 'player.connected',
+  server_id: SERVER_ID,
   ts: '2026-04-24T10:00:00.000Z',
-  payload: { steamId: 'A' },
+  actor: { kind: 'system', id: null },
+  correlation_id: null,
+  payload: { steam_id64: 'A' },
 };
 
 describe('RedisPublisher (production mode)', () => {

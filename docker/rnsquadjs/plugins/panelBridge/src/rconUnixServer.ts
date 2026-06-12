@@ -1,4 +1,4 @@
-import { unlink } from 'node:fs/promises';
+import { chmod, unlink } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 
 export type RconExecutor = (method: string, args: unknown[]) => Promise<string>;
@@ -46,8 +46,17 @@ export class RconUnixServer {
         }
       });
     });
+    await new Promise<void>((resolve, reject) => {
+      const onError = (err: Error) => reject(err);
+      server.once('error', onError);
+      server.listen(this.socketPath, () => {
+        server.off('error', onError);
+        resolve();
+      });
+    });
+    server.on('error', (err) => console.error('panelBridge rcon socket', err));
     this.server = server;
-    await new Promise<void>((resolve) => server.listen(this.socketPath, resolve));
+    await chmod(this.socketPath, 0o770);
   }
 
   async close(): Promise<void> {

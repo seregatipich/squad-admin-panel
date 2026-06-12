@@ -9,7 +9,7 @@ export interface PanelBridgeContext {
   serverId: string;
   emitter: EventEmitter;
   rconExec: (method: string, args: unknown[]) => Promise<string>;
-  onStatus: (cb: (state: 'connected' | 'disconnected') => void) => void;
+  onStatus: (cb: (state: 'connected' | 'disconnected') => void) => (() => void) | void;
 }
 
 const RN_EVENTS = [
@@ -32,6 +32,19 @@ const RN_EVENTS = [
   'UNPOSSESSED_ADMIN_CAMERA',
 ] as const;
 
+type RnEventHandler = (raw: Record<string, unknown>) => void;
+
+// In production mode the sidecar replaces only the legacy log pipeline (D4),
+// and the panel's strict envelope schema rejects types outside its enum —
+// so the real stream receives the legacy-parity types only. Shadow mode
+// publishes everything for parity analysis and future expansion.
+const PRODUCTION_TYPES = new Set([
+  'player.connected',
+  'player.disconnected',
+  'match.started',
+  'match.ended',
+]);
+
 export async function startPanelBridge(
   ctx: PanelBridgeContext,
 ): Promise<{ stop: () => Promise<void> }> {
@@ -40,17 +53,25 @@ export async function startPanelBridge(
   const publisher = new RedisPublisher(redis, ctx.serverId, mode);
   const heartbeat = new Heartbeat(redis, ctx.serverId);
 
+  let stopped = false;
+  const eventHandlers: Array<[(typeof RN_EVENTS)[number], RnEventHandler]> = [];
+
   for (const evt of RN_EVENTS) {
-    ctx.emitter.on(evt, (raw: Record<string, unknown>) => {
+    const handler: RnEventHandler = (raw) => {
+      if (stopped) return;
       const envelope = mapEvent(ctx.serverId, evt, raw);
       if (!envelope) return;
+      if (mode === 'production' && !PRODUCTION_TYPES.has(envelope.type)) return;
       publisher.publishEvent(envelope).catch((err) => {
         console.error('panelBridge publishEvent', err);
       });
-    });
+    };
+    ctx.emitter.on(evt, handler);
+    eventHandlers.push([evt, handler]);
   }
 
-  ctx.onStatus((state) => {
+  const unsubscribeStatus = ctx.onStatus((state) => {
+    if (stopped) return;
     publisher.publishRconStatus({ state, lastChange: new Date().toISOString() }).catch((err) => {
       console.error('panelBridge publishRconStatus', err);
     });
@@ -69,6 +90,12 @@ export async function startPanelBridge(
 
   return {
     stop: async () => {
+      stopped = true;
+      for (const [evt, handler] of eventHandlers) {
+        ctx.emitter.off(evt, handler);
+      }
+      eventHandlers.length = 0;
+      unsubscribeStatus?.();
       heartbeat.stop();
       await rconServer?.close();
       await redis.quit();
