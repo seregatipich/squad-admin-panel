@@ -33,6 +33,7 @@ let pgsql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;
 let ownerRoleId: string;
 let liveSnapshot: LiveStateSnapshot;
+const playerIds = new Map<bigint, string>();
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
@@ -55,7 +56,7 @@ beforeEach(async () => {
   await maskLiveOwners(db, liveSnapshot);
   for (const sid of [TEST_PLAYER_A, TEST_PLAYER_B]) {
     const stub = `Test ${String(sid).slice(-4)}`;
-    await db
+    const rows = await db
       .insert(players)
       .values({
         steamId64: sid,
@@ -66,7 +67,9 @@ beforeEach(async () => {
       .onConflictDoUpdate({
         target: players.steamId64,
         set: { roleId: null },
-      });
+      })
+      .returning({ id: players.id });
+    playerIds.set(sid, rows[0]!.id);
   }
 });
 
@@ -81,7 +84,7 @@ afterEach(async () => {
 describeIfDb('claimFirstOwner', () => {
   it('claims Owner once and sets the singleton flag', async () => {
     const bridge = fakeBridge(false);
-    const result = await claimFirstOwner(db, bridge, TEST_PLAYER_A);
+    const result = await claimFirstOwner(db, bridge, playerIds.get(TEST_PLAYER_A)!, TEST_PLAYER_A);
     expect(result).toBe('claimed');
 
     const player = await db
@@ -97,10 +100,10 @@ describeIfDb('claimFirstOwner', () => {
   });
 
   it('returns already_claimed on second call (DB anchor)', async () => {
-    await claimFirstOwner(db, fakeBridge(false), TEST_PLAYER_A);
+    await claimFirstOwner(db, fakeBridge(false), playerIds.get(TEST_PLAYER_A)!, TEST_PLAYER_A);
 
     const bridge2 = fakeBridge(false);
-    const result = await claimFirstOwner(db, bridge2, TEST_PLAYER_B);
+    const result = await claimFirstOwner(db, bridge2, playerIds.get(TEST_PLAYER_B)!, TEST_PLAYER_B);
     expect(result).toBe('already_claimed');
 
     const playerB = await db
@@ -113,7 +116,7 @@ describeIfDb('claimFirstOwner', () => {
   // regression: stale /var/lib/squad-panel/.first-owner-claimed sentinel blocked claim path
   it('DB is authoritative — stale sentinel does not block a fresh claim (regression)', async () => {
     const bridge = fakeBridge(true);
-    const result = await claimFirstOwner(db, bridge, TEST_PLAYER_A);
+    const result = await claimFirstOwner(db, bridge, playerIds.get(TEST_PLAYER_A)!, TEST_PLAYER_A);
     expect(result).toBe('claimed');
 
     const meta = await db.select().from(panelMeta).where(eq(panelMeta.id, 1));
@@ -132,8 +135,8 @@ describeIfDb('claimFirstOwner', () => {
     const bridge1 = fakeBridge(false);
     const bridge2 = fakeBridge(false);
     const [r1, r2] = await Promise.all([
-      claimFirstOwner(db, bridge1, TEST_PLAYER_A),
-      claimFirstOwner(db, bridge2, TEST_PLAYER_B),
+      claimFirstOwner(db, bridge1, playerIds.get(TEST_PLAYER_A)!, TEST_PLAYER_A),
+      claimFirstOwner(db, bridge2, playerIds.get(TEST_PLAYER_B)!, TEST_PLAYER_B),
     ]);
     const claimed = [r1, r2].filter((r) => r === 'claimed');
     const alreadyClaimed = [r1, r2].filter((r) => r === 'already_claimed');
@@ -147,7 +150,12 @@ describeIfDb('claimFirstOwner', () => {
       .set({ isSystemRole: false })
       .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)));
     try {
-      const result = await claimFirstOwner(db, fakeBridge(false), TEST_PLAYER_A);
+      const result = await claimFirstOwner(
+        db,
+        fakeBridge(false),
+        playerIds.get(TEST_PLAYER_A)!,
+        TEST_PLAYER_A,
+      );
       expect(result).toBe('no_owner_role');
     } finally {
       await db.update(roles).set({ isSystemRole: true }).where(eq(roles.name, 'Owner'));

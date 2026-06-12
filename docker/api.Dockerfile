@@ -9,6 +9,7 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 COPY packages/shared-config/package.json packages/shared-config/
 COPY packages/shared-types/package.json packages/shared-types/
 COPY packages/bridge-client/package.json packages/bridge-client/
+COPY packages/diag/package.json packages/diag/
 COPY packages/db/package.json packages/db/
 COPY apps/api/package.json apps/api/
 RUN pnpm install --frozen-lockfile
@@ -17,12 +18,14 @@ FROM deps AS builder
 COPY packages/shared-config packages/shared-config
 COPY packages/shared-types packages/shared-types
 COPY packages/bridge-client packages/bridge-client
+COPY packages/diag packages/diag
 COPY packages/db packages/db
 COPY apps/api apps/api
 COPY tsconfig.base.json biome.json turbo.json ./
 RUN pnpm --filter @squad/shared-config build
 RUN pnpm --filter @squad/shared-types build
 RUN pnpm --filter @squad/bridge-client build
+RUN pnpm --filter @squad/diag build
 RUN pnpm --filter @squad/db build
 RUN pnpm --filter @squad/api build
 

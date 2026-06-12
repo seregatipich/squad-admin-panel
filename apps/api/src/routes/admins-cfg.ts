@@ -104,7 +104,7 @@ const adminsCfgRoutes: FastifyPluginAsync = async (app) => {
       }
       await publishAdminsCfgSyncForServer(app.redis, req.query.server_id, {
         reason: 'force_sync',
-        actor_steam_id64: req.user?.steamId64 ? String(req.user.steamId64) : null,
+        actor_player_id: req.user?.playerId ?? null,
         enqueued_at: new Date().toISOString(),
         request_id: req.id,
       });

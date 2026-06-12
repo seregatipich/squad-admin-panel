@@ -57,7 +57,7 @@ async function seedAuthedPlayer(
   db: any,
   redis: Redis,
   steamId64: bigint,
-): Promise<{ token: string; sessionId: string }> {
+): Promise<{ token: string; sessionId: string; playerId: string }> {
   const ownerRoleRows = await db
     .select({ id: roles.id })
     .from(roles)
@@ -65,19 +65,22 @@ async function seedAuthedPlayer(
     .limit(1);
   const ownerRoleId = ownerRoleRows[0]?.id;
   if (!ownerRoleId) throw new Error('Owner role missing — migration 0009 not applied?');
-  await db.insert(players).values({
-    steamId64,
-    canonicalName: 'TestPlayer',
-    canonicalNameNormalized: 'testplayer',
-    roleId: ownerRoleId,
-  });
+  const [{ id: insertedId }] = await db
+    .insert(players)
+    .values({
+      steamId64,
+      canonicalName: 'TestPlayer',
+      canonicalNameNormalized: 'testplayer',
+      roleId: ownerRoleId,
+    })
+    .returning({ id: players.id });
   const result = await createSession(db, redis, {
-    steamId64,
+    playerId: insertedId,
     ip: null,
     userAgent: 'test-ua',
     ttlMs: 21600 * 1000,
   });
-  return { token: result.token, sessionId: result.session.id };
+  return { token: result.token, sessionId: result.session.id, playerId: insertedId };
 }
 
 describe('GET /api/v1/me', () => {
@@ -161,20 +164,23 @@ describe('GET /api/v1/me/sessions', () => {
   });
 
   it('lists only own sessions and marks current', async () => {
-    const { token: tokenA } = await seedAuthedPlayer(h.db, h.redis, 76561198000000400n);
+    const { token: tokenA, playerId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000400n);
     await createSession(h.db, h.redis, {
-      steamId64: 76561198000000400n,
+      playerId,
       ip: '10.0.0.5',
       userAgent: 'second-ua',
       ttlMs: 21600 * 1000,
     });
-    await h.db.insert(players).values({
-      steamId64: 76561198000000401n,
-      canonicalName: 'Other',
-      canonicalNameNormalized: 'other',
-    });
+    const [{ id: otherPlayerId }] = await h.db
+      .insert(players)
+      .values({
+        steamId64: 76561198000000401n,
+        canonicalName: 'Other',
+        canonicalNameNormalized: 'other',
+      })
+      .returning({ id: players.id });
     await createSession(h.db, h.redis, {
-      steamId64: 76561198000000401n,
+      playerId: otherPlayerId,
       ip: '10.0.0.6',
       userAgent: 'other-ua',
       ttlMs: 21600 * 1000,
@@ -206,9 +212,9 @@ describe('DELETE /api/v1/me/sessions/:id', () => {
   });
 
   it('revokes own session by id', async () => {
-    const { token } = await seedAuthedPlayer(h.db, h.redis, 76561198000000500n);
+    const { token, playerId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000500n);
     const second = await createSession(h.db, h.redis, {
-      steamId64: 76561198000000500n,
+      playerId,
       ip: null,
       userAgent: 'b',
       ttlMs: 21600 * 1000,
@@ -228,13 +234,16 @@ describe('DELETE /api/v1/me/sessions/:id', () => {
 
   it("returns 404 for another user's session", async () => {
     const { token } = await seedAuthedPlayer(h.db, h.redis, 76561198000000600n);
-    await h.db.insert(players).values({
-      steamId64: 76561198000000601n,
-      canonicalName: 'Other',
-      canonicalNameNormalized: 'other',
-    });
+    const [{ id: otherPlayerId }] = await h.db
+      .insert(players)
+      .values({
+        steamId64: 76561198000000601n,
+        canonicalName: 'Other',
+        canonicalNameNormalized: 'other',
+      })
+      .returning({ id: players.id });
     const otherSession = await createSession(h.db, h.redis, {
-      steamId64: 76561198000000601n,
+      playerId: otherPlayerId,
       ip: null,
       userAgent: 'b',
       ttlMs: 21600 * 1000,
@@ -262,9 +271,9 @@ describe('DELETE /api/v1/me/sessions', () => {
   });
 
   it('logs out all sessions for the player', async () => {
-    const { token } = await seedAuthedPlayer(h.db, h.redis, 76561198000000700n);
+    const { token, playerId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000700n);
     await createSession(h.db, h.redis, {
-      steamId64: 76561198000000700n,
+      playerId,
       ip: null,
       userAgent: 'b',
       ttlMs: 21600 * 1000,
@@ -278,7 +287,7 @@ describe('DELETE /api/v1/me/sessions', () => {
     const remaining = await h.db
       .select()
       .from(sessionsTable)
-      .where(eq(sessionsTable.steamId64, 76561198000000700n));
+      .where(eq(sessionsTable.playerId, playerId));
     expect(remaining.length).toBe(0);
   });
 
@@ -341,9 +350,9 @@ describe('GET /api/v1/me/sessions — pagination implicit', () => {
   });
 
   it('session list shows correct count when player has multiple sessions', async () => {
-    const { token } = await seedAuthedPlayer(h.db, h.redis, 76561198000000900n);
+    const { token, playerId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000900n);
     await createSession(h.db, h.redis, {
-      steamId64: 76561198000000900n,
+      playerId,
       ip: null,
       userAgent: 'extra-ua',
       ttlMs: 21600 * 1000,

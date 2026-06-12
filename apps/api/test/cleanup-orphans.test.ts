@@ -52,7 +52,7 @@ function makeCtx(
     db: db as unknown as CleanupContext['db'],
     bridge: bridge as unknown as CleanupContext['bridge'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    actorSteamId64: null,
+    actorPlayerId: null,
     actorIp: null,
     ...extra,
   };

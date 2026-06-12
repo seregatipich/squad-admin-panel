@@ -14,7 +14,8 @@ import { roles } from './roles.js';
 export const players = pgTable(
   'players',
   {
-    steamId64: bigint('steam_id64', { mode: 'bigint' }).primaryKey().notNull(),
+    id: uuid('id').primaryKey().notNull().default(sql`gen_random_uuid()`),
+    steamId64: bigint('steam_id64', { mode: 'bigint' }),
     canonicalName: text('canonical_name').notNull(),
     canonicalNameNormalized: text('canonical_name_normalized').notNull(),
     eosId: text('eos_id'),
@@ -34,6 +35,7 @@ export const players = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
   (table) => ({
+    steamId64UniqueIdx: uniqueIndex('players_steam_id64_unique_idx').on(table.steamId64),
     eosIdUniqueIdx: uniqueIndex('players_eos_id_unique_idx')
       .on(table.eosId)
       .where(sql`eos_id IS NOT NULL`),

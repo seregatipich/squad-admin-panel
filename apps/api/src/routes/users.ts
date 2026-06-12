@@ -19,7 +19,8 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
     },
     async (req) => {
       type UserRow = {
-        steam_id64: string;
+        id: string;
+        steam_id64: string | null;
         canonical_name: string;
         last_seen_at: string;
         role_id: string;
@@ -30,7 +31,7 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
       const q = req.query.q?.toLowerCase().trim();
       const roleId = req.query.role_id;
       const rows = await app.db.execute<UserRow>(sql`
-        SELECT p.steam_id64::text AS steam_id64, p.canonical_name, p.last_seen_at,
+        SELECT p.id, p.steam_id64::text AS steam_id64, p.canonical_name, p.last_seen_at,
                r.id AS role_id, r.name AS role_name, r.color AS role_color,
                r.is_system_role AS role_is_system
         FROM players p
@@ -45,6 +46,7 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
         ORDER BY p.last_seen_at DESC
       `);
       return (rows as unknown as UserRow[]).map((r) => ({
+        id: r.id,
         steam_id64: r.steam_id64,
         canonical_name: r.canonical_name,
         last_seen_at: r.last_seen_at,

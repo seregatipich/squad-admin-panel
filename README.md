@@ -1,10 +1,10 @@
 # Squad Admin Panel
 
-Open-source, self-hosted web admin panel for Squad dedicated servers. Install with one command; manage servers, players, and audit trail from a browser. Phase 0 foundation.
+Open-source, self-hosted web admin panel for Squad dedicated servers. Install with one command; manage servers, players, and audit trail from a browser.
 
-## Quick start (tested on Ubuntu 22.04 / 24.04 LTS and Debian 12)
+## Quick start (Ubuntu 22.04 / 24.04 LTS, Debian 12+)
 
-**Prerequisites**: Docker Engine + Compose v2 installed (see [docs.docker.com/engine/install](https://docs.docker.com/engine/install/)). Everything else is handled by the bootstrap script.
+**Prerequisites**: Docker Engine + Compose v2 ([docs.docker.com/engine/install](https://docs.docker.com/engine/install/)).
 
 ```bash
 git clone https://github.com/breaking-squad/squad-admin-panel.git
@@ -12,39 +12,90 @@ cd squad-admin-panel
 sudo ./scripts/bootstrap.sh
 ```
 
-That's it. The script is idempotent — safe to re-run if anything fails.
+The script is idempotent — safe to re-run. What it does:
 
-What it does:
+1. Installs the privileged Go host-bridge (systemd unit + socket + `panel` group).
+2. Creates the `data/` tree for PostgreSQL, Redis, Caddy, depot, and per-server files.
+3. Generates `.env` with fresh secrets (`POSTGRES_PASSWORD`, `APP_ENCRYPTION_KEY`, `SESSION_SECRET`). **Copy the printed `APP_ENCRYPTION_KEY` offline** — losing it means RCON passwords in the DB can no longer be decrypted.
+4. Adds `127.0.0.1 <APP_DOMAIN>` to `/etc/hosts` for dev domains (`*.lan`, `*.localhost`, `*.test`, `*.local`).
+5. Runs `docker compose build` and `docker compose up -d`, then waits for health checks.
 
-1. Installs the privileged Go host-bridge (`systemd` unit + socket + `panel` group + allow-listed host dirs).
-2. Generates `.env` with fresh 32-byte `POSTGRES_PASSWORD` / `APP_ENCRYPTION_KEY` / `SESSION_SECRET` and the matching `PANEL_GID`. **Copy the printed `APP_ENCRYPTION_KEY` offline** — losing it means RCON passwords in the DB can no longer be decrypted.
-3. Adds `127.0.0.1 <APP_DOMAIN>` to `/etc/hosts` when using a dev-only domain (`*.lan`, `*.localhost`, `*.test`, `*.local`).
-4. Runs `docker compose up -d --build` and waits for `api` + `caddy` to become healthy.
+Default domain is `squad-panel.lan`. For production, edit `.env` before starting:
 
-Default `APP_DOMAIN` is `squad-panel.lan`. For a real domain, edit `.env` before starting (`APP_DOMAIN=admin.example.com`, `TLS_ISSUER=acme`, `ACME_EMAIL=you@example.com`, `COOKIE_SECURE=true`) and re-run the bootstrap.
+```env
+APP_DOMAIN=admin.example.com
+TLS_ISSUER=acme
+ACME_EMAIL=you@example.com
+COOKIE_SECURE=true
+```
 
-Open `https://<APP_DOMAIN>/` in the browser and sign in via Steam — the first user to log in claims the Owner role automatically (DB-authoritative, single transaction; an advisory lock keeps concurrent first-logins safe). Install your first Squad dedicated server from `/servers/new`; the bridge runs `steamcmd` into a shared Docker volume (first install ~20 min, ~12.8 GB), writes the 19 default `.cfg` files, opens UFW, and starts the Squad container.
+Open `https://<APP_DOMAIN>/` — the first Steam login claims the Owner role automatically.
 
-## Server lifecycle
+## Rebuild from scratch
 
-The panel owns the full destructive lifecycle — install, edit, soft-delete with backup, restore, all from the UI.
-
-- **Soft-delete**: `DELETE /api/v1/servers/:id` first reads every `.cfg` via the bridge and persists each one as a row in `config_versions` tagged `deletion-backup-marker`. Only after the backup is durable does the orchestrator stop+remove the container, call the new `directory_delete` bridge RPC for `/var/lib/squad-panel/{configs,saved}/{uuid}`, drop UFW rules, and finally `UPDATE servers SET deleted_at = now()`. If the bridge can't read any `.cfg` the deletion aborts and the server stays alive — backups are never optional. Best-effort failures from phases 2–4 are recorded in the response body and audit log; the soft-delete still commits.
-- **Archive**: `/servers/archive` lists every soft-deleted server. `/servers/archive/[id]` shows the full backup file set with sha256 + author + timestamp, with read-only viewers for each file. The partial unique index `servers_slug_active_key` lets a deleted slug be reused by an active server.
-- **Restore wizard**: `/servers/archive/[id]/restore` mints a brand-new server (UUIDv7 + fresh RCON password + copied `serverSettings`), runs the standard install flow against the depot, then overlays the backed-up `.cfg` via `bridge.fileAtomicWrite` (skipping `Rcon.cfg` so the new server keeps its own credentials). Each restored file lands as a new `config_versions` row tagged `restored from server <id>`.
-
-## Live updates
-
-`GET /api/v1/ws/live` is a single authenticated WebSocket fed by Redis pub/sub fan-out. The status reconciler emits on container-state edges, the bridge heartbeat emits on connectivity flips, the RCON worker re-publishes its `rcon:status:{id}` writes on the `rcon:status:changed` channel — clients see changes within ~5 s instead of 10–30 s polling. The web client mounts a sticky `ConnectionBanner` that turns red when the WebSocket drops and amber when the bridge is unreachable, so operators never have to refresh to know whether an action will go through.
-
-### Uninstall
+Wipes everything — database, Redis, Caddy certs, per-server data, and the ~12 GB SteamCMD depot cache. Only `.env` secrets and the host bridge are preserved.
 
 ```bash
-sudo ./scripts/uninstall.sh          # removes host bridge + systemd units
-docker compose down -v --remove-orphans   # drops DB, Redis, caddy volumes
-docker volume rm squad-depot         # drops the 12 GB SteamCMD cache
-sudo rm -rf /var/lib/squad-panel     # drops per-server configs + saved/
+sudo ./scripts/rebuild.sh
 ```
+
+## Architecture
+
+```
+                         ┌──────────┐
+                         │  Caddy   │ :80/:443 reverse proxy + TLS
+                         └────┬─────┘
+                    ┌─────────┼─────────┐
+                    │         │         │
+               ┌────▼───┐ ┌──▼──┐ ┌────▼────┐
+               │  API   │ │ Web │ │ Workers  │  (7 active + 5 stubs)
+               │Fastify │ │Next │ │  Node.js │
+               └──┬──┬──┘ └─────┘ └────┬────┘
+                  │  │                  │
+           ┌──────┘  └──────┐           │
+      ┌────▼────┐     ┌────▼────┐  ┌───▼────┐
+      │Postgres │     │  Redis  │  │ Bridge │  Go daemon (root)
+      │  16     │     │   7     │  │  Unix  │  17 RPC methods
+      └─────────┘     └─────────┘  │ socket │
+                                   └───┬────┘
+                                       │
+                              ┌────────▼────────┐
+                              │  Host system    │
+                              │ Docker, UFW,    │
+                              │ SteamCMD, files │
+                              └─────────────────┘
+```
+
+### Services (docker-compose.yml)
+
+| Service | Role |
+|---------|------|
+| **caddy** | Reverse proxy, TLS termination (self-signed or ACME) |
+| **api** | Fastify REST + WebSocket server, auth, RBAC, audit logging |
+| **web** | Next.js 15 / React 19 dashboard |
+| **migrator** | One-shot Drizzle migration runner |
+| **worker-rcon** | RCON polling + A2S UDP queries |
+| **worker-log-ingest** | Docker log tailing, Squad log parsing |
+| **worker-metrics-sampler** | Host metrics collection (CPU, memory, disk) |
+| **worker-diag-flush** | Diagnostic event batching to database |
+| **worker-audit-archiver** | Cold-archives audit log rows >90 days |
+| **worker-event-partition** | Monthly partition rotation |
+| **worker-config-sync** | Config sync (stub) |
+| **postgres** | PostgreSQL 16 |
+| **redis** | Redis 7 (pub/sub, streams, cache) |
+
+### Key features
+
+- **Server lifecycle**: install, edit, soft-delete with backup, restore from archive
+- **Live updates**: single WebSocket per client via Redis pub/sub; status changes within ~5s
+- **Config editor**: Monaco-based `.cfg` editor with versioned history
+- **RCON + A2S**: live player list, server info, tickrate, kick/ban
+- **Monitoring**: CPU/memory time-series charts, lag spike detection, crash loop detection
+- **Tag management**: tag servers with chips, filter by tags
+- **License management**: license key storage with encryption
+- **Game updates**: coordinated depot update with server stop/restart
+- **Audit trail**: append-only audit log with SHA-256 chain integrity
+- **RBAC**: Owner, SeniorAdmin, Admin, Moderator, Viewer roles
 
 ## Repository layout
 
@@ -53,25 +104,94 @@ apps/
   api/              Fastify API (REST + WebSocket)
   web/              Next.js 15 App Router
   bridge/           Go privileged daemon (panel-host-bridge)
-  workers/          Redis Streams consumers (log-ingest, rcon, audit-archiver, ...)
+  workers/          Redis Streams consumers (rcon, log-ingest, metrics, ...)
 packages/
   shared-types/     Zod schemas (event envelope, API models)
-  shared-config/    Permission keys, constants
+  shared-config/    Permission keys, constants, heartbeat
   db/               Drizzle schema + migrations
   bridge-client/    TypeScript client for the Go bridge
-scripts/            install-host-bridge.sh, verify-bridge.sh, uninstall.sh
+  diag/             Diagnostic event utilities
+scripts/            bootstrap.sh, rebuild.sh, uninstall.sh, verify-bridge.sh
 docker/             Dockerfiles + Caddyfile
-docs/               README.md + architecture/, components/<name>/, operations/, development/
+docs/               Architecture, component docs, operations, development
 ```
+
+## Development
+
+**Requirements**: Node.js 22+, pnpm 9+, Go 1.22+ (for bridge), Docker.
+
+```bash
+pnpm install
+pnpm build
+pnpm dev                         # all apps in dev mode (turbo)
+pnpm test                        # run all tests
+pnpm typecheck                   # TypeScript checks
+pnpm lint                        # biome check
+```
+
+Dev compose override (hot-reload for API and Web):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
+
+### Database
+
+```bash
+pnpm db:generate                 # regenerate Drizzle schema
+pnpm db:migrate                  # run pending migrations
+pnpm db:studio                   # open Drizzle Studio GUI
+```
+
+### Bridge
+
+```bash
+pnpm bridge:build                # build Go binary
+pnpm bridge:test                 # run Go tests
+sg panel -c "bash scripts/verify-bridge.sh"   # smoke test
+```
+
+## Operations
+
+### Useful commands
+
+```bash
+docker compose ps                            # stack state
+docker compose logs -f api                   # tail API logs
+docker compose logs -f worker-rcon           # tail RCON worker
+pnpm verify:audit-chain                      # validate audit log integrity
+```
+
+### Uninstall
+
+```bash
+sudo ./scripts/uninstall.sh                  # removes host bridge + systemd units
+docker compose down -v --remove-orphans      # drops DB, Redis, Caddy volumes
+docker volume rm squad-depot                 # drops the SteamCMD cache (~12 GB)
+sudo rm -rf /var/lib/squad-panel             # drops per-server configs + saves
+```
+
+### Environment variables
+
+See [`.env.example`](.env.example) for all variables. Key ones:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `APP_DOMAIN` | yes | FQDN for the panel |
+| `POSTGRES_PASSWORD` | yes | PostgreSQL password (auto-generated) |
+| `APP_ENCRYPTION_KEY` | yes | 32-byte key for RCON password encryption |
+| `SESSION_SECRET` | yes | 32-byte key for session signing |
+| `TLS_ISSUER` | no | `internal` (default) or `acme` for Let's Encrypt |
+| `STEAM_API_KEY` | no | Steam Web API key for player lookups |
 
 ## Docs
 
-Start at [`docs/README.md`](docs/README.md) — it indexes everything.
+Start at [`docs/README.md`](docs/README.md) for the full index:
 
-- [`docs/architecture/`](docs/architecture/) — system overview, data flow, RBAC, security, decisions
-- [`docs/components/`](docs/components/) — per-component docs (api, web, bridge, workers, db, …)
-- [`docs/operations/`](docs/operations/) — setup, environment variables, troubleshooting
-- [`docs/development/`](docs/development/) — local development, testing
+- [`docs/architecture/`](docs/architecture/) — system overview, data flow, RBAC, security, ADRs
+- [`docs/components/`](docs/components/) — per-component docs (API, web, bridge, workers, DB)
+- [`docs/operations/`](docs/operations/) — setup, env vars, deployment, troubleshooting
+- [`docs/development/`](docs/development/) — local dev, testing, conventions
 
 ## License
 

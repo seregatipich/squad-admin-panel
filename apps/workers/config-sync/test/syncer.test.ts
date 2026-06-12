@@ -85,7 +85,7 @@ describe('syncServerAdminsCfg', () => {
     const ctx = makeCtx(new Error('bridge connection refused'));
     const result = await syncServerAdminsCfg(ctx, SERVER_ID, {
       reason: 'manual',
-      actorSteamId64: null,
+      actorPlayerId: null,
     });
     expect(result.state).toBe('unreachable');
     expect(result.serverId).toBe(SERVER_ID);
@@ -95,7 +95,7 @@ describe('syncServerAdminsCfg', () => {
 
   it('publishes syncing status to redis at start', async () => {
     const ctx = makeCtx(new Error('bridge down'));
-    await syncServerAdminsCfg(ctx, SERVER_ID, { reason: 'manual', actorSteamId64: null });
+    await syncServerAdminsCfg(ctx, SERVER_ID, { reason: 'manual', actorPlayerId: null });
     const redis = ctx.redis as ReturnType<typeof makeRedis>;
     expect(redis.set).toHaveBeenCalled();
     const firstSetKey = (redis.set as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
@@ -104,7 +104,7 @@ describe('syncServerAdminsCfg', () => {
 
   it('publishes unreachable status when fileRead fails', async () => {
     const ctx = makeCtx(new Error('timeout'));
-    await syncServerAdminsCfg(ctx, SERVER_ID, { reason: 'manual', actorSteamId64: null });
+    await syncServerAdminsCfg(ctx, SERVER_ID, { reason: 'manual', actorPlayerId: null });
     const redis = ctx.redis as ReturnType<typeof makeRedis>;
     const calls = (redis.set as ReturnType<typeof vi.fn>).mock.calls;
     const statusCalls = calls.filter((c: string[]) =>
@@ -119,7 +119,7 @@ describe('syncServerAdminsCfg', () => {
     const ctx = makeCtx(new Error('no such file'));
     const result = await syncServerAdminsCfg(ctx, SERVER_ID, {
       reason: 'manual',
-      actorSteamId64: null,
+      actorPlayerId: null,
     });
     expect(['wrote', 'in_sync', 'unreachable']).toContain(result.state);
     expect(result.serverId).toBe(SERVER_ID);
@@ -131,7 +131,7 @@ describe('syncServerAdminsCfg', () => {
     const ctx = makeCtx(err);
     const result = await syncServerAdminsCfg(ctx, SERVER_ID, {
       reason: 'manual',
-      actorSteamId64: null,
+      actorPlayerId: null,
     });
     expect(result.state).toBe('wrote');
     const bridge = ctx.bridge as ReturnType<typeof makeBridge>;
@@ -144,7 +144,7 @@ describe('syncServerAdminsCfg', () => {
     const ctx = makeCtx({ content: bogusContent });
     const result = await syncServerAdminsCfg(ctx, SERVER_ID, {
       reason: 'drift_check',
-      actorSteamId64: null,
+      actorPlayerId: null,
     });
     expect(['drift', 'in_sync']).toContain(result.state);
   });
@@ -155,7 +155,7 @@ describe('syncServerAdminsCfg', () => {
     const ctx = makeCtx(err);
     const result = await syncServerAdminsCfg(ctx, SERVER_ID, {
       reason: 'force_sync',
-      actorSteamId64: '76561198000000001',
+      actorPlayerId: '019d0000-0000-7000-8000-000000000001',
       forceWrite: true,
     });
     expect(result.state).toBe('wrote');
@@ -167,7 +167,7 @@ describe('syncServerAdminsCfg', () => {
     const ctx = makeCtx(err, new Error('write permission denied'));
     const result = await syncServerAdminsCfg(ctx, SERVER_ID, {
       reason: 'manual',
-      actorSteamId64: null,
+      actorPlayerId: null,
     });
     expect(result.state).toBe('unreachable');
   });

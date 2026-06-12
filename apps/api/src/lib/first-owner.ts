@@ -11,22 +11,11 @@ export interface SentinelBridge {
 
 const SENTINEL_PATH = '/var/lib/squad-panel/.first-owner-claimed';
 
-/**
- * Claim Owner role on first successful Steam login.
- *
- * The DB is the source of truth: `panel_meta.first_owner_claimed` decides
- * whether the trick fires. The host-side sentinel file is an informational
- * cache only — it survives DB resets, so trusting it as authoritative
- * caused a wedge after `docker compose down -v` + reinstall (sentinel from
- * the previous DB blocked every subsequent claim, leaving the panel without
- * an Owner). The sentinel is now written after a successful claim and read
- * only as a fast-path skip; if DB and sentinel disagree, DB wins and the
- * stale sentinel is overwritten.
- */
 export async function claimFirstOwner(
   db: DatabaseClient,
   bridge: SentinelBridge,
-  steamId64: bigint,
+  playerId: string,
+  steamId64: bigint | null,
 ): Promise<ClaimResult> {
   const result = await db.transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('panel_first_owner'))`);
@@ -43,7 +32,7 @@ export async function claimFirstOwner(
     if (!ownerRoleId) return 'no_owner_role' as const;
 
     const ownerExists = await tx
-      .select({ steamId64: players.steamId64 })
+      .select({ id: players.id })
       .from(players)
       .where(eq(players.roleId, ownerRoleId))
       .limit(1);
@@ -52,7 +41,7 @@ export async function claimFirstOwner(
       return 'already_claimed' as const;
     }
 
-    await tx.update(players).set({ roleId: ownerRoleId }).where(eq(players.steamId64, steamId64));
+    await tx.update(players).set({ roleId: ownerRoleId }).where(eq(players.id, playerId));
     await tx.update(panelMeta).set({ firstOwnerClaimed: true }).where(eq(panelMeta.id, 1));
     return 'claimed' as const;
   });
@@ -62,7 +51,8 @@ export async function claimFirstOwner(
       await bridge.fileAtomicWrite({
         path: SENTINEL_PATH,
         content: JSON.stringify({
-          steam_id64: String(steamId64),
+          player_id: playerId,
+          steam_id64: steamId64 ? String(steamId64) : null,
           claimed_at: new Date().toISOString(),
         }),
       });
@@ -73,11 +63,6 @@ export async function claimFirstOwner(
   return result;
 }
 
-/**
- * Read the sentinel file without affecting claim logic. Useful for the
- * `/no-access` page hint and ops diagnostics. Returns `null` if absent or
- * if the bridge call fails.
- */
 export async function readSentinelHint(
   bridge: SentinelBridge,
 ): Promise<{ steam_id64: string; claimed_at: string } | null> {

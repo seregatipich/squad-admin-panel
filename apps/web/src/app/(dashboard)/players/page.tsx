@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
 
 interface Player {
-  steam_id64: string;
+  id: string;
+  steam_id64: string | null;
   canonical_name: string;
   eos_id: string | null;
   first_seen_at: string;
@@ -63,7 +64,7 @@ export default function PlayersPage() {
       if (!needle) return true;
       return (
         p.canonical_name.toLowerCase().includes(needle) ||
-        p.steam_id64.includes(needle) ||
+        (p.steam_id64 ?? '').includes(needle) ||
         (p.eos_id ?? '').toLowerCase().includes(needle)
       );
     });
@@ -133,7 +134,7 @@ export default function PlayersPage() {
                 const age = Date.now() - new Date(p.last_seen_at).getTime();
                 const online = age <= ONLINE_WINDOW_MS;
                 return (
-                  <tr key={p.steam_id64} className="border-t border-neutral-900">
+                  <tr key={p.id} className="border-t border-neutral-900">
                     <td className="p-2">
                       <span
                         className={`inline-block h-2.5 w-2.5 rounded-full ${online ? 'bg-emerald-500' : 'bg-neutral-600'}`}
@@ -142,21 +143,25 @@ export default function PlayersPage() {
                     </td>
                     <td className="p-2">
                       <Link
-                        href={`/players/${p.steam_id64}`}
+                        href={`/players/${p.id}`}
                         className="text-sky-400 hover:text-sky-300 font-medium"
                       >
                         {p.canonical_name}
                       </Link>
                     </td>
                     <td className="p-2 font-mono text-xs">
-                      <a
-                        href={`https://steamcommunity.com/profiles/${p.steam_id64}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-neutral-300 hover:text-sky-300"
-                      >
-                        {p.steam_id64}
-                      </a>
+                      {p.steam_id64 ? (
+                        <a
+                          href={`https://steamcommunity.com/profiles/${p.steam_id64}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-neutral-300 hover:text-sky-300"
+                        >
+                          {p.steam_id64}
+                        </a>
+                      ) : (
+                        <span className="text-neutral-600">—</span>
+                      )}
                     </td>
                     <td className="p-2 font-mono text-[11px] text-neutral-400">
                       {p.eos_id ?? '—'}

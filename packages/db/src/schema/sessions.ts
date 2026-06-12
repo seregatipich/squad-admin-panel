@@ -1,13 +1,13 @@
-import { bigint, index, inet, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { index, inet, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { players } from './players.js';
 
 export const sessions = pgTable(
   'sessions',
   {
     id: text('id').primaryKey().notNull(),
-    steamId64: bigint('steam_id64', { mode: 'bigint' })
+    playerId: uuid('player_id')
       .notNull()
-      .references(() => players.steamId64, { onDelete: 'cascade' }),
+      .references(() => players.id, { onDelete: 'cascade' }),
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
     lastActivityAt: timestamp('last_activity_at', { withTimezone: true, mode: 'date' })
       .defaultNow()
@@ -17,7 +17,7 @@ export const sessions = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
   (table) => ({
-    steamIdIdx: index('sessions_steam_id64_idx').on(table.steamId64),
+    playerIdIdx: index('sessions_player_id_idx').on(table.playerId),
     expiresAtIdx: index('sessions_expires_at_idx').on(table.expiresAt),
     lastActivityIdx: index('sessions_last_activity_idx').on(table.lastActivityAt),
   }),

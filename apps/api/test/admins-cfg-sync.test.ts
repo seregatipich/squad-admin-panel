@@ -12,7 +12,7 @@ import {
 
 const testEvent: AdminsCfgSyncEvent = {
   reason: 'role-change',
-  actor_steam_id64: '76561198000000001',
+  actor_player_id: '76561198000000001',
   enqueued_at: '2026-01-01T00:00:00.000Z',
   request_id: 'req-123',
 };

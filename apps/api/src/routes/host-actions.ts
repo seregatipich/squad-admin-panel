@@ -36,7 +36,7 @@ const hostActionsRoutes: FastifyPluginAsync = async (app) => {
         db: app.db,
         bridge: app.bridge,
         log: req.log,
-        actorSteamId64: req.user?.steamId64 ?? null,
+        actorPlayerId: req.user?.playerId ?? null,
         actorIp: req.ip ?? null,
         dryRun: true,
       });
@@ -59,7 +59,7 @@ const hostActionsRoutes: FastifyPluginAsync = async (app) => {
         db: app.db,
         bridge: app.bridge,
         log: req.log,
-        actorSteamId64: req.user?.steamId64 ?? null,
+        actorPlayerId: req.user?.playerId ?? null,
         actorIp: req.ip ?? null,
       });
     },

@@ -15,6 +15,7 @@ COPY tsconfig.base.json biome.json turbo.json ./
 RUN pnpm --filter @squad/shared-config build
 RUN pnpm --filter @squad/shared-types build
 RUN pnpm --filter @squad/bridge-client build
+RUN pnpm --filter @squad/diag build
 RUN pnpm --filter @squad/db build
 ARG WORKER
 RUN test -n "$WORKER" && pnpm --filter @squad/worker-$WORKER build

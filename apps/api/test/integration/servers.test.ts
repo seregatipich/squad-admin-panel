@@ -421,7 +421,7 @@ describe('DELETE /api/v1/servers/:id', () => {
     expect(removed).toBe(true);
     const [row] = await h.db.select().from(servers).where(eq(servers.id, id));
     expect(row?.deletedAt).not.toBeNull();
-    expect(row?.deletedBySteamId64).toBe(OWNER_STEAM_ID);
+    expect(row?.deletedByPlayerId).toBe(h.seed.ownerPlayerId);
     await assertAuditRow(h, { action: 'server.delete', resource: 'server', targetId: id });
   });
 });
@@ -441,7 +441,7 @@ describe('RBAC enforcement on /api/v1/servers', () => {
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerSteamId64);
+    invalidatePermissionCache(h.seed.ownerPlayerId!);
 
     const cookie = await login();
     const resp = await h.app.inject({

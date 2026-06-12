@@ -28,7 +28,7 @@ const meTokensRoutes: FastifyPluginAsync = async (app) => {
         revokedAt: playerApiTokens.revokedAt,
       })
       .from(playerApiTokens)
-      .where(eq(playerApiTokens.steamId64, req.user.steamId64))
+      .where(eq(playerApiTokens.playerId, req.user.playerId))
       .orderBy(asc(playerApiTokens.createdAt));
     return rows.map((r) => ({
       id: r.id,
@@ -70,7 +70,7 @@ const meTokensRoutes: FastifyPluginAsync = async (app) => {
         .select({ id: playerApiTokens.id })
         .from(playerApiTokens)
         .where(
-          and(eq(playerApiTokens.steamId64, req.user.steamId64), isNull(playerApiTokens.revokedAt)),
+          and(eq(playerApiTokens.playerId, req.user.playerId), isNull(playerApiTokens.revokedAt)),
         );
       if (activeCount.length >= MAX_ACTIVE_TOKENS_PER_USER) {
         reply.code(409);
@@ -81,7 +81,7 @@ const meTokensRoutes: FastifyPluginAsync = async (app) => {
         .insert(playerApiTokens)
         .values({
           id: minted.id,
-          steamId64: req.user.steamId64,
+          playerId: req.user.playerId,
           name: req.body.name,
           tokenHash: minted.tokenHash,
           scopes: dedupedScopes,
@@ -125,7 +125,7 @@ const meTokensRoutes: FastifyPluginAsync = async (app) => {
         .where(
           and(
             eq(playerApiTokens.id, req.params.id),
-            eq(playerApiTokens.steamId64, req.user.steamId64),
+            eq(playerApiTokens.playerId, req.user.playerId),
           ),
         )
         .limit(1);

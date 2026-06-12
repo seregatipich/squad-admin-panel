@@ -17,14 +17,14 @@ const skip = shouldSkip();
 interface Version {
   id: string;
   sha256: string;
-  author_steam_id64: string | null;
+  author_player_id: string | null;
   message: string | null;
   created_at: string;
   size: number;
 }
 
 interface BlameResp {
-  lines: Array<{ text: string; version_id: string; author_steam_id64: string | null }>;
+  lines: Array<{ text: string; version_id: string; author_player_id: string | null }>;
   authors: Record<string, string>;
 }
 
@@ -80,7 +80,7 @@ describe.skipIf(skip.skip)('config versioning: history + diff + blame + restore'
     expect(r.items.length).toBeGreaterThanOrEqual(1);
     // The seeder's author is NULL + message mentions "initial install".
     const baselineRow = r.items[r.items.length - 1];
-    expect(baselineRow?.author_steam_id64).toBeNull();
+    expect(baselineRow?.author_player_id).toBeNull();
     expect(baselineRow?.message).toMatch(/initial install/i);
   });
 
@@ -171,7 +171,7 @@ describe.skipIf(skip.skip)('config versioning: history + diff + blame + restore'
     const marker = r.lines.find((l) => l.text.includes(`v2-marker-${suffix}`));
     expect(marker).toBeDefined();
     expect(marker?.version_id).toBe(v2Id);
-    if (marker?.author_steam_id64) expect(r.authors[marker?.author_steam_id64]).toBeTruthy();
+    if (marker?.author_player_id) expect(r.authors[marker?.author_player_id]).toBeTruthy();
   });
 
   it('POST /restore creates a NEW version with v1 content (non-destructive)', async () => {

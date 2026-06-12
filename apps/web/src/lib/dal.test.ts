@@ -16,6 +16,7 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('./api', () => ({
   apiFetch: vi.fn().mockResolvedValue({
+    player_id: 'b1e2c3d4-0000-0000-0000-000000000001',
     steam_id64: '76561198000000001',
     canonical_name: 'TestUser',
     avatar_url: null,
@@ -38,6 +39,7 @@ beforeEach(() => {
     get: (name: string) => (name === '__Host-sid' ? { value: 'test-session' } : undefined),
   } as Awaited<ReturnType<typeof nextHeaders.cookies>>);
   vi.mocked(apiModule.apiFetch).mockResolvedValue({
+    player_id: 'b1e2c3d4-0000-0000-0000-000000000001',
     steam_id64: '76561198000000001',
     canonical_name: 'TestUser',
     avatar_url: null,
@@ -59,6 +61,7 @@ describe('getSession', () => {
   it('returns Me object when session cookie is present', async () => {
     const me = await getSession();
     expect(me).not.toBeNull();
+    expect(me?.player_id).toBe('b1e2c3d4-0000-0000-0000-000000000001');
     expect(me?.steam_id64).toBe('76561198000000001');
     expect(me?.canonical_name).toBe('TestUser');
   });
@@ -87,7 +90,7 @@ describe('requireSession', () => {
 
   it('returns Me when session is valid', async () => {
     const me = await requireSession();
-    expect(me.steam_id64).toBe('76561198000000001');
+    expect(me.player_id).toBe('b1e2c3d4-0000-0000-0000-000000000001');
   });
 
   it('redirects to /login when session is absent', async () => {

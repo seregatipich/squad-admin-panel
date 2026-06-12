@@ -1,7 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
   type AnyPgColumn,
-  bigint,
   boolean,
   check,
   index,
@@ -28,10 +27,9 @@ export const servers = pgTable(
     timezone: text('timezone').notNull().default('UTC'),
     isCanary: boolean('is_canary').notNull().default(false),
     deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'date' }),
-    deletedBySteamId64: bigint('deleted_by_steam_id64', { mode: 'bigint' }).references(
-      () => players.steamId64,
-      { onDelete: 'set null' },
-    ),
+    deletedByPlayerId: uuid('deleted_by_player_id').references(() => players.id, {
+      onDelete: 'set null',
+    }),
     deletionBackupMarkerId: uuid('deletion_backup_marker_id').references(
       (): AnyPgColumn => configVersions.id,
       { onDelete: 'set null' },

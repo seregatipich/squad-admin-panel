@@ -25,20 +25,22 @@ export default fp(async (app) => {
       if (session) {
         const playerRows = await app.db
           .select({
+            id: players.id,
             steamId64: players.steamId64,
             canonicalName: players.canonicalName,
           })
           .from(players)
-          .where(eq(players.steamId64, session.steamId64))
+          .where(eq(players.id, session.playerId))
           .limit(1);
         const player = playerRows[0];
         if (player) {
-          req.session = { id: session.id, steamId64: player.steamId64 };
+          req.session = { id: session.id, playerId: player.id };
           req.user = {
+            playerId: player.id,
             steamId64: player.steamId64,
             canonicalName: player.canonicalName,
             avatarUrl: null,
-            permissions: await loadUserPermissions(app.db, player.steamId64),
+            permissions: await loadUserPermissions(app.db, player.id),
           };
           const touched = await touchSession({
             sessionId: session.id,
@@ -71,7 +73,7 @@ export default fp(async (app) => {
         const tokenRows = await app.db
           .select({
             id: playerApiTokens.id,
-            steamId64: playerApiTokens.steamId64,
+            playerId: playerApiTokens.playerId,
             scopes: playerApiTokens.scopes,
           })
           .from(playerApiTokens)
@@ -81,17 +83,19 @@ export default fp(async (app) => {
         if (token) {
           const playerRows = await app.db
             .select({
+              id: players.id,
               steamId64: players.steamId64,
               canonicalName: players.canonicalName,
             })
             .from(players)
-            .where(eq(players.steamId64, token.steamId64))
+            .where(eq(players.id, token.playerId))
             .limit(1);
           const player = playerRows[0];
           if (player) {
-            const rolePerms = await loadUserPermissions(app.db, player.steamId64);
+            const rolePerms = await loadUserPermissions(app.db, player.id);
             const effective = intersectScopes(token.scopes, rolePerms.permissions);
             req.user = {
+              playerId: player.id,
               steamId64: player.steamId64,
               canonicalName: player.canonicalName,
               avatarUrl: null,

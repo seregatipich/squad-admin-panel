@@ -7,12 +7,14 @@ x-logging: &default-logging
 services:
   caddy:
     image: caddy:2-alpine
+    init: true
     restart: unless-stopped
     ports:
       - '80:80'
       - '443:443'
     environment:
       APP_DOMAIN: ${APP_DOMAIN:-admin.localhost}
+      APP_IP: ${APP_IP:-127.0.0.1}
       TLS_ISSUER: ${TLS_ISSUER:-internal}
       ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
     volumes:
@@ -296,6 +298,30 @@ services:
       timeout: 3s
       retries: 3
     logging: *default-logging
+
+  # The bridge launches one squad-server container per panel server (named
+  # `squad-{uuid}`), and a transient depot-init container for steamcmd
+  # `app_update 403240`. Neither runs as a long-lived compose service, but
+  # both images MUST exist locally with these exact tags. We declare them
+  # under the `images` profile so `docker compose build` builds and tags
+  # them in one shot, while `docker compose up` skips them.
+  squad-server-image:
+    build:
+      context: ./docker
+      dockerfile: squad-server.Dockerfile
+    image: squad-server:latest
+    profiles: ['images']
+    command: ['/bin/true']
+    restart: 'no'
+
+  depot-init-image:
+    build:
+      context: ./docker
+      dockerfile: depot-init.Dockerfile
+    image: squad-panel/depot-init:latest
+    profiles: ['images']
+    command: ['/bin/true']
+    restart: 'no'
 
   backup:
     image: mazzolino/restic:latest

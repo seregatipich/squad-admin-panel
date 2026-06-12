@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -937,50 +938,92 @@ func parseHumanSize(s string) (int64, error) {
 	return val, nil
 }
 
+// volumeOnDiskBytes returns the byte size of a docker volume, walking the
+// real on-disk path. For bind-mounted volumes (`-o type=none -o o=bind`)
+// `docker system df --format ... -v` reports 0B because the data is not
+// owned by docker — we have to inspect the volume's `Options.device`
+// (or fall back to `Mountpoint`) and `du -sb` it ourselves.
+func volumeOnDiskBytes(name string) (int64, error) {
+	out, err := exec.Command(
+		"docker", "volume", "inspect",
+		"--format", "{{index .Options \"device\"}}|{{.Mountpoint}}",
+		name,
+	).Output()
+	if err != nil {
+		return 0, fmt.Errorf("docker volume inspect %s: %w", name, err)
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "|", 2)
+	device, mountpoint := parts[0], ""
+	if len(parts) == 2 {
+		mountpoint = parts[1]
+	}
+	path := device
+	if path == "" {
+		path = mountpoint
+	}
+	if path == "" {
+		return 0, nil
+	}
+	return realDuBytes(path)
+}
+
+// dockerSystemDfReport mirrors the JSON produced by `docker system df
+// --format '{{json .}}' -v` — ONE top-level object whose `Images` and
+// `Volumes` arrays we filter against the panel-owned allowlists.
+type dockerSystemDfReport struct {
+	Images []struct {
+		Repository string `json:"Repository"`
+		Tag        string `json:"Tag"`
+		Size       string `json:"Size"`
+	} `json:"Images"`
+	Volumes []struct {
+		Name string `json:"Name"`
+		Size string `json:"Size"`
+	} `json:"Volumes"`
+}
+
 func realDockerDiskBreakdown() ([]dockerVol, []dockerImg, int64, error) {
 	out, err := exec.Command("docker", "system", "df", "--format", "{{json .}}", "-v").Output()
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("docker system df: %w", err)
 	}
+	var report dockerSystemDfReport
+	if err := json.Unmarshal(bytes.TrimSpace(out), &report); err != nil {
+		return nil, nil, 0, fmt.Errorf("decode docker system df JSON: %w", err)
+	}
 	volumes := []dockerVol{}
 	images := []dockerImg{}
 	var depotBytes int64
-	for _, line := range bytes.Split(out, []byte("\n")) {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var record map[string]any
-		if err := json.Unmarshal(line, &record); err != nil {
-			continue
-		}
-		if name, ok := record["Name"].(string); ok && name != "" {
-			if _, owned := panelOwnedVolumes[name]; !owned {
+	// `docker system df -v` silently skips bind-mounted volumes (no
+	// docker-tracked size). Walk the panel-owned allowlist directly so
+	// the depot's host-side bytes always show up.
+	for name := range panelOwnedVolumes {
+		size, err := volumeOnDiskBytes(name)
+		if err != nil {
+			// Volume does not exist on this host — that's OK, just
+			// emit 0 bytes for it (e.g. caddy_data on a host that
+			// hasn't started caddy yet).
+			if strings.Contains(err.Error(), "No such volume") || strings.Contains(err.Error(), "exit status 1") {
 				continue
 			}
-			sizeStr, _ := record["Size"].(string)
-			size, err := parseHumanSize(sizeStr)
-			if err != nil {
-				return nil, nil, 0, err
-			}
-			volumes = append(volumes, dockerVol{Name: name, Bytes: size})
-			if name == depotVolumeName {
-				depotBytes = size
-			}
+			return nil, nil, 0, err
+		}
+		volumes = append(volumes, dockerVol{Name: name, Bytes: size})
+		if name == depotVolumeName {
+			depotBytes = size
+		}
+	}
+	// Sort for stable output / deterministic tests.
+	sort.Slice(volumes, func(i, j int) bool { return volumes[i].Name < volumes[j].Name })
+	for _, im := range report.Images {
+		if _, owned := panelOwnedImages[im.Repository]; !owned {
 			continue
 		}
-		if repo, ok := record["Repository"].(string); ok && repo != "" {
-			if _, owned := panelOwnedImages[repo]; !owned {
-				continue
-			}
-			tag, _ := record["Tag"].(string)
-			sizeStr, _ := record["Size"].(string)
-			size, err := parseHumanSize(sizeStr)
-			if err != nil {
-				return nil, nil, 0, err
-			}
-			images = append(images, dockerImg{Repository: repo, Tag: tag, Bytes: size})
+		size, err := parseHumanSize(im.Size)
+		if err != nil {
+			return nil, nil, 0, err
 		}
+		images = append(images, dockerImg{Repository: im.Repository, Tag: im.Tag, Bytes: size})
 	}
 	return volumes, images, depotBytes, nil
 }

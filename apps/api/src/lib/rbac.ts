@@ -62,10 +62,9 @@ interface RoleContextRow extends Record<string, unknown> {
 
 export async function loadUserPermissions(
   db: DatabaseClient,
-  steamId64: bigint,
+  playerId: string,
 ): Promise<PermissionContext> {
-  const cacheKey = String(steamId64);
-  const hit = cache.get(cacheKey);
+  const hit = cache.get(playerId);
   if (hit && hit.expiresAt > Date.now()) return hit.value;
 
   const rows = await db.execute<RoleContextRow>(sql`
@@ -83,7 +82,7 @@ export async function loadUserPermissions(
       ) AS squad_permissions
     FROM players p
     LEFT JOIN roles r ON r.id = p.role_id
-    WHERE p.steam_id64 = ${steamId64}
+    WHERE p.id = ${playerId}
     LIMIT 1
   `);
   const row = (rows as unknown as RoleContextRow[])[0];
@@ -99,7 +98,7 @@ export async function loadUserPermissions(
       canEditRoles: false,
       isOwner: false,
     };
-    cache.set(cacheKey, { value: empty, expiresAt: Date.now() + TTL_MS });
+    cache.set(playerId, { value: empty, expiresAt: Date.now() + TTL_MS });
     return empty;
   }
 
@@ -113,11 +112,6 @@ export async function loadUserPermissions(
         ((row.squad_permissions ?? []) as SquadPermissionKey[]).filter(Boolean),
       );
 
-  // Legacy explicit grants in role_permissions still take effect — they
-  // are unioned with the flag-derived defaults so a role can opt into a
-  // single fine-grained key (e.g. `audit:export`) without flipping
-  // `panel_access`. The seeded roles (Owner/Admin/Moderator/...) carry
-  // no rows in this table; their access is purely flag-derived.
   const explicit = await db
     .select({ key: rolePermissions.permissionKey })
     .from(rolePermissions)
@@ -138,23 +132,20 @@ export async function loadUserPermissions(
     canEditRoles,
     isOwner,
   };
-  cache.set(cacheKey, { value, expiresAt: Date.now() + TTL_MS });
+  cache.set(playerId, { value, expiresAt: Date.now() + TTL_MS });
   return value;
 }
 
-export function invalidatePermissionCache(steamId64: bigint): void {
-  cache.delete(String(steamId64));
+export function invalidatePermissionCache(playerId: string): void {
+  cache.delete(playerId);
 }
 
 export async function invalidatePermissionCacheForRole(
   db: DatabaseClient,
   roleId: string,
 ): Promise<void> {
-  const rows = await db
-    .select({ steamId64: players.steamId64 })
-    .from(players)
-    .where(eq(players.roleId, roleId));
-  for (const r of rows) cache.delete(String(r.steamId64));
+  const rows = await db.select({ id: players.id }).from(players).where(eq(players.roleId, roleId));
+  for (const r of rows) cache.delete(r.id);
 }
 
 export function invalidateAllPermissionCaches(): void {

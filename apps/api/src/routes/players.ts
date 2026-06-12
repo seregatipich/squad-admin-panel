@@ -1,5 +1,5 @@
 import { playerIpHistory, playerNameHistory, players, roles } from '@squad/db/schema';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -7,7 +7,7 @@ import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
 
-const playerIdParams = z.object({ steamId: z.string().regex(/^\d{17}$/) });
+const playerIdParams = z.object({ playerId: z.string().uuid() });
 const roleAssignBody = z.object({ role_id: z.string().uuid().nullable() });
 const listQuery = z.object({ q: z.string().min(1).max(64).optional() });
 
@@ -22,9 +22,19 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
     },
     async (req) => {
       const q = req.query.q?.toLowerCase().trim();
-      const whereClause = q
-        ? sql`canonical_name_normalized LIKE ${`%${q}%`} OR steam_id64::text = ${q}`
-        : undefined;
+      let whereClause: SQL | undefined;
+      if (q) {
+        const nameHistoryMatch = sql`EXISTS (
+          SELECT 1 FROM player_name_history h
+          WHERE h.player_id = players.id AND h.name_normalized LIKE ${`%${q}%`}
+        )`;
+        whereClause = or(
+          sql`canonical_name_normalized LIKE ${`%${q}%`}`,
+          sql`steam_id64::text = ${q}`,
+          sql`eos_id = ${q}`,
+          nameHistoryMatch,
+        );
+      }
       const rows = await app.db
         .select()
         .from(players)
@@ -33,7 +43,8 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         .limit(200);
       return {
         items: rows.map((r) => ({
-          steam_id64: r.steamId64.toString(),
+          id: r.id,
+          steam_id64: r.steamId64 ? r.steamId64.toString() : null,
           canonical_name: r.canonicalName,
           eos_id: r.eosId,
           first_seen_at: r.firstSeenAt,
@@ -46,15 +57,15 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
   );
 
   fast.get(
-    '/api/v1/players/:steamId',
+    '/api/v1/players/:playerId',
     {
       config: { permissions: ['player:view'], audit: false },
       schema: { params: playerIdParams },
     },
     async (req, reply) => {
-      const id = BigInt(req.params.steamId);
+      const id = req.params.playerId;
       const row = await app.db.query.players.findFirst({
-        where: eq(players.steamId64, id),
+        where: eq(players.id, id),
       });
       if (!row) {
         reply.code(404);
@@ -63,19 +74,20 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       const names = await app.db
         .select()
         .from(playerNameHistory)
-        .where(eq(playerNameHistory.steamId64, id))
+        .where(eq(playerNameHistory.playerId, id))
         .orderBy(desc(playerNameHistory.lastSeenAt));
       const ipsVisible = req.user?.permissions.permissions.has('player:view_ips') ?? false;
       const ips = ipsVisible
         ? await app.db
             .select()
             .from(playerIpHistory)
-            .where(eq(playerIpHistory.steamId64, id))
+            .where(eq(playerIpHistory.playerId, id))
             .orderBy(desc(playerIpHistory.lastSeenAt))
         : [];
       return {
         player: {
-          steam_id64: row.steamId64.toString(),
+          id: row.id,
+          steam_id64: row.steamId64 ? row.steamId64.toString() : null,
           canonical_name: row.canonicalName,
           eos_id: row.eosId,
           first_seen_at: row.firstSeenAt,
@@ -102,13 +114,13 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
   );
 
   fast.get(
-    '/api/v1/players/:steamId/role',
+    '/api/v1/players/:playerId/role',
     {
       config: { permissions: ['user:view'], audit: false },
       schema: { params: playerIdParams },
     },
     async (req) => {
-      const id = BigInt(req.params.steamId);
+      const id = req.params.playerId;
       type RoleRow = {
         role_id: string | null;
         role_name: string | null;
@@ -119,7 +131,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         SELECT r.id AS role_id, r.name AS role_name, r.color AS role_color,
                r.is_system_role AS role_is_system
         FROM players p LEFT JOIN roles r ON r.id = p.role_id
-        WHERE p.steam_id64 = ${id}
+        WHERE p.id = ${id}
       `);
       const r = (rows as unknown as RoleRow[])[0];
       if (!r?.role_id) return { role: null };
@@ -135,7 +147,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
   );
 
   fast.put(
-    '/api/v1/players/:steamId/role',
+    '/api/v1/players/:playerId/role',
     {
       schema: { params: playerIdParams, body: roleAssignBody },
       config: {
@@ -144,7 +156,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     async (req, reply) => {
-      const steamId64 = BigInt(req.params.steamId);
+      const playerId = req.params.playerId;
       const newRoleId = req.body.role_id;
 
       let newRolePanelAccess = false;
@@ -165,8 +177,6 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         }
         // biome-ignore lint/style/noNonNullAssertion: guarded by length check
         const target = exists[0]!;
-        // 2.6.4 — Owner cannot be assigned via UI; only the first-login
-        // trick or direct DB modification can grant Owner.
         if (target.isSystemRole && target.name === 'Owner') {
           reply.code(403);
           return { error: 'owner_assignment_forbidden' };
@@ -184,7 +194,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       const current = await app.db
         .select({ roleId: players.roleId })
         .from(players)
-        .where(eq(players.steamId64, steamId64))
+        .where(eq(players.id, playerId))
         .limit(1);
       const wasOwner = current[0]?.roleId === ownerId && ownerId !== null;
       const willBeOwner = newRoleId === ownerId && ownerId !== null;
@@ -201,30 +211,25 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       }
 
       await app.db.transaction(async (tx) => {
-        await tx.update(players).set({ roleId: newRoleId }).where(eq(players.steamId64, steamId64));
-        // Spec §2.7.1 — sync-task is enqueued in the same transaction
-        // as the player.role mutation so a Redis failure aborts the DB
-        // write and keeps the file/DB invariant.
+        await tx.update(players).set({ roleId: newRoleId }).where(eq(players.id, playerId));
         await publishAdminsCfgSyncForAllServers(tx, app.redis, {
           reason: newRoleId === null ? 'player.role.unassign' : 'player.role.assign',
-          actor_steam_id64: req.user?.steamId64 ? String(req.user.steamId64) : null,
+          actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
           request_id: req.id,
         });
       });
-      invalidatePermissionCache(steamId64);
+      invalidatePermissionCache(playerId);
 
-      // 2.6.1 — if the player just lost panel_access, kill all live
-      // sessions so the next request bounces them to /login.
       if (!newRolePanelAccess) {
-        await revokeAllForPlayer(app.db, app.redis, steamId64);
+        await revokeAllForPlayer(app.db, app.redis, playerId);
       }
       return { ok: true };
     },
   );
 
   fast.delete(
-    '/api/v1/players/:steamId/role',
+    '/api/v1/players/:playerId/role',
     {
       schema: { params: playerIdParams },
       config: {
@@ -233,8 +238,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     async (req, reply) => {
-      const steamId64 = BigInt(req.params.steamId);
-      // Self-protect last Owner.
+      const playerId = req.params.playerId;
       const ownerRow = await app.db
         .select({ id: roles.id })
         .from(roles)
@@ -244,7 +248,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       const current = await app.db
         .select({ roleId: players.roleId })
         .from(players)
-        .where(eq(players.steamId64, steamId64))
+        .where(eq(players.id, playerId))
         .limit(1);
       if (current.length === 0) {
         reply.code(404);
@@ -262,16 +266,16 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         }
       }
       await app.db.transaction(async (tx) => {
-        await tx.update(players).set({ roleId: null }).where(eq(players.steamId64, steamId64));
+        await tx.update(players).set({ roleId: null }).where(eq(players.id, playerId));
         await publishAdminsCfgSyncForAllServers(tx, app.redis, {
           reason: 'player.role.unassign',
-          actor_steam_id64: req.user?.steamId64 ? String(req.user.steamId64) : null,
+          actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
           request_id: req.id,
         });
       });
-      invalidatePermissionCache(steamId64);
-      await revokeAllForPlayer(app.db, app.redis, steamId64);
+      invalidatePermissionCache(playerId);
+      await revokeAllForPlayer(app.db, app.redis, playerId);
       return { ok: true };
     },
   );

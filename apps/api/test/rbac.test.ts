@@ -15,6 +15,13 @@ const PLAYER_A = testSteamId(1);
 const PLAYER_B = testSteamId(2);
 const PLAYER_C = testSteamId(3);
 
+const playerIds = new Map<bigint, string>();
+function pid(steamId: bigint): string {
+  const id = playerIds.get(steamId);
+  if (!id) throw new Error(`No UUID found for steamId64=${steamId}`);
+  return id;
+}
+
 let sql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;
 
@@ -61,12 +68,21 @@ beforeAll(async () => {
         set: { roleId: roleId ?? null },
       });
   }
+
+  for (const sid of [PLAYER_A, PLAYER_B, PLAYER_C]) {
+    const [row] = await db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.steamId64, sid))
+      .limit(1);
+    if (row) playerIds.set(sid, row.id);
+  }
 });
 
 afterAll(async () => {
   for (const sid of [PLAYER_A, PLAYER_B, PLAYER_C]) {
     await db.delete(players).where(eq(players.steamId64, sid));
-    invalidatePermissionCache(sid);
+    invalidatePermissionCache(pid(sid));
   }
   if (sql) await sql.end({ timeout: 5 });
 });
@@ -75,15 +91,15 @@ const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 describeIfDb('loadUserPermissions', () => {
   it('returns empty set + roleId=null for a player with no role', async () => {
-    invalidatePermissionCache(PLAYER_A);
-    const ctx = await loadUserPermissions(db, PLAYER_A);
+    invalidatePermissionCache(pid(PLAYER_A));
+    const ctx = await loadUserPermissions(db, pid(PLAYER_A));
     expect(ctx.permissions.size).toBe(0);
     expect(ctx.roleId).toBeNull();
   });
 
   it('returns Viewer permissions for a Viewer-roled player', async () => {
-    invalidatePermissionCache(PLAYER_B);
-    const ctx = await loadUserPermissions(db, PLAYER_B);
+    invalidatePermissionCache(pid(PLAYER_B));
+    const ctx = await loadUserPermissions(db, pid(PLAYER_B));
     expect(ctx.roleId).toBe(viewerRoleId);
     expect(ctx.permissions.has('server:view')).toBe(true);
     expect(ctx.permissions.has('player:view')).toBe(true);
@@ -91,18 +107,18 @@ describeIfDb('loadUserPermissions', () => {
   });
 
   it('caches result on second call (same object identity)', async () => {
-    invalidatePermissionCache(PLAYER_B);
-    const a = await loadUserPermissions(db, PLAYER_B);
-    const b = await loadUserPermissions(db, PLAYER_B);
+    invalidatePermissionCache(pid(PLAYER_B));
+    const a = await loadUserPermissions(db, pid(PLAYER_B));
+    const b = await loadUserPermissions(db, pid(PLAYER_B));
     expect(b).toBe(a);
   });
 });
 
 describeIfDb('invalidatePermissionCache', () => {
   it('forces re-fetch on next call', async () => {
-    const before = await loadUserPermissions(db, PLAYER_B);
-    invalidatePermissionCache(PLAYER_B);
-    const after = await loadUserPermissions(db, PLAYER_B);
+    const before = await loadUserPermissions(db, pid(PLAYER_B));
+    invalidatePermissionCache(pid(PLAYER_B));
+    const after = await loadUserPermissions(db, pid(PLAYER_B));
     expect(after).not.toBe(before);
     expect([...after.permissions]).toEqual([...before.permissions]);
   });
@@ -110,22 +126,22 @@ describeIfDb('invalidatePermissionCache', () => {
 
 describeIfDb('invalidatePermissionCacheForRole', () => {
   it('invalidates all carriers of a role', async () => {
-    const beforeB = await loadUserPermissions(db, PLAYER_B);
-    const beforeC = await loadUserPermissions(db, PLAYER_C);
+    const beforeB = await loadUserPermissions(db, pid(PLAYER_B));
+    const beforeC = await loadUserPermissions(db, pid(PLAYER_C));
 
     await invalidatePermissionCacheForRole(db, viewerRoleId);
 
-    const afterB = await loadUserPermissions(db, PLAYER_B);
-    const afterC = await loadUserPermissions(db, PLAYER_C);
+    const afterB = await loadUserPermissions(db, pid(PLAYER_B));
+    const afterC = await loadUserPermissions(db, pid(PLAYER_C));
     expect(afterB).not.toBe(beforeB);
     expect(afterC).not.toBe(beforeC);
   });
 
   it('does not affect users not carrying the role', async () => {
-    invalidatePermissionCache(PLAYER_A);
-    const beforeA = await loadUserPermissions(db, PLAYER_A);
+    invalidatePermissionCache(pid(PLAYER_A));
+    const beforeA = await loadUserPermissions(db, pid(PLAYER_A));
     await invalidatePermissionCacheForRole(db, viewerRoleId);
-    const afterA = await loadUserPermissions(db, PLAYER_A);
+    const afterA = await loadUserPermissions(db, pid(PLAYER_A));
     expect(afterA).toBe(beforeA);
   });
 });

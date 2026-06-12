@@ -43,12 +43,12 @@ describe('diag types constants', () => {
       severity: 'info',
       message: 'started',
       serverId: '019d0000-0000-7000-8000-000000000000',
-      actorSteamId64: '76561198000000001',
+      actorPlayerId: '019d0000-0000-7000-8000-000000000001',
       requestId: 'req-1',
       payload: { key: 'value' },
     };
     expect(ev.serverId).toBe('019d0000-0000-7000-8000-000000000000');
-    expect(ev.actorSteamId64).toBe('76561198000000001');
+    expect(ev.actorPlayerId).toBe('019d0000-0000-7000-8000-000000000001');
     expect(ev.requestId).toBe('req-1');
     expect(ev.payload).toEqual({ key: 'value' });
   });

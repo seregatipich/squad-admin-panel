@@ -24,7 +24,7 @@ export interface DeleteContext {
     'fileRead' | 'containerStop' | 'containerRm' | 'directoryDelete' | 'ufwRule'
   >;
   log: Pick<FastifyBaseLogger, 'warn' | 'info' | 'error' | 'debug'>;
-  actorSteamId64: bigint | null;
+  actorPlayerId: string | null;
   actorIp: string | null;
   actorLabel: string;
 }
@@ -49,44 +49,64 @@ export async function softDeleteServer(
   const configsDir = `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig`;
   type Backed = { filename: string; content: string; sha256: Buffer };
   const backed: Backed[] = [];
+  let allMissing = true;
   for (const file of ALLOWED_CONFIG_FILES) {
     try {
       const { content } = await ctx.bridge.fileRead({ path: `${configsDir}/${file}` });
       const sha256 = createHash('sha256').update(content, 'utf8').digest();
       backed.push({ filename: file, content, sha256 });
+      allMissing = false;
     } catch (err) {
+      const msg = (err as Error).message;
+      if (!/no such file or directory/i.test(msg)) {
+        // Bridge actually failed (permissions, transport, etc.) — not a
+        // never-installed signal. Keep the existing safety net.
+        allMissing = false;
+      }
       ctx.log.warn(
-        { err: (err as Error).message, file, serverId },
+        { err: msg, file, serverId },
         'server-delete: config read failed (will not be backed up)',
       );
     }
   }
-  if (backed.length === 0) {
+  // never-installed fast path: install was interrupted before seedConfigs
+  // ran (status='failed'), so /var/lib/squad-panel/configs/<uuid> does not
+  // exist. There is nothing to back up — proceed with the rest of the
+  // teardown so the orphan row can be soft-deleted.
+  if (backed.length === 0 && !allMissing) {
     throw new Error(
-      `cannot delete server ${serverId}: no config files could be backed up (read 0/${ALLOWED_CONFIG_FILES.length})`,
+      `cannot delete server ${serverId}: no config files could be backed up (read 0/${ALLOWED_CONFIG_FILES.length}); bridge errors look like a transport issue, not a missing configs dir`,
+    );
+  }
+  if (backed.length === 0) {
+    ctx.log.info(
+      { serverId },
+      'server-delete: configs dir missing — never-installed server, skipping backup',
     );
   }
 
   let backupMarkerId: string | null = null;
-  await ctx.db.transaction(async (tx) => {
-    const message = `deletion-backup-marker ${new Date().toISOString()}`;
-    const inserts = await tx
-      .insert(configVersions)
-      .values(
-        backed.map((b) => ({
-          serverId,
-          filename: b.filename,
-          content: b.content,
-          sha256: b.sha256,
-          authorSteamId64: ctx.actorSteamId64,
-          authorLabel: ctx.actorLabel,
-          authorIp: ctx.actorIp,
-          message,
-        })),
-      )
-      .returning({ id: configVersions.id });
-    if (inserts.length > 0) backupMarkerId = inserts[0]?.id ?? null;
-  });
+  if (backed.length > 0) {
+    await ctx.db.transaction(async (tx) => {
+      const message = `deletion-backup-marker ${new Date().toISOString()}`;
+      const inserts = await tx
+        .insert(configVersions)
+        .values(
+          backed.map((b) => ({
+            serverId,
+            filename: b.filename,
+            content: b.content,
+            sha256: b.sha256,
+            authorPlayerId: ctx.actorPlayerId,
+            authorLabel: ctx.actorLabel,
+            authorIp: ctx.actorIp,
+            message,
+          })),
+        )
+        .returning({ id: configVersions.id });
+      if (inserts.length > 0) backupMarkerId = inserts[0]?.id ?? null;
+    });
+  }
   result.backup_marker_id = backupMarkerId;
   result.files_backed_up = backed.length;
 
@@ -154,7 +174,7 @@ export async function softDeleteServer(
     .update(servers)
     .set({
       deletedAt: new Date(),
-      deletedBySteamId64: ctx.actorSteamId64,
+      deletedByPlayerId: ctx.actorPlayerId,
       deletionBackupMarkerId: backupMarkerId,
       updatedAt: new Date(),
     })

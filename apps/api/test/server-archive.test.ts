@@ -63,9 +63,9 @@ async function seedAndSoftDelete(
       db: h.db,
       bridge: h.bridge as unknown as FakeBridge,
       log: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      actorSteamId64: OWNER_STEAM_ID,
+      actorPlayerId: h.seed.ownerPlayerId!,
       actorIp: '127.0.0.1',
-      actorLabel: `steam:${OWNER_STEAM_ID}`,
+      actorLabel: `player:${h.seed.ownerPlayerId}`,
     },
     seeded.id,
   );

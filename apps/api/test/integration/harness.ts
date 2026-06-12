@@ -365,6 +365,7 @@ export interface IntegrationHarness {
   cleanup: () => Promise<void>;
   seed: {
     ownerSteamId64?: bigint;
+    ownerPlayerId?: string;
   };
 }
 
@@ -479,13 +480,17 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
       .limit(1);
     const ownerRoleId = ownerRows[0]?.id;
     if (!ownerRoleId) throw new Error('Owner role missing — migration 0009 not applied?');
-    await db.insert(players).values({
-      steamId64: ownerSteamId64,
-      canonicalName,
-      canonicalNameNormalized: canonicalName.toLowerCase(),
-      roleId: ownerRoleId,
-    });
+    const insertedPlayers = await db
+      .insert(players)
+      .values({
+        steamId64: ownerSteamId64,
+        canonicalName,
+        canonicalNameNormalized: canonicalName.toLowerCase(),
+        roleId: ownerRoleId,
+      })
+      .returning({ id: players.id });
     seed.ownerSteamId64 = ownerSteamId64;
+    seed.ownerPlayerId = insertedPlayers[0]?.id;
   }
 
   await app.ready();
@@ -512,12 +517,12 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
  * string ready for subsequent `inject()` calls.
  */
 export async function loginAsOwner(h: IntegrationHarness): Promise<string> {
-  if (!h.seed.ownerSteamId64) {
+  if (!h.seed.ownerPlayerId) {
     throw new Error('seed owner missing; pass seedOwner to buildIntegrationApp');
   }
-  invalidatePermissionCache(h.seed.ownerSteamId64);
+  invalidatePermissionCache(h.seed.ownerPlayerId);
   const { token } = await createSession(h.db, h.redis, {
-    steamId64: h.seed.ownerSteamId64,
+    playerId: h.seed.ownerPlayerId,
     ip: null,
     userAgent: 'test-harness',
     ttlMs: 21_600_000,

@@ -90,7 +90,7 @@ async function collectProtectedRoutes(): Promise<RouteSpec[]> {
 function canonicalUrl(url: string): string {
   return url.replace(/:([a-zA-Z_]+)/g, (_m, name: string) => {
     if (name === 'id') return '00000000-0000-0000-0000-000000000001';
-    if (name === 'steamId') return '76561198000000001';
+    if (name === 'playerId') return '00000000-0000-0000-0000-000000000002';
     if (name === 'filename') return 'Server.cfg';
     if (name === 'versionId') return '00000000-0000-0000-0000-000000000001';
     return 'placeholder';
@@ -108,6 +108,7 @@ let db: ReturnType<typeof drizzle<typeof schema>>;
 const createdRoleIds: string[] = [];
 const cookies = new Map<string, string>();
 const userKeys = new Map<string, bigint>();
+const playerIds = new Map<string, string>();
 let steamCounter = 700100;
 
 async function createUserWithPerms(key: string, perms: string[]): Promise<void> {
@@ -117,6 +118,7 @@ async function createUserWithPerms(key: string, perms: string[]): Promise<void> 
   const roleId = uuidv7();
   createdRoleIds.push(roleId);
 
+  let playerId: string;
   await db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
@@ -130,7 +132,7 @@ async function createUserWithPerms(key: string, perms: string[]): Promise<void> 
         .values(perms.map((permissionKey) => ({ roleId, permissionKey })));
     }
     const stub = `Mx${String(steamId).slice(-6)}`;
-    await tx
+    const [upserted] = await tx
       .insert(players)
       .values({
         steamId64: steamId,
@@ -138,12 +140,15 @@ async function createUserWithPerms(key: string, perms: string[]): Promise<void> 
         canonicalNameNormalized: stub.toLowerCase(),
         roleId,
       })
-      .onConflictDoUpdate({ target: players.steamId64, set: { roleId } });
+      .onConflictDoUpdate({ target: players.steamId64, set: { roleId } })
+      .returning({ id: players.id });
+    playerId = upserted!.id;
   });
 
-  invalidatePermissionCache(steamId);
+  playerIds.set(key, playerId);
+  invalidatePermissionCache(playerId);
   const { token } = await createSession(h.db, h.redis, {
-    steamId64: steamId,
+    playerId,
     ip: null,
     userAgent: 'matrix-test',
     ttlMs: 21_600_000,
@@ -197,13 +202,14 @@ afterAll(async () => {
       .where(eq(roles.id, id))
       .catch(() => undefined);
   }
-  for (const steamId of userKeys.values()) {
+  for (const [key, steamId] of userKeys.entries()) {
     await db
       .update(players)
       .set({ roleId: null })
       .where(eq(players.steamId64, steamId))
       .catch(() => undefined);
-    invalidatePermissionCache(steamId);
+    const pid = playerIds.get(key);
+    if (pid) invalidatePermissionCache(pid);
   }
   await sql.end({ timeout: 5 }).catch(() => undefined);
   await h.cleanup();

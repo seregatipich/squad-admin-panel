@@ -29,8 +29,8 @@ export interface CleanupContext {
     'listPanelDirs' | 'directoryDelete' | 'listSquadContainers' | 'containerStop' | 'containerRm'
   >;
   log: Pick<FastifyBaseLogger, 'info' | 'warn' | 'error' | 'debug'>;
-  /** Set to a steam id to attribute audit rows; null for periodic sweep. */
-  actorSteamId64: bigint | null;
+  /** Set to a player id to attribute audit rows; null for periodic sweep. */
+  actorPlayerId: string | null;
   actorIp: string | null;
   /**
    * If true, only report what would be removed without calling
@@ -142,8 +142,8 @@ export async function cleanupOrphans(ctx: CleanupContext): Promise<CleanupResult
     result.removed_containers.length > 0
   ) {
     await writeAuditEntry(ctx.db, {
-      actor: ctx.actorSteamId64
-        ? { kind: 'steam', steamId64: ctx.actorSteamId64, tokenId: null }
+      actor: ctx.actorPlayerId
+        ? { kind: 'steam', playerId: ctx.actorPlayerId, tokenId: null }
         : { kind: 'system', label: 'periodic-orphan-sweep' },
       actorIp: ctx.actorIp,
       actionType: 'host.cleanup_orphans',

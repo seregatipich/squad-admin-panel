@@ -120,7 +120,7 @@ async function seedConfigs(
       content,
       sha256: createHash('sha256').update(content).digest(),
       parentVersionId: null,
-      authorSteamId64: null,
+      authorPlayerId: null,
       authorLabel: 'system',
       authorIp: null,
       message: `initial install — SteamCMD depot ${file === 'Rcon.cfg' || file === 'Server.cfg' ? '+ panel rewrite' : 'default'}`,
@@ -136,7 +136,7 @@ async function seedConfigs(
 
 interface InstallEmitContext {
   diag: Diag;
-  actorSteamId64: string | undefined;
+  actorPlayerId: string | undefined;
 }
 
 async function runInstall(
@@ -186,7 +186,7 @@ async function runInstall(
     kind: 'server.install.depot_seed',
     severity: 'info',
     serverId,
-    actorSteamId64: emitCtx.actorSteamId64,
+    actorPlayerId: emitCtx.actorPlayerId,
     message: `seeded ${seededCount} cfg files`,
     payload: { seededCount, durationMs: Date.now() - seedT0 },
   });
@@ -215,7 +215,7 @@ async function runInstall(
         kind: 'server.install.ufw_rule',
         severity: 'info',
         serverId,
-        actorSteamId64: emitCtx.actorSteamId64,
+        actorPlayerId: emitCtx.actorPlayerId,
         message: `${proto}/${port} ${r.status}`,
         payload: { proto, port, status: r.status, durationMs: Date.now() - ufwT0 },
       });
@@ -227,7 +227,7 @@ async function runInstall(
         kind: 'server.install.ufw_rule',
         severity: 'error',
         serverId,
-        actorSteamId64: emitCtx.actorSteamId64,
+        actorPlayerId: emitCtx.actorPlayerId,
         message: `${proto}/${port} failed: ${errorMessage}`,
         payload: { proto, port, errorMessage, durationMs: Date.now() - ufwT0 },
       });
@@ -256,7 +256,7 @@ async function runInstall(
     kind: 'server.install.container_run',
     severity: 'info',
     serverId,
-    actorSteamId64: emitCtx.actorSteamId64,
+    actorPlayerId: emitCtx.actorPlayerId,
     message: `container started ${res.container_id}`,
     payload: {
       container_id: res.container_id,
@@ -278,7 +278,7 @@ async function runInstall(
     kind: 'server.install.verify',
     severity: 'info',
     serverId,
-    actorSteamId64: emitCtx.actorSteamId64,
+    actorPlayerId: emitCtx.actorPlayerId,
     message: 'server row marked running',
     payload: { container_id: res.container_id },
   });
@@ -351,10 +351,10 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'install_in_progress' };
       }
       const actor = req.user
-        ? { kind: 'steam' as const, steamId64: req.user.steamId64, tokenId: null }
+        ? { kind: 'steam' as const, playerId: req.user.playerId, tokenId: null }
         : { kind: 'system' as const, label: 'http-anonymous' };
       const actorIp = req.ip ?? null;
-      const actorSteamId64 = req.user?.steamId64?.toString();
+      const actorPlayerId = req.user?.playerId;
       const requestId = req.requestId;
       const installDiag: Diag = {
         emit: (ev) => app.diag.emit({ ...ev, requestId: ev.requestId ?? requestId }),
@@ -364,7 +364,7 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
         kind: 'server.install.requested',
         severity: 'info',
         serverId: id,
-        actorSteamId64,
+        actorPlayerId,
         message: 'install requested',
         payload: { display_name: srv.displayName, kind: 'install' },
       });
@@ -378,7 +378,7 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
               app.log.info({ server_id: id, ...line }, 'install progress');
               app.installProgress.publish(id, line);
             },
-            { diag: installDiag, actorSteamId64 },
+            { diag: installDiag, actorPlayerId },
           );
           await writeAuditEntry(app.db, {
             actor,
@@ -395,7 +395,7 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             kind: 'server.install.done',
             severity: 'info',
             serverId: id,
-            actorSteamId64,
+            actorPlayerId,
             message: 'install complete',
             payload: { totalDurationMs: Date.now() - startedAt },
           });
@@ -405,7 +405,7 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
           // baseline Admins.cfg the seedConfigs step just created.
           await publishAdminsCfgSyncForServer(app.redis, id, {
             reason: 'server.install.completed',
-            actor_steam_id64: actor.kind === 'steam' ? String(actor.steamId64) : null,
+            actor_player_id: actor.kind === 'steam' ? actor.playerId : null,
             enqueued_at: new Date().toISOString(),
           });
         } catch (err) {
@@ -436,7 +436,7 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             kind: 'server.install.failed',
             severity: 'error',
             serverId: id,
-            actorSteamId64,
+            actorPlayerId,
             message: `install failed: ${errorMessage}`,
             payload: {
               stage: 'runInstall',

@@ -10,7 +10,7 @@ const envSchema = z.object({
     .string()
     .min(32, 'APP_ENCRYPTION_KEY must be at least 32 bytes (base64 of 32 random bytes)'),
   SESSION_SECRET: z.string().min(32),
-  SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(21600),
+  SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(86400),
   SESSION_TOUCH_THROTTLE_SECONDS: z.coerce.number().int().positive().default(60),
   BRIDGE_SOCKET: z.string().default('/run/panel-host-bridge/bridge.sock'),
   COOKIE_SECURE: z.coerce.boolean().default(true),

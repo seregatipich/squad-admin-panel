@@ -36,9 +36,15 @@ let ownerCookie: string;
 let createdRoleId: string;
 
 async function login(steamId: bigint): Promise<string> {
-  invalidatePermissionCache(steamId);
+  const [row] = await h.db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.steamId64, steamId))
+    .limit(1);
+  if (!row) throw new Error(`Player not found for steamId ${steamId}`);
+  invalidatePermissionCache(row.id);
   const { token } = await createSession(h.db, h.redis, {
-    steamId64: steamId,
+    playerId: row.id,
     ip: null,
     userAgent: 'sql-injection-test',
     ttlMs: 21_600_000,
@@ -103,9 +109,9 @@ describe('SQL injection — GET /api/v1/players?q=<payload>', () => {
   }
 });
 
-describe('SQL injection — GET /api/v1/players/:steamId', () => {
+describe('SQL injection — GET /api/v1/players/:playerId', () => {
   for (const payload of PAYLOADS) {
-    it(`survives steamId path="${payload}"`, async () => {
+    it(`survives playerId path="${payload}"`, async () => {
       const encoded = encodeURIComponent(payload);
       const res = await h.app.inject({
         method: 'GET',
@@ -221,7 +227,7 @@ describe('SQL injection — GET /api/v1/audit?q=<payload>', () => {
   }
 });
 
-describe('SQL injection — PUT /api/v1/players/:steamId/role (role_id body)', () => {
+describe('SQL injection — PUT /api/v1/players/:playerId/role (role_id body)', () => {
   for (const payload of PAYLOADS) {
     it(`survives role_id="${payload}"`, async () => {
       const steamId = testSteamId(600100);
@@ -235,10 +241,16 @@ describe('SQL injection — PUT /api/v1/players/:steamId/role (role_id body)', (
           roleId: null,
         })
         .onConflictDoNothing();
+      const [playerRow] = await db
+        .select({ id: players.id })
+        .from(players)
+        .where(eq(players.steamId64, steamId))
+        .limit(1);
+      if (!playerRow) throw new Error('Player not found after insert');
 
       const res = await h.app.inject({
         method: 'PUT',
-        url: `/api/v1/players/${steamId}/role`,
+        url: `/api/v1/players/${playerRow.id}/role`,
         headers: { cookie: ownerCookie },
         payload: { role_id: payload },
       });

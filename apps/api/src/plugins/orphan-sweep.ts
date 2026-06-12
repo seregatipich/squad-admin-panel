@@ -25,7 +25,7 @@ export default fp(async (app) => {
         db: app.db,
         bridge: app.bridge,
         log: app.log,
-        actorSteamId64: null,
+        actorPlayerId: null,
         actorIp: null,
       });
       const removed = result.removed_configs.length + result.removed_saved.length;

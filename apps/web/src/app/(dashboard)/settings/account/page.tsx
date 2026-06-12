@@ -5,7 +5,8 @@ import { LiveIndicator } from '@/components/LiveIndicator';
 const POLL_MS = 30_000;
 
 interface Me {
-  steam_id64: string;
+  player_id: string;
+  steam_id64: string | null;
   canonical_name: string;
   avatar_url: string | null;
   permissions: string[];
@@ -22,6 +23,18 @@ interface ActiveSession {
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString('ru-RU');
+}
+
+function formatRelative(iso: string): string {
+  const diffMs = new Date(iso).getTime() - Date.now();
+  if (diffMs <= 0) return 'истекла';
+  const diffMin = Math.floor(diffMs / 60_000);
+  if (diffMin < 60) return `через ${diffMin} мин`;
+  const diffH = Math.floor(diffMin / 60);
+  const remMin = diffMin % 60;
+  if (diffH < 24) return remMin > 0 ? `через ${diffH} ч ${remMin} мин` : `через ${diffH} ч`;
+  const diffD = Math.floor(diffH / 24);
+  return `через ${diffD} дн`;
 }
 
 function shortenUa(ua: string | null): string {
@@ -132,8 +145,10 @@ export default function AccountSettings() {
       <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
         <h2 className="text-xs uppercase tracking-widest text-neutral-400">Профиль</h2>
         <dl className="grid grid-cols-[140px_1fr] gap-y-1 text-sm">
+          <dt className="text-neutral-500">Player ID</dt>
+          <dd className="font-mono text-xs">{me.player_id}</dd>
           <dt className="text-neutral-500">SteamID64</dt>
-          <dd className="font-mono">{me.steam_id64}</dd>
+          <dd className="font-mono">{me.steam_id64 ?? '—'}</dd>
           <dt className="text-neutral-500">Имя</dt>
           <dd>{me.canonical_name}</dd>
           <dt className="text-neutral-500">Permissions</dt>
@@ -170,7 +185,12 @@ export default function AccountSettings() {
                   <td className="py-2 pr-2 font-mono">{s.ip ?? '—'}</td>
                   <td className="py-2 pr-2 text-neutral-400">{shortenUa(s.user_agent)}</td>
                   <td className="py-2 pr-2 text-neutral-400">{formatDate(s.last_activity_at)}</td>
-                  <td className="py-2 pr-2 text-neutral-400">{formatDate(s.expires_at)}</td>
+                  <td className="py-2 pr-2 text-neutral-400">
+                    {formatDate(s.expires_at)}{' '}
+                    <span className="text-neutral-500 text-xs">
+                      ({formatRelative(s.expires_at)})
+                    </span>
+                  </td>
                   <td className="py-2 pr-2 text-right">
                     {s.current ? (
                       <span className="rounded bg-emerald-950/50 px-2 py-0.5 text-xs text-emerald-300">

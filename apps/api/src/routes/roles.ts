@@ -134,7 +134,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
           // rolls back and the role change is not persisted.
           await publishAdminsCfgSyncForAllServers(tx, app.redis, {
             reason: 'role.create',
-            actor_steam_id64: req.user?.steamId64 ? String(req.user.steamId64) : null,
+            actor_player_id: req.user?.playerId ?? null,
             enqueued_at: new Date().toISOString(),
             request_id: req.id,
           });
@@ -211,7 +211,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
           }
           await publishAdminsCfgSyncForAllServers(tx, app.redis, {
             reason: 'role.update',
-            actor_steam_id64: req.user?.steamId64 ? String(req.user.steamId64) : null,
+            actor_player_id: req.user?.playerId ?? null,
             enqueued_at: new Date().toISOString(),
             request_id: req.id,
           });
@@ -261,7 +261,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         await tx.delete(roles).where(eq(roles.id, req.params.id));
         await publishAdminsCfgSyncForAllServers(tx, app.redis, {
           reason: 'role.delete',
-          actor_steam_id64: req.user?.steamId64 ? String(req.user.steamId64) : null,
+          actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
           request_id: req.id,
         });

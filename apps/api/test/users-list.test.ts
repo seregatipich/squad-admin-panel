@@ -123,7 +123,7 @@ describeIfDb('GET /api/v1/users — HTTP integration', () => {
   });
 
   afterEach(async () => {
-    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerSteamId64);
+    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
     await h.cleanup();
   });
 
@@ -152,7 +152,7 @@ describeIfDb('GET /api/v1/users — HTTP integration', () => {
       .update(players)
       .set({ roleId: null })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerSteamId64);
+    invalidatePermissionCache(h.seed.ownerPlayerId!);
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/users', headers: { cookie } });
     expect(res.statusCode).toBe(403);

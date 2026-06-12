@@ -1,5 +1,7 @@
 FROM debian:bookworm-slim
 
+LABEL panel.preserve=true panel.kind=squad-server
+
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8

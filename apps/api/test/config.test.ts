@@ -95,10 +95,10 @@ describe('loadConfig', () => {
     expect(cfg.COOKIE_SECURE).toBe(true);
   });
 
-  it('SESSION_TTL_SECONDS defaults to 21600', async () => {
+  it('SESSION_TTL_SECONDS defaults to 86400', async () => {
     Object.assign(process.env, VALID_ENV);
     const loadConfig = await freshLoadConfig();
     const cfg = loadConfig();
-    expect(cfg.SESSION_TTL_SECONDS).toBe(21600);
+    expect(cfg.SESSION_TTL_SECONDS).toBe(86400);
   });
 });

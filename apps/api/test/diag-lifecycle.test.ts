@@ -133,7 +133,7 @@ describe('server lifecycle emits diag events', () => {
     const archivedId = await seedServer(h, { slug: 'diag-archived', status: 'stopped' });
     await h.db
       .update(servers)
-      .set({ deletedAt: new Date(), deletedBySteamId64: OWNER_STEAM_ID })
+      .set({ deletedAt: new Date(), deletedByPlayerId: h.seed.ownerPlayerId! })
       .where(eq(servers.id, archivedId));
 
     const cookie = await loginAsOwner(h);

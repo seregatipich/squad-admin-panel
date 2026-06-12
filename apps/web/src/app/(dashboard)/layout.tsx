@@ -1,9 +1,23 @@
+import { redirect } from 'next/navigation';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { SidebarNav } from '@/components/SidebarNav';
+import { apiFetch } from '@/lib/api';
 import { requireSession } from '@/lib/dal';
+
+interface SetupStatus {
+  setup_completed: boolean;
+}
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const me = await requireSession();
+
+  try {
+    const status = await apiFetch<SetupStatus>('/api/v1/setup/status');
+    if (!status.setup_completed) redirect('/setup');
+  } catch {
+    // if the endpoint fails, let the user through
+  }
+
   return (
     <div className="flex min-h-screen flex-col">
       <ConnectionBanner />

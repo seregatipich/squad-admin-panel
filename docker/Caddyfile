@@ -1,11 +1,12 @@
 {
 	email {$ACME_EMAIL:admin@example.com}
+	default_sni {$APP_DOMAIN:admin.localhost}
 	servers {
 		metrics
 	}
 }
 
-{$APP_DOMAIN:admin.localhost} {
+{$APP_DOMAIN:admin.localhost}, https://{$APP_IP:127.0.0.1} {
 	encode zstd gzip
 
 	tls {

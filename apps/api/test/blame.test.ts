@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { type BlameVersion, computeBlame } from '../src/lib/blame.js';
 
 function v(id: string, author: string | null, created_at: string, content: string): BlameVersion {
-  return { id, author_steam_id64: author, author_label: null, created_at, content };
+  return { id, author_player_id: author, author_label: null, created_at, content };
 }
 
 describe('computeBlame', () => {
@@ -14,7 +14,7 @@ describe('computeBlame', () => {
     const result = computeBlame([v('v1', 'alice', '2026-04-01T00:00:00Z', 'line-a\nline-b\n')]);
     expect(result).toHaveLength(3);
     expect(result.every((l) => l.version_id === 'v1')).toBe(true);
-    expect(result.every((l) => l.author_steam_id64 === 'alice')).toBe(true);
+    expect(result.every((l) => l.author_player_id === 'alice')).toBe(true);
   });
 
   it('keeps prior attribution on unchanged lines between two versions', () => {
@@ -35,7 +35,7 @@ describe('computeBlame', () => {
     const result = computeBlame(versions);
     expect(result[0]?.version_id).toBe('v1');
     expect(result[1]?.version_id).toBe('v2');
-    expect(result[1]?.author_steam_id64).toBe('bob');
+    expect(result[1]?.author_player_id).toBe('bob');
   });
 
   it('drops deleted lines from the output', () => {
@@ -56,7 +56,7 @@ describe('computeBlame', () => {
     const result = computeBlame(versions);
     expect(result[0]?.version_id).toBe('v1');
     expect(result[1]?.version_id).toBe('v2');
-    expect(result[1]?.author_steam_id64).toBe('bob');
+    expect(result[1]?.author_player_id).toBe('bob');
     expect(result[2]?.version_id).toBe('v1');
   });
 
@@ -67,9 +67,9 @@ describe('computeBlame', () => {
       v('v3', 'carol', '2026-04-03T00:00:00Z', 'x\nY\nZZ'),
     ];
     const result = computeBlame(versions);
-    expect(result[0]?.author_steam_id64).toBe('alice');
-    expect(result[1]?.author_steam_id64).toBe('bob');
-    expect(result[2]?.author_steam_id64).toBe('carol');
+    expect(result[0]?.author_player_id).toBe('alice');
+    expect(result[1]?.author_player_id).toBe('bob');
+    expect(result[2]?.author_player_id).toBe('carol');
   });
 
   it('sorts unordered input by created_at before walking the diff', () => {

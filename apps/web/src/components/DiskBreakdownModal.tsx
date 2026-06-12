@@ -73,22 +73,69 @@ export function DiskBreakdownModal({
 
   if (!open) return null;
 
-  const rows = data
-    ? [
-        ['configs', data.configs_bytes] as const,
-        ['saved (все сервера)', data.saved_total_bytes] as const,
-        ['squad-depot', data.depot_volume_bytes] as const,
-        ...data.docker_volumes.map((v) => [`volume:${v.name}`, v.bytes] as const),
-        ...data.docker_images.map(
-          (img) => [`image:${img.repository}:${img.tag}`, img.bytes] as const,
-        ),
-        ['audit archive', data.audit_archive_bytes] as const,
-      ]
-        .slice()
-        .sort((a, b) => b[1] - a[1])
+  type Row = {
+    label: string;
+    bytes: number;
+    tone: 'depot' | 'saved' | 'configs' | 'image' | 'misc';
+  };
+  type Group = { title: string; rows: Row[] };
+
+  const groups: Group[] = data
+    ? (() => {
+        // Squad bucket — depot volume (only once; the named volume IS the
+        // depot, so don't list it twice), saved, and configs.
+        const squad: Row[] = (
+          [
+            { label: 'Squad depot', bytes: data.depot_volume_bytes, tone: 'depot' as const },
+            { label: 'Saved (все серверы)', bytes: data.saved_total_bytes, tone: 'saved' as const },
+            { label: 'Configs', bytes: data.configs_bytes, tone: 'configs' as const },
+          ] satisfies Row[]
+        ).sort((a, b) => b.bytes - a.bytes);
+
+        // Volumes that aren't the depot (postgres/redis/caddy named
+        // volumes). The depot is already accounted for in the Squad bucket.
+        const otherVolumes: Row[] = data.docker_volumes
+          .filter((v) => v.bytes !== data.depot_volume_bytes || v.name !== 'squad-depot')
+          .map((v) => ({ label: `volume:${v.name}`, bytes: v.bytes, tone: 'misc' as const }))
+          .sort((a, b) => b.bytes - a.bytes);
+
+        const images: Row[] = data.docker_images
+          .map((img) => ({
+            label: `${img.repository}:${img.tag}`,
+            bytes: img.bytes,
+            tone: 'image' as const,
+          }))
+          .sort((a, b) => b.bytes - a.bytes);
+
+        const misc: Row[] = [
+          ...otherVolumes,
+          { label: 'Audit archive', bytes: data.audit_archive_bytes, tone: 'misc' as const },
+        ].sort((a, b) => b.bytes - a.bytes);
+
+        const result: Group[] = [{ title: 'Squad', rows: squad }];
+        if (images.length > 0) result.push({ title: 'Docker images', rows: images });
+        if (misc.length > 0) result.push({ title: 'Прочее', rows: misc });
+        return result;
+      })()
     : [];
 
+  const total = data?.total_panel_bytes ?? 0;
   const sortedSaved = data ? [...data.saved_per_server].sort((a, b) => b.bytes - a.bytes) : [];
+
+  const toneClass = (tone: Row['tone']): string => {
+    switch (tone) {
+      case 'depot':
+        return 'bg-purple-500';
+      case 'saved':
+        return 'bg-purple-400';
+      case 'configs':
+        return 'bg-purple-300';
+      case 'image':
+        return 'bg-sky-500';
+      default:
+        return 'bg-neutral-500';
+    }
+  };
 
   return (
     <div
@@ -155,23 +202,51 @@ export function DiskBreakdownModal({
               </button>
             </div>
 
-            <div>
-              <div className="mb-2 text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-                По типу
-              </div>
-              <ul className="space-y-0">
-                {rows.map(([label, bytes]) => (
-                  <li
-                    key={label}
-                    className="flex items-center justify-between gap-3 border-b border-neutral-900 py-1.5"
-                  >
-                    <span className="truncate text-neutral-200" title={label}>
-                      {label}
-                    </span>
-                    <span className="font-mono tabular-nums text-neutral-300">{fmt(bytes)}</span>
-                  </li>
-                ))}
-              </ul>
+            <div className="space-y-4">
+              {groups.map((group) => {
+                const groupTotal = group.rows.reduce((sum, r) => sum + r.bytes, 0);
+                return (
+                  <div key={group.title}>
+                    <div className="mb-2 flex items-baseline justify-between gap-3">
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
+                        {group.title}
+                      </span>
+                      <span className="font-mono text-xs tabular-nums text-neutral-500">
+                        {fmt(groupTotal)}
+                        {total > 0 ? (
+                          <span className="ml-2 text-neutral-600">
+                            {((groupTotal / total) * 100).toFixed(1)}%
+                          </span>
+                        ) : null}
+                      </span>
+                    </div>
+                    <ul className="space-y-1.5">
+                      {group.rows.map((row) => {
+                        const pct = total > 0 ? (row.bytes / total) * 100 : 0;
+                        return (
+                          <li key={row.label} className="space-y-1">
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="truncate text-neutral-200" title={row.label}>
+                                {row.label}
+                              </span>
+                              <span className="shrink-0 font-mono text-xs tabular-nums text-neutral-400">
+                                <span className="text-neutral-200">{fmt(row.bytes)}</span>
+                                <span className="ml-2 text-neutral-600">{pct.toFixed(1)}%</span>
+                              </span>
+                            </div>
+                            <div className="h-1 w-full overflow-hidden rounded-full bg-neutral-900">
+                              <div
+                                className={`h-full ${toneClass(row.tone)}`}
+                                style={{ width: `${Math.min(100, pct)}%` }}
+                              />
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                );
+              })}
             </div>
 
             {sortedSaved.length > 0 ? (

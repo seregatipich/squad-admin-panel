@@ -74,8 +74,14 @@ async function seedPlayer(
       roleId: ownerRoleId,
     })
     .onConflictDoNothing();
+  const [row] = await db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.steamId64, steamId64))
+    .limit(1);
+  if (!row) throw new Error('Player not found after insert');
   const { token } = await createSession(db, redis, {
-    steamId64,
+    playerId: row.id,
     ip: null,
     userAgent: 'cookie-security-test',
     ttlMs: 21_600_000,

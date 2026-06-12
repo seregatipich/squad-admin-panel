@@ -21,7 +21,7 @@ export interface RestoreContext {
   db: DatabaseClient;
   bridge: Pick<BridgeClient, 'fileAtomicWrite'>;
   log: Pick<FastifyBaseLogger, 'warn' | 'info' | 'error' | 'debug'>;
-  actorSteamId64: bigint | null;
+  actorPlayerId: string | null;
   actorIp: string | null;
   actorLabel: string;
 }
@@ -83,7 +83,7 @@ export async function restoreConfigsFromArchive(
         filename,
         content: backup.content,
         sha256,
-        authorSteamId64: ctx.actorSteamId64,
+        authorPlayerId: ctx.actorPlayerId,
         authorLabel: ctx.actorLabel,
         authorIp: ctx.actorIp,
         message,

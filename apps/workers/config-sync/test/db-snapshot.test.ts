@@ -21,10 +21,10 @@ describe('snapshotRolesAndAdmins', () => {
   });
 
   it('maps admin rows to AdminEntry array', async () => {
-    const db = makeDb([], [{ steam_id64: '76561198000000001', role_name: 'Admin' }]);
+    const db = makeDb([], [{ eos_id: '0002a10186d9414e8e15c66eb3dbf70a', role_name: 'Admin' }]);
     const { roles, admins } = await snapshotRolesAndAdmins(db);
     expect(roles).toEqual([]);
-    expect(admins).toEqual([{ steamId64: '76561198000000001', roleName: 'Admin' }]);
+    expect(admins).toEqual([{ eosId: '0002a10186d9414e8e15c66eb3dbf70a', roleName: 'Admin' }]);
   });
 
   it('returns empty arrays when queries return no rows', async () => {
@@ -47,14 +47,14 @@ describe('snapshotRolesAndAdmins', () => {
         { name: 'Mod', squad_permissions: ['warn'] },
       ],
       [
-        { steam_id64: '76561198000000001', role_name: 'Admin' },
-        { steam_id64: '76561198000000002', role_name: 'Mod' },
+        { eos_id: '0002a10186d9414e8e15c66eb3dbf70a', role_name: 'Admin' },
+        { eos_id: '0002b20286d9414e8e15c66eb3dbf70b', role_name: 'Mod' },
       ],
     );
     const { roles, admins } = await snapshotRolesAndAdmins(db);
     expect(roles).toHaveLength(2);
     expect(admins).toHaveLength(2);
-    expect(admins[0]).toEqual({ steamId64: '76561198000000001', roleName: 'Admin' });
-    expect(admins[1]).toEqual({ steamId64: '76561198000000002', roleName: 'Mod' });
+    expect(admins[0]).toEqual({ eosId: '0002a10186d9414e8e15c66eb3dbf70a', roleName: 'Admin' });
+    expect(admins[1]).toEqual({ eosId: '0002b20286d9414e8e15c66eb3dbf70b', roleName: 'Mod' });
   });
 });

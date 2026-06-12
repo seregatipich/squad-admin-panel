@@ -11,7 +11,7 @@ export interface RoleEntry {
 }
 
 export interface AdminEntry {
-  steamId64: string;
+  eosId: string;
   roleName: string;
   comment?: string | null;
 }
@@ -33,7 +33,7 @@ export interface ManagedSegment {
  * snapshot of the DB. Only roles with at least one Squad permission emit
  * a Group= line. Only admin entries whose role has at least one Squad
  * permission emit an Admin= line. The order is deterministic (sorted
- * alphabetically by role name then numerically by steam_id64) so the
+ * alphabetically by role name then by eos_id) so the
  * sha256 idempotency check is stable.
  */
 export function buildManagedSegment(inputs: SegmentInputs): ManagedSegment {
@@ -48,7 +48,7 @@ export function buildManagedSegment(inputs: SegmentInputs): ManagedSegment {
     .sort((a, b) => {
       const r = a.roleName.localeCompare(b.roleName);
       if (r !== 0) return r;
-      return a.steamId64.localeCompare(b.steamId64, undefined, { numeric: true });
+      return a.eosId.localeCompare(b.eosId);
     });
 
   const lines: string[] = [BEGIN_LINE];
@@ -57,7 +57,7 @@ export function buildManagedSegment(inputs: SegmentInputs): ManagedSegment {
   }
   if (rolesWithPerms.length > 0 && admins.length > 0) lines.push('');
   for (const admin of admins) {
-    const base = `Admin=${admin.steamId64}:${admin.roleName}`;
+    const base = `Admin=${admin.eosId}:${admin.roleName}`;
     lines.push(admin.comment ? `${base} // ${admin.comment}` : base);
   }
   lines.push(END_MARKER);

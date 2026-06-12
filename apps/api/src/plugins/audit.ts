@@ -7,7 +7,7 @@ export default fp(async (app) => {
     if (auditCfg === undefined) return;
     if (auditCfg === false) return;
     const actor: AuditActor = req.user
-      ? { kind: 'steam', steamId64: req.user.steamId64, tokenId: req.apiTokenId ?? null }
+      ? { kind: 'steam', playerId: req.user.playerId, tokenId: req.apiTokenId ?? null }
       : { kind: 'system', label: 'http-anonymous' };
     try {
       await writeAuditEntry(app.db, {
@@ -37,6 +37,6 @@ function extractTargetId(params: unknown): string | null {
   const p = params as Record<string, unknown>;
   if (typeof p.id === 'string') return p.id;
   if (typeof p.serverId === 'string') return p.serverId;
-  if (typeof p.steam_id64 === 'string') return p.steam_id64;
+  if (typeof p.playerId === 'string') return p.playerId;
   return null;
 }

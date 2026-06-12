@@ -18,12 +18,18 @@ vi.mock('next/link', () => ({
   default: ({ children }: { children: unknown }) => children,
 }));
 vi.mock('../src/lib/dal', () => ({
-  requireSession: vi
-    .fn()
-    .mockResolvedValue({ steam_id64: '1', canonical_name: 'Test', permissions: [] }),
-  getSession: vi
-    .fn()
-    .mockResolvedValue({ steam_id64: '1', canonical_name: 'Test', permissions: [] }),
+  requireSession: vi.fn().mockResolvedValue({
+    player_id: '00000000-0000-0000-0000-000000000001',
+    steam_id64: '1',
+    canonical_name: 'Test',
+    permissions: [],
+  }),
+  getSession: vi.fn().mockResolvedValue({
+    player_id: '00000000-0000-0000-0000-000000000001',
+    steam_id64: '1',
+    canonical_name: 'Test',
+    permissions: [],
+  }),
   SESSION_COOKIE: '__Host-sid',
 }));
 vi.mock('../src/lib/api', () => ({ apiFetch: vi.fn().mockResolvedValue({}) }));
@@ -68,7 +74,7 @@ vi.mock('../src/lib/live-bus', () => ({
 import auditPage from '../src/app/(dashboard)/audit/page';
 import dashboardPage from '../src/app/(dashboard)/dashboard/page';
 import logsPage from '../src/app/(dashboard)/logs/page';
-import playerDetailPage from '../src/app/(dashboard)/players/[steam_id64]/page';
+import playerDetailPage from '../src/app/(dashboard)/players/[id]/page';
 import playersPage from '../src/app/(dashboard)/players/page';
 import rolesEditPage from '../src/app/(dashboard)/roles/[id]/page';
 import rolesNewPage from '../src/app/(dashboard)/roles/new/page';

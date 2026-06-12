@@ -20,7 +20,7 @@ export const errorDiagPlugin = fp(
             severity: 'error',
             message: `${req.method} ${req.url} → ${err.message}`,
             requestId: req.id,
-            actorSteamId64: req.user?.steamId64?.toString(),
+            actorPlayerId: req.user?.playerId,
             payload: {
               method: req.method,
               url: req.url,

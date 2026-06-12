@@ -38,7 +38,7 @@ export function createDiag({ redis, log }: DiagDeps): Diag {
           'kind',
           ev.kind,
           ...(ev.serverId ? ['server_id', ev.serverId] : []),
-          ...(ev.actorSteamId64 ? ['actor_steam_id64', ev.actorSteamId64] : []),
+          ...(ev.actorPlayerId ? ['actor_player_id', ev.actorPlayerId] : []),
           ...(ev.requestId ? ['request_id', ev.requestId] : []),
           'message',
           ev.message,

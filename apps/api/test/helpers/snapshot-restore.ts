@@ -4,7 +4,7 @@ import { and, eq } from 'drizzle-orm';
 
 export interface LiveStateSnapshot {
   panelMetaFlag: boolean;
-  ownerSteamIds: bigint[];
+  ownerSteamIds: (bigint | null)[];
   ownerRoleId: string;
 }
 

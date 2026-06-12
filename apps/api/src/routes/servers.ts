@@ -297,14 +297,14 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: 'server_not_installed' };
       }
-      const actorSteamId64 = req.user?.steamId64?.toString();
+      const actorPlayerId = req.user?.playerId;
       const startT0 = Date.now();
       await req.diag.emit({
         component: 'api',
         kind: 'server.start.requested',
         severity: 'info',
         serverId: s.id,
-        actorSteamId64,
+        actorPlayerId,
         message: 'start requested',
         payload: {},
       });
@@ -321,7 +321,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             kind: 'server.start.done',
             severity: 'info',
             serverId: s.id,
-            actorSteamId64,
+            actorPlayerId,
             message: 'already running',
             payload: { durationMs: Date.now() - startT0, container_id: s.containerId ?? null },
           });
@@ -364,7 +364,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           kind: 'server.start.done',
           severity: 'info',
           serverId: s.id,
-          actorSteamId64,
+          actorPlayerId,
           message: 'start succeeded',
           payload: { durationMs: Date.now() - startT0, container_id: containerId },
         });
@@ -376,7 +376,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           kind: 'server.start.failed',
           severity: 'error',
           serverId: s.id,
-          actorSteamId64,
+          actorPlayerId,
           message: `start failed: ${errorMessage}`,
           payload: { errorMessage, durationMs: Date.now() - startT0 },
         });
@@ -410,7 +410,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         where: eq(serverCredentials.serverId, s.id),
       });
 
-      const actorSteamId64 = req.user?.steamId64?.toString();
+      const actorPlayerId = req.user?.playerId;
       const stopT0 = Date.now();
       // Mark requested-vs-unexpected exit window so the reconciler (status-
       // reconciler.ts) can distinguish a planned stop from a crash. TTL 5 min
@@ -421,7 +421,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         kind: 'server.stop.requested',
         severity: 'info',
         serverId: s.id,
-        actorSteamId64,
+        actorPlayerId,
         message: 'stop requested',
         payload: { method: 'graceful' },
       });
@@ -474,7 +474,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
               kind: 'server.stop.broadcast',
               severity: broadcastOk ? 'info' : 'error',
               serverId: s.id,
-              actorSteamId64,
+              actorPlayerId,
               message: broadcastOk ? 'AdminBroadcast sent' : 'AdminBroadcast failed',
               payload: {
                 ok: broadcastOk,
@@ -501,7 +501,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
               kind: 'server.stop.end_match',
               severity: endMatchOk ? 'info' : 'error',
               serverId: s.id,
-              actorSteamId64,
+              actorPlayerId,
               message: endMatchOk ? 'AdminEndMatch sent' : 'AdminEndMatch failed',
               payload: { ok: endMatchOk, durationMs: Date.now() - endMatchT0 },
             });
@@ -521,7 +521,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             kind: 'server.stop.container_stop',
             severity: 'error',
             serverId: s.id,
-            actorSteamId64,
+            actorPlayerId,
             message: `container_stop failed: ${(err as Error).message}`,
             payload: {
               ok: false,
@@ -536,7 +536,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           kind: 'server.stop.container_stop',
           severity: 'info',
           serverId: s.id,
-          actorSteamId64,
+          actorPlayerId,
           message: 'container_stop succeeded',
           payload: { ok: containerStopOk, durationMs: Date.now() - containerStopT0 },
         });
@@ -545,7 +545,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           kind: 'server.stop.done',
           severity: 'info',
           serverId: s.id,
-          actorSteamId64,
+          actorPlayerId,
           message: 'stop complete',
           payload: { totalDurationMs: Date.now() - stopT0 },
         });
@@ -557,7 +557,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           kind: 'server.stop.failed',
           severity: 'error',
           serverId: s.id,
-          actorSteamId64,
+          actorPlayerId,
           message: `stop failed: ${errorMessage}`,
           payload: {
             stage: 'container_stop',
@@ -706,14 +706,14 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
-      const actorSteamId64 = req.user?.steamId64?.toString();
+      const actorPlayerId = req.user?.playerId;
       const softDeleteT0 = Date.now();
       await req.diag.emit({
         component: 'api',
         kind: 'server.soft_delete.requested',
         severity: 'info',
         serverId: row.id,
-        actorSteamId64,
+        actorPlayerId,
         message: 'soft-delete requested',
         payload: {},
       });
@@ -723,9 +723,9 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             db: app.db,
             bridge: app.bridge,
             log: req.log,
-            actorSteamId64: req.user?.steamId64 ?? null,
+            actorPlayerId: req.user?.playerId ?? null,
             actorIp: req.ip ?? null,
-            actorLabel: req.user ? `steam:${req.user.steamId64}` : 'system',
+            actorLabel: req.user ? `player:${req.user.playerId}` : 'system',
           },
           row.id,
         );
@@ -735,7 +735,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           data: {
             server_id: row.id,
             deleted_at: new Date().toISOString(),
-            by: req.user ? String(req.user.steamId64) : null,
+            by: req.user?.playerId ?? null,
           },
         });
         await req.diag.emit({
@@ -743,7 +743,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           kind: 'server.soft_delete.done',
           severity: 'info',
           serverId: row.id,
-          actorSteamId64,
+          actorPlayerId,
           message: 'soft-delete complete',
           payload: {
             backup_id: result.backup_marker_id,
@@ -756,7 +756,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         // dangling images that the squad-server stack left behind. Fire
         // and forget — the response to the operator returns immediately
         // and the prune logs/audits when it completes.
-        fireAutoPrune(app, `server.delete:${row.id}`, req.user?.steamId64 ?? null, req.ip ?? null);
+        fireAutoPrune(app, `server.delete:${row.id}`, req.user?.playerId ?? null, req.ip ?? null);
         return { ok: true, ...result };
       } catch (err) {
         const errorMessage = (err as Error).message;
@@ -765,7 +765,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           kind: 'server.soft_delete.failed',
           severity: 'error',
           serverId: row.id,
-          actorSteamId64,
+          actorPlayerId,
           message: `soft-delete failed: ${errorMessage}`,
           payload: { errorMessage, durationMs: Date.now() - softDeleteT0 },
         });

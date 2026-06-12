@@ -27,6 +27,12 @@ const TEST_PLAYER_A = testSteamId(800001);
 const TEST_PLAYER_B = testSteamId(800002);
 const TEST_PLAYER_C = testSteamId(800003);
 const createdRoleIds: string[] = [];
+const playerIds = new Map<bigint, string>();
+function pid(steamId: bigint): string {
+  const id = playerIds.get(steamId);
+  if (!id) throw new Error(`No UUID found for steamId64=${steamId}`);
+  return id;
+}
 
 beforeAll(async () => {
   const dbUrl = process.env.DATABASE_URL;
@@ -61,7 +67,7 @@ afterAll(async () => {
 beforeEach(async () => {
   for (const sid of [TEST_PLAYER_A, TEST_PLAYER_B, TEST_PLAYER_C]) {
     const stub = `TestPA${String(sid).slice(-4)}`;
-    await db
+    const [row] = await db
       .insert(players)
       .values({
         steamId64: sid,
@@ -69,8 +75,10 @@ beforeEach(async () => {
         canonicalNameNormalized: stub.toLowerCase(),
         roleId: null,
       })
-      .onConflictDoUpdate({ target: players.steamId64, set: { roleId: null } });
-    invalidatePermissionCache(sid);
+      .onConflictDoUpdate({ target: players.steamId64, set: { roleId: null } })
+      .returning({ id: players.id });
+    playerIds.set(sid, row!.id);
+    invalidatePermissionCache(row!.id);
   }
 });
 
@@ -78,7 +86,7 @@ afterEach(async () => {
   for (const sid of [TEST_PLAYER_A, TEST_PLAYER_B, TEST_PLAYER_C]) {
     await db.update(players).set({ roleId: null }).where(eq(players.steamId64, sid));
     await db.delete(players).where(eq(players.steamId64, sid));
-    invalidatePermissionCache(sid);
+    invalidatePermissionCache(pid(sid));
   }
   for (const id of createdRoleIds) {
     await db.delete(rolePermissions).where(eq(rolePermissions.roleId, id));
@@ -120,17 +128,17 @@ describeIfDb('player single-role assignment', () => {
   });
 
   it('permission cache reflects new role after invalidation', async () => {
-    invalidatePermissionCache(TEST_PLAYER_B);
-    const before = await loadUserPermissions(db, TEST_PLAYER_B);
+    invalidatePermissionCache(pid(TEST_PLAYER_B));
+    const before = await loadUserPermissions(db, pid(TEST_PLAYER_B));
     expect(before.permissions.size).toBe(0);
 
     await db
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, TEST_PLAYER_B));
-    invalidatePermissionCache(TEST_PLAYER_B);
+    invalidatePermissionCache(pid(TEST_PLAYER_B));
 
-    const after = await loadUserPermissions(db, TEST_PLAYER_B);
+    const after = await loadUserPermissions(db, pid(TEST_PLAYER_B));
     expect(after.permissions.has('server:view')).toBe(true);
   });
 });
@@ -208,15 +216,15 @@ describeIfDb('cache invalidation on role permission change', () => {
       .update(players)
       .set({ roleId: testRoleId })
       .where(eq(players.steamId64, TEST_PLAYER_C));
-    invalidatePermissionCache(TEST_PLAYER_C);
+    invalidatePermissionCache(pid(TEST_PLAYER_C));
 
-    const before = await loadUserPermissions(db, TEST_PLAYER_C);
+    const before = await loadUserPermissions(db, pid(TEST_PLAYER_C));
     expect(before.permissions.has('server:view')).toBe(true);
 
     await db.delete(rolePermissions).where(eq(rolePermissions.roleId, testRoleId));
     await invalidatePermissionCacheForRole(db, testRoleId);
 
-    const after = await loadUserPermissions(db, TEST_PLAYER_C);
+    const after = await loadUserPermissions(db, pid(TEST_PLAYER_C));
     expect(after.permissions.has('server:view')).toBe(false);
   });
 });
@@ -233,7 +241,7 @@ describeIfDb('GET /api/v1/players — HTTP integration', () => {
   });
 
   afterEach(async () => {
-    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerSteamId64);
+    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
     await h.cleanup();
   });
 
@@ -294,14 +302,14 @@ describeIfDb('GET /api/v1/players — HTTP integration', () => {
       .update(players)
       .set({ roleId: null })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerSteamId64);
+    invalidatePermissionCache(h.seed.ownerPlayerId!);
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/players', headers: { cookie } });
     expect(res.statusCode).toBe(403);
   });
 });
 
-describeIfDb('PUT /api/v1/players/:steamId/role — HTTP integration', () => {
+describeIfDb('PUT /api/v1/players/:playerId/role — HTTP integration', () => {
   const OWNER_STEAM = 76561198000001410n;
   let h: IntegrationHarness;
 
@@ -313,7 +321,7 @@ describeIfDb('PUT /api/v1/players/:steamId/role — HTTP integration', () => {
   });
 
   afterEach(async () => {
-    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerSteamId64);
+    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
     await h.cleanup();
   });
 
@@ -328,15 +336,18 @@ describeIfDb('PUT /api/v1/players/:steamId/role — HTTP integration', () => {
     if (!viewerRoleId) throw new Error('viewer role missing');
 
     const target = testSteamId(810001);
-    await h.db.insert(players).values({
-      steamId64: target,
-      canonicalName: 'TargetPlayer',
-      canonicalNameNormalized: 'targetplayer',
-    });
+    const [targetRow] = await h.db
+      .insert(players)
+      .values({
+        steamId64: target,
+        canonicalName: 'TargetPlayer',
+        canonicalNameNormalized: 'targetplayer',
+      })
+      .returning({ id: players.id });
 
     const res = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/players/${String(target)}/role`,
+      url: `/api/v1/players/${targetRow!.id}/role`,
       headers: { cookie },
       payload: { role_id: viewerRoleId },
     });
@@ -347,14 +358,17 @@ describeIfDb('PUT /api/v1/players/:steamId/role — HTTP integration', () => {
   it('returns 404 when role_id does not exist', async () => {
     const cookie = await loginAsOwner(h);
     const target = testSteamId(810002);
-    await h.db.insert(players).values({
-      steamId64: target,
-      canonicalName: 'NoRole',
-      canonicalNameNormalized: 'norole',
-    });
+    const [targetRow] = await h.db
+      .insert(players)
+      .values({
+        steamId64: target,
+        canonicalName: 'NoRole',
+        canonicalNameNormalized: 'norole',
+      })
+      .returning({ id: players.id });
     const res = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/players/${String(target)}/role`,
+      url: `/api/v1/players/${targetRow!.id}/role`,
       headers: { cookie },
       payload: { role_id: '019e0000-0000-7000-8000-000000000000' },
     });
@@ -372,7 +386,7 @@ describeIfDb('PUT /api/v1/players/:steamId/role — HTTP integration', () => {
     if (!ownerRoleId) throw new Error('owner role missing');
     const res = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/players/${String(OWNER_STEAM)}/role`,
+      url: `/api/v1/players/${h.seed.ownerPlayerId!}/role`,
       headers: { cookie },
       payload: { role_id: null },
     });

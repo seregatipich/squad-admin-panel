@@ -1,6 +1,5 @@
 import { sql } from 'drizzle-orm';
 import {
-  bigint,
   check,
   index,
   jsonb,
@@ -21,7 +20,7 @@ export const diagnosticEvents = pgTable(
     severity: text('severity').notNull(),
     kind: text('kind').notNull(),
     serverId: uuid('server_id').references(() => servers.id, { onDelete: 'set null' }),
-    actorSteamId64: bigint('actor_steam_id64', { mode: 'bigint' }),
+    actorPlayerId: uuid('actor_player_id'),
     requestId: text('request_id'),
     message: text('message').notNull(),
     payload: jsonb('payload').notNull().default({}),

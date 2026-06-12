@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -920,7 +921,6 @@ func TestFileReadTail_HonorsExplicitMaxBytes(t *testing.T) {
 	}
 }
 
-
 func TestDispatcher_HostAgentRestartEmitsDiag(t *testing.T) {
 	buf := withDiagSink(t)
 
@@ -943,5 +943,45 @@ func TestDispatcher_HostAgentRestartEmitsDiag(t *testing.T) {
 	}
 	if !strings.Contains(out, `"request_id":"req-restart-1"`) {
 		t.Fatalf("expected request_id field, got %q", out)
+	}
+}
+
+// TestVolumeOnDiskBytes_BindMountedVolumeReturnsRealSize guards the regression
+// where `docker system df --format ... -v` reports 0B for bind-mounted named
+// volumes (Squad's depot is bind-mounted to ${DATA_DIR}/depot). The reported
+// 0B made the panel-disk-usage endpoint claim 0 B for squad-depot even
+// though the on-disk path held tens of MB. Fixed by walking the on-disk path
+// returned by `docker volume inspect` instead.
+func TestVolumeOnDiskBytes_BindMountedVolumeReturnsRealSize(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker not available in test environment")
+	}
+	tmp := t.TempDir()
+	// Populate the bind-mount source so du reports a non-zero byte count.
+	payload := bytes.Repeat([]byte("x"), 4096)
+	if err := os.WriteFile(filepath.Join(tmp, "marker.bin"), payload, 0o644); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	volName := fmt.Sprintf("squad-panel-test-%d", time.Now().UnixNano())
+	cmd := exec.Command(
+		"docker", "volume", "create",
+		"--driver", "local",
+		"--opt", "type=none", "--opt", "o=bind",
+		"--opt", "device="+tmp,
+		volName,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("docker volume create failed (likely no docker daemon access in CI): %v: %s", err, out)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command("docker", "volume", "rm", volName).Run()
+	})
+
+	got, err := volumeOnDiskBytes(volName)
+	if err != nil {
+		t.Fatalf("volumeOnDiskBytes: %v", err)
+	}
+	if got < int64(len(payload)) {
+		t.Fatalf("volumeOnDiskBytes(%s) = %d, expected >= %d", volName, got, len(payload))
 	}
 }

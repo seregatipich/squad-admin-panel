@@ -4,7 +4,7 @@ import { auditLog } from '@squad/db/schema';
 import { desc, sql } from 'drizzle-orm';
 
 export interface AuditEntry {
-  actorSteamId64: string | null;
+  actorPlayerId: string | null;
   actionType: string;
   targetType: string;
   targetId: string;
@@ -38,9 +38,9 @@ export async function appendWorkerAudit(db: DatabaseClient, entry: AuditEntry): 
     const prevHash = last[0]?.rowHash ?? null;
 
     const payload = {
-      actor_kind: entry.actorSteamId64 ? 'steam' : 'system',
-      actor_steam_id64: entry.actorSteamId64,
-      actor_system_label: entry.actorSteamId64 ? null : 'worker-config-sync',
+      actor_kind: entry.actorPlayerId ? 'steam' : 'system',
+      actor_player_id: entry.actorPlayerId,
+      actor_system_label: entry.actorPlayerId ? null : 'worker-config-sync',
       action_type: entry.actionType,
       target_type: entry.targetType,
       target_id: entry.targetId,
@@ -56,13 +56,13 @@ export async function appendWorkerAudit(db: DatabaseClient, entry: AuditEntry): 
 
     await tx.execute(sql`
       INSERT INTO audit_log (
-        actor_kind, actor_steam_id64, actor_token_id, actor_system_label, actor_ip,
+        actor_kind, actor_player_id, actor_token_id, actor_system_label, actor_ip,
         action_type, target_type, target_id,
         before_snapshot, after_snapshot, context,
         status_code, duration_ms, prev_hash, row_hash
       ) VALUES (
         ${payload.actor_kind},
-        ${payload.actor_steam_id64 ? BigInt(payload.actor_steam_id64) : null},
+        ${payload.actor_player_id},
         NULL,
         ${payload.actor_system_label},
         NULL,

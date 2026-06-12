@@ -17,24 +17,17 @@ declare module 'fastify' {
     bridge: BridgeClient;
     encryptionKey: Buffer;
     config: AppConfig;
-    /**
-     * Spawns a fresh short-lived BridgeClient. Long-running streaming calls
-     * (journalctl_follow, steamcmd_run watching an install) use this so the
-     * dedicated TCP connection can be torn down when the browser-side
-     * WebSocket closes, which in turn signals the bridge subprocess to exit.
-     * In tests this can be decorated with a stub.
-     */
     makeBridgeClient: () => BridgeClient;
   }
   interface FastifyRequest {
-    session?: { id: string; steamId64: bigint };
+    session?: { id: string; playerId: string };
     user?: {
-      steamId64: bigint;
+      playerId: string;
+      steamId64: bigint | null;
       canonicalName: string;
       avatarUrl: string | null;
       permissions: PermissionContext;
     };
-    /** Set when the request was authenticated via API token (Bearer header). */
     apiTokenId?: string;
     requestId: string;
   }

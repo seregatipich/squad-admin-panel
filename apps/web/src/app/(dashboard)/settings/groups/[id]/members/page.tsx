@@ -6,7 +6,8 @@ import { use, useCallback, useEffect, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
 
 interface Member {
-  steam_id64: string;
+  id: string;
+  steam_id64: string | null;
   canonical_name: string;
   last_seen_at: string;
 }
@@ -20,7 +21,8 @@ interface MembersResponse {
 }
 
 interface PlayerSearchItem {
-  steam_id64: string;
+  id: string;
+  steam_id64: string | null;
   canonical_name: string;
   last_seen_at: string;
 }
@@ -66,11 +68,11 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
 
   const canManage = me?.permissions.includes('user:manage_roles') ?? false;
 
-  async function removeMember(steamId64: string, name: string) {
+  async function removeMember(playerId: string, name: string) {
     if (!canManage) return;
     if (!confirm(`Снять роль с игрока «${name}»?`)) return;
     setErr(null);
-    const r = await fetch(`/api/v1/roles/${id}/members/${steamId64}`, {
+    const r = await fetch(`/api/v1/roles/${id}/members/${playerId}`, {
       method: 'DELETE',
       credentials: 'include',
     });
@@ -82,13 +84,13 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
     await load();
   }
 
-  async function addMember(steamId64: string) {
+  async function addMember(playerId: string) {
     setErr(null);
     const r = await fetch(`/api/v1/roles/${id}/members`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ steam_id64: steamId64 }),
+      body: JSON.stringify({ player_id: playerId }),
     });
     if (!r.ok) {
       const e = await r.json().catch(() => ({}) as Record<string, unknown>);
@@ -169,13 +171,13 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
             </tr>
           ) : null}
           {data.items.map((m) => (
-            <tr key={m.steam_id64} className="border-b border-neutral-900 hover:bg-neutral-900/40">
+            <tr key={m.id} className="border-b border-neutral-900 hover:bg-neutral-900/40">
               <td className="px-2 py-2">
-                <Link href={`/players/${m.steam_id64}`} className="text-sky-400 hover:text-sky-300">
+                <Link href={`/players/${m.id}`} className="text-sky-400 hover:text-sky-300">
                   {m.canonical_name}
                 </Link>
               </td>
-              <td className="px-2 py-2 font-mono text-xs">{m.steam_id64}</td>
+              <td className="px-2 py-2 font-mono text-xs">{m.steam_id64 ?? '—'}</td>
               <td className="px-2 py-2 text-xs text-neutral-400">
                 {new Date(m.last_seen_at).toLocaleString('ru-RU')}
               </td>
@@ -183,7 +185,7 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
                 {canManage ? (
                   <button
                     type="button"
-                    onClick={() => removeMember(m.steam_id64, m.canonical_name)}
+                    onClick={() => removeMember(m.id, m.canonical_name)}
                     className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-300 hover:bg-red-950"
                   >
                     Снять
@@ -220,7 +222,7 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
       </div>
 
       {addOpen ? (
-        <AddMemberModal onClose={() => setAddOpen(false)} onAdd={(p) => addMember(p.steam_id64)} />
+        <AddMemberModal onClose={() => setAddOpen(false)} onAdd={(p) => addMember(p.id)} />
       ) : null}
     </div>
   );
@@ -281,10 +283,12 @@ function AddMemberModal({
             <li className="py-2 text-xs text-neutral-500">Введите хотя бы 2 символа для поиска…</li>
           ) : null}
           {results.map((r) => (
-            <li key={r.steam_id64} className="flex items-center justify-between py-2">
+            <li key={r.id} className="flex items-center justify-between py-2">
               <div className="flex flex-col">
                 <span className="text-sm">{r.canonical_name}</span>
-                <span className="font-mono text-[11px] text-neutral-500">{r.steam_id64}</span>
+                <span className="font-mono text-[11px] text-neutral-500">
+                  {r.steam_id64 ?? '—'}
+                </span>
               </div>
               <button
                 type="button"

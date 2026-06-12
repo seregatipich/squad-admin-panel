@@ -13,10 +13,10 @@ const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0),
 });
-const memberBody = z.object({ steam_id64: z.string().regex(/^\d{17}$/) });
+const memberBody = z.object({ player_id: z.string().uuid() });
 const memberParam = z.object({
   id: z.string().uuid(),
-  steamId: z.string().regex(/^\d{17}$/),
+  playerId: z.string().uuid(),
 });
 
 const roleMembersRoutes: FastifyPluginAsync = async (app) => {
@@ -55,6 +55,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       const total = totalRows[0]?.c ?? 0;
       const items = await app.db
         .select({
+          id: players.id,
           steamId64: players.steamId64,
           canonicalName: players.canonicalName,
           lastSeenAt: players.lastSeenAt,
@@ -68,7 +69,8 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         // biome-ignore lint/style/noNonNullAssertion: length-check above
         role: role[0]!,
         items: items.map((r) => ({
-          steam_id64: r.steamId64.toString(),
+          id: r.id,
+          steam_id64: r.steamId64 ? r.steamId64.toString() : null,
           canonical_name: r.canonicalName,
           last_seen_at: r.lastSeenAt,
         })),
@@ -79,10 +81,6 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  // POST adds a player to a role; semantically a shortcut for
-  // PUT /players/:steamId/role { role_id: <id> } but routed through the
-  // role's namespace so the UI for /settings/groups/<id>/members can act
-  // without crossing into the player namespace.
   fast.post(
     '/api/v1/roles/:id/members',
     {
@@ -113,31 +111,28 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         reply.code(403);
         return { error: 'owner_assignment_forbidden' };
       }
-      const steamId64 = BigInt(req.body.steam_id64);
+      const playerId = req.body.player_id;
       const player = await app.db
-        .select({ steamId64: players.steamId64 })
+        .select({ id: players.id })
         .from(players)
-        .where(eq(players.steamId64, steamId64))
+        .where(eq(players.id, playerId))
         .limit(1);
       if (player.length === 0) {
         reply.code(404);
         return { error: 'player_not_found' };
       }
       await app.db.transaction(async (tx) => {
-        await tx
-          .update(players)
-          .set({ roleId: req.params.id })
-          .where(eq(players.steamId64, steamId64));
+        await tx.update(players).set({ roleId: req.params.id }).where(eq(players.id, playerId));
         await publishAdminsCfgSyncForAllServers(tx, app.redis, {
           reason: 'role.member.add',
-          actor_steam_id64: req.user?.steamId64 ? String(req.user.steamId64) : null,
+          actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
           request_id: req.id,
         });
       });
-      invalidatePermissionCache(steamId64);
+      invalidatePermissionCache(playerId);
       if (!role.panelAccess) {
-        await revokeAllForPlayer(app.db, app.redis, steamId64);
+        await revokeAllForPlayer(app.db, app.redis, playerId);
       }
       reply.code(201);
       return { ok: true };
@@ -145,7 +140,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
   );
 
   fast.delete(
-    '/api/v1/roles/:id/members/:steamId',
+    '/api/v1/roles/:id/members/:playerId',
     {
       schema: { params: memberParam },
       config: {
@@ -165,8 +160,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       }
       // biome-ignore lint/style/noNonNullAssertion: length-checked above
       const r = role[0]!;
-      const steamId64 = BigInt(req.params.steamId);
-      // Self-protect last Owner.
+      const playerId = req.params.playerId;
       if (r.isSystemRole && r.name === 'Owner') {
         const count = await app.db
           .select({ c: sql<number>`count(*)::int` })
@@ -181,16 +175,16 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         await tx
           .update(players)
           .set({ roleId: null })
-          .where(and(eq(players.steamId64, steamId64), eq(players.roleId, r.id)));
+          .where(and(eq(players.id, playerId), eq(players.roleId, r.id)));
         await publishAdminsCfgSyncForAllServers(tx, app.redis, {
           reason: 'role.member.remove',
-          actor_steam_id64: req.user?.steamId64 ? String(req.user.steamId64) : null,
+          actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
           request_id: req.id,
         });
       });
-      invalidatePermissionCache(steamId64);
-      await revokeAllForPlayer(app.db, app.redis, steamId64);
+      invalidatePermissionCache(playerId);
+      await revokeAllForPlayer(app.db, app.redis, playerId);
       return { ok: true };
     },
   );

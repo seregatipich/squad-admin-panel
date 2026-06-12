@@ -35,6 +35,7 @@ func TestDockerRunComposesCommand(t *testing.T) {
 	}
 	args := strings.Join(f.Calls[0].Args, " ")
 	for _, must := range []string{
+		"--pull never",
 		"--network host",
 		"--name squad-019dbb45-3556-751f-9124-d4cf0e6b0053",
 		"squad-depot:/squad:ro",
@@ -48,6 +49,43 @@ func TestDockerRunComposesCommand(t *testing.T) {
 			t.Errorf("expected args to contain %q, got: %s", must, args)
 		}
 	}
+}
+
+// TestDockerRunPullNeverPreventsRegistryPull guards the explicit `--pull never`
+// flag added so that a missing local image returns a clean error instead of
+// docker reaching out to Docker Hub for `squad-server:latest` (which would
+// fail with `pull access denied`).
+func TestDockerRunPullNeverPreventsRegistryPull(t *testing.T) {
+	f := &Fake{Stdout: []byte("cid\n")}
+	d := NewDocker(f)
+	spec := ContainerRunSpec{
+		ServerID:    "019dbb45-3556-751f-9124-d4cf0e6b0053",
+		Image:       "squad-server:latest",
+		GamePort:    7788,
+		QueryPort:   27166,
+		BeaconPort:  15001,
+		RCONPort:    21115,
+		MaxPlayers:  20,
+		Tickrate:    50,
+		Multihome:   "0.0.0.0",
+		ConfigsHost: "/var/lib/squad-panel/configs/019dbb45-3556-751f-9124-d4cf0e6b0053/ServerConfig",
+		SavedHost:   "/var/lib/squad-panel/saved/019dbb45-3556-751f-9124-d4cf0e6b0053",
+		DepotVolume: "squad-depot",
+	}
+	if _, err := d.Run(context.Background(), spec); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	args := f.Calls[0].Args
+	// `--pull` and `never` MUST be adjacent to form a single docker flag.
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--pull" {
+			if args[i+1] != "never" {
+				t.Fatalf("--pull followed by %q, want never", args[i+1])
+			}
+			return
+		}
+	}
+	t.Fatalf("--pull never not found in args: %v", args)
 }
 
 func TestDockerRunRejectsBadImage(t *testing.T) {

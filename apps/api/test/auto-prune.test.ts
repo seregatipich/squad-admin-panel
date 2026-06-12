@@ -78,16 +78,16 @@ describe('fireAutoPrune', () => {
     expect((app.log.warn as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('uses steam actor when actorSteamId64 is provided', async () => {
+  it('uses steam actor when actorPlayerId is provided', async () => {
     const { app, valuesStub } = makeApp({});
-    fireAutoPrune(app, 'server-delete', 76561198000000001n, '10.0.0.2');
+    fireAutoPrune(app, 'server-delete', 'test-player-001', '10.0.0.2');
     await drainAsync();
     const call = valuesStub.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(call.actorKind).toBe('steam');
-    expect(call.actorSteamId64).toBe(76561198000000001n);
+    expect(call.actorPlayerId).toBe('test-player-001');
   });
 
-  it('uses system actor when actorSteamId64 is null', async () => {
+  it('uses system actor when actorPlayerId is null', async () => {
     const { app, valuesStub } = makeApp({});
     fireAutoPrune(app, 'server-delete', null, null);
     await drainAsync();

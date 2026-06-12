@@ -75,6 +75,7 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	// bind mounts inside it before the container process starts.
 	args := []string{
 		"run", "-d",
+		"--pull", "never",
 		"--name", name,
 		"--restart", "unless-stopped",
 		"--network", "host",

@@ -11,7 +11,7 @@ const ADMINS_CFG_SYNC_GROUP = 'config-sync';
 
 interface ParsedEvent {
   reason?: string;
-  actor_steam_id64?: string | null;
+  actor_player_id?: string | null;
   enqueued_at?: string;
   request_id?: string;
   forceWrite?: boolean;
@@ -165,7 +165,7 @@ async function main() {
         try {
           const syncResult = await syncServerAdminsCfg(ctx, serverId, {
             reason: event.reason ?? 'unknown',
-            actorSteamId64: event.actor_steam_id64 ?? null,
+            actorPlayerId: event.actor_player_id ?? null,
             forceWrite: event.reason === 'force_sync' || event.forceWrite === true,
           });
           recordOutcome(serverId, syncResult.state !== 'unreachable');
@@ -249,7 +249,7 @@ async function main() {
           try {
             const syncResult = await syncServerAdminsCfg(ctx, serverId, {
               reason: event.reason ?? 'unknown',
-              actorSteamId64: event.actor_steam_id64 ?? null,
+              actorPlayerId: event.actor_player_id ?? null,
               forceWrite: event.reason === 'force_sync' || event.forceWrite === true,
             });
             recordOutcome(serverId, syncResult.state !== 'unreachable');
@@ -288,7 +288,7 @@ async function main() {
       try {
         const result = await syncServerAdminsCfg(ctx, serverId, {
           reason: 'drift_check',
-          actorSteamId64: null,
+          actorPlayerId: null,
           forceWrite: false,
         });
         recordOutcome(serverId, result.state !== 'unreachable');

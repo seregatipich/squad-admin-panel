@@ -46,7 +46,7 @@ interface ParsedEntry {
   severity: string;
   kind: string;
   serverId: string | null;
-  actorSteamId64: string | null;
+  actorPlayerId: string | null;
   requestId: string | null;
   message: string;
   payload: string;
@@ -75,7 +75,7 @@ export function parseEntry(fields: string[]): ParsedEntry | null {
     severity,
     kind,
     serverId: map.server_id ?? null,
-    actorSteamId64: map.actor_steam_id64 ?? null,
+    actorPlayerId: map.actor_player_id ?? null,
     requestId: map.request_id ?? null,
     message,
     payload,
@@ -112,7 +112,7 @@ export async function flushBatch(opts: FlushBatchOpts): Promise<void> {
     let i = 1;
     for (const row of validRows) {
       placeholders.push(
-        `($${i++},$${i++}::timestamptz,$${i++},$${i++},$${i++},$${i++}::uuid,$${i++}::bigint,$${i++},$${i++},$${i++}::jsonb)`,
+        `($${i++},$${i++}::timestamptz,$${i++},$${i++},$${i++},$${i++}::uuid,$${i++}::uuid,$${i++},$${i++},$${i++}::jsonb)`,
       );
       args.push(
         row.id,
@@ -121,13 +121,13 @@ export async function flushBatch(opts: FlushBatchOpts): Promise<void> {
         row.severity,
         row.kind,
         row.serverId,
-        row.actorSteamId64,
+        row.actorPlayerId,
         row.requestId,
         row.message,
         row.payload,
       );
     }
-    const text = `INSERT INTO diagnostic_events (id, ts, component, severity, kind, server_id, actor_steam_id64, request_id, message, payload) VALUES ${placeholders.join(',')} ON CONFLICT (id, ts) DO NOTHING`;
+    const text = `INSERT INTO diagnostic_events (id, ts, component, severity, kind, server_id, actor_player_id, request_id, message, payload) VALUES ${placeholders.join(',')} ON CONFLICT (id, ts) DO NOTHING`;
     await sql.unsafe(text, args);
   }
 

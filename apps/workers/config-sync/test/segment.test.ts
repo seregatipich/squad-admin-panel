@@ -17,10 +17,10 @@ describe('buildManagedSegment', () => {
         { name: 'NoPerms', squadPermissions: [] },
       ],
       admins: [
-        { steamId64: '76561198000000002', roleName: 'Admin' },
-        { steamId64: '76561198000000001', roleName: 'Admin' },
-        { steamId64: '76561198000000003', roleName: 'QueuePriority' },
-        { steamId64: '76561198000000004', roleName: 'NoPerms' },
+        { eosId: '0002b20286d9414e8e15c66eb3dbf70b', roleName: 'Admin' },
+        { eosId: '0002a10186d9414e8e15c66eb3dbf70a', roleName: 'Admin' },
+        { eosId: '0002c30386d9414e8e15c66eb3dbf70c', roleName: 'QueuePriority' },
+        { eosId: '0002d40486d9414e8e15c66eb3dbf70d', roleName: 'NoPerms' },
       ],
     });
     expect(out.body).toContain(BEGIN_MARKER);
@@ -28,15 +28,15 @@ describe('buildManagedSegment', () => {
     expect(out.body).toContain('Group=Admin:ban,cameraman,kick');
     expect(out.body).toContain('Group=QueuePriority:reserve');
     expect(out.body).not.toContain('Group=NoPerms');
-    // admins sorted by role then steam_id64
+    // admins sorted by role then eos_id
     const adminLines = out.body
       .split('\r\n')
       .filter((l) => l.startsWith('Admin='))
       .map((l) => l.replace('Admin=', ''));
     expect(adminLines).toEqual([
-      '76561198000000001:Admin',
-      '76561198000000002:Admin',
-      '76561198000000003:QueuePriority',
+      '0002a10186d9414e8e15c66eb3dbf70a:Admin',
+      '0002b20286d9414e8e15c66eb3dbf70b:Admin',
+      '0002c30386d9414e8e15c66eb3dbf70c:QueuePriority',
     ]);
     expect(out.groupsCount).toBe(2);
     expect(out.adminsCount).toBe(3);
@@ -45,7 +45,7 @@ describe('buildManagedSegment', () => {
   it('uses CRLF line endings', () => {
     const out = buildManagedSegment({
       roles: [{ name: 'Admin', squadPermissions: ['kick'] }],
-      admins: [{ steamId64: '76561198000000001', roleName: 'Admin' }],
+      admins: [{ eosId: '0002a10186d9414e8e15c66eb3dbf70a', roleName: 'Admin' }],
     });
     expect(out.body.split('\r\n').length).toBeGreaterThan(2);
     expect(out.body.includes('\n\n')).toBe(false);
@@ -54,11 +54,11 @@ describe('buildManagedSegment', () => {
   it('produces a stable sha256 hash for identical inputs', () => {
     const a = buildManagedSegment({
       roles: [{ name: 'Admin', squadPermissions: ['kick', 'ban'] }],
-      admins: [{ steamId64: '76561198000000001', roleName: 'Admin' }],
+      admins: [{ eosId: '0002a10186d9414e8e15c66eb3dbf70a', roleName: 'Admin' }],
     });
     const b = buildManagedSegment({
       roles: [{ name: 'Admin', squadPermissions: ['ban', 'kick'] }],
-      admins: [{ steamId64: '76561198000000001', roleName: 'Admin' }],
+      admins: [{ eosId: '0002a10186d9414e8e15c66eb3dbf70a', roleName: 'Admin' }],
     });
     expect(a.hash).toBe(b.hash);
   });
@@ -76,13 +76,13 @@ describe('buildManagedSegment', () => {
       roles: [{ name: 'Admin', squadPermissions: ['kick'] }],
       admins: [
         {
-          steamId64: '76561198000000001',
+          eosId: '0002a10186d9414e8e15c66eb3dbf70a',
           roleName: 'Admin',
           comment: 'manual addition',
         },
       ],
     });
-    expect(out.body).toContain('Admin=76561198000000001:Admin // manual addition');
+    expect(out.body).toContain('Admin=0002a10186d9414e8e15c66eb3dbf70a:Admin // manual addition');
   });
 });
 
@@ -130,7 +130,7 @@ describe('hashSegment', () => {
 });
 
 describe('drift detection (passive vs active)', () => {
-  it('hash differs ⇒ caller treats it as drift on a passive sweep', () => {
+  it('hash differs => caller treats it as drift on a passive sweep', () => {
     const original = `${BEGIN_MARKER}\r\nGroup=Old:kick\r\n${END_MARKER}\r\nUserBoundedSection=keepme\r\n`;
     const located = findManagedSegment(original);
     expect(located).not.toBeNull();
@@ -140,7 +140,6 @@ describe('drift detection (passive vs active)', () => {
     });
     const oldHash = hashSegment(located?.segment ?? '');
     expect(oldHash).not.toBe(fresh.hash);
-    // simulate the syncer's "drift detected on passive check" branch
     const isPassiveCheck = true;
     const hashesMatch = oldHash === fresh.hash;
     const willWrite = !isPassiveCheck && !hashesMatch;

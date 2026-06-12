@@ -28,7 +28,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       return { error: 'unauthenticated' };
     }
     return {
-      steam_id64: String(req.user.steamId64),
+      player_id: req.user.playerId,
+      steam_id64: req.user.steamId64 ? String(req.user.steamId64) : null,
       canonical_name: req.user.canonicalName,
       avatar_url: req.user.avatarUrl,
       permissions: Array.from(req.user.permissions.permissions),
@@ -43,7 +44,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     const rows = await app.db
       .select()
       .from(sessionsTable)
-      .where(eq(sessionsTable.steamId64, req.user.steamId64));
+      .where(eq(sessionsTable.playerId, req.user.playerId));
     return rows.map((s) => ({
       id: s.id,
       ip: s.ip,
@@ -69,7 +70,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         .select()
         .from(sessionsTable)
         .where(
-          and(eq(sessionsTable.id, req.params.id), eq(sessionsTable.steamId64, req.user.steamId64)),
+          and(eq(sessionsTable.id, req.params.id), eq(sessionsTable.playerId, req.user.playerId)),
         )
         .limit(1);
       if (target.length === 0) {
@@ -91,7 +92,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         reply.code(401);
         return { error: 'unauthenticated' };
       }
-      await revokeAllForPlayer(app.db, app.redis, req.user.steamId64);
+      await revokeAllForPlayer(app.db, app.redis, req.user.playerId);
       reply.clearCookie(SESSION_COOKIE, { path: '/' });
       return { ok: true };
     },

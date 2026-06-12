@@ -18,24 +18,30 @@ afterEach(async () => {
   if (h) await h.cleanup();
 });
 
-describe('GET /api/v1/players + /players/:steamId', () => {
+describe('GET /api/v1/players + /players/:playerId', () => {
+  let testPlayerId: string;
+
   beforeEach(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
       bridge: makeFakeBridge(),
     });
     const steamId = 76561198000000001n;
-    await h.db.insert(players).values({
-      steamId64: steamId,
-      canonicalName: 'TestPlayer',
-      canonicalNameNormalized: 'testplayer',
-      eosId: 'eos-abc',
-      firstSeenAt: new Date('2026-01-01T00:00:00Z'),
-      lastSeenAt: new Date('2026-04-23T00:00:00Z'),
-      totalTimePlayedSeconds: 3600,
-    });
+    const [insertedPlayer] = await h.db
+      .insert(players)
+      .values({
+        steamId64: steamId,
+        canonicalName: 'TestPlayer',
+        canonicalNameNormalized: 'testplayer',
+        eosId: 'eos-abc',
+        firstSeenAt: new Date('2026-01-01T00:00:00Z'),
+        lastSeenAt: new Date('2026-04-23T00:00:00Z'),
+        totalTimePlayedSeconds: 3600,
+      })
+      .returning({ id: players.id });
+    testPlayerId = insertedPlayer!.id;
     await h.db.insert(playerNameHistory).values({
-      steamId64: steamId,
+      playerId: testPlayerId,
       name: 'TestPlayer',
       nameNormalized: 'testplayer',
       firstSeenAt: new Date('2026-01-01T00:00:00Z'),
@@ -43,7 +49,7 @@ describe('GET /api/v1/players + /players/:steamId', () => {
       observationCount: 5,
     });
     await h.db.insert(playerIpHistory).values({
-      steamId64: steamId,
+      playerId: testPlayerId,
       ip: '203.0.113.5',
       firstSeenAt: new Date('2026-01-01T00:00:00Z'),
       lastSeenAt: new Date('2026-04-23T00:00:00Z'),
@@ -71,7 +77,7 @@ describe('GET /api/v1/players + /players/:steamId', () => {
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'GET',
-      url: '/api/v1/players/76561198000000001',
+      url: `/api/v1/players/${testPlayerId}`,
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(200);
@@ -98,11 +104,11 @@ describe('GET /api/v1/players + /players/:steamId', () => {
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerSteamId64);
+    invalidatePermissionCache(h.seed.ownerPlayerId!);
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'GET',
-      url: '/api/v1/players/76561198000000001',
+      url: `/api/v1/players/${testPlayerId}`,
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(200);
@@ -111,11 +117,11 @@ describe('GET /api/v1/players + /players/:steamId', () => {
     expect(body.ips).toEqual([]);
   });
 
-  it('returns 404 for unknown steamId', async () => {
+  it('returns 404 for unknown playerId', async () => {
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'GET',
-      url: '/api/v1/players/76561198000000998',
+      url: '/api/v1/players/00000000-0000-7000-8000-000000000998',
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(404);
@@ -195,7 +201,7 @@ describe('auth plugin', () => {
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerSteamId64);
+    invalidatePermissionCache(h.seed.ownerPlayerId!);
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'POST',

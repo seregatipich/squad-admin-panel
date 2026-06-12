@@ -7,7 +7,7 @@ export interface AuditConfig {
 }
 
 export type AuditActor =
-  | { kind: 'steam'; steamId64: bigint; tokenId?: string | null }
+  | { kind: 'steam'; playerId: string; tokenId?: string | null }
   | { kind: 'system'; label: string };
 
 export interface AuditEntryInput {
@@ -27,7 +27,7 @@ export async function writeAuditEntry(db: DatabaseClient, entry: AuditEntryInput
   const actor = entry.actor;
   await db.insert(auditLog).values({
     actorKind: actor.kind,
-    actorSteamId64: actor.kind === 'steam' ? actor.steamId64 : null,
+    actorPlayerId: actor.kind === 'steam' ? actor.playerId : null,
     actorTokenId: actor.kind === 'steam' ? (actor.tokenId ?? null) : null,
     actorSystemLabel: actor.kind === 'system' ? actor.label : null,
     actorIp: entry.actorIp,

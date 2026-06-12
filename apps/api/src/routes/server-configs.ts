@@ -144,7 +144,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         req.params.name,
         req.body.content,
         req.body.message ?? null,
-        req.user?.steamId64 ?? null,
+        req.user?.playerId ?? null,
         req.ip ?? null,
       );
     },
@@ -170,7 +170,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
           id: configVersions.id,
           sha256: configVersions.sha256,
           parent_version_id: configVersions.parentVersionId,
-          author_steam_id64: configVersions.authorSteamId64,
+          author_player_id: configVersions.authorPlayerId,
           author_label: configVersions.authorLabel,
           author_canonical_name: players.canonicalName,
           author_ip: configVersions.authorIp,
@@ -179,7 +179,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
           size: configVersions.content,
         })
         .from(configVersions)
-        .leftJoin(players, eq(players.steamId64, configVersions.authorSteamId64))
+        .leftJoin(players, eq(players.id, configVersions.authorPlayerId))
         .where(
           and(
             eq(configVersions.serverId, req.params.id),
@@ -192,7 +192,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         id: r.id,
         sha256: hex(r.sha256 as unknown as Buffer),
         parent_version_id: r.parent_version_id,
-        author_steam_id64: r.author_steam_id64 ? String(r.author_steam_id64) : null,
+        author_player_id: r.author_player_id ?? null,
         author_canonical_name: r.author_canonical_name ?? r.author_label ?? 'system',
         author_ip: r.author_ip,
         message: r.message,
@@ -230,7 +230,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         id: row.id,
         content: row.content,
         sha256: hex(row.sha256 as unknown as Buffer),
-        author_steam_id64: row.authorSteamId64 ? String(row.authorSteamId64) : null,
+        author_player_id: row.authorPlayerId ?? null,
         message: row.message,
         created_at: row.createdAt,
       };
@@ -315,7 +315,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         .select({
           id: configVersions.id,
           content: configVersions.content,
-          author_steam_id64: configVersions.authorSteamId64,
+          author_player_id: configVersions.authorPlayerId,
           author_label: configVersions.authorLabel,
           created_at: configVersions.createdAt,
         })
@@ -329,23 +329,23 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
       const vs: BlameVersion[] = rows.map((r) => ({
         id: r.id,
         content: r.content,
-        author_steam_id64: r.author_steam_id64 ? String(r.author_steam_id64) : null,
+        author_player_id: r.author_player_id ?? null,
         author_label: r.author_label,
         created_at: (r.created_at as Date).toISOString(),
       }));
       const lines = computeBlame(vs);
-      const steamIds = Array.from(
-        new Set(lines.map((l) => l.author_steam_id64).filter((v): v is string => !!v)),
+      const playerIds = Array.from(
+        new Set(lines.map((l) => l.author_player_id).filter((v): v is string => !!v)),
       );
       const playerRows =
-        steamIds.length > 0
+        playerIds.length > 0
           ? await app.db
-              .select({ steamId64: players.steamId64, canonicalName: players.canonicalName })
+              .select({ id: players.id, canonicalName: players.canonicalName })
               .from(players)
-              .where(inArrayOr(players.steamId64, steamIds.map(BigInt)))
+              .where(inArrayOr(players.id, playerIds))
           : [];
       const authors: Record<string, string> = {};
-      for (const r of playerRows) authors[String(r.steamId64)] = r.canonicalName;
+      for (const r of playerRows) authors[r.id] = r.canonicalName;
       const payload = { lines, authors };
       await app.redis.set(cacheKey, JSON.stringify(payload), 'EX', 24 * 3600);
       return payload;
@@ -385,7 +385,7 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         req.params.name as AllowedConfigFile,
         target.content,
         message,
-        req.user?.steamId64 ?? null,
+        req.user?.playerId ?? null,
         req.ip ?? null,
       );
     },
@@ -406,7 +406,7 @@ async function writeVersion(
   name: AllowedConfigFile,
   content: string,
   message: string | null,
-  authorSteamId64: bigint | null,
+  authorPlayerId: string | null,
   authorIp: string | null,
 ) {
   // read previous for parent_version_id linkage (best-effort)
@@ -437,8 +437,8 @@ async function writeVersion(
       content,
       sha256: newSha,
       parentVersionId: prevRow?.id ?? null,
-      authorSteamId64,
-      authorLabel: authorSteamId64 ? null : 'system',
+      authorPlayerId,
+      authorLabel: authorPlayerId ? null : 'system',
       authorIp,
       message,
     })

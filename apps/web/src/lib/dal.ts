@@ -7,7 +7,8 @@ import { apiFetch } from './api';
 export const SESSION_COOKIE = '__Host-sid';
 
 export interface Me {
-  steam_id64: string;
+  player_id: string;
+  steam_id64: string | null;
   canonical_name: string;
   avatar_url: string | null;
   permissions: string[];

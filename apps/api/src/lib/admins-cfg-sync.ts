@@ -16,7 +16,7 @@ export type AdminsCfgSyncDb = Pick<DatabaseClient, 'select'>;
 
 export interface AdminsCfgSyncEvent {
   reason: string;
-  actor_steam_id64: string | null;
+  actor_player_id: string | null;
   enqueued_at: string;
   request_id?: string;
 }

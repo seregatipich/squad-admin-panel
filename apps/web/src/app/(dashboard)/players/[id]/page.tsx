@@ -8,7 +8,8 @@ import { use, useCallback, useEffect, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
 
 interface Player {
-  steam_id64: string;
+  id: string;
+  steam_id64: string | null;
   canonical_name: string;
   eos_id: string | null;
   first_seen_at: string;
@@ -45,18 +46,18 @@ interface SingleRole {
 }
 
 interface Me {
-  steam_id64: string;
+  player_id: string;
   permissions: string[];
 }
 
-export default function PlayerDetail({ params }: { params: Promise<{ steam_id64: string }> }) {
-  const { steam_id64 } = use(params);
+export default function PlayerDetail({ params }: { params: Promise<{ id: string }> }) {
+  const { id: playerId } = use(params);
   const [data, setData] = useState<PlayerResponse | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`/api/v1/players/${steam_id64}`, { credentials: 'include', cache: 'no-store' })
+    fetch(`/api/v1/players/${playerId}`, { credentials: 'include', cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(setData)
       .catch((e) => setErr((e as Error).message));
@@ -64,7 +65,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ steam_id64:
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => setMe(j as Me | null))
       .catch(() => {});
-  }, [steam_id64]);
+  }, [playerId]);
 
   if (err) {
     return (
@@ -97,14 +98,18 @@ export default function PlayerDetail({ params }: { params: Promise<{ steam_id64:
         <dl className="grid grid-cols-[160px_1fr] gap-y-1 text-sm">
           <dt className="text-neutral-500">SteamID64</dt>
           <dd className="font-mono">
-            <a
-              href={`https://steamcommunity.com/profiles/${player.steam_id64}`}
-              target="_blank"
-              rel="noreferrer"
-              className="text-sky-400 hover:text-sky-300"
-            >
-              {player.steam_id64}
-            </a>
+            {player.steam_id64 ? (
+              <a
+                href={`https://steamcommunity.com/profiles/${player.steam_id64}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sky-400 hover:text-sky-300"
+              >
+                {player.steam_id64}
+              </a>
+            ) : (
+              <span className="text-neutral-600">—</span>
+            )}
           </dd>
           <dt className="text-neutral-500">EOS ID</dt>
           <dd className="font-mono">{player.eos_id ?? '—'}</dd>
@@ -117,7 +122,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ steam_id64:
         </dl>
       </section>
 
-      <PanelAccessSection steamId64={steam_id64} canManage={canManageRoles} />
+      <PanelAccessSection playerId={playerId} canManage={canManageRoles} />
 
       <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
         <h2 className="text-xs uppercase tracking-widest text-neutral-400">
@@ -194,7 +199,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ steam_id64:
   );
 }
 
-function PanelAccessSection({ steamId64, canManage }: { steamId64: string; canManage: boolean }) {
+function PanelAccessSection({ playerId, canManage }: { playerId: string; canManage: boolean }) {
   const [current, setCurrent] = useState<SingleRole | null>(null);
   const [editing, setEditing] = useState(false);
   const [allRoles, setAllRoles] = useState<SingleRole[]>([]);
@@ -204,7 +209,7 @@ function PanelAccessSection({ steamId64, canManage }: { steamId64: string; canMa
 
   const reload = useCallback(async () => {
     const [rRes, listRes] = await Promise.all([
-      fetch(`/api/v1/players/${steamId64}/role`, { credentials: 'include', cache: 'no-store' }),
+      fetch(`/api/v1/players/${playerId}/role`, { credentials: 'include', cache: 'no-store' }),
       // Only managers need the full role list; viewers don't query it.
       canManage
         ? fetch('/api/v1/roles', { credentials: 'include', cache: 'no-store' })
@@ -215,7 +220,7 @@ function PanelAccessSection({ steamId64, canManage }: { steamId64: string; canMa
       setCurrent(body.role);
     }
     if (listRes?.ok) setAllRoles((await listRes.json()) as SingleRole[]);
-  }, [steamId64, canManage]);
+  }, [playerId, canManage]);
 
   useEffect(() => {
     void reload();
@@ -233,11 +238,11 @@ function PanelAccessSection({ steamId64, canManage }: { steamId64: string; canMa
     try {
       const r =
         roleId === null
-          ? await fetch(`/api/v1/players/${steamId64}/role`, {
+          ? await fetch(`/api/v1/players/${playerId}/role`, {
               method: 'DELETE',
               credentials: 'include',
             })
-          : await fetch(`/api/v1/players/${steamId64}/role`, {
+          : await fetch(`/api/v1/players/${playerId}/role`, {
               method: 'PUT',
               credentials: 'include',
               headers: { 'content-type': 'application/json' },

@@ -90,9 +90,9 @@ describe('softDeleteServer (orchestrator)', () => {
           directoryDelete: typeof directoryDelete;
         },
         log: silentLogger,
-        actorSteamId64: OWNER_STEAM_ID,
+        actorPlayerId: h.seed.ownerPlayerId!,
         actorIp: '127.0.0.1',
-        actorLabel: `steam:${OWNER_STEAM_ID}`,
+        actorLabel: `player:${h.seed.ownerPlayerId}`,
       },
       seeded.id,
     );
@@ -131,15 +131,18 @@ describe('softDeleteServer (orchestrator)', () => {
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
     expect(row?.deletedAt).not.toBeNull();
     expect(row?.deletionBackupMarkerId).toBe(result.backup_marker_id);
-    expect(row?.deletedBySteamId64).toBe(OWNER_STEAM_ID);
+    expect(row?.deletedByPlayerId).toBe(h.seed.ownerPlayerId);
   });
 
-  it('aborts deletion when not a single config file can be read', async () => {
-    const seeded = await seedServer(h, { slug: 'no-configs' });
+  it('aborts deletion when bridge errors look like a transport issue (not missing dir)', async () => {
+    const seeded = await seedServer(h, { slug: 'transport-broken' });
     const bridge = {
       ...h.bridge,
       fileRead: vi.fn(async () => {
-        throw new Error('ENOENT');
+        // Anything other than "no such file or directory" must be treated
+        // as a real failure that blocks the delete — the existing safety
+        // net for "bridge unreachable / permission denied / mid-flight crash".
+        throw new Error('permission denied');
       }),
     };
 
@@ -149,13 +152,95 @@ describe('softDeleteServer (orchestrator)', () => {
           db: h.db,
           bridge: bridge as unknown as FakeBridge,
           log: silentLogger,
-          actorSteamId64: OWNER_STEAM_ID,
+          actorPlayerId: h.seed.ownerPlayerId!,
           actorIp: null,
-          actorLabel: `steam:${OWNER_STEAM_ID}`,
+          actorLabel: `player:${h.seed.ownerPlayerId}`,
         },
         seeded.id,
       ),
-    ).rejects.toThrow(/no config files could be backed up/);
+    ).rejects.toThrow(/no config files could be backed up.*transport issue/);
+
+    const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
+    expect(row?.deletedAt).toBeNull();
+  });
+
+  it('soft-deletes a never-installed server (configs dir never existed)', async () => {
+    const seeded = await seedServer(h, { slug: 'never-installed' });
+    // Simulate the bridge's exact error shape when the host configs dir
+    // does not exist — this is what an install that aborted before
+    // seedConfigs leaves behind.
+    const fileRead = vi.fn(async ({ path }: { path: string }) => {
+      throw new Error(`stat: stat ${path}: no such file or directory`);
+    });
+    const directoryDelete = vi.fn(async () => ({ removed: false }));
+    const ufwRule = vi.fn(async () => ({ output: '', status: 'ok' }));
+    const containerStop = vi.fn(async () => {
+      throw new Error('Error: No such container: squad-x');
+    });
+    const containerRm = vi.fn(async () => {
+      throw new Error('Error: No such container: squad-x');
+    });
+    const bridge = { ...h.bridge, fileRead, directoryDelete, ufwRule, containerStop, containerRm };
+
+    const result = await softDeleteServer(
+      {
+        db: h.db,
+        bridge: bridge as unknown as FakeBridge,
+        log: silentLogger,
+        actorPlayerId: h.seed.ownerPlayerId!,
+        actorIp: null,
+        actorLabel: `player:${h.seed.ownerPlayerId}`,
+      },
+      seeded.id,
+    );
+
+    // Backup is skipped — no rows in config_versions for this server.
+    expect(result.files_backed_up).toBe(0);
+    expect(result.backup_marker_id).toBeNull();
+    // ENOENT-shaped fileRead does NOT count as an error in `errors` —
+    // it's the documented never-installed signal, not a failure.
+    const fileReadErrors = result.errors.filter((e) => e.phase === 'config_backup');
+    expect(fileReadErrors).toHaveLength(0);
+
+    // Row is soft-deleted.
+    const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
+    expect(row?.deletedAt).not.toBeNull();
+
+    // No config_versions inserted as backup markers.
+    const versions = await h.db.query.configVersions.findMany({
+      where: and(
+        eq(configVersions.serverId, seeded.id),
+        like(configVersions.message, 'deletion-backup-marker%'),
+      ),
+    });
+    expect(versions).toHaveLength(0);
+  });
+
+  it('treats a mixed error set (some ENOENT, one transport) as bridge failure', async () => {
+    const seeded = await seedServer(h, { slug: 'mixed-errors' });
+    let callCount = 0;
+    const fileRead = vi.fn(async ({ path }: { path: string }) => {
+      callCount++;
+      if (callCount === 5) {
+        throw new Error('connect ECONNREFUSED /run/panel-host-bridge/bridge.sock');
+      }
+      throw new Error(`stat: stat ${path}: no such file or directory`);
+    });
+    const bridge = { ...h.bridge, fileRead };
+
+    await expect(
+      softDeleteServer(
+        {
+          db: h.db,
+          bridge: bridge as unknown as FakeBridge,
+          log: silentLogger,
+          actorPlayerId: h.seed.ownerPlayerId!,
+          actorIp: null,
+          actorLabel: `player:${h.seed.ownerPlayerId}`,
+        },
+        seeded.id,
+      ),
+    ).rejects.toThrow(/transport issue/);
 
     const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
     expect(row?.deletedAt).toBeNull();
@@ -186,9 +271,9 @@ describe('softDeleteServer (orchestrator)', () => {
         db: h.db,
         bridge: bridge as unknown as FakeBridge,
         log: silentLogger,
-        actorSteamId64: OWNER_STEAM_ID,
+        actorPlayerId: h.seed.ownerPlayerId!,
         actorIp: null,
-        actorLabel: `steam:${OWNER_STEAM_ID}`,
+        actorLabel: `player:${h.seed.ownerPlayerId}`,
       },
       seeded.id,
     );
@@ -226,7 +311,7 @@ describe('softDeleteServer (orchestrator)', () => {
         db: h.db,
         bridge: bridge as unknown as FakeBridge,
         log: silentLogger,
-        actorSteamId64: null,
+        actorPlayerId: null,
         actorIp: null,
         actorLabel: 'system',
       },

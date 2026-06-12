@@ -42,7 +42,7 @@ describe('appendWorkerAudit', () => {
   it('calls db.transaction', async () => {
     const db = makeDb(null);
     await appendWorkerAudit(db, {
-      actorSteamId64: null,
+      actorPlayerId: null,
       actionType: 'admins_cfg.synced',
       targetType: 'server',
       targetId: 'srv-001',
@@ -55,10 +55,10 @@ describe('appendWorkerAudit', () => {
     ).toHaveBeenCalledOnce();
   });
 
-  it('uses system actor when actorSteamId64 is null', async () => {
+  it('uses system actor when actorPlayerId is null', async () => {
     const db = makeDb(null);
     await appendWorkerAudit(db, {
-      actorSteamId64: null,
+      actorPlayerId: null,
       actionType: 'admins_cfg.synced',
       targetType: 'server',
       targetId: 'srv-001',
@@ -74,10 +74,10 @@ describe('appendWorkerAudit', () => {
     expect(typeof sqlArg).toBe('object');
   });
 
-  it('inserts with steam actor when actorSteamId64 is provided', async () => {
+  it('inserts with steam actor when actorPlayerId is provided', async () => {
     const db = makeDb(null);
     await appendWorkerAudit(db, {
-      actorSteamId64: '76561198000000001',
+      actorPlayerId: '019d0000-0000-7000-8000-000000000001',
       actionType: 'admins_cfg.force_synced',
       targetType: 'server',
       targetId: 'srv-002',
@@ -95,7 +95,7 @@ describe('appendWorkerAudit', () => {
     const db = makeDb(prevHash.toString('hex'));
 
     const entry = {
-      actorSteamId64: null,
+      actorPlayerId: null,
       actionType: 'admins_cfg.synced',
       targetType: 'server',
       targetId: 'srv-003',
@@ -107,7 +107,7 @@ describe('appendWorkerAudit', () => {
 
     const payload = {
       actor_kind: 'system',
-      actor_steam_id64: null,
+      actor_player_id: null,
       actor_system_label: 'worker-config-sync',
       action_type: entry.actionType,
       target_type: entry.targetType,
@@ -133,7 +133,7 @@ describe('appendWorkerAudit', () => {
   it('computes row_hash without prev_hash when table is empty', async () => {
     const db = makeDb(null);
     await appendWorkerAudit(db, {
-      actorSteamId64: null,
+      actorPlayerId: null,
       actionType: 'admins_cfg.sync_failed',
       targetType: 'server',
       targetId: 'srv-004',

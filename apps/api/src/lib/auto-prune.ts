@@ -14,7 +14,7 @@ import { writeAuditEntry } from './audit.js';
 export function fireAutoPrune(
   app: FastifyInstance,
   reason: string,
-  actorSteamId64: bigint | null,
+  actorPlayerId: string | null,
   actorIp: string | null,
 ): void {
   setImmediate(async () => {
@@ -48,8 +48,8 @@ export function fireAutoPrune(
     }
     try {
       await writeAuditEntry(app.db, {
-        actor: actorSteamId64
-          ? { kind: 'steam', steamId64: actorSteamId64, tokenId: null }
+        actor: actorPlayerId
+          ? { kind: 'steam', playerId: actorPlayerId, tokenId: null }
           : { kind: 'system', label: 'auto-prune' },
         actorIp,
         actionType: 'host.docker_prune',

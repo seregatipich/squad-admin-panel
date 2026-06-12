@@ -5,7 +5,7 @@ export interface DiagEvent {
   kind: string;
   severity: DiagSeverity;
   serverId?: string;
-  actorSteamId64?: string;
+  actorPlayerId?: string;
   requestId?: string;
   message: string;
   payload?: Record<string, unknown>;

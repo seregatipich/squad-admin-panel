@@ -1,5 +1,7 @@
 FROM debian:bookworm-slim
 
+LABEL panel.preserve=true panel.kind=depot-init
+
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8
 

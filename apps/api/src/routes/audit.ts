@@ -25,7 +25,7 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
           id: auditLog.id,
           created_at: auditLog.createdAt,
           actor_kind: auditLog.actorKind,
-          actor_steam_id64: auditLog.actorSteamId64,
+          actor_player_id: auditLog.actorPlayerId,
           actor_token_id: auditLog.actorTokenId,
           actor_system_label: auditLog.actorSystemLabel,
           actor_ip: auditLog.actorIp,
@@ -43,7 +43,7 @@ const auditRoutes: FastifyPluginAsync = async (app) => {
       const items = rows.map((r) => ({
         ...r,
         id: String(r.id),
-        actor_steam_id64: r.actor_steam_id64 !== null ? String(r.actor_steam_id64) : null,
+        actor_player_id: r.actor_player_id ?? null,
       }));
       return {
         items,

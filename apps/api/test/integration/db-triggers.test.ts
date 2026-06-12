@@ -37,7 +37,7 @@ afterEach(async () => {
 describe('audit_log trigger invariants', () => {
   it('UPDATE raises "audit_log is append-only"', async () => {
     await h.db.insert(auditLog).values({
-      actorSteamId64: null,
+      actorPlayerId: null,
       actorKind: 'system',
       actorSystemLabel: 'test',
       actionType: 'x.test',
@@ -55,7 +55,7 @@ describe('audit_log trigger invariants', () => {
 
   it('DELETE raises "audit_log is append-only"', async () => {
     await h.db.insert(auditLog).values({
-      actorSteamId64: null,
+      actorPlayerId: null,
       actorKind: 'system',
       actorSystemLabel: 'test',
       actionType: 'x.test',
@@ -70,7 +70,7 @@ describe('audit_log trigger invariants', () => {
   it('row_hash is a 32-byte sha256 digest and chains across inserts', async () => {
     for (let i = 0; i < 3; i++) {
       await h.db.insert(auditLog).values({
-        actorSteamId64: null,
+        actorPlayerId: null,
         actorKind: 'system',
         actorSystemLabel: 'test',
         actionType: `chain.${i}`,

@@ -54,6 +54,7 @@ import serverMetricsRoutes from './routes/server-metrics.js';
 import serverSettingsRoutes from './routes/server-settings.js';
 import serverUpdateRoutes from './routes/server-update.js';
 import serverRoutes from './routes/servers.js';
+import setupRoutes from './routes/setup.js';
 import usersRoutes from './routes/users.js';
 
 // Side-effect import: augments the Fastify types with our plugin context.
@@ -81,7 +82,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(rateLimit, {
     max: 1200,
     timeWindow: '1 minute',
-    keyGenerator: (req) => `${req.ip}:${req.user?.steamId64 ? String(req.user.steamId64) : ''}`,
+    keyGenerator: (req) => `${req.ip}:${req.user?.playerId ?? ''}`,
   });
   await app.register(swagger, {
     openapi: {
@@ -139,6 +140,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(logsRoutes);
   await app.register(liveRoutes);
   await app.register(steamRoutes);
+  await app.register(setupRoutes);
 
   return app;
 }

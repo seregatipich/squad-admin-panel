@@ -50,7 +50,7 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
           tags: servers.tags,
           created_at: servers.createdAt,
           deleted_at: servers.deletedAt,
-          deleted_by_steam_id64: servers.deletedBySteamId64,
+          deleted_by_player_id: servers.deletedByPlayerId,
           deletion_backup_marker_id: servers.deletionBackupMarkerId,
         })
         .from(servers)
@@ -59,7 +59,7 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
       return {
         items: rows.map((r) => ({
           ...r,
-          deleted_by_steam_id64: r.deleted_by_steam_id64 ? String(r.deleted_by_steam_id64) : null,
+          deleted_by_player_id: r.deleted_by_player_id ?? null,
         })),
         total: rows.length,
       };
@@ -90,7 +90,7 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
           sha256: configVersions.sha256,
           message: configVersions.message,
           created_at: configVersions.createdAt,
-          author_steam_id64: configVersions.authorSteamId64,
+          author_player_id: configVersions.authorPlayerId,
           author_label: configVersions.authorLabel,
         })
         .from(configVersions)
@@ -114,7 +114,7 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
           slug: row.slug,
           description: row.description,
           deleted_at: row.deletedAt,
-          deleted_by_steam_id64: row.deletedBySteamId64 ? String(row.deletedBySteamId64) : null,
+          deleted_by_player_id: row.deletedByPlayerId ?? null,
           deletion_backup_marker_id: row.deletionBackupMarkerId,
           tags: row.tags,
         },
@@ -136,7 +136,7 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
           sha256_hex: b.sha256.toString('hex'),
           message: b.message,
           created_at: b.created_at,
-          author_steam_id64: b.author_steam_id64 ? String(b.author_steam_id64) : null,
+          author_player_id: b.author_player_id ?? null,
           author_label: b.author_label,
         })),
       };
@@ -201,14 +201,14 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
       schema: { params: idParam, body: restoreBody },
     },
     async (req, reply) => {
-      const actorSteamId64 = req.user?.steamId64?.toString();
+      const actorPlayerId = req.user?.playerId;
       const restoreT0 = Date.now();
       await req.diag.emit({
         component: 'api',
         kind: 'server.restore.requested',
         severity: 'info',
         serverId: req.params.id,
-        actorSteamId64,
+        actorPlayerId,
         message: 'restore requested',
         payload: { slug: req.body.slug },
       });
@@ -294,7 +294,7 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
         kind: 'server.restore.done',
         severity: 'info',
         serverId: newId,
-        actorSteamId64,
+        actorPlayerId,
         message: 'restore complete',
         payload: {
           archive_id: archive.id,
@@ -355,9 +355,9 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
           db: app.db,
           bridge: app.bridge,
           log: req.log,
-          actorSteamId64: req.user?.steamId64 ?? null,
+          actorPlayerId: req.user?.playerId ?? null,
           actorIp: req.ip ?? null,
-          actorLabel: req.user ? `steam:${req.user.steamId64}` : 'system',
+          actorLabel: req.user ? `player:${req.user.playerId}` : 'system',
         },
         req.params.id,
         archive.id,

@@ -83,7 +83,7 @@ describe('audit chain integrity', () => {
       for (const r of rows) {
         await sql`
           INSERT INTO audit_log
-            (actor_kind, actor_system_label, actor_steam_id64, action_type,
+            (actor_kind, actor_system_label, actor_player_id, action_type,
              target_type, target_id, context, row_hash)
           VALUES (
             'system',

@@ -195,7 +195,7 @@ describeIfDb('roles HTTP — description=null update and color validation', () =
   });
 
   afterEach(async () => {
-    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerSteamId64);
+    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
     await h.cleanup();
   });
 

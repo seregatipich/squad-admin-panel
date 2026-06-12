@@ -5,7 +5,8 @@ import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
 
 interface UserRow {
-  steam_id64: string;
+  id: string;
+  steam_id64: string | null;
   canonical_name: string;
   last_seen_at: string;
   role: { id: string; name: string; color: RoleColor; is_system_role: boolean };
@@ -20,7 +21,8 @@ interface Me {
   permissions: string[];
 }
 interface PlayerHit {
-  steam_id64: string;
+  id: string;
+  steam_id64: string | null;
   canonical_name: string;
 }
 
@@ -51,10 +53,10 @@ export default function UsersPage() {
 
   const canManage = me?.permissions.includes('user:manage_roles') ?? false;
 
-  async function unassign(steamId64: string, name: string) {
+  async function unassign(playerId: string, name: string) {
     if (!canManage) return;
     if (!confirm(`Снять роль с пользователя «${name}»?`)) return;
-    const r = await fetch(`/api/v1/players/${steamId64}/role`, {
+    const r = await fetch(`/api/v1/players/${playerId}/role`, {
       method: 'DELETE',
       credentials: 'include',
     });
@@ -144,16 +146,13 @@ export default function UsersPage() {
               </tr>
             ) : null}
             {users.map((u) => (
-              <tr key={u.steam_id64} className="border-t border-neutral-900">
+              <tr key={u.id} className="border-t border-neutral-900">
                 <td className="p-2">
-                  <Link
-                    href={`/players/${u.steam_id64}`}
-                    className="text-sky-400 hover:text-sky-300"
-                  >
+                  <Link href={`/players/${u.id}`} className="text-sky-400 hover:text-sky-300">
                     {u.canonical_name}
                   </Link>
                 </td>
-                <td className="p-2 font-mono text-xs">{u.steam_id64}</td>
+                <td className="p-2 font-mono text-xs">{u.steam_id64 ?? '—'}</td>
                 <td className="p-2">
                   <span className="inline-flex items-center gap-2">
                     <RoleColorDot color={u.role.color} />
@@ -170,7 +169,7 @@ export default function UsersPage() {
                     ) : (
                       <button
                         type="button"
-                        onClick={() => unassign(u.steam_id64, u.canonical_name)}
+                        onClick={() => unassign(u.id, u.canonical_name)}
                         className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-300 hover:bg-red-950"
                       >
                         Снять
@@ -242,7 +241,7 @@ function AssignModal({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setErr(null);
     try {
-      const r = await fetch(`/api/v1/players/${picked.steam_id64}/role`, {
+      const r = await fetch(`/api/v1/players/${picked.id}/role`, {
         method: 'PUT',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
@@ -286,7 +285,7 @@ function AssignModal({ onClose }: { onClose: () => void }) {
           {hits.length > 0 && !picked ? (
             <ul className="mt-1 max-h-40 overflow-auto rounded border border-neutral-800">
               {hits.map((h) => (
-                <li key={h.steam_id64}>
+                <li key={h.id}>
                   <button
                     type="button"
                     onClick={() => {
@@ -297,7 +296,7 @@ function AssignModal({ onClose }: { onClose: () => void }) {
                     className="block w-full px-2 py-1 text-left text-sm hover:bg-neutral-900"
                   >
                     {h.canonical_name}{' '}
-                    <span className="font-mono text-xs text-neutral-500">{h.steam_id64}</span>
+                    <span className="font-mono text-xs text-neutral-500">{h.steam_id64 ?? ''}</span>
                   </button>
                 </li>
               ))}

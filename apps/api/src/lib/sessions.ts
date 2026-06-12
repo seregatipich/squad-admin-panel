@@ -7,7 +7,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 export interface SessionRecord {
   id: string;
-  steamId64: bigint;
+  playerId: string;
   expiresAt: Date;
   lastActivityAt: Date;
   ip: string | null;
@@ -31,14 +31,14 @@ export function tokenIdFromToken(token: string): string {
 export async function createSession(
   db: DatabaseClient,
   redis: Redis,
-  params: { steamId64: bigint; ip: string | null; userAgent: string | null; ttlMs: number },
+  params: { playerId: string; ip: string | null; userAgent: string | null; ttlMs: number },
 ): Promise<{ token: string; session: SessionRecord }> {
   const { token, tokenId } = mintSessionToken();
   const now = new Date();
   const expiresAt = new Date(now.getTime() + params.ttlMs);
   await db.insert(sessions).values({
     id: tokenId,
-    steamId64: params.steamId64,
+    playerId: params.playerId,
     expiresAt,
     lastActivityAt: now,
     ip: params.ip,
@@ -46,7 +46,7 @@ export async function createSession(
   });
   const record: SessionRecord = {
     id: tokenId,
-    steamId64: params.steamId64,
+    playerId: params.playerId,
     expiresAt,
     lastActivityAt: now,
     ip: params.ip,
@@ -80,7 +80,7 @@ export async function resolveSession(
   if (!row) return null;
   const record: SessionRecord = {
     id: row.id,
-    steamId64: row.steamId64,
+    playerId: row.playerId,
     expiresAt: row.expiresAt,
     lastActivityAt: row.lastActivityAt,
     ip: row.ip ?? null,
@@ -102,14 +102,14 @@ export async function revokeSession(
 export async function revokeAllForPlayer(
   db: DatabaseClient,
   redis: Redis,
-  steamId64: bigint,
+  playerId: string,
 ): Promise<void> {
   const rows = await db
     .select({ id: sessions.id })
     .from(sessions)
-    .where(eq(sessions.steamId64, steamId64));
+    .where(eq(sessions.playerId, playerId));
   if (rows.length) {
-    await db.delete(sessions).where(eq(sessions.steamId64, steamId64));
+    await db.delete(sessions).where(eq(sessions.playerId, playerId));
     await redis.del(...rows.map((r) => `${REDIS_PREFIX}${r.id}`));
   }
 }
@@ -146,7 +146,7 @@ async function cachePut(redis: Redis, record: SessionRecord): Promise<void> {
   await redis.set(
     `${REDIS_PREFIX}${record.id}`,
     JSON.stringify({
-      steamId64: String(record.steamId64),
+      playerId: record.playerId,
       expiresAt: record.expiresAt.toISOString(),
       lastActivityAt: record.lastActivityAt.toISOString(),
       ip: record.ip,
@@ -162,7 +162,7 @@ async function cacheGet(redis: Redis, tokenId: string): Promise<SessionRecord | 
   if (!raw) return null;
   try {
     const obj = JSON.parse(raw) as {
-      steamId64: string;
+      playerId: string;
       expiresAt: string;
       lastActivityAt: string;
       ip: string | null;
@@ -170,7 +170,7 @@ async function cacheGet(redis: Redis, tokenId: string): Promise<SessionRecord | 
     };
     return {
       id: tokenId,
-      steamId64: BigInt(obj.steamId64),
+      playerId: obj.playerId,
       expiresAt: new Date(obj.expiresAt),
       lastActivityAt: new Date(obj.lastActivityAt),
       ip: obj.ip,

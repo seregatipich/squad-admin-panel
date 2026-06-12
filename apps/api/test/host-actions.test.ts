@@ -22,7 +22,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerSteamId64);
+  if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
   await h.cleanup();
 });
 
@@ -32,7 +32,7 @@ async function demoteToNoRole(h: IntegrationHarness): Promise<void> {
     .update(players)
     .set({ roleId: null })
     .where(eq(players.steamId64, h.seed.ownerSteamId64));
-  invalidatePermissionCache(h.seed.ownerSteamId64);
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
 }
 
 describe('POST /api/v1/host/restart', () => {
@@ -66,7 +66,7 @@ describe('POST /api/v1/host/restart', () => {
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerSteamId64);
+    invalidatePermissionCache(h.seed.ownerPlayerId!);
 
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({

@@ -16,8 +16,14 @@ let h: IntegrationHarness;
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 async function loginAsSteam(steamId64: bigint): Promise<string> {
+  const [row] = await h.db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.steamId64, steamId64))
+    .limit(1);
+  if (!row) throw new Error(`No player found for steamId64=${steamId64}`);
   const { token } = await createSession(h.db, h.redis, {
-    steamId64,
+    playerId: row.id,
     ip: null,
     userAgent: 'roles-and-access-test',
     ttlMs: 21_600_000,
@@ -144,7 +150,12 @@ describeIfDb('flag-derived panel permissions', () => {
       .set({ roleId: queuePriority[0]?.id ?? null })
       .where(eq(players.steamId64, CARL));
     invalidateAllPermissionCaches();
-    const ctx = await loadUserPermissions(h.db, CARL);
+    const [carlRow] = await h.db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.steamId64, CARL))
+      .limit(1);
+    const ctx = await loadUserPermissions(h.db, carlRow!.id);
     expect(ctx.panelAccess).toBe(false);
     expect(ctx.permissions.size).toBe(0);
     expect(ctx.squadPermissions.has('reserve')).toBe(true);
@@ -161,7 +172,12 @@ describeIfDb('flag-derived panel permissions', () => {
       .set({ roleId: moderator[0]?.id ?? null })
       .where(eq(players.steamId64, BOB));
     invalidateAllPermissionCaches();
-    const ctx = await loadUserPermissions(h.db, BOB);
+    const [bobRow] = await h.db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.steamId64, BOB))
+      .limit(1);
+    const ctx = await loadUserPermissions(h.db, bobRow!.id);
     expect(ctx.panelAccess).toBe(true);
     expect(ctx.permissions.has('server:view')).toBe(true);
     expect(ctx.permissions.has('server:install')).toBe(true);
@@ -190,15 +206,20 @@ describeIfDb('Owner immutability + uniqueness', () => {
     expect(res.json()).toEqual({ error: 'owner_role_immutable' });
   });
 
-  it('PUT /api/v1/players/:steam_id64/role rejects setting Owner role via API', async () => {
+  it('PUT /api/v1/players/:playerId/role rejects setting Owner role via API', async () => {
     const owner = await h.db
       .select({ id: roles.id })
       .from(roles)
       .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
       .limit(1);
+    const [aliceRow] = await h.db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.steamId64, ALICE))
+      .limit(1);
     const res = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/players/${ALICE}/role`,
+      url: `/api/v1/players/${aliceRow!.id}/role`,
       headers: {
         cookie: await loginAsSteam(OWNER_STEAM),
         'content-type': 'application/json',

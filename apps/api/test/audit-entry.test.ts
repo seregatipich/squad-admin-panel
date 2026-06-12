@@ -31,7 +31,7 @@ describe('writeAuditEntry', () => {
   it('writes a steam-actor row with all expected columns', async () => {
     const { db, captured } = fakeDb();
     await writeAuditEntry(db, {
-      actor: { kind: 'steam', steamId64: 76561198000000123n, tokenId: null },
+      actor: { kind: 'steam', playerId: 'test-player-123', tokenId: null },
       actorIp: '10.0.0.1',
       actionType: 'server.create',
       targetType: 'server',
@@ -41,7 +41,7 @@ describe('writeAuditEntry', () => {
     expect(captured).toHaveLength(1);
     const row = captured[0]!.values;
     expect(row.actorKind).toBe('steam');
-    expect(row.actorSteamId64).toBe(76561198000000123n);
+    expect(row.actorPlayerId).toBe('test-player-123');
     expect(row.actorTokenId).toBeNull();
     expect(row.actorSystemLabel).toBeNull();
     expect(row.actorIp).toBe('10.0.0.1');
@@ -63,7 +63,7 @@ describe('writeAuditEntry', () => {
     });
     const row = captured[0]!.values;
     expect(row.actorKind).toBe('system');
-    expect(row.actorSteamId64).toBeNull();
+    expect(row.actorPlayerId).toBeNull();
     expect(row.actorTokenId).toBeNull();
     expect(row.actorSystemLabel).toBe('status-reconciler');
   });
@@ -73,7 +73,7 @@ describe('writeAuditEntry', () => {
     await writeAuditEntry(db, {
       actor: {
         kind: 'steam',
-        steamId64: 76561198000000124n,
+        playerId: 'test-player-124',
         tokenId: '0195000a-0000-7000-8000-000000000001',
       },
       actorIp: '10.0.0.2',
@@ -84,13 +84,13 @@ describe('writeAuditEntry', () => {
     });
     const row = captured[0]!.values;
     expect(row.actorTokenId).toBe('0195000a-0000-7000-8000-000000000001');
-    expect(row.actorSteamId64).toBe(76561198000000124n);
+    expect(row.actorPlayerId).toBe('test-player-124');
   });
 
   it('maps undefined before/after to null', async () => {
     const { db, captured } = fakeDb();
     await writeAuditEntry(db, {
-      actor: { kind: 'steam', steamId64: 1n, tokenId: null },
+      actor: { kind: 'steam', playerId: 'test-player-1', tokenId: null },
       actorIp: null,
       actionType: 'noop',
       targetType: null,

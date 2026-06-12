@@ -36,7 +36,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerSteamId64);
+  if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
   await h.cleanup();
 });
 
@@ -103,7 +103,7 @@ describe('GET /api/v1/host/disk-usage', () => {
       .update(players)
       .set({ roleId: null })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerSteamId64);
+    invalidatePermissionCache(h.seed.ownerPlayerId!);
 
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({

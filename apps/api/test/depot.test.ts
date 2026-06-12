@@ -28,7 +28,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerSteamId64);
+  if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
   await h.redis.del('depot:updating');
   await h.redis.del('depot:last_update');
   await h.cleanup();
@@ -46,7 +46,7 @@ async function asViewer(): Promise<string> {
     .update(players)
     .set({ roleId: viewerRoleId })
     .where(eq(players.steamId64, h.seed.ownerSteamId64));
-  invalidatePermissionCache(h.seed.ownerSteamId64);
+  invalidatePermissionCache(h.seed.ownerPlayerId!);
   return loginAsOwner(h);
 }
 
@@ -186,7 +186,7 @@ describe('POST /api/v1/depot/update', () => {
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerSteamId64);
+    invalidatePermissionCache(h.seed.ownerPlayerId!);
 
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({

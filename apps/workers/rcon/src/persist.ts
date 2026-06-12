@@ -1,10 +1,27 @@
-import { type DatabaseClient, playerNameHistory, players } from '@squad/db';
-import { sql } from 'drizzle-orm';
+import { auditLog, type DatabaseClient, playerNameHistory, players } from '@squad/db';
+import { eq, or, sql } from 'drizzle-orm';
+import { v7 as uuidv7 } from 'uuid';
 import type { RconPlayer } from './parse-list-players.js';
 
-/** Case-insensitive, whitespace-collapsed normalisation. */
 function normalise(name: string): string {
   return name.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+async function writeSystemAudit(
+  db: DatabaseClient,
+  action: string,
+  targetId: string,
+  context: Record<string, unknown>,
+): Promise<void> {
+  await db.insert(auditLog).values({
+    actorKind: 'system',
+    actorSystemLabel: 'rcon-sync',
+    actionType: action,
+    targetType: 'player',
+    targetId,
+    context: context as object,
+    rowHash: Buffer.from([]),
+  });
 }
 
 export async function upsertPlayers(db: DatabaseClient, incoming: RconPlayer[]): Promise<void> {
@@ -12,38 +29,74 @@ export async function upsertPlayers(db: DatabaseClient, incoming: RconPlayer[]):
   for (const p of incoming) {
     const normalised = normalise(p.name);
     const steamBigint = BigInt(p.steam_id64);
-    await db
-      .insert(players)
-      .values({
-        steamId64: steamBigint,
+
+    const existing = await db
+      .select({
+        id: players.id,
+        steamId64: players.steamId64,
+        canonicalName: players.canonicalName,
+        eosId: players.eosId,
+      })
+      .from(players)
+      .where(or(eq(players.eosId, p.eos_id), eq(players.steamId64, steamBigint)))
+      .limit(1);
+
+    if (existing[0]) {
+      const row = existing[0];
+      const playerId = row.id;
+
+      const updates: Record<string, unknown> = {
+        lastSeenAt: new Date(),
+        updatedAt: new Date(),
         canonicalName: p.name,
         canonicalNameNormalized: normalised,
+      };
+
+      if (!row.eosId && p.eos_id) {
+        updates.eosId = p.eos_id;
+      }
+
+      if (!row.steamId64 && steamBigint) {
+        updates.steamId64 = steamBigint;
+        await writeSystemAudit(db, 'player.steam_linked', playerId, {
+          steam_id64: p.steam_id64,
+          eos_id: p.eos_id,
+        });
+      }
+
+      await db.update(players).set(updates).where(eq(players.id, playerId));
+
+      await db
+        .insert(playerNameHistory)
+        .values({ playerId, name: p.name, nameNormalized: normalised })
+        .onConflictDoUpdate({
+          target: [playerNameHistory.playerId, playerNameHistory.nameNormalized],
+          set: {
+            lastSeenAt: new Date(),
+            observationCount: sql`${playerNameHistory.observationCount} + 1`,
+          },
+        });
+    } else {
+      const playerId = uuidv7();
+      await db.insert(players).values({
+        id: playerId,
+        steamId64: steamBigint,
         eosId: p.eos_id,
-      })
-      .onConflictDoUpdate({
-        target: players.steamId64,
-        set: {
-          lastSeenAt: new Date(),
-          canonicalName: p.name,
-          canonicalNameNormalized: normalised,
-          eosId: sql`coalesce(excluded.eos_id, ${players.eosId})`,
-          updatedAt: new Date(),
-        },
+        canonicalName: p.name,
+        canonicalNameNormalized: normalised,
       });
 
-    await db
-      .insert(playerNameHistory)
-      .values({
-        steamId64: steamBigint,
+      await db.insert(playerNameHistory).values({
+        playerId,
         name: p.name,
         nameNormalized: normalised,
-      })
-      .onConflictDoUpdate({
-        target: [playerNameHistory.steamId64, playerNameHistory.nameNormalized],
-        set: {
-          lastSeenAt: new Date(),
-          observationCount: sql`${playerNameHistory.observationCount} + 1`,
-        },
       });
+
+      await writeSystemAudit(db, 'player.created', playerId, {
+        steam_id64: p.steam_id64,
+        eos_id: p.eos_id,
+        canonical_name: p.name,
+      });
+    }
   }
 }

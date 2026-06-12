@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { players } from '@squad/db/schema';
+import { eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
+import { v7 as uuidv7 } from 'uuid';
 import { claimFirstOwner } from '../lib/first-owner.js';
 import { loadUserPermissions } from '../lib/rbac.js';
 import { createSession } from '../lib/sessions.js';
@@ -103,29 +105,47 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
         req.log.warn({ err }, 'steam profile enrichment failed (non-fatal)');
       }
 
-      await app.db
-        .insert(players)
-        .values({
+      const existing = await app.db
+        .select({ id: players.id })
+        .from(players)
+        .where(eq(players.steamId64, steamId64))
+        .limit(1);
+
+      let playerId: string;
+      if (existing[0]) {
+        playerId = existing[0].id;
+        await app.db
+          .update(players)
+          .set({
+            canonicalName,
+            canonicalNameNormalized: canonicalName.toLowerCase(),
+            updatedAt: new Date(),
+          })
+          .where(eq(players.id, playerId));
+      } else {
+        playerId = uuidv7();
+        await app.db.insert(players).values({
+          id: playerId,
           steamId64,
           canonicalName,
           canonicalNameNormalized: canonicalName.toLowerCase(),
-        })
-        .onConflictDoNothing();
+        });
+      }
 
       // biome-ignore lint/suspicious/noExplicitAny: SentinelBridge structural subtype
-      const claim = await claimFirstOwner(app.db, app.bridge as any, steamId64);
+      const claim = await claimFirstOwner(app.db, app.bridge as any, playerId, steamId64);
       if (claim === 'no_owner_role') {
         req.log.error('Owner role missing — system roles not seeded?');
         return reply.code(500).send({ error: 'owner_role_missing' });
       }
 
-      const ctx = await loadUserPermissions(app.db, steamId64);
+      const ctx = await loadUserPermissions(app.db, playerId);
       if (!ctx.panelAccess) {
         return reply.redirect(`/no-access?steam_id64=${String(steamId64)}`, 302);
       }
 
       const { token } = await createSession(app.db, app.redis, {
-        steamId64,
+        playerId,
         ip: req.ip ?? null,
         userAgent: req.headers['user-agent'] ?? null,
         ttlMs: app.config.SESSION_TTL_SECONDS * 1000,

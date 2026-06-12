@@ -8,7 +8,7 @@ interface RoleSqlRow extends Record<string, unknown> {
 }
 
 interface AdminSqlRow extends Record<string, unknown> {
-  steam_id64: string;
+  eos_id: string;
   role_name: string;
 }
 
@@ -27,11 +27,11 @@ export async function snapshotRolesAndAdmins(db: DatabaseClient): Promise<{
     ORDER BY r.name
   `);
   const adminRows = await db.execute<AdminSqlRow>(sql`
-    SELECT p.steam_id64::text AS steam_id64, r.name AS role_name
+    SELECT p.eos_id, r.name AS role_name
     FROM players p
     JOIN roles r ON r.id = p.role_id
-    WHERE p.role_id IS NOT NULL
-    ORDER BY r.name, p.steam_id64
+    WHERE p.role_id IS NOT NULL AND p.eos_id IS NOT NULL
+    ORDER BY r.name, p.eos_id
   `);
   return {
     roles: (roleRows as unknown as RoleSqlRow[]).map((r) => ({
@@ -39,7 +39,7 @@ export async function snapshotRolesAndAdmins(db: DatabaseClient): Promise<{
       squadPermissions: r.squad_permissions ?? [],
     })),
     admins: (adminRows as unknown as AdminSqlRow[]).map((a) => ({
-      steamId64: a.steam_id64,
+      eosId: a.eos_id,
       roleName: a.role_name,
     })),
   };

@@ -1,5 +1,4 @@
 import {
-  bigint,
   bigserial,
   index,
   integer,
@@ -7,6 +6,7 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  uuid,
 } from 'drizzle-orm/pg-core';
 import { players } from './players.js';
 
@@ -14,9 +14,9 @@ export const playerNameHistory = pgTable(
   'player_name_history',
   {
     id: bigserial('id', { mode: 'bigint' }).primaryKey(),
-    steamId64: bigint('steam_id64', { mode: 'bigint' })
+    playerId: uuid('player_id')
       .notNull()
-      .references(() => players.steamId64, { onDelete: 'cascade' }),
+      .references(() => players.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     nameNormalized: text('name_normalized').notNull(),
     firstSeenAt: timestamp('first_seen_at', { withTimezone: true, mode: 'date' })
@@ -28,8 +28,8 @@ export const playerNameHistory = pgTable(
     observationCount: integer('observation_count').notNull().default(1),
   },
   (table) => ({
-    steamNameKey: uniqueIndex('player_name_history_steam_name_key').on(
-      table.steamId64,
+    playerNameKey: uniqueIndex('player_name_history_player_name_key').on(
+      table.playerId,
       table.nameNormalized,
     ),
     nameNormalizedIdx: index('player_name_history_name_normalized_idx').on(table.nameNormalized),

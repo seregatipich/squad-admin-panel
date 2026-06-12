@@ -87,7 +87,7 @@ export interface SyncContext {
 
 export interface SyncOptions {
   reason: string;
-  actorSteamId64: string | null;
+  actorPlayerId: string | null;
   forceWrite?: boolean;
 }
 
@@ -140,7 +140,7 @@ export async function syncServerAdminsCfg(
       });
       // Spec §2.7.7 — "audit пишет failed sync attempts".
       await safeAppendAudit(db, log, serverId, {
-        actorSteamId64: opts.actorSteamId64,
+        actorPlayerId: opts.actorPlayerId,
         actionType: 'admins_cfg.sync_failed',
         targetType: 'server',
         targetId: serverId,
@@ -235,7 +235,7 @@ export async function syncServerAdminsCfg(
       error: msg,
     });
     await safeAppendAudit(db, log, serverId, {
-      actorSteamId64: opts.actorSteamId64,
+      actorPlayerId: opts.actorPlayerId,
       actionType: 'admins_cfg.sync_failed',
       targetType: 'server',
       targetId: serverId,
@@ -271,7 +271,7 @@ export async function syncServerAdminsCfg(
 
   try {
     await appendWorkerAudit(db, {
-      actorSteamId64: opts.actorSteamId64,
+      actorPlayerId: opts.actorPlayerId,
       actionType: opts.forceWrite ? 'admins_cfg.force_synced' : 'admins_cfg.synced',
       targetType: 'server',
       targetId: serverId,
