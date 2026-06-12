@@ -26,7 +26,7 @@ RUN npx tsc -p tsconfig.json
 
 FROM node:18.18-bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl tini \
+      ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=upstream /src /app
