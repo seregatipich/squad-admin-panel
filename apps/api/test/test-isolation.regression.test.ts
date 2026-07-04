@@ -1,7 +1,10 @@
 // regression: first-owner.test.ts beforeEach stripped Owner role from real users
 // Fix: snapshot/mask/restore helper in test/helpers/snapshot-restore.ts
 import { execSync } from 'node:child_process';
+import path from 'node:path';
 import { describe, it } from 'vitest';
+
+const REPO_ROOT = path.resolve(import.meta.dirname, '../../..');
 
 describe('test isolation', () => {
   it('no test mutates players/roles/panel_meta without test-id filter', () => {
@@ -21,7 +24,7 @@ describe('test isolation', () => {
            -e "security/permission-matrix" \
            -e "security/xss-smoke" \
        || true`,
-      { encoding: 'utf8', cwd: '/home/squad/squad-admin-panel' },
+      { encoding: 'utf8', cwd: REPO_ROOT },
     );
     if (out.trim()) {
       throw new Error(
