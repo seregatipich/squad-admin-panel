@@ -9,6 +9,7 @@ import { handleChat } from './chat/store.js';
 import { dropCutoverServers } from './cutover.js';
 import { TailManager } from './manager.js';
 import { DEFAULT_SEED_ONLINE_THRESHOLD, handleMatchCommand } from './match/store.js';
+import { handleMatchClose } from './match-roster/store.js';
 import { LogIngestor } from './parser/ingest.js';
 import { publish } from './publish.js';
 import { handleReport } from './report/store.js';
@@ -96,6 +97,9 @@ async function main() {
       onMatch: (command) => {
         matchChain = matchChain
           .then(() => handleMatchCommand(db, redis, command, { seedThreshold }))
+          .then(async () => {
+            await handleMatchClose(db, command);
+          })
           .catch((err) =>
             log.error({ err: (err as Error).message, kind: command.kind }, 'match assembly failed'),
           );
