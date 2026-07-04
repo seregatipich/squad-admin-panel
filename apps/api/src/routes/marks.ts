@@ -84,30 +84,6 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
   await ensureMarkTypes(app.db);
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  fast.get(
-    '/api/v1/mark-types',
-    { schema: { querystring: markTypesQuery }, config: { audit: false } },
-    async (req, reply) => {
-      const denied = panelGuard(req, reply);
-      if (denied) return denied;
-      const includeInactive = req.query.include_inactive === 'true';
-      const rows = await app.db
-        .select()
-        .from(markTypes)
-        .where(includeInactive ? undefined : eq(markTypes.isActive, true))
-        .orderBy(asc(markTypes.sortOrder));
-      return rows.map((t) => ({
-        id: t.id,
-        slug: t.slug,
-        label_en: t.labelEn,
-        label_ru: t.labelRu,
-        icon: t.icon,
-        severity: t.severity,
-        is_active: t.isActive,
-        sort_order: t.sortOrder,
-      }));
-    },
-  );
   function enrichedMarkQuery() {
     const author = alias(players, 'mark_author');
     const clearer = alias(players, 'mark_clearer');
@@ -132,6 +108,8 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
     const rows = await enrichedMarkQuery().where(eq(playerMarks.id, markId)).limit(1);
     const row = rows[0];
     return row ? enrichMark(row) : null;
+  }
+
   async function publishMarkChange(
     playerId: string,
     markId: string,
@@ -144,25 +122,32 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
       ts: new Date().toISOString(),
       data: { player_id: playerId, action, mark },
     });
-  fast.get('/api/v1/mark-types', { config: { audit: false } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
-    const rows = await app.db
-      .select()
-      .from(markTypes)
-      .where(eq(markTypes.isActive, true))
-      .orderBy(asc(markTypes.sortOrder));
-    return rows.map((t) => ({
-      id: t.id,
-      slug: t.slug,
-      label_en: t.labelEn,
-      label_ru: t.labelRu,
-      icon: t.icon,
-      severity: t.severity,
-      is_active: t.isActive,
-      sort_order: t.sortOrder,
-    }));
-  });
+  }
+
+  fast.get(
+    '/api/v1/mark-types',
+    { schema: { querystring: markTypesQuery }, config: { audit: false } },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+      const includeInactive = req.query.include_inactive === 'true';
+      const rows = await app.db
+        .select()
+        .from(markTypes)
+        .where(includeInactive ? undefined : eq(markTypes.isActive, true))
+        .orderBy(asc(markTypes.sortOrder));
+      return rows.map((t) => ({
+        id: t.id,
+        slug: t.slug,
+        label_en: t.labelEn,
+        label_ru: t.labelRu,
+        icon: t.icon,
+        severity: t.severity,
+        is_active: t.isActive,
+        sort_order: t.sortOrder,
+      }));
+    },
+  );
 
   fast.get('/api/v1/marks/active-summary', { config: { audit: false } }, async (req, reply) => {
     const denied = panelGuard(req, reply);

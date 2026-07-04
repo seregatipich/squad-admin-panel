@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { getLiveBus } from '@/lib/live-bus';
 import type { LiveEvent } from '@/lib/live-bus';
 import {
   type MarkTone,
@@ -57,15 +56,6 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
     void reload();
   }, [reload]);
 
-  useEffect(() => {
-    const bus = getLiveBus();
-    return bus.subscribe((event) => {
-      if (event.type === 'mark_type.changed') void reload();
-    });
-  }, [reload]);
-
-  const { active, cleared } = partitionMarks(marks);
-  const options = availableMarkTypes(types, active);
   const onLiveChange = useCallback(
     (event: Extract<LiveEvent, { type: 'mark.changed' }>) => {
       if (event.data.player_id !== playerId) return;

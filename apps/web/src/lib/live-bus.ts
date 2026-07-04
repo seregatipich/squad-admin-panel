@@ -38,16 +38,30 @@ export type LiveEvent =
       type: 'mark_type.changed';
       ts: string;
       data: { action: 'created' | 'updated' | 'reordered' };
+    }
+  | {
       type: 'session.revoked';
+      ts: string;
       data: { player_id: string; session_id: string };
+    }
+  | {
       type: 'issue.created';
+      ts: string;
       data: { issue: IssueView };
     }
   | {
       type: 'issue.updated';
+      ts: string;
+      data: { issue: IssueView };
+    }
+  | {
       type: 'issue.comment.created';
+      ts: string;
       data: { issue_id: string; comment: IssueComment };
+    }
+  | {
       type: 'mark.changed';
+      ts: string;
       data: { player_id: string; action: 'set' | 'cleared'; mark: LivePlayerMark };
     };
 
@@ -97,6 +111,8 @@ export interface IssueComment {
   author: IssuePlayerRef | null;
   body: string;
   created_at: string;
+}
+
 export interface LivePlayerMark {
   player_id: string;
   mark_type_id: number;

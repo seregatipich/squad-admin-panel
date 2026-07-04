@@ -65,16 +65,30 @@ export type LiveEvent =
       type: 'mark_type.changed';
       ts: string;
       data: { action: 'created' | 'updated' | 'reordered' };
+    }
+  | {
       type: 'session.revoked';
+      ts: string;
       data: { player_id: string; session_id: string };
+    }
+  | {
       type: 'issue.created';
+      ts: string;
       data: { issue: IssueLiveView };
     }
   | {
       type: 'issue.updated';
+      ts: string;
+      data: { issue: IssueLiveView };
+    }
+  | {
       type: 'issue.comment.created';
+      ts: string;
       data: { issue_id: string; comment: IssueCommentLiveView };
+    }
+  | {
       type: 'mark.changed';
+      ts: string;
       data: {
         player_id: string;
         action: 'set' | 'cleared';
