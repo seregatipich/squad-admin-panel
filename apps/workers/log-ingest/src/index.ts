@@ -7,6 +7,7 @@ import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
 import { dropCutoverServers } from './cutover.js';
 import { TailManager } from './manager.js';
+import { DEFAULT_SEED_ONLINE_THRESHOLD, handleMatchCommand } from './match/store.js';
 import { LogIngestor } from './parser/ingest.js';
 import { publish } from './publish.js';
 import { handleReport } from './report/store.js';
@@ -44,8 +45,12 @@ async function main() {
 
   const diag = createDiag({ redis, log });
 
+  const seedThreshold =
+    Number(process.env.MATCH_SEED_ONLINE_THRESHOLD) || DEFAULT_SEED_ONLINE_THRESHOLD;
+
   const manager = new TailManager((serverId, beaconPort) => {
     log.info({ serverId, beaconPort }, 'attaching log tail');
+    let matchChain: Promise<void> = Promise.resolve();
     const ingestor = new LogIngestor({
       serverId,
       beaconPort,
@@ -86,6 +91,13 @@ async function main() {
         handleReport(db, redis, { serverId, report }).catch((err) =>
           log.error({ err: (err as Error).message }, 'report handling failed'),
         );
+      },
+      onMatch: (command) => {
+        matchChain = matchChain
+          .then(() => handleMatchCommand(db, redis, command, { seedThreshold }))
+          .catch((err) =>
+            log.error({ err: (err as Error).message, kind: command.kind }, 'match assembly failed'),
+          );
       },
     });
     const abort = tailContainerLogs({

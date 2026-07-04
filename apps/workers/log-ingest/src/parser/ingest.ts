@@ -1,5 +1,6 @@
 import { type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
 import { v7 as uuidv7 } from 'uuid';
+import { MatchAssembler, type MatchCommand, parseNewGame, parseRoundTickets } from './match.js';
 import {
   BEACON_BIND,
   detectSquadFatal,
@@ -42,6 +43,8 @@ export class LogIngestor {
   private readonly onParseError?: (report: ParseErrorReport) => void;
   private readonly onSquadFatal?: (report: SquadFatalReport) => void;
   private readonly onReport?: (report: ParsedReport) => void;
+  private readonly onMatch?: (command: MatchCommand) => void;
+  private readonly matchAssembler: MatchAssembler;
 
   constructor(params: {
     serverId: string;
@@ -50,6 +53,7 @@ export class LogIngestor {
     onParseError?: (report: ParseErrorReport) => void;
     onSquadFatal?: (report: SquadFatalReport) => void;
     onReport?: (report: ParsedReport) => void;
+    onMatch?: (command: MatchCommand) => void;
   }) {
     this.serverId = params.serverId;
     this.beaconPort = params.beaconPort;
@@ -57,6 +61,8 @@ export class LogIngestor {
     this.onParseError = params.onParseError;
     this.onSquadFatal = params.onSquadFatal;
     this.onReport = params.onReport;
+    this.onMatch = params.onMatch;
+    this.matchAssembler = new MatchAssembler(params.serverId);
   }
 
   ingest(line: string): EventEnvelope[] {
@@ -104,6 +110,18 @@ export class LogIngestor {
   private handleMessage(category: string, message: string, ts: string): EventEnvelope[] {
     const events: EventEnvelope[] = [];
 
+    if (category === 'LogWorld') {
+      const newGame = parseNewGame(message);
+      if (newGame) this.feedMatch(this.matchAssembler.onNewGame(newGame.layer, ts));
+      return events;
+    }
+
+    if (category === 'LogSquadGameEvents' || category === 'LogGameEvents') {
+      const tickets = parseRoundTickets(message);
+      if (tickets) this.feedMatch(this.matchAssembler.onRoundTickets(tickets));
+      return events;
+    }
+
     if (category === 'LogNet') {
       const bind = BEACON_BIND.exec(message);
       if (bind) {
@@ -139,10 +157,15 @@ export class LogIngestor {
         const [, from, to] = ms;
         if (from === 'WaitingToStart' && to === 'InProgress') {
           events.push(this.build('match.started', ts, { from_state: from, to_state: to }));
+          this.feedMatch(this.matchAssembler.onMatchStarted(ts));
         } else if (to === 'WaitingPostMatch' && from === 'InProgress') {
           events.push(this.build('match.ended', ts, { from_state: from, to_state: to }));
+          this.feedMatch(this.matchAssembler.onMatchEnded(ts));
         }
+        return events;
       }
+      const tickets = parseRoundTickets(message);
+      if (tickets) this.feedMatch(this.matchAssembler.onRoundTickets(tickets));
       return events;
     }
 
@@ -165,6 +188,9 @@ export class LogIngestor {
         const code = Number(exit[2]);
         const type = code === 143 || code === 0 ? 'server.stopped' : 'server.crashed';
         events.push(this.build(type, ts, { exit_code: code }));
+        if (type === 'server.crashed') {
+          this.feedMatch(this.matchAssembler.onServerDown('server_crashed', ts));
+        }
       }
       return events;
     }
@@ -189,6 +215,11 @@ export class LogIngestor {
     }
 
     return events;
+  }
+
+  private feedMatch(commands: MatchCommand[]): void {
+    if (!this.onMatch) return;
+    for (const command of commands) this.onMatch(command);
   }
 
   private build(
