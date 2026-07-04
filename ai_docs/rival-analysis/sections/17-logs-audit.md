@@ -4,135 +4,249 @@
 
 The **Журнал** (Journal / Audit Log) is a read-only, server-side-paginated audit trail of admin actions performed through the SQSTAT panel. It answers "who did what, on which server, and when."
 
-- **Nav item:** calls `pageLoad('logs')` → `GET /ajax/page.php?page=logs`, whose HTML fragment is injected into `#content`.
-- **Fragment file analyzed:** `frags/logs.html`. Lines 1–107 are the page's own content; lines 108+ are the shared **player-detail modal** (`#playerModal`) embedded on every page — its columns and ~22 actions are NOT part of this page and are documented in the shared-modal section, not here.
-- **Table bootstrap:** an inline `<script>` (bottom of fragment) calls `$('#logTable').buildTable({ table: 'logs', ... })`.
+- **Nav item:** calls `pageLoad('logs')` → `GET /ajax/page.php?page=logs` (`ctype: text/html`, ~114 KB fragment), whose HTML is injected into `#content`.
+- **Table bootstrap:** an inline `<script>` at the bottom of the fragment calls `$('#logTable').buildTable({ table:'logs', collum:['serverName','name','date','log'], numrows:100, searchInput:[...], end:<hashtag binder> })`.
+- The page is a single filter bar plus one server-driven table (`#logTable`). It has **no state-changing controls of its own** — the only interaction beyond filtering is clicking a `<hashtag>` player token inside a row to open the shared player modal.
 
-The page consists of a single filter bar plus one DataTable-style table (`#logTable`). There are **no state-changing controls of its own** — the only interaction beyond filtering is clicking a `<hashtag>` inside a row to open the shared player modal.
+**Ground truth:** all contract facts below are captured from a live authenticated headless session against `https://breaking.sqstat.ru`. Capture files: `caps/logs/logs.network.json` (3 AJAX contracts), `caps/logs/logs.content.html` (rendered `#content`). `_blocked.json` is empty — no mutating request was issued (read-only page, as expected).
 
 ---
 
-### 2. Entities & Fields
+### 2. Live API Contracts
 
-#### 2.1 Log Entry (`logs` table, alias `t1`)
+The page issues **one GET** (fragment) and **two POSTs** to `/ajax/table.php` — a deliberate two-phase load: phase 1 returns the page rows fast (`count_time: 0`, `totalRows: 0` deferred); phase 2 runs the expensive `COUNT(*)` only when needed. Both POSTs are dispatched through the generic `Action({script:'table', action:'logs', data:...})` helper (`custom.js:284`), which posts `application/x-www-form-urlencoded` to `/ajax/<script>.php`.
 
-The audit record. Inferred from the returned column set (`collum: ["serverName","name","date","log"]`), the `<thead>`, and the `data-search` aliases used by the filters.
+#### 2.1 `GET /ajax/page.php?page=logs` — page fragment
 
-| Field (returned) | UI column | SQL source (from filter aliases) | Meaning / Type |
+| Param | Type | Required | Meaning |
 |---|---|---|---|
-| `serverName` | Сервер (Server) | joined via `server_id` | Human-readable server name (e.g. `RAAS/AAS #1`). String. |
-| `name` | Админ (Admin) | `t2.player` (admins table `t2`) | Display name of the admin who performed the action. Joined from the admin/player table. String. |
-| `date` | Дата (Date) | `t1.startdate` / `t1.enddate` filter on the row's timestamp | Timestamp of the action. Rendered ~120px column, centered. |
-| `log` | Действие (Action) | `t1.log` | Free-text/structured description of the logged action. String; may embed `<hashtag>` tokens (clickable player references). |
+| `page` | string enum | yes | View id; `logs` for this page. |
 
-Implied underlying columns not shown but used for filtering/joins: `server_id` (FK to server), an admin FK (joins `t2.player`), and the timestamp used by `t1.startdate`/`t1.enddate` range filters.
+Returns the raw HTML `#content` fragment (filter bar + empty `<table id="logTable">`). No JSON. `status: 200`, `text/html; charset=UTF-8`.
 
-#### 2.2 Server (referenced entity)
+#### 2.2 `POST /ajax/table.php` (phase 1 — rows) — the audit query
 
-Populated as `<option value="<id>" label='<name>'>` in the multiselect. Observed IDs are non-contiguous (`1, 6, 7, 9, 10, 11`), confirming `server_id` is a stable DB primary key, not a UI index.
+Captured body (`caps/logs/logs.network.json`, contract #2), URL-decoded:
 
-| Field | Type | Example |
+```
+action=logs
+table=logs
+page=1
+numrows=100
+search={"text":{},"check":{},"multiselect":{},"managers":{},"slider":{}}
+order_by=false
+order_sort=false
+```
+
+**Request params:**
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `action` | string enum | yes | Server handler = table id. Always `logs`. |
+| `table` | string enum | yes | Same value `logs` (redundant with `action`; `buildTable` sends both). |
+| `page` | int (1-based) | yes | Page number. Row window is `[(page-1)*numrows, page*numrows)`. |
+| `numrows` | int | yes | Page size. Bootstrap value `100`. |
+| `search` | JSON string (URL-encoded) | yes | Filter object, always the 5 fixed buckets `{text,check,multiselect,managers,slider}`; empty `{}` = no filter. See §5 for key set. |
+| `order_by` | string \| `"false"` | yes | Sort column DB-alias, or literal `false` when unsorted. Logs page always sends `false`. |
+| `order_sort` | `"asc"` \| `"desc"` \| `"false"` | yes | Sort direction, or literal `false`. Logs page always sends `false`. |
+
+**Response** (`application/json`, `status:200`), schema from capture:
+
+| Field | Type | Meaning |
 |---|---|---|
-| `server_id` | int PK | `1` |
-| server label | string | `RAAS/AAS #1`, `INVASION #3`, `Custom для FW` |
+| `status` | string enum `"ok"` | Request status. On `auth===true` (not `ok`) the client calls `location.reload()` (re-auth bounce). |
+| `exec_time` | float — seconds | Total server handler time (e.g. `0.022`). |
+| `data.totalPage` | int | `0` in phase 1 (count deferred to phase 2). |
+| `data.totalRows` | int | `0` in phase 1 (deferred). |
+| `data.currentPage` | string — 1-based | Echo of requested page, as string (`"1"`). |
+| `data.custom` | bool | Whether a custom result set is returned. `false` for logs. |
+| `data.query_time` | float — seconds | Row-fetch time (e.g. `0.02`). |
+| `data.count_time` | int/float — seconds | `0` in phase 1 (no COUNT run). |
+| `data.row` | array (len ≤ `numrows`) | Audit rows. Row object schema below. |
 
-#### 2.3 Admin (referenced entity, alias `t2`)
+**`data.row[]` object** (per captured `response_schema` / redacted `response_sample`):
 
-The audit joins to a players/admins table aliased `t2`; the filterable field is `t2.player` (the admin's identity/name). This is the same identity that the shared modal opens when a `<hashtag>` is clicked.
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string — numeric PK (6-digit observed, e.g. `"262459"`) | Audit-row primary key. Monotonic, gaps present (`262459, 262458, 262457, 262456, 262455, 262453…`) → auto-increment, effectively newest-first. Rendered as `<tr id="trID-<id>" data-id="<id>">`. |
+| `server_id` | string int (`"0"`, `"1"`…) | FK to server. `"0"` = panel-global event (no game server; e.g. login) → `serverName` empty. |
+| `steam_id` | string — 36 chars (UUID-shaped) | Internal player identity of the event subject. **Returned but not rendered** — no column maps it (see §3 Finding). Distinct from the 17-digit SteamID64 embedded inside `log` text. |
+| `date` | string — **UNIX timestamp** (10-digit seconds, e.g. `"1783146994"`) | Event time. Rendered client-side (§3) into a relative badge. |
+| `log` | string — free text / HTML | Human-readable action description (Russian). May embed `<b>`, `<i>`, and `<hashtag>SteamID64</hashtag>` tokens. Example values in §6. |
+| `name` | string | Display name of the acting admin (e.g. `[BSS] seregatipich`). |
+| `serverName` | string (may be empty) | Denormalized server label (e.g. `RAAS/AAS #1`). Empty when `server_id="0"`. |
+
+Redacted phase-1 sample row:
+
+```json
+{ "id":"262459", "server_id":"0", "steam_id":"<uuid:36>",
+  "date":"1783146994", "log":"Авторизовался",
+  "name":"<redacted>", "serverName":"" }
+```
+
+#### 2.3 `POST /ajax/table.php` (phase 2 — pagination count)
+
+Identical body to phase 1 **plus `&pagination=true`**. Fired by `getPagination()` (`custom.js:986`) only when the phase-1 page came back full (`rows == numrows`) **or** `currentPage != 1` — i.e. it's skipped entirely when the whole result fits on page 1 (then `Всего` is taken from the row count directly).
+
+**Response** (captured contract #3):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | string enum `"ok"` | Status. |
+| `exec_time` | float — seconds | Handler time (e.g. `0.069`). |
+| `totalPage` | int | Total pages = `ceil(totalRows/numrows)`. Live value `1105`. |
+| `totalRows` | **string** — integer | Total matching rows, as string. Live value `"110488"` (~110 K audit records). |
+| `count_time` | float — seconds | Cost of the `COUNT(*)` (e.g. `0.06`) — isolated here so it never blocks the row render. |
+
+`totalRows` / `totalPage` drive the pager and the `Страница X из Y — Всего: N` (Page X of Y — Total: N) info line, both `Intl.NumberFormat`-grouped.
 
 ---
 
 ### 3. The Page's Own Table (`#logTable`)
 
-**Columns** (`<thead class="table-dark">`):
+**Rendered columns** (`<thead class="table-dark">`, from `logs.content.html`):
 
-| # | `<th>` | Width | Align | Data key |
-|---|---|---|---|---|
-| 1 | Сервер (Server) | 200px | left | `serverName` |
-| 2 | Админ (Admin) | auto | left | `name` |
-| 3 | Дата (Date) | 120px | center | `date` |
-| 4 | Действие (Action) | auto | left | `log` |
+| # | `<th>` | Width | Align | `collum` key → `data-contact` | Render |
+|---|---|---|---|---|---|
+| 1 | Сервер (Server) | 200px | left | `serverName` | Raw string wrapped in `<code>` when non-empty; blank for global events. |
+| 2 | Админ (Admin) | auto | left (`class="contact_name"`) | `name` | `<p class="text-center mb-0"><b>{name}</b></p>`. |
+| 3 | Дата (Date) | 120px | center | `date` | `formatDate(unix, badge=true, checkdate=true)` → `<span class="badge bg-success" data-unix="{unix}">{label}</span>`. |
+| 4 | Действие (Action) | auto | left | `log` | Free HTML string, verbatim (may contain `<b>`/`<i>`/`<hashtag>`). |
 
-**Data source / request.** `buildTable` issues the row request through the generic `Action()` helper:
+**Date badge logic** (`formatDate`, `custom.js:132-158`): label is relative via `checkToday()` — same calendar day → `Сегодня` (Today), day-1 → `Вчера` (Yesterday), else `DD.MM.YYYY`; time suffix `HH:MM:SS` always appended. Badge color: `bg-important` only if `!checkdate && date*1000 < Date.now()`; because the logs column passes `checkdate=true`, all rows render `bg-success` (green). Example: `<span class="badge bg-success" data-unix="1783146994">Сегодня 08:36:34</span>`.
 
-- **Endpoint:** `POST /ajax/table.php`
-- **Body:** `action=logs&table=logs&page=<n>&numrows=100&search=<urlencoded JSON>&order_by=<false|col>&order_sort=<asc|desc>`
-- `action` = the table name (`logs`); response is `{status:'ok', data:{ row:[...], query_time, count_time, ... }}`.
-- **Page size:** `numrows: 100` per page.
-- **Sorting:** no `order` array is passed in the bootstrap call, so **column-header sorting is not enabled** on this page (rows come back in the server's default order, effectively newest-first by date). The `buildTable` engine *supports* sort via `order_by`/`order_sort`, but the logs page opts out.
-- **Pagination:** server-side; `buildTable` renders a pager (`showPages: 9` desktop / `3` mobile) below the table when total rows exceed 100.
+**DataTables config (exact):**
 
-**Search JSON shape** (built by `buildTable` from the `searchInput` list, then `encodeURIComponent(JSON.stringify(...))`):
+| Property | Value | Note |
+|---|---|---|
+| Server table id (`action`/`table`) | `logs` | |
+| `collum` | `["serverName","name","date","log"]` | Column→row-key map. `steam_id`, `server_id`, `id` are returned but unmapped (see Finding). |
+| `numrows` (page size) | `100` | |
+| `order` | `[]` (omitted) | **No column sorting wired.** `buildTable` only attaches header sort handlers + `<i data-sort>` icons when `order` is non-empty (`custom.js:797-838`); logs opts out. |
+| `order_by` / `order_sort` | `false` / `false` | Always literal false → server default order (id-desc ≈ newest-first). |
+| `showPages` | `9` desktop / `3` mobile | Pager window radius around current page. |
+| `showOnePage` | `true` | Renders the `Всего` info line even for a single page. |
+| `floatHead` | `true` | Sticky header; scrolls table into view on (re)build. |
+| Default sort | none sent → **server default** (newest first) | |
+
+**Finding — returned-but-unrendered identity.** The phase-1 row carries `steam_id` (36-char UUID) and `server_id`, yet `collum` maps neither. The clickable player token in column 4 is a **17-digit SteamID64** embedded inside the `log` free-text (e.g. `<hashtag>7656119XXXXXXXXXX</hashtag>`), not the row's `steam_id` field. So the audit surface exposes two different identifiers for the same subject (a UUID it doesn't display + a SteamID64 baked into prose), and drill-down keys off the string inside the message, not a structured FK.
+
+---
+
+### 4. Two-Phase Request Sequence (reference)
 
 ```
+buildTable(#logTable)
+  ├─ preGetTable() → query = ["logs", "&table=logs&page=1&numrows=100&search=<json>&order_by=false&order_sort=false"]
+  ├─ getTable()               POST /ajax/table.php  (rows; timeout 120 s)   → data.row[], currentPage
+  │     └─ build()            renders <tbody>, then getPagination(rows)
+  └─ getPagination(rows)
+        └─ if rows==100 or currentPage!=1:
+             Action(...data + "&pagination=true")  POST /ajax/table.php     → totalPage, totalRows
+             → renders pager + "Страница X из Y — Всего: N"
+```
+
+`Action()` (`custom.js:284`) aborts any in-flight request of the same name before firing (`retryAbort`), so rapid re-filters don't stack. On non-`ok` with `auth===true` it forces `location.reload()`.
+
+---
+
+### 5. Filters / Search Controls
+
+Wired via `searchInput: ["logTable-user","logTable-name","logTable-startdate","logTable-enddate","logTable-server"]`. `buildTable` reads each input's `data-search` alias + `type` and bins it into the `search` JSON (`custom.js:733-778`). Only non-empty inputs are emitted; `+` is escaped to `%2B` in multiselect values.
+
+| Control | `#id` | `data-search` alias | Input type | Placeholder | Search bucket | Behavior / validation |
+|---|---|---|---|---|---|---|
+| Admin name | `logTable-user` | `t2.player` | text | Администратор (Administrator) | `text` | Substring match on acting admin. |
+| Action text | `logTable-name` | `t1.log` | text | Действие (Action) | `text` | Free-text substring over the `log` description. |
+| From date | `logTable-startdate` | `t1.startdate` | text, `readonly` (datetimepicker) | От (From) | `text` | Lower bound. Bootstrap datetimepicker `language:'ru'`, `pickTime:true`, side-by-side. `readonly` → only picker sets it. Clear addon `onclick="$('#logTable-startdate').val('')"`. |
+| To date | `logTable-enddate` | `t1.enddate` | text, `readonly` (datetimepicker) | До (To) | `text` | Upper bound. Same picker. Clear addon zeroes it. |
+| Server | `logTable-server` | `server_id` | `multiselect` (`multiple`) | `- Сервер -` | `multiselect` | `bootstrap-multiselect`, HTML-enabled, multi-value → array of `server_id`. |
+| Search | `logTable-btn` | — | button | Поиск (Search) | — | Fires `buildTable` rebuild with `isSearch:true, page:1`. |
+
+**Server multiselect options** (live `<option value label>` set — non-contiguous ids confirm `server_id` is a DB PK):
+
+| `server_id` | Label |
+|---|---|
+| `1` | RAAS/AAS #1 |
+| `6` | БЕЗ ГОЛОСОВАНИЯ #2 (No-voting #2) |
+| `7` | INVASION #3 |
+| `9` | Custom для FW |
+| `10` | Custom для MDC |
+| `11` | Custom для BSS |
+
+`server_id=0` (panel-global) is **not** a filter option — global events are only reachable by leaving the server filter empty.
+
+**Resulting `search` JSON shape** (empty when unfiltered, as captured):
+
+```json
 {
-  "text":        { "t2.player": "<admin>", "t1.log": "<action text>",
-                   "t1.startdate": "<from>", "t1.enddate": "<to>" },
+  "text":        { "t2.player":"<admin>", "t1.log":"<text>",
+                   "t1.startdate":"<unix|datestr>", "t1.enddate":"<unix|datestr>" },
   "check":       {},
-  "multiselect": { "server_id": ["1","7", ...] },
+  "multiselect": { "server_id":["1","7"] },
   "managers":    {},
   "slider":      {}
 }
 ```
 
-Only non-empty inputs are included. `+` characters are pre-escaped to `%2B`.
+Filter aliases reveal the server join: `t1` = the logs table (`t1.log`, `t1.startdate`, `t1.enddate` range on the timestamp, `server_id`), `t2` = the admins/players table (`t2.player`). Note: clearing a date field does **not** auto-refresh — the user must press Поиск (or Enter in a text field).
 
 ---
 
-### 4. Filters / Search Controls
+### 6. Logged Action Strings (`log` semantics)
 
-Declared in the filter bar and wired via `searchInput: ["logTable-name","logTable-startdate","logTable-enddate","logTable-user","logTable-server"]`.
+`log` is stored/returned as a **rendered Russian string**, not a normalized `{action_type,target,params}` record — filtering is substring-only. Distinct action templates observed in the live 100-row page (counts in parentheses):
 
-| Control | Element id | `data-search` alias | Type | Placeholder | Behavior |
+| `log` template (Russian) | English gloss | Structure |
+|---|---|---|
+| `Авторизовался` (n=2) | Logged in / Authenticated | Bare verb. `server_id=0`, no server, no target. Session-level audit. |
+| `Зашёл в камеру` (n=94) | Entered admin cam (spectator) | Bare verb; carries `server_id`/`serverName`. Dominant event type. |
+| `Забанил <b>{name}</b> <hashtag>{steamid64}</hashtag> на <b>{N}</b> дн <i>"{reason + до DD.MM.YYYY HH:MM}"</i>` | Banned {player} for {N} days, reason … | Target SteamID64 as clickable token; duration + expiry + reason embedded in prose. |
+| `Разбанил <b>{name}</b> <hashtag>{steamid64}</hashtag> ({steamid64})` | Unbanned {player} | Target twice (token + parenthetical). |
+| `Отправил сообщение <b>{tag}</b> <hashtag>{steamid64}</hashtag> - "{message}"` | Sent message to {player} — "…" | In-game admin DM; message body quoted. |
+
+The panel writes login, admin-camera entry, ban, unban, and admin-message events (and, per the shared action catalog, presumably kick/kits/mark/twink/group-change etc.) as free text. Because everything is one string, "all bans by admin X this week" is only answerable by substring-matching `Забанил` in `t1.log` — brittle.
+
+---
+
+### 7. Actions Available on This Page (Permissions/Capabilities)
+
+The audit journal is deliberately **read-only** — no ban/kick/edit/delete/export control of its own.
+
+| UI trigger | Action | Endpoint | Data params | Effect | Destructive? |
 |---|---|---|---|---|---|
-| Admin name | `logTable-user` | `t2.player` | text | Администратор (Administrator) | Substring filter on the acting admin. Enter key triggers search. |
-| Action text | `logTable-name` | `t1.log` | text | Действие (Action) | Free-text filter over the log/action description. Enter key triggers search. |
-| From date | `logTable-startdate` | `t1.startdate` | text (readonly, datetimepicker) | От (From) | Lower bound of date range. Bootstrap datetimepicker, `language: 'ru'`, `pickTime: true`, side-by-side. Clear icon zeroes the field. |
-| To date | `logTable-enddate` | `t1.enddate` | text (readonly, datetimepicker) | До (To) | Upper bound of date range. Same picker config; clear icon resets. |
-| Server | `logTable-server` | `server_id` | multiselect (`multiple`) | `- Сервер -` | `bootstrap-multiselect`, HTML-enabled, multi-value. Filters to selected `server_id`s. |
-| Search button | `logTable-btn` | — | button | Поиск (Search) | Fires the query with current filter state. |
+| Load / filter / paginate | `Action({script:'table', action:'logs'})` | `POST /ajax/table.php` | `table=logs&page&numrows=100&search&order_by=false&order_sort=false[&pagination=true]` | Fetch audit rows / count. | N (read) |
+| Click a `<hashtag>` in a row | `player.open($(this).text())` | — (opens shared `#playerModal` via `player`/`squad` scripts) | SteamID64 from the token text | Opens player-detail modal for the referenced subject. | N |
 
-Notes:
-- Date fields are `readonly` — values only settable via the picker (prevents malformed input).
-- The two date-clear `<span>` addons run inline `$('#...').val('')`; they clear the field but do **not** auto-refresh — the user must press Поиск (or Enter in a text field).
+`end` callback binds: `$('#logTable tbody > tr hashtag').on('click', …) → player.open($(this).text())` — every SteamID64 rendered in a log line is a drill-down into the shared modal.
+
+> The action tokens pre-extracted for `logs.html` in `action_catalog.txt` (`ban, kick, kill, kits, mark, message, twink, unban, addComment, getComments, changeGroup, changeTeam, checkBans, findFriends, removePlayer, addBanName, removeBanName, twinkOnline, getPlayerOnlineData, downloadStat, kitSave, get`) plus `script:'player'`/`script:'squad'` all belong to the **embedded shared player modal**, NOT to the audit journal. They are what the modal can do to whatever player you open from a log row — do not attribute them to this page.
 
 ---
 
-### 5. Actions Available on This Page (Permissions/Capabilities)
+### 8. Permission / Visibility Logic
 
-The audit journal is deliberately **read-only**. It exposes no ban/kick/edit/delete/export controls of its own.
-
-| UI trigger | Action id | Script endpoint | Data params | Effect | Destructive? |
-|---|---|---|---|---|---|
-| Load / filter / paginate the table | `logs` | `POST /ajax/table.php` | `table=logs&page&numrows=100&search&order_by&order_sort` | Fetch audit rows (server-side paginated/filtered). | N (read-only) |
-| Click a `<hashtag>` in a row | (opens modal) `player.open(steamid)` | — (then shared modal loads via `player`/`squad` scripts) | steam id from the clicked token | Opens the shared player-detail modal for the referenced identity. | N |
-
-The `end` callback binds: `$('#logTable tbody > tr hashtag').on('click', ...) → player.open($(this).text())`. So any player reference rendered inside a log line is a drill-down link into the shared modal.
-
-> The action tokens pre-extracted for `logs.html` in `action_catalog.txt` (`ban`, `kick`, `kill`, `kits`, `mark`, `message`, `twink`, `unban`, `addComment`, `getComments`, `changeGroup`, `changeTeam`, `checkBans`, `findFriends`, `removePlayer`, `addBanName`, `removeBanName`, `twinkOnline`, `getPlayerOnlineData`, `downloadStat`, `kitSave`, `get`) together with `script:'player'` and `script:'squad'` all belong to the **embedded shared player modal**, NOT to the audit journal. They are the actions the modal can perform on whatever player you open from a log row — do not attribute them to this page.
+- The journal's own markup contains no per-element `hide`/role gating — it is one filterable table. (All `hide`/`display:none` in the fragment are inside the shared `#playerModal`.)
+- Access control is therefore **page-level**: server-side gating of `pageLoad('logs')` by admin group. The fragment assumes the requester is authorized.
+- Session expiry is handled transparently by `Action()`: a non-`ok` response with `auth===true` triggers `location.reload()` → login bounce (no stale audit data).
+- The server-global rows (`server_id=0`, e.g. logins) have no server filter path, so a per-server admin filtering by their server would never see panel-level login events — an intrinsic visibility gap.
 
 ---
 
-### 6. Forms & Modals
+### 9. Retention & Scale (observed)
 
-The page has **no forms/modals of its own** beyond the filter bar. The only modal in the fragment is the shared `#playerModal` (player-detail), reached by clicking a player `<hashtag>` in a log row. Its fields, tabs, and actions are covered in the shared-modal section.
-
----
-
-### 7. Permission / Visibility Logic
-
-- The fragment contains no per-element `class="hide"` or role gating within the journal's own markup — the entire page is a single filterable table. (All `hide`/`display:none` elements in the file are inside the shared player modal.)
-- Access control for the journal is therefore expected to be **page-level** (server-side gating of `pageLoad('logs')` by admin group). The client fragment assumes the requester is already authorized to see it.
-- `Action()` transparently handles session expiry: if `table.php` responds `auth === true`, it triggers `location.reload()` (re-auth), so an expired session on the audit page bounces to login rather than showing stale data.
+- Live `totalRows = 110488` across `totalPage = 1105` at 100/page. `page` is unbounded and the date filter defaults to empty (full history). No client-side age cap or rotation notice.
+- `id` is a dense-ish auto-increment (small gaps from deleted/rolled-back events) — the sequence itself implies long-lived accumulation, not a rolling window.
+- Retention/rotation, if any, is enforced server-side and is not observable from the client. The isolated `count_time` (§2.3) suggests the count query is non-trivial at this row volume — hence the two-phase deferral.
 
 ---
 
-### 8. Notable UX & Competitively Interesting Details
+### 10. Competitively Interesting Details
 
-- **Minimal, single-purpose page.** Four columns, five filters, one button. It reads as an accountability/compliance view (who-did-what) rather than an operations console — the deliberate absence of any mutating control is the point: an audit log you can't edit is more trustworthy.
-- **The `log` column is free-text**, filtered by substring on `t1.log`. This implies actions are stored as rendered strings, not as a normalized `{action_type, target, params}` schema. **Competitive opportunity:** store audit events structurally (actor, action enum, target entity + id, before/after diff, server, timestamp) so you can filter by exact action type, link every target, and render a rich timeline. Their text-search-only model can't reliably answer "show all *bans* by admin X this week."
-- **No column sorting** is wired here (order array omitted) — you can filter but not re-sort. Easy to beat by enabling sort on Date/Admin/Server.
-- **Date range uses two separate readonly pickers** (`t1.startdate` / `t1.enddate`) rather than a single daterange widget (the engine supports a `daterange` type elsewhere). Clearing a date does not auto-refresh, a minor friction point.
-- **Server filter keys off DB `server_id`** (non-contiguous ids), and the server label is denormalized into the row (`serverName`) — cheap to render, but means historical server renames would rewrite past display names unless snapshotted.
-- **Drill-down via `<hashtag>`:** player identities embedded in log lines are live links into the shared modal — a nice touch that turns the audit log into an investigation entry point. Worth copying: make every actor and target in an audit row a clickable entity link.
-- **Retention:** nothing in the client indicates a retention/rotation policy or an age cap on queries — pagination is unbounded (`page` increments, `numrows=100`), and the date filter defaults to empty (all history). Retention, if any, is enforced server-side and is not observable from the fragment.
+- **Free-text `log`, not a structured event.** Filtered by substring on `t1.log`; duration, reason, expiry, target are baked into prose. **Opportunity:** store audit events as `{actor, action_enum, target_entity+id, before/after, server_id, ts}` so you can filter by exact action type, join every target, and render a real timeline. Their model can't reliably answer "all bans by admin X this week."
+- **Two identifiers, neither clean.** Row carries a 36-char UUID `steam_id` it never renders, while drill-down keys off a SteamID64 string parsed out of the message HTML. A normalized target FK + one canonical id would be strictly better.
+- **No column sorting** (empty `order`) — filter but can't re-sort. Trivial to beat by enabling Date/Admin/Server sort (engine already supports it via `order_by`/`order_sort`).
+- **Two separate readonly date pickers** rather than one daterange widget (`t1.startdate`/`t1.enddate`); clearing a date doesn't auto-refresh — minor friction.
+- **Deferred count (two-phase load)** is a genuinely good pattern at 110 K rows — worth copying: render rows immediately, compute `COUNT(*)` in a second request so pagination never blocks first paint.
+- **Global vs per-server split** (`server_id=0`) means login/session events live outside every server filter — an accountability blind spot to avoid.
+- **Drill-down via `<hashtag>`** turns the audit log into an investigation entry point. Worth copying — but make *every* actor and target a structured entity link, not a regex over rendered text.

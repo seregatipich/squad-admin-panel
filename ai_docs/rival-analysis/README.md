@@ -2,11 +2,11 @@
 
 Competitive functionality analysis of the rival SQUAD server admin panel **SQSTAT**, for benchmarking against this project's `squad-admin-panel`.
 
-Produced by authenticated, **strictly read-only** exploration of the live panel (no state changed) + static analysis of its client bundle + a 24-agent parallel documentation pass. Date: 2026-07-04.
+Produced in two passes, both **strictly read-only** (no state changed on the rival panel): (1) a 24-agent parallel documentation pass over a captured corpus + static analysis of the client bundle; (2) a **parallel-browser live-capture pass** — a fleet of subagents each drove its **own** headless Chromium (authenticated via the session cookie) behind a network interceptor that aborts any mutating action, capturing the **real AJAX request/response contracts** so every chapter is spec-grade (exact endpoints, params, response field types). Date: 2026-07-04.
 
 ## Start here
 
-- **[`SQSTAT-rival-panel-analysis.md`](SQSTAT-rival-panel-analysis.md)** — the complete single-file report (executive summary + all 25 chapters + screenshot index). ~444 KB.
+- **[`SQSTAT-rival-panel-analysis.md`](SQSTAT-rival-panel-analysis.md)** — the complete single-file report (executive summary + all 25 chapters + screenshot index). ~660 KB. Each chapter carries a **"Live API Contracts"** block.
 
 ## Structure
 

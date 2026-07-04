@@ -1,5 +1,71 @@
 ## 19. Public API
 
+### Live API Contracts
+
+**Capture method.** `/api/docs/` was rendered in a headless authenticated Chromium (capture label `api-top`). The page fires **0 XHR/AJAX** on load — it is a static, self-contained HTML documentation page (`_api_docs_.content.html`, 75 KB), not a DataTables/RPC surface. The "live contracts" below are therefore the docs' own **request tables** plus the **redacted JSON examples** embedded in each `<code>` block (capture file: `/tmp/caps/api-top/_api_docs_.content.html`; `_api_docs_.network.json` = `[]`; `_blocked.json` = `[]`, no mutations attempted). All SteamIDs/EOS IDs/names below are the docs' own placeholder values.
+
+Sidebar API version: **`0.8.3`**. Base URL: `https://breaking.sqstat.ru/api/<group>/<method>.php`. All requests `Content-Type: x-www-form-urlencoded`; all responses `application/json`.
+
+#### Response-envelope map (ground truth from live examples)
+
+The envelope is **inconsistent per endpoint** — this is the single most important spec detail and is confirmed by the captured examples. There is no uniform `{status,data}` wrapper.
+
+| Endpoint | Success wrapper key | `status` present? | Notable live-observed typing |
+|---|---|---|---|
+| `server/stat.php` | `data` (object) | Yes | `enabled`: bool; `map_start`: string unix(s); `players[].playtime`: `{date,last_seen}` JS-ms unix (int); `queue_players`: int; `vote`: object |
+| `server/chat.php` | `chat` (array, **top-level**) | Yes | all fields string; `date`: string unix(s) |
+| `server/setmap.php` | — (empty body) | Yes | no `data` payload documented |
+| `player/info.php` | **`info`** (object, NOT `data`) | Yes | see §Info-envelope below |
+| `player/stats.php` | **none — fields at root** | Yes (at root) | see §Stats-envelope below |
+| `player/vip.php` | fields at root (`msg`,`expire`,`player`) | Yes | `expire`: `{unix:string, human:string}` |
+| `player/ban.php` | fields at root (`msg`) | Yes | `msg`: string |
+| `player/hasBan.php` | fields at root (`ban`,`ban_count`,`mark`,`last_ban`) | Yes | `ban`: **singular object**; `mark`: `false`\|int; `last_ban`: int unix(s) |
+| `player/hasBanAll.php` | `data.ban` (array) | Yes | per-ban object **omits `description`** |
+| `player/comments.php` | `comments` (array, **top-level**) | Yes | all fields string; `date`: string unix(s) |
+| `player/bonus.php` | fields at root (`old`,`new`,`amount`) | Yes | integer bonus balances |
+| `clan/get.php` | **`clan`** (object) | Yes | `players[].online`: object\|`false` |
+
+> **Buildable takeaway:** a client library must special-case the unwrap per method — `stat`→`.data`, `info`→`.info`, `clan`→`.clan`, `chat`→`.chat`, `comments`→`.comments`, `stats`/`vip`/`ban`/`hasBan`/`bonus`→root. Numeric values are frequently returned as **JSON strings** (`"895"`, `"101440"`, `"71"`), unix timestamps as **string seconds** except `players[].playtime`/`clan.players[].online.playtime` which are **integer JS-milliseconds**. Nullable fields observed `null`: `discord`, `expire`, `group_id`, `group_description`, `image`, `prefix`, `prefix_rgb`.
+
+#### Info-envelope (`player/info.php`, redacted live example)
+
+Wrapper: `{"info":{…},"status":"ok"}`. Corrections vs a naive reading:
+- `ban` is a **singular object** (the single active/last ban), while `bans` is the **array** of history — each history item carries an extra **`impact`: bool** field not present in the request-table docs.
+- Booleans-as-JSON-bool: `baby`, `online`. String-numbers: `bonus` (`"895"`), `mark` (`"0"`), all `date`/`create_date`/`expire` unix seconds are strings.
+- `eos_id`: 32-char hex string (`"00000000000000000000000000000000"` when unset).
+
+```json
+{"info":{"baby":true,"ban":{"admin_id":"765…04","admin_name":"Admin 1","date":"1738043756","description":"","expire":"0","id":"70174","reason":"[Навсегда] Читы","steam_id":"765…01","unban":"0"},
+"bans":[{"admin_id":"765…05","admin_name":"Admin 2","date":"1738021793","description":"читы","expire":"1740613793","id":"70172","impact":false,"reason":"…п.12","steam_id":"765…01","unban":"1"}],
+"bonus":"895","create_date":"1733345407","date":"1738021803","discord":null,"eos_id":"0…0","expire":null,"group_description":null,"group_id":null,"image":null,"mark":"0","name":"Player 1",
+"names":[{"date":"1738021803","name":"Player 1"}],"online":false,
+"playtime":{"boost":"0","online":"895","queue":"0","server":"Server 1"},"prefix":null,"prefix_rgb":null,"steam_id":"765…01"},"status":"ok"}
+```
+
+#### Stats-envelope (`player/stats.php`, redacted live example)
+
+**No wrapper** — `damage`, `eos_id`, `games`, `is_play`, `kits`, `name`, `primetime`, `stats`, `status`, `steam_id`, `teamkill`, `weapons` are all at the JSON root. The important correction: **`weapons` is a nested object, not a flat array** — `weapons.vehicle[<name>]` and `weapons.weapon[<name>]`, each value `{cnt,damage,name}` (and `image` for hand weapons). `primetime[].cnt`/`.sum` are **integers**; other stats fields are string-numbers.
+
+```json
+{"damage":"101440","eos_id":"0…0","games":[{"end":"1751371119","id":"62997","map":"Sumari Bala Seed v1","playtime":"4540","server_id":"1","start":"1751349417","t1":"USA","t1_tickets":"0","t2":"MEA","t2_tickets":"0","win":"3"}],
+"is_play":false,"kits":[{"cnt":"15197","kit":"Rifleman","steam_id":"765…01"}],"name":"Player 1",
+"primetime":[{"cnt":101,"end":"1748251080","sort":"10:37","start":"1748158620","sum":678}],
+"stats":[{"name":"Online","value":"915h 46m"},{"name":"Winrate","value":"W:12 L:18 (40%)"},{"name":"K/D","value":"2.12"},{"name":"Kills","value":"310"},{"name":"Deaths","value":"146"},{"name":"Revivals","value":"1"}],
+"status":"ok","steam_id":"765…01","teamkill":"71",
+"weapons":{"vehicle":{"M1 Abrams":{"cnt":"20","damage":"11613","name":"M1 Abrams"}},"weapon":{"M16A4":{"cnt":"18","damage":"2758","image":"M16A4","name":"M16A4"}}}}
+```
+`stats[].name` value set observed: `Online`, `Boost`, `Favorite kit`, `Matches`, `Winrate`, `K/D`, `Kills`, `Deaths`, `Revivals`. `games[].win` is an enum code (observed `"0"` and `"3"` — win-status codes, not a boolean).
+
+#### Other live examples (redacted)
+
+- **stat.php** `vote`: `{"isVote":false,"votes":{"yes":[],"no":[]},"map":"","mode":"skip"}`; `last_restart`: `{"month":"07","year":"2025","day":"24","hour":"06","minute":"00","seconds":"45","ms":"314","unix":"1753326045"}` (all string parts). `players[].playtime`: `{"date":1753361173458,"last_seen":1753365019574}` (int JS-ms).
+- **vip.php**: `{"status":"ok","msg":"VIP выдан","expire":{"unix":"1753333199","human":"24.7.2025 22:54"},"player":{"name":"Player 1","steam_id":"765…01"}}`.
+- **hasBan.php**: `{"ban":{"id":"79086","steam_id":"765…01","date":"1753284989","reason":"…п.5 до 24.07.2025 18:36","description":"…","admin_id":"765…02","expire":"1753371389","unban":"0","admin_name":"Admin 1"},"ban_count":"1","mark":false,"last_ban":1753284989,"status":"ok"}` — **keyless**, returns acting-admin SteamID + nick.
+- **comments.php**: `{"comments":[{"id":"1","steam_id":"765…01","admin_id":"765…02","date":"1658163595","text":"Test","admin_name":"Admin 1"}],"status":"ok"}`.
+- **clan/get.php**: `{"clan":{"name":"Clan 1","players":[{"eos_id":"0…0","name":"Player 1","online":{"playtime":{"date":1753942016647,"last_seen":1753955053758},"server":"Server 1","team":"USMC"},"steam_id":"765…01"},{"eos_id":"0…1","name":"Player 2","online":false,"steam_id":"765…02"}],"tags":["[TAG1]","[TAG2]"]},"status":"ok"}` — `online` is either a live-presence object or `false`.
+
+---
+
 ### 1. Purpose & Nav Location
 
 - **Nav location / page id:** `/api/docs/` (loaded as a page fragment, not via the usual `pageLoad('<page>')` → `/ajax/page.php` mechanism; it is a self-contained documentation page).
