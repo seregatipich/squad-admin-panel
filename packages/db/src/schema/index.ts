@@ -2,6 +2,7 @@ export * from './audit-log.js';
 export * from './config-versions.js';
 export * from './diagnostic-events.js';
 export * from './events.js';
+export * from './marks.js';
 export * from './panel-meta.js';
 export * from './player-api-tokens.js';
 export * from './player-ip-history.js';

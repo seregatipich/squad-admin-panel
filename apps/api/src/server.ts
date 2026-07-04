@@ -41,6 +41,7 @@ import hostRoutes from './routes/host.js';
 import hostActionsRoutes from './routes/host-actions.js';
 import liveRoutes from './routes/live.js';
 import logsRoutes from './routes/logs.js';
+import marksRoutes from './routes/marks.js';
 import meTokensRoutes from './routes/me-tokens.js';
 import permissionsRoutes from './routes/permissions.js';
 import playerRoutes from './routes/players.js';
@@ -139,6 +140,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(roleMembersRoutes);
   await app.register(usersRoutes);
   await app.register(playerRoutes);
+  await app.register(marksRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(auditRoutes);
   await app.register(logsRoutes);

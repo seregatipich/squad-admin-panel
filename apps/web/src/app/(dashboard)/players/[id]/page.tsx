@@ -5,6 +5,7 @@ import type { RoleColor } from '@squad/shared-config/role-colors';
 import Link from 'next/link';
 import { use, useCallback, useEffect, useState } from 'react';
 
+import { PlayerMarks } from '@/components/PlayerMarks';
 import { RoleColorDot } from '@/components/RoleColorDot';
 
 interface Player {
@@ -123,6 +124,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       </section>
 
       <PanelAccessSection playerId={playerId} canManage={canManageRoles} />
+
+      <PlayerMarks playerId={playerId} />
 
       <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
         <h2 className="text-xs uppercase tracking-widest text-neutral-400">
