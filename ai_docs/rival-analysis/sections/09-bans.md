@@ -10,24 +10,155 @@ The page is a two-column layout: a fixed left **filter sidebar** (`col-md-3`, `p
 
 ---
 
+### Live API Contracts
+
+> Ground truth captured 2026-07-04 from `breaking.sqstat.ru` with a read-only headless browser. Source: `caps/bans/bans.network.json`. Mutations were network-intercepted and aborted (`caps/bans/_blocked.json` = `[]`), so ban/unban/addBanName request shapes below are reconstructed from the inline modal JS in `caps/bans/bans.content.html` / `collabans.content.html`, not from a fired write.
+
+#### C-1. Page fragment load
+
+| Attribute | Value |
+|---|---|
+| Method + path | `GET /ajax/page.php?page=bans` |
+| Response | `text/html; charset=UTF-8`, ~114 KB HTML fragment injected into `#content` |
+| Body | filter sidebar + `#banPlayers` table shell + full shared player-detail modal markup + inline `<script>` |
+
+#### C-2. Ban list read — `POST /ajax/table.php` (action `banPlayers`)
+
+This is the sole data read of the page (fired once on load by `buildTable`).
+
+**Request (form-urlencoded):**
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `action` | string const `banPlayers` | Y | Server table id / router key. |
+| `table` | string const `banPlayers` | Y | Duplicated table id. |
+| `page` | int (1-based) | Y | Page number. |
+| `numrows` | int, `100` | Y | Page size. |
+| `search` | URL-encoded JSON | Y | Filter object (5 buckets, see below). |
+| `order_by` | string \| `false` | Y | Sort column key (one of the `collum` set) or literal `false` = default order. |
+| `order_sort` | `asc` \| `desc` \| `false` | Y | Sort direction or `false`. |
+| `pagination` | `true` | N | When appended, returns only the count envelope (§C-3) instead of rows. |
+
+`search` JSON shape (captured verbatim, default state): `{"text":{},"check":{"permanent":"false"},"multiselect":{},"managers":{},"slider":{}}`. Buckets: `text` = free-text inputs keyed by their `data-search` SQL alias; `check` = checkbox flags (`permanent` = `"true"`/`"false"` string); `multiselect`, `managers`, `slider` unused on this page.
+
+**Response** `application/json`, `status:"ok"`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `data.totalPage` | int | Page count (0 in the row-fetch call; real value comes from the `pagination=true` call). |
+| `data.totalRows` | int | Row count (0 in row-fetch; real value from pagination call). |
+| `data.currentPage` | string | Echo of requested page ("1"). |
+| `data.row[]` | array of ban objects | The page of bans (see per-row shape). |
+| `data.custom` | bool | Custom-render flag (observed `false`). |
+| `data.query_time` | float (seconds) | Server SQL time for the row query. |
+| `data.count_time` | int/float (seconds) | Server SQL time for the count query (0 when not counting). |
+| `status` | string enum `"ok"` | Result status; anything else / `auth:true` forces a client reload. |
+| `exec_time` | float (seconds) | Total server handler time. |
+
+**Per-row object `data.row[i]` (LIVE-captured field set — this supersedes prior column inference):**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string (numeric) | Ban record PK (`t1.id`), used as `data-id` / `trID-<id>` on the row. |
+| `steam_id` | string (Steam64) | Banned player identity; rendered hidden in `<hashtag>`, drives `player.open()`. |
+| `name` | string | Player nick at ban time (may contain markup escaped by server). |
+| `reason` | string | Reason text; **note it embeds the expiry as trailing `… до DD.MM.YYYY HH:MM`** in the same string. |
+| `description` | string (may be empty `""`) | Free-text admin comment. |
+| `admin_id` | string (Steam64) | **Issuing admin's SteamID** (raw id, NOT a resolved name — the modal resolves the name separately). |
+| `date` | string (**unix seconds**) | When the ban was issued, e.g. `"1783085160"`. Client formats via `data-unix` badge. |
+| `expire` | string (**pre-rendered HTML**) | Server returns a ready `<span class="badge …">DD.MM.YYYY HH:MM</span>` fragment, NOT a raw timestamp. Permanent bans render a distinct badge. Client injects it verbatim. |
+| `unban` | string enum `"0"`/`"1"` | Boolean-as-string: `"1"` = ban was revoked (kept in history), `"0"` = active. |
+
+Redacted example row:
+
+```json
+{ "id": "30900", "steam_id": "<steam64>", "date": "1783085160",
+  "reason": "Спец кит   тех пех до 04.07.2026 16:26", "description": "",
+  "admin_id": "<steam64>", "expire": "<span class=\"badge bg-primary\" style=\"…\">04.07.2026 16:26</span>",
+  "unban": "0", "name": "<nick>" }
+```
+
+#### C-3. Lazy pagination count — `POST /ajax/table.php` … `&pagination=true`
+
+A second, deferred call (same body + `&pagination=true`) returns only the count envelope so the pager can be drawn without blocking the row render:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `totalPage` | int | Number of pages at the current `numrows`. |
+| `totalRows` | int \| string | Total matching rows. **Type is inconsistent across tables** — `ban_names` returns it as a string (`"371"`), `collabans` as an int (`17510`). Treat as numeric. |
+| `count_time` | int/float (seconds) | SQL count time (logged to console). |
+| `status` | `"ok"` | Status. |
+| `exec_time` | float | Handler time. |
+
+#### C-4. Ban mutation contracts (reconstructed from modal JS — never fired)
+
+`Action({script, action, data})` → `POST /ajax/<script>.php` with body `action=<action>&<data>`. Success predicate: `text.status == 'ok'`; `text.auth === true` ⇒ session expired ⇒ full reload.
+
+| Action | script → endpoint | Request data | Response (on success) | Destructive |
+|---|---|---|---|---|
+| `ban` | `squad` → `POST /ajax/squad.php` | query string: `server_id` (only when `player.info.online`), `steam_id`, `reason_id` (= `#player_ban-reason` select value), `description` (= textarea), `days` (= checked `player_ban-reason_type` radio value; `0` = permanent, `-1` = kick) | `{status:'ok'}`; client removes player from `#players` and refreshes active server | **Y** |
+| `unban` | `squad` → `POST /ajax/squad.php` | JSON `{steam_id: string, unban: bool}` — `unban:true` (the `#unban-error` toggle) **fully erases** the ban; `false` lifts it but keeps history (`unban="1"`) | `{status:'ok'}`; modal flips + reloads player | **Y** |
+| `addBanName` | `player` → `POST /ajax/player.php` | JSON `{name: string}` (the current nick) | `{status:'ok'}`; reopens player | **Y** |
+| `removeBanName` | `player` → `POST /ajax/player.php` | JSON `{name: string}` | `{status:'ok'}`; reopens player | **Y** |
+| `checkBans` | `player` → `POST /ajax/player.php` | JSON `{steam_id: string}` | `{status:'ok', projects:[…]}` (see §C-5) | N (read) |
+| `changeExpire` | `clan` → `POST /ajax/clan.php` | ban-expiry edit (defined on `clan_16`, not on `bans`) — adjusts an existing ban's `expire` | `{status:'ok'}` | **Y** |
+| `get` | `player` → `POST /ajax/player.php` | JSON `{steam_id}` (fired on row-click) | full `player.info` object | N (read) |
+
+#### C-5. `checkBans` response — cross-project ban intelligence
+
+Consumed by `player.checkbans()`; renders one card per federated community in `#player_findban-list`.
+
+```
+{ status:'ok',
+  projects: [ {
+    name:     string,           // community/project name
+    discord?: string(url),      // optional Discord invite → icon link when present
+    online:   int (seconds),    // player's total playtime on that project (secToTime)
+    ban: {
+      total:   int,             // punishment count → "Наказаний: N" (0/absent ⇒ "Нет наказаний")
+      current: null | {         // presence flips icon red-ban vs green-check
+        reason: string,
+        date:   int (unix),     // ban start
+        expire: int (unix) | "0"  // "0" ⇒ "Перманент", else From/To range
+      }
+    }
+  } ] }
+```
+
+#### DataTables config (client `buildTable`, from `bans.content.html`)
+
+| Setting | Value |
+|---|---|
+| `table` (action id) | `banPlayers` |
+| `collum` (column keys) | `["steam_id","name","reason","date","expire"]` |
+| `order` (sortable keys) | `["steam_id","name","reason","date","expire"]` |
+| `numrows` (page size) | `100` |
+| `mode` | default (table) |
+| `searchInput` | `["banPlayers-name","banPlayers-admin","banPlayers-startdate","banPlayers-enddate","banPlayers-permanent","banPlayers-reason","banPlayers-description"]` |
+| default sort | `order_by=false`, `order_sort=false` (server default) |
+| row click | `player.open( td[data-contact=steam_id] > hashtag .text() )` |
+
+---
+
 ### 2. Entities & Fields
 
 #### 2.1 Ban (the row entity — table `banPlayers`, server-side view over `t1`)
 
-Inferred from the table columns, the `data-search` aliases on the filter inputs, the `player.info.ban` object consumed by the modal, and the `checkBans` response.
+Field set is now confirmed against the live `banPlayers` response (§C-2); the `Origin / alias` column maps each response field to its filter `data-search` SQL alias.
 
-| Field | Origin / alias | Type | Meaning |
+| Field | Response key / filter alias | Type | Meaning |
 |---|---|---|---|
-| `steam_id` | column 0 (`t2.player`) | string (Steam64), rendered inside a `<hashtag>` element | Identity of the banned player. Column is CSS-hidden (`class="hide"` + `td:first-child{display:none}`) but drives the row-click. NB: the panel has since migrated identity to a UUID elsewhere; here it is still the SteamID. |
-| `name` | column 1 | string | Player nick at time of lookup. |
-| `reason` | column 2 (`t1.reason`) | string | Human-readable reason text, resolved from a rules catalog (see reason `<select>` §5.1). |
-| `date` | column 3 | datetime | When the ban was issued ("Забанен"). |
-| `expire` | column 4 | datetime or `0` | Ban expiry ("До"). `0` / empty = **permanent**. |
-| `description` | filter `t1.description` | string (≤512 chars) | Free-text admin comment attached to the ban. Not shown as a column, only searchable + shown in modal. |
-| `admin_name` | `t3.player` (filter "Админ") | string | The admin who issued the ban. Searchable; shown in modal (`#player_info_ban-admin`) and in each ban history entry. |
-| `impact` | `ban.impact` (modal) | bool | Whether this ban counts toward *progressive* escalation ("Влияет на наказание"). |
-| `unban` | `ban.unban` (modal) | bool/"1" | Whether the ban was later revoked ("Игрок был разбанен"). |
-| `permanent` | filter `permanent` | bool | Filter-only flag (`expire == 0`). |
+| `id` | `row.id` | string (numeric) | Ban record PK (`t1.id`); becomes `data-id`/`trID-<id>`. |
+| `steam_id` | `row.steam_id` / filter `t2.player` | string (Steam64), rendered in `<hashtag>` | Banned player identity. Column CSS-hidden (`class="hide"` + `td:first-child{display:none}`) but drives row-click. NB other panels migrated identity to a UUID; here it is still the SteamID. |
+| `name` | `row.name` / filter `t2.player` | string | Player nick at ban time. |
+| `reason` | `row.reason` / filter `t1.reason` | string | Reason text; **embeds the expiry as trailing `… до DD.MM.YYYY HH:MM`**. |
+| `date` | `row.date` | string (**unix seconds**) | When issued ("Забанен"); e.g. `"1783085160"`. |
+| `expire` | `row.expire` (column "До") | string (**pre-rendered HTML badge**) | Server returns a ready `<span class="badge …">` — not a raw timestamp. Empty/permanent renders a distinct badge. |
+| `unban` | `row.unban` | string `"0"`/`"1"` | `"1"` = ban revoked (kept in history), `"0"` = active. |
+| `description` | `row.description` / filter `t1.description` | string, may be `""` (≤512 chars) | Free-text admin comment; searchable + shown in modal. |
+| `admin_id` | `row.admin_id` / filter `t3.player` | string (Steam64) | **Issuing admin's SteamID** (raw id in the row; name resolved separately in `#player_info_ban-admin`). |
+| `impact` | `ban.impact` (modal only) | bool | Whether this ban counts toward *progressive* escalation ("Влияет на наказание"). |
+| `permanent` | filter `permanent` (check bucket) | bool-as-string `"true"`/`"false"` | Filter-only flag (`expire == 0`). |
 
 SQL aliasing exposed by the `data-search` attributes reveals the underlying join: **`t1` = bans**, **`t2` = banned player**, **`t3` = issuing admin**.
 
@@ -70,9 +201,9 @@ The row click loads the full player object; ban-relevant sub-fields:
 | 3 | Забанен (Banned) | `date` | 130px. |
 | 4 | До (Until) | `expire` | 130px; empty/`0` ⇒ permanent. |
 
-`buildTable` config: `numrows: 100`, `order: ["steam_id","name","reason","date","expire"]`.
+`buildTable` config: `numrows: 100`, `collum/order: ["steam_id","name","reason","date","expire"]`. Full contract in §C-2.
 
-**Data request (competitively important):** `Action({script:'table', action:'banPlayers', data:'&table=banPlayers&page=<n>&numrows=100&search=<urlencoded-json>&order_by=<col>&order_sort=<asc|desc>'})` → `POST /ajax/table.php`. A **separate** call with `&pagination=true` returns `{totalPage, totalRows, count_time}` so page count is computed lazily (server logs the SQL count time to the browser console).
+**Data request (competitively important):** `POST /ajax/table.php` with `action=banPlayers&table=banPlayers&page=<n>&numrows=100&search=<urlencoded-json>&order_by=<col|false>&order_sort=<asc|desc|false>`. The `search` JSON has 5 buckets `{text,check,multiselect,managers,slider}` (see §C-2). A **separate** call with `&pagination=true` returns `{totalPage,totalRows,count_time,status,exec_time}` so page count is computed lazily (server logs the SQL count time to the browser console).
 
 **Filter sidebar controls** (each carries a `data-search` SQL alias; all feed the JSON `search` payload):
 

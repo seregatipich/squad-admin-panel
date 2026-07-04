@@ -1,8 +1,12 @@
 ## 00. Overview & Architecture
 
-Reference analysis of the **rival SQUAD game-server admin panel "SQSTAT"** — instance `breaking.sqstat.ru` (branding: "SQSTAT 2019–2026, by Enj0y"). This document set was produced by direct authenticated exploration (read-only) of the live panel plus static analysis of its client bundle, for competitive benchmarking against this project's `squad-admin-panel`.
+Reference analysis of the **rival SQUAD game-server admin panel "SQSTAT"** — instance `breaking.sqstat.ru` (branding: "SQSTAT 2019–2026, by Enj0y"), for competitive benchmarking against this project's `squad-admin-panel`.
 
-> **Scope & ethics:** All exploration was strictly **read-only** (no state was changed on the rival panel). This documentation describes *functionality, structure, entities and permissions*. It intentionally does **not** reproduce the rival's third-party user data (player SteamIDs, names, IPs, ban lists) beyond isolated anonymized examples needed to explain a feature.
+> **Method (two passes).** (1) Authenticated exploration of the live panel + static analysis of the client bundle. (2) A **live-capture pass**: a fleet of subagents each drove its **own** headless Chromium (authenticated via the session cookie), driving each section and intercepting the real AJAX traffic, so the per-section chapters and the cross-cutting chapters (91 data-model, 92 per-player storage, 93 action catalog) carry **exact captured request/response contracts** — endpoint, params, and response field types — not just inferred shapes. Chapters marked "### Live API Contracts" are backed by captured schemas.
+
+> **Scope & ethics:** All exploration was strictly **read-only** (no state was changed on the rival panel). The live-capture browsers ran behind a network interceptor that **aborted any mutating action at the wire** (verified: 0 mutations attempted across the whole fleet). This documentation describes *functionality, structure, entities and permissions*, and does **not** reproduce the rival's third-party user data (player SteamIDs, names, IPs, ban lists) beyond isolated redacted examples needed to explain a feature.
+
+> **Notable live finding:** the captures reveal a **SteamID64 → UUID primary-key migration in progress** — rewritten global tables (`adminPlayers`, `playerComments`, `playerMark`, `logs`, `changeGroup`) now emit a 36-char UUID under the legacy `steam_id` column, while high-volume event/archive tables and the entire public API still key on SteamID64. See chapter 91 §identity.
 
 ---
 

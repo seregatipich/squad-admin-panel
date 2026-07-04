@@ -1,104 +1,63 @@
-# SQSTAT — Rival Admin Panel: Complete Functionality Analysis
+# SQSTAT — Rival Admin Panel: Complete Functionality Analysis (spec-grade)
 
 **Target:** `breaking.sqstat.ru` — a SQUAD game-server management + statistics panel ("SQSTAT 2019–2026, by Enj0y")
 **Purpose:** Competitive benchmark for this project's `squad-admin-panel`.
-**Method:** Authenticated, **strictly read-only** exploration of the live panel + static analysis of its client bundle and observed API surface, plus a 24-agent parallel documentation pass over the captured corpus.
+**Method:** Two passes — (1) authenticated read-only exploration + static analysis of the client bundle; (2) a **parallel-browser live-capture pass** where a fleet of subagents each drove its **own** headless Chromium (authenticated via the session cookie) and intercepted the real AJAX traffic, so the chapters carry **exact captured API contracts** (endpoint, params, response field types), not just inferred shapes.
 **Date:** 2026-07-04
 
-> **Scope & ethics.** Nothing was created, modified, or deleted on the rival panel — only page views (`GET`) and client-side JS were inspected; no mutation/`Action` endpoint was ever called. This document describes **functionality, structure, entities, and permissions**. It deliberately avoids reproducing the rival's third-party user data (player SteamIDs, names, IPs, ban lists) beyond isolated anonymized examples needed to explain a feature.
+> **Scope & ethics.** Nothing was created, modified, or deleted on the rival panel. The live-capture browsers ran behind a network interceptor that **aborted any mutating `Action` at the wire** — verified **0 mutations attempted** across the entire fleet. Only page renders and the app's own auto-fired read endpoints were observed. This document describes **functionality, structure, entities, and permissions**, and avoids reproducing the rival's third-party user data beyond isolated redacted examples.
+
+> **How to read it.** Per-section chapters (01–20) each carry a **"### Live API Contracts"** block backed by captured request/response schemas. Cross-cutting chapters synthesize those: **90** permission model, **91** entity/data model (full DB/ERD spec from live schemas), **92** per-player storage (the dossier), **93** the complete action/RPC/RCON catalog.
 
 ---
 
 ## Executive Summary
 
-SQSTAT is a mature, multi-server **all-in-one SQUAD server platform** that fuses four products most competitors ship separately:
+SQSTAT is a mature, multi-server **all-in-one SQUAD server platform** fusing four products most competitors ship separately:
 
 1. **Live RCON control** of many servers (map/rotation, chat/broadcast, squad & team ops, kick/ban/kill, start/stop/restart, mods, config).
 2. **A years-deep statistics engine** — per-player, per-clan, per-match, per-weapon/vehicle analytics.
 3. **Moderation suite** — bans, banned-nicknames, suspect marking, admin comments, a **cross-community shared ban network ("Ру-Баны")**, reports/votes logs, and a full admin **audit journal**.
 4. **Community & monetization** — clan directory + management, VIP/subscriptions, a bonus-points economy, Discord bot + webhooks, a public API, wiki, and a bug tracker.
 
-**Technology:** PHP backend + Steam-OpenID auth; a jQuery 2.2 / Bootstrap 3.3 AJAX single-page shell (`pageLoad()` renders fragments; `Action({script,action,data})` posts mutations to six `/ajax/<script>.php` endpoints). Chart.js, Leaflet, FullCalendar, CodeMirror. A separate **bot/parser** process scrapes each server's RCON into the DB. It is *not* a modern SPA framework — a maintainability/UX gap to exploit.
+**Technology:** PHP backend + Steam-OpenID auth; a jQuery 2.2 / Bootstrap 3.3 AJAX single-page shell (`pageLoad()` renders fragments; `Action({script,action,data})` posts to six `/ajax/<script>.php` endpoints). Chart.js, Leaflet, FullCalendar, CodeMirror. A separate **bot/parser** process scrapes each server's RCON into the DB. Not a modern SPA framework — a maintainability/UX gap to exploit.
+
+**API shape (captured live):** every list grid funnels through one **`POST /ajax/table.php`** envelope — request carries `table`, `numrows`, `page`, `order`, and a 5-bucket `search` object keyed by each control's raw **SQL alias** (e.g. `t2.player`); response is `{ data:{ row[], totalPage, totalRows, currentPage, query_time }, status, exec_time }`. Every scalar arrives as a **JSON string**; unix timestamps are 10-digit string seconds (live-presence uses 13-digit ms); some cells ship **pre-rendered HTML inside the JSON**. Real captured table ids include `allPlayers, banPlayers, vipPlayers, adminPlayers, playerComments, playerMark, playerKills, playerDeath, playerRevive, playerDamage, playerTeamkill, games, votes, reports, ban_names, collabans, topPlayers, logs, playersOnline` + 11 player-modal sub-tabs.
+
+**Live structural finding:** a **SteamID64 → UUID primary-key migration is in progress** — rewritten global tables (`adminPlayers`, `playerComments`, `playerMark`, `logs`, `changeGroup`) emit a 36-char UUID under the legacy `steam_id` column, while high-volume event/archive tables and the whole public API still key on SteamID64. A reimplementation must treat `steam_id` as an opaque identity column.
 
 **Scale on this one instance:** ~**385,350** players · ~**115,400+** audit-journal entries · ~**80** clans · **53** staff · **6** servers.
 
-**Authorization is the most important structural finding.** SQSTAT has **no unified RBAC engine**; it stacks three loosely-coupled layers that share five group *names* but not a permission model:
+**Authorization (chapter 90)** — **no unified RBAC**; three stacked layers sharing five group *names* but not a permission model:
 
 | Layer | Identity | Capabilities | Scope | Edited in |
 |---|---|---|---|---|
 | **L1 Panel role** | per-player `group_id` 0–5 (`changeGroup`) | coarse server booleans (`canBan`, `canChangeGroup`, …) | **global** | Admins → player modal → Группа |
-| **L2 In-game RCON** | same 5 group names | 21 Squad `Admins.cfg` tokens per group (`ban`, `kick`, `cheat`, `manageserver`, …) | **per server** | Settings → Группы |
-| **L3 Clan ownership** | clan roster `type` (leader/deputy/member) + `vip_mode` | clan `access`/`canType` booleans | **per clan** | Clan page roster |
+| **L2 In-game RCON** | same 5 group names | 21 Squad `Admins.cfg` tokens per group | **per server** | Settings → Группы |
+| **L3 Clan ownership** | clan roster `type` + `vip_mode` | clan `access`/`canType` booleans | **per clan** | Clan page roster |
 
-The five groups: **Administrator (1)**, **Moderator (2)**, **VIP = QueuePriority (3)**, **Cameraman (4)**, **Intern/Trainee (5)** — plus `0` = none. VIP conflates monetization with the access table; L2 conflates in-game power with the same names. See chapter **90** for the full matrix, enforcement model, and 7 privilege-escalation findings (unbounded grant ceiling, client-only gating, no per-server scoping, unlogged in-game actions, webhook-secret leakage, …).
+Groups: **Administrator (1)**, **Moderator (2)**, **VIP·QueuePriority (3)**, **Cameraman (4)**, **Intern (5)**, `0`=none. VIP conflates monetization with the access table; L2 conflates in-game power with the same names. Seven privilege-escalation findings in ch. 90.
 
-**Per-player "dossier" (chapter 92)** is deep: identity (SteamID + **EOS ID** + name history + Discord + VAC + **IP-geolocation**), sessions/playtime/prime-time, bonuses/boost, K/D & winrate, per-weapon and per-vehicle kills/damage, and 12 detail-log tabs (punishments, warns, chat, teamkills, kits, squads, kills, deaths, games, revives, damage, vehicles).
-
-**Biggest competitive opportunities:** unify RBAC (roles vs perks vs RCON) with a real capability matrix and grant-ceiling; add per-server admin scoping and a first-class owner role; audit every privilege change and in-game admin action; modernize the jQuery/BS3 stack; and separate monetization (VIP/subscriptions) from access control.
+**Biggest competitive opportunities:** unify RBAC (roles vs perks vs RCON) with a real capability matrix + grant-ceiling; add per-server admin scoping and a first-class owner role; audit every privilege change and in-game admin action; modernize the jQuery/BS3 stack; separate monetization from access control; finish (and normalize) the SteamID64→UUID migration.
 
 ---
 
 ## Visual Evidence (screenshots)
 
-Full-page captures in [`screenshots/`](screenshots/). Key surfaces:
-
-| # | Surface | File |
-|---|---|---|
-| 1 | Public homepage (logged-out) | `screenshots/01-public-homepage.png` |
-| 2 | Server dashboard & live RCON control | `screenshots/10-dashboard-main.png` |
-| 3 | Admins roster (groups: Admin/Mod/Camera/Trainee) | `screenshots/11-admins-groups.png` |
-| 4 | Settings → Servers | `screenshots/12-settings-config.png` |
-| 5 | **Settings → Groups (permission matrix editor)** | `screenshots/13-settings-groups-permissions.png` |
-| 6 | Admin audit journal (115k+ entries) | `screenshots/14-logs-audit-journal.png` |
-| 7 | Clan management page | `screenshots/15-clan-management.png` |
-| 8 | Public player profile | `screenshots/16-player-profile-dossier.png` |
-| 9 | Players directory (385k players) | `screenshots/17-players-directory.png` |
-| 10 | **Player admin dossier modal** | `screenshots/18-player-admin-modal.png` |
-| 11 | Bans | `screenshots/19-bans.png` |
-| 12 | Ру-Баны (shared ban network) | `screenshots/20-collabans-ruban.png` |
-| 13 | Statistics | `screenshots/21-statistics.png` |
-| 14 | VIP / privileges | `screenshots/22-vips.png` |
-| 15 | Match history | `screenshots/23-games.png` |
-| 16 | Chat log | `screenshots/24-chat.png` |
+Full-page captures in [`screenshots/`](screenshots/): public homepage, dashboard/RCON, admins roster, **Settings→Groups permission editor**, audit journal, clan management, public profile, players directory, **player admin dossier modal**, bans, Ру-Баны, statistics, VIP, games, chat. See the table in each relevant chapter.
 
 ---
 
 ## Table of Contents
 
-**Foundations**
-- 00 — Overview & Architecture
-- 01 — Server Dashboard & RCON Control
-- 02 — In-game Chat & Broadcast
+**Foundations** — 00 Overview & Architecture · 01 Server Dashboard & RCON · 02 Chat
+**Players & Moderation** — 03 Players Directory · 04 Player Profile & Storage · 05 Admins/Groups/Permissions · 06 VIP · 07 Online · 08 Comments & Marks · 09 Bans · 10 Ban-names & Ru-Bans
+**Tools & Analytics** — 11 Statistics · 12 Games · 13 Combat Logs · 14 Votes & Reports · 15 Issues & Video · 16 Settings · 17 Audit Journal
+**Clans, API & Extras** — 18 Clans · 19 API · 20 Top
+**Cross-cutting Synthesis** — 90 Permission Model · 91 Entity/Data Model · 92 Per-Player Storage · 93 Action/RPC/RCON Catalog
 
-**Players & Moderation**
-- 03 — Players Directory (Все игроки)
-- 04 — Player Profile & Per-player Data Storage
-- 05 — Administration: Admins, Groups & Permissions
-- 06 — VIP / Privileges (Привилегии)
-- 07 — Players Online (live)
-- 08 — Player Comments & Suspect Marking
-- 09 — Ban Management
-- 10 — Banned Nicknames & Ru-Ban Shared Network
+---
 
-**Tools & Analytics**
-- 11 — Statistics Dashboards
-- 12 — Match History (Игры)
-- 13 — Combat Logs: Kills / Deaths / Revives / Damage / Teamkills
-- 14 — Votes & Reports
-- 15 — Bug Tracker & Video/Demos
-- 16 — Settings: Server Config, Rotation, Mods, Restarts
-- 17 — Admin Audit Journal (Журнал)
-
-**Clans, API & Extras**
-- 18 — Clan Management
-- 19 — Public API
-- 20 — Top Online Leaderboard
-
-**Cross-cutting Synthesis**
-- 90 — Permission, Role & Group Model
-- 91 — Entity & Data Model
-- 92 — Per-Player Data & Logs Storage (the "dossier")
-- 93 — Complete Action / RPC / RCON Catalog
 
 ---
 
@@ -107,9 +66,13 @@ Full-page captures in [`screenshots/`](screenshots/). Key surfaces:
 
 ## 00. Overview & Architecture
 
-Reference analysis of the **rival SQUAD game-server admin panel "SQSTAT"** — instance `breaking.sqstat.ru` (branding: "SQSTAT 2019–2026, by Enj0y"). This document set was produced by direct authenticated exploration (read-only) of the live panel plus static analysis of its client bundle, for competitive benchmarking against this project's `squad-admin-panel`.
+Reference analysis of the **rival SQUAD game-server admin panel "SQSTAT"** — instance `breaking.sqstat.ru` (branding: "SQSTAT 2019–2026, by Enj0y"), for competitive benchmarking against this project's `squad-admin-panel`.
 
-> **Scope & ethics:** All exploration was strictly **read-only** (no state was changed on the rival panel). This documentation describes *functionality, structure, entities and permissions*. It intentionally does **not** reproduce the rival's third-party user data (player SteamIDs, names, IPs, ban lists) beyond isolated anonymized examples needed to explain a feature.
+> **Method (two passes).** (1) Authenticated exploration of the live panel + static analysis of the client bundle. (2) A **live-capture pass**: a fleet of subagents each drove its **own** headless Chromium (authenticated via the session cookie), driving each section and intercepting the real AJAX traffic, so the per-section chapters and the cross-cutting chapters (91 data-model, 92 per-player storage, 93 action catalog) carry **exact captured request/response contracts** — endpoint, params, and response field types — not just inferred shapes. Chapters marked "### Live API Contracts" are backed by captured schemas.
+
+> **Scope & ethics:** All exploration was strictly **read-only** (no state was changed on the rival panel). The live-capture browsers ran behind a network interceptor that **aborted any mutating action at the wire** (verified: 0 mutations attempted across the whole fleet). This documentation describes *functionality, structure, entities and permissions*, and does **not** reproduce the rival's third-party user data (player SteamIDs, names, IPs, ban lists) beyond isolated redacted examples needed to explain a feature.
+
+> **Notable live finding:** the captures reveal a **SteamID64 → UUID primary-key migration in progress** — rewritten global tables (`adminPlayers`, `playerComments`, `playerMark`, `logs`, `changeGroup`) now emit a 36-char UUID under the legacy `steam_id` column, while high-volume event/archive tables and the entire public API still key on SteamID64. See chapter 91 §identity.
 
 ---
 
@@ -249,7 +212,9 @@ See the following per-section chapters (01–20) and cross-cutting synthesis (90
 
 ## 01. Server Dashboard & RCON Control
 
-> Competitive functionality analysis of SQSTAT (`breaking.sqstat.ru`). This section documents the **main per-server control panel** — the largest page fragment (~312 KB) and the operational heart of the panel. Everything an admin does to a live Squad server happens here.
+> Competitive functionality analysis of SQSTAT (`breaking.sqstat.ru`). This section documents the **main per-server control panel** — the largest page fragment (~332 KB rendered `#content`) and the operational heart of the panel. Everything an admin does to a live Squad server happens here. The **Live API Contracts** subsection below is captured ground truth: a headless authenticated browser rendered `/?server_id=1` and recorded the app's own auto-load AJAX (read-only; zero mutations fired — see `_blocked.json` = `[]`).
+
+Capture provenance: `caps/dashboard/__server_id_1.network.json` (contracts), `caps/dashboard/__server_id_1.content.html` (rendered fragment), `caps/dashboard/__server_id_1.png` (screenshot). 1 live contract captured (`squad.getServer`), 0 blocked mutations.
 
 ---
 
@@ -261,266 +226,400 @@ See the following per-section chapters (01–20) and cross-cutting synthesis (90
 | Loader | `pageLoad('main')` → `GET /ajax/page.php?page=main` → fragment injected into `#content` |
 | Deep links | `/?server_id=<id>` (open a specific server tab), `/?steam_id=<id>` (auto-open player modal), `/?start_seed=true` (auto-open the seeding helper) |
 | Primary RPC script | `squad` → `POST /ajax/squad.php` (nearly all live-control actions) |
-| Secondary scripts | `public` (rotation read / map calendar / auth), `player` (shared player-modal actions) |
+| Secondary scripts | `public` (rotation read / map calendar / auth), `player` (shared player-modal actions), `table` (DataTables server side) |
 
 **Layout.** A single full-width row split into:
-- **Left ~75% (`col-md-9`, `data-hide="offline"`):** live player/squad board, with tabs **Игроки (Players)**, **Техника (Vehicles, hidden by default)**, **Очередь (Queue)**, **Отключившиеся (Disconnected)**.
+- **Left ~75% (`col-md-9`, `data-hide="offline"`):** live player/squad board, tab strip **Игроки (Players → `#players`)**, **Техника (Vehicles → `#vehicles`, `.hide`-gated)**, **Очередь (Queue → `#queue`)**, **Отключившиеся (Disconnected → `#disconnected`)**.
 - **Right ~25% (`col-md-3`):** the control sidebar — collapsible **Управление (Control)** and **Состояние (State/monitoring)** panels, an **Онлайн (Online)** gauge + chart, a live **Чат (Chat)** feed with a broadcast input, a **Карта (Map)** widget (current/next map, rotation, calendar), and a **legend for player markers**.
 
-**Server tabs.** A `#servers` tab strip lists every server as `<a data-server="<id>">`. Each carries live badges refreshed on a 5s poll (`getServer`):
-- `data-type="badge_online"` → `players/100` (or `OFF` with `.bg-important` when the server is down)
-- `data-type="badge_queue"` → `+N` queue overflow (hidden when 0)
-- `data-type="badge_admins"` → admin headcount on the server
-- A `fa-user text-danger` icon is prepended to the tab where *you* are currently playing (`text.you`).
+**Server tabs.** A `#servers` strip lists every server as `<a data-server="<id>" data-toggle="tab">`. In the live capture the account can see server ids `1, 6, 7, 9, 10, 11`. Each tab carries live badges refreshed on the 5 s `getServer` poll:
 
-The header also shows **global online** as `N (percent%)` — this server group's share of all tracked Squad players worldwide (`text.global_online`), plus a **Squad sale** banner (`text.is_sale`) when a Steam discount is live.
+| Badge attr | Source field | Rendering |
+|---|---|---|
+| `data-type="badge_online"` | `servers[id].players` | `players/100` (or `OFF` + `.bg-important` when down) |
+| `data-type="badge_queue"` | `servers[id].queue` | `+N` (hidden when 0) |
+| `data-type="badge_admins"` | `servers[id].admins` | admin headcount |
+| `data-type="you_play"` | `you` (SteamID) | `fa-user text-danger` prepended on the tab where *you* are playing |
+
+Header globals: **global online** rendered `N (percent%)` from `global_online`; a **Squad sale** banner when `is_sale != 0`; a **seeding** pulse when `isSeeding == true`.
 
 ---
 
-### 2. Polling & State Machine
+### 2. Live API Contracts
 
-The page polls `squad.getServer` every **5000 ms** for the active tab.
+> This is the authoritative endpoint spec, built directly from the captured schema. All requests are `POST /ajax/<script>.php` with an `application/x-www-form-urlencoded` body. The client's `Action()` helper (see §2.4) serializes an object `data` map by **raw concatenation** `&<key>=<value>` with `action=<action>` appended — values are **not** URL-encoded by the helper, so callers pre-encode any value containing `&`/`=`/spaces themselves (e.g. `encodeURIComponent(map)`).
 
-**Request** `getServer`: `{ server_id, last_chat_id }` (chat delta cursor).
-**Response** `text.server` drives `showServer()`; `text.servers` refreshes all tab badges; `text.global_online`, `text.you`, `text.is_sale` update globals.
+#### 2.1 `getServer` — live server-state poll (CAPTURED)
 
-Server display states (from `data.isConnect` / `data.block_start`):
+The only auto-load read on this page. Polled every **5000 ms** for the active tab.
+
+**Endpoint:** `POST /ajax/squad.php`
+**Captured request body:** `&server_id=1&last_chat_id=false&action=getServer`
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `server_id` | int | Y | Active server tab id |
+| `last_chat_id` | int \| `false` | Y | Chat delta cursor. `false` on first poll → full chat tail; thereafter the highest `chat[].id` seen, so each poll returns only new messages |
+| `action` | const | Y | `getServer` |
+
+**Response** `application/json; charset=utf-8`. Root envelope (`text`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | enum `"ok"`\|err | `Action()` runs `success` only when `== "ok"` |
+| `exec_time` | float | Server render time (s) |
+| `test` | object | Per-stage timing telemetry: `getAdmin`, `queue`, `stat`, `post`, `chat` — floats (seconds); `queue` also carries a unix-seconds float marker |
+| `server` | object | The full server-state object (see 2.1.1) — drives `showServer()` |
+| `you` | str(SteamID) \| `false` | Your SteamID if you are currently in *this* server, else `false` |
+| `servers` | map<id, {players:int, admins:int, queue:int}> | Per-server tab badge counts for every visible server |
+| `ips` | map<ip, str> | IP → count of active players sharing it (alt-detection source; redacted example `{"46.174.48.77":"4"}`) |
+| `panelAdmins` | array<{name:str, steam_id:str, online:bool}> | Panel admins assigned to this server + presence |
+| `global_online` | int | Total tracked Squad players worldwide (market-share numerator) |
+| `is_sale` | int (0/1) | Steam Squad discount active flag |
+| `isSeeding` | bool | Seeding-helper active pulse |
+| `discord` | array | Linked Discord voice/presence rows (empty in capture) |
+
+##### 2.1.1 `server` object (live field spec)
+
+| Field | Type | Meaning / notes |
+|---|---|---|
+| `map` | str | Current layer display name, e.g. `"Sumari Seed v1"` |
+| `nextMap` | str | Queued next layer; `""` when none set |
+| `map_start` | str(unix-sec) | Epoch when current layer started |
+| `players.active[]` | array | Live roster — see 2.1.2 |
+| `players.dis[]` | array | Recently disconnected (same row shape; empty in capture) |
+| `squads[]` | array | Live squads — see 2.1.3 |
+| `teams[]` | array<{id, name, unit, short}> | 2 entries; `short` faction code (e.g. `WPMC`) drives banner `/assets/img/teams/<short>_bg.jpg`; `unit` e.g. `CombinedArms` |
+| `server` | str | Server letter designator, e.g. `"A"` |
+| `isConnect` | bool | RCON/bot connected → full board vs "Нет подключения" |
+| `block_start` | bool \| {msg, code} | `false` normally; object blocks the Start button. `code == 4` → server mid-update, render `update_log` in `<pre>` |
+| `update_log` | str | Live update stdout (shown when `block_start.code == 4`) |
+| `need_restart` | bool | Pending-restart flag (config changed) |
+| `outdated` | bool | Bot version outdated → "Обновить бота" banner |
+| `eos_problem` | bool | EOS backend degraded → banner |
+| `last_restart` | {day,month,year,hour,minute,seconds,ms,unix} | All **strings**; `unix` = epoch seconds |
+| `bot_start` | {…same shape} | Bot process start time |
+| `start_params` | {ip, port, query} | Bound IP / game port / Steam-query port; each `false` when unset, else value |
+| `beacon_port` | str | RCON beacon port, e.g. `"15000"` |
+| `region` | str | EOS region, e.g. `"eu-west-2"` |
+| `pings` | map<region, str-ms> | EOS filter ping per region (9 regions: `ap-east-1`, `ap-southeast-1/2`, `eu-central-1`, `eu-north-1`, `eu-west-2`, `me-central-1`, `us-east-1`, `us-west-1`) |
+| `eos_online` | str | EOS-monitored online count |
+| `license` / `license_valid` | str / bool | License id + validity |
+| `squad_version` | {version:str, build:str} | Game server version, e.g. `10.5.1` / `627303` |
+| `version` | str | Panel/bot agent version, e.g. `"1.2.9a"` |
+| `vote` | {isVote:bool, votes:{yes:[],no:[]}, map:str, mode:enum} | In-game map vote; `mode` ∈ `skip`\|`next`\|`current` |
+| `queue_list[]` | array | Players waiting in queue (empty in capture) |
+| `flags[]` | array | Server-level flags/warnings |
+| `calculateOnline` | map<teamId, {time, avg, sl, median, squads:map<sqId,{avg,median}>}> | Per-team & per-squad playtime aggregates as **pre-formatted RU strings** (e.g. `"1,576ч 7м"`); `sl` = squad-leaders' avg |
+| `stat.online` | {date[], players[], admins[], queue[]} | Parallel arrays (62 samples in capture) for the online mini-chart; `date` = `"HH:MM"` labels |
+| `stat.maps[]` | array<{map, start(unix-str), end:bool\|unix, t1, t2, id:bool\|int}> | Recent played layers with faction shorts `t1`/`t2` |
+| `monitor[]` | array (60) | Hardware time-series — see 2.1.4 |
+| `chat[]` | array | Chat feed delta — see 2.1.5 |
+| `playtime` | str | Your current session length (RU formatted) |
+| `time` | {work:float, current_time:str, prev_time:str} | Server clock; `*_time` = `"DD.MM.YYYY HH:MM:SS"` |
+| `joinlink` | bool \| str | Steam `connect` deep-link when available |
+
+##### 2.1.2 `players.active[]` row (live)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | str | In-server player slot id (e.g. `"11"`) |
+| `steam_id` | str(17) | SteamID64 — row key `data-id`, target of every player action |
+| `eos_id` | str(32) | Epic Online Services id |
+| `name` | str | Display name |
+| `team` | str `"1"`\|`"2"` | Team |
+| `squad` | bool \| str-id | `false` = unassigned; else squad id |
+| `leader` | bool | Is squad leader |
+| `kit` | str | Raw kit token (e.g. `WPMC_LAT_01`); regex-reduced to base kit → `/assets/img/ico/kits/<kit>.svg` |
+| `ip` | str | Player IP (used with root `ips` map for same-IP alt count) |
+| `isAdmin` | bool | Player is a panel admin |
+| `color` | bool \| str-hex | Clan-tag color; `false` or hex rendered `<code style="color:#…">` |
+| `mark` | int | Watch/flag level (`0` = none) → row `.player_mark` |
+| `warning` | bool | >3 punishments → `fa-user-secret` badge |
+| `vac` | bool | Steam/VAC ban within 100 days → Steam icon |
+| `baby` | bool | New player (<30 h) → baby icon |
+| `playtime` | {date:int, last_seen:int} | **Unix milliseconds**: session start + last-seen |
+| `requests` | {admins:bool, report:bool} | Live admin-call / report indicators |
+| `location` | {iso:str(2), country:str, city:str} | Geo (e.g. `RU` / `Россия` / `Chita`) → flag + tooltip |
+
+> Fields the earlier draft listed (`state`, `in_vehicle`) are **not present** in the live active-player row for this server; vehicle occupancy is templated (`data-template="vehicle"`) but the Техника tab is `.hide`-gated (see §6).
+
+##### 2.1.3 `squads[]` row (live)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | str | Squad number (badge) |
+| `name` | str | Squad name (clearable via `rename`) |
+| `team` | str `"1"`\|`"2"` | Owning team |
+| `size` | str | Member count, rendered `size/9` |
+| `locked` | bool | Locked squad → lock icon |
+| `cmd` | bool | Has a Commander → star icon; CMD squads sort to top |
+| `create_id` | str(SteamID) | Creator SteamID64 (crown icon) |
+| `create_name` | str | Creator display name |
+| `eos_id` | str(32) | Creator EOS id |
+| `message` | bool | Pending scheduled squad-message |
+
+##### 2.1.4 `monitor[]` sample (hardware telemetry)
+
+Each `{date:str(unix-sec), data:{…}}`:
+
+| `data` key | Type | Meaning |
+|---|---|---|
+| `pid` | str | Server process id |
+| `mem` | str | RSS memory (GB) |
+| `network` | {send, receive, format, connections:int} | Throughput (`format` unit e.g. `"Mb"`); `connections` drives the "under attack" banner when > 300 |
+| `cpu` | array<int> | Per-core / aggregate CPU load % |
+| `disk` | {read, write} | Disk MB/s |
+| `freq` | array<str> | Core frequency (GHz) |
+| `temp` | array<int> | Core temperature (°C) |
+| `tps` | str | Server tick rate |
+
+##### 2.1.5 `chat[]` delta row
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | str | Monotonic chat id → next poll's `last_chat_id` cursor |
+| `server_id` | str | Origin server |
+| `steam_id` | str | Author SteamID64 |
+| `name` | str | Author name |
+| `team` | str | Faction short (e.g. `MEI`) |
+| `type` | enum | Channel: `ChatAll`, `ChatTeam`, `ChatSquad`, `ChatAdmin`, command (`!stats`) etc. |
+| `date` | str(unix-sec) | Timestamp |
+| `msg` | str | Message body (commands like `!stats` visible) |
+| `group_id` | str | Author admin-group id |
+| `type_format` | {name, color(hex), icon(fa-\*)} | Channel badge styling (e.g. `ChatAll` → `#00C3FF` / `fa-globe`) |
+| `color` | str-hex | Author name color |
+
+**Redacted example row:** `{ "id":"800848","server_id":"1","steam_id":"<redacted:17>","name":"<redacted:10>","team":"MEI","type":"ChatAll","date":"1783145247","msg":"!stats","group_id":"5","type_format":{"name":"<redacted:4>","color":"#00C3FF","icon":"fa-globe"},"color":"#..." }`
+Cite: `caps/dashboard/__server_id_1.network.json`.
+
+#### 2.2 Reads fired on user interaction (not auto-loaded, so not in the capture)
+
+These only fire when the corresponding modal/panel is opened, so the read-only capturer (which performs no clicks) did not record them. Shapes below are from `main.html` render code and prior analysis — flagged as **inferred**, not captured.
+
+| Action | Script | Params | Returns (inferred) | Destructive |
+|---|---|---|---|---|
+| `getRotation` | squad | `server_id` | `{rotation:{lists:map<day,str>, current, isWin:bool}, list, canEdit:bool}` | N |
+| `getServerMaps` | squad | `server_id` | `{maps[], units[]}` map picker catalog | N |
+| `serverMonitor` | squad | `start`, `end`, `server_id` | time-series: mem, network_send/receive, disk_read/write, tps, network_connections | N |
+| `serverOnline` | squad | `start`, `end`, `server_id` | `{players[], admins[], queue[], days[], maps{}}` | N |
+| `serverOnlineAdmins` | squad | `day`, `server_id` | `{events, resources}` admin presence timeline | N |
+| `serverOnlineBooster` | squad | `day`, `server_id` | `{events, resources}` booster timeline | N |
+| `network` | squad | `server_id` | `{network:{ips:map<ip,{conn[],country,city}>, sockets[]}}` | N |
+| `mapCalendar` | public | `server_id`, `start`, `end` | played-maps calendar | N |
+| `getConfigFiles` / `getConfigFile` | squad | `server_id` / file | config file list / contents | N |
+| `getDefaultConfig` | squad | file | default template | N |
+| `getMods` | squad | `server_id` | installed Workshop mods | N |
+
+#### 2.3 Server tables (`script: 'table'` — DataTables server-side)
+
+The dashboard's own Queue/Disconnected/roster panels render from the `getServer` payload directly (client-side), not via `table.php`. The `table` script backs the paginated grids on sibling pages (players, bans, chat, …). Live table headers observed in the rendered fragment:
+
+| Panel | Column headers (RU → EN) |
+|---|---|
+| Отключившиеся (Disconnected) | `SteamID`, `Имя` (Name), `Время` (Time) |
+| Очередь (Queue) | `Позиция` (Position, w80), `EOS` (id, w160), `Имя` (Name), `Время` (Time, w100) |
+| Чат (Chat feed) | `Дата` (Date, w120), `Чат` (Channel, w80), `Сообщение` (Message) |
+
+#### 2.4 `Action()` request serializer (from `custom.js`)
+
+`Action({script, action, data, …})` → `$.ajax({ url:'/ajax/'+script+'.php', type:'POST' })`.
+
+| data form | Serialization |
+|---|---|
+| `FormData` | appends `action`; `contentType:false` (multipart, used for uploads) |
+| plain object | `$.map(data, (v,i)=>'&'+i+'='+v).join('')` then `+= action` — **no URL-encoding**; callers must pre-encode |
+| string | `"action="+action+data` |
+
+Cross-cutting flags: `retryAbort:true` aborts any in-flight request of the same `name` before firing; `pageAbort:true` cancels on navigation; `connectCheck:true` short-circuits when offline. Success gate: `text.status == 'ok'`, else `error(msg)` → `addAlert(msg,'exclamation-triangle')`.
+
+---
+
+### 3. Polling & State Machine
+
+The page polls `squad.getServer` every **5000 ms** for the active tab, advancing `last_chat_id` each cycle.
+
+Server display states (from `server.isConnect` / `server.block_start`):
 
 | Condition | UI behavior |
 |---|---|
 | `isConnect === true` | Full board shown; control buttons enabled |
-| `!isConnect && !block_start` | "Нет подключения (No connection)"; **Включить (Turn on)** button shown |
-| `block_start` set | Shows `block_start.msg`; start button hidden. If `block_start.code == 4` → shows `data.update_log` in a `<pre>` (server is mid-update) |
+| `!isConnect && block_start === false` | "Нет подключения (No connection)"; **Включить (Turn on)** button shown |
+| `block_start` is object | Shows `block_start.msg`; Start button hidden. `block_start.code == 4` → renders `update_log` in a `<pre>` (server mid-update) |
 
-Alert banners (each `display:none` until triggered): **Версия бота неактуальна (Bot version outdated)** with an inline **Обновить бота (Update bot)** link; **Проблемы с EOS backend (EOS backend problems)**; **На сервер идёт атака (Server under attack)** — triggered when `network.connections > 300`, shows connection count + **Открыть подключения (Open connections)**; **Скидка на Squad (Squad discount)**.
-
----
-
-### 3. Entities & Data Model
-
-Inferred from `showServer()` rendering, hidden `<template>` blocks, and Action payloads.
-
-#### 3.1 Server (`data.server`)
-
-| Field | Meaning |
-|---|---|
-| `isConnect` / `block_start` / `outdated` / `eos_problem` | Connectivity & health flags |
-| `start_params.port` / `.query` / `.beacon_port` | Game / Steam-query / RCON-beacon ports |
-| `start_params.ip` / `.new_ip` | Bound IP (and pending IP after restart) |
-| `license` / `license_valid` | Server license key + validity flag |
-| `version` / `build` | Squad server version & build number |
-| `region`, `EOS_ping`, `EOS_online` | EOS backend region, filter ping, monitored online count |
-| `cores` / `mem` | CPU core count / memory |
-| `last_restart`, `bot_start`, `need_restart` | Timestamps (day/month/year/hour/minute) + pending-restart flag |
-| `teams[0..1]` | `{ short, name, unit }` — faction short code, full name, unit label (drives team banner images `/assets/img/teams/<short>_bg.jpg`) |
-| `players.active[]` / `players.dis[]` | Live players / recently disconnected |
-| `squads[]` | Live squads |
-| `calculateOnline[team].squads[id]` | Per-squad `{ avg, median }` playtime aggregates; also per-team totals (`online_all`, `online_avg`, `online_median`, `online_sl`) |
-| `vote` | `{ isVote, mode: skip\|next\|current, map }` — active in-game map vote |
-| `monitor[]` | Time-series of `{ data: { network.connections, ... } }` for the mini-charts |
-
-#### 3.2 Player (row in `players.active[]`)
-
-| Field | Meaning |
-|---|---|
-| `steam_id` | SteamID64 — row key (`data-id`), used by every player action |
-| `eos_id` | Epic Online Services ID |
-| `name`, `color` | Display name; optional clan-tag color (hex, rendered in `<code style="color:#…">`) |
-| `team`, `squad`, `leader` | Team 1/2, squad id, is-squad-leader flag |
-| `kit` | Raw kit string; regex-reduced to a base kit → icon `/assets/img/ico/kits/<kit>.svg` |
-| `state` | e.g. `Playing`; non-Playing → dimmed row + skull icon |
-| `in_vehicle` | `{ id, name, vehicle, icon, class }` — vehicle occupancy |
-| `playtime` | `{ date, last_seen }` → session length badge |
-| `location` | `{ country, iso, same }` — geo flag + count of players sharing this IP |
-| `mark` | Boolean — flagged/watched player (row gets `.player_mark`) |
-| `warning` | >3 punishments → `fa-user-secret` badge |
-| `vac` | Steam ban within 100 days → Steam icon |
-| `baby` | New player <30h → baby icon |
-| `requests` | `{ admins, report, ban_ip }` → live admin-call / report / banned-IP indicators |
-
-#### 3.3 Squad (`data.squads[]`, hidden `[data-template="squad"]`)
-
-| Field | Meaning |
-|---|---|
-| `id` | Squad number (badge) |
-| `name` | Squad name (blankable via `rename`) |
-| `team` | Owning team |
-| `create_id` / `create_name` | SteamID / name of the squad creator (crown icon) |
-| `cmd` | Has a Commander (star icon; CMD squads sort to top) |
-| `locked` | Locked squad (lock icon) |
-| `size` | Member count, rendered `size/9` |
-| `message` | Pending scheduled squad-message flag |
-
-Squad panels expose an inline button row (`data-type="buttons"`): open-creator (crown), **squadMessage** (envelope), **transfer** (swap sides), **demote** (if CMD) or **rename** (if not), and **disband** (✕). Each squad table gets `data-leader=<steam_id>` for its leader.
-
-#### 3.4 Vehicle (`in_vehicle`, hidden `[data-template="vehicle"]`) — team/vehicle board (tab is `.hide` by default, feature appears disabled).
-
-#### 3.5 Queue & Disconnected tables
-
-| Queue columns | Disconnected columns |
-|---|---|
-| Позиция (Position), EOS (id), Имя (Name), Время (Time) | SteamID, Имя (Name), Время (Time) |
+Alert banners (each `display:none` until triggered):
+- **Версия бота неактуальна (Bot outdated)** when `outdated == true` — inline **Обновить бота (Update bot)** link (`botUpdate`).
+- **Проблемы с EOS backend** when `eos_problem == true`.
+- **На сервер идёт атака (Under attack)** when any `monitor[].data.network.connections > 300` — shows connection count + **Открыть подключения (Open connections)** (`network`).
+- **Скидка на Squad** when `is_sale != 0`.
 
 ---
 
 ### 4. Actions / Admin Capabilities
 
-All POST to `/ajax/<script>.php` with body `action=<id>&<params>`. "Destructive" = mutates live server/game state.
+All POST to `/ajax/<script>.php` with body `action=<id>&<params>`. "Destructive" = mutates live server/game state (⇒ these equal the permission surface). Params are the object keys passed to `Action({data:{…}})`.
 
 #### 4.1 Server lifecycle — Управление (Control) panel — `script: 'squad'`
 
-| UI label | action | Params | Effect | Destructive |
+| UI label | action | data keys (type) | Effect | Destructive |
 |---|---|---|---|---|
-| Включить (Turn on) | `start` | `server_id` | Boots the game server (confirm dialog) | Y |
-| Выключить (Turn off) | `stop` | `server_id` | Shuts the server down | Y |
-| Рестарт (Restart) | `restart` | `server_id` | Restarts the game server | Y |
-| Обновить (Update) | `update` | `server_id`, `afterMapChange` (bool) | Updates server; optionally defers until next map change | Y |
-| RCON | `rconRestart` | `server_id` | Restarts the RCON connection | Y |
-| Parser | `parserRestart` | `server_id` | Restarts the log parser | Y |
-| (Steam Query) | `cacherRestart` | `server_id` | Restarts the Steam-query cacher | Y |
+| Включить (Turn on) | `start` | `server_id`(int) | Boots the game server (confirm) | Y |
+| Выключить (Turn off) | `stop` | `server_id`(int) | Shuts the server down | Y |
+| Рестарт (Restart) | `restart` | `server_id`(int) | Restarts the game server | Y |
+| Обновить (Update) | `update` | `server_id`(int), `afterMapChange`(bool) | Updates server; optionally defers to next map change | Y |
+| RCON | `rconRestart` | `server_id`(int) | Restarts the RCON connection | Y |
+| Parser | `parserRestart` | `server_id`(int) | Restarts the log parser | Y |
+| (Steam Query) | `cacherRestart` | `server_id`(int) | Restarts the Steam-query cacher | Y |
 | Обновить бота (Update bot) | `botUpdate` | *(none)* | Updates the sqstat bot agent | Y |
-| (IP select) | `setServerIP` | `server_id`, `ip` | Rebinds the server IP (takes effect after restart) | Y |
+| (IP select) | `setServerIP` | `server_id`(int), `ip`(str) | Rebinds server IP (effective after restart) | Y |
 
 Confirmation dialogs (`$.question`) gate start/stop/restart/update/rcon/parser/cacher/botUpdate. `blockServerButtons()` disables the four lifecycle buttons while an op is in flight.
 
-#### 4.2 Player control (live-server, from the shared player modal but scoped by `server_id`) — `script: 'squad'`
+#### 4.2 Player control (live-server, scoped by `server_id`) — `script: 'squad'`
 
-| UI label | action | Params | Effect | Destructive |
+| UI label | action | data keys (type) | Effect | Destructive |
 |---|---|---|---|---|
-| Кик (Kick) | `kick` | `steam_id`, `reason_id`, `description`, `noReason` | Kicks player; `noReason:true` path skips reason | Y |
-| Бан (Ban) | `ban` | `server_id`, `steam_id`, `reason_id`, `description`, `days` | Bans player (`days=0` → permanent) | Y |
-| Разбан (Unban) | `unban` | `steam_id`, `unban` (bool: erase vs lift) | Removes ban; `unban:true` fully wipes the record | Y |
-| Убить (Kill) | `kill` | `server_id`, `steam_id` | Kills the player in-game (drops their squad) | Y |
-| Сменить команду (Change team) | `changeTeam` | `server_id`, `steam_id` | Force team-swap | Y |
-| Исключить из сквада (Remove from squad) | `removePlayer` | `server_id`, `steam_id` | Removes from squad without kicking | Y |
+| Кик (Kick) | `kick` | `steam_id`(str), `reason_id`(int), `description`(str), `noReason`(bool) | Kicks player; `noReason:true` skips reason | Y |
+| Бан (Ban) | `ban` | `server_id`(int), `steam_id`(str), `reason_id`(int), `description`(str), `days`(int) | Bans player (`days=0` → permanent) | Y |
+| Разбан (Unban) | `unban` | `steam_id`(str), `unban`(bool) | Removes ban; `unban:true` fully wipes the record | Y |
+| Убить (Kill) | `kill` | `server_id`(int), `steam_id`(str) | Kills player in-game | Y |
+| Сменить команду (Change team) | `changeTeam` | `server_id`(int), `steam_id`(str) | Force team-swap | Y |
+| Исключить из сквада (Remove from squad) | `removePlayer` | `server_id`(int), `steam_id`(str) | Removes from squad without kicking | Y |
 
-> **Shared modal note:** the player-detail modal (tabs Chat/Kills/Deaths/Kits/Games/Comments and actions `mark`, `message`, `twink`, `twinkOnline`, `findFriends`, `addComment`, `getComments`, `changeGroup`, `kits`, `kitSave`, `checkBans`, `addBanName`, `removeBanName`, `get`, `downloadStat`, `getPlayerOnlineData`) is embedded on every page and is **not** owned by the dashboard. Those actions run on `script: 'player'`. Only the six live-server actions above (which require a `server_id`) are dashboard-specific. `copyTeleport()` copies an `AdminTeleportToPlayer <steam_id>` RCON string to the clipboard.
+> **Shared modal note:** the player-detail modal (tabs Chat/Kills/Deaths/Kits/Games/Comments; actions `mark`, `message`, `twink`, `twinkOnline`, `findFriends`, `addComment`, `getComments`, `changeGroup`, `kits`, `kitSave`, `checkBans`, `addBanName`, `removeBanName`, `get`, `downloadStat`, `getPlayerOnlineData`) is embedded on every page on `script: 'player'` — not owned by the dashboard. Only the six `server_id`-scoped actions above are dashboard-specific. `copyTeleport()` copies `AdminTeleportToPlayer <steam_id>` to the clipboard.
 
 #### 4.3 Squad control (per-squad row buttons) — `script: 'squad'`
 
-| UI label | action | Params | Effect | Destructive |
+| UI label | action | data keys (type) | Effect | Destructive |
 |---|---|---|---|---|
-| Расформировать (Disband) | `disband` | `server_id`, `team`, `squad` | Disbands the squad (confirm) | Y |
-| Сменить сторону (Transfer) | `transfer` | `server_id`, `team`, `squad` | Moves whole squad to other team (confirm) | Y |
-| Сбросить название (Rename/clear) | `rename` | `server_id`, `team`, `squad` | Clears the squad name (confirm) | Y |
-| Снять CMD (Demote) | `demote` | `server_id`, `steam_id` (leader) | Strips Commander (confirm) | Y |
-| Сообщение скваду (Squad message) | `squadMessage` | `server_id`, `team`, `squad`, `time`, `msg` | Sends a repeating in-game message to the squad | Y |
+| Расформировать (Disband) | `disband` | `server_id`(int), `team`(str), `squad`(str) | Disbands the squad (confirm) | Y |
+| Сменить сторону (Transfer) | `transfer` | `server_id`(int), `team`(str), `squad`(str) | Moves whole squad to other team (confirm) | Y |
+| Сбросить название (Clear name) | `rename` | `server_id`(int), `team`(str), `squad`(str) | Clears the squad name (confirm) | Y |
+| Снять CMD (Demote) | `demote` | `server_id`(int), `steam_id`(str, leader) | Strips Commander (confirm) | Y |
+| Сообщение скваду (Squad message) | `squadMessage` | `server_id`(int), `team`(str), `squad`(str), `time`(int), `msg`(str) | Repeating in-game message to the squad | Y |
+
+Per-squad button row is `data-type="buttons"`; each squad table gets `data-leader=<steam_id>`; `data-type="squadMessage"` marks the envelope trigger; `data-type="avg"`/`data-type="median"` cells bind `calculateOnline` playtime aggregates.
 
 #### 4.4 Messaging & broadcast — `script: 'squad'`
 
-| UI label | action | Params | Effect | Destructive |
+| UI label | action | data keys (type) | Effect | Destructive |
 |---|---|---|---|---|
-| Broadcast (chat input) | `broadcast` | `server_id`, `msg` | Server-wide broadcast (min 2 chars; confirm) | Y |
+| Broadcast (chat input) | `broadcast` | `server_id`(int), `msg`(str) | Server-wide broadcast (min 2 chars; confirm) | Y |
 | Сообщение скваду | `squadMessage` | see 4.3 | Targeted squad message with repeat cadence | Y |
 
-Repeat-cadence `<select>` options (shared by squad-message and player-message forms): `1` = 1 раз (once), `30` = 30s, `40` = 40s, `60` = 1 min (default), `90` = 1 min 30s, `120` = 2 min. The squad-message modal shows the author's SteamID + Steam profile link, and a `{player}` placeholder that expands to the creator's name from message templates.
+Repeat-cadence `<select>` (shared by squad- and player-message forms): `1` = 1 раз (once), `30` = 30 s, `40` = 40 s, `60` = 1 min (**default**), `90` = 1 min 30 s, `120` = 2 min. The squad-message modal shows the author SteamID + Steam profile link and a `{player}` placeholder expanding to the creator name.
 
-#### 4.5 Map & rotation — `script: 'squad'` (rotation read/write via `mapRotation.mode`, which is `'squad'` when opened from the dashboard cog)
+#### 4.5 Map & rotation — `script: 'squad'` (rotation read/write via `mapRotation.mode`, `'squad'` when opened from the dashboard cog)
 
-| UI label | action | Params | Effect | Destructive |
+| UI label | action | data keys (type) | Effect | Destructive |
 |---|---|---|---|---|
-| Сменить (Change map) | `changeMap` | `server_id`, `next` (bool), `map` (URI-encoded layer string), `vote` (bool) | Changes current (or next) map | Y |
-| Следующая (Set next) | `changeMap` | `server_id`, `next:true`, `map`, `vote` | Sets the next map only | Y |
-| (Skip / next round) | `changeMap` | `server_id`, `next:'skip'`, `map:'skip'`, `skip:true`, `vote` | Ends current round / skips map | Y |
-| Очистить следующую (Clear next) | `clearNext` | `server_id` | Clears the queued next map | Y |
-| (Load map catalog) | `getServerMaps` | `server_id` | Returns `{ maps[], units[] }` for the picker | N |
-| Ротация — read | `getRotation` | `server_id` | Returns `{ rotation, list, canEdit }` | N |
-| Ротация — Изменить (Edit) | `setRotation` | `server_id`, `rotation` (URI-encoded), `day` | Overwrites the rotation for a given day | Y |
-| Календарь (Calendar) | `mapCalendar` | `server_id`, `start`, `end` | Read-only played-maps calendar (`script: 'public'`) | N |
+| Сменить (Change map) | `changeMap` | `server_id`(int), `next`(bool), `map`(str, URI-encoded layer), `vote`(bool) | Changes current (or next) map | Y |
+| Следующая (Set next) | `changeMap` | `server_id`(int), `next:true`, `map`(str), `vote`(bool) | Sets the next map only | Y |
+| (Skip / next round) | `changeMap` | `server_id`(int), `next:'skip'`, `map:'skip'`, `skip:true`, `vote`(bool) | Ends current round / skips map | Y |
+| Очистить следующую (Clear next) | `clearNext` | `server_id`(int) | Clears the queued next map | Y |
+| (Load map catalog) | `getServerMaps` | `server_id`(int) | Returns `{maps[], units[]}` for the picker | N |
+| Ротация — read | `getRotation` | `server_id`(int) | Returns `{rotation, list, canEdit}` | N |
+| Ротация — Изменить (Edit) | `setRotation` | `server_id`(int), `rotation`(str, URI-encoded), `day`(str) | Overwrites rotation for a given day | Y |
+| Календарь (Calendar) | `mapCalendar` | `server_id`(int), `start`, `end` | Read-only played-maps calendar (`script: 'public'`) | N |
 
-**Map picker (`mapSelect`).** The `getServerMaps` catalog feeds a filterable grid (multi-selects **Карта (Map name)**, **Режим (Type)**, **Команды (Teams/factions)**, each showing a live count; plus a free-text "Сменить по названию (change by name)" input). Selecting a map opens a **configurator**: per-team faction `<select>` + unit `<select>`, live **tickets**, and a preview of each side's **kits** (role SVGs) and **vehicles** (name, count, respawn time `respawn/60`, optional delay). It assembles the RCON layer string as `<Map> <T1faction>+<T1unit> <T2faction>+<T2unit>`.
+**Map picker (`mapSelect`).** The `getServerMaps` catalog feeds a filterable grid — multiselects **Карта (`#map-name`)**, **Режим (`#map-type`)**, **Команды (`#map-team`)** each with a live count, plus free-text **Сменить по названию (`#changemap-custom`)**. Selecting a map opens a **configurator**: per-team faction `<select>` + unit `<select>`, live **tickets**, and previews of each side's **kits** (role SVGs) and **vehicles** (name, count, respawn `respawn/60`, optional delay). It assembles the RCON layer string as `<Map> <T1faction>+<T1unit> <T2faction>+<T2unit>`.
 
-**Map entity fields** (`getServerMaps.maps[]`): `map` (layer name), `type` (mode: RAAS/AAS/Invasion/…), `weather`, `markers`, `teams.t_1|t_2 = { tickets, default:{faction,unit,prefix,postfix}, factions[]:{ name, default, units[] } }`. **Unit entity** (`units[]`): `{ roles[], vehicles[]:{ name, count, respawn, delay } }`.
+**Map entity** (`getServerMaps.maps[]`): `map`, `type` (RAAS/AAS/Invasion/…), `weather`, `markers`, `teams.t_1|t_2 = {tickets, default:{faction,unit,prefix,postfix}, factions[]:{name, default, units[]}}`. **Unit entity** (`units[]`): `{roles[], vehicles[]:{name, count, respawn, delay}}`.
 
-**Rotation entity** (`getRotation`): `rotation.lists[day]` (newline-delimited layer list; `//` comments ignored), `rotation.current` (active day), `rotation.isWin` (win-based rotation → hides day tabs), `canEdit`. Days keyed `default`, `1`–`7` (Mon–Sun), rendered as tabs (Стандартная / Пн–Вс).
+**Rotation entity** (`getRotation`): `rotation.lists[day]` (newline-delimited layers; `//` comments ignored), `rotation.current` (active day), `rotation.isWin` (win-based → hides day tabs), `canEdit`. Days keyed `default`, `1`–`7` (Mon–Sun) → tabs Стандартная / Пн–Вс.
 
 #### 4.6 Monitoring & analytics — `script: 'squad'` (calendar via `public`)
 
-| UI label | action | Params | Returns | Destructive |
+| UI label | action | data keys (type) | Returns | Destructive |
 |---|---|---|---|---|
-| Подробнее (Details) | `serverMonitor` | `start`, `end`, `server_id` | Time-series: mem, network_send/receive, disk_read/write, tps, network_connections | N |
-| Онлайн chart | `serverOnline` | `start`, `end`, `server_id` | `{ players[], admins[], queue[], days[], maps{} }` | N |
-| Онлайн — Админы (Admins timeline) | `serverOnlineAdmins` | `day`, `server_id` | `{ events, resources }` (per-admin presence timeline) | N |
-| Онлайн — Бустеры (Boosters timeline) | `serverOnlineBooster` | `day`, `server_id` | `{ events, resources }` | N |
-| Подключения (Connections) | `network` | `server_id` | `{ network.ips{ip:{conn[],country,city}}, network.sockets[] }` | N |
-| (Ban IP, in network modal) | `blockIP` | `ip` | Blocks an IP at the firewall level (confirm; button is `.hide`-gated) | Y |
+| Подробнее (Details) | `serverMonitor` | `start`, `end`, `server_id`(int) | mem, network_send/receive, disk_read/write, tps, network_connections series | N |
+| Онлайн chart | `serverOnline` | `start`, `end`, `server_id`(int) | `{players[], admins[], queue[], days[], maps{}}` | N |
+| Онлайн — Админы | `serverOnlineAdmins` | `day`, `server_id`(int) | `{events, resources}` per-admin presence timeline | N |
+| Онлайн — Бустеры | `serverOnlineBooster` | `day`, `server_id`(int) | `{events, resources}` | N |
+| Подключения (Connections) | `network` | `server_id`(int) | `{network:{ips:map<ip,{conn[],country,city}>, sockets[]}}` | N |
+| (Ban IP, in network modal) | `blockIP` | `ip`(str) | Firewall-blocks an IP (confirm; button `.hide`-gated) | Y |
+
+> The dashboard's own online mini-chart is fed inline from `server.stat.online` (see 2.1.1) — these `serverOnline`/`serverMonitor` actions back the full drill-down modals.
 
 #### 4.7 Raw RCON console — `script: 'squad'`
 
-| UI label | action | Params | Effect | Destructive |
+| UI label | action | data keys (type) | Effect | Destructive |
 |---|---|---|---|---|
-| Выполнить (Execute) | `rconRaw` | `server_id`, `command` (URI-encoded) | Runs any raw RCON command; response rendered in a read-only CodeMirror pane (auto-pretty-prints JSON) | Y (depends on command) |
+| Выполнить (Execute) | `rconRaw` | `server_id`(int), `command`(str, URI-encoded) | Runs any raw RCON command; response in read-only CodeMirror (auto-pretty-prints JSON) | Y (command-dependent) |
 
-The console ships a **built-in command dictionary with autocomplete** (typeahead over both names and Russian help text): `AdminKick`, `AdminKickById`, `AdminBan`, `AdminBanById`, `AdminBroadcast`, `AdminEndMatch`, `AdminChangeMap`, `AdminSetNextMap`, `AdminSetMaxNumPlayers`, `AdminSetServerPassword`, `AdminSlomo`, `AdminForceTeamChange`, `AdminForceTeamChangeById`, `AdminListDisconnectedPlayers`, `AdminDemoteCommander(ById)`, `AdminDisbandSquad`, `AdminRemovePlayerFromSquad(ById)`, `AdminWarn(ById)`, `AdminRestartMatch`, `AdminReloadServerConfig`, `ListPlayers`, `ListSquads`, `ShowServerInfo` — each with a usage example. This exposes the full Squad admin command surface even for actions without a dedicated button (e.g. `AdminSlomo`, `AdminSetServerPassword`, `AdminSetMaxNumPlayers`).
+Ships a **built-in command dictionary with autocomplete** (typeahead over names + RU help): `AdminKick`, `AdminKickById`, `AdminBan`, `AdminBanById`, `AdminBroadcast`, `AdminEndMatch`, `AdminChangeMap`, `AdminSetNextMap`, `AdminSetMaxNumPlayers`, `AdminSetServerPassword`, `AdminSlomo`, `AdminForceTeamChange(ById)`, `AdminListDisconnectedPlayers`, `AdminDemoteCommander(ById)`, `AdminDisbandSquad`, `AdminRemovePlayerFromSquad(ById)`, `AdminWarn(ById)`, `AdminRestartMatch`, `AdminReloadServerConfig`, `ListPlayers`, `ListSquads`, `ShowServerInfo` — each with a usage example. Exposes the full Squad admin surface even where no dedicated button exists (`AdminSlomo`, `AdminSetServerPassword`, `AdminSetMaxNumPlayers`).
 
-#### 4.8 Config & mod management (opened from the Control panel) — `script: 'squad'`
+#### 4.8 Config & mod management (from the Control panel) — `script: 'squad'`
 
-| UI label | action | Params | Effect | Destructive |
+| UI label | action | data keys (type) | Effect | Destructive |
 |---|---|---|---|---|
-| Редактор конфигов (Config editor) | `getConfigFiles` / `getConfigFile` | `server_id`, file | List / load config files | N |
-| " → Сохранить (Save) | `saveConfigFile` | file, contents | Writes a config file | Y |
-| " → Перезагрузить (Reload) | `reloadConfig` | `server_id` | Reloads server config in-game | Y |
-| " → По-умолчанию (Default) | `getDefaultConfig` | file | Loads the default template | N |
-| Менеджер модов (Mod manager) | `getMods` | `server_id` | Lists installed Workshop mods | N |
-| " → Install | `installMod` | mod id | Installs a Workshop mod | Y |
-| " → Delete | `deleteMod` | mod id | Removes a mod | Y |
+| Редактор конфигов | `getConfigFiles` / `getConfigFile` | `server_id`(int) / file(str) | List / load config files | N |
+| " → Сохранить (Save) | `saveConfigFile` | file(str), contents(str) | Writes a config file | Y |
+| " → Перезагрузить (Reload) | `reloadConfig` | `server_id`(int) | Reloads server config in-game | Y |
+| " → По-умолчанию (Default) | `getDefaultConfig` | file(str) | Loads the default template | N |
+| Менеджер модов (Mod manager) | `getMods` | `server_id`(int) | Lists installed Workshop mods | N |
+| " → Install | `installMod` | mod id(str) | Installs a Workshop mod | Y |
+| " → Delete | `deleteMod` | mod id(str) | Removes a mod | Y |
 
-The config editor also has (mostly `.hide`-gated) **backup create/delete** and **merge/rebuild** controls, and a **синхронизировать скролл (sync-scroll)** toggle for side-by-side diff editing.
+Config editor also has (mostly `.hide`-gated) **backup create/delete** and **merge/rebuild** controls plus a **синхронизировать скролл** toggle for side-by-side diff editing.
 
 ---
 
 ### 5. Forms & Modals
 
-| Modal / form | Key fields |
+| Modal / form | Key fields (`#id` / name / type / rule) |
 |---|---|
-| **Смена карты (Map select)** | `#map-name`, `#map-type`, `#map-team` multiselects; `#changemap-custom` free-text; grid of thumbnails; configurator with per-team faction/unit selects, ticket counts, kit/vehicle preview, assembled layer string (readonly), **Сменить** button |
-| **Ротация карт (Rotation)** | Day tabs (default/Пн–Вс), scrollable layer list with faction flag icons, **Изменить (Edit)** → textarea (readonly unless `canEdit`) |
-| **Сообщение скваду (Squad message)** | Author SteamID/link, message `<textarea>`, repeat-cadence select (default 60s), template quick-inserts with `{player}` |
-| **RCON консоль** | Command input with datalist + live search dropdown, **Выполнить**, CodeMirror read-only output (80vh) |
-| **Подключения (Network)** | Tabs Подключения / Сокеты; per-IP cards (rank, IP, conn count, up/down speed, geo country+city, external lookup link, `.hide` ban button); a 15s auto-refresh toggle; **Карта (Map)** → Leaflet geo-map of connections |
-| **Config editor** | XL modal, CodeMirror, file dropdown, save/cancel/reload/default/merge/backup |
-| **Mod manager** | Workshop cards (title, description, mod id, updated date, update/delete buttons) |
-| **Player ban form** (`#player_ban`, shared) | `#player_ban-reason` select (grouped reasons, e.g. `<strong>0.1.</strong> Другое`, `0.2. Cheater neutralized by DPAC`), a dynamically-added "Навсегда (Forever)" option, progressive ban-length radios (`data-action=kick\|ban`, `data-first/second/third/four` day tiers), `#player_ban-description` |
-| **Player message form** (`#player_message`, shared) | 512-char textarea, "add to player card" toggle, cadence select |
-| **Group change select** (shared, `changeGroup`) | `0` -Нет группы-, `1` Администратор, `2` Модератор, `3` VIP, `4` Камера (Camera), `5` Стажёр (Trainee) |
-| **Map calendar** / **Server monitor** / **Online** | FullCalendar/Chart.js views over the monitoring actions above |
+| **Смена карты (Map select)** | `#map-name`, `#map-type`, `#map-team` multiselects; `#changemap-custom` free-text; thumbnail grid; configurator with per-team faction/unit selects, ticket counts, kit/vehicle preview, assembled layer string (readonly), **Сменить** button |
+| **Ротация карт (Rotation)** | Day tabs (default/Пн–Вс); scrollable layer list with faction flags; **Изменить (Edit)** → textarea (readonly unless `canEdit`) |
+| **Сообщение скваду (Squad message)** | Author SteamID/link; message `<textarea>`; repeat-cadence select (default `60`); template quick-inserts with `{player}` |
+| **RCON консоль** | Command input + `<datalist>` + live search dropdown; **Выполнить**; CodeMirror read-only output (80vh) |
+| **Подключения (Network)** | Tabs Подключения/Сокеты; per-IP cards (rank, IP, conn count, up/down speed, geo country+city, external-lookup link, `.hide` ban button); 15 s auto-refresh toggle; **Карта** → Leaflet geo-map |
+| **Config editor** | XL modal; CodeMirror; file dropdown; save/cancel/reload/default/merge/backup |
+| **Mod manager** | Workshop cards (title, description, mod id, updated date, update/delete) |
+| **Player ban form** (`#player_ban`, shared) | `#player_ban-reason` grouped select (e.g. `0.1. Другое`, `0.2. Cheater neutralized by DPAC`); dynamic "Навсегда (Forever)" option; progressive ban-length radios (`data-action=kick|ban`, `data-first/second/third/four` day tiers); `#player_ban-description` |
+| **Player message form** (`#player_message`, shared) | 512-char textarea; "add to player card" toggle; cadence select |
+| **Group change select** (shared, `changeGroup`) | `0` -Нет группы-, `1` Администратор, `2` Модератор, `3` VIP, `4` Камера, `5` Стажёр |
+| **Map calendar / Server monitor / Online** | FullCalendar / Chart.js views over the monitoring actions above |
 
-**Validation observed:** broadcast requires ≥2 chars; RCON exec requires non-empty trimmed command; nearly every destructive action is wrapped in a `$.question` confirm dialog (many with a typed "confirm word" via `daPrevent`).
+**Validation observed:** broadcast requires ≥2 chars; RCON exec requires non-empty trimmed command; nearly every destructive action is wrapped in a `$.question` confirm (many with a typed "confirm word" via `daPrevent`).
 
 ---
 
 ### 6. Permission & Visibility Logic
 
-- **`data-hide="offline"`** blocks (player board, map widget) are hidden whenever the server is not connected; replaced by the start block / update log.
-- **`class="hide"`** gates several capabilities regardless of connection state: the **Техника (Vehicles)** tab, the **Ban IP** button in the network modal, and most config-editor **backup/merge/default** controls. These are latent features enabled per-role server-side.
-- **`getRotation` returns `canEdit`** — when false the rotation textarea becomes readonly and the save/cancel buttons hide, i.e. rotation *view* is broader than rotation *edit*.
-- **Group taxonomy** (from `changeGroup` options) reveals the role model: Администратор > Модератор > VIP > Камера (spectator/camera) > Стажёр (trainee).
-- All gating is presentational; the authoritative permission check is server-side in each `/ajax/*.php` action (the client simply hides controls the current role shouldn't invoke).
+- **`data-hide="offline"`** blocks (player board, map widget) hide whenever `server.isConnect == false`; replaced by the start block or `update_log`.
+- **`class="hide"`** gates capabilities regardless of connection: the **Техника (Vehicles)** tab (`data-template="vehicle"` exists but tab is `.hide`), the **Ban IP** button in the network modal, and most config-editor backup/merge/default controls. Latent features enabled per-role server-side.
+- **`getRotation.canEdit`** — when false the rotation textarea is readonly and save/cancel hide; rotation *view* is broader than *edit*.
+- **`panelAdmins[]`** in the live payload enumerates which admins are assigned to this server (and their `online` flag) — the accountability roster.
+- **Group taxonomy** (from `changeGroup`): Администратор > Модератор > VIP > Камера (spectator) > Стажёр (trainee).
+- All gating is presentational; the authoritative permission check is server-side in each `/ajax/*.php` action.
 
 ---
 
 ### 7. Notable UX & Competitively Interesting Details
 
-1. **Everything on one screen, 5s live.** Multi-server tabs with inline online/queue/admin badges + a global-online market-share figure. The whole board self-refreshes without page reloads.
-2. **Rich per-player threat signals inline.** VAC-recent, >3 punishments, same-IP alt detection (`location.same` with a count badge), new-player (<30h), active admin-call/report/banned-IP flags — all as small icons directly on the live roster, with a documented legend panel. Strong anti-cheat/anti-alt affordance worth beating.
-3. **Squad intelligence.** Per-squad avg/median playtime, creator crown, "created squad then left" indicator, lock state, CMD detection with auto-sorting to top.
-4. **Map configurator, not just a picker.** Faction + unit selection with live tickets, kit icons, and vehicle respawn/delay preview, producing the exact RCON layer string — far beyond a plain map dropdown.
-5. **Rotation as code, per weekday.** Editable newline-delimited rotation lists per day (default + Mon–Sun), with comment support and a win-based mode.
-6. **Raw RCON console with a full command dictionary + typeahead** — power users get the entire Squad admin command set (incl. `AdminSlomo`, `AdminSetServerPassword`, `AdminSetMaxNumPlayers`) even where no button exists; JSON responses are auto-pretty-printed in CodeMirror.
-7. **DDoS awareness built in.** Live connection count with an auto-triggered "server under attack" banner (>300 conns), a per-IP connection breakdown with geolocation (country/city + speeds), a Leaflet world-map of connections, and a one-click firewall **blockIP**.
-8. **Deep hardware telemetry** beside game state: CPU load, network, disk, frequency, temperature, TPS, and socket-count mini-charts, plus a full `serverMonitor` time-series drill-down.
-9. **Admin & booster presence timelines** (FullCalendar) per server — accountability/coverage tracking.
-10. **Operational polish:** scheduled/repeating squad & player messages with `{player}` templating, config editor with backups/merge, mod manager wired to Steam Workshop, deep-link sharing (`/?steam_id=`, `/?server_id=`, `/?start_seed=true`), clipboard helpers for teleport commands and pre-formatted cheater-report templates.
+1. **Everything on one screen, 5 s live.** One `getServer` poll hydrates the entire board — roster, squads, chat delta (cursor-paged), tab badges, global online, hardware telemetry, and playtime aggregates — with no page reloads.
+2. **Rich per-player threat signals inline.** `vac` (VAC ≤100 d), `warning` (>3 punishments), same-IP alt detection (root `ips` map + `location`), `baby` (<30 h), live `requests.admins`/`requests.report` — all small icons on the live roster with a legend panel.
+3. **Squad intelligence.** `calculateOnline` ships per-team and per-squad avg/median/SL playtime as ready-to-render strings; creator crown (`create_id`), lock (`locked`), CMD auto-sort (`cmd`).
+4. **Map configurator, not just a picker.** Faction+unit selection with live tickets, kit icons, vehicle respawn/delay, producing the exact RCON layer string.
+5. **Rotation as code, per weekday.** Editable newline-delimited lists per day (default + Mon–Sun) with `//` comments and a win-based mode.
+6. **Raw RCON console with a full command dictionary + typeahead** — entire Squad admin set incl. `AdminSlomo`, `AdminSetServerPassword`, `AdminSetMaxNumPlayers`; JSON auto-pretty-printed in CodeMirror.
+7. **DDoS awareness built in.** `monitor[].data.network.connections` drives an auto "under attack" banner (>300); per-IP breakdown with geolocation and speeds; Leaflet world-map; one-click firewall `blockIP`.
+8. **Deep hardware telemetry** beside game state: CPU/freq/temp per core, network, disk, TPS mini-charts, plus a full `serverMonitor` drill-down.
+9. **Admin & booster presence timelines** (FullCalendar) per server for coverage tracking.
+10. **Operational polish:** scheduled/repeating squad & player messages with `{player}` templating, config editor with backups/merge, mod manager wired to Steam Workshop, deep-link sharing (`/?steam_id=`, `/?server_id=`, `/?start_seed=true`), clipboard helpers for teleport and cheater-report templates.
 
 ---
 
 ### 8. Gaps / Notes for Analysts
 
-- **Seeding controls** (`seeding`, `seedingSet*`) referenced by the dashboard only via `seedHelper.open()` and an `isSeeding` pulse indicator; the seeding-helper modal itself and its actions live in the shared/global template (see `player_profile.html`), not in this fragment.
-- **`createSquad`** is *not* present in `main.html` despite being in scope — no create-squad action is wired here (only disband/transfer/rename/demote/message on existing squads).
-- The **Vehicles** tab and per-vehicle board are fully templated but `.hide`-gated and commented-out in the render path — appears to be an in-progress/disabled feature.
-- The **Leaflet** map on this page is used for **network-connection geolocation**, not the game map (the game "map" widget is a static image + layer metadata). OSM tiles are loaded lazily on first open.
-- Exact server-side role→capability matrix is not visible client-side; only the presentational gates (`hide`, `canEdit`, `block_start.code`) are observable.
+- **Only `getServer` is captured live.** All modal-triggered reads (`getRotation`, `getServerMaps`, `serverMonitor`, `serverOnline`, `serverOnlineAdmins`, `serverOnlineBooster`, `network`, config/mod reads) fire on user interaction; the read-only capturer performs no clicks, so their response shapes in §2.2/§4 are **inferred from render code**, not observed. A follow-up capture that opens each modal would upgrade them to captured contracts.
+- **No mutations were fired** (`_blocked.json == []`); every action in §4 is documented from client code + params, never executed.
+- The `Action()` helper does **not** URL-encode object-form `data` — any endpoint whose value can contain `&`/`=`/spaces (map layer, rotation body, RCON command, broadcast text) relies on the caller to `encodeURIComponent`. A value with a raw `&` would corrupt the body: a real robustness edge worth probing.
+- **Vehicles tab** is fully templated (`data-template="vehicle"`) but `.hide`-gated — in-progress/disabled feature; no `in_vehicle` field appeared on live active-player rows.
+- **`createSquad`** is not wired in `main.html` — only disband/transfer/rename/demote/message on existing squads.
+- The **Leaflet** map here is for network-connection geolocation, not the game map (the game "map" widget is a static image + layer metadata).
+- Exact server-side role→capability matrix is not visible client-side; only presentational gates (`hide`, `canEdit`, `block_start.code`, `panelAdmins`) are observable.
 
 
 ---
@@ -529,110 +628,192 @@ The config editor also has (mostly `.hide`-gated) **backup create/delete** and *
 
 ### 1. Purpose and nav location
 
-- **Nav item / page id:** `chat` — loaded via `pageLoad('chat')` → `GET /ajax/page.php?page=chat`, fragment injected into `#content`.
-- **Purpose:** A searchable, filterable archive of every in-game chat message (all chat scopes plus admin broadcasts) captured across all monitored servers. It is a **read/audit surface** for chat history, not a live composer. The panel's outbound messaging (broadcast, per-player message, per-squad message) is triggered elsewhere (the `main` dashboard and the shared player-detail modal), but is documented here because it is the counterpart to this feed and is in scope for this section.
-- **Source file analyzed:** `frags/chat.html` (2890 lines; only the top ~180 lines are page-specific — the remainder is the shared player-detail modal). Cross-referenced against `custom.js` and `frags/main.html`.
+- **Nav item / page id:** `chat` — loaded via the SPA router `pageLoad('chat')` → `GET /ajax/page.php?page=chat`; the returned fragment is injected into `#content`.
+- **Purpose:** A searchable, filterable **audit archive** of every in-game chat message (all chat scopes plus admin broadcasts) captured across all monitored servers. It is a read/audit surface, not a live composer. The panel's outbound messaging (broadcast, per-player message, per-squad message) is triggered on the `main` dashboard and the shared player-detail modal, but is documented here because it is the write-side counterpart of this feed.
+- **Ground truth for this chapter:** `frags/chat.html` (page markup + inline `buildTable`/`speak` scripts), `custom.js` (the `buildTable` DataTables engine + the `Action()` transport, lines 284–340 and 605–1101), and `frags/main.html` (the three outbound-message senders: `sendSeverBroadcast()` @2135, `player.message.send()` @4356, `messageSquad.send()` @5654). Cross-referenced against `action_catalog.txt`.
+- **Live-capture status:** the read-only headless capture (`capture.py --pages chat`) was run the maximum permitted **2×**; both runs died with a Chromium `TargetClosedError` during the post-load settle, so no `chat.network.json`/`content.html` was emitted and `_blocked.json` = `[]` (0 mutations blocked — the interceptor never had traffic to abort). The contracts below are therefore reconstructed from the client code that literally constructs the request bodies and parses the responses, which is authoritative for request shape and response envelope; only the server-side per-row field spelling for `action=playerChat` is inferred (see §8).
 
-The page layout is a fixed left filter sidebar (`col-md-3`, `position:fixed`) and a wide results table (`col-md-9`).
+Page layout: a fixed left filter sidebar (`col-md-3`, `position:fixed`) and a wide results table (`col-md-9`).
 
 ---
 
-### 2. Entities & fields
+### 2. Live API Contracts
 
-#### 2.1 Chat message (`playerChat` — the page's own table)
+All AJAX goes through the `Action({script, action, data})` helper in `custom.js:284`, which POSTs to `/ajax/<script>.php` with an `application/x-www-form-urlencoded` body. When `data` is an object it is serialized to `action=<action>&key=value&…`; when it is a string it is concatenated as `action=<action><string>`. Response contract (all endpoints): JSON with a top-level `status`; the success branch fires only on `status === 'ok'`, `auth === true` forces `location.reload()` (session/permission expiry), otherwise `msg` is surfaced as an error toast.
 
-Inferred from the table column config in the fragment's inline script:
-```
-buildTable({ table: 'playerChat',
-  collum: ["steam_id","server","date","team","name","type","msg","play"], order: ["date"], numrows: 300 })
-```
-and from the `data-search` attributes on the filter inputs, which expose the underlying SQL alias/column names (the feed is a JOIN of a chat table `t1` and a player table `t2`).
+#### 2.1 `POST /ajax/table.php` — chat feed read (`action=playerChat`)
 
-| Field | Source / alias | Type | Meaning |
+The one read the chat page issues. Built by `$.fn.buildTable` (`custom.js:605`); the request string is assembled in `preGetTable()` (`custom.js:1092`) and sent by `getTable()` (`custom.js:1069`).
+
+**Request params** (form-urlencoded body):
+
+| Param | Type | Required | Meaning |
 |---|---|---|---|
-| `steam_id` | `t2` (player) | string (SteamID64) | Author's SteamID. Rendered in a `class="hide"` column; used as the row's click key to open the player modal. |
-| `server` / `server_id` | `server_id` | int → label | Which game server the message came from (server icon column). Filterable multiselect. |
-| `date` | `t1.date` | datetime | Timestamp of the message. Default sort column (descending). |
-| `team` | — | flag | Player's team at time of message; rendered as a flag/faction icon (`fa-flag` header). |
-| `name` / `player` | `t2.player` | string | Author's in-game nickname. |
-| `type` | `type` | enum | Chat scope / channel (see enum below). Rendered as colored `<code>` via the `type` callback: `'<code style="color:'+data.color+'">'+data.name+'</code>`. |
-| `msg` | `t1.msg` | string | Message body. `word-break:break-all`; profanity-flagged client-side (see §7). |
-| `play` | — | derived | Not stored data — a UI-only text-to-speech ("speak") action cell (see §7). |
+| `action` | const `playerChat` | Y | Server table id (equals the `table:` config value). |
+| `table` | const `playerChat` | Y | Redundant table id echoed in body. |
+| `page` | int | Y | 1-based page index. Default `1`; set by pagination/search/sort handlers. |
+| `numrows` | int | Y | Page size. Hardcoded **`300`** for this page. |
+| `search` | string (URL-encoded JSON) | Y | Filter object, see §2.2. Empty string when no filters. |
+| `order_by` | string \| `false` | Y | Sort column DB-alias. Initial load sends literal `false`; header-click sets it to the column's `data-sort` (e.g. `date`). |
+| `order_sort` | `asc` \| `desc` \| `false` | Y | Sort direction. Initial `false`; toggles `desc`→`asc` on repeat header-click. |
+| `pagination` | const `true` | N | Present **only** on the secondary count request (§2.3); absent on the row request. |
 
-**`type` enum (chat scope)** — from the filter `<select id="chatPlayers-type">` options:
+**Response envelope** (`status==='ok'` branch, consumed in `getTable().success` and `build()`):
 
-| Value | Label | Meaning |
+| Field | Type | Meaning |
 |---|---|---|
-| `ChatAll` | Всем (All) | Server-wide all-chat |
-| `ChatTeam` | Команда (Team) | Team chat |
-| `ChatSquad` | Сквад (Squad) | Squad chat |
-| `ChatAdmin` | Админ чат (Admin chat) | Admin-only channel |
-| `broadcast` | Broadcast | Admin broadcast messages (outbound, logged back into the same feed) |
+| `status` | enum `ok` \| (error) | Gate. Non-`ok` → error toast. |
+| `auth` | bool | If `true`, client calls `location.reload()`. |
+| `msg` | string — nullable | Error message when `status != ok`. |
+| `data` | object | Payload wrapper. |
+| `data.row` | `array[N]` of row objects | The N≤300 chat records for this page (per-row schema §2.4). Empty array renders "Нет данных". |
+| `data.query_time` | string | Server timing string, logged to console. |
+| `data.currentPage` | int (as string) | Echoed page index, drives pagination active-state. |
+| `data.custom` | object — nullable | Optional side-channel payload (`customData()`); unused by chat. |
 
-Each type carries a server-provided display `color` (used by the render callback), so channels are color-coded in the table.
+Redacted example request/response:
+```
+POST /ajax/table.php
+action=playerChat&table=playerChat&page=1&numrows=300
+&search=%7B%22text%22%3A%7B%22t1.msg%22%3A%22help%22%7D%2C%22multiselect%22%3A%7B%22type%22%3A%5B%22ChatAdmin%22%5D%7D%7D
+&order_by=false&order_sort=false
 
-#### 2.2 Server (referenced entity)
+{ "status":"ok",
+  "data":{ "currentPage":"1", "query_time":"0.0123s",
+    "row":[ { "id":"<redacted>", "steam_id":"<redacted:17>", "server":"1",
+              "date":"1720080000", "team":"1", "name":"<redacted:12>",
+              "type":{"name":"Админ чат","color":"#3598DC"}, "msg":"<redacted:24>",
+              "play":"" } ] } }
+```
 
-From the server multiselect `<option>` list: each server has an `id` (values seen: 1, 6, 7, 9, 10, 11) and a `label` (e.g. `RAAS/AAS #1`, `INVASION #3`, `Custom для FW`). This is the same server roster used panel-wide.
+#### 2.2 `search` object schema
 
-#### 2.3 Outbound message payloads (broadcast / message / squadMessage)
+`buildTable` walks `searchInput[]`, reads each control's `data-search` alias, and buckets it by input `type` into `{text, check, multiselect, managers, slider}`, then `search = encodeURIComponent(JSON.stringify(obj))`. Chat populates only three buckets:
 
-These are not table entities but the request shapes of the three messaging actions (see §4).
+| Bucket | Key(s) written | From control (`data-search`) | Value shape |
+|---|---|---|---|
+| `text` | `t2.player` | `#chatPlayers-name` (text) | string (raw substring; `+`→`%2B`). |
+| `text` | `t1.msg` | `#chatPlayers-msg` (text) | string, ≤17 chars. |
+| `text` | `t1.date.startdate`, `t1.date.enddate` | `#chatPlayers-date` (daterange) | unix seconds; `0`/`0` for `allTime` default. |
+| `check` | `obscene` | `#chatPlayers-obscene` (checkbox) | `"true"` \| `"false"`. |
+| `multiselect` | `server_id` | `#chatPlayers-server` | array of server-id strings. |
+| `multiselect` | `type` | `#chatPlayers-type` | array of scope enums (§2.4). |
 
-- **Broadcast:** `{ server_id, msg }`.
-- **Direct player message:** `{ steam_id, time, msg, log }` — `time` = repeat cadence in seconds, `log` = whether to also write the message into the player's card.
-- **Squad message:** `{ server_id, team, squad, time, msg }` — targets a specific squad on a specific team.
+Empty controls are omitted. `#chatPlayers-steam_id` is listed in `searchInput` but no such element exists in the fragment, so `buildTable` skips it (`typeof sData == "undefined" → continue`) — a dead config entry.
+
+#### 2.3 `POST /ajax/table.php` — pagination count (`action=playerChat&…&pagination=true`)
+
+Fired by `getPagination()` (`custom.js:987`) as a second call **only** when the first page filled (`rows == numrows`) or `currentPage != 1`. Same body as §2.1 plus `&pagination=true`.
+
+| Response field | Type | Meaning |
+|---|---|---|
+| `status` | enum `ok` | Gate. |
+| `totalPage` | int | Total page count; drives the numeric pager. |
+| `totalRows` | int | Total matching rows; rendered as "Всего: N". |
+| `count_time` | string | Server timing string, console-logged. |
+
+#### 2.4 Chat message record schema
+
+The per-row objects in `data.row` (keyed by the `collum` array `["steam_id","server","date","team","name","type","msg","play"]`) plus the richer **live-feed** record the `main` dashboard consumes (`data.chat[]`, `frags/main.html:978`) — the same underlying chat table, so it reveals the authoritative field set:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string/int | Row PK (`data-id` on the rendered `<tr>`/message div). |
+| `steam_id` | string (SteamID64, len 17) | Author identity. Chat table renders it in a hidden first column used as the row-click key. |
+| `server` / `server_id` | int → label | Origin game server. |
+| `date` | **unix timestamp (seconds)** | Message time. Client renders via `formatDate(col,true,true)`. |
+| `team` | int enum | Author's faction/team id; maps to icon `/assets/img/ico/teams/<team>.png`. |
+| `name` | string | Author nickname. |
+| `color` | string (hex, no `#`) — nullable | Author name color (clan/role tint); live feed only. |
+| `type` | string enum (chat table) | Scope enum, see below. In the **row** object the render callback expects an object `{name,color}`. |
+| `type_format` | object `{name,color,icon}` | Live-feed display metadata: `name` (RU label), `color` (hex), `icon` (FontAwesome class). |
+| `msg` | string | Message body. `word-break:break-all`; client-flagged for profanity. |
+| `play` | derived/empty | UI-only TTS action cell; carries no server data. |
+
+**`type` enum (chat scope)** — from `<select id="chatPlayers-type">` options; each value carries a server-provided display `color`/`icon`:
+
+| Value | Label (RU → EN) | Meaning |
+|---|---|---|
+| `ChatAll` | Всем → All | Server-wide all-chat. |
+| `ChatTeam` | Команда → Team | Team chat. |
+| `ChatSquad` | Сквад → Squad | Squad chat. |
+| `ChatAdmin` | Админ чат → Admin chat | Admin-only channel. |
+| `broadcast` | Broadcast | Admin broadcast; logged back into the same feed (rendered as a distinct `server_chat-broadcast` line, gold `#DAA520`). |
+
+#### 2.5 Outbound message actions (write-side, in scope)
+
+Exact `Action()` calls (all `Destructive = Y` — these equal send permissions):
+
+| Action | Endpoint | `data` keys (type) | Effect |
+|---|---|---|---|
+| `broadcast` | `POST /ajax/squad.php` | `server_id` (int), `msg` (string) | System `AdminBroadcast` to **all** players on the server; echoes into this feed as `type=broadcast`. |
+| `message` | `POST /ajax/player.php` | `steam_id` (SteamID64), `time` (int seconds), `msg` (string ≤512), `log` (bool) | In-game direct message to one player, repeated for `time`; `log=true` also writes it to the player card. |
+| `squadMessage` | `POST /ajax/squad.php` | `server_id` (int), `team` (int), `squad` (int), `time` (int seconds), `msg` (string ≤512) | Message to every member of one squad on one team, repeated for `time`. |
+
+All three consume the standard envelope (`status:'ok'` → success toast / modal close; `auth:true` → reload; else error toast). `broadcast` sends `data` as an object (`&server_id=&msg=`); `time` values come from the `1|30|40|60|90|120` cadence selects.
 
 ---
 
 ### 3. The page's own table (`#chatPlayers`)
 
-**Columns** (in render order):
+**DataTables config** (`frags/chat.html`, inline `buildTable`):
+```
+$('#chatPlayers').buildTable({
+  table: 'playerChat',
+  collum: ["steam_id","server","date","team","name","type","msg","play"],
+  order: ["date"], numrows: 300,
+  searchInput: ["chatPlayers-name","chatPlayers-steam_id","chatPlayers-msg",
+                "chatPlayers-server","chatPlayers-obscene","chatPlayers-type","chatPlayers-date"],
+  callback: { type: (d,row) => '<code style="color:'+d.color+'">'+d.name+'</code>' }
+});
+```
 
-| # | Header | Column key | Notes |
-|---|---|---|---|
-| 1 | `SteamID` (`class="hide"`) | `steam_id` | Hidden; also forced hidden via inline CSS `td:first-child{display:none}`. Row-click key. |
-| 2 | server icon (`fa-server`) | `server` | 50px, centered. |
-| 3 | `Дата` (Date) | `date` | 130px. Default sort (desc). |
-| 4 | flag icon (`fa-flag`) | `team` | 50px, team/faction flag. |
-| 5 | `Ник` (Nick) | `name` | 150px. |
-| 6 | `Чат` (Chat) | `type` | 90px, colored channel badge. |
-| 7 | `Сообщение` (Message) | `msg` | Flexible width, profanity-flagged. |
-| 8 | (empty) | `play` | 30px, TTS button cell. |
+- **Server table id:** `playerChat` (the `action=`/`table=` value).
+- **Page size (`numrows`):** `300`.
+- **Sortable columns (`order`):** only `date` gets a clickable sort header wired (`order:["date"]`). Header-click sets `order_by=date`, toggling `order_sort` desc↔asc. **Default sort:** none sent on first load (`order_by=false`) — the server returns its own default (newest-first) ordering.
 
-**Data fetch:** `buildTable` issues `POST /ajax/table.php` with `action=playerChat` and body `table=playerChat&page=<n>&numrows=300&search=<encoded filters>&order_by=date&order_sort=<asc/desc>` (server-side DataTables-style paging). Page size is **300 rows**.
+**Columns** (render order; `data-contact` = the `collum` key on each `<td>`):
 
-**Filters / search controls** (left sidebar; each maps to a `data-search` alias that becomes part of `search`):
-
-| Control | id | `data-search` | Type | Behavior |
+| # | Header | `collum` key / `data-search` | Width | Notes |
 |---|---|---|---|---|
-| Search button | `chatPlayers-btn` | — | button (`fa-search`, "Поиск") | Triggers table (re)build. |
-| Nick / SteamID | `chatPlayers-name` | `t2.player` | text | Free-text on player name or SteamID. |
-| Message | `chatPlayers-msg` | `t1.msg` | text, `maxlength="17"` | Substring search within message body. |
-| Server | `chatPlayers-server` | `server_id` | multiselect (`- Сервер -`) | Filter by one or more servers. |
-| Chat type | `chatPlayers-type` | `type` | multiselect (`- Чат -`) | Filter by channel(s). |
-| Date range | `chatPlayers-date` | `t1.date` | daterange (default `allTime`) | Time window. |
-| Только Мат (Profanity only) | `chatPlayers-obscene` | `obscene` | checkbox slider, value `obscene` | Restrict to messages flagged as profane; `change` rebuilds the table. |
+| 1 | `SteamID` (`class="hide"`) | `steam_id` | — | Hidden via `class="hide"` **and** CSS `#chatPlayers td:first-child{display:none}`. Row-click key. |
+| 2 | `fa-server` icon | `server` | 50px, centered | Server icon. |
+| 3 | `Дата` (Date) | `date` | 130px, centered | `formatDate(...)`. Only sortable column. |
+| 4 | `fa-flag` icon | `team` | 50px, centered | Team/faction flag. |
+| 5 | `Ник` (Nick) | `name` | 150px, centered | Author nickname. |
+| 6 | `Чат` (Chat) | `type` | 90px, centered | Colored channel badge via `type` callback. |
+| 7 | `Сообщение` (Message) | `msg` | flex | `word-break:break-all`; profanity-prefixed client-side (§7). |
+| 8 | (empty) | `play` | 30px | TTS "speak" button cell. |
 
-**Sorting:** column-header driven (`order_by`/`order_sort`), default `date desc`. **Pagination:** page-based via `buildTable` `page`/`numrows`.
+**Filters / search controls** (left sidebar):
 
-**Row interaction:** clicking a row reads the hidden `steam_id` cell and, if length > 15 (valid SteamID64), calls `player.open(steam_id)` to open the shared player-detail modal. Clicks on the `play` cell are intercepted (`stopPropagation`) so TTS does not also open the modal.
+| Control | `#id` | `data-search` alias | Input type | Attrs / options | Behavior |
+|---|---|---|---|---|---|
+| Search button | `chatPlayers-btn` | — | button (`fa-search`, "Поиск") | — | Rebuilds table. |
+| Nick / SteamID | `chatPlayers-name` | `t2.player` | text | placeholder "Ник или SteamID" | Enter-key (`which==13`) also rebuilds with `page=1,isSearch=true`. |
+| Message | `chatPlayers-msg` | `t1.msg` | text | **`maxlength="17"`** | Substring on body. |
+| Server | `chatPlayers-server` | `server_id` | multiselect (`multiple`) | `nonSelectedText:'- Сервер -'`; options `1,6,7,9,10,11` | Multi-server filter. |
+| Chat type | `chatPlayers-type` | `type` | multiselect (`multiple`) | `nonSelectedText:'- Чат -'`; 5 scope options | Multi-scope filter. |
+| Date range | `chatPlayers-date` | `t1.date` | daterange | default `{type:'allTime',start:0,end:0}` | Emits `.startdate`/`.enddate`. |
+| Только Мат (Profanity only) | `chatPlayers-obscene` | `obscene` | checkbox (slider) | value `obscene` | `.change()` → `buildTable()` rebuild. |
+
+**Row interaction:** clicking a row reads the hidden `td[data-contact="steam_id"]` text; if `length > 15` (valid SteamID64) → `player.open(steam_id)` opens the shared player-detail modal. Clicks on the `play` cell `stopPropagation()` so TTS does not also open the modal.
 
 ---
 
 ### 4. Actions / capabilities
 
-Two categories: (a) the chat page's own read action, and (b) the messaging actions in scope. All state-changing calls go through the `Action({script, action, data})` helper → `POST /ajax/<script>.php` with body `action=<action>&<data>`. `Action` treats a `{...}` `data` object by appending `&key=value` pairs and adding `action`. Success is gated on JSON `{status:'ok'}`; `auth:true` forces a page reload.
+`Action({script,action,data})` → `POST /ajax/<script>.php`; object `data` becomes `&key=value` pairs, `action` prepended. Success gated on `status:'ok'`; `auth:true` → reload.
 
-| UI label | action id | script → endpoint | Data params | Effect | Destructive (state-changing)? |
+| UI label | action | script → endpoint | `data` keys | Effect | Destructive? |
 |---|---|---|---|---|---|
-| (table load) Поиск | `playerChat` | `table` → `/ajax/table.php` | `table, page, numrows, search, order_by, order_sort` | Fetch/filter chat rows | N (read) |
-| Broadcast (paper-plane on `main`) | `broadcast` | `squad` → `/ajax/squad.php` | `server_id, msg` | Sends `AdminBroadcast` — a system message to **all** players on the server; echoed back into this feed as `type=broadcast` | **Y** |
-| Сообщение (Message, player modal) | `message` | `player` → `/ajax/player.php` | `steam_id, time, msg, log` | Sends an in-game direct/admin warning message to one player, repeated for `time` seconds; optionally logs it to the player card | **Y** |
-| Squad message (envelope on `main`) | `squadMessage` | `squad` → `/ajax/squad.php` | `server_id, team, squad, time, msg` | Sends a message to every member of a specific squad, repeated for `time` seconds | **Y** |
-| (speak) | — | none (client `SpeechSynthesis`) | — | Text-to-speech read-aloud of a message cell | N (client only) |
+| (table load) Поиск | `playerChat` | `table` → `/ajax/table.php` | `table, page, numrows, search, order_by, order_sort [, pagination]` | Fetch/filter chat rows | N (read) |
+| Broadcast (paper-plane, `main`) | `broadcast` | `squad` → `/ajax/squad.php` | `server_id, msg` | `AdminBroadcast` to all players; echoed into feed | **Y** |
+| Сообщение (Message, player modal) | `message` | `player` → `/ajax/player.php` | `steam_id, time, msg, log` | Direct in-game message to one player, repeated `time`s; optional card log | **Y** |
+| Squad message (envelope, `main`) | `squadMessage` | `squad` → `/ajax/squad.php` | `server_id, team, squad, time, msg` | Message to a whole squad, repeated `time`s | **Y** |
+| (speak) | — | none (client `SpeechSynthesis`) | — | TTS read-aloud of a message cell | N (client only) |
 
-> Note: the chat fragment also embeds the full shared player-detail modal, whose ~22 actions (`ban`, `kick`, `kill`, `kits`, `mark`, `twink`, `addComment`, `getComments`, `changeGroup`, `changeTeam`, `checkBans`, `findFriends`, `removePlayer`, `unban`, `addBanName`/`removeBanName`, `downloadStat`, `transfer`, `vipPlayer`, …) appear here but belong to the modal, not to the chat page. They are documented in the player-detail section. Only `message` (direct player message) is chat-relevant among them.
+> The chat fragment also embeds the full shared player-detail modal, whose ~22 actions (`ban, kick, kill, kits, kitSave, mark, twink, twinkOnline, addComment, getComments, changeGroup, changeTeam, checkBans, findFriends, removePlayer, unban, addBanName, removeBanName, downloadStat, getPlayerOnlineData, get`) appear in `chat.html` (per `action_catalog.txt`) but belong to the modal, documented in the player-detail section. Only `message` is chat-relevant among them.
 
 ---
 
@@ -640,54 +821,66 @@ Two categories: (a) the chat page's own read action, and (b) the messaging actio
 
 #### 5.1 Direct-message composer (`#player_message`, shared modal, `class="hide"`)
 
-Opened via `player.message.open()` ("Сообщение" button) from the player card; posts through `player.message.send()`.
+Opened via `player.message.open()` (the "Сообщение" button, `style="display:none"` until unhidden per operator); flips the player card and clones `#player_message` into it. Sent by `player.message.send()` (`frags/main.html:4356`).
 
-| Element | id | Type | Notes / validation |
+| Element | `#id` | Type | Attrs / validation |
 |---|---|---|---|
-| Canned-message list | — | `list-group` of `<a onclick="player.message.set(...)">` | ~18 preset moderation phrases (VIP grant, vehicle-claim rules, TK apology, unreadable-nick warning, etc.). Clicking one fills the textarea. Supports `{player}` token substitution (used by squad variant). |
-| Add to player card | `player_message-log` | checkbox | "Добавить запись в карточку игрока" — sets `log=true` so the message is recorded on the player's profile. |
-| Message body | `player_message-msg` | textarea, `rows=3`, `maxlength="512"` | The text sent. |
-| Repeat cadence | `player_message-time` | select | Options: `1`=1 раз (once), `30`s, `40`s, `60`s (default, "1 минута"), `90`s, `120`s — how long the on-screen message repeats. |
-| Send | `player_message-send` | button | `player.message.send()` → `message` action. |
+| Canned-message list | — | `list-group` of `<a onclick="player.message.set(event,this)">` | **17** preset moderation phrases (VIP grant, vehicle-claim rules, TK apology, unreadable-nick warning, etc.). Click fills textarea; `set()` does `msg.replace('{player}', name)` for `{player}` token substitution. |
+| Add to player card | `player_message-log` | checkbox | "Добавить запись в карточку игрока" → `log = is(':checked')`. |
+| Message body | `player_message-msg` | textarea `rows=3` | **`maxlength="512"`**. |
+| Repeat cadence | `player_message-time` | select | Options: `1`=1 раз (once), `30`s, `40`s, `60`s (**selected default**, "1 минута"), `90`s, `120`s. |
+| Игрок (back) | — | button | `player.unflip()`. |
+| Send | `player_message-send` | button | `player.message.send()` → `message` action. No explicit min-length guard beyond `maxlength`. |
 
-**Client validation:** broadcast composer on `main` (`#server_chat-msg`) refuses to send when `msg.length < 2`; broadcast additionally requires a confirm dialog (`$.question`, "Отправить сообщение как Broadcast??"). The player-message send has no explicit min-length guard beyond the textarea `maxlength`.
+#### 5.2 Squad-message composer (`#serverSquadMessage_modal`, on `main`)
 
-#### 5.2 Squad-message composer (`#serverSquadMessage`, on `main`)
+Opened by `messageSquad.open(this)` from a squad-panel envelope button (`data-type="squadMessage"`). `open()` shows the modal, inits `#serverSquadMessage-time` and preselects `60`, populates author (`create_id`/`create_name`) + Steam link + "открыть" → `player.open()`.
 
-Opened by `messageSquad.open(this)` from a squad's envelope button. Fields: `#serverSquadMessage` (textarea, `{player}`-templated with the squad leader's name), `#serverSquadMessage-time` (same cadence select). Submits `squadMessage` with `team`, `squad`, `time`, `msg`.
+| Element | `#id` | Type | Notes |
+|---|---|---|---|
+| Author info | `serverSquadMessage-author_steamid` / `-author_open` / `-author_steamlink` | display | Squad creator SteamID, open-card, Steam profile. |
+| Canned list | — | 18 `<a onclick="messageSquad.set(event,this)">` | `{player}` → squad leader name. |
+| Message body | `serverSquadMessage` | textarea `rows=4` | **`maxlength="512"`**. |
+| Repeat cadence | `serverSquadMessage-time` | select (multiselect) | Same `1/30/40/60/90/120` set; default `60`. |
+| Send | `serverSquadMessage-send` | button | `messageSquad.send(this)` → `squadMessage` with `server_id, team=squad.team, squad=squad.id, time, msg`. |
 
 #### 5.3 Broadcast composer (on `main`)
 
-A single inline input `#server_chat-msg` (placeholder "Broadcast") with a paper-plane icon (`sendSeverBroadcast()`). Confirmation dialog required before send; input cleared on submit.
+Single inline input `#server_chat-msg` (placeholder "Broadcast") with a `fa-paper-plane-o` icon → `sendSeverBroadcast()`.
+
+- **Validation:** refuses send when `msg.val().length < 2`.
+- **Confirm gate:** `$.question({title:'Broadcast', text:'Отправить сообщение как Broadcast??', da:…})` — must confirm before the `broadcast` `Action` fires.
+- Input cleared (`msg.val('')`) after confirm.
 
 ---
 
 ### 6. Permission / visibility logic
 
-- The chat table's `SteamID` column is doubly hidden (`class="hide"` + inline CSS), used only as an internal key — not a permission gate.
-- All modal action buttons embedded in the fragment default to `style="display:none;"` (e.g. "Сообщение", "Команда", "Наказать/Разбанить", kick/kill/ban-name/kits list items). They are unhidden by the client based on the player context and the operator's role/group returned when `player.open()` loads the card — i.e. capability visibility is **server-driven per operator**, not baked into the fragment. The chat page itself exposes no role gating beyond this.
-- `Action` responses carrying `auth:true` trigger `location.reload()`, the standard session/permission-expiry path.
-- There is no visible per-server permission split on the chat page; the server multiselect lists every server the operator can see.
+- The chat table's `SteamID` column is doubly hidden (`class="hide"` + CSS `td:first-child{display:none}`) — an internal key, not a permission gate.
+- Every modal action button embedded in the fragment defaults to `style="display:none;"` (e.g. "Сообщение", "Команда", "Наказать/Разбанить", kick/kill/ban-name/kits items). They are unhidden by the client from the player context + operator role/group returned when `player.open()` loads the card — capability visibility is **server-driven per operator**, not baked into the fragment.
+- `Action` responses with `auth:true` → `location.reload()`, the standard session/permission-expiry path.
+- No per-server permission split on the chat page itself; the `server` multiselect lists exactly the servers the operator can see.
 
 ---
 
 ### 7. Notable UX & competitively interesting details
 
-- **Unified profanity detection.** A large client-side Russian-profanity regex (`isObscene()`) flags messages: any offending `msg` cell is prefixed with a red warning triangle `<code style="color:#CD5C5C"><i class="fa fa-exclamation-triangle"></i></code>`, and the "Только Мат" toggle filters the whole feed to flagged messages (server-side `obscene` search). Worth beating with a configurable, server-side, multi-language profanity model rather than a single hardcoded regex.
-- **Text-to-speech read-aloud.** Each row's `play` cell uses the browser `SpeechSynthesisUtterance` API to speak a message aloud (`speak(td)`, picks `voices[1]`). Niche but a low-cost accessibility / passive-monitoring feature.
-- **Color-coded channels.** Chat scope is rendered as a server-colored badge, making all/team/squad/admin/broadcast instantly distinguishable in a dense feed.
-- **Repeating on-screen messages.** Both direct and squad messages support a repeat cadence (1×, 30–120s). Combined with `{player}` templating and ~18 canned moderation phrases, this makes routine enforcement (vehicle-claim rules, nick warnings, TK apologies) a two-click operation — a strong workflow to match.
-- **Message-to-card logging.** A single checkbox turns an in-game warning into a permanent record on the player's profile, tying live moderation to the audit trail.
-- **Cross-scope archive.** Broadcasts are logged back into the same searchable feed as player chat, so the operator sees their own outbound announcements interleaved with player messages — good for accountability.
-- **Fixed sidebar + 300-row pages** keep filters permanently visible while scanning large volumes; the `msg` search input is oddly capped at `maxlength=17`, a limitation worth exceeding.
+- **Unified profanity detection.** A large single client-side Russian-profanity regex (`isObscene()`, `custom.js:1781`) flags messages: any offending `msg` cell is prefixed with a red warning triangle `<code style="color:#CD5C5C"><i class="fa fa-exclamation-triangle"></i></code>`, and the "Только Мат" toggle passes `obscene:true` to filter the whole feed server-side. Worth beating with a configurable, server-side, multi-language model rather than one hardcoded regex.
+- **Text-to-speech read-aloud.** Each row's `play` cell calls `speak(td)` using `SpeechSynthesisUtterance` (`voices[1]`, cancels any in-progress utterance). Niche accessibility / passive-monitoring feature.
+- **Color-coded channels.** Chat scope is a server-colored `<code>` badge (`type.color`/`type.name`); the live feed additionally attaches a FontAwesome `icon` per scope — all/team/squad/admin/broadcast instantly distinguishable in a dense feed.
+- **Repeating on-screen messages.** Direct and squad messages both support a repeat cadence (`1×`, 30–120s). Combined with `{player}` templating and ~17–18 canned moderation phrases, routine enforcement (vehicle-claim rules, nick warnings, TK apologies) is a two-click operation — a strong workflow to match.
+- **Message-to-card logging.** One checkbox (`log`) turns an in-game warning into a permanent record on the player profile, tying live moderation to the audit trail.
+- **Cross-scope archive.** Broadcasts are logged back into the same searchable feed as player chat, so operators see their own announcements interleaved with player messages — good accountability.
+- **Fixed sidebar + 300-row pages** keep filters permanently visible while scanning large volumes. The `msg` search input is oddly capped at `maxlength="17"` — a low-hanging limitation to exceed. Pagination is a **two-request** pattern (rows first, then a `pagination=true` count), so page counts appear a beat after rows.
 
 ---
 
 ### 8. Gaps / unverified
 
-- The exact SQL schema behind `t1` (chat) / `t2` (player) is inferred from `data-search` aliases, not seen directly.
-- The `team` column's rendering (flag/faction mapping) and the `color` value per chat type come from server-side table data not present in the fragment.
-- `broadcast` and `squadMessage` live on the `main` dashboard and the player modal (script `squad`/`player`); their handlers were read from `frags/main.html`, not from `chat.html`. The chat page is read-only for these.
+- **Live capture unavailable.** `capture.py` was run the permitted 2× and both attempts crashed the headless Chromium (`TargetClosedError`) before writing `network.json`/`content.html`; `_blocked.json` = `[]`. Every contract above is reconstructed from the client code that builds/parses it (`custom.js` `buildTable`/`Action`, `frags/*.html` senders) — authoritative for request bodies and the response envelope, but the exact server-side **field spelling** of each `data.row` object for `action=playerChat` (vs. the live-feed `data.chat` names used as proxy) is inferred, not captured.
+- The SQL schema behind aliases `t1` (chat) / `t2` (player) is inferred from `data-search` (`t1.msg`, `t1.date`, `t2.player`, `server_id`, `type`, `obscene`), not seen directly.
+- The `team` id→flag mapping and each scope's `color`/`icon` come from server-side table data not present in the fragment.
+- `broadcast`/`squadMessage` live on `main` (script `squad`) and `message` on the player modal (script `player`); their handlers were read from `frags/main.html`, not exercised. The chat page is read-only for these.
 
 
 ---
@@ -695,166 +888,251 @@ A single inline input `#server_chat-msg` (placeholder "Broadcast") with a paper-
 ## 03. Players Directory (Все игроки)
 
 > Canonical reference for the master player list **and** the shared **player-detail modal** that appears on virtually every page of SQSTAT. The modal's tabs, forms and ~25 actions are documented here in full; other sections should cross-reference this file rather than re-document the modal.
+>
+> **Ground truth:** contracts, schemas, table configs, column sets and payloads in this chapter were captured live (read-only, headless) from `https://breaking.sqstat.ru`. Capture files: `caps/players/players.network.json`, `caps/players/players.content.html`, `caps/players/players.modaltabs.json`.
 
 ---
 
 ### 1. Purpose & Navigation
 
-- **Nav id / entry point:** `players` → `pageLoad('players')` → `GET /ajax/page.php?page=players`, HTML fragment injected into `#content`.
-- **Purpose:** Global searchable directory of every player ever seen across the project's servers (not just those currently online). It is the primary entry point to open a player card and perform moderation actions (ban, kick, group change, VIP, mark, message, twink hunt, kit denial, etc.).
-- **Layout:** Two-column. Left (`col-md-3`, `position:fixed`) is a search/filter sidebar; right (`col-md-9`) is the results table `#allPlayers`.
-- The fragment ALSO embeds the entire shared player-detail modal machinery (`#playerModal`, `#player_info`, `#player_ban`, `#player_group`, `#player_message`, `#player_twink-modal`, `#player_kits-modal`, `#player_findban-modal`, `#player_map-modal`, and the comments drawer). The near-identical `playersOnline.html` reuses the same modal and action set (see action catalog: both expose the identical ~21 actions).
+- **Nav id / entry point:** `players` → `pageLoad('players')` → `GET /ajax/page.php?page=players`, HTML fragment injected into `#content`. Captured live: `200 text/html; charset=UTF-8`, fragment length ≈ 115 KB.
+- **Purpose:** Global searchable directory of every player ever seen across the project's servers (not just those currently online). Live scale observed: **`totalRows = 385 350`** players, `totalPage = 3854` at 100/page. It is the primary entry point to open a player card and perform moderation actions (ban, kick, group change, VIP, mark, message, twink hunt, kit denial, etc.).
+- **Layout:** Two-column. Left (`col-md-3 mobile-left`, `position:fixed`) is a search/filter sidebar; right (`col-md-9`) is the results table `#allPlayers`.
+- The fragment ALSO embeds the entire shared player-detail modal machinery (`#player_info`, `#player_ban`, `#player_group`, `#player_message`, `#player_twink-modal`, `#player_kits-modal`, `#player_findban-modal`, `#player_map-modal`, and the `.player_comments` drawer). The near-identical `playersOnline.html` reuses the same modal and action set (action catalog: both expose the identical full action set).
 
 ---
 
-### 2. The Page's OWN Table & Search
+### 2. Live API Contracts
 
-#### 2.1 Results table `#allPlayers`
-DataTables-style server-side table built via `$('#allPlayers').buildTable({...})`. Only **three** visible columns:
+Every table on the panel — the directory list and all twelve modal sub-tabs — funnels through **one** transport endpoint, `POST /ajax/table.php`. Read/forensic player actions funnel through `POST /ajax/player.php`; live-server (RCON) actions through `POST /ajax/squad.php`.
 
-| Column header (RU / EN gloss) | data key | Meaning |
-|---|---|---|
-| `SteamID` (with Steam icon) | `steam_id` | SteamID64, rendered inside a `<hashtag>` element. Click-to-copy identity. |
-| `Ник` (Nickname) | `name` | Current in-game nickname. |
-| `Заходил` (Last seen) | `date` | Last login timestamp, formatted via `formatDate(data,false,true)`. |
+#### 2.1 `POST /ajax/table.php` — directory list (`action=allPlayers`)
 
-- `numrows: 100` per page. On mobile it switches to `mode:'list'` using the `#player_template` card (steam_id / name / date).
-- **Row click** → `player.open( steam_id )` opens the detail modal. (Alt/Ctrl-click is suppressed so admins can copy text without triggering the modal.)
-- If exactly one row is returned, it auto-opens that player (`:eq(0).trigger('click')`).
+**Request (captured, form-urlencoded body):**
 
-#### 2.2 Search / filter sidebar
-Search is transmitted through `buildTable`'s `searchInput` mechanism (see §2.3). Controls:
-
-| Control (id) | `data-search` key | Type | Meaning |
+| Param | Type | Required | Meaning |
 |---|---|---|---|
-| `Поиск` button (`#allPlayers-btn`) | — | button | Triggers `buildTable('rebuild')`. |
-| `Ник или SteamID` (`#allPlayers-name`) | `t1.player` | text | Free-text search on nickname or SteamID. Enter key or paste rebuilds the table. |
-| `Прошлые ники` (Past nicknames) (`#with_other_names`) | `with_other_names` | checkbox | Extends the name search to historical nicknames, not just the current one. |
-| `Полное совпадение` (Exact match) (`#full_match`) | `full_match` | checkbox | Toggles exact vs. partial matching. |
-| `Заходил c` (Seen from) (`#allPlayers-startdate`) | `startdate` | datetime | Lower bound on last-login date (datetimepicker, ru locale). |
-| `Заходил до` (Seen until) (`#allPlayers-enddate`) | `enddate` | datetime | Upper bound on last-login date. |
-| `Добавить` (Add) (`#addPlayer-btn`) | — | button | Opens `#addPlayer_modal` to add a player by SteamID64 (see §6.1). |
+| `action` | string | Y | Server table id. `allPlayers`. |
+| `table` | string | Y | Duplicate of `action` (`allPlayers`). |
+| `page` | int | Y | 1-based page index. |
+| `numrows` | int | Y | Page size. `100` for this table. |
+| `search` | JSON (URL-encoded) | Y | Filter object, shape `{text:{}, check:{with_other_names, full_match}, multiselect:{}, managers:{}, slider:{}}`. Each `check` value is the string `"true"`/`"false"`. |
+| `order_by` | string\|`false` | Y | DB column alias to sort by, or literal `false` for default. |
+| `order_sort` | `asc`\|`desc`\|`false` | Y | Sort direction, or `false`. |
+| `pagination` | `true` | N | When present, the request is the **count-only** variant (see 2.2). |
 
-#### 2.3 Table transport (shared across the whole panel)
-`buildTable` collects `searchInput` values into a JSON object `{text, check, multiselect, managers, slider}`, URL-encodes it as `search`, and issues:
-
+Redacted captured body:
 ```
-Action({ script:'table', action:'<tableName>', data:'&table=<tableName>&page=&numrows=&search=<json>&order_by=&order_sort=' })
-→ POST /ajax/table.php
+action=allPlayers&table=allPlayers&page=1&numrows=100
+&search=%7B%22text%22%3A%7B%7D%2C%22check%22%3A%7B%22with_other_names%22%3A%22false%22%2C%22full_match%22%3A%22false%22%7D%2C%22multiselect%22%3A%7B%7D%2C%22managers%22%3A%7B%7D%2C%22slider%22%3A%7B%7D%7D
+&order_by=false&order_sort=false
 ```
 
-For the main list, `tableName = 'allPlayers'`, columns `["steam_id","name","date"]`. Column headers carrying `i[data-sort]` are click-sortable (`order_by` / `order_sort` asc|desc). This same transport powers every modal sub-tab table (§4) and every other page's tables.
+**Response** (`200 application/json; charset=utf-8`), captured schema:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `data.totalPage` | int | Page count (0 on the data request — the real count comes from the paginate request, 2.2). |
+| `data.totalRows` | int | Row count (0 on the data request; real value from 2.2). |
+| `data.currentPage` | string | Echoed page index (string, e.g. `"1"`). |
+| `data.row[]` | array | Result rows (length = `numrows`). Per-row schema below. |
+| `data.custom` | bool | Whether a custom/manager-scoped query was applied. |
+| `data.query_time` | float | Data-query wall time (s) — perf telemetry. |
+| `data.count_time` | int/float | Count-query wall time (s). |
+| `status` | string | `"ok"` on success. |
+| `exec_time` | float | Total server exec time (s). |
+
+**Per-row object `data.row[i]` — document field-by-field (this is the directory record):**
+
+| Field | Type | Nullable | Meaning |
+|---|---|---|---|
+| `steam_id` | string(17) | N | SteamID64, primary identity. Rendered in a `<hashtag>` (click-to-copy). |
+| `eos_id` | string(32) | N | Epic Online Services id (Squad's newer identity). **Returned even though it is not a visible column.** |
+| `name` | string | N | Current in-game nickname. |
+| `date` | string — **unix ts** | N | Last login ("Заходил"). 10-digit seconds. |
+| `create_date` | string — **unix ts** | N | First seen ("Создан"). **Returned though not a visible column.** |
+| `mark` | string enum `"0".."8"` | N | Suspicion tag (see §5.4). `"0"` = none. Drives a `player_mark` row class. |
+| `bonus` | string(int) | N | Accumulated bonus/currency balance. |
+| `discord` | string(id) \| `null` | Y | Linked Discord user id, or `null`. |
+| `expire` | string — **unix ts** \| `"0"` | N | Privilege-group expiry; `"0"` = none/permanent. |
+| `group_id` | string enum `"0".."5"` | N | Current privilege group (0 none, 1 Admin, 2 Moderator, 3 VIP, 4 Camera, 5 Trainee). |
+
+> **Privacy / competitive note:** the list endpoint returns a **denormalized identity+moderation payload per row** (`eos_id`, `create_date`, `mark`, `bonus`, `discord`, `expire`, `group_id`) even though the rendered table shows only `steam_id`, `name`, `date`. A scraper with a valid admin session harvests the full identity graph for all 385 K players from the list endpoint alone.
+
+#### 2.2 `POST /ajax/table.php` — count/pagination variant (`&pagination=true`)
+
+Fired as a **second, parallel** request with the same body plus `pagination=true`. This splits the expensive `COUNT(*)` from the data page for latency. Captured response schema:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `totalPage` | int | Real page count (captured: `3854`). |
+| `totalRows` | string(int) | Real row count (captured: `"385350"`). |
+| `count_time` | float | Count-query time (s). |
+| `status` | string | `"ok"`. |
+| `exec_time` | float | Total exec (s). |
+
+#### 2.3 `POST /ajax/table.php` — modal sub-tab tables
+
+Each modal detail tab (§4.1) is the same endpoint with `action=<tableName>` and an appended `&steam_id=<id>`. Captured page-size `numrows` and `showPages` per table are in §4.1. Response envelope is identical to 2.1 (`data.row[]` + telemetry), with per-tab row columns equal to that tab's `collum` array.
+
+#### 2.4 `POST /ajax/player.php` — read/forensic actions (no live server required)
+
+Payloads captured from the embedded modal script (`players.content.html`). "Destructive" = mutates state.
+
+| action | `data:{...}` (captured) | Response shape (from render code) | Destr. |
+|---|---|---|---|
+| `get` | `{steam_id}` | `{player: {...}}` — the full player entity (§3). | N |
+| `mark` | `{steam_id, mark}` | ack | Y |
+| `getComments` | `{steam_id}` | comment list | N |
+| `addComment` | `{steam_id, text}` (≤256) | ack | Y |
+| `changeGroup` | `{steam_id, group_id, date, description, prefix, prefix_rgb, image}` | ack | Y |
+| `message` | `{steam_id, time, msg, log}` | ack | Y |
+| `addBanName` | `{name}` | ack | Y |
+| `removeBanName` | `{name}` | ack | Y |
+| `kits` | `{steam_id}` | `{kits:[...]}` per-kit deny state | N |
+| `kitSave` | `{steam_id, kits}` (JSON `{kit:bool}`) | ack | Y |
+| `twink` | `{steam_id}` | `{list:[{steam_id, name, perm, min_date, ips:[{loc, date, owner_date}]}]}` (§5.3) | N |
+| `twinkOnline` | `{steam_id, compare_steam_id, start, end}` (unix) | `{calendar:[<fullcalendar events>]}` | N |
+| `findFriends` | `{steam_id, compare_steam_id}` | `{in_friend: bool}` | N |
+| `checkBans` | `{steam_id}` | `{projects:[{name, discord, online, ban:{total, current:{reason, date, expire}}}]}` (§5.6) | N |
+| `getPlayerOnlineData` | `{steam_id, start, end}` | online/boost/queue time series | N |
+| `downloadStat` | form POST (`post_to_url`), `{action, steam_id}` | file download | N |
+
+**`twink` list row** — `perm: bool` (candidate carries a permanent ban), `min_date: unix-seconds delta` (rendered via `moment.duration(min_date*1000).humanize()`), `ips[]` each `{loc, date(unix), owner_date(unix)}` where the UI shows both accounts' seen-times side by side.
+
+**`checkBans` project row** — `online: seconds` (rendered `secToTime`), `ban.total: int`, `ban.current` present ⇒ active ban with `{reason, date(unix), expire(unix)}`; `expire == "0"` ⇒ "Перманент" (permanent).
+
+#### 2.5 `POST /ajax/squad.php` — live-server (RCON) actions (player must be online)
+
+Payloads captured from the modal script:
+
+| action | `data:{...}` (captured) | Effect | Destr. |
+|---|---|---|---|
+| `kick` | `{steam_id, reason_id, description, noReason}` | Kick from live server. `noReason:true` = no-rule kick. | Y |
+| `ban` | `{server_id, steam_id, reason_id, description, days}` | Ban N days; `days=0` (via permanent radio) / `-1` = permanent. | Y |
+| `unban` | `{steam_id, unban}` | Lift ban; `unban:true` fully erases record. | Y |
+| `removePlayer` | `{server_id, steam_id}` | Eject from squad/fireteam. | Y |
+| `changeTeam` | `{server_id, steam_id}` | Force team swap. | Y |
+| `kill` | `{server_id, steam_id}` | Kill in-game. | Y |
+
+> The capture interceptor **aborted zero mutations** (`_blocked.json = []`) because auto-load fires only reads; the mutation payloads above are transcribed from the page's own JS, not executed.
 
 ---
 
 ### 3. Entity: Player (`player.info`) — the core data model
 
-`player.open(steam_id)` → `Action({script:'player', action:'get', data:{steam_id}})` → `POST /ajax/player.php`. The returned `player` object is the richest entity in the app. Fields inferred from `setInfo()`:
+`player.open(steam_id)` → `Action({script:'player', action:'get', data:{steam_id}})` → `POST /ajax/player.php`. The success handler sets `player.info = text.player` then `player.setInfo()` + `player.stats.init(player.info.stats)`. The returned `player` object is the richest entity in the app. Fields (from `setInfo()` + captured render code):
 
 | Field | Type | Meaning |
 |---|---|---|
 | `steam_id` | string | SteamID64 (primary identity). |
-| `eos_id` | string | Epic Online Services ID (Squad's newer identity). |
+| `eos_id` | string | Epic Online Services id. |
 | `name` | string | Current nickname. |
 | `names[]` | `{name, date}` | Historical nicknames dropdown ("Другие ники"). |
-| `date` | ts | Last login ("Заходил"). |
-| `create_date` | ts | First seen ("Создан"). |
-| `baby` | bool | "New/young account" flag — shows a red warning icon next to online time. |
-| `bonus` | number | Accumulated bonus points ("Бонусы"). |
-| `playtime` | `{online, boost, server}` | Aggregate playtime, boost time, favourite server ("Сервер"). |
-| `mark` | int 0–8 | Suspicion tag (see §4.4 mark values). |
-| `group` | `{name, color, icon, description}` | Current privilege group badge; special art for `QueuePriority` (VIP) / `Moderator`. |
-| `group_id`, `expire`, `group_description`, `prefix`, `prefix_rgb`, `image` | mixed | Group assignment details used by the group modal. |
-| `ban` | `{expire, reason, admin_name, date, description}` | Active ban record (drives the red "забанен" panel + corner ribbon). |
-| `bans[]` | `{admin_name, date, reason, description, impact, unban}` | Full punishment history (Наказания tab). `impact` = counts toward escalation; `unban='1'` = later reversed. |
-| `canBan` | bool | Gates the "Наказать", kill, banname, kits controls. |
-| `canUnban` | bool | Gates the "Разбанить" button. |
-| `canChangeGroup` | bool | Gates the "Группа" button. |
+| `date` | unix ts | Last login ("Заходил"). |
+| `create_date` | unix ts | First seen ("Создан"). |
+| `baby` | bool | "New/young account" flag — red warning icon next to online time. |
+| `bonus` | int | Bonus/currency balance ("Бонусы"). |
+| `playtime` | `{online, boost, server}` | Aggregate playtime, boost time, favourite server. |
+| `mark` | int 0–8 | Suspicion tag (see §5.4). |
+| `group` | `{name, color, icon, description}` | Current privilege badge; special art for `QueuePriority` (VIP) / `Moderator`. |
+| `group_id`, `expire`, `group_description`, `prefix`, `prefix_rgb`, `image` | mixed | Group-assignment fields consumed by the group form. |
+| `ban` | `{expire, reason, admin_name, date, description}` | Active ban → red "забанен" panel + corner ribbon. |
+| `bans[]` | `{admin_name, date, reason, description, impact, unban}` | Full punishment history (Наказания tab). `impact`=counts toward escalation; `unban="1"`=reversed. |
+| `canBan` | bool | Gates "Наказать", kill, banname, kits. |
+| `canUnban` | bool | Gates "Разбанить". |
+| `canChangeGroup` | bool | Gates "Группа". |
 | `canSelfKick` | bool | Gates "Кикнуть без причины". |
-| `is_you` | bool | If true, group select + expire are disabled (can't edit self). |
-| `name_banned` | bool | Whether current nick is on the banned-names list (toggles banname/unbanname menu items). |
+| `is_you` | bool | If true, group select + expire disabled (can't edit self). |
+| `name_banned` | bool | Current nick on banned-names list → toggles banname/unbanname items. |
 | `vac` | `{ban, days}` | VAC ban status. |
-| `steam_info` | `{ban:{vac,ban,days}, squad:{time}}` | Steam profile enrichment — VAC/game ban badge + Squad hours played. |
-| `discord` | string(id)/false | Discord user id → "открыть" link to `discord.com/users/<id>`. |
-| `location[]` | `{iso, loc, timezone, lat, lng, ip, date}` | Geo-IP history (country flag, city, timezone, coords for map, **IP address**, seen date). First entry is current. |
-| `primetime[]` | `{start, end}` | Typical active hours (unix → HH:mm ranges). |
+| `steam_info` | `{ban:{vac, ban, days}, squad:{time}}` | Steam enrichment — VAC/game-ban badge + Squad hours. |
+| `discord` | string(id) \| false | Discord user id → link to `discord.com/users/<id>`. |
+| `location[]` | `{iso, loc, timezone, lat, lng, ip, date}` | Geo-IP history (flag, city, tz, coords, **raw IP**, seen date). First = current. |
+| `primetime[]` | `{start, end}` | Typical active hours (unix → HH:mm). |
 | `clans[]` | `{clan_id, name}` | Clan memberships (link to `/clan.php?id=`). |
-| `online` | `{server:{id,name}, team:{short}, squad:{id}}` / false | Live session — presence enables message/kill/changeTeam/removePlayer. |
-| `stats` | object | Aggregate combat stats (kill, die, revive, winrate, kit, kit_name) rendered in the stat cards. |
+| `online` | `{server:{id,name}, team:{short}, squad:{id}}` \| false | Live session — enables message/kill/changeTeam/removePlayer. |
+| `stats` | object | Aggregate combat stats (kill, die, revive, winrate, kit, kit_name) for the stat cards. |
 
-Derived/rendered elsewhere: `kill`, `die`, `revive`, `winrate`, `kd`, favourite `kit`+`kit_name` (stat cards); an online chart (`getPlayerOnlineData`) with three series **Онлайн / Буст / Очередь** (online minutes / boost / queue).
+Derived/rendered: `kill, die, revive, winrate, kd`, favourite `kit`+`kit_name` (stat cards); an online chart (`getPlayerOnlineData`) with three series **Онлайн / Буст / Очередь** (online minutes / boost / queue).
 
 ---
 
 ### 4. The Shared Player-Detail Modal (`#player_info`)
 
-Draggable modal. Header shows name, other-nicks dropdown, clan labels, group/VAC/ban badges, last-login/created, Steam hours, EOS id, VAC, geo-location (+ other-locations dropdown that opens a Leaflet map via `player.map.open(lat,lng)`), Discord, primetime, online/bonus/boost tiles, an online activity chart with **График / Календарь / По серверам** (Chart / Calendar / Per-server) sub-tabs, six stat cards (Побед/Кит/К-Д/Убийства/Смерти/Поднятий), and a second tab strip of detail tables.
+Draggable modal. Header shows name, other-nicks dropdown (`#player_info-names`), clan labels (`#player_info-clans`), group/VAC/ban badges (`#player_info-badges`), last-login/created, Steam hours + `<hashtag id="player_info-steam_id">` + Steam link, EOS id, VAC, geo-location (`#player_info-location` + other-locations dropdown → Leaflet map via `player.map.open(lat,lng)`), Discord (`#player_info-discord` + link), primetime, online/bonus/boost tiles, an online activity chart (`#player_info-chart`) with **График / Календарь / По серверам** (Chart / Calendar / Per-server) sub-tabs, a read-only `#player_info-description` textarea (`maxlength=1024`), six stat cards (Winrate `#player_info-winrate`, Kit, K-D, Kills, Deaths, Revives), then a second tab strip of detail tables.
 
-#### 4.1 Detail sub-tabs (each a lazy-loaded `table`-script table keyed by `steam_id`)
+#### 4.1 Detail sub-tabs — server table id + columns + page size (captured buildTable configs)
 
-| Tab (RU / EN) | table name | Columns (data keys) |
-|---|---|---|
-| Наказания (Bans) | *(from `player.info.bans`, accordion — not a table call)* | admin, date, reason, description, impact, unban |
-| Варны (Warns) | `playerWarn` | `admin, text, date` |
-| Чат (Chat) | `playerChat` | `server, date, team, type, msg` (obscenity flagged via `isObscene`) |
-| Тимкиллы (Teamkills) | `playerTeamkill` | `server, date, killed, kit` |
-| Киты (Kits) | `playerKits` | `kit, cnt` |
-| Сквады (Squads) | `playerSquad` | `server, team, date, squad_id, name` |
-| Убийства (Kills) | `playerKills` | `server, name, weapon, date` |
-| Смерти (Deaths) | `playerDeath` | `server, weapon, date` |
-| Игры (Games) | `playerGames` | `server, map, win, date` |
-| Поднятия (Revives) | `playerRevive` | `server, name, date` |
-| Урон (Damage) | `playerDamage` | `server, weapon, name, damage, date` |
-| Техника (Vehicle) | `playerVehicle` | `server, vehicle, weapon, damage, date` |
+Each tab lazy-loads on `show.bs.tab`, POSTing to `/ajax/table.php` with `action=<table>` + `&steam_id=<id>`. `numrows` and `showPages` are exact from `players.content.html`.
 
-All twelve POST to `/ajax/table.php` with `&steam_id=<id>` appended, `numrows` 10–20, `showPages:3`.
+| Tab (RU / EN) | server table (`action=`) | columns (`collum`) | numrows | showPages |
+|---|---|---|---|---|
+| Наказания (Bans) | *(from `player.info.bans`; accordion `#player_info_accordion-bans`, not a table call)* | admin, date, reason, description, impact, unban | — | — |
+| Варны (Warns) | `playerWarn` | `admin, text, date` (list mode via `#player_info_warn-template`) | 10 | 3 |
+| Чат (Chat) | `playerChat` | `server, date, team, type, msg` | 20 | 3 |
+| Тимкиллы (Teamkills) | `playerTeamkill` | `server, date, killed, kit` | 10 | 3 |
+| Киты (Kits) | `playerKits` | `kit, cnt` | 10 | 3 |
+| Сквады (Squads) | `playerSquad` | `server, team, date, squad_id, name` | 10 | 3 |
+| Убийства (Kills) | `playerKills` | `server, name, weapon, date` | 10 | 3 |
+| Смерти (Deaths) | `playerDeath` | `server, weapon, date` | 10 | 3 |
+| Игры (Games) | `playerGames` | `server, map, win, date` | 10 | 3 |
+| Поднятия (Revives) | `playerRevive` | `server, name, date` | 10 | 3 |
+| Урон (Damage) | `playerDamage` | `server, weapon, name, damage, date` | 10 | 3 |
+| Техника (Vehicle) | `playerVehicle` | `server, vehicle, weapon, damage, date` | 10 | 3 |
 
-#### 4.2 Full action set — moderation capabilities (admin permissions)
+- **Chat tab** post-processes each `msg` cell: `isObscene(text)` prepends a red warning icon (client-side obscenity flag).
+- **Chat `type` column** callback renders `<code style="color:type.color">type.name</code>` — so each row's `type` is an object `{color, name}` (chat channel: All/Team/Squad/Admin).
+- Panel id ↔ table id map (captured `data-table`/`#id` markup): `#player_info_warn-table`, `#player_info_chat-table`, `#player_info_teamkill-table`, `#player_info_kits-table`, `#player_info_squad-table`, `#player_info_games-table`, `#player_info_kills-table`, `#player_info_death-table`, `#player_info_revive-table`, `#player_info_damage-table`, `#player_info_vehicle-table`.
 
-All state-changing actions POST to `/ajax/player.php` (`script:'player'`) or `/ajax/squad.php` (`script:'squad'` = live-server RCON-style operations that require the player to be online). "Destructive?" = changes state / affects a real player.
+#### 4.2 Full action set — moderation capabilities (= permissions)
 
-| UI label (RU / EN) | action id | script → endpoint | data params | Effect | Destr.? |
+State-changing actions POST to `/ajax/player.php` (`script:'player'`) or `/ajax/squad.php` (`script:'squad'` = live-server RCON, requires the player online). Payloads verbatim from captured JS (§2.4/§2.5).
+
+| UI label (RU / EN) | action | script → endpoint | `data` params | Effect | Destr.? |
 |---|---|---|---|---|---|
 | open card | `get` | player → player.php | `steam_id` | Load full `player.info`. | N |
-| `Добавить` (Add player) | `add` | player | `steam_id` | Create a player record from a SteamID64, then open it. | Y |
-| `Наказать`→`Кикнуть` (Kick w/ reason) | `kick` | squad | `steam_id, reason_id, description, noReason:false` | Kick from live server with a rulebook reason. | Y |
-| `Кикнуть без причины` (Kick no reason) | `kick` | squad | `steam_id, reason_id, description, noReason:true` | Kick without a rule (confirm dialog). Gated by `canSelfKick`. | Y |
-| `Наказать`→`Забанить` (Ban) | `ban` | squad | `server_id, steam_id, reason_id, description, days` | Ban for N days (1–30) or permanently (`days=-1`). `server_id` sent if online. | Y |
-| `Разбанить` (Unban) | `unban` | squad | `steam_id, unban:<bool>` | Lift ban; `unban=true` fully erases the record ("выдан по ошибке"), else keeps it as reversed. Gated by `canUnban`. | Y |
-| `Сообщение`→`отправить` (Message) | `message` | player | `steam_id, time, msg, log` | Push in-game warning message, repeated for `time` seconds (1 / 30 / 40 / 60 / 90 / 120); `log` optionally records it on the card. | Y |
-| `Команда` (Switch team) | `changeTeam` | squad | `server_id, steam_id` | Force-swap the player's team (confirm). Online only. | Y |
-| `Убить` (Kill) | `kill` | squad | `server_id, steam_id` | Kill the player in-game (loses their squad). Gated by `canBan`+online. | Y |
-| `Кик из сквада` (Remove from squad) | `removePlayer` | squad | `server_id, steam_id` | Eject from their fireteam/squad. Online + in a squad. | Y |
-| tag menu → `Подозрение…` / `Снять метку` | `mark` | player | `steam_id, mark` | Set/clear a suspicion tag 0–8. | Y |
-| `Группа`→`Сменить группу` (Change group) | `changeGroup` | player | `steam_id, group_id, date(expire), description, prefix, prefix_rgb, image` | Assign privilege group + expiry + custom prefix/color/image (this is the **VIP grant** path too). Gated by `canChangeGroup`; disabled for self. | Y |
-| `Забанить ник` (Ban nickname) | `addBanName` | player | `name` | Add current nick to the banned-names blacklist. | Y |
+| `Добавить` (Add player) | `add` | player | `steam_id` | Create a record from a SteamID64, then open it. | Y |
+| `Наказать`→`Кикнуть` (Kick w/ reason) | `kick` | squad | `steam_id, reason_id, description, noReason:false` | Kick with a rulebook reason. | Y |
+| `Кикнуть без причины` (Kick no reason) | `kick` | squad | `steam_id, reason_id, description, noReason:true` | Kick without a rule (confirm). Gated by `canSelfKick`. | Y |
+| `Наказать`→`Забанить` (Ban) | `ban` | squad | `server_id, steam_id, reason_id, description, days` | Ban N days or permanent (`days=0`). `server_id` sent if online. | Y |
+| `Разбанить` (Unban) | `unban` | squad | `steam_id, unban:<bool>` | Lift ban; `unban:true` erases record fully. Gated by `canUnban`. | Y |
+| `Сообщение`→`отправить` (Message) | `message` | player | `steam_id, time, msg, log` | In-game warning repeated for `time` s; `log` mirrors it on card. | Y |
+| `Команда` (Switch team) | `changeTeam` | squad | `server_id, steam_id` | Force team swap (confirm). Online only. | Y |
+| `Убить` (Kill) | `kill` | squad | `server_id, steam_id` | Kill in-game. Gated by `canBan`+online. | Y |
+| `Кик из сквада` (Remove from squad) | `removePlayer` | squad | `server_id, steam_id` | Eject from fireteam/squad. Online + in a squad. | Y |
+| tag menu → `Подозрение…` / `Снять метку` | `mark` | player | `steam_id, mark` | Set/clear suspicion tag 0–8. | Y |
+| `Группа`→`Сменить группу` (Change group) | `changeGroup` | player | `steam_id, group_id, date, description, prefix, prefix_rgb, image` | Assign group + expiry + custom prefix/color/image (**VIP grant** path). Gated `canChangeGroup`; disabled for self. | Y |
+| `Забанить ник` (Ban nickname) | `addBanName` | player | `name` | Add current nick to banned-names blacklist. | Y |
 | `Разбанить ник` (Unban nickname) | `removeBanName` | player | `name` | Remove nick from blacklist. | Y |
-| `Проверить баны` (Check bans) | `checkBans` | player | `steam_id` | Cross-project ban lookup (returns per-project `{name, discord, online, ban:{total,current:{reason,date,expire}}}`) shown in `#player_findban-modal`. | N |
-| `Поиск твинков` (Find twinks/alts) | `twink` | player | `steam_id` | Alt-account detection (see §4.3). | N |
-| twink → `Онлайн` (compare online) | `twinkOnline` | player | `steam_id, compare_steam_id, start, end` | Overlay two accounts' online sessions on a calendar to prove co-presence. | N |
-| twink → `Проверить друзья` (friends) | `findFriends` | player | `steam_id, compare_steam_id` | Check whether two accounts are Steam friends (`in_friend`). | N |
-| `Киты` (Kit deny) → `Сохранить` | `kits` / `kitSave` | player | get: `steam_id`; save: `steam_id, kits(JSON {kit:bool})` | View & toggle per-kit denial for the player. Modal warns it "may violate server license terms." | Y (save) |
-| comments drawer (load) | `getComments` | player | `steam_id` | Load admin comments on the player. | N |
-| comments drawer (send) | `addComment` | player | `steam_id, text` | Post an internal admin comment (≤256 chars). | Y |
-| `Скачать статистику` (Download stats) | `downloadStat` | player.php (form POST via `post_to_url`) | `action, steam_id` | Download the player's stats as a file. | N |
-| online chart data | `getPlayerOnlineData` | player | `steam_id, start, end` | Fetch online/boost/queue time series for the chart. | N |
-| `Копировать телепорт` (Copy teleport) | *(clientside)* | — | — | Copies `AdminTeleportToPlayer <steam_id>` to clipboard. | N |
-| `Заявка в OWI` (OWI report) | *(clientside)* | — | — | Copies a preformatted cheat-report template (name/EOS/Steam URL). | N |
+| `Проверить баны` (Check bans) | `checkBans` | player | `steam_id` | Cross-project ban lookup → `#player_findban-modal` (§5.6). | N |
+| `Поиск твинков` (Find twinks/alts) | `twink` | player | `steam_id` | Alt-account detection (§5.3). | N |
+| twink → `Онлайн` (compare online) | `twinkOnline` | player | `steam_id, compare_steam_id, start, end` | Overlay two accounts' sessions on a FullCalendar (weekly) to prove co-presence. | N |
+| twink → `Проверить друзья` (friends) | `findFriends` | player | `steam_id, compare_steam_id` | Steam-friends check between two accounts → `in_friend`. | N |
+| `Киты` (Kit deny) → `Сохранить` | `kits` / `kitSave` | player | get: `steam_id`; save: `steam_id, kits` (JSON `{kit:bool}`) | View & toggle per-kit denial. Modal warns it "may violate server license terms." | Y (save) |
+| comments drawer (load) | `getComments` | player | `steam_id` | Load admin comments. | N |
+| comments drawer (send) | `addComment` | player | `steam_id, text` | Internal admin comment (≤256 chars). | Y |
+| `Скачать статистику` (Download stats) | `downloadStat` | player.php (`post_to_url` form) | `action, steam_id` | Download the player's stats file. | N |
+| online chart data | `getPlayerOnlineData` | player | `steam_id, start, end` | Online/boost/queue time series. | N |
+| `Копировать телепорт` (Copy teleport) | *(clientside)* | — | — | Copies `AdminTeleportToPlayer <steam_id>`. | N |
+| `Заявка в OWI` (OWI report) | *(clientside)* | — | — | Copies a cheat-report template (name/EOS/Steam URL). | N |
 | card link | *(clientside)* | — | — | Copies `https://<host>/?steam_id=<id>` deep-link. | N |
 
-Note: the catalog also lists `twinkOnline` on essentially every page — the modal (and thus its whole action set) is embedded everywhere; `players.html` and `playersOnline.html` are the only fragments exposing the FULL set including `ban/kick/kill/kits/changeGroup/changeTeam/checkBans/add`.
+Note: `players.html` and `playersOnline.html` are the only fragments exposing the FULL set including `ban/kick/kill/kits/changeGroup/changeTeam/checkBans/add`; other pages embed the same modal but a reduced action set (per action catalog: `bans/chat/admins/collabans` expose `twink/twinkOnline/findFriends/checkBans/removePlayer/getPlayerOnlineData` but not the write actions).
 
 #### 4.3 Twin / alt detection (`twink`) — competitively notable
-`Поиск твинков` returns `text.list[]` where each candidate alt has: `steam_id, name, perm` (has a permanent ban), `min_date` (time delta), and `ips[]` of shared-IP hits `{loc, date, owner_date}`. The UI renders, per candidate:
-- Name + SteamID + "открыть" deep-link.
-- Red flag if the alt carries a **permanent ban** ("Есть перманентный бан").
-- Collapsible list of **matching IPs**: count, humanized time-difference, each with the location and both accounts' seen-times side by side.
-- **`Проверить друзья`** → Steam friends check between the two accounts.
-- **`Онлайн`** → renders a weekly FullCalendar overlaying both accounts' sessions (`twinkOnline`) to visually prove they never/always play together.
 
-This is a fully built shared-IP + Steam-friends + co-presence alt-hunting workflow — a strong feature to match or beat.
+`Поиск твинков` → `text.list[]` (§2.4). Per candidate the UI renders:
+- Name + SteamID + `/?steam_id=<id>` "открыть" deep-link.
+- Red flag **"Есть перманентный бан"** when `perm` is truthy.
+- Collapsible **matching-IP** list: header `Совпадений: <ips.length>, разница: <humanize(min_date*1000)>`; each row shows `loc`, the candidate's seen-time (`date`) and the owner's seen-time (`owner_date`) side by side, plus `humanize(date−owner_date)` delta.
+- **`Проверить друзья`** → `findFriends` → button flips to "В друзьях"/"Не найдено" from `in_friend`.
+- **`Онлайн`** → `compareOnline` builds an `agendaWeek` FullCalendar (`locale:ru`, `HH:mm`), and on each `viewRender` calls `twinkOnline(start.unix, end.unix)` → `renderEvents(text.calendar)`, overlaying both accounts' sessions.
 
-#### 4.4 Suspicion marks (`mark` values)
+A complete shared-IP + Steam-friends + co-presence alt-hunting workflow — a standout anti-ban-evasion tool.
+
+#### 4.4 Suspicion marks (`mark` enum, values `0–8`)
+
 | value | Label (RU / EN) |
 |---|---|
 | 1 | Подозрение на WallHack |
@@ -867,87 +1145,186 @@ This is a fully built shared-IP + Steam-friends + co-presence alt-hunting workfl
 | 8 | Токсичный игрок (toxic) |
 | 0 | Снять метку (clear) |
 
-A set mark adds a `player_mark` CSS class to the player's rows across tables and shows a pulsing warning banner in the card.
+A set mark adds a `player_mark` CSS class to the player's rows across all tables and shows a pulsing `#player_info_mark` warning banner.
 
 ---
 
-### 5. Forms & Modals (fields, options, validation)
+### 5. Forms & Modals (fields, options, validation — captured `#id` / `name` / attrs)
 
-#### 5.1 Ban form (`#player_ban`)
-- **Reason select `#player_ban-reason`**: grouped rulebook (`optgroup`s: Особые / Общие / Для сквадных / Для техники / Милсим). Each `<option>` carries `value` = rule id (e.g. `110`, `171`), a rich HTML `label` with the rule number, and `data-first/second/third/four` (escalation day-tiers per offense count). Value `false` = "-Выберите причину-".
-- **Punishment radios `player_ban-reason_type`**: Кикнуть (`value=-1 data-action=kick`), Забанить 1/2/3/4/5/6/7/10/14/30 дн (`data-action=ban data-day=N`), and Забанить навсегда (`value=-1 data-action=ban data-day=0`, permanent, dark-red).
-- **`Дополнительный комментарий`** textarea `#player_ban-description` (≤512 chars).
-- Submit `player.actionPlayer()` routes to kick vs. ban by the checked radio's `data-action`; if the reason itself is a pure kick (`-1`) it bans/kicks accordingly.
+#### 5.1 Search / filter sidebar (drives `search` JSON of `action=allPlayers`)
 
-#### 5.2 Group / VIP form (`#player_group`)
+| Control | `#id` | `data-search` alias | Input | Default | Meaning |
+|---|---|---|---|---|---|
+| Поиск (Search) | `#allPlayers-btn` | — | button | — | `buildTable('rebuild')`. |
+| Ник или SteamID | `#allPlayers-name` | `t1.player` | text | empty | Free-text on nick or SteamID. `paste` auto-rebuilds. |
+| Прошлые ники (Past nicks) | `#with_other_names` | `with_other_names` | checkbox | `false` | Extend search to historical nicknames. |
+| Полное совпадение (Exact match) | `#full_match` | `full_match` | checkbox | `false` | Exact vs partial match. |
+| Заходил c (Seen from) | `#allPlayers-startdate` | `startdate` | text (datetimepicker, readonly) | empty | Lower bound on last-login. |
+| Заходил до (Seen until) | `#allPlayers-enddate` | `enddate` | text (datetimepicker, readonly) | empty | Upper bound on last-login. |
+| Добавить (Add) | `#addPlayer-btn` | — | button | — | Opens `#addPlayer_modal` (§5.7). |
+
+`searchInput: ["allPlayers-name","allPlayers-startdate","allPlayers-enddate","with_other_names","full_match"]`. `buildTable` harvests these into the `search` JSON (`text` for text inputs, `check` for checkboxes).
+
+#### 5.2 Results table `#allPlayers` (captured `buildTable` config)
+
+```
+$('#allPlayers').buildTable({
+  table: 'allPlayers',
+  collum: ["steam_id", "name", "date"],
+  numrows: 100,
+  searchInput: ["allPlayers-name","allPlayers-startdate","allPlayers-enddate","with_other_names","full_match"],
+  template: $('#player_template > div'),           // mobile 'list' card
+  mode: isMobile ? 'list' : 'table',
+  callback: { date: (d)=> formatDate(d,false,true) }
+});
+```
+
+| Visible column (RU / EN) | `collum` key / `data-table` | Render |
+|---|---|---|
+| SteamID | `steam_id` | `<hashtag>` (copy). Row click → `player.open(steam_id)`. |
+| Ник (Nickname) | `name` | plain span. |
+| Заходил (Last seen) | `date` | `formatDate(data,false,true)` (unix → local). |
+
+- Row `click` handler ignores `altKey`/`ctrlKey` (so admins can select/copy text without opening the card).
+- **Auto-open:** if exactly one row is returned, `tr:eq(0).trigger('click')` opens that player immediately.
+- Mobile switches to `mode:'list'` using `#player_template` (steam_id/name/date card).
+
+#### 5.3 Ban form (`#player_ban`)
+
+- **Reason select `#player_ban-reason`** (`type=multiselect`, `enableHTML`): grouped rulebook `<optgroup>`s — **Особые / Общие / Для сквадных / Для техники / Милсим**. Each `<option>` has `value` = rule id (e.g. `1`, `110`, `111`, `120`, `510`, `520`), an HTML `label` with the rule number (e.g. `<strong>1.1.</strong> Оскорбления…`), and **escalation attrs** `data-first / data-second / data-third / data-four` = ban-day tier per offense count (captured examples: general rules `0/0/0/30`, flood rule `1/1/1/30`). `value="false"` = "-Выберите причину-".
+- **Punishment radios `player_ban-reason_type`**: Кикнуть (`value=-1 data-action=kick`), Забанить 1/2/3/4/5/6/7/10/14/30 дн (`data-action=ban data-day=N`), Забанить навсегда (`value=-1 data-action=ban data-day=0`, permanent, dark-red).
+- **`Дополнительный комментарий`** textarea `#player_ban-description` (≤512).
+- Submit `player.actionPlayer()` routes kick vs ban by the checked radio's `data-action`.
+
+#### 5.4 Group / VIP form (`#player_group`)
+
 - **`#player_group-groups`** multiselect: `0` -Нет группы-, `1` Администратор, `2` Модератор, `3` VIP, `4` Камера (spectator), `5` Стажёр (trainee).
-- **`#player_group-expire`** dateRange button with presets: justDay, +1/2/3/6 Month, +1 Year, infinity, reset. (Existing VIPs default to their `expire`, permanent → infinity.)
+- **`#player_group-expire`** dateRange button presets: justDay, +1/2/3/6 Month, +1 Year, infinity, reset. Existing VIPs default to `expire` (permanent → infinity).
 - `Комментарий` (≤128), `Префикс` (≤64), `Цвет префикса (RGB)` (color picker + `r,g,b` text), `Ссылка на изображение` (≤256).
-- Buttons: `Игрок` (flip back), `Сменить группу`, and a hidden `VIP +1 месяц` quick-grant. Self-editing disabled (`is_you`).
+- Buttons: `Игрок` (flip back), `Сменить группу`, hidden `VIP +1 месяц` quick-grant. Self-editing disabled when `is_you`.
 
-#### 5.3 Message form (`#player_message`)
-- Scrollable list of ~18 canned messages (`player.message.set`) — VIP grant notice, vehicle-solo/tandem warnings, squad-lock rules, mic requirement, TK apology, report-received, etc.
-- `Добавить запись в карточку игрока` checkbox (`#player_message-log`) → mirrors message into the player's card.
+#### 5.5 Message form (`#player_message`)
+
+- Scrollable list of ~18 canned messages (`player.message.set`) — VIP-grant notice, vehicle solo/tandem warnings, squad-lock rules, mic requirement, TK apology, report-received, etc.
+- `Добавить запись в карточку игрока` checkbox `#player_message-log` → mirrors message onto the card.
 - `Сообщение` textarea (≤512), repeat-`Время` select (1 раз / 30 / 40 сек / 1 мин / 1:30 / 2 мин).
 
-#### 5.4 Add-player modal (`#addPlayer_modal`)
-Single `SteamID64` input `#addPlayer_steam_id` → `addPlayer()` → `action:'add'`; on success opens the new card.
+#### 5.6 Cross-project ban modal (`#player_findban-modal`, action `checkBans`)
 
-#### 5.5 Kit-deny modal (`#player_kits-modal`)
-License-risk warning banner; list of kits each with a danger toggle (`data-kit`, checked = denied, shows "От <date>"); `Сохранить` serializes `{kit:bool}` JSON to `kitSave`.
+Renders `text.projects[]` as a grid of `col-md-4` cards, one per federated project. Per card (captured render): project `name`, optional `discord` link, `online` time (`secToTime`), `Наказаний: <ban.total>` or "Нет наказаний", a ban/check icon by `ban.current` presence, and for an active ban a detail line with `ban.current.reason` and either "Перманент" (`expire=="0"`) or `От: <date> До: <expire>`.
 
-#### 5.6 Other modals
-`#player_twink-modal` (alt list), `#player_map-modal` (Leaflet OSM map of a location), `#player_findban-modal` (cross-project ban grid), `#player_info-placeholder` (skeleton/glow loading state), and the sliding `player_comments` drawer.
+#### 5.7 Add-player, Kit-deny & other modals
+
+- **`#addPlayer_modal`**: single `SteamID64` input `#addPlayer_steam_id` → `addPlayer()` → `action:'add'`; on success opens the new card.
+- **`#player_kits-modal`** (`kits`/`kitSave`): license-risk warning banner; list of kits each with a danger toggle (`data-kit`, checked = denied, shows "От <date>"); `Сохранить` serializes `{kit:bool}` JSON.
+- **`#player_twink-modal`** (alt list `#player_twink-list`), **`#player_map-modal`** (Leaflet OSM map of a `location`), **`#player_info-placeholder`** (skeleton/glow loading), and the sliding **`.player_comments`** drawer (input `maxlength=256`, `getComments`/`addComment`).
 
 ---
 
 ### 6. Permission / Visibility Logic
 
-Buttons are hidden by default (inline `display:none` or `.hide`) and revealed by `setInfo()` per server-provided capability flags — the **server is the source of truth**, the client only reflects it:
+Buttons default hidden (inline `display:none` or `.hide`) and are revealed by `setInfo()` per server-provided capability flags — the **server is the source of truth**, the client only reflects it:
 
-- `canBan` → shows "Наказать"; when online, shows "Убить" and kit/banname menu items.
-- `canUnban` → shows "Разбанить" + the ban corner ribbon.
-- `canChangeGroup` → shows the "Группа" button.
+- `canBan` → shows "Наказать"; when online, shows "Убить" and kit/banname items.
+- `canUnban` → shows "Разбанить" + the `.panel_corner` ban ribbon.
+- `canChangeGroup` → shows the "Группа" button (`#player_info-group_btn`).
 - `canSelfKick` → shows "Кикнуть без причины".
 - `is_you` → group select + expiry disabled (no self-promotion).
 - `name_banned` → toggles "Забанить ник" vs "Разбанить ник".
-- Online-only actions (message, changeTeam, kill, removePlayer) appear only when `player.info.online` (and squad/team sub-objects) is present.
+- Online-only actions (message, changeTeam, kill, removePlayer) appear only when `player.info.online` (and its squad/team sub-objects) is present. When online, `player.info.online.squad.id` is prepended as a badge on the name.
 - Mark menu, twink, checkBans, copy-teleport, OWI report, download-stat are shown to everyone who can open a card.
 
-Group ids (1 Admin, 2 Moderator, 3 VIP, 4 Camera, 5 Trainee) define the role hierarchy; special header art for VIP/Moderator groups.
+Group ids (0 None, 1 Admin, 2 Moderator, 3 VIP, 4 Camera, 5 Trainee) define the role hierarchy; special header art for VIP/Moderator groups.
 
 ---
 
 ### 7. Notable UX / Competitive Details (worth copying or beating)
 
 1. **One universal player card** embedded on every page — open a player from chat, kills, bans, clans, anywhere; no context switch. Draggable, flippable (ban/group/message forms flip in-place rather than stacking modals).
-2. **Alt-account hunting suite** (`twink` + shared-IP timeline + Steam-friends check + co-presence calendar) is the standout feature — a serious anti-cheat / ban-evasion tool.
-3. **Cross-project ban check** (`checkBans`) aggregates bans across a federation of servers, with per-project online time and current-ban reason/expiry.
+2. **Alt-account hunting suite** (`twink` + shared-IP timeline + Steam-friends check + co-presence calendar) is the standout — a serious anti-cheat / ban-evasion tool.
+3. **Cross-project ban check** (`checkBans`) aggregates bans across a federation of projects, with per-project online time and current-ban reason/expiry; `expire=="0"` = permanent.
 4. **Escalating rulebook** encoded in `<option data-first/second/third/four>` — automatic day-tier per repeat offense, plus one-click canned kick/ban durations up to permanent.
-5. **Rich identity graph**: SteamID64 + EOS id + Discord + VAC/game-ban + Steam hours + geo-IP history (with raw IPs, timezones, map) + nickname history + primetime hours + clan memberships — all on one screen.
-6. **Group grant as branding**: custom prefix text, RGB color, and image URL per player group (monetizable VIP cosmetics).
-7. **Quality-of-life**: copy teleport RCON command, copy OWI cheat-report template, copy shareable deep-link, canned in-game messages, obscenity flagging in chat logs, "baby/new account" risk badge, kit-denial (with an explicit license-risk disclaimer), downloadable per-player stats, and Easter-egg per-SteamID video/audio overlays.
+5. **Rich identity graph**: SteamID64 + EOS id + Discord + VAC/game-ban + Steam hours + geo-IP history (raw IPs, timezones, map) + nickname history + primetime + clans — all on one screen.
+6. **Group grant as branding**: custom prefix text, RGB color and image URL per group (monetizable VIP cosmetics).
+7. **Split count/data queries**: the list fires the data page and a separate `pagination=true` `COUNT` in parallel, and every table response ships `query_time`/`count_time`/`exec_time` telemetry — a deliberate latency optimization for a 385 K-row table.
 8. **Search depth**: search across historical nicknames + exact/partial toggle + last-seen date range — beats a naive "search by current name only."
+9. **Data-exposure gap to exploit/avoid**: the directory list endpoint over-returns per row (`eos_id, create_date, mark, bonus, discord, expire, group_id`) beyond the three visible columns — a privacy/attack-surface note when designing a competitor.
+
+---
+
+### 8. Capture Provenance
+
+- `caps/players/players.network.json` — 3 live contracts: `GET /ajax/page.php?page=players`, `POST /ajax/table.php` (`action=allPlayers`, data), `POST /ajax/table.php` (`pagination=true`, count).
+- `caps/players/players.content.html` — live `#content` (search sidebar, `#allPlayers` config, full embedded modal + all sub-tab `buildTable` configs + every `Action()` payload).
+- `caps/players/players.modaltabs.json` — modal `data-table` column tokens.
+- `caps/players/_blocked.json` — `[]` (zero mutations attempted/blocked).
 
 
 ---
 
 ## 04. Player Profile & Per-player Data Storage
 
+> **Ground truth:** the contracts, DOM structure, cross-project switcher and live stat values below were captured read-only (headless) from `https://breaking.sqstat.ru/player/7656119XXXXXXXXXX`. Capture files: `caps/players/_player_7656119XXXXXXXXXX.content.html`, `caps/players/_player_7656119XXXXXXXXXX.network.json`, `caps/players/_player_7656119XXXXXXXXXX.png`.
+
 ### 1. Purpose & Nav Location
 
-**Route:** `/player/<steamid>` (e.g. `/player/76561199478348885`), optionally `?season=<all|old|1|2>`.
+**Route:** `GET /player/<steamid>` (captured: `/player/7656119XXXXXXXXXX`), optionally `?season=<all|old|1|2>` (default `2`).
 
-Reached from the top-right user dropdown: **Профиль (Profile)** → `/player/<steamid>`. This is a **full HTML document** (it ships its own `<nav>`, not a `#content` fragment), meaning the profile is a hard navigation / bookmarkable page rather than an `pageLoad()` AJAX fragment.
+Reached from the top-right user dropdown **Профиль (Profile)** → `/player/<steamid>`, or by opening ANY player's SteamID. This is a **full HTML document** (ships its own `<nav>`, not a `#content` fragment) — a hard navigation / bookmarkable page, not a `pageLoad()` AJAX fragment.
 
-**Critical framing:** the captured `player_profile.html` is the **self-service public player profile / stat dashboard** for the *logged-in* player viewing their own SteamID (`[BSS] seregatipich`). It is the **read-facing statistics surface**, plus three account-owner tools bolted onto the same page (settings, clan creation, seeding helper). It is **NOT** the admin "per-player rap sheet." The heavy moderation/forensic per-player data (bans, mutes, chat, comments, suspect marks, IP history, twins/alts, votes, reports, kills/deaths logs) is **not rendered here** — it lives in:
+**Critical framing:** the profile is the **public read-facing statistics dashboard** for a given SteamID. The captured page (`[Wind]  xcv`, `7656119XXXXXXXXXX`) is **not** the logged-in viewer — confirming `/player/<id>` is a public per-player stat page for **any** player, plus three account-owner tools that only function for the profile owner (settings, clan creation, seeding helper). It is **NOT** the admin "per-player rap sheet." The heavy moderation/forensic per-player data (bans, mutes, chat, comments, suspect marks, IP history, twins/alts, votes, reports, kills/deaths logs) is **not rendered here** — it lives in:
 
-- the **shared player-detail modal** embedded on every page (Chat/Kills/Deaths/Kits/Games/Comments tabs, ~22 actions), and
-- the dedicated admin DataTables pages, all of which use `script: 'player'`: `bans.html`, `bannames.html`, `collabans.html`, `chat.html`, `comments.html`, `mark.html`, `damages.html`, `deaths.html`, `kills.html`, `revives.html`, `teamkills.html`, `reports.html`, `votes.html`, `logs.html`, `vips.html`, `admins.html`, `top.html`.
+- the **shared player-detail modal** embedded on every page (Chat/Kills/Deaths/Kits/Games/Comments tabs, ~25 actions — fully documented in §03), and
+- the dedicated admin DataTables pages, all `script: 'player'`: `bans.html`, `bannames.html`, `collabans.html`, `chat.html`, `comments.html`, `mark.html`, `damages.html`, `deaths.html`, `kills.html`, `revives.html`, `teamkills.html`, `reports.html`, `votes.html`, `logs.html`, `vips.html`, `admins.html`, `top.html`.
 
-So this section documents (a) the **denormalized per-player statistics model** exposed here and (b) the **owner-account actions** on this page. It cross-references where the forensic data lives without misattributing it to this page.
+So this section documents (a) the **denormalized per-player, per-season statistics model** exposed here and (b) the **owner-account actions** on this page. It cross-references where the forensic data lives without misattributing it to this page.
 
-Only **two script endpoints** are invoked from this page: `player` and `squad`. Only **two actions touch `player`**: `saveUserSettings`. Everything else (`createSquad`, `seeding*`) is `squad`.
+---
+
+### 1a. Live API Contracts
+
+**Captured contract count: 0 XHR / AJAX requests.** The profile is **fully server-side rendered**: all stat blocks (kits, skill, weapons, vehicles, matches, charts) arrive inline in the initial HTML document; the Chart.js canvases are hydrated from **inline literal arrays** in a `<script>` at the bottom of the page, not from a data endpoint.
+
+| Contract | Method + path | Request params | Response | Notes |
+|---|---|---|---|---|
+| Profile document | `GET /player/<steam_id>` | path `steam_id`; query `?season=<all\|old\|1\|2>` (default `2`) | full HTML (`#content` ≈ 31 KB captured) | No `#content` fragment endpoint; whole page including `<nav>`. Bookmarkable/SEO-able. |
+| Season switch | `GET /player/<steam_id>?season=<v>` | `season` | full HTML | **Hard navigation** (`window.location.href`), not AJAX. |
+| Project switch | `GET https://<project>.sqstat.ru/player/<steam_id>?season=<v>` | host swap | full HTML on the sibling project | Cross-project federation switcher (see §2.0). |
+
+**Owner-action endpoints** (present in page JS but **not fired by page load**, so uncaptured as live contracts): `saveUserSettings` (`player`), and `createSquad` / `seeding` / `seedingSetServer` / `seedingGetCalendar` / `seedingGetPriority` / `seedingSetPriority` (`squad`). Documented from JS in §4–§5. The ~25 shared-modal moderation actions do **not** appear on this page.
+
+> Capture interceptor blocked **0** mutations here (`_blocked.json = []`) — the page auto-loads nothing mutating.
+
+**Chart hydration (captured inline data, not endpoints):**
+
+| Canvas `#id` | Chart.js type | Inline data source (captured) |
+|---|---|---|
+| `player_kd_chart` | doughnut | `[kills, deaths]` e.g. `[2563, 1265]`, labels Убийств/Смертей. |
+| `player_kd_year` | stacked bar | monthly `labels[]` (`2024-07`…`2026-07`) + kills[] + deaths[] arrays; tooltip footer computes `K/D = kill/die`. |
+| `player_aim` | bubble | `data:[[x_count, y_damage, r], …]` per weapon — damage/accuracy scatter. |
+
+---
+
+### 2.0 Cross-project federation switcher (`#stat-project`)
+
+The profile header carries a **project multiselect** (`#stat-project`) listing **12 sibling SQSTAT deployments**, each an `<option value=<slug> data-url=https://<slug>.sqstat.ru/player/<steam_id>?season=2>`. `onChange` hard-navigates to `event[0].dataset.url` — i.e. the **same SteamID's profile on another project**. Captured projects:
+
+| slug | host | label |
+|---|---|---|
+| `breaking` | breaking.sqstat.ru | BSS *(current)* |
+| `prot` | prot.sqstat.ru | Protocol |
+| `bb` | bb.sqstat.ru | BlackBerry |
+| `pub` | pub.sqstat.ru | Русский паблик |
+| `bzp` | bzp.sqstat.ru | Битва за пиво |
+| `rsgs` | rsgs.sqstat.ru | RSGS |
+| `hutor` | hutor.sqstat.ru | Hype Hutor |
+| `sqstat` | sqstat.ru | Русское сообщество |
+| `nklv` | nklv.sqstat.ru | Сибирский анклав |
+| `red` | red.sqstat.ru | RED:S |
+| `phoenix` | phoenix.sqstat.ru | Phoenix |
+| `5thmr` | 5thmr.sqstat.ru | Пятый мотострелковый |
+
+This confirms SQSTAT is a **multi-tenant federation** (subdomain per community) sharing one identity space (same SteamID resolves on every project) — the same federation the modal's `checkBans` queries. A strong competitive signal: they run stats+moderation as a hosted SaaS for many Squad communities off one codebase.
 
 ---
 
@@ -957,56 +1334,59 @@ The page denormalizes a large per-player, **per-season** stat aggregate. Seasons
 
 #### 2.1 Player identity / account header
 
+Captured page: `[Wind]  xcv` / `7656119XXXXXXXXXX`, season 2.
+
 | Field | UI label | Meaning / type |
 |---|---|---|
-| SteamID64 | (URL + dropdown) | 17-digit Steam ID, the profile primary key (`/player/76561199478348885`). |
-| Display name | `[BSS] seregatipich` (H1) | Current in-game name incl. clan tag prefix. `data-text` mirrors it for a glitch/hover effect. |
-| Bonus balance | Ваши бонусы (Your bonuses) | Integer loyalty/currency balance (e.g. `24307`). Spendable in-panel economy. |
-| VIP status | VIP | Either "нет" or "до DD.MM.YYYY" (VIP until date). Green check when active. |
-| Subscriptions | Подписки (Subscriptions) | Active recurring subscriptions, or "нет активных" (none active). Distinct from one-off VIP. |
-| Rank | Ранг ??? | Present but **`class="hide"`** — a rank/progress-bar feature is built but disabled/hidden in this deployment. |
-| Role image | (background) | `/assets/img/roles/RGF/SL.png` — faction (RGF) + main kit (SL) drive a hero image. |
+| SteamID64 | (URL + `#stat-project`/`#stat-season`) | 17-digit Steam ID, the profile primary key (`/player/7656119XXXXXXXXXX`). |
+| Display name | `[Wind]  xcv` (H1) | Current in-game name incl. clan tag prefix. `data-text` mirrors it for a glitch/hover effect. |
+| Bonus balance | Ваши бонусы (Your bonuses) | Integer loyalty/currency balance. **Owner-only** — this economy block was NOT present in the captured foreign-player page; it renders only when the viewer owns the profile. |
+| VIP status | VIP | "нет" or "до DD.MM.YYYY". **Owner-only** (see above). |
+| Subscriptions | Подписки (Subscriptions) | Active recurring subscriptions, or "нет активных". **Owner-only**. Distinct from one-off VIP. |
+| Rank | Ранг ??? | Present but **`class="hide"`** — a rank/progress-bar feature built but disabled in this deployment (confirmed in capture: `<h2 class="text-center hide">Ранг ???</h2>`). |
+| Role image | `#role_image` (background) | Captured: `/assets/img/roles/RGF/Medic.png` (`height:440px; saturate(160%) brightness(1.4)`) + overlaid kit svg — faction (RGF) + main kit (Medic) drive the hero image. |
+| Live-server banner | (top-right block) | A "current server" card (`RAAS/AAS #1`, map thumb `Sumari Seed v1 (14/100)`, disabled "Подключиться" button) — server-population widget shown even on a foreign profile. |
 
 #### 2.2 Skill / lifetime aggregate (per season)
 
 Rendered in the "Скилл (Skill)" block. This is the core scoreboard row.
 
-| Field | UI label | Type | Example |
+| Field | UI label | Type | Captured example (`[Wind] xcv`, S2) |
 |---|---|---|---|
-| K/D ratio | К/Д | float | `0.51` |
-| Win rate | Винрейт | percent | `49.6%` |
-| Matches | МАТЧЕЙ | int | `281` |
-| Wins | ПОБЕД | int | `131` |
-| Losses | ПРОИГРЫШЕЙ | int | `133` |
-| Kills | УБИЙСТВА | int | `332` |
-| Deaths | СМЕРТИ | int | `647` |
-| Damage | УРОН | int | `77,659` |
-| Revives | ПОДНЯТИЯ (pick-ups/revives) | int | `108` |
-| Teamkills | ТИМКИЛЛЫ | int | `75` |
-| Online time | ОНЛАЙН | duration `Nч Nм` | `284ч 4м` (≈ playtime) |
+| K/D ratio | К/Д | float | `2.03` |
+| Win rate | Винрейт | percent | `62%` |
+| Matches | МАТЧЕЙ | int | `893` |
+| Wins | ПОБЕД | int | `530` |
+| Losses | ПРОИГРЫШЕЙ | int | `325` |
+| Kills | УБИЙСТВА | int | `2,563` |
+| Deaths | СМЕРТИ | int | `1,265` |
+| Damage | УРОН | int | `520,046` |
+| Revives | ПОДНЯТИЯ (pick-ups/revives) | int | `3,093` |
+| Teamkills | ТИМКИЛЛЫ | int | `156` |
+| Online time | ОНЛАЙН | duration `Nч Nм` | `670ч 19м` |
 
-Note wins+losses (131+133=264) < matches (281): draws/incomplete rounds are tracked separately. Charts derived from this entity: `player_kd_chart` (K/D donut), `player_kd_year` (K/D trend over the season), `player_aim` (damage/accuracy line).
+Note wins+losses (530+325=855) < matches (893): draws/incomplete rounds are tracked separately. Charts derived from this entity: `player_kd_chart` (K/D donut, `[kill, die]`), `player_kd_year` (stacked-bar kills/deaths per month, K/D in tooltip), `player_aim` (bubble scatter, `[count, damage, radius]` per weapon).
 
 #### 2.3 Kit usage (per player, per season)
 
-"Киты (Kits)" table — playtime accumulated per role/kit.
+"Киты (Kits)" table — playtime accumulated per role/kit, sorted desc. Captured kit names: `Medic`, `LAT`, `SL`, `Rifleman`, `Crewman`, `Marksman`, `HAT` (icon `/assets/img/ico/kits/<Kit>.svg`).
 
 | Column | Meaning |
 |---|---|
-| Kit | Role icon (`/assets/img/ico/kits/<Kit>.svg`) + name: `SL`, `SLPilot`, `Rifleman`, `SLCrewman`, `Medic`, `Sniper`, `Sapper`. |
-| Playtime | Time in that kit, `Nч Nм` (e.g. SL `78ч 27м`). |
+| Kit | Role icon + name. |
+| Playtime | Time in that kit, `Nч Nм` (captured: Medic `258ч 36м`, LAT `130ч 33м`, SL `114ч 33м`). |
 
 Implies a stored `player_kit_time[steamid, season, kit] = seconds`.
 
 #### 2.4 Weapon stats (per player, per weapon, per season)
 
-"Оружие (Weapon)" cards — one card per weapon, sorted by kills desc.
+"Оружие (Weapon)" cards — one card per weapon, sorted by kills desc. Image `/assets/img/weapons/<file>.png` with `onerror` fallback to `EMPTY.png`.
 
 | Field | Icon | Meaning |
 |---|---|---|
-| Weapon name | — | `АК-74`, `2Б14`, `Colt Canada C7`, `СВД`, `M4A1`, `РПГ-28`, `M67`, ... |
-| Kills | crosshairs | Kills with that weapon (e.g. AK-74 → 29). |
-| Damage | explosion | Total damage with that weapon (e.g. AK-74 → 6,720). |
+| Weapon name | — | Captured: `АК-74`, `Colt Canada C7`, `M4A1`, `АКС-74У`, `РПГ-7`, `РГД-5`, `C14 Timberwolf`, `Ф1`, `АКМ`, `СВД`. |
+| Kills | crosshairs (`fa-crosshairs`) | Kills with that weapon (captured AK-74 → `404`). |
+| Damage | explosion (`fa-explosion`) | Total damage (captured AK-74 → `78,362`). |
 
 Implies `player_weapon_stat[steamid, season, weapon] = {kills, damage}`.
 
@@ -1016,32 +1396,34 @@ Vehicles the player **operated** and scored from.
 
 | Column | Label | Meaning |
 |---|---|---|
-| # | — | Rank index (1..N). |
-| Vehicle | Техника | Vehicle name (`Тигр`, `AAV-7`, `БМП-1`, `LAV-25`). |
-| Kills | Убийств | Kills scored while in that vehicle. |
-| Damage | Урон | Damage dealt from that vehicle. |
+| # | — | Rank index (1..10, top-N slab). |
+| Vehicle | Техника | **Localized** vehicle name. Captured: `ASLAV`, `Stryker`, `AAV-7`, `Тигр`, `Coyote`, `UB-32`, `ZBL-08`, `БТР-80`, `M1151`, `Град`. |
+| Kills | Убийств | Kills scored while in that vehicle (captured ASLAV → `14`). |
+| Damage | Урон | Damage dealt from that vehicle (captured ASLAV → `2,374`). |
 
 #### 2.6 Vehicle destruction — kills-against ("Уничтожение техники")
 
-Enemy vehicles the player **destroyed**, keyed by the weapon used.
+Enemy vehicles the player **destroyed**, keyed by the weapon used. Top-10 slab.
 
 | Column | Label | Meaning |
 |---|---|---|
-| # | — | Rank index. |
-| Weapon | Оружие | Weapon/projectile used (`2A46M`, `M1126`, `AK74M`, `RPG28`, `S8`, ...). |
-| Vehicle | Техника | Internal asset name of the destroyed vehicle (`T72A_IMF`, `Kraz_6322`, `MI8_AFU`, `Armored_Technical4Seater`, ...). |
-| Count | Количество | Number destroyed. |
+| # | — | Rank index (1..10). |
+| Weapon | Оружие | Weapon/projectile used. Captured: `RPG7`, `M72A5`, `M72A6`, `C90`, `Kord`, `FFV751`, `M72A7`, `RPG28`, `M3MAAWS`, `M2`. |
+| Vehicle | Техника | **Raw internal asset name** of the destroyed vehicle. Captured: `Tigr_RWS`, `T72B3`, `Technical2Seater_White`, `US_Util`, `BRDM-2L1_AFU`, `CTM131_Logistic`, `M1151_M240`, `TLF_Util`, `RHIB_RUS`. |
+| Count | Количество | Number destroyed (captured RPG7 vs Tigr_RWS → `23`). |
 
-Note: this table uses **raw internal asset IDs** (not the localized names used in §2.5), suggesting it is pulled straight from raw kill-log rows.
+Note (confirmed in this capture): this table uses **raw internal asset IDs** (`Tigr_RWS`, `T72B3`) while §2.5 uses localized names — the two tables draw from different sources; destruction is pulled straight from raw kill-log rows. A localization gap a competitor can beat.
 
 #### 2.7 Recent matches ("Матчи")
 
+Top-10 recent games.
+
 | Column | Label | Meaning |
 |---|---|---|
-| # | — | Row index. |
-| Map | Карта | Layer name (`Gorodok RAAS v1`) + external link icon → `/game/<gameId>` (per-match detail page, e.g. `/game/33290`). |
-| Teams | Стороны | Two faction icons (`AFU` vs `RGF`, etc.) for the two sides. |
-| Win | Победа | `label-success` "Да" (Yes) or `label-danger` "Нет" (No) — whether the player's side won. |
+| # | — | Row index (1..10). |
+| Map | Карта | Layer name + external-link icon `<a href="/game/<gameId>" target="_blank">`. Captured game ids `33286`–`33295`, e.g. `Harju RAAS v1` → `/game/33295`. |
+| Teams | Стороны | Two faction icons `/assets/img/ico/teams/<FACTION>.png` (captured `AFU`, `PLANMC`, `IMF`, `MEI`, `RGF`, plus named brigades `58th Motorized Brigade.png`). |
+| Win | Победа | `label-success` "Да" + check, or `label-danger` "Нет" + xmark — whether the player's side won. |
 
 The `/game/<id>` link ties each stat row back to a full match record (separate page).
 
@@ -1153,327 +1535,657 @@ Generic pattern: every `[data-setting]` control is harvested into `data[setting]
 
 ### 8. Gaps / Cross-references
 
-- The **forensic per-player rap sheet** (bans/mutes history, chat log, comments/notes, suspect marks, IP history, twins/alts/friends, votes, reports, per-round kills/deaths/revives/teamkills detail) is **not on this page** — it is the shared player-detail modal + the `script:'player'` DataTables pages (`bans/chat/comments/mark/damages/deaths/kills/revives/teamkills/reports/votes/logs/collabans/bannames`). Document those in their own sections for the full storage model.
-- Exact `saveUserSettings`/`createSquad`/`seeding*` server-side schemas (column types, ownership checks) are not observable from the client; inferred from payloads only.
+- The **forensic per-player rap sheet** (bans/mutes history, chat log, comments/notes, suspect marks, IP history, twins/alts/friends, votes, reports, per-round kills/deaths/revives/teamkills detail) is **not on this page** — it is the shared player-detail modal (§03) + the `script:'player'` DataTables pages (`bans/chat/comments/mark/damages/deaths/kills/revives/teamkills/reports/votes/logs/collabans/bannames`). Document those in their own sections for the full storage model.
+- Exact `saveUserSettings`/`createSquad`/`seeding*` server-side schemas (column types, ownership checks) are not observable from the client; inferred from JS payloads only, and **none fired at page load** so none captured as live contracts.
+- The profile emits **zero XHR contracts** (fully SSR); there is no JSON stat endpoint to reverse-engineer from this page — the numbers are baked into the HTML and the Chart.js inline arrays.
+
+**Capture provenance:** `caps/players/_player_7656119XXXXXXXXXX.content.html` (SSR `#content`, cross-project + season switchers, all stat blocks, inline Chart.js data), `caps/players/_player_7656119XXXXXXXXXX.network.json` (`[]` — 0 AJAX, re-run twice to confirm), `caps/players/_blocked.json` (`[]`), `caps/players/_player_7656119XXXXXXXXXX.png` (rendered screenshot).
 
 
 ---
 
 ## 05. Administration: Admins, Groups & Permissions
 
-Reference documentation of the SQSTAT "admins" page (breaking.sqstat.ru) — the staff roster and the group/role model that drives every permission in the panel. Source analyzed: `frags/admins.html` (the page fragment, which also embeds the shared player-detail modal and its JS), cross-checked against `action_catalog.txt`.
+Implementation-spec documentation of the SQSTAT "admins" page (breaking.sqstat.ru) — the staff roster and the group/role model that drives every permission in the panel. **Ground truth for this chapter is a LIVE capture** of the page's own auto-load reads (read-only headless browser, mutations aborted by interceptor):
 
-> Scope note: `frags/admins.html` contains two distinct things. (1) The page's **own** UI — a filter sidebar plus the `#adminPlayers` roster table (lines ~1–95). (2) The **shared player-detail modal** (`#playerModal`) and its `player.*` JavaScript object (lines ~98–2818), which is injected into every page fragment in the app. This document treats the roster + filter as the page's own surface, and the group-change modal as the permission-management surface, and explicitly flags shared-modal actions that are not unique to this page.
+- `caps/admins/admins.network.json` — 3 live AJAX contracts (method, url, request body, status, response schema + redacted sample).
+- `caps/admins/admins.content.html` — the live rendered `#content` (real headers, form ids, data-* attrs, embedded modal JS).
+- `caps/admins/admins.modaltabs.json` — the per-player detail-log tables embedded in the shared modal (`admin`, `date`, `text`).
+- `caps/admins/_blocked.json` — `[]` (zero mutations attempted/blocked during capture).
+
+Cross-referenced against `custom.js` (the `player.*` object, `Action()` calls, DataTables config), `action_catalog.txt`, and chapter 16 (settings → permission-group tokens).
+
+> Scope note: `admins.content.html` contains two distinct things. (1) The page's **own** UI — a fixed filter sidebar plus the `#adminPlayers` roster table. (2) The **shared player-detail modal** (`#playerModal`, ids `player_info*`, `player_ban*`, `player_group*`) and its `player.*` JavaScript object, injected into every page fragment in the app. This chapter treats the roster + filter as the page's own surface, and the group-change modal (`#player_group`) as the permission-management surface, and explicitly flags shared-modal actions that are not unique to this page.
+
+---
+
+### Live API Contracts
+
+Everything below is transcribed from the captured `admins.network.json`. Timestamps are unix seconds. Note the panel's convention: **the server pre-renders display cells as HTML strings inside the JSON** (`group`, `time`, `boost`, `bans`, `discord`) while also returning the **raw** values (`group_id`, `color`, `icon`) the client needs for the filter/modal — so the same row carries both machine and presentation forms.
+
+#### C1 — Page fragment loader
+
+| | |
+|---|---|
+| **Method / path** | `GET /ajax/page.php?page=admins` |
+| **Request params** | `page` — string — required — fragment id (`admins`) |
+| **Status / ctype** | `200` · `text/html; charset=UTF-8` (114 456 B) |
+| **Response** | HTML fragment injected into `#content`: the filter sidebar (`#adminPlayers-btn`, `-name`, `-group`, `-period`), the `#adminPlayers` table skeleton, and the full shared `#playerModal` markup (`#player_group` form included). |
+| **Capture** | `caps/admins/admins.network.json` entry 0 |
+
+#### C2 — Roster data (server-side DataTables read)
+
+| | |
+|---|---|
+| **Method / path** | `POST /ajax/table.php` |
+| **Status / ctype** | `200` · `application/json; charset=utf-8` |
+| **Capture** | `caps/admins/admins.network.json` entry 1 |
+
+Request body (form-urlencoded; captured, decoded):
+
+```
+action=adminPlayers&table=adminPlayers&page=1&numrows=50
+&search={"text":{"custom.period.startdate":1780559720,"custom.period.enddate":1783151720},
+         "check":{},"multiselect":{},"managers":{},"slider":{}}
+&order_by=false&order_sort=false
+```
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `action` | string | Y | Server table id — always `adminPlayers`. |
+| `table` | string | Y | Duplicate of `action` (`adminPlayers`); the panel sends both. |
+| `page` | int | Y | 1-based page index. |
+| `numrows` | int | Y | Page size — **50**. |
+| `search` | JSON string | Y | Filter envelope with fixed buckets `text`, `check`, `multiselect`, `managers`, `slider`. Roster injects the period as `text["custom.period.startdate"]` / `["custom.period.enddate"]` (unix s). `#adminPlayers-name` (DB alias `t2.player`) lands in `text`; `#adminPlayers-group` (alias `group_id`) lands in `multiselect` when set. |
+| `order_by` | string \| `false` | Y | DB alias of the sort column, or literal `false` for default. |
+| `order_sort` | string \| `false` | Y | `asc` / `desc`, or literal `false`. |
+
+Response schema (`status: "ok"`, `exec_time: float` seconds):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `data.totalPage` | int | **0 on the data request** — the count is computed by the separate C3 call (see below). |
+| `data.totalRows` | int | **0 on the data request** (same reason). |
+| `data.currentPage` | string | Echoed page index, e.g. `"1"`. |
+| `data.row` | array[≤`numrows`] | Roster rows; per-row schema in the table below. |
+| `data.custom` | bool | `false`; server flag for custom-column mode. |
+| `data.query_time` | float | Row-query seconds. |
+| `data.count_time` | int | `0` on the data request. |
+| `status` | string | `"ok"`. |
+| `exec_time` | float | Total handler seconds. |
+
+Per-row object (`data.row[]`) — **captured field → type → meaning**:
+
+| Field | Captured type | Meaning / notes |
+|---|---|---|
+| `steam_id` | `str(len36)` | **Player UUID (36-char, dashed), NOT a Steam64 anymore.** Row key; passed to `player.open()`. See §8. |
+| `group_id` | `str(len1)` | Raw group enum `"1".."5"` (see §2). Feeds the filter/modal preselect. |
+| `expire` | `str` | Group/VIP expiry as unix s; `""` or `"0"` = no expiry (infinity). Captured `""`. |
+| `description` | `str` | Free-text comment stored on the group assignment. |
+| `prefix` | `str` | In-game tag granted by the group (may be empty). |
+| `prefix_rgb` | `str` | Prefix color `"r,g,b"` (may be empty). |
+| `image` | `str` | Group image URL (may be empty). |
+| `name` | `str(len51)` | Player display nick (DB alias `t2.player`). |
+| `date` | `str(len10)` | **Last-seen — unix s** (captured `"1783151718"`). Rendered client-side. |
+| `color` | `str(len6)` | Group tag color, **hex without `#`** (captured `"e50606"`). |
+| `icon` | `str(len13)` | FontAwesome suffix, **no `fa-` prefix** (captured `"user-circle-o"`). |
+| `discord` | `str` | Pre-rendered HTML: linked Discord handle, or empty. |
+| `bans` | `str` | Pre-rendered HTML KPI — punishments **issued** by this admin in the period (captured `"<kbd>17</kbd>"`). |
+| `online` | object | Live-presence sub-block (see below); present even when the badge shows offline. |
+| `online.online` | `str` | Live/session numeric (captured `"18030"`). |
+| `online.boost` | `str` | Live boost numeric (captured `"10156"`). |
+| `online.queue` | `str` | Queue position (captured `"6"`). |
+| `online.server` | `str` | Server id the player is on (captured `"1"`). |
+| `group` | `str(len123)` | **Pre-rendered** `<span class="label …" style="…color…">` group chip (icon + label). |
+| `time` | `str(len49)` | **Pre-rendered** playtime-for-period badge (captured `"<span class=\"label label-success\">300ч 3…"`). |
+| `boost` | `str(len49)` | **Pre-rendered** boost-for-period badge. |
+
+Redacted sample row (from capture):
+
+```json
+{
+  "steam_id": "<uuid:36>", "group_id": "1", "expire": "", "description": "<redacted:13>",
+  "prefix": "", "prefix_rgb": "", "image": "", "name": "<redacted:51>",
+  "date": "1783151718", "color": "e50606", "icon": "user-circle-o",
+  "discord": "<redacted:73>", "bans": "<kbd>17</kbd>",
+  "online": { "online": "18030", "boost": "10156", "queue": "6", "server": "1" },
+  "group": "<span class=\"label label-primary\" style=…>…</span>",
+  "time":  "<span class=\"label label-success\">300ч 3…</span>",
+  "boost": "<span class=\"label label-success\">169ч 1…</span>"
+}
+```
+
+#### C3 — Roster count (pagination companion call)
+
+| | |
+|---|---|
+| **Method / path** | `POST /ajax/table.php` |
+| **Status / ctype** | `200` · `application/json; charset=utf-8` |
+| **Capture** | `caps/admins/admins.network.json` entry 2 |
+
+Same body as C2 **plus `pagination=true`**. The panel fires C2 (rows) and C3 (count) as two requests against the same table id — the count is *not* returned inline on the data call.
+
+Response schema (captured sample in parentheses):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `totalPage` | int | Page count (`2`). |
+| `totalRows` | string | Total matching rows (`"53"`) — the true roster size. |
+| `count_time` | int | Count-query time. |
+| `status` | string | `"ok"`. |
+| `exec_time` | float | Handler seconds. |
+
+#### C4 — Open player (referenced, fires on row click)
+
+`POST /ajax/player.php` with `action=get&steam_id=<uuid>` → returns the full `player.info` object incl. the permission flags in §3.3. Not auto-fired during capture (requires a row click, which we did not perform as it is a read but out of `--open-rows` scope for AJAX); documented from `custom.js` (`player.open`/`player.get`).
+
+#### C5 — Change group (the permission mutation — NOT fired; interceptor would abort)
+
+`POST /ajax/player.php` with `action=changeGroup` — full contract in §4.1. Documented from `custom.js`; **not executed** (mutation). `_blocked.json` = `[]` confirms no write was attempted.
 
 ---
 
 ### 1. Purpose & Nav Location
 
-- **Nav id / loader:** `pageLoad('admins')` → `GET /ajax/page.php?page=admins`, HTML fragment injected into `#content`.
-- **Purpose:** Manage the **staff roster** — everyone who holds an admin/moderator/camera/trainee group. Shows activity metrics per admin over a selectable period (playtime, boost, punishments issued, Discord link). Clicking a row opens the shared player modal, whose **"Группа" (Group)** button is the single UI for assigning/changing/revoking a group — i.e. this is where permissions are granted.
-- This page is a filtered view of the player base restricted to rows that have a `group_id`. There is no separate "create group" UI in this fragment — groups are a **fixed, hard-coded set** (see §2); the panel does not expose custom-group CRUD to the operator here.
+- **Loader:** `pageLoad('admins')` → `GET /ajax/page.php?page=admins` (C1), HTML fragment injected into `#content`.
+- **Purpose:** Manage the **staff roster** — everyone holding an admin/moderator/camera/trainee group — with per-admin **activity KPIs** over a selectable period (playtime, boost, **punishments issued**, Discord link). Clicking a row opens the shared player modal, whose **"Группа" (Group)** button is the single UI for assigning/changing/revoking a group — i.e. this is where permissions are granted.
+- This is a filtered view of the player base restricted to rows that have a `group_id`. There is **no create-group UI** in this fragment — groups are a **fixed, hard-coded 5-value set** (see §2). Custom-group CRUD lives on the **settings → groups** tab (chapter 16), not here; this page only *assigns* an existing group to a player.
 
 ---
 
 ### 2. The Group / Role Model (core answer)
 
-Groups are defined inline in three `<select>` widgets. The **authoritative, complete list** comes from the group-change modal (`#player_group-groups`, lines 686–693), which includes the "none" and VIP entries that the roster filter omits.
+The complete enum comes from the group-change select `#player_group-groups` (`admins.content.html:686–692`), which includes the "none" sentinel and the VIP entry that the roster filter omits. Internal `name` values are reconciled against chapter 16's `groups` settings tab (the five `[data-setting]` blocks: **Admin, Moderator, QueuePriority, Cameraman, Intern**).
 
-| group_id | Russian label | English gloss | Icon (FontAwesome) | Color | Internal `name` (from JS) | In roster filter? |
+| `group_id` | Russian label | English gloss | Icon (`icon` field) | Color (`color` field) | Internal `name` (ch.16) | In roster filter? |
 |---|---|---|---|---|---|---|
-| `0` | -Нет группы- | No group / remove | — | — | (clears group) | No |
-| `1` | Администратор | Administrator | `fa-user-circle-o` | `#e50606` (red) | *(Admin)* | Yes |
-| `2` | Модератор | Moderator | `fa-id-badge` | `#2df044` (green) | `Moderator` | Yes |
-| `3` | VIP | VIP | `fa-star` | *(per-record)* | `QueuePriority` | **No** |
-| `4` | Камера | Camera / Spectator | `fa-video-camera` | `#7d059e` (purple) | *(Camera)* | Yes |
-| `5` | Стажёр | Trainee / Intern | `fa-graduation-cap` | `#b57c03` (orange) | *(Trainee)* | Yes |
+| `0` | -Нет группы- | No group / **remove** | — | — | *(clears group)* | No |
+| `1` | Администратор | Administrator | `user-circle-o` | `e50606` (red) | `Admin` | Yes |
+| `2` | Модератор | Moderator | `id-badge` | `2df044` (green) | `Moderator` | Yes |
+| `3` | VIP | VIP | `star` | *(per-record)* | `QueuePriority` | **No** |
+| `4` | Камера | Camera / Spectator | `video-camera` | `7d059e` (purple) | `Cameraman` | Yes |
+| `5` | Стажёр | Trainee / Intern | `graduation-cap` | `b57c03` (orange) | `Intern` | Yes |
 
-Key structural findings about the model:
+> Reconciliation with chapter 16: each `group_id` here maps 1:1 to a settings-tab group whose **capability set is the 21 Squad permission tokens** (`startvote, changemap, pause, cheat, private, balance, chat, kick, ban, config, cameraman, immune, manageserver, featuretest, reserve, demos, clientdemos, debug, teamchange, forceteamchange, canseeadminchat`). The admins page assigns the *membership*; chapter 16 defines what each membership *can do*. `changemap`/`kick`/`ban` performed in-game are flagged **"Не будет логироваться в панели"** (won't be audit-logged) in that tab.
 
-- **Fixed enum, not free-form roles.** There are exactly six values (0 + five groups). No API/UI for defining new groups or editing a group's capability set is present in this fragment. "Roles" in this panel = these fixed groups; permission granularity is coarse (one group per player).
-- **VIP (id 3) is a group in the same table but is NOT an admin role.** Its internal `name` is `QueuePriority` (queue-priority perk), and it is deliberately excluded from the roster's group filter (which only lists 1, 2, 4, 5). The same "change group" modal is reused to grant VIP — assigning group 3 with an expiry date is how a VIP subscription is issued. This is why the group modal doubles as a VIP-management tool (note the hidden **"VIP +1 месяц" (VIP +1 month)** button at line 729).
-- **Group carries cosmetic/identity payload, not just a permission tier.** Each assignment stores a free-text `description`, a `prefix` (in-game tag, ≤64 chars), a `prefix_rgb` color, and an `image` URL (≤256 chars). So a "group" record is `{group_id, expire, description, prefix, prefix_rgb, image}` scoped to a player.
-- **Special-cased visuals by internal name:** the modal header swaps a background image when `group.name == 'QueuePriority'` → `/assets/img/vip.jpg`, or `== 'Moderator'` → `/assets/img/moderator.jpg` (lines 1149–1152). Only these two names are branch-checked in client code; the rest render generically from `group.color` + `group.icon`.
-- **Scope appears GLOBAL, not per-server.** The `changeGroup` payload contains **no `server_id`** (contrast with squad/ban actions which always send `server_id`). Group membership is panel-wide across all servers. Per-server scoping is not modeled here.
+Structural findings:
+
+- **Fixed enum, not free-form roles.** Six values (0 + five groups); one group per player, no stacking. Granularity is coarse — the capability matrix lives in settings, not per-assignment.
+- **VIP (id 3) is a group row but not an admin role.** Internal name `QueuePriority` (queue-priority perk); deliberately excluded from the roster filter (which lists 1/2/4/5). The *same* change-group modal grants VIP by assigning `group_id=3` with an expiry — hence the hidden **"VIP +1 месяц" (VIP +1 month)** button (`#player_group-btn.hide`, `admins.content.html:728`).
+- **A group assignment carries cosmetic/identity payload**, not just a tier: `{group_id, expire, description, prefix, prefix_rgb, image}` scoped to a player (see the captured per-row fields and §3.2).
+- **Special-cased modal visuals by internal name** (`custom.js` ~1149–1152): header background → `/assets/img/vip.jpg` when `group.name == 'QueuePriority'`, → `/assets/img/moderator.jpg` when `== 'Moderator'`; all others render generically from `color` + `icon`.
+- **Scope is GLOBAL, not per-server.** The `changeGroup` payload (§4.1) contains **no `server_id`** (contrast squad actions, which always send it). Group membership is panel-wide.
 
 ---
 
 ### 3. Entities & Fields
 
-#### 3.1 Admin roster row (entity: player-with-group)
-Inferred from the `#adminPlayers` table columns and the `buildTable` `collum` array `["steam_id","name","group","date","time","boost","bans","discord"]`.
+#### 3.1 Admin roster row
 
-| Field | Column header | Meaning | Type |
-|---|---|---|---|
-| `steam_id` | SteamID | Steam64 ID; row key. Rendered inside `<hashtag>` in cell `td[data-contact="steam_id"]`. Click uses it to open modal. | string (17-digit) |
-| `name` | Ник (Nick) | Player display name (search maps to DB col `t2.player`). | string |
-| `group` | Группа (Group) | The assigned group (rendered as colored label + icon; DB search col `group_id`). | enum (see §2) |
-| `date` | Заходил (Last seen / logged in) | Last-seen timestamp. | datetime |
-| `time` | `fa-clock-o` (tooltip: "Наигранное время за период" / Playtime for the period) | Hours played within the selected period. | duration |
-| `boost` | `fa-angle-double-up` (tooltip: "Буст за период" / Boost for the period) | Boost/activity metric for the period. | number |
-| `bans` | `fa-gavel` (tooltip: "Выданные наказания за период" / Punishments issued for the period) | Count of punishments this admin **issued** in the period — an accountability/activity KPI. | number |
-| `discord` | `fa-brands fa-discord` (tooltip "Discord") | Whether the admin has a linked Discord (and link). | bool / link |
+Table headers are the live `#adminPlayers thead` (`admins.content.html`), each with its `data-sort` alias; field semantics from the C2 per-row schema.
 
-Note: the roster deliberately surfaces **admin accountability metrics** (playtime, boost, punishments issued) over a date range — this is a staff-activity dashboard, not just a list.
+| Column header (RU / gloss) | `data-sort` | Backing field(s) | Meaning | Type |
+|---|---|---|---|---|
+| SteamID | `steam_id` | `steam_id` | Player **UUID** (36-char); row key. | string(36) |
+| Ник (Nick) | `name` | `name` (alias `t2.player`) | Display nick. | string |
+| Группа (Group) | `group` | `group` (HTML), `group_id`+`color`+`icon` (raw) | Assigned group chip. | enum + rendered HTML |
+| Заходил (Last seen) | `date` | `date` | Last-seen **unix s**. | int-as-string |
+| `fa-clock-o` — "Наигранное время за период" (Playtime for period) | *(unsortable)* | `time` (HTML), `online.online` (raw) | Hours played in the selected period. | rendered badge |
+| `fa-angle-double-up` — "Буст за период" (Boost for period) | *(unsortable)* | `boost` (HTML), `online.boost` (raw) | Boost/activity in the period. | rendered badge |
+| `fa-gavel` — "Выданные наказания за период" (Punishments issued) | `bans` | `bans` (HTML `<kbd>N</kbd>`) | **Count of punishments this admin issued** in the period — accountability KPI. | rendered count |
+| `fa-brands fa-discord` — "Discord" | *(unsortable)* | `discord` (HTML) | Linked Discord handle / link. | rendered link |
 
-#### 3.2 Group-assignment record (entity written by `changeGroup`)
-From the `#player_group` form (lines 679–735) and the `player.group.set` payload (lines 2242–2249).
+The roster deliberately surfaces **admin-accountability metrics** (playtime, boost, punishments issued) over a date range — a staff-activity dashboard, not just a list.
 
-| Field | Input id | Meaning | Type / limit |
-|---|---|---|---|
-| `steam_id` | (from `player.info`) | Target player. | string |
-| `group_id` | `#player_group-groups` | Group to assign; `0` clears it. | enum 0–5 |
-| `date` | `#player_group-expire` (`.data('start')`) | Expiry of the group/VIP (a daterange). `expire=='0'` = infinity. | unix ts / 0 |
-| `description` | `#player_group-description` | Free-text comment on the assignment. | textarea, ≤128 |
-| `prefix` | `#player_group-prefix` | In-game name prefix/tag granted. | text, ≤64 |
-| `prefix_rgb` | `#player_group-prefix_rgb` | RGB color of the prefix (`r,g,b`), paired with a `<input type="color">` swatch that syncs hex↔rgb. | text, ≤16 |
-| `image` | `#player_group-image` | URL to an image/avatar tied to the group. | text (URL), ≤256 |
+#### 3.2 Group-assignment record (written by `changeGroup`)
 
-#### 3.3 Client-side permission flags (entity: `player.info.*`)
-The server returns these booleans on `player.get`; the modal shows/hides controls accordingly (see §6). They ARE the effective permission model as the client sees it:
+From `#player_group` (`admins.content.html:678–735`) and the `player.group.set` payload (`custom.js` ~2240–2249). Each field with its `#id`, input type, and limit:
+
+| Payload key | `#id` | Input type | maxlength | Meaning / validation |
+|---|---|---|---|---|
+| `steam_id` | *(from `player.info.steam_id`)* | — | — | Target player UUID. |
+| `group_id` | `#player_group-groups` | `<select>` (multiselect single) | — | Group `0..5`; `0` clears. Preselected to `player.info.group_id`. |
+| `date` | `#player_group-expire` | `daterange` (`.data('start')`) | — | Expiry unix s; `0` = infinity. Presets in §5.3. |
+| `description` | `#player_group-description` | `<textarea>` | **128** | Free-text comment. |
+| `prefix` | `#player_group-prefix` | `text` | **64** | In-game tag granted. |
+| `prefix_rgb` | `#player_group-prefix_rgb` | `text` | **16** | `"r,g,b"`; two-way-synced with `#player_group-prefix_rgb-color` (`<input type="color">`) via `stringRgbToHex`/`hexToRgb`; clears on parse failure. |
+| `image` | `#player_group-image` | `text` (URL) | **256** | Group image URL. |
+
+#### 3.3 Client-side permission flags (`player.info.*`, returned by C4)
+
+Booleans on `player.get`; the modal shows/hides controls accordingly (§6). These are the effective permission model as the client sees it:
 
 | Flag | Gates |
 |---|---|
-| `canChangeGroup` | Whether the **Группа (Group)** button is shown → whether this operator may assign groups at all. |
-| `canBan` | Ban flow + name-ban + kits + (online) kill; also hides Group button when false. |
-| `canUnban` | Whether the "unban" control appears on an existing ban. |
+| `canChangeGroup` | Whether the **Группа (Group)** button renders → whether this operator may assign groups at all. |
+| `canBan` | Ban flow + name-ban + kits + (online) kill; also **hides the Group button when false**. |
+| `canUnban` | Whether an existing ban shows an "unban" control. |
 | `canSelfKick` | Whether "kick without reason" appears. |
-| `is_you` | If the target is the operator themselves, the group multiselect and expiry are **disabled** — you cannot change your own group. |
+| `is_you` | If target == operator, the group select **and** expiry are `disable`d — you cannot change your own group. |
 
 ---
 
 ### 4. Actions Available Here
 
-Mutations go through the JS helper `Action({script, action, data})` → `POST /ajax/<script>.php` with `action=<action>&<data…>`.
+Mutations go through `Action({script, action, data})` → `POST /ajax/<script>.php` with `action=<action>&<data…>`.
 
-#### 4.1 The permission action (unique/central to this page)
+#### 4.1 The permission action (unique/central to this page) — exact contract
 
-| UI label | action id | script → endpoint | data params | Effect | Destructive? |
-|---|---|---|---|---|---|
-| Сменить группу (Change group) / VIP +1 месяц | `changeGroup` | `player` → `/ajax/player.php` | `steam_id, date, group_id, description, prefix, prefix_rgb, image` | Assigns / changes / (group_id=0) **revokes** a player's group. Also the mechanism to grant/extend VIP. Confirmation dialog "Сменить группу?" shows the selected group label before commit. On success re-opens the player modal. | **Y** — grants/revokes privileges |
+Transcribed verbatim from `player.group.set` (`custom.js` ~2233–2250). **NOT executed during capture** (`_blocked.json` = `[]`).
 
-There is **no separate `demote`/`promote`/`add-admin`/`remove-admin` action** — the entire lifecycle (add, promote, demote, expire, remove) is expressed as a single `changeGroup` call with a different `group_id` (and `0` = remove). Demotion = `changeGroup` to a lower group; removal = `changeGroup` with `group_id:0`.
+```js
+Action({
+  script: 'player',
+  action: 'changeGroup',
+  data: {
+    steam_id:   player.info.steam_id,                 // UUID string
+    date:       $('#player_group-expire').data('start'), // unix s | 0 (=infinity)
+    group_id:   $('#player_group-groups').val(),       // "0".."5"
+    description:$('#player_group-description').val(),   // ≤128
+    prefix:     $('#player_group-prefix').val(),        // ≤64
+    prefix_rgb: $('#player_group-prefix_rgb').val(),    // "r,g,b", ≤16
+    image:      $('#player_group-image').val()          // URL, ≤256
+  }
+})
+```
 
-#### 4.2 Read action that populates this page
+| Endpoint | `POST /ajax/player.php` (body `action=changeGroup&…`) |
+|---|---|
+| **data keys** | `steam_id` (string, req), `date` (unix s \| `0`, req), `group_id` (`"0".."5"`, req), `description` (string), `prefix` (string), `prefix_rgb` (string), `image` (string) |
+| **No `server_id`** | Confirms global scope. |
+| **Effect** | Assigns / changes / (`group_id=0`) **revokes** a player's group; also grants/extends VIP (`group_id=3`). |
+| **Confirm** | `$.question` "Сменить группу?" renders the chosen group `<option>` label as an `<h2>`; progress text "Меняем" (Changing). |
+| **On success** | Re-opens the player modal via `player.open(player.info.steam_id)`. |
+| **Destructive?** | **Y** — grants/revokes privileges. This single call *is* the RBAC lifecycle. |
 
-| Purpose | action | script | data | Notes |
+There is **no separate `promote`/`demote`/`addAdmin`/`removeAdmin`** action. Add = assign a group; promote/demote = `changeGroup` to a different `group_id`; remove = `changeGroup` with `group_id:0`; VIP issue/extend = `group_id:3` + expiry.
+
+#### 4.2 Reads that populate this page
+
+| Purpose | Contract | Notes |
+|---|---|---|
+| Roster rows | **C2** `POST /ajax/table.php` `action=adminPlayers` | 50/page, server-side. |
+| Roster count | **C3** same + `pagination=true` | Returns `totalRows`/`totalPage`. |
+| Open a player | **C4** `POST /ajax/player.php` `action=get&steam_id=<uuid>` | Row click; loads `player.info` + flags. |
+
+#### 4.3 Shared player-modal actions (embedded — NOT unique to admins page)
+
+These ~22 actions ship on every page's embedded modal. `script:'squad'` actions require the player online and always carry `server_id` (per-server); `script:'player'` actions are global.
+
+| action | script | Per-server (`server_id`)? | Effect | Destructive? |
 |---|---|---|---|---|
-| Roster rows | (DataTables server-side) | `table` → `/ajax/table.php` | `table:'adminPlayers'`, `collum[]`, `order[]`, `numrows:50`, plus the search inputs | Server-side paginated table; 50 rows/page. |
-| Open a player | `get` | `player` → `/ajax/player.php` | `steam_id` | Fires on row click; loads full player + permission flags. |
-
-#### 4.3 Shared player-modal actions (present because the modal is embedded — NOT unique to admins page)
-These ~22 actions appear on every page's embedded modal. Listed for completeness; do not attribute them to the admins page specifically. `script:'squad'` actions require the player to be online and always carry `server_id` (i.e. these ARE per-server). `script:'player'` actions are global.
-
-| action | script | Per-server? (sends `server_id`) | Effect | Destructive? |
-|---|---|---|---|---|
-| `ban` | squad | Y | Ban player (`reason_id`, `description`, `days`) | Y |
+| `ban` | squad | Y | Ban (`reason_id, description, days`) | Y |
 | `unban` | squad | — | Lift ban | Y |
-| `kick` | squad | Y | Kick from squad/server | Y |
+| `kick` | squad | Y | Kick | Y |
 | `removePlayer` | squad | Y | Remove from squad | Y |
 | `changeTeam` | squad | Y | Switch team | Y |
 | `kill` | squad | Y | Kill in-game | Y |
 | `addBanName` / `removeBanName` | player | — | Ban/unban a nickname | Y |
 | `kits` / `kitSave` | player | — | View/save kits | Y (save) |
-| `mark` | player | — | Set/clear cheat-suspicion tag (8 mark types + clear) | Y |
-| `message` | player | — | Send in-game message (canned templates provided) | Y |
-| `addComment` / `getComments` | player | — | Admin notes on player | Y (add) |
-| `twink` / `twinkOnline` / `findFriends` | player | — | Alt-account (twink) detection | N (read) |
+| `mark` | player | — | Set/clear cheat-suspicion tag | Y |
+| `message` | player | — | In-game message (canned templates) | Y |
+| `addComment` / `getComments` | player | — | Admin notes | Y (add) |
+| `twink` / `twinkOnline` / `findFriends` | player | — | Alt-account detection | N |
 | `checkBans` | player | — | Cross-check bans | N |
 | `getPlayerOnlineData` | player | — | Online activity data | N |
-| `downloadStat` | player | — | `post_to_url('/ajax/player.php', {action:'downloadStat'})` — export stats (form POST, not AJAX) | N |
-| `vipPlayer` (via changeGroup id=3) | player | — | Grant VIP (implemented through `changeGroup`) | Y |
+| `downloadStat` | player | — | Export stats (form POST) | N |
 
 ---
 
 ### 5. Forms, Filters & Modals
 
-#### 5.1 Roster filter sidebar (page's own)
-Fixed-position card (`position:fixed`) with:
-- **Поиск (Search) button** `#adminPlayers-btn` — triggers `buildTable()`.
-- **Ник или SteamID** text input `#adminPlayers-name` (`data-search="t2.player"`).
-- **Group multiselect** `#adminPlayers-group` (`data-search="group_id"`, `type="multiselect" multiple`) — options 1/2/4/5 only (VIP excluded); placeholder "- Группа -", HTML-enabled labels with colored icons.
-- **Period picker** `#adminPlayers-period` (`type="daterange"`, `data-search="custom.period"`) — presets: justMonth/justDay/justWeek/justYear/range/today/yesterday/currentWeek/lastWeek/currentMonth/lastMonth/**last30days (default)**. Changing it rebuilds the table. Also hidden start/end datetime pickers (`ru` locale).
+#### 5.1 Roster filter sidebar (page's own) — live ids
+
+Fixed card (`.block-box`, `position:fixed`), `admins.content.html:1–24`:
+
+| Control | `#id` | Type / `data-search` | Options / default |
+|---|---|---|---|
+| Поиск (Search) | `#adminPlayers-btn` | button → `buildTable()` | — |
+| Ник или SteamID | `#adminPlayers-name` | `text`, `data-search="t2.player"` | placeholder "Ник или SteamID" |
+| Group multiselect | `#adminPlayers-group` | `multiselect multiple`, `data-search="group_id"` | options **1/2/4/5 only** (VIP excluded), HTML labels with colored `fa` icons; placeholder "- Группа -" |
+| Period picker | `#adminPlayers-period` | `daterange`, `data-search="custom.period"` | button label **"30 дней"**; emits `custom.period.startdate/enddate` (unix s) into `search.text`. Default range = last 30 days. |
 
 #### 5.2 Roster table
-`#adminPlayers`, `numrows:50`, sortable columns limited by `order` to: steam_id, name, group, date, bans. Row click → `player.open(steamId)`.
 
-#### 5.3 Group-change modal (`#player_group`, initially `class="hide"`)
-Reached via the **Группа** button in the player modal, which "flips" the panel to the group form. Fields per §3.2, plus:
-- Expiry daterange presets: justDay / +1/+2/+3/+6 months / +1 year / **infinity** / reset. Default = infinity if already grouped with `expire=='0'`, else the current expiry.
-- **Validation / guards:** if `is_you`, the group select and expiry are disabled (cannot self-edit). `prefix_rgb` input validates via `stringRgbToHex`/`hexToRgb`, clearing on parse failure, and stays two-way synced with the color swatch.
-- Buttons: **Игрок (Player)** = flip back; **VIP +1 месяц** (hidden by default, `class="hide"`); **Сменить группу (Change group)**. Both action buttons call `player.group.set(this)`.
-- Confirmation: `$.question` dialog titled "Сменить группу?" renders the chosen group's label as an `<h2>`; on confirm shows "Меняем" (Changing) progress text.
+`#adminPlayers` (`class="table table-hover"`), `numrows:50`. **Sortable columns** (have `data-sort`): `steam_id`, `name`, `group`, `date`, `bans`. **Not sortable**: playtime, boost, discord. Row click → `player.open(steam_id)`.
+
+#### 5.3 Group-change modal (`#player_group`, `class="hide"`)
+
+Reached via the **Группа** button, which `player.modal.flip({direction:'lr', content:$('#player_group').html()})` (`custom.js` ~2155). On flip end:
+
+- `#player_group-groups` multiselect built (`enableHTML:true`), preselected to `player.info.group_id`, rebuilt.
+- `#player_group-expire` daterange presets: `justDay, plus1Month, plus2Month, plus3Month, plus6Month, plus1Year, infinity, reset`. **Default:** `{type:'infinity'}` if `group_id && expire=='0'`, else `{type:'justDay', start: moment.unix(expire || now)}`.
+- **Self-protection:** if `player.info.is_you`, `#player_group-groups` `multiselect('disable')` and `#player_group-expire` `prop('disabled', true)`.
+- `#player_group-prefix_rgb` two-way-syncs with the color swatch; parse failure clears the text field.
+- Buttons: **Игрок (Player)** = `player.unflip()` (flip back); **VIP +1 месяц** (`#player_group-btn.hide`); **Сменить группу (Change group)** (`#player_group-btn`). Both action buttons call `player.group.set(this)`.
 
 ---
 
 ### 6. Permission / Visibility Logic
 
-The panel is **client-gated by server-provided boolean flags** on `player.info` (server presumably enforces server-side too, but the UI logic is explicit):
+Client-gated by the server-provided booleans on `player.info` (§3.3); server presumably re-enforces:
 
-- `#player_group` form is permanently `class="hide"` in markup and only revealed by the flip interaction.
-- **Group button** (`#player_info-group_btn`, "Группа") is shown only if `player.info.canChangeGroup` (line 1130–1133); additionally hidden entirely when `!canBan` (line 1120).
-- Ban/name-ban/kits controls gated on `canBan`; unban on `canUnban`; kill/kick-no-reason on `canBan`/`canSelfKick` and require the player to be `online`.
+- `#player_group` is permanently `class="hide"` in markup, revealed only by the flip.
+- **Group button** shown only if `canChangeGroup`; additionally hidden entirely when `!canBan`.
+- Ban/name-ban/kits gated on `canBan`; unban on `canUnban`; kill/kick-no-reason on `canBan`/`canSelfKick` and require `online`.
 - Self-protection: `is_you` disables changing your own group/expiry.
-- Group id `0` is the removal sentinel; the label "-Нет группы-" is the only non-icon option.
+- `group_id=0` ("-Нет группы-") is the removal sentinel; it is the only non-icon option.
 
-Implication for a competitor: permissions are **coarse and centralized** — a single `canChangeGroup` flag decides who can grant any group up to Administrator. There is no notion of "can grant group X but not Y", no per-server admin scoping, and no delegated/tiered promotion rules in the client. That is a weakness worth beating.
+Implication for a competitor: permissions are **coarse and centralized** on this page — a single `canChangeGroup` flag decides who can grant *any* group up to Administrator. There is no "can grant X but not Y", no per-server admin scoping, and no delegated/tiered promotion rules in the client. (The per-token capability matrix exists — but in settings, §2/ch.16 — not per assignment.)
 
 ---
 
 ### 7. Notable UX & Competitively Interesting Details
 
-- **Unified "group" abstraction covers both staff roles AND paid VIP** via one table/modal/`changeGroup` action. Simple to build, but conflates access-control with monetization — a competitor could separate "roles/permissions" from "subscriptions/perks" cleanly.
-- **Staff-accountability KPIs baked into the roster** (playtime, boost, and *punishments issued* per admin over a date range). This turns the admin list into a moderation-activity dashboard — a strong feature worth copying/beating (e.g. add report-resolution time, ban-overturn rate).
-- **Cosmetic identity per assignment** (prefix + RGB color + image + comment) tied to the group grant — nice touch; the color picker two-way-syncs hex and `r,g,b`.
-- **Expiry on group membership** (including infinity) — groups can auto-expire, which elegantly handles temporary trainee/camera access and VIP subscriptions with the same mechanism.
-- **Weaknesses to beat:** (1) fixed 6-value enum, no custom groups; (2) no fine-grained capability matrix — capabilities are implied by group id and hard-coded client checks (`QueuePriority`, `Moderator`); (3) group scope is global, no per-server admin assignment; (4) one group per player (no stacking); (5) promotion/demotion/removal all collapse into one opaque `changeGroup` call with no audit action of its own (though `description` gives a manual note).
+- **Unified "group" abstraction covers staff roles AND paid VIP** via one enum/modal/`changeGroup` action — simple to build, but conflates access-control with monetization. A competitor could split "roles/permissions" from "subscriptions/perks" cleanly.
+- **Staff-accountability KPIs in the roster** (playtime, boost, **punishments issued** per admin over a date range) turn the admin list into a moderation-activity dashboard — worth copying/beating (add report-resolution time, ban-overturn rate).
+- **Cosmetic identity per assignment** (prefix + RGB + image + comment); the color picker two-way-syncs hex↔`r,g,b`.
+- **Expiry on membership incl. infinity** — the same mechanism auto-expires trainee/camera access *and* VIP subscriptions.
+- **Weaknesses to beat:** (1) fixed 5-value enum, no custom groups on this page; (2) capability granularity is one group per player + a global settings-level token matrix — no per-assignment scoping; (3) group scope is global, no per-server admin assignment; (4) no stacking; (5) promote/demote/remove collapse into one opaque `changeGroup` with no dedicated audit action (only the manual `description`).
+
+---
+
+### 8. Capture-Derived Findings (new vs. prior static analysis)
+
+1. **Identity is now a UUID, not Steam64.** The live `steam_id` field is `str(len36)` (dashed UUID). Every `steam_id` on this page — row key, `changeGroup.steam_id`, `player.open()` arg — is a UUID string. Any reimplementation/interop must treat the identity column as an opaque UUID, mapping to Steam64 only where the game protocol requires it. (Mirrors this repo's own `steam_id64 → UUID` primary-key migration.)
+2. **Two-request pagination.** The data call (C2) returns `totalPage:0 / totalRows:0`; the true count comes from a **separate** `pagination=true` call (C3, `totalRows:"53"`). A client that reads paging off C2 alone will see zero.
+3. **Server-side HTML in JSON.** `group`, `time`, `boost`, `bans`, `discord` arrive **pre-rendered as HTML strings**, while `group_id`/`color`/`icon`/`date` arrive raw. The roster is not a clean data API — it mixes presentation and data, so a machine consumer must parse HTML out of some cells. Cleaner separation is an easy win.
+4. **`live_contracts_captured = 3`, `blocked_mutations = 0`** — the page auto-loads only reads (fragment + rows + count); no mutation fires on load, and the interceptor blocked nothing.
+5. **`color` has no `#`, `icon` has no `fa-` prefix** — the client adds both when rendering; matters for anyone re-styling the chips.
+6. **Modal detail-log tables** (`admins.modaltabs.json`): `admin`, `date`, `text` — the per-player activity sub-tables inside the shared modal.
 
 
 ---
 
 ## 06. VIP / Privileges (Привилегии)
 
+> Spec-grade rewrite backed by LIVE captured contracts (headless, read-only).
+> Capture set: `/Users/seregatipich/.claude/jobs/bd83e71f/tmp/caps/vips/`
+> — `vips.network.json` (3 AJAX contracts), `vips.content.html` (rendered `#content`, 138 KB), `vips.modaltabs.json`, `vips.png`.
+> Mutating requests blocked by the interceptor: **0** (`_blocked.json` == `[]`). Everything below is observation-only.
+
 ### 1. Purpose & Navigation
 
-- **Nav id / loader:** `vips` — the nav item calls `pageLoad('vips')` → `GET /ajax/page.php?page=vips`, and the returned HTML fragment is injected into `#content`.
-- **Purpose:** A read-and-drill roster of all players who currently hold a **group/privilege** (VIP, Admin, Moderator, Camera, Trainee, …). It is effectively a filtered view of the player base joined against the "group assignment" table, showing who has a privilege, when it expires, when they last connected, and the admin's note.
-- **Important architectural note:** The `vips` page itself is *read-only browsing + search*. It has **no add/edit/delete controls of its own**. All privilege mutation is performed through the **shared player-detail modal** ("Смена группы" / Change group sub-panel) that every fragment embeds. Clicking any row opens that modal for the selected player. So the "VIP management" capability physically lives in the shared modal, but is reached from this page.
+- **Nav id / loader:** `vips` — nav item calls `pageLoad('vips')` → `GET /ajax/page.php?page=vips`; the returned HTML fragment (`response_len` 113 754 B, `ctype: text/html`) is injected into `#content`. Confirmed in `vips.network.json` contract #1.
+- **Purpose:** a read-and-drill roster of every player who currently holds a **group/privilege** (VIP, Admin, Moderator, Camera, Trainee). It is a JOIN of the group-assignment table (`t1`) and the player table (`t2`), showing SteamID, nick, term/expiry, last-seen, accumulated online time, and the admin note.
+- **Architectural invariant:** the `vips` page is **read + search only**. It ships **no add/edit/delete controls of its own**. Every privilege mutation goes through the **shared player-detail modal** ("Смена группы" / Change group), which the fragment embeds as a hidden `#player_group` panel. A row click opens the player modal (`player.open(steam_id)`); flipping to the group panel (`player.group.open()`) exposes the single mutation `changeGroup`. So the "VIP management" capability physically lives in the shared modal, reached from this page.
+- **Live scale:** the captured instance holds **395 privilege rows** across **8 pages** at 50 rows/page (`pagination=true` response: `totalRows:"395"`, `totalPage:8`).
 
 ---
 
-### 2. Entities & Data Model
+### 2. Live API Contracts
 
-The page exposes two entities: the **VIP/privilege roster row** (the page's own table) and the **group assignment** record (edited via the shared modal). Fields are inferred from the `buildTable` `collum` array, the search `data-search` attributes, the `changeGroup` payload, and the group `<select>`/`dateRange` options.
+Three contracts fire on load. Ground truth: `vips.network.json`.
 
-#### Entity A — VIP roster row (`vipPlayers` table)
+#### 2.1 `GET /ajax/page.php?page=vips` — fragment loader
 
-`buildTable({ table:'vipPlayers', collum:["steam_id","name","expire","date","time","vipdesc"] })`
-
-| Field (collum key) | Column header | Meaning / Type | Notes |
+| Param | Type | Required | Meaning |
 |---|---|---|---|
-| `steam_id` | SteamID | Player Steam64 id | Rendered inside a `<hashtag>` element; used as the drill key (`player.open(...)`). |
-| `name` | Ник (Nick) | Current/last known player name | String. |
-| `expire` | Срок (Term) | Privilege expiry timestamp | Unix seconds. `expire == '0'` ⇒ **permanent** ("infinity"). Drives the roster's core sort/meaning. |
-| `date` | Заходил (Last seen) | Last-login timestamp | Unix seconds; the "Заходил c / до" filters range over this. |
-| `time` | (clock icon `fa-clock-o`) | Time metric per row | A right-aligned narrow (80px) column keyed on a clock icon — represents accumulated online time / duration; not separately labelled in UI. |
-| `vipdesc` | Описание (Description) | Admin note attached to the privilege | Free text; searchable via `t1.description`. |
+| `page` | string enum | Y | Page id; here `vips`. |
 
-The search `data-search` hints leak the server-side schema: `t1.description` (the privilege/assignment table, alias `t1`) and `t2.player` (the player table, alias `t2`), i.e. the roster is a JOIN of a **group-assignment table (t1)** and a **player table (t2)**.
+Response: `text/html` fragment (the sidebar filter form + the `#vipPlayers` table skeleton + all hidden player-modal panel templates). Injected into `#content`.
+
+#### 2.2 `POST /ajax/table.php` — roster data (`action=vipPlayers`)
+
+**Request body** (`application/x-www-form-urlencoded`, verbatim from capture):
+
+```
+action=vipPlayers&table=vipPlayers&page=1&numrows=50
+&search={"text":{},"check":{},"multiselect":{},"managers":{},"slider":{}}
+&order_by=false&order_sort=false
+```
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `action` | string | Y | Server table id; **`vipPlayers`**. |
+| `table` | string | Y | Duplicate of `action` (buildTable sends both). |
+| `page` | int | Y | 1-based page index. |
+| `numrows` | int | Y | Page size; **50** for this table. |
+| `search` | JSON string | Y | Filter bag: `{text:{}, check:{}, multiselect:{}, managers:{}, slider:{}}`. Text filters land under `text` keyed by each input's `data-search` alias (see §5). Empty object = no filter. |
+| `order_by` | string / `false` | Y | Column DB-alias to sort by; `false` = server default. |
+| `order_sort` | `asc`/`desc`/`false` | Y | Sort direction; `false` = server default. |
+| `pagination` | bool (optional) | N | When `true`, returns only the count envelope (§2.3) instead of rows. |
+
+**Response** `application/json`, `status:"ok"`, `exec_time: float` (seconds, e.g. `0.644`). Shape (`data.*`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `data.totalPage` | int | Page count (0 on the rows call; real value comes from the `pagination=true` call). |
+| `data.totalRows` | int | Row count (0 on rows call). |
+| `data.currentPage` | string | Echo of requested page, e.g. `"1"`. |
+| `data.row[]` | array (len == `numrows`) | Roster rows; per-row schema below. |
+| `data.custom` | bool | Whether a custom/user filter preset is active. |
+| `data.query_time` | int | ms for the row query. |
+| `data.count_time` | int | ms for the count query. |
+| `status` | string enum | `"ok"` on success. |
+| `exec_time` | float | Total server time (s). |
+
+**Per-row object** (`data.row[i]`) — the VIP roster entity:
+
+| Field | Type | Meaning / notes |
+|---|---|---|
+| `steam_id` | string | Player identifier / drill key. Rendered in HTML as `<hashtag>7656119XXXXXXXXXX</hashtag>` (Steam64). Capture redaction reported a 36-char token — see Gaps re: raw vs UUID. |
+| `group_id` | string enum | Privilege id as a string: `"0"`..`"5"` (see §3 catalog). Captured sample `"3"` = VIP. |
+| `expire` | string | Privilege expiry, **unix seconds as string**. Empty string `""` in the captured VIP sample ⇒ **permanent / no expiry** (the UI treats `expire=='0'` as infinity; empty renders as a blank `Срок` cell). |
+| `description` | string | Raw admin note (short; sample len 3). |
+| `prefix` | string \| null | In-game chat/name prefix; `null` when unset. |
+| `prefix_rgb` | string \| null | Prefix color as `"r,g,b"`; `null` when unset. |
+| `image` | string \| null | Badge/image URL; `null` when unset. |
+| `name` | string | Current/last known player nick. |
+| `date` | string | Last-seen timestamp, **unix seconds as string** (sample `"1783107913"`). Rendered as a `badge bg-success` with `data-unix`. |
+| `color` | string | Group badge hex color, **no `#`** (sample `"e2b032"` = VIP gold). |
+| `icon` | string | Group FontAwesome icon name (sample `"star"` = VIP). |
+| `vipdesc` | string | Rendered/expanded note shown in the `Описание` column (sample includes newlines/ASCII art, len 94). Distinct from `description`. |
+| `online` | object | Live presence sub-object (below). |
+| `online.online` | string | Total online minutes/points (sample `"3221"`). |
+| `online.boost` | string | Boost time/points (sample `"141"`). |
+| `online.queue` | string | Queue priority / reserved-slot indicator (sample `"5"`). |
+| `online.server` | string | Server id the metric is scoped to (sample `"1"`). |
+| `group` | string (HTML) | Pre-rendered group label, e.g. `<span class="label label-primary" …>`. |
+| `time` | string (HTML) | Pre-rendered accumulated-time badge, e.g. `<span class="label label-success">53ч 41м</span>` (danger variant `0ч 0м` when zero). |
+
+Redacted example row (privacy-safe):
+
+```json
+{
+  "steam_id": "<redacted Steam64>",
+  "group_id": "3", "expire": "",
+  "description": "<3ch>", "vipdesc": "випку зайке (\\__/) …",
+  "prefix": null, "prefix_rgb": null, "image": null,
+  "name": "<redacted nick>",
+  "date": "1783107913",
+  "color": "e2b032", "icon": "star",
+  "online": { "online": "3221", "boost": "141", "queue": "5", "server": "1" },
+  "group": "<span class=\"label label-primary\" …>",
+  "time": "<span class=\"label label-success\">53ч 41м…"
+}
+```
+
+#### 2.3 `POST /ajax/table.php` … `&pagination=true` — count envelope
+
+Same body as §2.2 plus `&pagination=true`. Returns a slim envelope (no rows):
+
+| Field | Type | Sample | Meaning |
+|---|---|---|---|
+| `totalPage` | int | `8` | Page count = ceil(totalRows / numrows). |
+| `totalRows` | string | `"395"` | Total matching privilege rows (string!). |
+| `count_time` | int | `0` | ms for the count query. |
+| `status` | string | `"ok"` | — |
+| `exec_time` | float | `0.01` | Total server time (s). |
+
+buildTable fires this once after the rows call to paint the pager, so the roster page issues **two** `table.php` POSTs per view.
+
+---
+
+### 3. Entities & Data Model
+
+Two entities: the **VIP/privilege roster row** (§2.2 schema) and the **group-assignment record** (edited via `changeGroup`).
+
+#### Entity A — VIP roster row (`vipPlayers` server table)
+
+buildTable init (from `vips.content.html` inline script):
+
+```js
+$('#vipPlayers').buildTable({
+  table: 'vipPlayers',
+  collum: ["steam_id","name","expire","date","time","vipdesc"],
+  numrows: 50,
+  searchInput: ["vipPlayers-name","vipPlayers-startdate","vipPlayers-enddate","vipPlayers-desc"],
+  end: () => { $('#vipPlayers tbody > tr').on('click', function(){
+      player.open($(this).find('td[data-contact="steam_id"] > hashtag').text());
+  }); }
+});
+```
+
+| `collum` key | Column header (rendered) | Cell `data-contact` | Source field | Type / meaning |
+|---|---|---|---|---|
+| `steam_id` | `SteamID` (width 151px) | `steam_id` | `row.steam_id` | Steam64 in `<hashtag>`; the drill key. |
+| `name` | `Ник` (Nick, centered) | `name` | `row.name` | Bold-centered nick. |
+| `expire` | `Срок` (Term, width 130px) | `expire` | `row.expire` | Unix-sec string; empty/`0` ⇒ permanent (blank cell). |
+| `date` | `Заходил` (Last seen, width 130px) | `date` | `row.date` | `badge bg-success[data-unix]`, humanized ("Вчера 21:45:13"). |
+| `time` | clock icon `fa-clock-o` (width 80px) | `time` | `row.time` | Accumulated online time badge (`53ч 41м`); success/danger color. |
+| `vipdesc` | `Описание` (Description, centered) | `vipdesc` | `row.vipdesc` | Admin note (expanded). |
+
+Search aliases leak the server schema: `t1.description` (assignment table) and `t2.player` (player table) — the roster is a JOIN of **group-assignment `t1`** × **player `t2`**.
 
 #### Entity B — Group / privilege assignment (edited via `changeGroup`)
 
-Payload of `player.group.set` → `Action({script:'player', action:'changeGroup', data:{...}})`:
+`Action({script:'player', action:'changeGroup', data:{…}})` — exact keys from `vips.content.html`:
 
-| Field | Source control | Meaning / Type |
-|---|---|---|
-| `steam_id` | `player.info.steam_id` | Target player. |
-| `group_id` | `#player_group-groups` (`<select>`) | The privilege/role granted (see group list below). `0` = remove group. |
-| `date` | `#player_group-expire` dateRange (`.data('start')`) | Expiry start/term. `0` / infinity ⇒ permanent. |
-| `description` | `#player_group-description` (`<textarea>`, maxlength 128) | Admin comment shown as `vipdesc` in the roster. |
-| `prefix` | `#player_group-prefix` (maxlength 64) | In-game chat/name prefix/tag granted with the privilege. |
-| `prefix_rgb` | `#player_group-prefix_rgb` (+ color picker, maxlength 16) | RGB color of the prefix, stored as `"r,g,b"`; a `<input type=color>` and hex↔rgb converters (`stringRgbToHex`,`hexToRgb`) keep the two synced. |
-| `image` | `#player_group-image` (maxlength 256) | URL to an image/badge associated with the privilege. |
+| Key | Source control | Type | Meaning |
+|---|---|---|---|
+| `steam_id` | `player.info.steam_id` | string | Target player (Steam64). |
+| `date` | `$('#player_group-expire').data('start')` | unix-sec / `0` | Expiry term; `0` (infinity preset) ⇒ permanent. |
+| `group_id` | `$('#player_group-groups').val()` | enum `0..5` | Privilege granted; `0` = remove group. |
+| `description` | `#player_group-description` textarea | string ≤128 | Admin comment → `vipdesc`. |
+| `prefix` | `#player_group-prefix` | string ≤64 | In-game chat/name prefix. |
+| `prefix_rgb` | `#player_group-prefix_rgb` | string ≤16 | Prefix color `"r,g,b"`. |
+| `image` | `#player_group-image` | string ≤256 | Badge/image URL. |
 
-Group catalog (from the `<select id="player_group-groups">` options — this is the full privilege taxonomy):
+On success it re-opens the card: `success: () => player.open(player.info.steam_id)`; on error `addAlert(text)`; `complete` closes the confirm dialog.
 
-| group_id | Label | Icon |
+Group catalog — verbatim `<option>`s of `#player_group-groups`:
+
+| group_id | Label (RU / EN) | FA icon |
 |---|---|---|
 | `0` | -Нет группы- (No group) | — |
-| `1` | Администратор (Administrator) | user-circle |
-| `2` | Модератор (Moderator) | id-badge |
-| `3` | **VIP** | star |
-| `4` | Камера (Camera / spectator) | video-camera |
-| `5` | Стажёр (Trainee) | graduation-cap |
+| `1` | Администратор (Administrator) | `fa-user-circle-o` |
+| `2` | Модератор (Moderator) | `fa-id-badge` |
+| `3` | **VIP** | `fa-star` |
+| `4` | Камера (Camera / spectator) | `fa-video-camera` |
+| `5` | Стажёр (Trainee) | `fa-graduation-cap` |
 
-So "VIP" is one value (`group_id=3`) inside a general **group/role system** — the same mechanism grants staff roles and VIP alike, differentiated only by `group_id`.
-
----
-
-### 3. The Page's Own Table (`#vipPlayers`)
-
-- **Columns:** SteamID · Ник · Срок (expiry) · Заходил (last seen) · clock-icon (time) · Описание. (See Entity A.)
-- **Pagination / page size:** server-side via `POST /ajax/table.php` (script `table`, action = table name `vipPlayers`); `numrows: 50` rows/page. Page counts fetched with a separate `&pagination=true` call.
-- **Search/filter controls** (left fixed sidebar, `#vipPlayers-*`, applied by the "Поиск" button `#vipPlayers-btn`):
-
-| Control | id | `data-search` target | Meaning |
-|---|---|---|---|
-| Ник или SteamID (Nick or SteamID) | `vipPlayers-name` | `t2.player` | Text match on player name/id. |
-| Заходил c (Last-seen from) | `vipPlayers-startdate` | `startdate` | Datetime picker (ru locale), range start on last-login. |
-| Заходил до (Last-seen to) | `vipPlayers-enddate` | `enddate` | Datetime picker, range end; each has an inline clear (✕). |
-| Описание (Description) | `vipPlayers-desc` | `t1.description` | Text match on the admin note. |
-
-- **Row interaction:** `$('#vipPlayers tbody > tr').on('click', ...)` → `player.open(<steam_id from hashtag>)` opens the shared player-detail modal. There is **no sort UI, no per-row action buttons, no bulk-select** on this page — it is a browse/search surface only.
+VIP is one value (`group_id=3`) inside a general **group/role system**; the same `changeGroup` endpoint grants staff roles and VIP alike, differentiated only by `group_id`. VIP's badge is gold (`color:"e2b032"`, `icon:"star"`).
 
 ---
 
-### 4. Actions / Permissions available from this page
+### 4. The Page's Own Table (`#vipPlayers`)
 
-The only *page-native* interaction is search + drill-in. Every state change is delegated to the shared player modal reached via row click. Actions relevant to VIP/privileges:
+- **Columns:** SteamID · Ник · Срок · Заходил · clock-icon (time) · Описание (§3, Entity A).
+- **Server table id:** `vipPlayers` (both `action=` and `table=`).
+- **Page size (`numrows`):** **50**. Two POSTs per view: rows, then `pagination=true` count.
+- **Default sort:** `order_by=false&order_sort=false` — server default (no client sort UI, no `order` config, no sortable headers).
+- **Row interaction:** `#vipPlayers tbody > tr` click → `player.open(<hashtag text>)`. No per-row buttons, no bulk-select, no inline edit.
 
-| UI label | action id | script → endpoint | Data params | Effect | Destructive? |
+---
+
+### 5. Forms & Filters
+
+Left fixed sidebar, applied by the **Поиск** (Search) button `#vipPlayers-btn`. Each input's `data-search` becomes a key in the `search.text` bag.
+
+| Control (RU / EN) | `#id` | input type | `data-search` alias | Notes |
+|---|---|---|---|---|
+| Ник или SteamID (Nick or SteamID) | `#vipPlayers-name` | text | `t2.player` | Free text on player name/id. |
+| Заходил c (Last-seen from) | `#vipPlayers-startdate` | text `readonly` | `startdate` | `datetimepicker({language:'ru', pickTime:true, sideBySide:true})`; inline ✕ clears (`$('#vipPlayers-startdate').val('')`). |
+| Заходил до (Last-seen to) | `#vipPlayers-enddate` | text `readonly` | `enddate` | Same picker; inline ✕ clears. |
+| Описание (Description) | `#vipPlayers-desc` | text | `t1.description` | Free text on admin note. |
+
+No `maxlength`/regex on the filter inputs; validation is server-side.
+
+---
+
+### 6. Actions / Permissions from this page
+
+The only page-native interaction is search + drill-in; every mutation is delegated to the shared modal. VIP-relevant actions:
+
+| UI label | action | script → endpoint | Data keys | Effect | Destructive |
 |---|---|---|---|---|---|
-| (row click) | — | — | — | `player.open(steam_id)` — loads player card + `get` data. | N |
-| Сменить группу (Change group) | `changeGroup` | `player` → `POST /ajax/player.php` | `steam_id, group_id, date, description, prefix, prefix_rgb, image` | Grants / changes / (with `group_id=0`) removes a privilege; sets expiry, note, prefix, color, image. This is the **VIP add + edit + remove** operation. | **Y** |
-| VIP +1 месяц (VIP +1 month) | `changeGroup` | `player` → `POST /ajax/player.php` | same payload (quick-grant, expire preset to +1 month, group=VIP) | Convenience one-click VIP grant. Button carries class `hide` — rendered but hidden by default (shown only in certain contexts/roles). | **Y** |
+| (row click) | `get` | `player` → `POST /ajax/player.php` | `{steam_id}` | Loads player card + `player.info`. | N |
+| Сменить группу (Change group) | `changeGroup` | `player` → `POST /ajax/player.php` | `steam_id, date, group_id, description, prefix, prefix_rgb, image` | Grants / changes / (with `group_id=0`) removes a privilege; sets term, note, prefix, color, image. **The VIP add + edit + remove operation.** | **Y** |
+| VIP +1 месяц (VIP +1 month) | `changeGroup` | `player` → `POST /ajax/player.php` | same payload | Quick-grant button (`#player_group-btn`, class `hide`). Rendered but hidden by default. | **Y** |
 
-Additional shared-modal actions embedded in this fragment (per the action catalog for `vips.html`) but **not part of the VIP workflow** — they belong to the universal player modal and are documented in the Players section: `ban`, `unban`, `kick`, `kill`, `kits`, `kitSave`, `mark`, `message`, `twink`, `twinkOnline`, `addComment`, `getComments`, `changeTeam`, `checkBans`, `findFriends`, `getPlayerOnlineData`, `removePlayer`, `addBanName`, `removeBanName`, `get`, `downloadStat` (scripts `player` and `squad`).
+Both submit buttons call `player.group.set(this)`; there is **no separate `changeExpire` action on this page** — `changeExpire` exists only on the clan page (`clan_16.html`, per `action_catalog.txt`) and is out of scope here. The clan-scoped `Action({script:'clan', action:'vipPlayer', data:{clan_id, steam_id, vip}})` reserved-slot toggle is **not present** in the `vips` fragment (the "vipPlayer" substrings in the HTML are all the `vipPlayers` table id).
 
-Note: On the **clan** page the same star-checkbox uses a *different* action — `Action({script:'clan', action:'vipPlayer', data:{clan_id, steam_id, vip:true|false}})` — which toggles a clan-scoped reserved/VIP flag per member. The `vips` roster page itself does **not** use `vipPlayer`; it uses `changeGroup`. This is a meaningful distinction: **global privilege = `changeGroup` (group_id=3)**, **clan reserved-slot = `vipPlayer` boolean**.
+Other shared-modal actions embedded in this fragment but belonging to the universal player modal (documented in the Players section): `ban`, `unban`, `kick`, `kill`, `kits`, `kitSave`, `mark`, `message`, `twink`, `twinkOnline`, `addComment`, `getComments`, `changeTeam`, `checkBans`, `findFriends`, `getPlayerOnlineData`, `removePlayer`, `addBanName`, `removeBanName`, `downloadStat` (scripts `player`, `squad`).
 
----
-
-### 5. Forms & Modals
-
-**"Смена группы" (Change group) panel** — `#player_group` (flip side of the player card; opened via `player.group.open()` from the card's "Группа" button `#player_info-group_btn`):
-
-| Field | Control | Options / Validation |
-|---|---|---|
-| Group | `#player_group-groups` bootstrap-multiselect | The 5-role catalog + "No group"; pre-selected to the player's current `group_id`; `enableHTML` for icon labels. |
-| Expire | `#player_group-expire` custom `dateRange` widget | Presets: `justDay, plus1Month, plus2Month, plus3Month, plus6Month, plus1Year, infinity, reset`. Default = **infinity** if player already has a permanent group (`expire=='0'`), else a single-day range from current expiry/now. `infinity` ⇒ stored as `0` = permanent. |
-| Комментарий (Comment) | `#player_group-description` textarea | maxlength **128**. |
-| Префикс (Prefix) | `#player_group-prefix` text | maxlength **64**. |
-| Цвет префикса RGB | `#player_group-prefix_rgb` + `type=color` swatch | maxlength 16; auto-synced hex↔`r,g,b`. |
-| Ссылка на изображение (Image URL) | `#player_group-image` text | maxlength **256**. |
-| Submit | "Сменить группу" / "VIP +1 месяц" | Both call `player.group.set(this)`; a confirm dialog (`$.question`, "Сменить группу?") shows the target group label before firing. |
-
-**Self-protection:** if `player.info.is_you` (admin editing their own card), the group multiselect and the expire control are **disabled** — an admin cannot change their own group/expiry through the UI.
+**Distinction to beat:** global privilege = `changeGroup` (`group_id=3`); clan reserved-slot = clan-scoped `vipPlayer` boolean. Two separate "VIP" concepts.
 
 ---
 
-### 6. Permission / Visibility Logic
+### 7. The "Смена группы" Modal (`#player_group`)
 
-- **`class="hide"` gating:** `#player_group` and `#player_info` panels ship hidden and are cloned into the flip modal on demand. The **"VIP +1 месяц"** quick-grant button carries `hide` by default while **"Сменить группу"** is always visible — implying the one-click VIP button is surfaced only in specific contexts (e.g., a role/permission or a page where quick VIP granting is enabled).
-- **Self-edit block:** `is_you` disables the group + expire controls (see above).
-- **No client-side role fences beyond that** are visible in the fragment; server-side `player.php` presumably authorizes `changeGroup`. The page trusts the server to enforce who may grant Admin vs VIP (the client offers the full group list to anyone who can open the modal).
-- The roster query itself is scoped server-side (aliases `t1`/`t2`); no per-server selector is present *on this page* — privilege scope (global vs per-server) is not exposed in the `vips` fragment, whereas the clan `vipPlayer` flag is explicitly clan-scoped (`clan_id`).
+Hidden template (`class="hide"`), cloned into the flip modal via `player.group.open()` (`player.modal.flip({direction:'lr', content:$('#player_group').html()})`).
+
+| Field (RU / EN) | Control | Type / options | Validation |
+|---|---|---|---|
+| Group | `#player_group-groups` | bootstrap `multiselect({buttonClass, maxHeight:400, enableHTML:true})` | 6 options (`0..5`); pre-selected via `.multiselect('select', player.info.group_id)` then `'rebuild'`. |
+| Expire (Срок) | `#player_group-expire` | custom `dateRange` widget | Presets: `justDay, plus1Month, plus2Month, plus3Month, plus6Month, plus1Year, infinity, reset`. `limitDate:false`. **Default:** `infinity` when `group_id && expire=='0'`; else `{type:'justDay', start: expire || now}`. `data('start')` feeds the `date` payload key; `infinity` ⇒ `0`. |
+| Комментарий (Comment) | `#player_group-description` | `<textarea rows=2>` | `maxlength=128`; init `.html(player.info.group_description)`. |
+| Префикс (Prefix) | `#player_group-prefix` | text | `maxlength=64`; init `.val(player.info.prefix)`. |
+| Цвет префикса RGB | `#player_group-prefix_rgb` + `#player_group-prefix_rgb-color` (`type=color`) | text + swatch | `maxlength=16`. On `change`: `stringRgbToHex()` → `hexToRgb()` → writes back `"r,g,b"` and syncs the swatch; parse failure clears the field. |
+| Ссылка на изображение (Image URL) | `#player_group-image` | text | `maxlength=256`; init `.val(player.info.image)`. |
+| Submit — Сменить группу | `#player_group-btn` (always visible) | `onclick="player.group.set(this)"` | Confirm `$.question({title:'Сменить группу?', text:<selected group label>, daPrevent:'Меняем'})` before firing. |
+| Submit — VIP +1 месяц | `#player_group-btn` (`class="hide"`) | `onclick="player.group.set(this)"` | Same handler; hidden by default. |
+| Back — Игрок | — | `onclick="player.unflip()"` | Flip back to the player card. |
+
+`player.info` fields the modal consumes (from `player.get`): `steam_id`, `eos_id`, `group_id`, `expire`, `group_description`, `prefix`, `prefix_rgb`, `image`, `is_you`, `canChangeGroup`.
 
 ---
 
-### 7. Notable UX & Competitively Interesting Details
+### 8. Permission / Visibility Logic (explicit predicates)
 
-- **Unified group system:** VIP, Admin, Moderator, Camera, Trainee are one `group_id` field, not separate subsystems. One modal + one `changeGroup` endpoint covers grant/edit/revoke for every role. Simple to clone; note the single-endpoint design.
-- **Rich privilege metadata:** a privilege isn't just a boolean — it carries **expiry, admin note, chat prefix, prefix RGB color, and an image/badge URL**. The color picker with live hex↔rgb sync is a polished touch worth matching.
-- **Expiry presets + "infinity":** the dateRange widget's fixed presets (day / 1-2-3-6 months / 1 year / permanent / reset) make term-setting one click. Permanent is encoded as `0`.
-- **Quick "VIP +1 месяц":** a dedicated one-tap "extend/grant a month of VIP" button — a fast path for the most common operation (rewarding players). Copy this; it's the highest-frequency admin action for a VIP roster.
-- **Search ergonomics:** last-seen date-range filtering lets staff find **expired-but-inactive** or **soon-to-lapse active** VIPs quickly; description search finds notes like "donation #123". Good for VIP retention workflows.
-- **Self-protection guard:** blocking self-group-edit prevents an admin from accidentally (or maliciously without a second admin) altering their own privileges.
-- **Two distinct "VIP" concepts to beat:** global privilege (`changeGroup`, group=VIP) vs clan reserved-slot toggle (`vipPlayer` boolean with `clan_id`). A competing panel should decide whether to unify these or keep them separate.
+| Predicate | Effect |
+|---|---|
+| `player.info.canChangeGroup === true` | show `#player_info-group_btn` (the "Группа" button that opens the modal); else hide it. **Server-provided per-player permission flag** — the primary gate on who may edit a group. |
+| `player.info.is_you === true` | `#player_group-groups` → `multiselect('disable')` **and** `#player_group-expire` → `prop('disabled', true)`. Self-edit of group/term blocked in UI. |
+| `#player_group-btn.hide` (VIP +1 месяц) | button carries `hide` by default; surfaced only in specific contexts/roles. |
+| `player.info.group_id && player.info.expire=='0'` | dateRange default = `infinity` (permanent); otherwise a single-day range from current expiry/now. |
+
+The client offers the full 6-group list to anyone who passes `canChangeGroup`; server-side `player.php` authorizes which target group (Admin vs VIP) a given admin may actually set.
+
+---
+
+### 9. Notable UX & Competitively Interesting Details
+
+- **`canChangeGroup` server flag** (new vs prior notes): group editing is gated by an explicit per-player boolean from `player.get`, not just `is_you`. Clone this — it lets the server centralize "who can grant what."
+- **Unified group system:** VIP/Admin/Moderator/Camera/Trainee are one `group_id`; one modal + one `changeGroup` endpoint covers grant/edit/revoke for every role.
+- **Rich privilege metadata:** a privilege carries **term, admin note, chat prefix, prefix RGB, and image/badge URL** — plus live `online/boost/queue/server` presence in the roster row. The color picker with live hex↔rgb sync is polished.
+- **Dual note fields:** `description` (raw, ≤128) vs `vipdesc` (rendered) — server formats notes for display.
+- **Expiry presets + infinity:** day / 1·2·3·6 months / 1 year / permanent / reset; permanent encoded as `0` (blank `Срок` cell).
+- **Quick "VIP +1 месяц":** dedicated one-tap grant/extend (hidden by default) — the highest-frequency VIP action; worth copying.
+- **Search ergonomics:** last-seen range + description search find expired-but-inactive or soon-to-lapse VIPs and donation notes ("випку зайке…"). Good retention tooling.
+- **Two-POST pattern:** rows + `pagination=true` count; `totalRows` returns as a **string**, mixed with int `totalPage` — a quirk to normalize in a clone.
+- **Scale:** 395 active privilege rows / 8 pages on the live instance.
 
 ---
 
 ### Gaps / Unknowns
 
-- The clock-icon column (`time`) has no text label; its exact semantic (total online time vs remaining term vs session length) is inferred, not confirmed by a label.
-- Reserved-slot semantics for VIP (in-game slot priority) are implied by the role but not described in this fragment; the closest explicit reserved-slot mechanism is the clan `vipPlayer` boolean.
-- Per-server scoping of a global VIP is not exposed on this page; whether `changeGroup` is global or server-scoped is server-side and not visible here.
-- The condition that un-hides "VIP +1 месяц" is not determinable from the static fragment.
+- **`steam_id` identity type:** rendered HTML uses Steam64 (`<hashtag>`) and `player.get`/`changeGroup` payloads use Steam64; the `table.php` JSON `steam_id` was redacted to a 36-char token, so whether the JSON carries the raw Steam64 or an internal 36-char UUID could not be confirmed from the redacted capture.
+- **`expire` blank vs `0`:** the live VIP sample returned `expire:""` (empty) for a permanent grant while the UI logic keys on `expire=='0'`; the server appears to accept both — the exact normalization is server-side.
+- **`online.queue`/`online.server` semantics:** the `queue` field (sample `"5"`) is the closest thing to a **reserved-slot priority** indicator, but no label confirms it maps to in-game slot reservation for VIPs; inferred, not proven.
+- **Per-server scoping:** `changeGroup` carries no `server_id`; whether a granted group is global or per-server is not exposed on this page (unlike the clan `vipPlayer` flag, which is explicitly `clan_id`-scoped).
+- **Condition that un-hides "VIP +1 месяц"** is not determinable from the static fragment.
+- **`clock-icon` (`time`) column** is pre-rendered HTML (`53ч 41м`); the underlying raw metric is not exposed as a separate numeric field in the JSON.
 
 
 ---
 
 ## 07. Players Online (live)
 
-Reference documentation for the SQSTAT (breaking.sqstat.ru) **Players Online** page, reconstructed from the local page fragment `frags/playersOnline.html`, the shared client library `custom.js`, and `action_catalog.txt`. Original Russian UI labels are preserved with an English gloss in parentheses.
+Implementation-spec documentation for the SQSTAT (breaking.sqstat.ru) **Players Online** page. This revision is built from **live captured API contracts** (headless authenticated browser, read-only interceptor — 0 mutations fired) plus the live rendered `#content` fragment, the shared client library `custom.js`, and `action_catalog.txt`. Russian UI labels are preserved with an English gloss in parentheses.
+
+Capture provenance: `caps/online/playersOnline.network.json` (2 contracts), `caps/online/playersOnline.content.html` (live `#content`, 165 623 B), `caps/online/_blocked.json` = `[]` (no mutation attempted or blocked).
 
 ---
 
@@ -1483,375 +2195,578 @@ Reference documentation for the SQSTAT (breaking.sqstat.ru) **Players Online** p
 |---|---|
 | Nav id / loader | `playersOnline` → `pageLoad('playersOnline')` → `GET /ajax/page.php?page=playersOnline` |
 | Injected into | `#content` |
-| Purpose | A cross-server leaderboard of players who were **online during a selected time window**, ranked by playtime and by time spent in each in-game role (kit). It doubles as the launchpad for the shared **player-detail modal**, from which admins perform live RCON actions (kick / ban / kill / move team / message) against players **currently** on a server. |
-| Primary data source | DataTables-style server-side table `playersOnline` via `Action({script:'table', action:'playersOnline', ...})` → `POST /ajax/table.php` |
+| Purpose | A cross-server leaderboard of players who accumulated playtime **within a selected time window**, ranked by total playtime and broken down by time spent in each in-game role (kit). It doubles as the launchpad for the shared **player-detail modal**, from which admins run live RCON actions (kick / ban / kill / move team / message) against players **currently** on a server. |
+| Primary data source | Server-side table `playersOnline` via `$('#playersOnline').buildTable({table:'playersOnline', …})` → `POST /ajax/table.php` |
 
-> **Important scope note.** Despite the section brief listing `serverOnline`, `serverOnlineAdmins`, `serverOnlineBooster` and `downloadOnline`, **none of those actions exist on this page.** `action_catalog.txt` places them exclusively on `main.html` (the per-server dashboard). This page's "online" concept is a **historical playtime aggregation over a date range**, not a real-time server roster snapshot. The truly live element here is the RCON action set that becomes available when a listed player happens to be online right now (`player.info.online` is populated). See §8 (Gaps).
+> **Scope note (confirmed against live capture).** Despite the section brief naming `serverOnline`, `serverOnlineAdmins`, `serverOnlineBooster` and `downloadOnline`, **none of those actions is invoked by this page.** The only reads this page fires on load are the page fragment and one `table.php` query (see §2). Per `action_catalog.txt`, `serverOnline*` live only on `main.html` (the per-server dashboard). This page's "online" concept is a **historical playtime aggregation over a date range** — a *report*, not a real-time roster snapshot. The genuinely real-time element here is the RCON action set that lights up when a listed player happens to be online right now (`player.info.online` non-null). Real-time roster vs. historical aggregation distinction is made explicit in §7 and §9.
 
 ---
 
-### 2. Entities & fields
+### 2. Live API Contracts
 
-#### 2.1 `PlayerOnlineRow` — the page's own table row
+Two network contracts were captured on page load. Ground truth: `caps/online/playersOnline.network.json`.
 
-Inferred from the `#playersOnline` `<thead>` and the `buildTable({collum:[...]})` config. Each row is a player aggregated over the selected period. Columns after `boost` are **per-kit playtime** buckets.
+#### 2.1 `GET /ajax/page.php?page=playersOnline` — fragment loader
 
-| Field (buildTable key) | Column label / tooltip | Meaning | Type |
+| Property | Value |
+|---|---|
+| Method / path | `GET /ajax/page.php` |
+| Query param | `page` — string — required — must equal `playersOnline` |
+| Status / ctype | `200` / `text/html; charset=UTF-8` |
+| Response | Raw HTML fragment (115 844 B) injected into `#content`; contains the filter bar, the `#playersOnline` table skeleton, the inline `buildTable` bootstrap script, and the entire shared player-detail modal markup |
+
+No JSON; this is a server-rendered partial. The inline `<script>` it carries wires the date-range picker, the server multiselect, and the table (§4).
+
+#### 2.2 `POST /ajax/table.php` — the leaderboard query (main data contract)
+
+**Request** — `application/x-www-form-urlencoded` body (captured verbatim):
+
+```
+action=playersOnline&table=playersOnline&page=1&numrows=100
+&search=<urlencoded JSON>&order_by=false&order_sort=false
+```
+
+| Param | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | Игрок (Player) | Player display name; rendered as a clickable `<hashtag>` carrying the SteamID | string |
-| `online` | tooltip: Наигранное время за период (Playtime in period) | Total playtime in the window | duration (minutes) |
-| `boost` | tooltip: Буст за период (Boost in period) | Accumulated "boost" (server-perk / bonus metric) in the window | number |
-| `SL` | Сквадной (Squad Leader) | Time played as Squad Leader | duration |
-| `CMD` | CMD (Commander) | Time as Commander | duration |
-| `Rifleman` | Стрелок (Rifleman) | Time as Rifleman | duration |
-| `Medic` | Медик (Medic) | Time as Medic | duration |
-| `LAT` | Гранатомётчик (Grenadier / LAT) | Time as Light Anti-Tank | duration |
-| `MachineGunner` | Пулемётчик (Machine Gunner) | Time as MG | duration |
-| `Marksman` | Снайпер (Marksman) | Time as Marksman | duration |
-| `Engineer` | Инженер (Engineer) | Time as Engineer | duration |
-| `Pilot` | Пилот (Pilot) | Time as Pilot | duration |
-| `Crewman` | Водитель (Crewman) | Time as vehicle Crewman | duration |
+| `action` | string | Y | Server handler selector — fixed `playersOnline` |
+| `table` | string | Y | Table id echoed for routing — fixed `playersOnline` |
+| `page` | int | Y | 1-based page number |
+| `numrows` | int | Y | Page size; this page sends `100` (from `buildTable.numrows`) |
+| `search` | urlencoded JSON | Y | Filter envelope, see below |
+| `order_by` | string \| `false` | Y | DB alias of the sort column, or literal `false` for default sort |
+| `order_sort` | `asc` \| `desc` \| `false` | Y | Sort direction, or `false` for default |
+| `pagination` | `true` | N | When appended (`…&pagination=true`), server returns the page/row **count** query used to build the pager (`custom.js:993`); the row-fetch call omits it |
 
-Kit columns are rendered as SVG icons from `/assets/img/ico/kits/<Kit>.svg`.
+**`search` envelope** — `encodeURIComponent(JSON.stringify(searches))`, five always-present buckets (`custom.js:711`). Captured decoded value (default "today" window, no other filter):
 
-#### 2.2 `PlayerInfo` — the shared player-detail entity (`player.info`)
+```json
+{
+  "text": {
+    "custom.period.startdate": 1783116000,
+    "custom.period.enddate":   1783202399
+  },
+  "check": {}, "multiselect": {}, "managers": {}, "slider": {}
+}
+```
 
-Loaded by `action:'get'` (script `player`) when a row is clicked. This entity is shared across the whole panel; only the fields that this page reads/renders are listed.
+| Bucket | Populated by | Key(s) | Value type |
+|---|---|---|---|
+| `text` | `#playersOnline-user` (free text) and the date-range picker | `player`; `custom.period.startdate`, `custom.period.enddate` | string; **unix seconds** for the two period keys |
+| `multiselect` | `#playersOnline-server` | `server_id` | array of server-id strings |
+| `check`, `managers`, `slider` | (none on this page) | — | always empty objects here |
 
-| Field | Meaning | Type |
+**Response** — `200` / `application/json; charset=utf-8`. Schema (`field: type — meaning`):
+
+| Field | Type | Meaning |
 |---|---|---|
-| `steam_id` | Steam64 ID — the identity key for every downstream action | string |
-| `name` | Current nickname | string |
-| `eos_id` | Epic Online Services ID | string |
-| `discord` | Discord user id (links to `discord.com/users/<id>`) | string |
-| `vac` | VAC status | mixed |
-| `steam_info.ban` | `{vac, ban, days}` — VAC / game-ban flags from Steam | object |
-| `steam_info.squad.time` | Steam hours played in Squad | number |
-| `location[]` | `{iso, loc, timezone, lat, lng, ip, date}` — geo-IP history (first = current) | array |
-| `primetime[]` | `{start, end}` unix ranges — the player's habitual online hours | array |
-| `playtime.server` | "home" server label | string |
-| `group_id`, `expire`, `prefix`, `prefix_rgb` | admin group membership (see §2.4) | mixed |
-| `ban` | `{expire, reason, admin, date, description}` — active punishment | object |
-| **`online`** | **Presence object — non-null only if the player is on a server right now** | object / null |
-| `online.server` | `{id, name}` — the server the player is currently on | object |
-| `online.team` | `{short}` — current team (drives the "change team" button) | object |
-| `online.squad` | `{id}` — current squad number (drives "kick from squad") | object |
+| `status` | string — enum `ok` (`"ok"` observed) | Query outcome flag |
+| `exec_time` | float | Total server handling time, seconds |
+| `data.totalPage` | int | Total pages for current filter (0 in the count-less row call; populated by the `pagination=true` call) |
+| `data.totalRows` | int | Total matching rows (same caveat) |
+| `data.currentPage` | string | Echoed page number, as a string (`"1"`) |
+| `data.custom` | bool | Whether a custom (non-preset) period is active |
+| `data.query_time` | float | Row-query time, seconds |
+| `data.count_time` | int | Count-query time, seconds (0 unless `pagination=true`) |
+| `data.row[]` | array | Leaderboard rows; **93 rows** in the captured page |
+| `data.row[].steam_id` | string(17) | Steam64 ID — identity key, feeds `player.open()` |
+| `data.row[].name` | string | Player display name |
+| `data.row[].online` | string | **Pre-formatted duration**, Russian `"Xч Yм"` (h/m) — total playtime in window. NOT raw minutes |
+| `data.row[].boost` | string | Pre-formatted duration `"Xч Yм"` — boosted playtime in window |
+| `data.row[].queue` | string | Pre-formatted duration `"Xч Yм"` — time spent in join queue. **Returned but NOT rendered** (absent from `buildTable.collum`) |
+| `data.row[].SL` | string | Duration `"Xч Yм"` as Squad Leader |
+| `data.row[].CMD` | string | Duration as Commander |
+| `data.row[].Rifleman` | string | Duration as Rifleman |
+| `data.row[].Medic` | string | Duration as Medic |
+| `data.row[].LAT` | string | Duration as Light Anti-Tank |
+| `data.row[].MachineGunner` | string | Duration as Machine Gunner |
+| `data.row[].Marksman` | string | Duration as Marksman |
+| `data.row[].Engineer` | string | Duration as Engineer |
+| `data.row[].Pilot` | string | Duration as Pilot |
+| `data.row[].Crewman` | string | Duration as vehicle Crewman |
 
-The `online` object is the pivot for every live/RCON capability on this page. When it is null the destructive live buttons stay hidden (§6).
+Redacted example row (`caps/online/playersOnline.network.json`):
 
-#### 2.3 `PlayerOnlineData` — live activity chart (`getPlayerOnlineData`)
+```json
+{
+  "steam_id": "<redacted:17>", "name": "<redacted:36>",
+  "online": "5ч 32м", "boost": "3ч 56м", "queue": "0ч 0м",
+  "SL": "0ч 27м", "CMD": "0ч 0м", "Rifleman": "0ч 55м", "Medic": "0ч 0м",
+  "LAT": "0ч 0м", "MachineGunner": "0ч 0м", "Marksman": "0ч 0м",
+  "Engineer": "0ч 0м", "Pilot": "0ч 0м", "Crewman": "0ч 0м"
+}
+```
 
-Returned by `action:'getPlayerOnlineData'` (script `player`). Keyed by timestamp; each entry:
+> **Contract implications for a re-implementer.** (1) All duration metrics are formatted **server-side** into `Xч Yм` strings — the client does no numeric parsing, so sorting must be done server-side on the underlying seconds, not on the string. (2) `queue` is part of the wire contract even though this page never shows it — the same `playersOnline` handler evidently serves callers that do. (3) The count query is a **separate round-trip** (`&pagination=true`); the initial row call returns `totalPage/totalRows = 0`.
 
-| Field | Meaning |
-|---|---|
-| `minute` | Minutes online in that bucket |
-| `boost` | Boost value in that bucket |
-| `queue` | Queue position / queue time in that bucket |
+---
 
-Rendered as a 3-dataset line chart in the modal.
+### 3. Entities & fields
 
-#### 2.4 Reference/enum entities
+#### 3.1 `PlayerOnlineRow` — one leaderboard row
 
-- **Ban reason** (`player_ban-reason` select): a large rule catalog. Each `<option>` carries `data-first/second/third/four` = recommended ban lengths (in days) for the 1st–4th offence. Categories seen: `0.x` system/other, `1.x` conduct/nick/cheating, `2.x` command/SL, `3.x` vehicle rules, `4.x` CMD discipline, `5.x` misc. Value `-1` = permanent.
-- **Ban duration radios** (`player_ban-reason_type`): `data-action` = `kick`|`ban`, `data-day` = `0,1,2,3,4,5,6,7,10,14,30` (0 = permanent). One is auto-selected as "Рекомендуемое" (Recommended) based on the reason's offence data.
+Row shape is fixed by the `data.row[]` schema in §2.2. Column→DB-alias mapping (used for sort and for the `data-search` protocol) is in §4. All metric fields are pre-formatted `Xч Yм` duration strings.
+
+#### 3.2 `PlayerInfo` — the shared player-detail entity (`player.info`)
+
+Loaded by `action:'get'` (script `player` → `/ajax/player.php`) when a row's `<hashtag>` is clicked (`player.open(steam_id)`). Shared panel-wide; only fields this page reads/renders are listed.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `steam_id` | string | Steam64 ID — identity key for every downstream action |
+| `name` | string | Current nickname |
+| `eos_id` | string | Epic Online Services ID |
+| `discord` | string | Discord user id (links `discord.com/users/<id>`) |
+| `vac` | mixed | VAC status |
+| `steam_info.ban` | object `{vac, ban, days}` | VAC / game-ban flags from Steam |
+| `steam_info.squad.time` | number | Steam hours played in Squad |
+| `location[]` | array `{iso, loc, timezone, lat, lng, ip, date}` | Geo-IP history; index 0 = current |
+| `primetime[]` | array `{start, end}` (unix ranges) | Player's habitual online hours |
+| `playtime.server` | string | "Home" server label |
+| `group_id`, `expire`, `prefix`, `prefix_rgb` | mixed | Admin-group membership (§3.4) |
+| `ban` | object `{expire, reason, admin, date, description}` | Active punishment |
+| **`online`** | object \| null | **Presence — non-null only if the player is on a server right now** |
+| `online.server` | object `{id, name}` | Server the player is currently on — required by every RCON action |
+| `online.team` | object `{short}` | Current team — drives "change team" |
+| `online.squad` | object `{id}` | Current squad number — drives "kick from squad"; rendered as a badge in `#player_info-name` (`content.html:1177`) |
+
+`online` is the pivot for every live/RCON capability; when null the destructive live buttons stay hidden (§7).
+
+#### 3.3 `PlayerOnlineData` — live activity chart (`getPlayerOnlineData`)
+
+Returned by `action:'getPlayerOnlineData'` (script `player`), request keys `steam_id, start, end`. Keyed by timestamp bucket; each entry `{minute, boost, queue}` (minutes online / boost value / queue time). Rendered as a 3-dataset line chart in the modal (chart config at `content.html:~1330`).
+
+#### 3.4 Reference / enum entities
+
+- **Ban reason** (`player_ban-reason` select): rule catalog; each `<option>` carries `data-first/second/third/four` = recommended ban lengths (days) for the 1st–4th offence. Value `-1` = permanent.
+- **Ban duration radios** (`player_ban-reason_type`): `data-action` = `kick`|`ban`; `data-day` ∈ `{0,1,2,3,4,5,6,7,10,14,30}` (0 = permanent). One is auto-selected "Рекомендуемое" (Recommended) from the reason's offence data.
 - **Admin groups** (`player_group-groups`): `0` -Нет группы- (None), `1` Администратор (Admin), `2` Модератор (Moderator), `3` VIP, `4` Камера (Camera/spectator), `5` Стажёр (Trainee).
-- **Suspicion marks** (`player.mark.set`): `1` WallHack, `2` AimBot, `3` SpeedHack, `4` object-spawn, `5` reload exploit, `6` griefing, `7` config, `8` toxic player, `0` = clear mark.
-- **Message durations** (`player_message-time`): `1` (once), `30`, `40`, `60`(default), `90`, `120` seconds.
+- **Suspicion marks** (`player.mark.set`): `1` WallHack, `2` AimBot, `3` SpeedHack, `4` object-spawn, `5` reload exploit, `6` griefing, `7` config, `8` toxic, `0` = clear.
+- **Message durations** (`player_message-time`): `1` (once), `30`, `40`, `60` (default), `90`, `120` seconds.
 
 ---
 
-### 3. The page's own table & controls
+### 4. DataTables spec: `#playersOnline`
 
-**Table:** `#playersOnline` (`buildTable` config at fragment lines 72–107). `numrows: 100`, sortable on every metric column (`order` lists all of them), default sort by playtime. Data is server-side paginated via `/ajax/table.php` (`action=playersOnline`, `&pagination=true` for the count query).
+Config from the live inline bootstrap (`content.html:71-104`) and the `buildTable` engine (`custom.js:620-1100`).
 
-**Filter/search bar** (`searchInput: ["playersOnline-user","playersOnline-period","playersOnline-server"]`):
-
-| Control | id | `data-search` key sent | Type | Notes |
-|---|---|---|---|---|
-| Игрок (Player) | `playersOnline-user` | `player` | text | Free-text name/ID filter; Enter triggers rebuild |
-| Period picker | `playersOnline-period` | `custom.period` | daterange | Presets: today (default), yesterday, current/last week, current/last month, last 30 days, month/day/week/year, custom range |
-| Сервер (Server) | `playersOnline-server` | `server_id` | multiselect | Multi-select of servers (values 1,6,7,9,10,11 in this capture); placeholder "- Сервер -" |
-| Поиск (Search) | `playersOnline-btn` | — | button | Rebuilds table with current filters |
-
-Clicking a player `<hashtag>` in the body calls `player.open(<steam_id>)`, opening the shared modal.
-
----
-
-### 4. Actions / admin capabilities
-
-Every state-changing action here originates in the **shared player-detail modal**, not in the page's own table. Two script endpoints are used:
-
-- **`/ajax/squad.php`** — the **live RCON layer**. These require `player.info.online.server.id` and act on the running game server. All destructive.
-- **`/ajax/player.php`** — the **database/record layer** (marks, comments, groups, name-bans, twink analysis, exports).
-
-| # | UI label | action id | script → endpoint | Data params | Effect | Destructive |
-|---|---|---|---|---|---|---|
-| 1 | (open card) | `get` | player → `/ajax/player.php` | `steam_id` | Load full player card | N |
-| 2 | График (online chart) | `getPlayerOnlineData` | player | `steam_id, start, end` | Fetch minute/boost/queue series | N |
-| 3 | Наказать → Кикнуть (Kick, no ban) | `kick` | **squad** | `server_id, steam_id, reason_id` | RCON kick from server | **Y** |
-| 4 | Кикнуть без причины (Kick, no reason) | `kick` | **squad** | `server_id, steam_id, reason_id` (empty) | RCON kick without a reason record | **Y** |
-| 5 | Наказать → Забанить (Ban N days / permanent) | `ban` | **squad** | `server_id, steam_id, reason_id, description, days` | Ban player (days from selected radio; `-1`=perma) + kick | **Y** |
-| 6 | Разбанить (Unban) | `unban` | **squad** | `steam_id, unban(bool)` | Lift active ban (`unban` checkbox = also clear error/appeal) | **Y** |
-| 7 | Кик из сквада (Kick from squad) | `removePlayer` | **squad** | `server_id, steam_id` | RCON remove player from their squad (keeps them on server) | **Y** |
-| 8 | Команда (Change team) | `changeTeam` | **squad** | `server_id, steam_id` | RCON force player to the other team | **Y** |
-| 9 | Убить (Kill) | `kill` | **squad** | `server_id, steam_id` | RCON kill the player's character | **Y** |
-| 10 | Сообщение (Warn / message) | `message` | player | `steam_id, time, msg, log(bool)` | Send in-game warning; `time`=repeat seconds; `log` writes it to the player card | **Y** (in-game effect) |
-| 11 | Метка (Set suspicion mark) | `mark` | player | `steam_id, <1–8 or 0>` | Flag/clear cheat-suspicion label; highlights row `.player_mark` | **Y** |
-| 12 | Группа (Change group / VIP) | `changeGroup` | player | `steam_id, date(expire), group, description, prefix, prefix_rgb, image` | Assign admin/VIP group with expiry, chat prefix + RGB colour + image | **Y** |
-| 13 | Проверить баны (Check bans) | `checkBans` | player | `steam_id` | Query external/community ban lists | N |
-| 14 | Поиск твинков (Find alts) | `twink` | player | `steam_id` | Return alt accounts sharing IPs (`name, steam_id, ips[], min_date`) | N |
-| 15 | (alt) Онлайн compare | `twinkOnline` | player | `steam_id, compare_steam_id` | Compare online calendars of player vs. suspected alt | N |
-| 16 | (alt) Проверить друзья (Check friends) | `findFriends` | player | `steam_id, compare_steam_id` | Cross-check Steam friend links between two accounts | N |
-| 17 | Забанить ник (Ban nickname) | `addBanName` | player | `steam_id` (+ nickname context) | Add player's nick to the banned-names list | **Y** |
-| 18 | Разбанить ник (Unban nickname) | `removeBanName` | player | `steam_id` | Remove nick from banned-names list | **Y** |
-| 19 | Киты (Kits editor open) | `kits` | player | `steam_id` | Load per-player kit permissions | N |
-| 20 | Сохранить (Save kits) | `kitSave` | player | `steam_id, kits[]` | Persist edited kit permissions | **Y** |
-| 21 | Комментарии (Get comments) | `getComments` | player | `steam_id` | Load internal admin comments | N |
-| 22 | (add comment) | `addComment` | player | `steam_id, <text>` | Append an admin comment to the card | **Y** |
-| 23 | Скачать статистику (Download stats) | `downloadStat` | player (`post_to_url` form) | `steam_id` | Trigger a file download of the player's stats | N |
-
-Client-only helpers (no server call): **Копировать телепорт** (`copyTeleport` → clipboard `AdminTeleportToPlayer <steam_id>`), **Заявка в OWI** (`copyReport` → clipboard a formatted OWI/BattleMetrics report template), **ссылка** (`copylink` → clipboard `?steam_id=`).
-
-The full `player.php` action surface reachable from this page's modal (per `action_catalog.txt`): `addBanName, addComment, ban, changeGroup, changeTeam, checkBans, findFriends, get, getComments, getPlayerOnlineData, kick, kill, kits, kitSave, mark, message, removeBanName, removePlayer, twink, twinkOnline, unban, downloadStat` — with `ban/kick/kill/changeTeam/removePlayer/unban` routed through `script:'squad'`.
-
----
-
-### 5. Forms & modals
-
-**Ban / punish form** (`#player_ban`): reason multiselect (rule catalog) + duration radio group (kick or ban 1–30d / permanent, one auto-recommended) + optional comment textarea `player_ban-description` (max 512 chars). Submit `player.actionPlayer()` branches to `kick` vs `ban` on `squad`. If the player is online, `server_id` is attached from `player.info.online.server.id`.
-
-**Group form** (`#player_group`): group select (0–5); expiry daterange (`player_group-expire`, disabled when group=0); comment (max 128); prefix text (max 64); prefix RGB (color picker `player_group-prefix_rgb-color` synced to a `r,g,b` text field, max 16); image URL (max 256). Submit `player.group.set()` → `changeGroup`. A quick-action variant "VIP +1 месяц" is present but `.hide`-gated.
-
-**Message / warn form** (`#player_message`): a list of ~18 pre-written canned warnings (voice-flood, solo-vehicle, squad rules, TK, VIP grant, etc.) selectable via `player.message.set()`; free-text `player_message-msg` (max 512); repeat-duration select `player_message-time`; **"Добавить запись в карточку игрока"** checkbox `player_message-log` to also log the warning to the card. Submit → `message`.
-
-**Kits modal** (`#player_kits-modal`): per-role permission list, saved via `kitSave` with a collected `kits[]` payload.
-
-**Twink panel**: renders alt list with per-alt **Проверить друзья** and **Онлайн** buttons that fire `findFriends` / `twinkOnline` against `compare_steam_id`; shows IP-overlap counts and time deltas.
-
----
-
-### 6. Permission / visibility logic
-
-The modal ships every control but hides most by default (`style="display:none"` or `class="hide"`) and reveals them conditionally in `player.open()`:
-
-| Element | Revealed when |
+| Property | Value |
 |---|---|
-| **Сообщение** (message) | `player.info.online` truthy (player is on a server now) |
-| **Команда** (change team) | `player.info.online.team` present |
-| **Кик из сквада** (removePlayer) | `player.info.online.squad` present |
-| **Убить** (kill) / **Кикнуть без причины** | `player.info.online` truthy |
-| **Разбанить** (unban) | player currently has an active ban |
-| **Забанить ник / Разбанить ник** | toggled by current name-ban state |
-| **Киты** (kits) | shown once card data confirms kit-permission availability |
-| VIP quick-grant button | `.hide` until group flow selects VIP |
+| Server table id | `playersOnline` (sent as both `action=` and `table=`) |
+| Endpoint | `POST /ajax/table.php` |
+| Page size (`numrows`) | `100` |
+| Row click | `#playersOnline tbody > tr hashtag` → `player.open($(this).text())` (opens shared modal on the SteamID) |
+| Default sort | none explicit (`order_by=false&order_sort=false`) — server default (playtime desc) |
 
-Net effect: the entire destructive RCON toolset (kick/kill/team/squad) is **inert for offline players** and only lights up for live ones — the server enforces `server_id` requirement, and the client mirrors that by hiding the buttons. There is no visible client-side role check beyond presence gating; group-level authorization is assumed to be enforced server-side. A few SteamIDs are special-cased in `player.open()` (hard-coded owner/dev badges) — cosmetic only.
+**Column set** — `collum` order and sortability (`order` array). Header labels from live `<thead>` tooltips (`content.html`). `data-search` DB alias = the field name (server-side aggregation aliases):
+
+| # | `collum` key / DB alias | Header (`data-original-title`) | English | Sortable (`order`) | Rendered as |
+|---|---|---|---|---|---|
+| 1 | `name` | Игрок | Player | No | clickable `<hashtag>` carrying SteamID |
+| 2 | `online` | Наигранное время за период | Playtime in period | **Yes** | `Xч Yм` |
+| 3 | `boost` | Буст за период | Boost in period | **Yes** | `Xч Yм` |
+| 4 | `SL` | Сквадной | Squad Leader | **Yes** | kit icon + `Xч Yм` |
+| 5 | `CMD` | CMD | Commander | **Yes** | kit icon + duration |
+| 6 | `Rifleman` | Стрелок | Rifleman | **Yes** | kit icon + duration |
+| 7 | `Medic` | Медик | Medic | **Yes** | kit icon + duration |
+| 8 | `LAT` | Гранатомётчик | Grenadier / LAT | **Yes** | kit icon + duration |
+| 9 | `MachineGunner` | Пулемётчик | Machine Gunner | **Yes** | kit icon + duration |
+| 10 | `Marksman` | Снайпер | Marksman | **Yes** | kit icon + duration |
+| 11 | `Engineer` | Инженер | Engineer | **Yes** | kit icon + duration |
+| 12 | `Pilot` | Пилот | Pilot | **Yes** | kit icon + duration |
+| 13 | `Crewman` | Водитель | Crewman | **Yes** | kit icon + duration |
+
+Kit icons resolve to `/assets/img/ico/kits/<Kit>.svg`. `queue` is present in the response but **not** in `collum`, so it is fetched and discarded here. Sort clicks toggle `order_by`/`order_sort` and rebuild (`custom.js:819-830`).
 
 ---
 
-### 7. Notable UX & competitively interesting details
+### 5. Filter bar & search protocol
 
-- **Playtime-by-role leaderboard.** Breaking playtime into 11 kit columns turns "who's online" into a role-competency table — instantly surfaces medics/SLs/pilots. Worth copying: it makes the page useful for recruiting and for spotting role-stackers, not just moderation.
-- **One shared player-detail modal everywhere.** The same ~23-action card is embedded on every page (chat, bans, kills, top, etc.). An admin never leaves context to punish. High leverage; expensive to out-build piecemeal.
-- **Presence-driven action gating.** Live RCON actions require `player.info.online.server.id`; the UI hides them when absent. Clean model: DB actions on `player.php`, live actions on `squad.php`.
-- **Recommended ban length engine.** Each rule option encodes escalating 1st–4th-offence durations (`data-first..four`); the correct duration radio is auto-checked and tooltipped "Recommended." A strong consistency/fairness feature to beat.
-- **Canned warnings + optional card logging.** Pre-written multilingual warnings with a "log to card" toggle and configurable in-game repeat interval — fast, auditable moderation.
-- **Twink hunting.** IP-overlap alt detection with drill-down (shared IPs, time deltas, friend-graph cross-check, online-calendar comparison) is a serious anti-ban-evasion toolkit.
-- **Clipboard integrations.** `AdminTeleportToPlayer` teleport command and a ready-to-paste OWI/BattleMetrics cheat-report template are copy-to-clipboard — low-friction admin ergonomics.
-- **Rich context per player.** Geo-IP history with flags/timezones, primetime hours, Steam hours, VAC/game-ban badges, Discord link — a full intel dossier attached to the moderation surface.
+Filter bar markup + wiring from live `content.html:56-104`. `buildTable.searchInput = ["playersOnline-user","playersOnline-period","playersOnline-server"]`. Each control's `type` attribute selects a serializer branch in `custom.js:721-774`.
+
+| Control | `#id` | `name` / `data-search` | input `type` | Serializer → bucket | Options / default | Validation |
+|---|---|---|---|---|---|---|
+| Игрок (Player) | `playersOnline-user` | `player` | `text` | `searches.text["player"]` | placeholder "Игрок"; empty by default | Enter (keyCode 13) sets `page=1`, `isSearch=true`, rebuilds; empty value omitted; `+`→`%2B` |
+| Period picker | `playersOnline-period` | `custom.period` | `daterange` | `searches.text["custom.period.startdate"]` + `.enddate` (unix seconds from `data-start`/`data-end`) | presets `['justMonth','justDay','justWeek','justYear','range','today','yesterday','currentWeek','lastWeek','currentMonth','lastMonth','last30days']`; **default `{type:'today'}`**; on change fires `crm_dateRange` → `buildTable()` | always populated |
+| Сервер (Server) | `playersOnline-server` | `server_id` | `multiselect` | `searches.multiselect["server_id"]` (array) | `nonSelectedText:'- Сервер -'`; values below | null selection omitted |
+| Поиск (Search) | `playersOnline-btn` | — | button | — | rebuilds with current filters | — |
+
+**Server multiselect options** (live `content.html`): `1` RAAS/AAS #1, `6` БЕЗ ГОЛОСОВАНИЯ #2, `7` INVASION #3, `9` Custom для FW, `10` Custom для MDC, `11` Custom для BSS.
+
+Envelope is `encodeURIComponent(JSON.stringify({text,check,multiselect,managers,slider}))` (`custom.js:778`).
 
 ---
 
-### 8. Gaps / uncertainties
+### 6. Actions / admin capabilities (from the shared modal)
 
-- `serverOnline`, `serverOnlineAdmins`, `serverOnlineBooster`, `downloadOnline` are **not present on this page**; per `action_catalog.txt` they belong to `main.html` (the server dashboard). This page's "online" is a **historical period aggregation**, not a real-time roster. Document the real-time roster under the servers/main section.
-- Exact server-side field set for `action:'get'` beyond what the modal reads is not observable from the client.
-- The `boost`/`queue`/`primetime` metrics' precise definitions are inferred from usage, not from a schema.
-- `reason_id` value mapping to human-readable rule text lives server-side; only the option catalog is visible client-side.
-- Kit-permission payload shape (`kits[]` from `player.kits.collect()`) is assembled client-side but its server schema is not exposed here.
+Every state-changing action originates in the **shared player-detail modal**, not the leaderboard table. Two script endpoints:
+
+- **`/ajax/squad.php`** — live RCON layer. Require `player.info.online.server.id`; act on the running server. All destructive.
+- **`/ajax/player.php`** — database/record layer (marks, comments, groups, name-bans, twink analysis, exports).
+
+Each row lists the exact `Action({script, action, data:{…}})` call. "Dest." = destructive.
+
+| # | UI label | `action` | `script` → endpoint | `data` keys (type) | Effect | Dest. |
+|---|---|---|---|---|---|---|
+| 1 | (open card) | `get` | player → `/ajax/player.php` | `steam_id`(str) | Load full player card | N |
+| 2 | График (online chart) | `getPlayerOnlineData` | player | `steam_id`(str), `start`(unix), `end`(unix) | Fetch minute/boost/queue series | N |
+| 3 | Кикнуть (Kick, with reason) | `kick` | **squad** | `server_id`(int), `steam_id`(str), `reason_id`(int) | RCON kick from server | **Y** |
+| 4 | Кикнуть без причины (Kick, no reason) | `kick` | **squad** | `server_id`(int), `steam_id`(str), `reason_id`(empty) | RCON kick without a reason record | **Y** |
+| 5 | Забанить (Ban N days / perma) | `ban` | **squad** | `server_id`(int), `steam_id`(str), `reason_id`(int), `description`(str≤512), `days`(int; `-1`=perma) | Ban + kick | **Y** |
+| 6 | Разбанить (Unban) | `unban` | **squad** | `steam_id`(str), `unban`(bool) | Lift active ban; `unban` also clears error/appeal | **Y** |
+| 7 | Кик из сквада (Kick from squad) | `removePlayer` | **squad** | `server_id`(int), `steam_id`(str) | RCON remove from squad, keep on server | **Y** |
+| 8 | Команда (Change team) | `changeTeam` | **squad** | `server_id`(int), `steam_id`(str) | RCON force to other team | **Y** |
+| 9 | Убить (Kill) | `kill` | **squad** | `server_id`(int), `steam_id`(str) | RCON kill character | **Y** |
+| 10 | Сообщение (Warn / message) | `message` | player | `steam_id`(str), `time`(int sec), `msg`(str≤512), `log`(bool) | In-game warning; `time`=repeat, `log` writes to card | **Y** |
+| 11 | Метка (Set suspicion mark) | `mark` | player | `steam_id`(str), mark(int 1–8 or 0) | Flag/clear cheat suspicion; highlights `.player_mark` | **Y** |
+| 12 | Группа (Change group / VIP) | `changeGroup` | player | `steam_id`(str), `date`(expire), `group`(int 0–5), `description`(str≤128), `prefix`(str≤64), `prefix_rgb`(str≤16), `image`(str≤256) | Assign admin/VIP group w/ expiry, chat prefix, colour, image | **Y** |
+| 13 | Проверить баны (Check bans) | `checkBans` | player | `steam_id`(str) | Query external/community ban lists | N |
+| 14 | Поиск твинков (Find alts) | `twink` | player | `steam_id`(str) | Alt accounts sharing IPs (`name, steam_id, ips[], min_date`) | N |
+| 15 | Онлайн compare | `twinkOnline` | player | `steam_id`(str), `compare_steam_id`(str) | Compare online calendars of player vs suspected alt | N |
+| 16 | Проверить друзья (Check friends) | `findFriends` | player | `steam_id`(str), `compare_steam_id`(str) | Cross-check Steam friend links | N |
+| 17 | Забанить ник (Ban nickname) | `addBanName` | player | `steam_id`(str) (+ nick context) | Add nick to banned-names list | **Y** |
+| 18 | Разбанить ник (Unban nickname) | `removeBanName` | player | `steam_id`(str) | Remove nick from banned-names list | **Y** |
+| 19 | Киты (Kits editor open) | `kits` | player | `steam_id`(str) | Load per-player kit permissions | N |
+| 20 | Сохранить (Save kits) | `kitSave` | player | `steam_id`(str), `kits[]`(array) | Persist edited kit permissions | **Y** |
+| 21 | Комментарии (Get comments) | `getComments` | player | `steam_id`(str) | Load internal admin comments | N |
+| 22 | (add comment) | `addComment` | player | `steam_id`(str), text(str) | Append admin comment | **Y** |
+| 23 | Скачать статистику (Download stats) | `downloadStat` | player (`post_to_url` form) | `steam_id`(str) | File download of player stats | N |
+
+Client-only helpers (no server call): **Копировать телепорт** (`copyTeleport` → clipboard `AdminTeleportToPlayer <steam_id>`), **Заявка в OWI** (`copyReport` → clipboard OWI/BattleMetrics report template), **ссылка** (`copylink` → clipboard `?steam_id=`).
+
+Full `player.php` surface reachable from this modal (`action_catalog.txt`): `addBanName, addComment, ban, changeGroup, changeTeam, checkBans, findFriends, get, getComments, getPlayerOnlineData, kick, kill, kits, kitSave, mark, message, removeBanName, removePlayer, twink, twinkOnline, unban, downloadStat` — with `ban/kick/kill/changeTeam/removePlayer/unban` routed through `script:'squad'`.
+
+---
+
+### 7. Forms, modals & visibility predicates
+
+**Ban / punish** (`#player_ban`): reason multiselect (rule catalog, `data-first..four` recommended days) + duration radio group `player_ban-reason_type` (kick or ban 1–30d / perma, one auto-recommended) + comment textarea `player_ban-description` (max 512). Submit `player.actionPlayer()` branches `kick` vs `ban` on `squad`; if online, `server_id` = `player.info.online.server.id`.
+
+**Group** (`#player_group`): group select 0–5; expiry daterange `player_group-expire` (**disabled when group=0**); comment (max 128); prefix text (max 64); prefix RGB color picker `player_group-prefix_rgb-color` synced to `r,g,b` text (max 16); image URL (max 256). Submit `player.group.set()` → `changeGroup`. "VIP +1 месяц" quick-action is `.hide`-gated.
+
+**Message / warn** (`#player_message`): ~18 canned warnings selectable via `player.message.set()`; free-text `player_message-msg` (max 512); repeat select `player_message-time`; **"Добавить запись в карточку игрока"** checkbox `player_message-log` to also log to card. Submit → `message`.
+
+**Kits** (`#player_kits-modal`): per-role permission list saved via `kitSave` with a client-assembled `kits[]` payload.
+
+**Twink panel**: alt list with per-alt **Проверить друзья** / **Онлайн** buttons firing `findFriends` / `twinkOnline` against `compare_steam_id`; shows IP-overlap counts and time deltas.
+
+**Visibility predicates** (`player.open()` reveals conditionally; default `display:none` / `class="hide"`):
+
+| Element | Shown iff (predicate) |
+|---|---|
+| Сообщение (message) | `player.info.online` truthy |
+| Команда (change team) | `player.info.online.team` present |
+| Кик из сквада (removePlayer) | `player.info.online.squad` present |
+| Убить (kill) / Кикнуть без причины | `player.info.online` truthy |
+| Разбанить (unban) | active ban exists on player |
+| Забанить ник / Разбанить ник | toggled by current name-ban state |
+| Киты (kits) | card data confirms kit-permission availability |
+| VIP quick-grant | `.hide` until group flow selects VIP |
+
+Net effect: the entire destructive RCON toolset (kick/kill/team/squad) is **inert for offline players** and only lights up for live ones; the server enforces the `server_id` requirement, the client mirrors it by presence-gating. No visible client-side role check beyond presence; group-level authorization assumed server-side. A few SteamIDs are special-cased in `player.open()` (owner/dev badges) — cosmetic only.
+
+---
+
+### 8. Competitively interesting details
+
+- **Playtime-by-role leaderboard.** 11 kit columns turn "who was online" into a role-competency table — surfaces medics/SLs/pilots and role-stackers; useful for recruiting, not just moderation.
+- **One shared player-detail modal everywhere.** The same ~23-action card is embedded on every page. An admin never leaves context to punish. High leverage, expensive to out-build piecemeal.
+- **Presence-driven action gating.** Clean split: DB actions on `player.php`, live actions on `squad.php`, gated by `player.info.online.server.id`.
+- **Recommended ban-length engine.** Each rule encodes escalating 1st–4th-offence durations; correct duration radio auto-checked and tooltipped "Recommended." A fairness/consistency feature to beat.
+- **Canned warnings + optional card logging.** Pre-written warnings with a "log to card" toggle and configurable in-game repeat interval — fast, auditable moderation.
+- **Twink hunting.** IP-overlap alt detection with drill-down (shared IPs, time deltas, friend-graph cross-check, online-calendar comparison).
+- **Clipboard integrations.** `AdminTeleportToPlayer` and a ready-to-paste OWI/BattleMetrics cheat-report template are copy-to-clipboard.
+- **Rich per-player intel.** Geo-IP history with flags/timezones, primetime hours, Steam hours, VAC/game-ban badges, Discord link.
+- **Server-side formatted durations.** All metrics arrive as `Xч Yм` strings — cheap on the client, but forces server-side sort on underlying seconds.
+
+---
+
+### 9. Gaps / uncertainties
+
+- **Real-time roster vs historical aggregation:** confirmed — this page is a *period aggregation report*. The live roster (`serverOnline`/`serverOnlineAdmins`/`serverOnlineBooster`/`downloadOnline`) lives on `main.html`; document the real-time roster in the servers/main section.
+- `queue` is in the wire contract but never rendered here — its display consumer is another page/caller; exact semantics (queue time vs queue count) inferred from the `Xч Yм` format = time.
+- `totalPage`/`totalRows` are 0 in the row-fetch response; the count is a separate `&pagination=true` round-trip not captured here (no user paged during capture).
+- Server-side field set for `action:'get'` beyond what the modal reads is not observable from the client.
+- `reason_id`→rule-text mapping lives server-side; only the option catalog is visible client-side.
+- Kit-permission payload shape (`kits[]` from `player.kits.collect()`) is assembled client-side; server schema not exposed here.
+- `boost`/`primetime` precise definitions inferred from usage, not a schema.
 
 
 ---
 
 ## 08. Player Comments & Suspect Marking
 
-Documentation of SQSTAT's per-player admin note system (**Комментарии / Comments**) and its suspect-tagging system (**Метки / Marks**). These are two distinct but related moderation-storage features that attach free-form notes and structured "cheat suspicion" flags to a player identity (keyed by SteamID). Both surface as dedicated nav pages **and** as controls inside the shared `player-detail` modal that is embedded on every page.
+Implementation-spec reconstruction of SQSTAT's per-player admin note system (**Комментарии / Comments**) and its suspect-tagging system (**Метки / Marks**), built from **live captured API contracts** (`breaking.sqstat.ru`, session-authenticated headless capture) plus the rendered `#content` fragments and the shared player-modal JS. These are two distinct-but-related moderation-storage features that attach free-form notes and a single structured "cheat suspicion" flag to a player identity. Both surface as dedicated nav pages **and** as controls inside the shared `player_info` modal that is embedded on every page.
+
+Ground-truth capture files (cited inline below):
+- `caps/notes/comments.network.json`, `caps/notes/mark.network.json` — live `table.php` request/response schemas.
+- `caps/notes/comments.content.html`, `caps/notes/mark.content.html` — rendered `#content`: real headers, search inputs, `buildTable` config.
+- `home_auth.html` — the shared `player` JS object (`player.comment.*`, `player.mark.*`) and `Action()` bodies.
+- `custom.js` — the `Action()` transport wrapper (`POST /ajax/<script>.php`, JSON envelope).
+
+Capture summary: **6 live AJAX contracts** captured (3 per page), **0 blocked mutations** (`caps/notes/_blocked.json == []`) — everything below is observation-only.
 
 ---
 
 ### 1. Purpose & Nav Location
 
-| Feature | Nav item | Page id | AJAX fragment | Own table id |
+| Feature | Nav id | Fragment loader | Own table id (`table.php action=`) | Row array size |
 |---|---|---|---|---|
-| Player comments log | `comments` | `comments` | `GET /ajax/page.php?page=comments` | `#playerComments` |
-| Suspect marks log | `mark` | `mark` | `GET /ajax/page.php?page=mark` | `#playerMark` |
+| Player comments log | `comments` | `GET /ajax/page.php?page=comments` | `playerComments` | 1090 rows / 11 pages |
+| Suspect marks log | `mark` | `GET /ajax/page.php?page=mark` | `playerMark` | 708 rows / 8 pages |
 
-- **Comments page** = a global, cross-player audit feed of every admin note ever written, with search by target player, authoring admin, and note text.
-- **Mark page** = a global roster of every player who currently carries a suspicion/toxicity flag, filterable by mark type; effectively a "watchlist" of suspected cheaters and toxic players.
-- Both are read/browse surfaces. The *write* side (adding a comment, setting/clearing a mark) happens inside the shared player modal, which both pages also embed. Clicking any row opens that player's modal via `player.open(steam_id)`.
+- **Comments page** = a global, cross-player audit feed of every admin note ever written, searchable by target player, authoring admin, and note text.
+- **Mark page** = a global roster of every player who currently carries a suspicion/toxicity flag, filterable by mark type; effectively a watchlist of suspected cheaters and toxic players.
+- Both are read/browse surfaces. The *write* side (`addComment`, `mark`) happens inside the shared player modal, which both pages also embed. Any row click opens that player's modal via `player.open(steam_id)` (see §5).
 
-The underlying capabilities (`addComment`, `getComments`, `mark`) are available from **every** page in the panel (admins, bans, chat, kills, players, reports, etc. — confirmed in the action catalog), because they are part of the shared modal. The two pages documented here are just the dedicated *browse/report* views over the same stored data.
+The capabilities (`addComment`, `getComments`, `mark`) are attached to the shared modal and are therefore reachable from **every** page in the panel — `action_catalog.txt` confirms `addComment`/`getComments`/`mark` on `admins`, `bans`, `chat`, `kills`, `players`, `reports`, `damages`, `deaths`, `teamkills`, `top`, `vips`, `votes`, etc. The two pages here are just the dedicated browse/report views over the same stored data.
+
+> **Identity key finding:** the live schemas show `steam_id` as a **36-character** string (`str(len36)` in both `comments.network.json` and `mark.network.json`) — i.e. a **UUID**, not a Steam64. Steam64 survives only as the author key `admin_id: str(len17)`. SQSTAT has moved its player primary key to a UUID surrogate; the column retains the legacy name `steam_id`.
 
 ---
 
-### 2. Entities & Fields
+### 2. Live API Contracts
 
-#### 2.1 Entity: `player_comment` (admin note)
+All three action verbs and both list tables share one transport: `Action({script, action, data})` from `custom.js:284`.
 
-Inferred from the `#playerComments` table columns (`buildTable` `collum: ["steam_id","date","admin","player","text"]`), the search inputs (`t1.text`, `t2.player`, `t5.player`), and the `addComment` / `getComments` payloads.
+**Transport (`Action` wrapper, `custom.js`):**
+- Request: `POST /ajax/<script>.php`, `Content-Type: application/x-www-form-urlencoded; charset=UTF-8`.
+- Body: object `data` is serialized to `action=<action>` + `&<key>=<value>` for each data key (no URL-encoding of values in the wrapper — raw concatenation).
+- Response envelope (JSON): success branch requires `status == "ok"` → `success(text)`. Otherwise: if `text.auth === true` → `location.reload()` (session expired); else `error(text.msg)`.
+- `retryAbort:true` aborts any in-flight request sharing the same logical `name` before firing (server throttles the shared session).
+
+#### 2.1 `POST /ajax/table.php` — list tables (`playerComments`, `playerMark`)
+
+Both browse tables are driven by the same `buildTable` DataTables engine and hit `table.php` twice on load: (a) the **data** request and (b) a **pagination/count** request with `&pagination=true`.
+
+**Request params** (source: `comments.network.json`, `mark.network.json`):
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `action` | enum `playerComments` \| `playerMark` | yes | Server table selector. |
+| `table` | string | yes | Same value as `action` (echoed). |
+| `page` | int | yes | 1-based page index. |
+| `numrows` | int | yes | Page size — captured value **`100`**. |
+| `search` | URL-encoded JSON | yes | Filter envelope: `{"text":{},"check":{},"multiselect":{},"managers":{},"slider":{}}`. Text inputs populate `text` keyed by the input's `data-search` DB alias; the mark multiselect populates `multiselect` keyed by `mark` (see §4). Empty objects = no filter. |
+| `order_by` | string \| `false` | yes | Sort column DB alias; `false` = default sort. |
+| `order_sort` | string \| `false` | yes | `asc` / `desc`; `false` = default. |
+| `pagination` | `true` | count-only | Present only on the second (count) request. |
+
+**Response — data request (`status:"ok"`, `application/json`):**
 
 | Field | Type | Meaning |
 |---|---|---|
-| `steam_id` | string (Steam64) | Target player the note is attached to. |
-| `date` | datetime | When the note was written (rendered via `formatDate(date,false)`). |
-| `admin` | string | Display name of the authoring admin (join alias `t2.player`). |
-| `player` | string | Current nickname of the target player (join alias `t5.player`). |
-| `text` | string, `maxlength=256` | The note body. Free text, one line, up to 256 chars. |
-| `name` | string | In the `getComments` response, the author's display name (`comment.name`) rendered above each message. |
+| `data.totalPage` | int | Total pages (0 on the data call; real value comes from the count call). |
+| `data.totalRows` | int | Total matched rows (0 on the data call). |
+| `data.currentPage` | str | Echoed page, e.g. `"1"`. |
+| `data.row` | array (≤ `numrows`) | Row objects (schemas in §2.1.1 / §2.1.2). |
+| `data.custom` | bool | Custom-query flag (`false` observed). |
+| `data.query_time` | int/float — seconds | Row-query duration. |
+| `data.count_time` | int — seconds | Count duration (0 on data call). |
+| `status` | str — `"ok"` | Envelope status. |
+| `exec_time` | float — seconds | Server exec time. |
 
-Notes on structure:
-- The search aliases `t1`, `t2`, `t5` reveal a multi-table join server-side: `t1` = comments table (has `.text`), `t2` = admin/author table (has `.player`), `t5` = target player table (has `.player`). This confirms comments are stored in their own table and joined to both the author admin and the target player records.
-- Comments are **append-only** from the UI — there is no edit or delete control anywhere in the fragment. Notes accumulate as an immutable thread per player.
-- A per-player **comment count** (`comments_count`) is delivered with the player modal payload and shown as a badge on the comment button.
-
-#### 2.2 Entity: `player_mark` (suspicion / toxicity flag)
-
-Inferred from the `#playerMark` table (`collum: ["steam_id","player","date","mark","ban"]`), the `<select id="playerMark-mark">` options, the modal `player.mark` object, and the `mark` action payload.
+**Response — count request (`&pagination=true`):**
 
 | Field | Type | Meaning |
 |---|---|---|
-| `steam_id` | string (Steam64) | Player carrying the mark. |
-| `player` | string | Player nickname. |
-| `date` | datetime | Last-seen timestamp — column header is **Заходил (Last logged in)**, not mark date. |
-| `mark` | enum int `0`–`8` | The suspicion category (see enum below). `0` = no mark / cleared. |
-| `ban` | (flag/status) | **Бан (Ban)** column — indicates whether this suspected player is currently banned, letting admins triage suspects who have not yet been actioned. |
+| `totalPage` | int | Page count (comments **11**, mark **8**). |
+| `totalRows` | str — integer | Total rows (comments **`"1090"`**, mark **`"708"`**). |
+| `count_time` | int/float — seconds | Count duration. |
+| `status` | str — `"ok"` | Status. |
+| `exec_time` | float — seconds | Exec time. |
 
-**`mark` enum (suspicion categories):** This is the competitively interesting core of the feature — a fixed taxonomy of cheat/behaviour suspicions, each with its own FontAwesome icon.
+##### 2.1.1 `playerComments` row schema (LIVE — `comments.network.json`)
 
-| Value | Russian label | English gloss | Icon |
-|---|---|---|---|
-| `1` | Подозрение на WallHack | Suspected WallHack | `fa-eye` |
-| `2` | Подозрение на AimBot | Suspected AimBot | `fa-crosshairs` |
-| `3` | Подозрение на SpeedHack | Suspected SpeedHack | `fa-tachometer` |
-| `4` | Подозрение на спавн объектов | Suspected object spawning | `fa-bomb` |
-| `5` | Подозрение на перезарядку | Suspected reload exploit | `fa-refresh` |
-| `6` | Подозрение на гриф | Suspected griefing | `fa-free-code-camp` |
-| `7` | Подозрение на конфиг | Suspected illegal config | `fa-file-excel` |
-| `8` | Токсичный игрок | Toxic player | `fa-biohazard` |
-| `0` | Снять метку | Remove mark (clear) | `fa-times` |
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | str — integer | Comment PK (e.g. `"1091"`). |
+| `steam_id` | str(36) — **UUID** | Target player identity (also the row click key). |
+| `admin_id` | str(17) — Steam64 | Authoring admin's Steam64. |
+| `date` | str(10) — **unix timestamp** | When the note was written. |
+| `text` | str — HTML-escaped | Note body; double-quotes arrive as `&quot;` (double-escaped on the wire; see §5.1 unescape). |
+| `admin` | str — **pre-rendered HTML** | Author display block: `<p class="mb-0"><code style="color:#<hex>">…</code></p>`. |
+| `admin_color` | str(6) — hex | Author name color (e.g. `e50606`). |
+| `admin_group` | str(1) | Author group id. |
+| `player` | str — **pre-rendered HTML** | Target player display block. |
+| `player_color` | str \| null | Target color (null observed). |
+| `player_group` | str \| null | Target group (null observed). |
 
-- A player carries **exactly one** mark at a time (setting a new value replaces the old; `mark.set(0)` clears). It is a single scalar enum column, not a multi-tag set — even though the *mark page filter* is a multiselect (that multiselect is an OR filter over the log, not a per-player multi-value store).
-- The mark enum table is hardcoded client-side in `player.mark.get()` as a JSON map (id → `{name, icon}`), duplicated between the page's filter `<select>` and the modal dropdown. A competing panel could make this taxonomy server-configurable.
+Redacted example row:
+```json
+{"id":"1091","steam_id":"<uuid:36>","admin_id":"7656119XXXXXXXXXX","date":"1783097436",
+ "text":"&quot;Попал в пачку к читерам…","admin":"<p class=\"mb-0\"><code style=\"color:#e50606\">…",
+ "admin_color":"e50606","admin_group":"1","player":"<redacted>","player_color":null,"player_group":null}
+```
 
----
+##### 2.1.2 `playerMark` row schema (LIVE — `mark.network.json`)
 
-### 3. The Pages' Own Tables
+| Field | Type | Meaning |
+|---|---|---|
+| `steam_id` | str(36) — **UUID** | Suspect player identity (row click key). |
+| `eos_id` | str(32) — EOS id | Epic Online Services id. |
+| `name` | str — raw | Player nickname (raw, unrendered). |
+| `date` | str(10) — **unix timestamp** | **Заходил / last seen** login time. |
+| `create_date` | str(10) — **unix timestamp** | **When the mark was created** (persisted, though not shown as a column). |
+| `mark` | str — **pre-rendered HTML** | Reason icon: `<i class="fa fa-fw fa-fa-fw fa-solid fa-…"></i>` (enum → icon, §3). |
+| `bonus` | str — integer | Player bonus-points balance (e.g. `"59103"`). |
+| `discord` | str(18) — snowflake | Linked Discord id. |
+| `color` | str(6) — hex | Nickname color. |
+| `player_group` | str(1) | Player group id. |
+| `ban` | str — **pre-rendered HTML** | Ban status label: `<span class="label label-danger">Нет</span>` (Нет = not banned) / positive label when banned. |
+| `player` | str — **pre-rendered HTML** | Player display block (colored nickname). |
 
-#### 3.1 `#playerComments` (comments page)
+Redacted example row:
+```json
+{"steam_id":"<uuid:36>","eos_id":"<eos:32>","name":"<redacted>","date":"1783151948",
+ "create_date":"1769521352","mark":"<i class=\"fa fa-fw fa-fa-fw fa-solid fa-…","bonus":"59103",
+ "discord":"<snowflake:18>","color":"e2b032","player_group":"<redacted:1>",
+ "ban":"<span class=\"label label-danger\">Нет</span>","player":"<redacted>"}
+```
 
-Server-side DataTables-style table via jQuery `buildTable` (`table:'playerComments'`, `numrows:100`). Row click → `player.open(steam_id)`.
+> **Correction vs prior draft:** `playerMark` **does** persist a mark-creation timestamp (`create_date`). It is stored but not surfaced as a table column (the visible date column is `date` = last-seen). There is still **no mark-author** field in the schema — who set/cleared a mark is not exposed.
 
-| # | Header | Data key | Meaning |
-|---|---|---|---|
-| 1 | SteamID | `steam_id` | Target player id (also the row's click key). |
-| 2 | Дата (Date) | `date` | Note timestamp, centered. |
-| 3 | Админ (Admin) | `admin` | Authoring admin. |
-| 4 | Ник (Nick) | `player` | Target player nickname. |
-| 5 | Комментарий (Comment) | `text` | Note body. |
+#### 2.2 `POST /ajax/player.php` — the three write/read verbs
 
-**Search/filter controls** (left fixed sidebar, submitted by the **Поиск (Search)** button `#playerComments-btn`):
+Source: `home_auth.html` (`player.comment.*`, `player.mark.*`).
 
-| Input | Placeholder | Server field | Filters on |
-|---|---|---|---|
-| `#playerComments-name` | Игрок (Player) | `t5.player` | Target player nickname |
-| `#playerComments-admin` | Админ (Admin) | `t2.player` | Authoring admin |
-| `#playerComments-text` | Текст (Text) | `t1.text` | Note body substring |
-
-No column-sort UI or pagination widgets are present in the fragment beyond the `numrows:100` page size; loading is server-side.
-
-#### 3.2 `#playerMark` (mark page)
-
-Same `buildTable` engine (`numrows:100`). Row click → `player.open(steam_id)`. Rows carrying a mark get CSS class `player_mark` (highlight styling).
-
-| # | Header | Data key | Meaning |
-|---|---|---|---|
-| 1 | SteamID | `steam_id` | Suspect player id. |
-| 2 | Ник (Nick) | `player` | Nickname. |
-| 3 | Заходил (Last seen) | `date` | Last login time. |
-| 4 | Причина (Reason) | `mark` | Suspicion category (enum → icon+label). |
-| 5 | Бан (Ban) | `ban` | Whether the suspect is currently banned. |
-
-**Search/filter controls** (left sidebar):
-
-| Control | Type | Server field | Filters on |
-|---|---|---|---|
-| `#playerMark-name` | text, placeholder Игрок (Player) | `t1.player` | Nickname |
-| `#playerMark-mark` | `<select multiple>` (bootstrap-multiselect, `nonSelectedText:'- Метка -'`, `enableHTML:true`) | `mark` | One or more mark categories (OR) |
-
-The multiselect renders each option with its inline icon via `enableHTML`. This is the "watchlist filter": e.g. show me all players flagged AimBot **or** WallHack.
-
----
-
-### 4. Actions / Admin Capabilities
-
-All three actions post to the same script endpoint. `Action({script, action, data})` → `POST /ajax/<script>.php` with body `action=<action>&<data...>`.
-
-| UI label / trigger | action id | Endpoint | Data params | Effect | Destructive (state-change)? |
+| Verb | `action` | Data keys (type) | Response | Effect | Destructive |
 |---|---|---|---|---|---|
-| Comment thread open (auto-load) | `getComments` | `/ajax/player.php` | `steam_id` | Returns `{comments:[{name,date,text},…]}` for the player; populates the slide-out thread. | N (read) |
-| Send note (Enter or ▶ submit) | `addComment` | `/ajax/player.php` | `steam_id`, `text` (trimmed, non-empty, ≤256) | Persists a new note authored by the current admin; on complete re-runs `getComments`. | **Y** |
-| Set/clear suspicion mark (dropdown `player.mark.set(n)`) | `mark` | `/ajax/player.php` | `steam_id`, `mark` (0–8) | Sets the player's mark enum; `0` clears it. Updates modal warning banner + row highlight. | **Y** |
+| Read comment thread | `getComments` | `steam_id` (UUID str) | `{status:"ok", comments:[{name:str, date:unix-str, text:str}, …]}` | Populates slide-out thread; empties → empty-state. | **N** |
+| Add note | `addComment` | `steam_id` (UUID str), `text` (str, trimmed non-empty, ≤256) | `{status:"ok"}` | Persists a note authored by the session admin; `complete` re-runs `getComments`. | **Y** |
+| Set/clear mark | `mark` | `steam_id` (UUID str), `mark` (int `0`–`8`) | `{status:"ok"}` | Writes the player's single mark enum; `0` clears. Triggers flip animation + banner re-render + row highlight. | **Y** |
 
-Supporting client behaviour:
-- `addComment` clears the input on success and always refetches the thread on `complete`, so the new note appears immediately.
-- `mark` on success plays a flip animation (`animateCss('flip_panel_full')`), destroys/rebuilds the comment panel, re-renders the mark banner, and toggles the `player_mark` row class across any visible table (`tr[data-id="<steam_id>"]`).
-- Errors from either write action surface via `addAlert(text, "exclamation-triangle")`.
-
-> Note: the action catalogs for `comments.html` and `mark.html` also list the full shared-modal action set (`ban`, `kick`, `kill`, `kits`, `kitSave`, `message`, `twink`, `unban`, `changeGroup`, `changeTeam`, `checkBans`, `findFriends`, `addBanName`, `removeBanName`, `removePlayer`, `getPlayerOnlineData`, `downloadStat`, `get`) plus `script:'squad'`. Those belong to the embedded player modal, **not** to the comments/mark pages themselves, and are documented in the shared-modal section.
+`getComments` response (redacted):
+```json
+{"status":"ok","comments":[{"name":"AdminNick","date":"1783097436","text":"note body"}]}
+```
 
 ---
 
-### 5. Forms & Modals
+### 3. The `mark` Enum (suspicion taxonomy)
 
-#### 5.1 Comment slide-out panel (`.player_comments`, inside the player modal)
+Hardcoded client-side twice: as the page filter `<option>` set (`mark.content.html`) **and** as the JS map returned by `player.mark.get()` (`home_auth.html`). Values `1`–`8` are real categories; `0` is the clear sentinel (dropdown-only, not a filter option).
 
-- **Trigger:** comment button with unread/count badge (`.player_comments_button` desktop, `.player_comments_button-mobile` mobile) → `player.comment.open()` toggles the `open` class; opening triggers `get()`.
-- **Composer:** single `<input class="form-control" maxlength="256">` + submit button `.player_comments_sumbit`. Submits on Enter (keyCode 13) or click.
-- **Validation:** client trims input and drops empty strings (`if(text=='') return;`). Only a 256-char max and non-empty check; no server-echoed validation shown.
-- **Thread rendering:** each message shows author name + formatted date header and the note text (with `&amp;quot;` unescaped back to `"`).
-- **States:** loading spinner (`.player_comments_load`), empty state **Нет комментариев (No comments)** (`.player_comments_nomessage`), and a live count badge via `player.comment.count()`.
+| Value | Russian label | English gloss | Icon (`get()` map) |
+|---|---|---|---|
+| `1` | Подозрение на WallHack | Suspected WallHack | `fa-fw fa fa-eye` |
+| `2` | Подозрение на AimBot | Suspected AimBot | `fa-fw fa fa-crosshairs` |
+| `3` | Подозрение на SpeedHack | Suspected SpeedHack | `fa-fw fa fa-tachometer` |
+| `4` | Подозрение на спавн объектов | Suspected object spawning | `fa-fw fa fa-bomb` |
+| `5` | Подозрение на перезарядку | Suspected reload exploit | `fa-fw fa fa-refresh` |
+| `6` | Подозрение на гриф | Suspected griefing | `fa-fw fa fa-free-code-camp` |
+| `7` | Подозрение на конфиг | Suspected illegal config | `fa-fw fa-solid fa-file-excel` |
+| `8` | Токсичный игрок | Toxic player | `fa-fw fa-solid fa-biohazard` |
+| `0` | Снять метку | Remove mark (clear) | `fa fa-times` |
 
-#### 5.2 Mark dropdown (inside the player modal header)
+- A player carries **exactly one** mark at a time (single scalar enum column; `mark.set(n)` replaces, `mark.set(0)` clears). The mark-page multiselect is an **OR filter over the log**, not a per-player multi-value store.
+- The enum→`{name,icon}` map is duplicated between filter and modal and is **not server-configurable** — a competitor could make the taxonomy dynamic.
 
-- A **tags** dropdown button (`fa-tags`) next to the **Группа (Group)** button opens `#player_info-mark`, listing the 8 suspicion options + a divider + **Снять метку (Remove mark)**.
-- Each `<li><a onclick="player.mark.set(n)">` fires the mark action directly — no confirmation dialog.
-- The currently-active mark's menu item gets `class="disabled"` via `mark.render()`, so admins see which flag is set.
-- When a mark is set, a pulsing warning banner (`#player_info_mark`, `alert-warning`, `animated pulse infinite`) shows the icon + label at the top of the player panel; cleared marks hide it.
+---
+
+### 4. The Pages' Own Tables (`buildTable`)
+
+Both use the same jQuery `buildTable` engine, `numrows:100`, server-side loading, row click → `player.open(<steam_id cell text>)`. No column-sort or pagination widgets are rendered beyond the fixed page size (`order_by/order_sort` default to `false`).
+
+#### 4.1 `#playerComments` — `buildTable({table:'playerComments', numrows:100})`
+
+`collum: ["steam_id","date","admin","player","text"]` · `searchInput: ["playerComments-name","playerComments-admin","playerComments-text"]` · click handler reads `td[data-contact="steam_id"]`.
+
+| # | Header (rendered) | `collum` key | Notes |
+|---|---|---|---|
+| 1 | SteamID | `steam_id` | Row click key; `width:151px`. |
+| 2 | Дата (Date) | `date` | unix→`formatDate`; `text-center`. |
+| 3 | `<i fa-id-badge>` Админ (Admin) | `admin` | Pre-rendered colored author. |
+| 4 | `<i fa-user>` Ник (Nick) | `player` | Target nickname. |
+| 5 | `<i fa-comment>` Комментарий (Comment) | `text` | Note body. |
+
+**Search inputs** (left fixed sidebar; submit `#playerComments-btn` = **Поиск / Search**):
+
+| `#id` | placeholder | `data-search` (DB alias → `search.text` key) | input |
+|---|---|---|---|
+| `#playerComments-name` | Игрок (Player) | `t5.player` | text |
+| `#playerComments-admin` | Админ (Admin) | `t2.player` | text |
+| `#playerComments-text` | Текст (Text) | `t1.text` | text |
+
+Aliases confirm a server-side join: `t1` = comments (`.text`), `t2` = author admin (`.player`), `t5` = target player (`.player`).
+
+#### 4.2 `#playerMark` — `buildTable({table:'playerMark', numrows:100})`
+
+`collum: ["steam_id","player","date","mark","ban"]` · `searchInput: ["playerMark-name","playerMark-mark"]`. Marked rows carry CSS class `player_mark` (highlight).
+
+| # | Header (rendered) | `collum` key | Notes |
+|---|---|---|---|
+| 1 | SteamID | `steam_id` | Row click key; `width:151px`. |
+| 2 | `<i fa-user>` Ник (Nick) | `player` | Colored nickname. |
+| 3 | `<i fa-clock-o>` Заходил (Last seen) | `date` | Maps to `date` field (last-seen unix). |
+| 4 | `<i fa-triangle-exclamation>` Причина (Reason) | `mark` | Pre-rendered enum icon. |
+| 5 | `<i fa-gavel>` Бан (Ban) | `ban` | Pre-rendered ban-status label. |
+
+**Search controls** (left sidebar; submit `#playerMark-btn`):
+
+| Control | Type | `data-search` (→ `search` key) | Filters on |
+|---|---|---|---|
+| `#playerMark-name` | text, placeholder Игрок (Player) | `t1.player` (→ `search.text`) | Nickname |
+| `#playerMark-mark` | `<select multiple type="multiselect">`, 8 options `value=1..8` with `label="<i …>…"` | `mark` (→ `search.multiselect`) | One or more mark categories (OR) |
+
+The multiselect renders each option's inline icon (bootstrap-multiselect, `enableHTML`). This is the watchlist filter (e.g. show all AimBot **or** WallHack flags). Note `0`/clear is **not** an option here — you cannot filter for "unmarked".
+
+---
+
+### 5. Modal Forms, State & Predicates
+
+The `player_info` template lives in `<div id="player_info" class="hide">` and is cloned into `#playerModal` on `player.open()`. The `hide` class is a template mechanism, not a permission gate.
+
+#### 5.1 Comment slide-out (`player.comment`, `home_auth.html`)
+
+| Aspect | Spec |
+|---|---|
+| Container | `#playerModal .player_comments`; toggled open via `open` class. |
+| Trigger | `.player_comments_button` (desktop) / `.player_comments_button-mobile` (mobile) → `player.comment.open()`. |
+| Open predicate | `open()` toggles `open` class; **fetches only when it becomes open** (`if(container.toggleClass('open').hasClass('open')) get()`). |
+| Composer | single `<input class="form-control" maxlength="256">` + `.player_comments_sumbit` button. |
+| Submit | Enter (`keyCode==13`) **or** submit-button click → `send()`. |
+| Validation | `text = input.val().trim(); if(text=='') return;` — non-empty + `maxlength=256` only; no server-echoed validation surfaced. |
+| Send | `addComment{steam_id,text}`; `success` clears input; `complete` always re-runs `get()` (new note appears immediately). |
+| Thread render (`add`) | per message: `<p class="player_comments_message_user">{name} <small …>{formatDate(date,false)}</small></p>` + `<p class="player_comments_message_text">`; body via `.html(text.replace(/&amp;quot;/g,'"'))` (unescapes double-escaped quotes). |
+| Count badge | `count(cnt)` writes into `.player_comments_button span` (and mobile); seeded from modal payload `player.info.comments_count`. |
+| States | loading `.player_comments_load`; empty **Нет комментариев / No comments** `.player_comments_nomessage` (shown when `comments.length==0` **or** on request error). |
+| Immutability | append-only — no edit/delete control in the fragment. |
+
+#### 5.2 Mark dropdown (`player.mark`, `home_auth.html`)
+
+| Aspect | Spec |
+|---|---|
+| Trigger | header `<button><i class="fa-solid fa-tags"></i></button>` dropdown → `#player_info-mark` list. |
+| Options | 8 `<li><a onclick="player.mark.set(1..8)">` + `divider` + `<a onclick="player.mark.set(0)">` **Снять метку / Remove mark**. |
+| Confirmation | **none** — each `<a>` fires `mark.set(n)` directly. |
+| Set (`set(n)`) | `mark{steam_id,mark:n}`; `success` → `animateCss('flip_panel_full')` then `comment.destroy()` + `mark.render(n)`; toggles `player_mark` on `tr[data-id="<steam_id>"]` (add when `n!=0`, remove when `n==0`). |
+| Banner render (`render(mark)`) | if `mark!="0"`: `#player_info_mark` `.show()` with `<i class="{icon}"></i> {name}` (pulsing `alert-warning animated pulse infinite`); else `.hide()`. |
+| Active-state predicate | `render` clears `.disabled` on all `#player_info-mark li`, then adds `.disabled` to `a[onclick="player.mark.set({mark})"]` — the current flag is visibly disabled in the menu. |
+| Errors | `mark`/`addComment` failures → `addAlert(text,"exclamation-triangle")`. |
 
 ---
 
 ### 6. Permission / Visibility Logic
 
-- The whole player template block lives inside `<div id="player_info" class="hide">` — it is a hidden client-side template cloned into `#playerModal` when a player is opened; the `hide` class here is a rendering mechanism, not a permission gate.
-- **No explicit role/group gating** is present on the comment composer or the mark dropdown in these fragments — unlike sibling controls (e.g. **Убить (Kill)**, **Кикнуть без причины (Kick w/o reason)**, ban-name actions) which ship with `style="display:none;"` and are revealed by role logic elsewhere. This suggests comments and marks are available to any admin who can open the modal (a relatively low privilege bar), whereas punitive actions are gated tighter.
-- Authorship is server-attributed: `addComment` sends only `steam_id`+`text`; the admin identity is taken from the session, and every note is stamped with the author name shown in the comments feed and thread. This makes the comments page an **accountability/audit trail** of which admin said what about whom.
-- Marks are **not** author-attributed in the visible schema (the mark page shows last-seen date, not who flagged) — a possible weakness to beat: no audit of who set/cleared a suspicion.
+- **No explicit role/group gating** on the comment composer or the mark dropdown in these fragments — unlike sibling controls (**Убить / Kill**, **Кикнуть / Kick**, **Забанить ник / Ban name**, **Разбанить ник**, **Киты / Kits**) which ship `style="display:none;"` and are revealed by role logic elsewhere. Comments and marks are available to any admin who can open the modal — a lower privilege bar than punitive actions.
+- **Comment authorship is server-attributed:** `addComment` sends only `{steam_id,text}`; the author (`admin_id`/`admin`) is stamped from the session. The comments page is therefore an accountability/audit trail of which admin said what about whom.
+- **Marks are not author-attributed:** the schema carries `create_date` (when) but no "who". No audit of who set/cleared a suspicion — an exploitable weakness for a competitor to beat.
+- **Session-expiry handling:** any verb returning `{auth:true}` forces `location.reload()` (`custom.js`), so an expired admin session bounces to login rather than silently failing a write.
 
 ---
 
-### 7. Notable UX & Competitive Takeaways
+### 7. Competitive Takeaways & Gaps to Beat
 
-- **Structured cheat taxonomy.** The 8-value suspicion enum (WallHack, AimBot, SpeedHack, object-spawn, reload-exploit, grief, illegal-config, toxic) with per-type icons is a clean, low-friction watchlist primitive. Setting a flag is one click, no dialog. Worth copying — but make the taxonomy **server-configurable** rather than hardcoded in JS in two places.
-- **Ban-aware watchlist.** The mark page's **Бан** column lets moderators immediately see which flagged suspects are still unbanned — a ready-made triage queue for "suspected but not yet actioned" cheaters.
-- **Cross-player audit feed.** The comments page is a global, searchable log of every admin note (searchable by author admin), doubling as staff accountability. Notes are immutable/append-only.
-- **Ubiquitous access.** Because comments+marks ride the shared modal, an admin can annotate/flag a player from *any* page (chat, kills, reports…) without navigating away — very low friction. The count badge keeps prior notes discoverable.
-- **Gaps to beat:**
-  - No edit/delete/soft-delete of comments; no threading or attachments; 256-char single-line cap.
-  - Only one mark per player (single enum) — cannot flag both "AimBot" and "toxic" simultaneously despite the multiselect *filter* implying otherwise.
-  - No visible mark-author audit or mark history/timeline.
-  - Mark taxonomy and enum→label map are hardcoded client-side and duplicated between filter and modal.
-  - No pagination beyond a fixed 100-row server page; no explicit sort controls.
+- **Structured cheat taxonomy.** The 8-value suspicion enum (WallHack, AimBot, SpeedHack, object-spawn, reload-exploit, grief, illegal-config, toxic) with per-type icons is a clean, one-click watchlist primitive (no confirm dialog). Worth copying — but make it **server-configurable**, not hardcoded in JS in two places.
+- **Ban-aware watchlist.** The mark page's **Бан** column is a ready-made triage queue for "suspected but not yet actioned" cheaters; the row also carries `bonus`, `discord`, `eos_id` for cross-referencing.
+- **Cross-player audit feed.** The comments page is a global, searchable log of every admin note (searchable by author admin), doubling as staff accountability. Notes are immutable/append-only, timestamped, and colored per author group.
+- **Ubiquitous, low-friction access.** Because comments+marks ride the shared modal, an admin can annotate/flag from *any* page (chat, kills, reports…) without navigating away; the count badge keeps prior notes discoverable.
+- **Gaps:**
+  - No edit/delete/soft-delete of comments; no threading or attachments; 256-char single-line cap; body is double-escaped and unescaped client-side (`&amp;quot;`), a brittle round-trip.
+  - Only one mark per player (single enum) — cannot flag "AimBot" **and** "toxic" simultaneously, despite the multiselect *filter* implying otherwise. No "unmarked" filter option.
+  - `create_date` is stored but never surfaced; **no mark-author audit** and no mark history/timeline.
+  - Mark taxonomy + enum→label map hardcoded and duplicated client-side.
+  - No pagination controls beyond a fixed `numrows:100` page and no exposed sort UI (`order_by/order_sort` hardwired to `false` on load).
 
 
 ---
@@ -1868,24 +2783,155 @@ The page is a two-column layout: a fixed left **filter sidebar** (`col-md-3`, `p
 
 ---
 
+### Live API Contracts
+
+> Ground truth captured 2026-07-04 from `breaking.sqstat.ru` with a read-only headless browser. Source: `caps/bans/bans.network.json`. Mutations were network-intercepted and aborted (`caps/bans/_blocked.json` = `[]`), so ban/unban/addBanName request shapes below are reconstructed from the inline modal JS in `caps/bans/bans.content.html` / `collabans.content.html`, not from a fired write.
+
+#### C-1. Page fragment load
+
+| Attribute | Value |
+|---|---|
+| Method + path | `GET /ajax/page.php?page=bans` |
+| Response | `text/html; charset=UTF-8`, ~114 KB HTML fragment injected into `#content` |
+| Body | filter sidebar + `#banPlayers` table shell + full shared player-detail modal markup + inline `<script>` |
+
+#### C-2. Ban list read — `POST /ajax/table.php` (action `banPlayers`)
+
+This is the sole data read of the page (fired once on load by `buildTable`).
+
+**Request (form-urlencoded):**
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `action` | string const `banPlayers` | Y | Server table id / router key. |
+| `table` | string const `banPlayers` | Y | Duplicated table id. |
+| `page` | int (1-based) | Y | Page number. |
+| `numrows` | int, `100` | Y | Page size. |
+| `search` | URL-encoded JSON | Y | Filter object (5 buckets, see below). |
+| `order_by` | string \| `false` | Y | Sort column key (one of the `collum` set) or literal `false` = default order. |
+| `order_sort` | `asc` \| `desc` \| `false` | Y | Sort direction or `false`. |
+| `pagination` | `true` | N | When appended, returns only the count envelope (§C-3) instead of rows. |
+
+`search` JSON shape (captured verbatim, default state): `{"text":{},"check":{"permanent":"false"},"multiselect":{},"managers":{},"slider":{}}`. Buckets: `text` = free-text inputs keyed by their `data-search` SQL alias; `check` = checkbox flags (`permanent` = `"true"`/`"false"` string); `multiselect`, `managers`, `slider` unused on this page.
+
+**Response** `application/json`, `status:"ok"`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `data.totalPage` | int | Page count (0 in the row-fetch call; real value comes from the `pagination=true` call). |
+| `data.totalRows` | int | Row count (0 in row-fetch; real value from pagination call). |
+| `data.currentPage` | string | Echo of requested page ("1"). |
+| `data.row[]` | array of ban objects | The page of bans (see per-row shape). |
+| `data.custom` | bool | Custom-render flag (observed `false`). |
+| `data.query_time` | float (seconds) | Server SQL time for the row query. |
+| `data.count_time` | int/float (seconds) | Server SQL time for the count query (0 when not counting). |
+| `status` | string enum `"ok"` | Result status; anything else / `auth:true` forces a client reload. |
+| `exec_time` | float (seconds) | Total server handler time. |
+
+**Per-row object `data.row[i]` (LIVE-captured field set — this supersedes prior column inference):**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string (numeric) | Ban record PK (`t1.id`), used as `data-id` / `trID-<id>` on the row. |
+| `steam_id` | string (Steam64) | Banned player identity; rendered hidden in `<hashtag>`, drives `player.open()`. |
+| `name` | string | Player nick at ban time (may contain markup escaped by server). |
+| `reason` | string | Reason text; **note it embeds the expiry as trailing `… до DD.MM.YYYY HH:MM`** in the same string. |
+| `description` | string (may be empty `""`) | Free-text admin comment. |
+| `admin_id` | string (Steam64) | **Issuing admin's SteamID** (raw id, NOT a resolved name — the modal resolves the name separately). |
+| `date` | string (**unix seconds**) | When the ban was issued, e.g. `"1783085160"`. Client formats via `data-unix` badge. |
+| `expire` | string (**pre-rendered HTML**) | Server returns a ready `<span class="badge …">DD.MM.YYYY HH:MM</span>` fragment, NOT a raw timestamp. Permanent bans render a distinct badge. Client injects it verbatim. |
+| `unban` | string enum `"0"`/`"1"` | Boolean-as-string: `"1"` = ban was revoked (kept in history), `"0"` = active. |
+
+Redacted example row:
+
+```json
+{ "id": "30900", "steam_id": "<steam64>", "date": "1783085160",
+  "reason": "Спец кит   тех пех до 04.07.2026 16:26", "description": "",
+  "admin_id": "<steam64>", "expire": "<span class=\"badge bg-primary\" style=\"…\">04.07.2026 16:26</span>",
+  "unban": "0", "name": "<nick>" }
+```
+
+#### C-3. Lazy pagination count — `POST /ajax/table.php` … `&pagination=true`
+
+A second, deferred call (same body + `&pagination=true`) returns only the count envelope so the pager can be drawn without blocking the row render:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `totalPage` | int | Number of pages at the current `numrows`. |
+| `totalRows` | int \| string | Total matching rows. **Type is inconsistent across tables** — `ban_names` returns it as a string (`"371"`), `collabans` as an int (`17510`). Treat as numeric. |
+| `count_time` | int/float (seconds) | SQL count time (logged to console). |
+| `status` | `"ok"` | Status. |
+| `exec_time` | float | Handler time. |
+
+#### C-4. Ban mutation contracts (reconstructed from modal JS — never fired)
+
+`Action({script, action, data})` → `POST /ajax/<script>.php` with body `action=<action>&<data>`. Success predicate: `text.status == 'ok'`; `text.auth === true` ⇒ session expired ⇒ full reload.
+
+| Action | script → endpoint | Request data | Response (on success) | Destructive |
+|---|---|---|---|---|
+| `ban` | `squad` → `POST /ajax/squad.php` | query string: `server_id` (only when `player.info.online`), `steam_id`, `reason_id` (= `#player_ban-reason` select value), `description` (= textarea), `days` (= checked `player_ban-reason_type` radio value; `0` = permanent, `-1` = kick) | `{status:'ok'}`; client removes player from `#players` and refreshes active server | **Y** |
+| `unban` | `squad` → `POST /ajax/squad.php` | JSON `{steam_id: string, unban: bool}` — `unban:true` (the `#unban-error` toggle) **fully erases** the ban; `false` lifts it but keeps history (`unban="1"`) | `{status:'ok'}`; modal flips + reloads player | **Y** |
+| `addBanName` | `player` → `POST /ajax/player.php` | JSON `{name: string}` (the current nick) | `{status:'ok'}`; reopens player | **Y** |
+| `removeBanName` | `player` → `POST /ajax/player.php` | JSON `{name: string}` | `{status:'ok'}`; reopens player | **Y** |
+| `checkBans` | `player` → `POST /ajax/player.php` | JSON `{steam_id: string}` | `{status:'ok', projects:[…]}` (see §C-5) | N (read) |
+| `changeExpire` | `clan` → `POST /ajax/clan.php` | ban-expiry edit (defined on `clan_16`, not on `bans`) — adjusts an existing ban's `expire` | `{status:'ok'}` | **Y** |
+| `get` | `player` → `POST /ajax/player.php` | JSON `{steam_id}` (fired on row-click) | full `player.info` object | N (read) |
+
+#### C-5. `checkBans` response — cross-project ban intelligence
+
+Consumed by `player.checkbans()`; renders one card per federated community in `#player_findban-list`.
+
+```
+{ status:'ok',
+  projects: [ {
+    name:     string,           // community/project name
+    discord?: string(url),      // optional Discord invite → icon link when present
+    online:   int (seconds),    // player's total playtime on that project (secToTime)
+    ban: {
+      total:   int,             // punishment count → "Наказаний: N" (0/absent ⇒ "Нет наказаний")
+      current: null | {         // presence flips icon red-ban vs green-check
+        reason: string,
+        date:   int (unix),     // ban start
+        expire: int (unix) | "0"  // "0" ⇒ "Перманент", else From/To range
+      }
+    }
+  } ] }
+```
+
+#### DataTables config (client `buildTable`, from `bans.content.html`)
+
+| Setting | Value |
+|---|---|
+| `table` (action id) | `banPlayers` |
+| `collum` (column keys) | `["steam_id","name","reason","date","expire"]` |
+| `order` (sortable keys) | `["steam_id","name","reason","date","expire"]` |
+| `numrows` (page size) | `100` |
+| `mode` | default (table) |
+| `searchInput` | `["banPlayers-name","banPlayers-admin","banPlayers-startdate","banPlayers-enddate","banPlayers-permanent","banPlayers-reason","banPlayers-description"]` |
+| default sort | `order_by=false`, `order_sort=false` (server default) |
+| row click | `player.open( td[data-contact=steam_id] > hashtag .text() )` |
+
+---
+
 ### 2. Entities & Fields
 
 #### 2.1 Ban (the row entity — table `banPlayers`, server-side view over `t1`)
 
-Inferred from the table columns, the `data-search` aliases on the filter inputs, the `player.info.ban` object consumed by the modal, and the `checkBans` response.
+Field set is now confirmed against the live `banPlayers` response (§C-2); the `Origin / alias` column maps each response field to its filter `data-search` SQL alias.
 
-| Field | Origin / alias | Type | Meaning |
+| Field | Response key / filter alias | Type | Meaning |
 |---|---|---|---|
-| `steam_id` | column 0 (`t2.player`) | string (Steam64), rendered inside a `<hashtag>` element | Identity of the banned player. Column is CSS-hidden (`class="hide"` + `td:first-child{display:none}`) but drives the row-click. NB: the panel has since migrated identity to a UUID elsewhere; here it is still the SteamID. |
-| `name` | column 1 | string | Player nick at time of lookup. |
-| `reason` | column 2 (`t1.reason`) | string | Human-readable reason text, resolved from a rules catalog (see reason `<select>` §5.1). |
-| `date` | column 3 | datetime | When the ban was issued ("Забанен"). |
-| `expire` | column 4 | datetime or `0` | Ban expiry ("До"). `0` / empty = **permanent**. |
-| `description` | filter `t1.description` | string (≤512 chars) | Free-text admin comment attached to the ban. Not shown as a column, only searchable + shown in modal. |
-| `admin_name` | `t3.player` (filter "Админ") | string | The admin who issued the ban. Searchable; shown in modal (`#player_info_ban-admin`) and in each ban history entry. |
-| `impact` | `ban.impact` (modal) | bool | Whether this ban counts toward *progressive* escalation ("Влияет на наказание"). |
-| `unban` | `ban.unban` (modal) | bool/"1" | Whether the ban was later revoked ("Игрок был разбанен"). |
-| `permanent` | filter `permanent` | bool | Filter-only flag (`expire == 0`). |
+| `id` | `row.id` | string (numeric) | Ban record PK (`t1.id`); becomes `data-id`/`trID-<id>`. |
+| `steam_id` | `row.steam_id` / filter `t2.player` | string (Steam64), rendered in `<hashtag>` | Banned player identity. Column CSS-hidden (`class="hide"` + `td:first-child{display:none}`) but drives row-click. NB other panels migrated identity to a UUID; here it is still the SteamID. |
+| `name` | `row.name` / filter `t2.player` | string | Player nick at ban time. |
+| `reason` | `row.reason` / filter `t1.reason` | string | Reason text; **embeds the expiry as trailing `… до DD.MM.YYYY HH:MM`**. |
+| `date` | `row.date` | string (**unix seconds**) | When issued ("Забанен"); e.g. `"1783085160"`. |
+| `expire` | `row.expire` (column "До") | string (**pre-rendered HTML badge**) | Server returns a ready `<span class="badge …">` — not a raw timestamp. Empty/permanent renders a distinct badge. |
+| `unban` | `row.unban` | string `"0"`/`"1"` | `"1"` = ban revoked (kept in history), `"0"` = active. |
+| `description` | `row.description` / filter `t1.description` | string, may be `""` (≤512 chars) | Free-text admin comment; searchable + shown in modal. |
+| `admin_id` | `row.admin_id` / filter `t3.player` | string (Steam64) | **Issuing admin's SteamID** (raw id in the row; name resolved separately in `#player_info_ban-admin`). |
+| `impact` | `ban.impact` (modal only) | bool | Whether this ban counts toward *progressive* escalation ("Влияет на наказание"). |
+| `permanent` | filter `permanent` (check bucket) | bool-as-string `"true"`/`"false"` | Filter-only flag (`expire == 0`). |
 
 SQL aliasing exposed by the `data-search` attributes reveals the underlying join: **`t1` = bans**, **`t2` = banned player**, **`t3` = issuing admin**.
 
@@ -1928,9 +2974,9 @@ The row click loads the full player object; ban-relevant sub-fields:
 | 3 | Забанен (Banned) | `date` | 130px. |
 | 4 | До (Until) | `expire` | 130px; empty/`0` ⇒ permanent. |
 
-`buildTable` config: `numrows: 100`, `order: ["steam_id","name","reason","date","expire"]`.
+`buildTable` config: `numrows: 100`, `collum/order: ["steam_id","name","reason","date","expire"]`. Full contract in §C-2.
 
-**Data request (competitively important):** `Action({script:'table', action:'banPlayers', data:'&table=banPlayers&page=<n>&numrows=100&search=<urlencoded-json>&order_by=<col>&order_sort=<asc|desc>'})` → `POST /ajax/table.php`. A **separate** call with `&pagination=true` returns `{totalPage, totalRows, count_time}` so page count is computed lazily (server logs the SQL count time to the browser console).
+**Data request (competitively important):** `POST /ajax/table.php` with `action=banPlayers&table=banPlayers&page=<n>&numrows=100&search=<urlencoded-json>&order_by=<col|false>&order_sort=<asc|desc|false>`. The `search` JSON has 5 buckets `{text,check,multiselect,managers,slider}` (see §C-2). A **separate** call with `&pagination=true` returns `{totalPage,totalRows,count_time,status,exec_time}` so page count is computed lazily (server logs the SQL count time to the browser console).
 
 **Filter sidebar controls** (each carries a `data-search` SQL alias; all feed the JSON `search` payload):
 
@@ -2045,6 +3091,104 @@ Both are SPA fragments loaded via `pageLoad('bannames')` / `pageLoad('collabans'
 
 ---
 
+### Live API Contracts
+
+> Ground truth captured 2026-07-04 from `breaking.sqstat.ru` via read-only headless browser. Sources: `caps/bans/bannames.network.json`, `caps/bans/collabans.network.json`, and the inline JS in `caps/bans/bannames.content.html` / `caps/bans/collabans.content.html`. Zero mutations fired (`_blocked.json` = `[]`); `addBanName`/`removeBanName` shapes are reconstructed from the modal JS.
+
+#### C-A. Fragment loads
+
+| Page | Method + path | Response |
+|---|---|---|
+| bannames | `GET /ajax/page.php?page=bannames` | ~3.7 KB HTML: sidebar + `#ban_names` table + `#add_ban_names_modal`. Self-contained (no shared modal). |
+| collabans | `GET /ajax/page.php?page=collabans` | ~115 KB HTML: sidebar + `#banPlayers` table shell + `#ban_template`/`#project_template` + full shared player modal + inline script. |
+
+#### C-B. `ban_names` read — `POST /ajax/table.php` (action `ban_names`)
+
+**Request** (form-urlencoded): `action=ban_names&table=ban_names&page=1&numrows=100&search=<urlencoded-json>&order_by=false&order_sort=false` [`&pagination=true` for the count call].
+`search` default: `{"text":{},"check":{},"multiselect":{},"managers":{},"slider":{}}`; the nick filter feeds `text["t1.name"]`.
+
+**Response** `application/json`, `status:"ok"`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `data.row[i].name` | string | The banned nickname (the rule's identity key). |
+| `data.row[i].date` | string (**unix seconds**) | When the rule was added (e.g. `"1775743360"`); client renders via `formatDate`. |
+| `data.row[i].button` | int (`1`) | Render flag → server signals the per-row delete button should be drawn. |
+| `data.totalPage` / `data.totalRows` | int | 0 in the row call. |
+| `data.custom` | bool | `false`. |
+| `data.query_time` / `data.count_time` | int/float (s) | Server timings. |
+| `status` / `exec_time` | `"ok"` / float | Status + handler time. |
+
+**Pagination call** (`&pagination=true`) — live sample: `{ "totalPage": 4, "totalRows": "371", "count_time": 0, "status": "ok", "exec_time": 0.002 }`. Note `totalRows` here is a **string** ("371"), unlike `collabans` which returns an int — do not assume a fixed type. Live catalog size ≈ **371 banned nicknames**.
+
+The captured schema confirms the client-visible record is exactly `{name, date, button}` — **no severity, regex flag, scope, expiry, or author field is returned** (see Gaps).
+
+#### C-C. `collabans` read — `POST /ajax/table.php` (action `collabans`)
+
+**Request**: `action=collabans&table=collabans&page=1&numrows=100&search=<urlencoded-json>&order_by=false&order_sort=false` [`&pagination=true`].
+`search` default: `{"text":{},"check":{},"multiselect":{},"managers":{},"slider":{}}`.
+
+**Response** `application/json`, `status:"ok"` — the per-row shape is **flatter than previously inferred**: a row carries only `name`, `steam_id`, and a nested `projects[]` array. There are **no top-level `reason`/`date`/`expire` fields**; the "Причина / Забанен / До" columns are rendered by the `projects` callback into per-community cards.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `data.row[i].name` | string | Player nickname; callback renders `<b>name</b>` or `<code>Нет ника</code>` when empty. |
+| `data.row[i].steam_id` | string (Steam64) | Player identity (hidden first column); row-click → `player.open(steam_id)`. |
+| `data.row[i].projects[]` | array<Project> | Per-community ban breakdown (see below). |
+| `data.totalPage`/`totalRows`/`custom`/`query_time`/`count_time` | int/bool/float | Envelope. |
+
+**Project object `projects[j]`:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | Contributing community/project name. |
+| `admin_name` | string | Admin who issued that project's ban (rendered in `<code>`). |
+| `reason` | string | That project's stated reason (e.g. `"[Навсегда] нежелательный"`). |
+| `date` | string (**unix seconds**) | That project's ban date. |
+| `expire` | string (unix seconds) \| `"0"` | `"0"` ⇒ red `label-danger`/`panel-danger` + "Перманент"; else `label-warning`/`panel-warning` + "Временный". |
+| `cnt` | string (numeric) | Number of ban records that project logged (rendered with a gavel icon). |
+
+Redacted example row:
+
+```json
+{ "name": "<nick>", "steam_id": "<steam64>",
+  "projects": [ { "name": "<community>", "date": "1783149951",
+    "reason": "[Навсегда] нежелательный", "admin_name": "<admin>",
+    "expire": "0", "cnt": "1" } ] }
+```
+
+**Pagination call** — live sample: `{ "totalPage": 176, "totalRows": 17510, "count_time": 0.37, "status": "ok", "exec_time": 0.37 }`. Live federated pool size ≈ **17,510 banned players** across contributing communities. Here `totalRows` is an **int** (contrast `ban_names`).
+
+#### C-D. Mutation & network contracts (reconstructed — never fired)
+
+| Action | script → endpoint | Request data | Effect | Destructive |
+|---|---|---|---|---|
+| `addBanName` | `player` → `POST /ajax/player.php` | JSON `{name: string}` (from `#add_ban_names_name` on bannames, or `player.info.name` from a context menu) | Inserts a banned-nick rule; on `status:'ok'` hides modal + `buildTable('rebuild')`. | **Y** |
+| `removeBanName` | `player` → `POST /ajax/player.php` | JSON `{name: string}` (read from the row's `[data-contact="name"]` HTML) | Deletes the rule matching that nick; rebuilds table. | **Y** |
+| `checkBans` | `player` → `POST /ajax/player.php` | JSON `{steam_id: string}` | Returns `{projects:[…]}` cross-project ban status (schema in chapter 09 §C-5). | N (read) |
+| `ban` / `unban` | `squad` → `POST /ajax/squad.php` | see chapter 09 §C-4 | New bans enter the federated pool via the normal `ban` action; federation is server-side. | **Y** |
+| `botUpdate` | `squad` → `POST /ajax/squad.php` | (none) | On `main.html`, triggers the enforcement bot to update (the agent that syncs bans/bannames in-game). Confirmation dialog first. | **Y** |
+| `downloadList` | `clan` → `POST /ajax/clan.php` (form-post → file download) | `clan_id` | On `clan_16.html`, exports a roster file. Not a ban-sync trigger. | N |
+
+**Ru-Ban sync finding:** no client action pushes/imports federated bans from these two pages. `collabans` + `checkBans` are **read** views over a server-aggregated pool; `botUpdate` refreshes the enforcement agent. Propagation between communities (push API / polling / shared DB) is server/bot-side and not observable client-side. The `network` action in `main.html` is the live TCP/DOS monitor — unrelated to the ban network; do not conflate.
+
+#### DataTables configs (from captured content JS)
+
+| | `ban_names` (bannames) | `banPlayers`/`collabans` (collabans) |
+|---|---|---|
+| `table` (action id) | `ban_names` | `collabans` |
+| `collum` | `["name","date",["button", "<button onclick=remove_ban_names(this)…>"]]` | `["steam_id","reason","date","expire"]` |
+| `mode` | `table` | `list` |
+| `numrows` | `100` | `100` |
+| `template` | `#player_template > div` | `#ban_template > div` (cards from `#project_template`) |
+| `searchInput` | `["ban_names-name"]` (→ `t1.name`) | `["banPlayers-name","banPlayers-permanent","banPlayers-reason"]` |
+| callbacks | `date` → `formatDate` | `name` (empty→"Нет ника"), `date` → `formatDate`, `projects` → clone `#project_template` per project |
+| row click | — (delete button per row) | `player.open(td[data-contact=steam_id]>hashtag .text())` |
+
+Filter aliases on the collabans sidebar: `#banPlayers-name` → `s.player`, `#banPlayers-reason` → `s.reason`, `#banPlayers-permanent` (check bucket). Add-nick modal on bannames: single `#add_ban_names_name` input (placeholder "Ник"), **no client-side validation** — an empty submit sends `name=''`.
+
+---
+
 ### 10.1 Purpose and nav location
 
 | Page id | Nav label (RU / gloss) | Purpose |
@@ -2118,16 +3262,15 @@ Note: `addBanName` / `removeBanName` are **ubiquitous** — they appear on nearl
 
 #### 10.3.2 Entities & fields
 
-**Entity A — federated ban row (`collabans` table).** Inferred from `buildTable({table:'collabans', collum:["steam_id","reason","date","expire"]})`, the table `<th>`s, and the `#ban_template`.
+**Entity A — federated ban row (`collabans` table).** LIVE-captured shape (§C-C) — the row is **flat**: only `name`, `steam_id`, `projects[]`. The `reason`/`date`/`expire` in the `buildTable` `collum` config are **column slots populated by the `projects` callback cards**, not top-level row fields.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `steam_id` | string (Steam64) | Player identity; the hidden first column. Row click → `player.open(steam_id)`. |
 | `name` | string | Player nickname; callback renders `<b>name</b>` or `<code>Нет ника</code>` ("No nick") when empty. |
-| `reason` | string | Ban reason (aggregate/representative). Column "Причина". |
-| `date` | datetime | When banned. Column "Забанен" (Banned). |
-| `expire` | datetime / `0` | Ban expiry; `0` = permanent. Column "До" (Until). |
-| `projects` | array<Project> | Per-community ban breakdown (see Entity B), rendered as cards. |
+| `projects` | array<Project> | Per-community ban breakdown (see Entity B), rendered as cards into the reason/date/expire column area. |
+
+> Correction vs. earlier inference: there are **no** scalar `reason`/`date`/`expire` fields on the collabans row. Every ban attribute is per-project inside `projects[]`.
 
 **Entity B — per-project ban card (`project`).** Inferred from `#project_template` `data-project="…"` bindings and the `projects` callback.
 
@@ -2243,22 +3386,98 @@ The client does not expose an explicit "import shared bans" / "downloadList of b
 
 ## 11. Statistics Dashboards
 
+> **Ground truth:** live contracts captured 2026-07-04 via headless browser (read-only; 0 mutations blocked). Sources: `caps/games-stats/statistics.network.json` (2 AJAX contracts), `caps/games-stats/statistics.content.html` (live-rendered `#content`, 20 chart canvases).
+
 ### 1. Purpose and Nav Location
 
-- **Nav item:** `statistics` — invoked via `pageLoad('statistics')` → `GET /ajax/page.php?page=statistics`, injected into `#content`.
-- **Source fragment:** `frags/statistics.html`.
-- **Purpose:** A single-page, all-graphical analytics dashboard rendering ~20 Chart.js charts covering server population (online/queue), staff coverage (admins online), moderation volume (bans/punishments), match throughput, chat/teamkill volume, and per-server combat aggregates (kills/deaths/revives/wounds). It is a **read-only reporting screen** — there is no table, no row-level actions, and no export button on the page itself. All data is pulled by a single RPC (`action:'statistics'`, `script:'squad'`) driven by two controls: a date-range picker and a multi-server selector.
-
-This page is unusual for SQSTAT: unlike the DataTables list pages (players, bans, chat, kills, etc.), it does **not** carry the `downloadStat` export action and, notably, its embedded fragment does **not** appear to include the shared player-detail modal wiring in the analyzed slice — it is a pure visualization surface.
+- **Nav item:** `statistics` — `pageLoad('statistics')` → `GET /ajax/page.php?page=statistics` (`text/html`, ~41 KB fragment), injected into `#content`.
+- **Purpose:** a single-page, all-graphical analytics dashboard rendering **20 Chart.js canvases** covering server population (online/max/queue), staff coverage (admins/maxAdmins), moderation volume (bans), match throughput (games/modes/maps), social volume (chat/teamkill), player growth (new), and per-server combat aggregates (kills/death/revival/damage/wound). It is **read-only** — no table, no row actions, no export button. All data comes from **one** RPC (`action=statistics`, `POST /ajax/squad.php`) driven by two controls: a date-range picker and a multi-server selector.
+- Unlike the DataTables list pages, this page carries **no** `downloadStat` export and no player-detail modal wiring — a pure visualization surface.
 
 ---
 
-### 2. Entities & Fields (inferred data model)
+### Live API Contracts
 
-#### 2.1 Server (client-side `servers` map)
+Two contracts fire on load. Observation-only; `_blocked.json` = `[]`.
 
-A `var servers = {...}` object is inlined in the fragment (`<script>` block, line 204) and drives dataset creation, coloring, and labels. One anonymized example entry:
+#### C1 — Page fragment
 
+| | |
+|---|---|
+| **Method / path** | `GET /ajax/page.php?page=statistics` |
+| **Request params** | `page` — string — required — `statistics` |
+| **Response** | `text/html; charset=UTF-8`, ~41 KB — the `#stat_wrapper` markup: date button, server multiselect, spinner overlay, and 20 `<canvas>` cards. |
+| **Capture** | `statistics.network.json` [0] |
+
+#### C2 — Aggregated statistics RPC (the whole dashboard)
+
+**`POST /ajax/squad.php`** — `application/json; charset=utf-8`. Capture: `statistics.network.json` [1].
+
+Request body (form-urlencoded; note the leading `&`):
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `start` | int (unix s) | Y | Range start (live: `1780560007`). From `#stat_date` `data-start`. |
+| `end` | int (unix s) | Y | Range end (live: `1783152007`). From `data-end`. |
+| `servers` | CSV of ints | Y | **Comma-joined** server ids, e.g. `1,6,7,9,10,11` — *not* a JSON/PHP array. |
+| `action` | string | Y | Always `statistics` (server-side handler selector on `squad.php`). |
+
+Full observed body: `&start=1780560007&end=1783152007&servers=1,6,7,9,10,11&action=statistics`
+
+**Response shape.** One JSON object. Values are either flat time-series `{label: value}`, **nested per-server** `{serverId: {label: value}}`, or shared axis-label arrays. Numeric values are frequently returned **as strings** (`"37"`) — clients must coerce. Top-level keys:
+
+| Key | Shape | Value type | Feeds chart | Meaning |
+|---|---|---|---|---|
+| `test` | object | float per section | — | **Server-side profiling** timings (s) for sub-queries: `online, maps, players, chat, bans, teamkill, onlineHour, onlineDay`. Diagnostic, not charted. |
+| `days` | array[N] | `"DD.MM.YYYY"` | X labels | Day buckets across the range (live N=31). |
+| `hours` | array[24] | `"HH:00"` | X labels | Hour-of-day buckets `00:00`…`23:00`. |
+| `dayofweek` | array[7] | RU weekday | X labels | `Понедельник`…`Воскресенье` (Mon…Sun). |
+| `online` | `{sid:{day:val}}` | string(int) | `chartOnline` | Avg online per server/day (business-hours window). |
+| `max` | `{sid:{day:val}}` | string(int) | `chartOnlineMax` | Peak players incl. queue, per server/day. |
+| `queue` | `{sid:{day:val}}` | string(int) | `chartQueue` | Avg queue length per server/day. |
+| `admins` | `{day:val}` | int | `chartAdmins` | Avg admins online per day (single series). |
+| `maxAdmins` | `{day:val}` | int | `chartAdminsMax` | Peak admins online per day (single series). |
+| `bans` | `{day:val}` | string(int) | `chartBans` | Punishments issued per day (single series). |
+| `onlineHour` | `{sid:{HH:00:val}}` | string(int) | `chartOnlineHour` | Avg online by hour, per server. |
+| `onlineDay` | `{sid:{weekday:val}}` | string(int) | `chartOnlineDay` | Avg online by weekday, per server. |
+| `games` | `{sid:{day:val}}` | string(int) | `chartGames` | Matches per server/day. |
+| `modes` | `{mode:count}` | int | `chartModes` | Match count per mode: `AAS, Invasion, RAAS, Seed, Skirmish`. |
+| `maps` | `{mapName:count}` | int **or** string(int) | `chartMaps` | Match count per map (**inconsistent typing** — some values int, some string; excludes Skirmish/Seed). |
+| `new` | `{day:val}` | int | `chartNew` | New/first-seen players per day. |
+| `chat` | `{sid:{day:val}}` | string(int) | `chartChat` | Chat messages per server/day. |
+| `teamkill` | `{sid:{day:val}}` | string(int) | `chartTeamkill` | Teamkills per server/day. |
+| `kills` | `{sid:{day:val}}` | string(int) | `chartKills` | Kills per server/day. |
+| `death` | `{sid:{day:val}}` | string(int) | `chartDeaths` | Deaths per server/day. |
+| `revival` | `{sid:{day:val}}` | string(int) | `chartRevivals` | Revives per server/day. |
+| `damage` | `{sid:{day:val}}` | string(int) | `chartDamage`* | Damage dealt per server/day. |
+| `wound` | `{sid:{day:val}}` | string(int) | `chartWounds` | Wounds (downs) per server/day. |
+| `unique` | array | (empty `[]`) | `chartUnique` | Unique players — **returned empty** in this deployment. |
+| `kits` | array | (empty `[]`) | `chartKits` | Kit counts — **returned empty** in this deployment. |
+| `status` | string enum | `"ok"` | — | Result status. |
+| `exec_time` | float | — | — | Total RPC wall-time (live: `1.507` s). |
+
+\* A `chartDamage` series maps to the `damage` key; the fragment ships a `chartWounds` and a `chartDeaths` etc. — see §7 for the canvas-to-key map.
+
+Per-server sub-keys are the server ids `1,6,7,9,10,11`. Redacted samples:
+```
+test    = {"online":0.538,"maps":0.005,"players":0.062,"chat":0.044,"bans":0.004,"teamkill":0.082,"onlineHour":0.355,"onlineDay":0.393}
+modes   = {"AAS":168,"Invasion":57,"RAAS":171,"Seed":68,"Skirmish":60}
+maps    = {"Narva":65,"Mutaha":50,"Fallujah":43,"Gorodok":40,...,"Sanxian Islands":"3","Kohat Toi":"2"}
+online.1= {"04.06.2026":"37","05.06.2026":"1","06.06.2026":"47", ...}
+admins  = {"04.06.2026":5,"05.06.2026":5,"06.06.2026":7, ...}
+bans    = {"04.06.2026":"16","05.06.2026":"69","06.06.2026":"7", ...}
+new     = {"04.06.2026":174,"05.06.2026":254,"06.06.2026":170, ...}
+```
+
+**Live-capture correction to prior notes:** the `chartKits` and `chartUnique` canvases are **present and rendered** in the live `#content` (not commented out) — they simply receive empty `kits`/`unique` arrays, so they draw blank. All 20 canvases exist in the DOM (§7).
+
+---
+
+### 2. Entities & Fields (client-side model)
+
+#### 2.1 Server (`servers` map, inlined in fragment `<script>`)
+
+Drives dataset creation, per-server coloring, and legend labels. Anonymized example:
 ```json
 "1": { "id":"1","ip":"80.242.59.123","port":"0","pass":"","name":"RAAS/AAS #1",
        "short":"A","ext_short":"","mods":false,"types":false,
@@ -2267,212 +3486,258 @@ A `var servers = {...}` object is inlined in the fragment (`<script>` block, lin
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | string(int) | Server primary key; used as dataset `id`, color index (`colors[id]`), and response-map key. |
-| `ip` | string | Server IP (all six configured servers share one host in this deployment). |
-| `port` | string(int) | Query/RCON port (0 here → likely resolved elsewhere). |
-| `pass` | string | RCON/query password (empty in the delivered fragment). |
-| `name` | string | Full display name, e.g. "RAAS/AAS #1", "БЕЗ ГОЛОСОВАНИЯ #2" (No Voting #2), "INVASION #3". |
-| `short` | string | Single-letter tag (A, B, C, E, F, G) used as the chart dataset `label`/legend and axis short code. |
-| `ext_short` | string | Extended short label (unused/empty here). |
-| `mods` | bool | Whether the server runs mods. |
-| `types` | bool | Layer/type restriction flag. |
-| `licensed` | string(int) | License/enabled flag (1 = licensed). |
-| `sort` | string(int) | Display ordering. |
-| `chan_id` | string | Associated Discord channel id (empty here). |
+| `id` | string(int) | PK; used as dataset id, `colors[id]` index, and response-map key. |
+| `ip` / `port` / `pass` | string | Connection info (all six share one host here; pass empty in fragment). |
+| `name` | string | Full display name (e.g. `БЕЗ ГОЛОСОВАНИЯ #2`). |
+| `short` | string(1) | Legend/axis short code (A, B, C, E, F, G). |
+| `ext_short` | string | Extended short (empty). |
+| `mods` / `types` | bool | Mods / layer-type restriction flags. |
+| `licensed` | string(int) | 1 = licensed. |
+| `sort` | string(int) | Display order. |
+| `chan_id` | string | Discord channel id (empty). |
 | `disabled` | string(int) | 0 = active. |
 
-**Competitive note:** server ids are non-contiguous (1, 6, 7, 9, 10, 11 — id 8 and others missing), implying servers are soft-deleted / retired rather than renumbered.
+Server ids are non-contiguous (1, 6, 7, 9, 10, 11 → 2–5, 8 retired/soft-deleted).
 
-#### 2.2 Statistics response payload (`text` from `action:'statistics'`)
-
-The RPC returns one JSON object; keys are either flat time-series (`{label: value}`) or **nested per-server** (`{serverId: {label: value}}`). Axis label arrays are shared across charts.
-
-| Response key | Shape | Feeds chart | Meaning |
-|---|---|---|---|
-| `days` | array | X labels (most time-series) | Date buckets for the selected range. |
-| `hours` | array | X labels | Hour-of-day buckets (0–23) for the hourly chart. |
-| `dayofweek` | array | X labels | Weekday buckets for the day-of-week chart. |
-| `online` | `{serverId:{day:val}}` | `chartOnline` | Average online per server per day (stacked). |
-| `max` | `{serverId:{day:val}}` | `chartOnlineMax` | Peak players incl. queue, per server per day (stacked). |
-| `admins` | `{day:val}` | `chartAdmins` | Average admin count online (single series, line). |
-| `maxAdmins` | `{day:val}` | `chartAdminsMax` | Peak admins online per day (single series, bar). |
-| `bans` | `{day:val}` | `chartBans` | Punishments issued per day (single series; subtitle shows total). |
-| `onlineHour` | `{serverId:{hour:val}}` | `chartOnlineHour` | Avg online by hour of day, per server (stacked). |
-| `onlineDay` | `{serverId:{weekday:val}}` | `chartOnlineDay` | Avg online by weekday, per server (stacked). |
-| `modes` | `{modeName:count}` | `chartModes` | Match count per game mode (doughnut). |
-| `maps` | `{mapName:count}` | `chartMaps` | Match count per map, excluding Skirmish/Seed (bar). |
-| `new` | `{day:val}` | `chartNew` | New/first-seen players per day. |
-| `chat` | `{serverId:{day:val}}` | `chartChat` | Chat messages per server per day (stacked; subtitle: avg/max/total). |
-| `teamkill` | `{serverId:{day:val}}` | `chartTeamkill` | Teamkills per server per day (stacked). |
-| `queue` | `{serverId:{day:val}}` | `chartQueue` | Queue length per server per day (stacked). |
-| `games` | `{serverId:{day:val}}` | `chartGames` | Matches played per server per day (stacked). |
-| `kills` | `{serverId:{day:val}}` | `chartKills` | Kills per server per day (stacked). |
-| `death` | `{serverId:{day:val}}` | `chartDeaths` | Deaths per server per day (stacked). |
-| `revival` | `{serverId:{day:val}}` | `chartRevivals` | Revives per server per day (stacked). |
-| `wound` | `{serverId:{day:val}}` | `chartWounds` | Wounds (downs) per server per day (stacked). |
-
-Two additional charts, **`chartKits` (Количество китов / Kit count, horizontalBar)** and **`chartUnique` (Уникальных игроков / Unique players)**, are defined in JS but their surrounding HTML `<canvas>` blocks are **commented out** (lines 182–201) — dead/disabled features not currently rendered.
+#### 2.2 Statistics payload — see the C2 response table (authoritative).
 
 ---
 
 ### 3. The Page's OWN Table
 
-**None.** This page renders zero DataTables and zero HTML `<table>`. It is entirely `<canvas>`-based Chart.js output inside Bootstrap grid `block-box` cards. There is no per-row sort/search/pagination. The only "filter" controls are the global date range and server multiselect (Section 5).
+**None.** Zero DataTables, zero HTML `<table>`. Entirely `<canvas>`-based Chart.js output inside Bootstrap `block-box` cards. No per-row sort/search/pagination. The only filters are the global date range and server multiselect (§5).
 
 ---
 
 ### 4. Actions / Admin Capabilities
 
-Only **one** action exists on this page, and it is a pure read (non state-changing).
+Exactly **one** action, a pure read.
 
-| UI trigger | Action id | Script endpoint | Data params | Effect | Destructive? |
+| UI trigger | action | Endpoint | Data params | Effect | Destructive? |
 |---|---|---|---|---|---|
-| Auto-run on load, on date-range change, and on server-select dropdown close (`getStatistic()`) | `statistics` | `POST /ajax/squad.php` (`script:'squad'`) | `start` (range start, from `#stat_date` `data-start`), `end` (range end, from `data-end`), `servers` (array of selected server ids from `#stat-server`) | Returns the aggregated statistics JSON (Section 2.2); client redraws all charts. | **N** (read-only) |
+| Auto-run on load; on date-range change; on server-select dropdown close (`getStatistic()`) | `statistics` | `POST /ajax/squad.php` | `start` (unix), `end` (unix), `servers` (CSV of ids), `action=statistics` | Returns the aggregated JSON (§ C2); client redraws all charts inside a single `Promise.all`. | **N** |
 
-Notes:
-- Payload is exactly `{ start, end, servers }` — see `getStatistic()` at `statistics.html:980`.
-- There is **no** `downloadStat`, `stats`, CSV, or Excel export on this dashboard, in contrast to nearly every list page in the app (admins, bans, chat, kills, players, etc. all carry `downloadStat`). Server-side statistics are visualized only, not exportable from the UI here — a competitive gap worth beating.
+There is **no** `downloadStat`/CSV/Excel export on this dashboard, unlike nearly every list page (admins, bans, chat, kills, players all carry `downloadStat`). Server statistics are visualized only, not exportable here — a competitive gap.
 
 ---
 
 ### 5. Forms & Controls
 
-No `<form>` element; two standalone controls at the top of `#stat_wrapper`:
+No `<form>`; two standalone controls at the top of `#stat_wrapper`.
 
-**5.1 Date range — `#stat_date`** (`<button type="daterange">`)
-- Initialized via `.dateRange({...})` plugin.
-- Preset options offered: `justMonth`, `justDay`, `justWeek`, `justYear`, `range` (custom), `today`, `yesterday`, `currentWeek`, `lastWeek`, `currentMonth`, `lastMonth`, `last30days`.
-- **Default:** `last30days`.
-- Emits `crm_dateRange` event → calls `getStatistic()`. Exposes `data-start` / `data-end` consumed by the RPC.
+**5.1 Date range — `#stat_date`** (`<button type="daterange">`, live label "30 дней")
+- `.dateRange({...})` plugin. Presets: `justMonth, justDay, justWeek, justYear, range (custom), today, yesterday, currentWeek, lastWeek, currentMonth, lastMonth, last30days`.
+- **Default:** `last30days` (live `start=1780560007`, `end=1783152007` ≈ 30-day span). Emits `crm_dateRange` → `getStatistic()`; exposes `data-start`/`data-end`.
 
-**5.2 Server multiselect — `#stat-server`** (`<select multiple>` → Bootstrap `multiselect`)
-- Options are the six configured servers (value = server id, label = full name), **all selected by default**.
-- Placeholder when empty: `- Сервер -`.
-- `enableHTML: true`.
-- Change is **debounced to dropdown close**: an `onChange` flag is set, and `getStatistic()` only fires in `onDropdownHide` if something actually changed — avoids one RPC per checkbox toggle. Good UX pattern to copy.
+**5.2 Server multiselect — `#stat-server`** (`<select multiple type="multiselect">` → Bootstrap `multiselect`)
+- Six options = the configured servers (`value`=id, `label`=name). **All selected by default** (live button text "Все выбраны (6)" = All selected (6); each `<li class="active">`).
+- Placeholder when empty: `- Сервер -`. `enableHTML: true`.
+- **Debounced to dropdown close:** an `onChange` flag is set; `getStatistic()` fires in `onDropdownHide` only if something changed — avoids one RPC per checkbox toggle.
 
-**Loading state:** during a fetch, the date button is disabled, the multiselect is disabled (`.multiselect('disable')`), `#stat_wrapper` gets class `load`, and a spinner overlay (`.load_block` with `fa-spinner fa-pulse`) shows. Controls re-enable on completion. Charts are updated inside `Promise.all([...])` so all redraw together.
+**Loading state:** during a fetch, the date button and multiselect are disabled (`.multiselect('disable')`), `#stat_wrapper` gets class `load`, and the `.load_block` spinner overlay (`fa-spinner fa-pulse`, positioned `top:0;left:5px`) shows. Controls re-enable on completion; charts redraw together via `Promise.all`.
 
 ---
 
 ### 6. Permission / Visibility Logic
 
-- No `class="hide"`, role checks, or group gating are present within the fragment itself. Access control is enforced upstream: whether the `statistics` nav item is rendered and whether `POST /ajax/squad.php action=statistics` is authorized is decided server-side (not visible in this fragment).
-- The server list injected into `servers` is pre-filtered server-side to the servers this operator may view — the client trusts and iterates it directly.
-- The commented-out `chartKits`/`chartUnique` cards are hidden by HTML comment, not by permission class.
+- No `class="hide"`, role checks, or group gating inside the fragment. Access is enforced upstream: whether the `statistics` nav item renders and whether `squad.php action=statistics` authorizes the caller.
+- The inlined `servers` map is pre-filtered server-side to servers the operator may view; the client iterates it directly.
+- `chartKits`/`chartUnique` are gated by **empty data**, not a permission class — they render blank.
 
 ---
 
-### 7. Chart Inventory & Notable UX / Competitive Details
+### 7. Chart Inventory (20 live canvases) & Competitive Details
 
-Full rendered chart list (title text is Russian in-source; English gloss added):
+All 20 `<canvas id="chart…">` confirmed present in `statistics.content.html`. Grid width from the wrapping `col-md-*`; series model per §1 key shape.
 
-| Canvas id | Type | Title (RU → EN) | Grid width | Series model |
-|---|---|---|---|---|
-| `chartOnline` | bar (stacked) | Средний онлайн (10:00 - 03:00) → Average online (10:00–03:00) | col-6 | per-server |
-| `chartOnlineMax` | bar (stacked) | Максимально игроков (с очередью) → Peak players (incl. queue) | col-6 | per-server |
-| `chartAdmins` | line | Среднее кол-во админов (10:00 - 03:00) → Avg admins online | col-4 | single |
-| `chartAdminsMax` | bar | Максимально админов → Peak admins | col-4 | single |
-| `chartBans` | bar | Выдано наказаний → Punishments issued | col-4 | single |
-| `chartOnlineHour` | bar (stacked) | Средний онлайн по часам дня → Avg online by hour of day | col-6 | per-server |
-| `chartOnlineDay` | bar (stacked) | Средний онлайн по дням недели → Avg online by weekday | col-6 | per-server |
-| `chartMaps` | bar | Количество карт (не Skirmish или Seed) → Map counts (excl. Skirmish/Seed) | col-8 | single |
-| `chartModes` | doughnut | Game-mode distribution | col-4 | single |
-| `chartNew` | bar | Новых игроков → New players | col-7 | single |
-| `chartChat` | bar (stacked) | Сообщений чата → Chat messages | col-5 | per-server |
-| `chartTeamkill` | bar (stacked) | Тимкиллы → Teamkills | col-6 | per-server |
-| `chartQueue` | bar (stacked) | Очередь → Queue | col-6 | per-server |
-| `chartGames` | bar (stacked) | Игр → Matches | col-6 | per-server |
-| `chartKills` | bar (stacked) | Убийств → Kills | col-6 | per-server |
-| `chartDeaths` | bar (stacked) | Смертей → Deaths | col-4 | per-server |
-| `chartRevivals` | bar (stacked) | Поднятий → Revives | col-4 | per-server |
-| `chartWounds` | bar (stacked) | Ранений → Wounds | col-4 | per-server |
-| `chartKits` *(disabled)* | horizontalBar | Количество китов → Kit count | — | single |
-| `chartUnique` *(disabled)* | bar | Уникальных игроков → Unique players | — | single |
+| # | Canvas id | Type | Title (RU → EN) | col width | Feeds key | Series |
+|---|---|---|---|---|---|---|
+| 1 | `chartOnline` | bar (stacked) | Средний онлайн → Avg online (10:00–03:00) | 6 | `online` | per-server |
+| 2 | `chartOnlineMax` | bar (stacked) | Максимально игроков (с очередью) → Peak players incl. queue | 6 | `max` | per-server |
+| 3 | `chartAdmins` | line | Среднее кол-во админов → Avg admins | 4 | `admins` | single |
+| 4 | `chartAdminsMax` | bar | Максимально админов → Peak admins | 4 | `maxAdmins` | single |
+| 5 | `chartBans` | bar | Выдано наказаний → Punishments issued | 4 | `bans` | single |
+| 6 | `chartOnlineHour` | bar (stacked) | Средний онлайн по часам → Avg online by hour | 6 | `onlineHour` | per-server |
+| 7 | `chartOnlineDay` | bar (stacked) | Средний онлайн по дням недели → Avg online by weekday | 6 | `onlineDay` | per-server |
+| 8 | `chartMaps` | bar | Количество карт (не Skirmish/Seed) → Map counts | 8 | `maps` | single |
+| 9 | `chartModes` | doughnut | Game-mode distribution | 4 | `modes` | single |
+| 10 | `chartNew` | bar | Новых игроков → New players | 7 | `new` | single |
+| 11 | `chartChat` | bar (stacked) | Сообщений чата → Chat messages | 5 | `chat` | per-server |
+| 12 | `chartTeamkill` | bar (stacked) | Тимкиллы → Teamkills | 6 | `teamkill` | per-server |
+| 13 | `chartQueue` | bar (stacked) | Очередь → Queue | 6 | `queue` | per-server |
+| 14 | `chartGames` | bar (stacked) | Игр → Matches | 6 | `games` | per-server |
+| 15 | `chartKills` | bar (stacked) | Убийств → Kills | 6 | `kills` | per-server |
+| 16 | `chartDeaths` | bar (stacked) | Смертей → Deaths | 4 | `death` | per-server |
+| 17 | `chartRevivals` | bar (stacked) | Поднятий → Revives | 4 | `revival` | per-server |
+| 18 | `chartWounds` | bar (stacked) | Ранений → Wounds | 4 | `wound` | per-server |
+| 19 | `chartKits` | horizontalBar | Количество китов → Kit count | — | `kits` (empty) | single — draws blank |
+| 20 | `chartUnique` | bar | Уникальных игроков → Unique players | — | `unique` (empty) | single — draws blank |
+
+A `damage` series is also returned; where charted it maps to a damage canvas alongside the combat set.
 
 Competitively interesting details:
 
-- **Subtitle stat strip:** every time-series chart computes and displays a subtitle line reading `Среднее: <avg>, Максимум: <max>, Всего: <total>` (Average / Maximum / Total), computed client-side via helper array methods `.average()`, `.max()`, `.sum()`, and `.sum2d()` (for stacking per-server series into a per-day total). Totals are formatted with `Intl.NumberFormat("en-US")` (thousands separators). This gives at-a-glance KPIs without a separate stat panel.
-- **Business-hours windowing:** several titles hard-code the analysis window **10:00–03:00**, i.e. the servers' active hours — averages deliberately exclude dead night hours to avoid diluting "average online". A subtle but meaningful methodology choice to replicate.
-- **Map chart explicitly excludes Skirmish and Seed layers** from "real match" counts — separating warmup/seeding from competitive rounds.
-- **Consistent per-server coloring:** a fixed `colors[]` palette indexed by server id keeps a server the same color across all charts, aiding cross-chart reading.
-- **Coordinated redraw:** all charts update inside a single `Promise.all`, so the dashboard refreshes atomically rather than popping in piecemeal.
-- **Debounced multi-server filter** (fires only on dropdown close) minimizes RPC chatter.
-- **Gaps vs. a competitor build:** no export/download, no drill-down from chart to underlying rows, seeding volume not charted as its own metric (only inferred via queue/online), playtime hours not directly charted, and the Kits/Unique-players charts are shipped-but-disabled. These are low-hanging features to differentiate on.
+- **Subtitle stat strip:** each time-series chart shows `Среднее: <avg>, Максимум: <max>, Всего: <total>` (Avg/Max/Total), computed client-side via `.average()`/`.max()`/`.sum()`/`.sum2d()` (stacking per-server into per-day totals). Totals use `Intl.NumberFormat("en-US")`. At-a-glance KPIs without a separate panel.
+- **Business-hours windowing:** several titles hard-code **10:00–03:00** (the servers' active hours) so "average online" excludes dead night hours. Methodology choice to replicate.
+- **Map chart excludes Skirmish & Seed** from "real match" counts (separating warmup/seeding from competitive rounds).
+- **Consistent per-server coloring** via a fixed `colors[]` palette indexed by server id — same server, same color across all charts.
+- **Coordinated redraw** inside one `Promise.all` — atomic refresh.
+- **Debounced multi-server filter** (fires on dropdown close) minimizes RPC chatter.
+- **`test` profiling block** ships per-sub-query timings to the client — internal instrumentation exposed in the response (info-leak worth noting; also a hint the backend runs ~8 separate aggregate queries).
+- **Gaps vs. a competitor build:** no export/download; no drill-down from chart to underlying rows; `unique`/`kits` shipped but returning empty (dead metrics); playtime-hours not charted directly; numeric values inconsistently typed (int vs string, e.g. `maps`) forcing client coercion; single heavy ~1.5 s RPC returns the entire dashboard (no incremental/streamed load). Low-hanging features to differentiate on.
+
+---
+
+### Gaps / Unknowns
+
+- **`getStatistic()` source** is inlined in the `statistics.html` fragment `<script>`, not in `custom.js` — exact per-chart option objects (axis config, colors) are inferred from canvas ids + response keys, not read line-by-line here.
+- **`unique`/`kits` real schema** cannot be documented — both returned empty in this deployment; their populated shape is unobserved.
+- **`damage` chart canvas id** is inferred from the combat-series grouping; the exact canvas element for the `damage` key was not isolated among the 20 (the combat block renders kills/death/revival/wound/damage together).
+- **Backend query structure** behind each aggregate is inferred from the `test` profiling keys, not from `squad.php` source.
 
 
 ---
 
 ## 12. Match History (Игры)
 
+> **Ground truth:** live contracts captured 2026-07-04 via headless browser (read-only; 0 mutations blocked). Sources: `caps/games-stats/games.network.json` (3 AJAX contracts), `caps/games-stats/games.content.html` (live-rendered `#content`).
+
 ### 1. Purpose & Navigation
 
-The **Игры** (Games / Match History) page is a searchable log of every match (round) played across all monitored Squad servers. It answers "which layer was played, on which server, when, and who won by how many tickets." Each row is a completed (or in-progress) round; clicking a row drills into a full per-match detail page.
+The **Игры** (Games / Match History) page is a searchable, server-side-paginated log of every match (round) played across all monitored Squad servers. It answers "which layer was played, on which server, when, and who won by how many tickets." Each row is a completed (or in-progress) round; clicking a row performs a full-page navigation to the per-match detail view.
 
-- **Nav id / entry point:** `pageLoad('games')` → `GET /ajax/page.php?page=games`, HTML fragment injected into `#content`.
-- **Fragment file analyzed:** `/Users/seregatipich/.claude/jobs/bd83e71f/tmp/frags/games.html` (110 lines).
-- **Layout:** a fixed left filter sidebar (`col-md-3`, `position:fixed`) plus a wide results panel (`col-md-9`) holding table `#games`.
-- **Data source:** the table is populated client-side via the shared `buildTable()` helper (defined in `custom.js`), which issues a server-side-paginated request to the `table` script endpoint. There is **no** `<form>` POST and **no** page-specific `Action()` mutation on this page — it is a **read-only reporting screen**.
+- **Nav id / entry point:** `pageLoad('games')` → `GET /ajax/page.php?page=games` (`ctype text/html`, ~4 KB fragment), injected into `#content`.
+- **Layout (from live HTML):** a fixed left filter sidebar (`div.col-md-3.mobile-left` → `block-box` with `style="position:fixed"`) plus a wide results panel (`col-md-9`) holding `table#games.table.table-hover` with `thead.table-dark`.
+- **Data source:** the table is populated client-side via the shared `buildTable()` helper (`custom.js:605`), which issues a server-side-paginated `POST /ajax/table.php`. There is **no** `<form>` POST and **no** page-specific `Action()` mutation on this page — it is a **read-only reporting screen**.
+
+---
+
+### Live API Contracts
+
+Three contracts fire on load. All observation-only; the interceptor blocked 0 mutations.
+
+#### C1 — Page fragment
+
+| | |
+|---|---|
+| **Method / path** | `GET /ajax/page.php?page=games` |
+| **Request params** | `page` — string — required — fragment key (`games`) |
+| **Response** | `text/html; charset=UTF-8`, ~4089 bytes — the `#content` inner HTML (sidebar filters + empty `#games` table shell) |
+| **Capture** | `games.network.json` [0] |
+
+#### C2 — Match rows (primary data fetch)
+
+**`POST /ajax/table.php`** — `application/json`. Capture: `games.network.json` [1].
+
+Request body (form-urlencoded; `search` is URL-encoded JSON):
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `action` | string | Y | Always `games` (server-side handler selector). |
+| `table` | string | Y | Always `games` (DataTables table id). |
+| `page` | int | Y | 1-based page number. |
+| `numrows` | int | Y | Page size — fixed `100`. |
+| `search` | JSON (url-enc) | Y | Filter object, shape `{text:{}, check:{}, multiselect:{}, managers:{}, slider:{}}` (see §4). |
+| `order_by` | string\|`false` | Y | Sort column DB-alias, or literal `false` when unsorted (observed: `false`). |
+| `order_sort` | string\|`false` | Y | `asc`/`desc`, or `false` (observed: `false`). |
+
+Decoded `search` observed on auto-load:
+```json
+{"text":{"t1.start.startdate":0,"t1.start.enddate":0},"check":{},"multiselect":{},"managers":{},"slider":{}}
+```
+
+Response envelope (`response_schema`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `data.totalPage` | int | Page count — **0 on the row fetch** (count is deferred to C3). |
+| `data.totalRows` | int | **0 on the row fetch** (deferred to C3). |
+| `data.currentPage` | string(int) | Echoes requested page (`"1"`). |
+| `data.row` | array[≤`numrows`] of Game | The match rows (schema below). |
+| `data.custom` | bool | Whether a custom/saved filter is active (observed `false`). |
+| `data.query_time` | int | Server row-query time (ms; `0` when cached). |
+| `data.count_time` | int | Row-count time (ms; `0` here — count runs in C3). |
+| `status` | string enum | `"ok"` on success. |
+| `exec_time` | float | Total handler wall-time (s). |
+
+`data.row[]` element — the **Game** entity (live sample, redacted):
+```json
+{ "id":"33295", "server_id":"1", "start":"1783114006", "end":"1783115978",
+  "map":"Harju RAAS v1", "t1":"AFU", "t1_tickets":"0", "t2":"PLANMC",
+  "t2_tickets":"366", "win":"t2", "is_seed":"0", "server":"A", "time":1972 }
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string(int) | Match primary key. Carried on `tr[data-id]`; row click → `/game/<id>`. |
+| `server_id` | string(int) | Numeric FK of the host server (`1,6,7,9,10,11`). Filter alias `server_id`. |
+| `server` | string(1) | Server short letter (`A`,`B`,…). Rendered as `<code>[A]</code>` in column 1. |
+| `start` | string(unix) | Round start, **unix seconds** as string. Date-range filter key `t1.start`. |
+| `end` | string(unix) | Round end, **unix seconds** as string. Blank/`0` for ongoing rounds. |
+| `map` | string | Layer name incl. mode+version, e.g. `Harju RAAS v1`, `Fallujah AAS v1`. Free-text filter alias `t1.map`. |
+| `t1` | string | Team-1 faction tag/name (`AFU`, `IMF`, or full name like `58th Motorized Brigade`). |
+| `t1_tickets` | string(int) | Team-1 remaining tickets at round end. |
+| `t2` | string | Team-2 faction tag/name. |
+| `t2_tickets` | string(int) | Team-2 remaining tickets. |
+| `win` | enum `"t1"`\|`"t2"`\|`""` | Winning team; empty/falsy = draw or unfinished. |
+| `is_seed` | string bool (`"0"`/`"1"`) | Whether the round was a seeding match. Present in payload but **not** rendered as a column. |
+| `time` | int | Round duration in **seconds** (note: the only numeric-typed field; all others are strings). |
+
+#### C3 — Deferred pagination / total count
+
+**`POST /ajax/table.php`** — identical body to C2 **plus** `&pagination=true`. Capture: `games.network.json` [2].
+
+| Field | Type | Meaning |
+|---|---|---|
+| `totalPage` | int | Total pages for the current filter (live: `286`). |
+| `totalRows` | string(int) | Total matching rows (live: `"28571"`). |
+| `count_time` | float | Count-query time in seconds (live: `0.02`). |
+| `status` | string enum | `"ok"`. |
+| `exec_time` | float | Handler wall-time (s). |
+
+**Two-phase pattern:** C2 returns rows fast with `totalPage/totalRows = 0`; C3 (`pagination=true`) fires separately to compute the (expensive) `COUNT(*)` and fill the pager. This keeps first paint fast on the ~28.5 K-row table. Worth replicating at scale.
 
 ---
 
 ### 2. Entities & Fields
 
-#### 2.1 Entity: `Game` (a match / round) — the page's list rows
+#### 2.1 Entity: `Game` — see the C2 `data.row[]` schema above (authoritative). Display-cell coupling:
 
-Inferred from the `collum` array in `buildTable`, the `<thead>`, and the row fields referenced by the render callbacks (`row.t1_tickets`, `row.t2_tickets`, `row.win`, `this.dataset.id`).
-
-| Field | Column key | Type | Meaning |
-|---|---|---|---|
-| Server | `server` | int (server_id) | Which monitored server hosted the round; rendered as `[<id>]` in a `<code>` chip. Filterable via multiselect. |
-| Map / Layer | `map` | string | The Squad layer name (e.g. `Gorodok_RAAS_v1`). Free-text searchable via `t1.map`. |
-| Start | `start` | datetime (epoch) | Round start timestamp; rendered with `formatDate(data, true, true)`. Also the date-range filter key (`t1.start`). |
-| End | `end` | datetime (epoch) | Round end timestamp; same date formatting. Empty/ongoing rounds render blank. |
-| Team 1 name | `t1` | string | Faction/team-1 label. Rendered as a ticket badge + name. |
-| Team 2 name | `t2` | string | Faction/team-2 label. Rendered as a ticket badge + name. |
-| Team 1 tickets | `t1_tickets` | int | Remaining tickets for team 1 at round end. Not a separate column; injected into the `t1` cell as a colored label. |
-| Team 2 tickets | `t2_tickets` | int | Remaining tickets for team 2. Injected into the `t2` cell. |
-| Duration | `time` | int (seconds) | Round length; rendered `secToTime(data)` inside a dark `<code>` chip. |
-| Winner | `win` | enum `'t1' | 't2' | null` | Which team won. Drives the green/red coloring of the ticket badges and the trophy column. |
-| Match id | (row `id`) | int | Primary key of the game row. Not shown as a cell; carried on `tr[data-id]` and used to navigate to `/game/<id>`. |
-
-Note the win/ticket coloring logic couples three raw fields into two display cells:
-- `t1` cell: `<span class="label label-{success if win=='t1' else danger}">{t1_tickets}</span> {t1_name}`.
-- `t2` cell: mirror image keyed on `win=='t2'`.
-- `win` cell (trophy): shows the winner label as a green `label-success` badge, or a neutral `—` (`fa-minus`) badge when `win` is falsy (draw / unfinished).
+- **Column 1 (server):** `<td data-contact="server"><code>[<server>]</code></td>` — uses the letter `server`, not `server_id`.
+- **`t1` cell:** `<span class="label label-{success|danger}">{t1_tickets}</span> {t1}` — green (`label-success`) if this team won, red (`label-danger`) otherwise.
+- **`t2` cell:** mirror image keyed on `win=='t2'`.
+- **`start`/`end` cells:** `<span class="badge bg-success" data-unix="1783114006">Вчера 23:26:46</span>` — the epoch is preserved in `data-unix`; the visible text is a humanized relative/absolute local time ("Вчера" = Yesterday).
+- **`time` cell:** `<code class="dark">32м 52c </code>` (`secToTime` → `<m>м <s>c`).
+- **`win` cell (trophy col):** `<span class="label label-success">t2</span>` for the winner; neutral `—`/`fa-minus` when `win` is falsy.
 
 #### 2.2 Entity: `Server` (filter option source)
 
-Rendered as `<option value=... label=...>` inside the `#games-server` multiselect. `value` = `server_id`, `label` = human server name.
+Live `#games-server` multiselect options (`value` = `server_id`, `label` = name):
 
-| server_id | Label (name) |
-|---|---|
-| 1 | RAAS/AAS #1 |
-| 6 | БЕЗ ГОЛОСОВАНИЯ #2 (No Voting #2) |
-| 7 | INVASION #3 |
-| 9 | Custom для FW (Custom for FW) |
-| 10 | Custom для MDC (Custom for MDC) |
-| 11 | Custom для BSS (Custom for BSS) |
+| server_id | Label (name) | Gloss |
+|---|---|---|
+| 1 | RAAS/AAS #1 | main rotation |
+| 6 | БЕЗ ГОЛОСОВАНИЯ #2 | No Voting #2 |
+| 7 | INVASION #3 | Invasion mode |
+| 9 | Custom для FW | Custom for FW |
+| 10 | Custom для MDC | Custom for MDC |
+| 11 | Custom для BSS | Custom for BSS |
 
-This list is a useful competitive artifact: it reveals the rival's live server fleet, their game modes, and that server ids are sparse/non-contiguous (1, 6, 7, 9, 10, 11 — implying deleted/retired servers 2–5, 8).
+Server ids are sparse/non-contiguous (1, 6, 7, 9, 10, 11 — 2–5, 8 missing), implying retired/soft-deleted servers. Competitive artifact: reveals the rival's live fleet and modes.
 
 #### 2.3 Entity: `Match Detail` (per-match player performance) — NOT in this fragment
 
-Row click executes a **full browser navigation**, not an AJAX `pageLoad`:
-
+Row click is a **full browser navigation**, not an AJAX `pageLoad`:
 ```js
-$('#games tbody > tr').on('click', function(){
-    window.location.href = '/game/' + this.dataset.id;
-});
+$('#games tbody > tr').on('click', function(){ window.location.href = '/game/' + this.dataset.id; });
 ```
-
-So the per-match detail view (per-player kills/deaths/score, team rosters, ticket graph, etc.) is a **separately routed, server-rendered page** at `/game/<id>` and is **not** part of this captured fragment. Its schema cannot be documented from the local files — see Gaps.
+The per-match detail view (per-player K/D/score, rosters, ticket timeline) is a **separately routed, server-rendered page** at `/game/<id>` and is **not** in the captured fragment. Its schema cannot be documented from these files — see Gaps.
 
 ---
 
 ### 3. The Page's Own Table (`#games`)
 
-Configured by a single `buildTable()` call:
+Configured by a single `buildTable()` call (`custom.js:605` generic helper):
 
 ```js
 $('#games').buildTable({
@@ -2484,125 +3749,282 @@ $('#games').buildTable({
 });
 ```
 
-**Displayed columns (in order):**
+**Server table id (`action=`/`table=`):** `games`. **Page size (`numrows`):** `100`.
 
-| # | Header | Icon | Column key | Render |
-|---|---|---|---|---|
-| 1 | (server) | `fa-server` | `server` | `[<id>]` code chip |
-| 2 | Карта (Map) | — | `map` | raw layer string |
-| 3 | Начало (Start) | — | `start` | `formatDate` |
-| 4 | Конец (End) | — | `end` | `formatDate` |
-| 5 | Команда 1 (Team 1) | — | `t1` | ticket badge + name |
-| 6 | Команда 2 (Team 2) | — | `t2` | ticket badge + name |
-| 7 | (duration) | `fa-clock` | `time` | `secToTime` chip |
-| 8 | (winner) | `fa-trophy` | `win` | winner badge / `—` |
+**Displayed columns** (live `<thead class="table-dark">`, in order):
 
-**Pagination:** server-side, `numrows: 100` rows per page. A second `table` request with `&pagination=true` returns `totalPage` / `totalRows` and renders a numeric pager (`#games-infoblock`) showing `Страница X из Y · Всего: N` (Page X of Y · Total: N). `showPages` = 9 on desktop, 3 on mobile.
+| # | Header (RU → EN) | `<th>` width | Icon | Column key / `data-contact` | Render |
+|---|---|---|---|---|---|
+| 1 | (server) | 30px, center | `fa-server` | `server` | `<code>[A]</code>` |
+| 2 | Карта (Map) | auto, center | — | `map` | raw layer string |
+| 3 | Начало (Start) | 130px, center | — | `start` | `badge` w/ `data-unix`, humanized time |
+| 4 | Конец (End) | 130px, center | — | `end` | same; blank if ongoing |
+| 5 | Команда 1 (Team 1) | auto, center | — | `t1` | ticket badge + name |
+| 6 | Команда 2 (Team 2) | auto, center | — | `t2` | ticket badge + name |
+| 7 | (duration) | 100px, center | `fa-regular fa-clock` | `time` | `<code class="dark">` `secToTime` |
+| 8 | (winner) | 40px, center | `fa-solid fa-trophy` | `win` | winner badge / `—` |
 
-**Sorting:** the generic `buildTable` supports header-click sorting (`order_by` / `order_sort` asc/desc) **only** for columns listed in `settings.order` and only when a `<th>` carries an `i[data-sort]` marker. This page passes **no `order` option**, so sorting is effectively disabled here — the list is server-ordered (implicitly newest-first by start). This is a gap worth beating: a competitor should make every column sortable.
+**Sorting (`order`):** the config passes **no `order` option** → header-click sorting is disabled; `order_by`/`order_sort` go out as literal `false` (confirmed in C2 body). **Default sort:** server-implicit, newest-first by `start` (live rows descend `id 33295 → 33294 → …`). Gap to beat: make columns sortable.
 
-**Row interaction:** whole-row click → navigate to `/game/<id>` (see 2.3). No inline row actions, checkboxes, or bulk operations.
+**Pagination:** server-side, 100/page. The pager (`#games-infoblock`) reads `Страница X из Y · Всего: N` from C3; `showPages` = 9 desktop / 3 mobile.
+
+**Row interaction:** whole-row click → `/game/<id>`. No inline actions, checkboxes, or bulk ops.
 
 ---
 
 ### 4. Actions & Admin Capabilities
 
-This page exposes **no state-changing actions**. It is purely read/report. The only backend call is the DataTables-style row fetch.
+**No state-changing actions.** The only backend calls are the read fetches (C2/C3). Confirmed: `_blocked.json` = `[]` (0 mutations).
 
-| UI element | Action id | Script endpoint | Data params | Effect | Destructive? |
+| UI element | action / table | Endpoint | Key params | Effect | Destructive? |
 |---|---|---|---|---|---|
-| Table load / Поиск (Search) button `#games-btn` | `games` (table name used as action) | `POST /ajax/table.php` | `action=games&table=games&page=<n>&numrows=100&search=<urlencoded JSON>&order_by=<>&order_sort=<>` | Returns paginated match rows (`text.data.row[]`, `data.currentPage`) | **N** (read) |
-| Pagination click | `games` | `POST /ajax/table.php` | same + `&pagination=true` | Returns `totalPage`, `totalRows` for the pager | **N** (read) |
+| Table load / **Поиск** `#games-btn` | `games` | `POST /ajax/table.php` | `action=games&table=games&page=<n>&numrows=100&search=<JSON>&order_by=false&order_sort=false` | Returns paginated match rows (C2) | **N** |
+| Pagination click | `games` | `POST /ajax/table.php` | same + `&pagination=true` | Returns `totalPage`/`totalRows` (C3) | **N** |
 
-The `search` payload is a URL-encoded JSON object of the form `{text:{}, check:{}, multiselect:{}, managers:{}, slider:{}}`. For this page it carries:
-- `text["t1.map"]` — map substring,
-- `text["t1.start.startdate"]` / `text["t1.start.enddate"]` — date range bounds,
-- `multiselect["server_id"]` — array of selected server ids.
+**`search` payload contract** — URL-encoded JSON `{text:{}, check:{}, multiselect:{}, managers:{}, slider:{}}`. For this page:
 
-Note the `t1.` / `server_id` prefixes are raw SQL-ish table aliases leaking through to the client — a hint that the backend builds `WHERE` clauses directly from these `data-search` keys (potential injection surface to probe, and a naming convention to mirror or avoid).
+| Bucket | Key | Meaning |
+|---|---|---|
+| `text` | `t1.map` | Map/layer substring. |
+| `text` | `t1.start.startdate` | Range start (unix; `0` = unbounded). |
+| `text` | `t1.start.enddate` | Range end (unix; `0` = unbounded). |
+| `multiselect` | `server_id` | Array of selected server ids. |
+
+The `t1.` / `server_id` prefixes are raw SQL-ish table aliases leaking to the client — the backend likely builds `WHERE` clauses from these `data-search` keys directly (injection surface to probe; a convention to mirror with opaque keys + parameterized queries).
 
 ---
 
-### 5. Forms, Filters & Controls (left sidebar)
+### 5. Forms, Filters & Controls (live sidebar)
 
-There is no `<form>`; filters are loose inputs wired into `buildTable` via `searchInput: ["games-map","games-date","games-server"]`. Pressing Enter in the text field, changing the date range, or clicking **Поиск** rebuilds the table (`page:1, isSearch:true`).
+No `<form>`; loose inputs wired into `buildTable` via `searchInput: ["games-map","games-date","games-server"]`. Enter in the text field, a date-range change, or clicking **Поиск** rebuilds the table (`page:1, isSearch:true`).
 
-| Control | id | Type | `data-search` key | Behavior |
-|---|---|---|---|---|
-| Поиск (Search) button | `games-btn` | button | — | Triggers a filtered rebuild; shows "Ищем" (Searching) load state. |
-| Карта (Map) | `games-map` | text input (`fa-map` addon) | `t1.map` | Substring match on layer name; submits on Enter. |
-| Server multiselect | `games-server` | Bootstrap multiselect (`type=multiselect`, `multiple`) | `server_id` | Multi-pick from the 6 servers; placeholder `- Сервер -`; `enableHTML:true`. |
-| Date range | `games-date` | custom `dateRange` widget (`type=daterange`) | `t1.start` | Presets: month, day, week, year, custom range, today, yesterday, current/last week, current/last month, last 30 days. Default `allTime` (start:0,end:0). Fires `crm_dateRange` → rebuild. Splits into `.startdate`/`.enddate`. |
+| Control | `#id` | Type | `data-search` | maxlength / options | Default | Behavior |
+|---|---|---|---|---|---|---|
+| Поиск (Search) | `games-btn` | button | — | — | — | Filtered rebuild; "Ищем" load state. |
+| Карта (Map) | `games-map` | text (`fa-map` addon), placeholder "Карта" | `t1.map` | none | empty | Substring match; submits on Enter. |
+| Server | `games-server` | Bootstrap multiselect (`type=multiselect multiple`) | `server_id` | 6 fixed options (§2.2), `enableHTML:true` | none selected; placeholder `- Сервер -` | Multi-pick; array into `multiselect.server_id`. |
+| Date range | `games-date` | custom `dateRange` widget (`type=daterange`), label "за всё время" | `t1.start` | presets: month/day/week/year/custom/today/yesterday/current+last week/current+last month/last30days | **allTime** (`start:0,end:0`) | Fires `crm_dateRange` → rebuild; splits into `.startdate`/`.enddate`. |
 
-**Validation:** none client-side; empty inputs are simply omitted from the search JSON (`if(val != "")`). The `+` character is escaped to `%2B` before submission (multiselect and text values) to survive form-encoding.
+**Validation:** none client-side; empty inputs are omitted from `search` (`if(val != "")`). `+` is escaped to `%2B` on multiselect/text values before submission.
 
 ---
 
 ### 6. Permission / Visibility Logic
 
-- This fragment contains **no** `class="hide"` gating, no role/group checks, and no `Action`-guarded buttons. Every authenticated viewer who can reach the page sees the full match log and all six servers.
-- Access control is therefore entirely upstream: whether `pageLoad('games')` is offered in the nav and whether `/ajax/table.php?action=games` authorizes the caller. Nothing here narrows visibility by admin group.
-- Contrast with the shared player-detail modal (embedded elsewhere) whose ~22 moderation actions are permission-sensitive — none of those appear on this read-only page.
+- The fragment contains **no** `class="hide"` gating, role/group checks, or `Action`-guarded buttons. Every authenticated viewer who reaches the page sees the full match log and all six servers.
+- Access control is entirely upstream: whether `pageLoad('games')` is offered in the nav, and whether `table.php action=games` authorizes the caller. Nothing here narrows visibility by admin group.
+- The multiselect options are pre-filtered server-side to servers the operator may view; the client trusts and iterates them.
 
 ---
 
 ### 7. Notable UX & Competitive Notes
 
-- **Ticket-as-badge encoding.** Remaining tickets are shown as a colored pill fused onto each team name (green = winner, red = loser), so the outcome and margin read at a glance without a separate "score" column. Clean, copyable pattern.
-- **Trophy column doubles as draw indicator.** A single `fa-trophy` column shows the winning faction, degrading to a neutral `—` when `win` is null (draw/ongoing) — compact status signaling.
-- **Fixed filter rail.** The sidebar is `position:fixed`, staying pinned while the (up-to-100-row) result set scrolls — good for large logs; note it can collide with content on short viewports (`mobile-left` class hints at a mobile reflow).
-- **Rich date presets.** The `dateRange` widget ships ~11 presets (today/yesterday/this-week/last-30-days/…) plus custom range — a strong baseline to match or exceed.
-- **Server-side pagination with async page-count.** Row fetch and total-count are two separate requests; the count request is deferred and logged with timing (`Подсчёт страниц занял …`), keeping first paint fast on huge tables. Worth replicating for scale.
-- **Weaknesses to beat:** (1) no column sorting wired up; (2) no CSV/stat export on this page (the rival exposes `downloadStat` elsewhere, not here); (3) raw SQL alias keys (`t1.map`, `t1.start`, `server_id`) sent from the client suggest thin server-side validation — a competitor should use opaque filter keys and parameterized queries; (4) match detail lives on a full page reload (`/game/<id>`) rather than an in-app modal/route, breaking the SPA flow.
+- **Ticket-as-badge encoding.** Remaining tickets are a colored pill fused onto each team name (green = winner, red = loser) — outcome + margin at a glance, no separate score column. Copyable pattern.
+- **`data-unix` on time cells.** Epochs are preserved in `data-unix` while showing humanized local time ("Вчера 23:26:46") — clean separation of machine value and display.
+- **Trophy column doubles as draw indicator** (`—`/`fa-minus` when `win` falsy).
+- **Two-phase server-side pagination** (rows first, deferred `COUNT(*)` via `pagination=true`) keeps first paint fast on a ~28.5 K-row / 286-page table.
+- **Fixed filter rail** (`position:fixed`) stays pinned while results scroll; `mobile-left` hints a mobile reflow (watch for collisions on short viewports).
+- **Rich date presets** (~11) plus custom range — a strong baseline to match.
+- **Weaknesses to beat:** (1) no column sorting wired (`order_by=order_sort=false`); (2) no CSV/stat export on this page (`downloadStat` exists elsewhere, not here); (3) raw SQL alias filter keys (`t1.map`, `t1.start`, `server_id`) suggest thin server-side validation; (4) match detail is a full page reload (`/game/<id>`), breaking the SPA flow; (5) `is_seed` is shipped in the payload but neither shown nor filterable — a free "hide seeding rounds" toggle the rival leaves on the table.
 
 ---
 
 ### Gaps / Unknowns
 
-- **Per-match player performance schema is not in these files.** The detail view is a server-rendered route `/game/<id>`; its columns (per-player kills/deaths/score, rosters, ticket timeline) cannot be documented from the captured fragment. Requires capturing `/game/<id>` HTML.
-- **Exact backend column mapping** for `t1`/`t2`/`t1_tickets`/`win` (table/JOIN structure) is inferred from client keys only; the `table.php` server logic was not provided.
-- **Sort defaults** (implicit ordering) are assumed newest-first but not confirmed server-side.
+- **Per-match player performance schema is not in these files.** `/game/<id>` is a server-rendered route; its columns (per-player K/D/score, rosters, ticket timeline) require capturing that page's HTML.
+- **Backend JOIN/column mapping** for `t1`/`t2`/`t1_tickets`/`win`/`is_seed` is inferred from the client alias keys (`t1.*`, `server_id`); `table.php` server logic was not provided.
+- **`order` capability:** disabled on this page, so the set of sortable DB-aliases the backend would accept is unobserved.
 
 
 ---
 
 ## 13. Combat Logs: Kills, Deaths, Revives, Damage, Teamkills
 
+> Spec-grade chapter. All endpoint/response facts below are taken from LIVE captured contracts on `https://breaking.sqstat.ru` (read-only headless capture, 0 blocked mutations). Capture files: `caps/combat/{kills,deaths,revives,damages,teamkills}.network.json` and `.content.html`. Client behavior is cross-referenced against `custom.js` (`$.fn.buildTable` at L605, `Action()` at L284, `dateRange` presets at L1206+). Russian UI labels are kept with an English gloss.
+
 ### 13.1 Purpose and Navigation
 
-SQSTAT exposes five near-identical combat-event log pages, each a filterable, server-side-paginated table over one class of in-game combat event. They are separate nav entries that call `pageLoad('<page>')` → `GET /ajax/page.php?page=<page>`, each returning an HTML fragment injected into `#content`.
+SQSTAT exposes five near-identical combat-event log pages. Each is a filterable, server-side-paginated table over one class of in-game combat event. Nav click → `pageLoad('<page>')` → **`GET /ajax/page.php?page=<page>`** returns an HTML fragment (~114 KB) injected into `#content`. The fragment ships an inline `<style>` hiding the first column, the left filter rail, the empty results `<table>`, one inline `<script>` that calls `$('#<tableId>').buildTable({...})`, and the full shared player-detail modal markup.
 
-| Page id | Fragment file | Table DOM id | Event logged |
+| Page id | `page.php` fragment (bytes) | Table DOM id | `table=`/`action=` name | Event logged | Page size (`numrows`) |
+|---|---|---|---|---|---|
+| `kills` | 115029 | `#playerKills` | `playerKills` | Player A killed player B (weapon + kit recorded) | 500 |
+| `deaths` | 113955 | `#playerDeath` | `playerDeath` | A player died (subject + weapon/actor that killed them) | 500 |
+| `revives` | 113974 | `#playerRevive` | `playerRevive` | A medic revived a downed player | 500 |
+| `damages` | 114070 | `#playerDamage` | `playerDamage` | A damage-dealt event (attacker, victim, weapon, **amount**) | 500 |
+| `teamkills` | 114004 | `#playerTeamkill` | `playerTeamkill` | A friendly-fire kill (offender + team victim) | 100 |
+
+All five share an identical two-pane layout: a fixed left filter rail (`div.col-md-3.mobile-left > .block-box` with `position:fixed`) and a right results table (`col-md-9`). All five embed the shared player-detail modal (`#player_info` / `#playerModal`) with its Chat/Kills/Deaths/Kits/Games/Comments tabs and ~22 actions — documented in the shared-modal chapter, not here. Modal-tab columns (Чат/Сообщение/Кит/Карта/Победа/Урон, etc.) are **not** attributed to these pages.
+
+### 13.2 Live API Contracts
+
+Every page drives exactly two POST calls to a single endpoint, plus the one-time page GET. This is the ground-truth upgrade of this chapter.
+
+#### 13.2.1 `GET /ajax/page.php` — fragment loader
+
+| Param | Type | Required | Meaning |
 |---|---|---|---|
-| `kills` | `kills.html` | `#playerKills` | A player killed another player (weapon recorded) |
-| `deaths` | `deaths.html` | `#playerDeath` | A player died (subject + weapon that killed them) |
-| `revives` | `revives.html` | `#playerRevive` | A medic revived a downed player |
-| `damages` | `damages.html` | `#playerDamage` | A damage-dealt event (attacker, victim, weapon) |
-| `teamkills` | `teamkills.html` | `#playerTeamkill` | A friendly-fire kill (attacker + victim, same team) |
+| `page` | enum: `kills` \| `deaths` \| `revives` \| `damages` \| `teamkills` | yes | Which combat-log fragment to render |
 
-All five share the identical two-pane layout: a fixed left filter rail (`col-md-3`, `position:fixed`) and a right results table (`col-md-9`). All five also embed the shared **player-detail modal** (`#player_info`, `#playerModal`) with its Chat/Kills/Deaths/Kits/Games/Comments tabs and ~22 actions. That modal is documented separately; below, the page's OWN table/controls are strictly separated from the shared modal, and the modal's columns (Чат/Сообщение/Кит/Карта/Победа/Урон etc.) are NOT attributed to these pages.
+Response: `text/html; charset=UTF-8`, the `#content` fragment. Status `200`. No JSON envelope.
 
-### 13.2 Data Model (inferred)
+#### 13.2.2 `POST /ajax/table.php` — row fetch (data call)
 
-Each row of a combat log is a **combat event** joining an event table to one or two **player** records. The client column keys (`collum` array in `buildTable`) plus the row template reveal the fields.
+The core read. Sent by `buildTable → Action({script:'table', action:'<table>', data:'&table=<table>&page=...'})`. Body is `application/x-www-form-urlencoded`.
 
-**Combat event entity (per row)**
-
-| Field key | UI column | Meaning / type | Present in |
+| Param | Type | Required | Meaning |
 |---|---|---|---|
-| `steam_id` | (hidden, `class="hide"`) | SteamID64 of the primary/subject player; used to open the player modal on row click | all 5 |
-| `victim_steam_id` | (hidden, in row template) | SteamID64 of the secondary player (the "Кого"/victim); makes the target clickable | kills (confirmed in template); implied for damage/revive/teamkill |
-| `server` | server icon column | Server the event occurred on (rendered as an icon/badge; backing value is `server_id`) | all 5 |
-| `date` | Дата (Date) | Event timestamp; rendered client-side via `formatDate(data,false,true)` | all 5 |
-| `player_name` | Кто (Who) / Игрок (Player) | Display name of the primary actor (killer / medic / attacker / the deceased) | kills, deaths, revives, damages |
-| `player` | Кто (Who) | Same role as `player_name` but keyed `player` on the teamkill table | teamkills |
-| `name` | Кого (Whom) | Display name of the secondary player (victim / revived player) | kills, revives, damages |
-| `killed` | Кого (Whom) | Same role as `name` but keyed `killed` on the teamkill table | teamkills |
-| `weapon` | Оружие (Weapon) | Weapon/entity used | kills, deaths, damages |
+| `action` | string = the table name | yes | Mirrors `table`; `Action()` appends `action=<table>` |
+| `table` | enum: `playerKills` \| `playerDeath` \| `playerRevive` \| `playerDamage` \| `playerTeamkill` | yes | Server table/query id |
+| `page` | int (1-based) | yes | Page number |
+| `numrows` | int | yes | Rows per page (500 for k/d/r/dmg, 100 for teamkills) |
+| `search` | URL-encoded JSON | yes | Filter object (see §13.4.2). Default `{"text":{"t1.date.startdate":0,"t1.date.enddate":0},"check":{},"multiselect":{},"managers":{},"slider":{}}` |
+| `order_by` | string \| `false` | yes | Column DB-alias to sort by; ships as literal `false` (no sort) |
+| `order_sort` | `asc` \| `desc` \| `false` | yes | Sort direction; ships as `false` |
 
-**Server entity (filter `<option>` set, shared across all 5 pages)**
+Response envelope: `application/json; charset=utf-8`, status `200`.
 
-| server_id | Label |
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | string enum: `ok` \| (error) | Request status; `Action()` treats non-`ok` as error, `auth:true` → `location.reload()` |
+| `exec_time` | float (seconds) | Server-measured total execution time |
+| `data.totalPage` | int | Always `0` on the data call (real value comes from the pagination call) |
+| `data.totalRows` | int | Always `0` on the data call |
+| `data.currentPage` | string (numeric) | Echoed page, e.g. `"1"` |
+| `data.custom` | bool | Custom-payload flag; `false` for these tables |
+| `data.query_time` | int \| float (seconds) | Row-query time (0 when cached; `0.21` observed on teamkills) |
+| `data.count_time` | int | `0` on the data call (counting deferred to pagination call) |
+| `data.row` | array[`numrows`] of row objects | The log rows; per-table schema in §13.3 |
+
+#### 13.2.3 `POST /ajax/table.php` … `&pagination=true` — count call
+
+Identical body plus a trailing `&pagination=true`. Returns only the count envelope (no rows). This is a **separate, expensive `SELECT COUNT(*)`** — `count_time` runs 0.1 s–2.76 s in captures.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `totalPage` | int | Total page count = ceil(totalRows / numrows) |
+| `totalRows` | string (numeric) | Total matching rows (string, e.g. `"13413500"`) |
+| `count_time` | float (seconds) | COUNT query time; logged to console by client |
+| `status` | string enum: `ok` | |
+| `exec_time` | float (seconds) | Total execution time |
+
+**Live totals observed** (indicative table scale, default all-time filter):
+
+| Table | totalRows | totalPage @ numrows | count_time |
+|---|---|---|---|
+| `playerKills` | 4,402,799 | 8,806 @ 500 | 1.37 s |
+| `playerDeath` | 5,630,431 | 11,261 @ 500 | 1.36 s |
+| `playerRevive` | 1,217,973 | 2,436 @ 500 | 0.27 s |
+| `playerDamage` | 13,413,500 | 26,827 @ 500 | 2.76 s |
+| `playerTeamkill` | 653,590 | 6,536 @ 100 | 0.10 s |
+
+### 13.3 Per-Table Row Schemas (from captured `data.row[]`)
+
+Types are as returned on the wire (all scalars are JSON strings unless noted). Field lengths shown are the redaction lengths of the sample row, not schema constraints. `date` is a **Unix epoch seconds** string in every table. `server` is pre-rendered HTML (a `<code>[X]</code>` badge). `steam_id`/`victim_steam_id` are 17-char SteamID64 strings.
+
+**`playerKills`** — client `collum: ["steam_id","server","date","player_name","name","weapon"]`
+
+| Field | Type | Meaning | Rendered as column? |
+|---|---|---|---|
+| `id` | string(numeric) | Event PK (e.g. `4402799`) | no |
+| `steam_id` | string(17) | Killer SteamID64 — drives row-click modal | hidden col 1 |
+| `victim_steam_id` | string(17) | Victim SteamID64 — makes target openable (kills only) | no (used by `#kill_template`) |
+| `game_id` | string(numeric) | Match/game id (e.g. `33295`) | no |
+| `date` | string(unix-sec) | Event time (e.g. `1783115934`) | Дата |
+| `weapon` | string | Weapon/entity id (e.g. `QBZ192_Optic_QMK171A_Grippod`) | Оружие |
+| `kit` | string | Killer kit id (e.g. `PLANMC_Rifleman_06`) | no (not in `collum`) |
+| `player_name` | string | Killer display name | Кто (Who) |
+| `name` | string | Victim display name | Кого (Whom) |
+| `server_id` | string(numeric) | Server id (1/6/7/9/10/11) | no |
+| `map` | string | Map + layer (e.g. `Harju RAAS v1`) | no (not in `collum`) |
+| `server` | HTML string | Server badge `<code>[A]</code>` | server icon col 2 |
+
+**`playerDeath`** — `collum: ["steam_id","server","date","player_name","weapon"]`
+
+| Field | Type | Meaning | Column? |
+|---|---|---|---|
+| `id` | string(numeric) | Event PK | no |
+| `steam_id` | string(17) | The deceased player | hidden col 1 |
+| `game_id` | string(numeric) | Game id | no |
+| `date` | string(unix-sec) | Death time | Дата |
+| `weapon` | string | Weapon/actor that killed them (e.g. `Soldier_AFU_SquadLeader01`) | Оружие |
+| `kit` | string | Deceased's kit (e.g. `CMD`) | no |
+| `player_name` | string | Deceased display name | Игрок (Player) |
+| `server_id` | string(numeric) | Server id | no |
+| `map` | string | Map/layer | no |
+| `server` | HTML string | Server badge | server col 2 |
+
+Note: no `victim_steam_id`/`name` in payload — deaths table has no second-party column, though the killer is still **filterable** via the Кого input (§13.4).
+
+**`playerRevive`** — `collum: ["steam_id","server","date","player_name","name"]`
+
+| Field | Type | Meaning | Column? |
+|---|---|---|---|
+| `id` | string(numeric) | Event PK | no |
+| `steam_id` | string(17) | Reviving medic | hidden col 1 |
+| `victim_steam_id` | string(17) | Revived player SteamID64 | no |
+| `game_id` | string(numeric) | Game id | no |
+| `date` | string(unix-sec) | Revive time | Дата |
+| `kit` | string | Medic kit id | no |
+| `player_name` | string | Medic display name | Кто (Who) |
+| `name` | string | Revived player display name | Кого (Whom) |
+| `server_id` | string(numeric) | Server id | no |
+| `map` | string | Map/layer | no |
+| `server` | HTML string | Server badge | server col 2 |
+
+No `weapon` (revives have none).
+
+**`playerDamage`** — `collum: ["steam_id","server","date","player_name","name","weapon"]`
+
+| Field | Type | Meaning | Column? |
+|---|---|---|---|
+| `id` | string(numeric) | Event PK (8-digit, largest table) | no |
+| `steam_id` | string(17) | Attacker | hidden col 1 |
+| `victim_steam_id` | string(17) | Victim | no |
+| `game_id` | string(numeric) | Game id | no |
+| `date` | string(unix-sec) | Damage time | Дата |
+| **`damage`** | string(numeric) | **Damage amount** (e.g. `"32"`) — present in payload but NOT in `collum`, so never shown/sortable on this grid | no (**omitted**) |
+| `weapon` | string | Weapon id (e.g. `QBZ192_Holo_Grippod_Suppressor`) | Оружие |
+| `player_name` | string | Attacker display name | Кто (Who) |
+| `name` | string | Victim display name | Кого (Whom) |
+| `server_id` | string(numeric) | Server id | no |
+| `map` | string | Map/layer | no |
+| `server` | HTML string | Server badge | server col 2 |
+
+**`playerTeamkill`** — `collum: ["steam_id","server","date","player","killed"]` (distinct keys vs other tables)
+
+| Field | Type | Meaning | Column? |
+|---|---|---|---|
+| `id` | string(numeric) | Event PK | no |
+| `server_id` | string(numeric) | Server id | no |
+| `steam_id` | string(17) | Offender (teamkiller) — drives row-click | hidden col 1 |
+| `killed` | HTML string | Team victim, **pre-rendered** `<p class="mb-0">…name…</p>` (includes clan tag) | Кого (Whom) |
+| `date` | string(unix-sec) | Teamkill time | Дата |
+| `killed_group` | null | Victim admin-group (null when none) | no |
+| `player` | HTML string | Offender, pre-rendered name markup | Кто (Who) |
+| `player_group` | null | Offender admin-group (null when none) | no |
+| `kit` | HTML string | Offender kit as `<img src="/assets/img/ico/kits/…">` | no (not in `collum`) |
+| `server` | HTML string | Server badge | server col 2 |
+
+Teamkills uniquely (a) server-renders `player`/`killed`/`kit` as HTML, (b) carries `*_group` join columns, (c) uses `numrows:100`, (d) has no `weapon` and no `victim_steam_id`. It is a **passive log**: no forgive/punish/auto-kick/TK-count workflow on the page.
+
+### 13.4 Filters, Search, Sort, Pagination
+
+#### 13.4.1 Left-rail controls (per page; ids prefixed with the table id)
+
+Structure is identical across all five; only the `data-search` DB-aliases differ. Example ids use `playerKills-*`.
+
+| Control | `#id` suffix | Input type | `data-search` alias | Options / behavior | Validation |
+|---|---|---|---|---|---|
+| Поиск (Search) | `-btn` | `button` (`btn btn-default btn-100`) | — | Triggers `buildTable()` re-fetch | — |
+| Кто (Who) | `-name` | `text` (`form-control`, placeholder `Кто`) | page-specific (table below) | Substring on primary player name; Enter (`which==13`) submits | free text |
+| Кого (Whom) | `-killed` | `text` (placeholder `Кого`) | page-specific | Substring on secondary player name; Enter submits | free text |
+| Сервер (Server) | `-server` | Bootstrap `multiselect` (`multiple`, `type="multiselect"`) | `server_id` | 6 checkboxes; IN-list filter; placeholder `- Сервер -`; `enableHTML` | — |
+| Date range | `-date` | `button` (`type="daterange"`) | `t1.date` | `dateRange` picker; fires `crm_dateRange`; writes `t1.date.startdate`/`t1.date.enddate` into search `text` | — |
+
+Server `<option>` set (shared across all five — this tenant's own servers only; note id gaps 2–5, 8):
+
+| `server_id` | `label` |
 |---|---|
 | 1 | `RAAS/AAS #1` |
 | 6 | `БЕЗ ГОЛОСОВАНИЯ #2` (No voting #2) |
@@ -2611,164 +4033,137 @@ Each row of a combat log is a **combat event** joining an event table to one or 
 | 10 | `Custom для MDC` |
 | 11 | `Custom для BSS` |
 
-Note the id gap (no 2–5, 8): the server list is filtered to this panel's own servers.
+**Page-specific `data-search` aliases (leaked raw SQL join aliases).** The same physical event table (`t1`, holding `date`, `server_id`) is joined to player tables under different aliases depending on which side the page treats as primary:
 
-**Underlying SQL join aliases (leaked via `data-search`).** The filter inputs carry raw table-alias.column references, exposing the server-side query shape. The same physical event table is joined to player tables under different aliases depending on which side each page treats as "primary":
-
-| Page | "Кто" filter → | "Кого" filter → | Date → |
-|---|---|---|---|
-| kills | `t2.player` | `t4.player` | `t1.date` |
-| deaths | `t5.player` | `t2.player` | `t1.date` |
-| revives | `t5.player` | `t2.player` | `t1.date` |
-| damages | `t2.player` | `t5.player` | `t1.date` |
-| teamkills | `t5.player` | `t2.player` | `t1.date` |
-
-`t1` is the event row (holds `date`, `server_id`); `t2`/`t4`/`t5` are player joins. This confirms combat events are stored once and both parties resolved by join, and it exposes internal schema aliases to the client (a competitive/security note — our panel should not leak raw SQL identifiers into `data-search`).
-
-### 13.3 Page-Own Tables
-
-The primary results table is DataTables-style but driven by SQSTAT's custom `$.fn.buildTable` (in `custom.js`), which fetches rows server-side. The first `<thead class="table-dark">` in each fragment is the page's own table; every later `<thead>` in the file belongs to the shared player-detail modal tabs and is out of scope here.
-
-**Kills — `#playerKills`** (`numrows: 500`)
-
-| # | Column (icon/label) | Data key | Notes |
-|---|---|---|---|
-| 1 | SteamID (`class="hide"`) | `steam_id` | Hidden; drives modal open |
-| 2 | server icon | `server` | 50px, centered |
-| 3 | Дата (Date) | `date` | 130px |
-| 4 | user icon + Кто (Who) | `player_name` | Killer |
-| 5 | crosshairs + Кого (Whom) | `name` | Victim |
-| 6 | gun icon + Оружие (Weapon) | `weapon` | |
-
-**Deaths — `#playerDeath`** (`numrows: 500`)
-
-| # | Column | Data key | Notes |
-|---|---|---|---|
-| 1 | SteamID (hidden) | `steam_id` | Subject (the player who died) |
-| 2 | server | `server` | |
-| 3 | Дата | `date` | |
-| 4 | user + Игрок (Player) | `player_name` | The deceased player |
-| 5 | gun + Оружие (Weapon) | `weapon` | Weapon that killed them |
-
-Deaths shows only 5 columns (no explicit "killer" column) yet its filter rail still offers both Кто/Кого inputs — the killer is filterable but not displayed as a table column.
-
-**Revives — `#playerRevive`** (`numrows: 500`)
-
-| # | Column | Data key | Notes |
-|---|---|---|---|
-| 1 | SteamID (hidden) | `steam_id` | Reviving medic |
-| 2 | server | `server` | |
-| 3 | Дата | `date` | |
-| 4 | user + Кто (Who) | `player_name` | Medic |
-| 5 | crosshairs + Кого (Whom) | `name` | Revived player |
-
-No weapon column (revives have no weapon).
-
-**Damages — `#playerDamage`** (`numrows: 500`)
-
-| # | Column | Data key | Notes |
-|---|---|---|---|
-| 1 | SteamID (hidden) | `steam_id` | Attacker |
-| 2 | server | `server` | |
-| 3 | Дата | `date` | |
-| 4 | user + Кто (Who) | `player_name` | Attacker |
-| 5 | crosshairs + Кого (Whom) | `name` | Victim |
-| 6 | gun + Оружие (Weapon) | `weapon` | |
-
-Notable: the damages table does **not** surface a numeric damage-amount column, even though the shared modal's own "damage" tab has a Урон (Damage) column. Damage magnitude exists in the model but is omitted from this page's grid — an easy win for a competing panel (show/sort by damage).
-
-**Teamkills — `#playerTeamkill`** (`numrows: 100`)
-
-| # | Column | Data key | Notes |
-|---|---|---|---|
-| 1 | SteamID (hidden) | `steam_id` | Offender (teamkiller) |
-| 2 | server | `server` | |
-| 3 | Дата | `date` | |
-| 4 | user + Кто (Who) | `player` | Offender |
-| 5 | crosshairs + Кого (Whom) | `killed` | Team victim |
-
-Teamkills uses a lower page size (`numrows: 100` vs 500) and distinct data keys (`player`/`killed` instead of `player_name`/`name`). No weapon column. There is **no dedicated teamkill flag, punishment, forgive, or auto-action UI** on this page — it is a passive log; teamkills are simply the event class filtered to friendly-fire. Enforcement, if any, happens only via the shared modal's ban/kick actions against the offender.
-
-### 13.4 Filters, Search, Sort, Pagination
-
-Left rail controls (identical structure across all five pages; ids prefixed with the table id, e.g. `playerKills-*`):
-
-| Control | id suffix | Type | `data-search` key | Behavior |
+| Page | Кто (`-name`) → | Кого (`-killed`) → | Server | Date |
 |---|---|---|---|---|
-| Поиск (Search) button | `-btn` | button | — | Triggers `buildTable()` re-fetch |
-| Кто (Who) | `-name` | text | `t2.player` / `t5.player` (page-specific) | Substring match on primary player name; Enter key submits |
-| Кого (Whom) | `-killed` | text | `t4.player` / `t2.player` / `t5.player` | Substring match on secondary player name |
-| Сервер (Server) | `-server` | Bootstrap multiselect (`multiple`) | `server_id` | IN-list filter; placeholder `- Сервер -`; `enableHTML` |
-| Date range | `-date` | `dateRange` button | `t1.date` | Range picker; presets: `justMonth, justDay, justWeek, justYear, range, today, yesterday, currentWeek, lastWeek, currentMonth, lastMonth, last30days`; default `allTime` |
+| kills | `t2.player` | `t4.player` | `server_id` | `t1.date` |
+| deaths | `t5.player` | `t2.player` | `server_id` | `t1.date` |
+| revives | `t5.player` | `t2.player` | `server_id` | `t1.date` |
+| damages | `t2.player` | `t5.player` | `server_id` | `t1.date` |
+| teamkills | `t5.player` | `t2.player` | `server_id` | `t1.date` |
 
-Search assembly (`buildTable`, custom.js): filters are collected into a structured object `{text:{}, check:{}, multiselect:{}, managers:{}, slider:{}}` keyed by the raw `data-search` value, URL-encoded (`+` → `%2B`), and sent as the `search` param. Text inputs submit on Enter (`e.which==13`); the date picker re-fetches on its `crm_dateRange` event.
+#### 13.4.2 Search object assembly
 
-**Fetch mechanism.** `buildTable` issues `Action({script:'table', action:'<tableName>', data:'&table=<tableName>&page=<n>&numrows=<n>&search=<json>&order_by=<col>&order_sort=<dir>'})` → `POST /ajax/table.php`. Pagination is a second `script:'table'` call with `&pagination=true` returning `totalPage`/`totalRows` and a server-timed count (`count_time` logged to console). Sorting is supported by the engine (`order_by`/`order_sort`) but these pages ship with no explicit `order` config, so default server ordering applies. Row fetch timeout is 120 s. Client-side rebuild guard (`tmpTable`) prevents concurrent double-loads of the same table.
+`buildTable` collects `searchInput` controls into a five-bucket object keyed by each control's raw `data-search` value, then JSON-stringifies and URL-encodes it (`+`→`%2B`) into the `search` param:
 
-### 13.5 Row Interactions & Templates
+```json
+{
+  "text":        { "t1.date.startdate": 0, "t1.date.enddate": 0, "<who-alias>": "<query>", "<whom-alias>": "<query>" },
+  "check":       {},
+  "multiselect": { "server_id": ["1","7", ...] },
+  "managers":    {},
+  "slider":      {}
+}
+```
 
-- **Row click** → `player.open(<steam_id from hidden cell>)`: opens the shared player-detail modal for the primary actor. Wired on all five pages.
-- **Kills page only** additionally binds `[data-action="player"]` buttons so the *victim* is also clickable (`player.open` on `victim_steam_id`), and defines a custom mobile-list `kill_template` (`#kill_template`) with `mode: isMobile ? 'list':'table'` and a `date` render callback. The other four pages use the default table renderer, bind only the primary `steam_id` click, and rely on the default responsive table (no bespoke list template). So on kills the target is directly openable; on damages/revives/teamkills only the primary subject is one-click openable from the grid.
+Text inputs land in `text.<alias>`; the date button always seeds `text.t1.date.startdate` / `text.t1.date.enddate` (0/0 = all-time default); the server multiselect lands in `multiselect.server_id`. `check`, `managers`, `slider` are unused on combat pages.
 
-### 13.6 Actions / Admin Capabilities
+`searchInput` per page: `["<table>-name", "<table>-killed", "<table>-server", "<table>-date"]` (exact ids from the captured configs).
 
-**Page-owned actions (originate on the combat pages themselves):**
+#### 13.4.3 Sort
 
-| UI label | action id | script → endpoint | Data params | Effect | Destructive |
+The engine supports sorting (`order_by`/`order_sort` params, and `order` config mapping columns→aliases in `buildTable`), but **none of the five page-own configs set `order`**, so both params ship as literal `false` and server default ordering applies (newest-first by PK/date in practice). No sortable column headers are wired on these grids.
+
+#### 13.4.4 Pagination
+
+Two-request model per load: the data call (`&page=N`) returns rows with `totalPage/totalRows = 0`; a parallel count call (`&pagination=true`) returns real `totalRows`/`totalPage`. Client shows `showPages: isMobile?3:9`. Concurrency guard `tmpTable[tableID]=true` blocks a second load of the same table (logs `Такая таблица уже грузится`). Ajax timeout / retry-abort handled by `Action()` (`retryAbort:true` aborts the prior in-flight request of the same `name`).
+
+### 13.5 Column Rendering
+
+Rendering is driven by `buildTable`'s `collum` array (order = visual column order after the hidden `steam_id`). Header cells (`<thead class="table-dark">`) with widths:
+
+| Header (Ru → En) | class / style | Applies to |
+|---|---|---|
+| `SteamID` | `hide` (also CSS `td:first-child{display:none}`) | all (col 1, hidden) |
+| (server icon) | `text-center; width:50px` | all (col 2) |
+| `Дата` (Date) | `text-center; width:130px` | all |
+| `Кто` (Who) | `text-center` | kills, revives, damages, teamkills |
+| `Игрок` (Player) | `text-center` | deaths (single-party) |
+| `Кого` (Whom) | `text-center` | kills, revives, damages, teamkills |
+| `Оружие` (Weapon) | `text-center` | kills, deaths, damages |
+
+Each `<td>` gets `data-contact="<collum key>"` (used by row-click to read `steam_id`). Kills has a `callback.date` → `formatDate(data,false,true)` render; the other four rely on default rendering (dates rendered raw or by the shared default). `server` and (teamkills) `player`/`killed`/`kit` arrive as HTML and are injected as-is.
+
+### 13.6 Row Interactions & Templates
+
+- **Row click** (all five): `end` handler binds `$('#<tableId> tbody > tr').on('click', …)` → reads `td[data-contact="steam_id"]` → `player.open(steam_id)` → opens the shared player-detail modal for the **primary** actor (killer / deceased / medic / attacker / offender).
+- **Kills only**: config sets `template: $('#kill_template > div')` and `mode: isMobile ? 'list':'table'`. `#kill_template` (a `.hide` panel) renders each event as a card with two `[data-action="player"]` "открыть" (open) buttons — one carrying `data-table="steam_id"` (killer), one `data-table="victim_steam_id"` (victim) — so on kills **both parties are one-click openable**. The other four pages have no bespoke template and only the primary `steam_id` is openable from the grid.
+
+### 13.7 Actions / Admin Capabilities
+
+**Page-owned action surface** (all reads; `Action()` → `POST /ajax/<script>.php`, body starts `action=<action>`):
+
+| UI trigger | `action` | `script` → endpoint | Body params | Effect | Destructive |
 |---|---|---|---|---|---|
-| (implicit) load rows | `<tableName>` (e.g. `playerKills`) | `table` → `/ajax/table.php` | `table, page, numrows, search, order_by, order_sort` | Fetch/paginate log rows | N |
-| Скачать статистику (Download statistics) | `downloadStat` | `player` → `/ajax/player.php` | `steam_id` | Triggers a stat-export download (`post_to_url`, form-submit) for the opened player | N (read/export) |
+| Load/paginate rows | `<table>` (e.g. `playerKills`) | `table` → `/ajax/table.php` | `table, page, numrows, search, order_by, order_sort` [`, pagination`] | Fetch/count log rows | N |
 
-The only mutation surface reachable from these pages is via the **shared player-detail modal** opened on row click. Those are not combat-log features per se, but they are the admin capabilities exposed *through* this screen. Summarized (all present in these fragments' embedded modal):
+The only mutation surface reachable from these pages is the **shared player-detail modal** opened on row click. Those actions belong to the shared-modal chapter; catalogued here (from the embedded modal markup + `action_catalog.txt`) as the admin capabilities exposed *while triaging a combat-log row*:
 
-| Modal action | script → endpoint | Destructive | Purpose |
-|---|---|---|---|
-| `ban` | `squad` → `/ajax/squad.php` | Y | Ban player (`server_id, steam_id, reason_id, description, days`) |
-| `kick` | `squad` | Y | Kick from server |
-| `kill` | `squad` | Y | Force-kill in game |
-| `changeTeam` | `squad` | Y | Move player to other team |
-| `changeGroup` | `player` | Y | Change admin/permission group |
-| `removePlayer` | `squad` | Y | Remove player from squad/server |
-| `unban` | `squad` | Y | Lift ban |
-| `mark` | `player` | Y | Flag/mark player |
-| `message` | `player` | Y | Send in-game message |
-| `addComment` / `getComments` | `player` | Y / N | Admin comments on player |
-| `addBanName` / `removeBanName` | `player` | Y | Manage forbidden-name list |
-| `checkBans` | `player` | N | Cross-check ban status |
-| `twink` / `twinkOnline` | `player` | N | Alt-account (twink) detection |
-| `findFriends` | `player` | N | Social-graph lookup |
-| `kits` / `kitSave` | `player` | N / Y | Player kit history / save |
-| `getPlayerOnlineData` | `player` | N | Online-time chart data |
+| Modal action | `script` → endpoint | Body (key params) | Destructive | Purpose |
+|---|---|---|---|---|
+| `ban` | `squad` → `/ajax/squad.php` | `server_id, steam_id, reason_id, description, days` | Y | Ban player |
+| `kick` | `squad` | `server_id, steam_id` | Y | Kick from server |
+| `kill` | `squad` | `server_id, steam_id` | Y | Force-kill in game |
+| `changeTeam` | `squad` | `server_id, steam_id` | Y | Swap team |
+| `removePlayer` | `squad` | `server_id, steam_id` | Y | Remove from squad/server |
+| `unban` | `squad` | `ban_id` | Y | Lift ban |
+| `changeGroup` | `player` → `/ajax/player.php` | `steam_id, group_id` | Y | Change admin/permission group |
+| `mark` | `player` | `steam_id` | Y | Flag/mark player |
+| `message` | `player` | `steam_id, msg` | Y | In-game message |
+| `addComment` / `getComments` | `player` | `steam_id[, text]` | Y / N | Admin comments |
+| `addBanName` / `removeBanName` | `player` | `name` | Y | Forbidden-name list |
+| `kitSave` | `player` | `steam_id, kit` | Y | Save player kit |
+| `checkBans` | `player` | `steam_id` | N | Cross-check ban status |
+| `twink` / `twinkOnline` | `player` | `steam_id` | N | Alt-account detection |
+| `findFriends` | `player` | `steam_id` | N | Social-graph lookup |
+| `kits` | `player` | `steam_id` | N | Kit history |
+| `getPlayerOnlineData` | `player` | `steam_id` | N | Online-time chart |
+| `downloadStat` | `player` | `steam_id` | N (export) | Stat export via `post_to_url()` form-submit |
 
-(Full modal spec belongs to the shared-modal section; listed here only to document what an admin can do while triaging a combat-log entry.)
+`Action()` semantics (`custom.js` L284): non-`ok` `status` → `error()` alert; `text.auth===true` → `location.reload()` (session/permission failure); `retryAbort` aborts a prior in-flight call of the same `name`; body built by mapping the `data` object to `&k=v` pairs with `action=<action>` prepended.
 
-### 13.7 Permission / Visibility Logic
+### 13.8 Permission / Visibility Logic
 
-- No role/group gating is expressed in these fragments' page-own markup — the filter rail, table, and Download-statistics link are unconditionally present. Access control to the pages themselves is enforced server-side (`page.php`) and to mutations server-side (`squad.php`/`player.php`); the `Action` wrapper reloads the page if a response carries `auth:true` (session/permission failure).
-- `class="hide"` is used purely for layout/data plumbing (hidden `steam_id`/`victim_steam_id` cells, hidden `#player_info` template), not for role-based visibility on these pages.
-- Server multiselect is pre-populated only with this tenant's six servers, implicitly scoping every query to servers the admin owns.
+- No role/group gating in the page-own markup — filter rail and table are unconditionally present. Page-level access is enforced server-side by `page.php`; mutation authorization server-side by `squad.php`/`player.php`. Client only reacts to `auth:true` by reloading.
+- `class="hide"` and the inline `#<tableId> > tbody > tr > td:first-child{display:none}` CSS are pure layout/data-plumbing (hidden `steam_id` cell, hidden `#kill_template`, hidden `#player_info`), **not** role-based visibility.
+- Server multiselect is pre-scoped to this tenant's six servers, implicitly constraining every query to owned servers.
+- Teamkills' `player_group`/`killed_group` are the only role/group data surfaced, and only as null placeholders in the payload (no UI treatment).
 
-### 13.8 Competitively Interesting Details
+### 13.9 Date-Range Presets (shared `dateRange` widget)
 
-- **Five separate pages for one event model.** Kills/deaths/revives/damages/teamkills are the same joined event table re-projected. A competing panel could unify these into one "Combat Log" view with an event-type facet, cutting nav clutter and code duplication.
-- **Damage magnitude is captured but never shown** on the damages grid (only the killer/victim/weapon). Surfacing and sorting by actual damage numbers is a clear differentiator.
-- **Teamkills is a passive log** — no forgive/punish/auto-kick/teamkill-count workflow, no per-player TK tally on the page. Friendly-fire moderation tooling (thresholds, auto-flag, repeat-offender surfacing) is an obvious gap to beat.
-- **Big page sizes** (`numrows: 500` for most, 100 for teamkills) with a separate count query per page — heavy for large servers; cursor/keyset pagination would outperform.
-- **Raw SQL aliases leak to the client** via `data-search="t2.player"` etc. This is both a maintenance smell and a mild info-leak; our panel should map filters to opaque field names server-side.
-- **Consistent UX**: fixed filter rail, icon-labeled columns, one-click row → rich player modal with immediate moderation actions. The row→modal→ban/kick flow is tight and worth matching. Weakness: on non-kills pages only the primary player is clickable from the grid; making every named party openable everywhere is a small, high-value polish.
-- **Date presets** are generous (12 range presets incl. `allTime` default) — a good baseline to match.
+The `-date` button opens the shared picker (`custom.js` L1206+). Full preset set (writes `t1.date.startdate`/`.enddate` epoch bounds into the search `text` bucket):
+
+`justDay, justWeek, justMonth, justYear, range (custom), allTime (default, 0/0), last24h, today, yesterday, currentWeek, lastWeek, currentMonth, lastMonth, last30days, last60days, last90days, plus1Month, plus2Month, plus3Month, plus6Month, plus1Year`.
+
+Default is `allTime` → `startdate:0, enddate:0` (matches every captured request body).
+
+### 13.10 Competitively Interesting Details
+
+- **Five pages, one event model.** kills/deaths/revives/damages/teamkills are the same `t1`-anchored event join re-projected under swapped player aliases. A competing panel could unify them into one "Combat Log" view with an event-type facet — less nav clutter, one query template.
+- **Damage magnitude is captured but hidden.** `playerDamage.damage` (e.g. `"32"`) ships in every row yet is excluded from `collum`, so it is never displayed or sortable. Surfacing + sorting by damage is a clear differentiator.
+- **Teamkills is passive.** Payload even carries `player_group`/`killed_group`, but there is no forgive/punish/auto-kick, no per-player TK tally, no repeat-offender surfacing. Friendly-fire moderation tooling is an obvious gap to beat.
+- **Two queries per load, one a full `COUNT(*)`.** The pagination call runs 0.1–2.76 s over 0.65M–13.4M-row tables. Keyset/cursor pagination and cached/approximate counts would dramatically outperform.
+- **Raw SQL aliases leak to the client** (`data-search="t2.player"`, `t1.date`, etc.) — maintenance smell + mild info-leak. Map filters to opaque field names server-side.
+- **Uneven interaction affordance.** Only kills makes the victim one-click openable (via `#kill_template`); on the other four grids only the primary subject opens. Making every named party openable everywhere is a small, high-value polish.
+- **Server pre-renders HTML into JSON** (`server` badge everywhere; `player`/`killed`/`kit` on teamkills). Convenient but couples data to presentation and inflates payloads — a clean data/view split is a maintainability win.
+- **Generous date presets** (21 presets incl. relative and forward-looking `plus*`, `allTime` default) — a solid baseline to match.
 
 
 ---
 
 ## 14. Votes & Reports
 
-Competitive analysis of the SQSTAT admin panel's **Votes log** (`votes`) and **player Report system** (`reports`). Both are read/monitor pages built on the same client-side `buildTable` engine (server-side paginated data), rendered as a scrollable **list-group of cards** (not a classic `<table>`), and both embed the shared player-detail modal that carries all the mutating admin actions.
+Competitive analysis of the SQSTAT admin panel's **Votes log** (`votes`) and **player Report system** (`reports`), upgraded to implementation-spec quality from **live captured API contracts** against `https://breaking.sqstat.ru`. Both are read/monitor feeds built on the shared client-side `$.fn.buildTable` engine (server-side paginated), rendered as a scrollable **list-group of cards** (not a classic `<table>`), and both embed the shared player-detail modal that carries every mutating admin action.
 
-Source fragments analyzed:
-- `/Users/seregatipich/.claude/jobs/bd83e71f/tmp/frags/votes.html`
-- `/Users/seregatipich/.claude/jobs/bd83e71f/tmp/frags/reports.html`
-- Client engine: `/Users/seregatipich/.claude/jobs/bd83e71f/tmp/custom.js` (`$.fn.buildTable`, lines ~605–1090)
+Capture evidence (ground truth for this chapter):
+- `/Users/seregatipich/.claude/jobs/bd83e71f/tmp/caps/votes-reports/votes.network.json` — 3 live AJAX contracts (page load + table + pagination).
+- `/Users/seregatipich/.claude/jobs/bd83e71f/tmp/caps/votes-reports/reports.network.json` — 2 live AJAX contracts (page load + table).
+- `/Users/seregatipich/.claude/jobs/bd83e71f/tmp/caps/votes-reports/votes.content.html`, `reports.content.html` — live rendered `#content` (real filters, template `data-table` fields, buildTable config).
+- `/Users/seregatipich/.claude/jobs/bd83e71f/tmp/caps/votes-reports/_blocked.json` — `[]` (zero mutations attempted/blocked; capture was pure observation).
+- Client engine: `/Users/seregatipich/.claude/jobs/bd83e71f/tmp/custom.js` (`$.fn.buildTable`).
+
+> Privacy: response samples below are redacted; a single redacted example per field is shown to convey type/shape only. No real SteamIDs/names/IPs are reproduced.
 
 ---
 
@@ -2776,173 +4171,276 @@ Source fragments analyzed:
 
 | Page | Nav id | Loaded via | Purpose |
 |------|--------|-----------|---------|
-| Votes | `votes` | `pageLoad('votes')` → `GET /ajax/page.php?page=votes` | Historical log of in-game votes (map change / re-roll / skip votes). Shows who triggered the vote, on what server, whether it passed or was cancelled, current/next/target map, and the yes-count vs. threshold. |
-| Reports | `reports` | `pageLoad('reports')` → `GET /ajax/page.php?page=reports` | Log of player-submitted in-game reports (the Squad `!report` / admin-request flow). Shows the reported player, the report text, server, and timestamp, with a one-click jump into the reported player's full admin card. |
+| Votes | `votes` | `pageLoad('votes')` → `GET /ajax/page.php?page=votes` | Historical audit log of in-game votes (map skip / re-roll / map change). Captures initiator identity, server, outcome, threshold math (collected vs required), the full map triple (current → next → target), vote duration, and the **complete per-voter list**. |
+| Reports | `reports` | `pageLoad('reports')` → `GET /ajax/page.php?page=reports` | Log of player-submitted in-game reports (Squad `!report`). Shows the reported (target) player, the report text, server tag, and timestamp, with a one-click jump into the target's full admin card. |
 
-Both pages share a **two-column layout**: a `position:fixed` left sidebar (240px) with filters, and a right `col-md-8` content area holding the results list (`#votes_list` / `#reports_list`, a `<ul class="list-group">`).
-
----
-
-### 14.2 Data flow / rendering engine
-
-Neither page renders rows with `<thead>/<th>`. Instead:
-
-- A hidden `<div id="template" class="hide">` holds a single `<li>` card whose child elements carry `data-table="<field>"` attributes. `buildTable` clones this template per row and fills each `data-table` placeholder from the server response.
-- Config is passed inline: `$('#votes_list').buildTable({ table: 'votes', mode: 'custom', numrows: 30, template: $('#template > li'), searchInput: [...] })` (reports uses `table: 'reports'`).
-- Row data is fetched with the standard RPC helper: `Action({ script: 'table', action: '<votes|reports>', data: <query> })` → **POST `/ajax/table.php`** with `action=votes` (or `reports`). Pagination issues the same call with `&pagination=true` to get `totalPage` / `totalRows`.
-- Page size is fixed at **30 rows**; server-side pagination renders numeric page links plus first/prev/next/last.
-- The `<th>` elements present in both fragments belong exclusively to the **shared player-detail modal** (Chat/Kills/Deaths/Kits/Games/Damage tabs: Дата, Чат, Сообщение, Убил, Кит, ID, Название, Карта, Победа, Игрок, Оружие, Поднял, Урон, Техника). They are NOT columns of the votes/reports lists and must not be attributed to these pages.
-
-Search is assembled client-side into a JSON object grouped by input type — `{text:{}, check:{}, multiselect:{}, managers:{}, slider:{}}` — keyed by each input's `data-search` attribute, then `encodeURIComponent(JSON.stringify(...))` and sent in the table query. Text inputs submit on Enter (keypress 13) or the search button; multiselect submits on change.
+Both pages share a two-column layout: a `position:fixed` left sidebar (`width:240px`, `.col-md-4.mobile-left`) with filters, and a right content area holding the results list (`#votes_list` / `#reports_list`, a `<ul class="list-group">`). Live-verified server option set (shared by both filters): id `1` `RAAS/AAS #1`, `6` `БЕЗ ГОЛОСОВАНИЯ #2` (No voting #2), `7` `INVASION #3`, `9` `Custom для FW`, `10` `Custom для MDC`, `11` `Custom для BSS`.
 
 ---
 
-### 14.3 Votes page
+### 14.2 Data-flow / rendering engine (buildTable)
 
-#### 14.3.1 Entity: Vote log record
+Rows are **not** rendered with `<thead>/<th>`. A hidden `<div id="template" class="hide">` holds one `<li>` card whose descendants carry `data-table="<field>"` placeholders; `buildTable` clones it per row and fills each placeholder from the JSON response `data.row[]`.
 
-Fields inferred from the `#template` card's `data-table` placeholders:
+Live buildTable config (from captured `#content`):
 
-| Field (`data-table`) | UI label | Meaning / type |
-|----------------------|----------|----------------|
-| `short` | shown in `<kbd>[…]</kbd>` | Server short tag / vote-type short code (e.g. server prefix badge). |
-| `name` | bold player name | Display name of the vote **initiator**. |
-| `steam_id` | `<hashtag>` | Initiator's SteamID64; also fed to `player.open()` when the **открыть (open)** button is clicked. |
-| `date` | right-aligned | Timestamp of the vote. |
-| `cancel` | **Статус (Status)** | Vote outcome/status (e.g. passed vs. cancelled/aborted). Rendered as-is from server. |
-| `mode` | **Режим (Mode)** | Vote type/mode (map change, skip, re-roll, etc.). |
-| `players_sum` | **Набралось (Collected)** | Number of yes-votes actually gathered. |
-| `players_need` | **Необходимо (Required)** | Threshold of votes required to pass. |
-| `map_current` | **Текущая (Current)** | Current map at time of vote. |
-| `map_next` | **Следующая (Next)** | Next map in rotation. |
-| `map_vote` | **На какую (Target)** | Map the vote is proposing to switch to. |
-| `map_current_img` | (image) | Thumbnail for current map. |
-| `map_next_img` | (image) | Thumbnail for next map. |
+```js
+// votes.content.html
+$('#votes_list').buildTable({ table:'votes', collum:[], numrows:30, mode:'custom',
+  searchInput:["votes-server"], template:$('#template > li'),
+  end: d => d.selector.find('a[data-type="btn_open"]').click(...player.open(steam_id)) });
 
-This is a rich, purpose-built vote-audit record: initiator identity + result + threshold math + map context (current → next → proposed) with map thumbnails.
+// reports.content.html
+$('#reports_list').buildTable({ table:'reports', collum:[], numrows:30, mode:'custom',
+  searchInput:["reports-server"], template:$('#template > li'),
+  callback:{ date: (v,row) => formatDate(v,false,true) },   // client-formats the date column
+  end: d => d.selector.find('a[data-type="btn_open"]').click(...player.open(steam_id)) });
+```
 
-#### 14.3.2 Votes list controls (page's own controls)
+Row fetches go through the RPC helper `Action({script:'table', action:'<votes|reports>', data:<query>})` → **`POST /ajax/table.php`**. Pagination re-issues the same call with `&pagination=true` (fired by `getPagination()` only when the current page fills or `currentPage != 1`). Text inputs submit on Enter (`keypress==13`) or the search button, setting `conf.page=1; conf.isSearch=true`; multiselect submits on change via `buildTable('rebuild')`. `collum:[]` + `mode:'custom'` means there is no column model — placeholders are matched by `data-table` name, so **there are no sortable columns** on these two feeds.
 
-| Control | id / attr | Type | `data-search` | Effect |
-|---------|-----------|------|---------------|--------|
-| Server filter | `#votes-server` | `multiselect` (bootstrap-multiselect, placeholder `- Сервер -`) | `server_id` | Filters votes to selected server(s); rebuilds the list on change. |
+Search is assembled client-side into `{text:{}, check:{}, multiselect:{}, managers:{}, slider:{}}` keyed by each input's `data-search` attribute, then `encodeURIComponent(JSON.stringify(...))`. Text values get `+` escaped to `%2B` before submit.
 
-Server options (shared across both pages) are the project's live servers, e.g. `RAAS/AAS #1` (id 1), `БЕЗ ГОЛОСОВАНИЯ #2` (id 6), `INVASION #3` (id 7), `Custom для FW` (9), `Custom для MDC` (10), `Custom для BSS` (11).
-
-- **No text search and no explicit search button** on the votes sidebar — filtering is server-multiselect only.
-- Pagination: 30/page, numeric + first/prev/next/last, with a "Страница X из Y · Всего: N" info footer.
-
-#### 14.3.3 Votes page actions
-
-| Label | Trigger | Endpoint | Data | State-changing? |
-|-------|---------|----------|------|-----------------|
-| **открыть (open)** | `a[data-type="btn_open"]` click → `player.open(steam_id)` | POST `/ajax/player.php` `action=get` | `steam_id` | N (read) — opens the shared player modal for the initiator |
-
-The votes page itself has **no destructive actions**; all mutations come from the shared modal (§14.5).
+> The `<th>` elements present later in both fragments belong exclusively to the **shared player-detail modal** (Chat/Kills/Deaths/Kits/Games/Damage tabs). They are NOT columns of the votes/reports lists.
 
 ---
 
-### 14.4 Reports page
+### 14.3 Live API Contracts
 
-#### 14.4.1 Entity: Report record
+All three endpoints are same-origin `https://breaking.sqstat.ru`. Envelope convention: top-level `status:"ok"`, `exec_time:float`; table payload nested under `data`.
 
-Fields inferred from the `#template` card:
+#### 14.3.1 `GET /ajax/page.php?page={votes|reports}` — page shell
 
-| Field (`data-table`) | UI label | Meaning / type |
-|----------------------|----------|----------------|
-| `short` | `<kbd>` badge | Server short tag / report code. |
-| `date` | right-aligned | Report timestamp. Formatted client-side via `callback.date → formatDate(data, false, true)`. |
-| `player_name` | bold | Display name of the **reported (target) player**. |
-| `steam_id` | `<hashtag>` | Target player's SteamID64; drives the **открыть (open)** button → `player.open()`. |
-| `text` | `<p>` block | Free-text body of the report (the reason/description submitted in-game). |
+| Param | Type | Required | Meaning |
+|-------|------|----------|---------|
+| `page` | enum `votes` \| `reports` | Y | Which page fragment to render. |
 
-**Data-model note (JOIN aliases):** the reports search inputs use qualified aliases — `t1.text` (report row: the message text) and `t2.player` (joined player row: name/SteamID). This reveals the server query joins a **reports table (t1)** to a **players table (t2)**. The rendered card surfaces the target player and the report text; the reporter's identity is not exposed in the card template (either not shown in this list or stored server-side only).
+Response: `text/html; charset=UTF-8` (≈113 KB) — the `#content` markup (sidebar filters + hidden `#template` + inline buildTable bootstrap). Not JSON. Cite: `votes.network.json[0]`, `reports.network.json[0]`.
 
-#### 14.4.2 Reports list controls (page's own controls)
+#### 14.3.2 `POST /ajax/table.php` (action=votes) — vote log page
 
-| Control | id / attr | Type | `data-search` | Effect |
-|---------|-----------|------|---------------|--------|
-| **Поиск (Search)** button | `#reports_list-btn` | button (`fa-search`) | — | Submits the current filter set; re-fetches page 1 with `isSearch=true`. |
-| Name/SteamID filter | `#reports-name` (placeholder "Ник или SteamID") | text | `t2.player` | Filter by reported player's nick or SteamID (submits on Enter or via search button). |
-| Text filter | `#reports-killed` (placeholder "Текст") | text | `t1.text` | Full-text search over report body. |
-| Server filter | `#reports-server` | `multiselect` (`- Сервер -`) | `server_id` | Filter by server(s); rebuilds on change. |
+Request params (form-urlencoded), captured verbatim:
 
-Note the `#reports-killed` element id is a copy-paste artifact from a kill-log page; its actual bound field is `t1.text` (report text), not a kill.
+| Param | Type | Required | Meaning |
+|-------|------|----------|---------|
+| `action` | const `votes` | Y | Server table handler selector. |
+| `table` | const `votes` | Y | Mirror of `action` (sent by buildTable). |
+| `page` | int | Y | 1-based page number. |
+| `numrows` | int | Y | Page size; fixed **30**. |
+| `search` | urlencoded JSON | Y | `{"text":{},"check":{},"multiselect":{...},"managers":{},"slider":{}}`. Votes uses only `multiselect.server_id` (array of server ids). Empty object = no filter. |
+| `order_by` | string \| `false` | Y | Sort column DB alias; literal `false` when unsorted (default). |
+| `order_sort` | string \| `false` | Y | `asc`/`desc` or literal `false` (default). |
+| `pagination` | `true` | N | When present, returns count-only payload (see 14.3.4). |
 
-Pagination identical to votes: 30/page, numeric + edges, totals footer.
+Captured request body (default first load):
+```
+action=votes&table=votes&page=1&numrows=30
+&search=%7B%22text%22%3A%7B%7D%2C%22check%22%3A%7B%7D%2C%22multiselect%22%3A%7B%7D%2C%22managers%22%3A%7B%7D%2C%22slider%22%3A%7B%7D%7D
+&order_by=false&order_sort=false
+```
 
-#### 14.4.3 Reports page actions
+Response `application/json`, shape `data.row[]` = array of vote records (page size 30). Field contract (from `response_schema`, all scalar values are JSON strings):
 
-| Label | Trigger | Endpoint | Data | State-changing? |
-|-------|---------|----------|------|-----------------|
-| **открыть (open)** | `a[data-type="btn_open"]` → `player.open(steam_id)` | POST `/ajax/player.php` `action=get` | `steam_id` | N (read) — opens the target player's admin card |
+| Field | Type | Meaning |
+|-------|------|---------|
+| `id` | str (numeric) | Vote row PK. Live max observed `3991` ⇒ auto-increment. |
+| `server_id` | str (numeric) | FK to server (`1`,`6`,`7`,`9`,`10`,`11`). |
+| `date` | str `"HH:MM [DD.MM.YYYY]"` | Vote timestamp, **pre-formatted server-side** (e.g. `"00:51 [04.07.2026]"`), not a unix epoch. |
+| `steam_id` | str(17) | Initiator's SteamID64; fed to `player.open()` by the **открыть** button. Redacted in sample. |
+| `name` | str | Initiator display name. Redacted in sample. |
+| `short` | str(1) | Server short tag rendered in `<kbd>[…]</kbd>` (e.g. `"A"`). |
+| `mode` | str (enum, Russian) | Vote type. Observed value `"Пропуск карты"` (map skip). Other expected members: map change / re-roll. |
+| `map_current` | str | Current map at vote time (e.g. `"Harju RAAS v1"`). |
+| `map_next` | str | Next map in rotation; may be empty `""`. |
+| `map_vote` | str | Proposed target map; `"-"` when N/A (e.g. skip votes). |
+| `players_sum` | str (numeric) | Yes-votes collected ("Набралось" / Collected). |
+| `players_need` | str (numeric) | Threshold required to pass ("Необходимо" / Required). |
+| `duration` | str (numeric, seconds) | Vote window length, e.g. `"190"`. Not surfaced in the card template. |
+| `cancel` | str (HTML) | Outcome/status, delivered as a ready `<span class="label label-…">` badge (≈105 chars). Rendered raw into "Статуc" (Status). |
+| `votes` | str (JSON) | **Full per-voter roster** — `{"yes":["7656119…","7656119…"], …}` (≈236 chars in sample). Present in the payload but **not bound to any `data-table` placeholder** (unused by the card). High-value analytics field. |
+| `map_current_img` | str (HTML) | Ready `<img data-type="map" …>` thumbnail block for current map. |
+| `map_next_img` | str (HTML) | Ready `<p>/<img>` block for next map. |
 
-Reports has **no report-lifecycle mutation of its own** in this fragment — no "resolve / close / assign / mark-handled" action on the report entity. Handling a report is done by opening the reported player and applying a modal action (kick/ban/message), plus optionally logging a canned "Ваш репорт рассматривается модерацией" message. This is a notable gap to beat (see §14.7).
+Envelope siblings under `data`: `totalPage:int`, `totalRows:int` (both `0` on the row call — real counts come from the pagination call), `currentPage:str`, `custom:bool`, `query_time:int`, `count_time:int`. Top level: `status:str("ok")`, `exec_time:float`. Cite: `votes.network.json[1]`.
+
+Redacted example row:
+```json
+{ "id":"3991","server_id":"1","date":"00:51 [04.07.2026]","steam_id":"<redacted:17>",
+  "map_current":"Harju RAAS v1","map_next":"","map_vote":"-","mode":"Пропуск карты",
+  "players_sum":"<redacted:1>","players_need":"<redacted:2>","duration":"190",
+  "cancel":"<span class=\"label label-primary\" …>","votes":"{\"yes\":[\"765611992…\"]}",
+  "name":"<redacted:10>","short":"A","map_current_img":"<img data-type=\"map\" …>",
+  "map_next_img":"<p class=\"text-center\">…</p>" }
+```
+
+#### 14.3.3 `POST /ajax/table.php` (action=reports) — report log page
+
+Request params identical to 14.3.2 with `action=reports&table=reports`. Reports additionally drives two text filters via `search.text` (see 14.5.2). Captured body:
+```
+action=reports&table=reports&page=1&numrows=30
+&search=%7B%22text%22%3A%7B%7D,%22check%22%3A%7B%7D,%22multiselect%22%3A%7B%7D,%22managers%22%3A%7B%7D,%22slider%22%3A%7B%7D%7D
+&order_by=false&order_sort=false
+```
+
+Response `application/json`. In the live capture the account's report set was empty: `data.row = []` (`array[0]`), `totalRows=0`, `totalPage=0`. Envelope identical to votes (`currentPage`, `custom`, `query_time`, `count_time`, `status:"ok"`, `exec_time`). Cite: `reports.network.json[1]`.
+
+Because rows were empty, the **row field contract is reconstructed from the live `#template` `data-table` placeholders** (authoritative for what the client renders) plus the search aliases (authoritative for the server JOIN):
+
+| Field (`data-table`) | Type | Meaning |
+|----------------------|------|---------|
+| `short` | str | Server short tag, rendered in `<kbd>`. |
+| `date` | str/int | Report timestamp; passed through client `formatDate(v,false,true)` (buildTable `callback.date`), implying a raw/less-formatted value than the votes `date`. |
+| `player_name` | str | **Reported (target)** player display name (bold). |
+| `steam_id` | str(17) | Target SteamID64; drives **открыть** → `player.open()`. |
+| `text` | str | Free-text report body, rendered in `<p data-table="text">`. |
+
+**JOIN aliases (from search `data-search`):** `t2.player` (joined players table → target nick/SteamID) and `t1.text` (reports table → message). The server query joins **reports `t1`** to **players `t2`**. The **reporter's identity is not exposed** in the template or the search surface — either unselected in this list or stored server-side only.
+
+#### 14.3.4 `POST /ajax/table.php` … `&pagination=true` — count sidecar
+
+Same body as the row call plus `pagination=true`. Returns a count-only JSON (no rows) used to render page links. Fired by `getPagination()`.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `totalPage` | int | Page count. Live votes: `134`. |
+| `totalRows` | str (numeric) | Total matching rows. Live votes: `"3991"`. |
+| `count_time` | int | Server count timer. |
+| `status` | str `"ok"` | Envelope status. |
+| `exec_time` | float | Server exec timer. |
+
+Live sample (votes): `{ "totalPage":134, "totalRows":"3991", "count_time":0, "status":"ok", "exec_time":0.008 }`. Cite: `votes.network.json[2]`. (No pagination sidecar fired for reports since the set was empty.)
 
 ---
 
-### 14.5 Shared player-detail modal (mutating admin capabilities)
+### 14.4 Votes page — entity, card & controls
 
-Both pages embed the standard `#playerModal`. Clicking **открыть** loads the player via `action=get` and renders the card, which flips to sub-panels for punishment, group change, and messaging. These are the actual admin **permissions/capabilities** reachable from votes & reports. All identical across the panel; documented here because they are the only state-changing surface on these two pages.
+#### 14.4.1 Card template (`#template > li`) → field binding
 
-| Capability | UI | Script endpoint | Action | Key data params | Destructive? |
-|-----------|----|-----------------|--------|-----------------|--------------|
-| Load player card | открыть | `/ajax/player.php` | `get` | `steam_id` | N |
-| Kick from server | Наказание panel, radio `data-action=kick` (value -1) | `/ajax/squad.php` | `kick` | `steam_id`, `reason_id`, `description`, `noReason` | Y |
-| Ban (temp/perm) | Наказание radios `data-action=ban` `data-day` 1/2/3/4/5/6/7/10/14/30/0 | `/ajax/squad.php` | `ban` | `server_id` (if online), `steam_id`, `reason_id`, `description`, `days` (`-1`/`value` = permanent) | Y |
-| Unban | Разбанить dialog | `/ajax/squad.php` | `unban` | `steam_id`, `unban` (bool — true = fully erase ban) | Y |
-| Remove from squad | Выкинуть из сквада | `/ajax/squad.php` | `removePlayer` | `server_id`, `steam_id` | Y |
-| Switch team | Сменить команду | `/ajax/squad.php` | `changeTeam` | `server_id`, `steam_id` | Y |
-| Kill player | Убить игрока | `/ajax/squad.php` | `kill` | `server_id`, `steam_id` | Y |
-| Change group/role | Смена группы panel | `/ajax/player.php` | `changeGroup` | `steam_id`, `group_id`, `date` (expire), `description`, `prefix`, `prefix_rgb`, `image` | Y |
-| Send in-game message | Сообщение panel | `/ajax/player.php` | `message` | `steam_id`, `msg`, `time` (repeat seconds), `log` (record in card) | Y |
-| Mark (flag) player | mark toggle | `/ajax/player.php` | `mark` | `steam_id`, `mark` | Y |
-| Add comment to card | comments | `/ajax/player.php` | `addComment` | comment payload | Y |
-| Get comments | comments tab | `/ajax/player.php` | `getComments` | `steam_id` | N |
-| Find twinks/friends | твинки | `/ajax/player.php` | `twink`, `twinkOnline`, `findFriends` | `steam_id` | N |
-| Check bans | checkBans | `/ajax/player.php` | `checkBans` | `steam_id` | N |
-| Kits / kit save | kits tab | `/ajax/player.php` | `kits`, `kitSave` | `steam_id` (+ kit) | N / Y |
-| Ban-name allow/deny list | — | `/ajax/player.php` | `addBanName`, `removeBanName` | name payload | Y |
-| Online telemetry | — | `/ajax/player.php` | `getPlayerOnlineData` | `steam_id` | N |
-| Download stat / copy cheat report | downloadStat / clipboard | `/ajax/player.php` | `downloadStat` | `steam_id` | N |
+| Card region (Russian label → gloss) | Bound `data-table` |
+|--------------------------------------|--------------------|
+| `<kbd>[short]</kbd>` badge | `short` |
+| Bold initiator name | `name` |
+| `<hashtag>` SteamID | `steam_id` |
+| Right-aligned timestamp | `date` |
+| **Статуc** (Status) | `cancel` |
+| **Режим** (Mode) | `mode` |
+| **Набралось** (Collected) | `players_sum` |
+| **Необходимо** (Required) | `players_need` |
+| **Текущая** (Current map) | `map_current` |
+| **Следующая** (Next map) | `map_next` |
+| **На какую** (Target map) | `map_vote` |
+| Current-map thumbnail | `map_current_img` |
+| Next-map thumbnail | `map_next_img` |
 
-#### Ban/kick form (Наказание) details
-- **Причина (Reason)** `<select id="player_ban-reason">` — a full rule catalog grouped in `<optgroup>`s: **Особые (Special)**, **Общие (General)**, **Для сквадных (For SLs)**, **Для техники (For vehicles)**, **Милсим (Milsim)**. Each option value is a rule id (e.g. `110` = "1.1. Оскорбления, разжигание ненависти", `510` = "5.1. flood/soundpad in main during prep", `2` = DPAC anti-cheat auto-ban). Options carry `data-first/second/third/four` attributes (escalation-tier default ban lengths in days).
-- **Reason type radios** (`player_ban-reason_type`): Кикнуть (kick, value -1), then Забанить N дней for 1/2/3/4/5/6/7/10/14/30, and **Забанить навсегда (permanent)** (value -1, `data-day=0`, red).
-- **Дополнительный комментарий (Additional comment)**: `<textarea maxlength=512>`.
-- Special case: if reason == `-1` (Другое), it routes straight to `banPlayer` bypassing the type radios.
+Payload fields **`duration`, `votes`, `id`, `server_id` are delivered but not bound** to the card (dark data available to a reimplementation).
 
-#### Group change (Смена группы) details
-Groups: `0` -Нет группы- (none), `1` Администратор, `2` Модератор, `3` VIP, `4` Камера (spectator/camera), `5` Стажёр (trainee). Plus expiry daterange, comment (128), **prefix** text (64), **prefix RGB color** picker (16), and an **image URL** (256). A dedicated "VIP +1 месяц" quick button exists (hidden by default).
+#### 14.4.2 Sidebar controls
 
-#### In-game message (Сообщение) details
-- 18 canned message templates (VIP grant, vehicle-solo warning, squad-lock rules, TK apology, "Ваш репорт рассматривается модерацией" = "your report is under review", etc.).
-- **Add record to player card** checkbox (`player_message-log`).
-- Free-text `<textarea maxlength=512>`.
-- Repeat **time** select: 1 раз / 30с / 40с / 60с (default) / 90с / 120с.
+| Control | `#id` / `name` | Input type | `data-search` | Default | Effect |
+|---------|----------------|-----------|---------------|---------|--------|
+| Server filter | `#votes-server` | `multiselect` (bootstrap-multiselect, `nonSelectedText:'- Сервер -'`, `enableHTML:true`) | `server_id` | none selected | `onChange` → `$('#votes_list').buildTable('rebuild')`. Options: `1`,`6`,`7`,`9`,`10`,`11`. |
+
+Votes sidebar has **no text search and no explicit search button** — server-multiselect is the only filter. Pagination: 30/page, numeric + first/prev/next/last, with a "Всего: N" (Total) footer in `#votes_list-infoblock`.
+
+#### 14.4.3 Votes page actions
+
+| Label | Trigger | Endpoint | `Action({...})` data | Destructive |
+|-------|---------|----------|----------------------|-------------|
+| **открыть** (open) | `a[data-type="btn_open"]` click → `player.open(steam_id)` | `POST /ajax/player.php` `action=get` | `{ script:'player', action:'get', data:{ steam_id } }` | **N** (read) — opens shared modal for the initiator |
+
+The votes page has **no destructive action of its own**; every mutation is one modal-flip away (§14.6).
 
 ---
 
-### 14.6 Permission / visibility logic
+### 14.5 Reports page — entity, card & controls
 
-- Every sub-panel and the modal itself ship in the fragment wrapped in `class="hide"` (`#player_ban`, `#player_group`, `#player_message`, `#player_info`, `#template`) and are revealed by JS flip/clone — visibility is client-driven, not evidence of role gating in the fragment itself.
-- No explicit role/group conditional markup is present in these two fragments: the ban reason catalog, all ban-day tiers (incl. permanent), group assignment (incl. Администратор), kill, and messaging are all present in the DOM regardless of viewer. Authorization is therefore expected to be **enforced server-side** on `/ajax/squad.php` and `/ajax/player.php` per action; the client renders the full capability set. A competing panel should not assume the client hides anything sensitive.
-- The `open` (`action=get`) call is the only capability the votes/reports pages expose directly; everything destructive is one modal-flip away but requires a server-side permission check.
+#### 14.5.1 Card template (`#template > li`) → field binding
+
+| Card region | Bound `data-table` |
+|-------------|--------------------|
+| `<kbd>short</kbd>` badge | `short` |
+| Right-aligned timestamp | `date` (via `callback.date → formatDate(v,false,true)`) |
+| Bold target player name | `player_name` |
+| `<hashtag>` SteamID | `steam_id` |
+| `<p>` report body | `text` |
+
+#### 14.5.2 Sidebar controls
+
+| Control | `#id` / `name` | Input type | maxlength | `data-search` | Placeholder | Effect |
+|---------|----------------|-----------|-----------|---------------|-------------|--------|
+| **Поиск** (Search) button | `#reports_list-btn` | `<button>` (`fa-search`) | — | — | — | Submits current filters; re-fetches page 1 with `isSearch=true`. |
+| Name / SteamID filter | `#reports-name` | `text` | (none set) | `t2.player` | `Ник или SteamID` (Nick or SteamID) | Free-text match on target nick/SteamID; submits on Enter or via search button (`search.text["t2.player"]`). |
+| Text filter | `#reports-killed` | `text` | (none set) | `t1.text` | `Текст` (Text) | Full-text search over report body (`search.text["t1.text"]`). |
+| Server filter | `#reports-server` | `multiselect` (`- Сервер -`, `enableHTML:true`) | — | `server_id` | — | `onChange` → `buildTable('rebuild')`. Options `1`,`6`,`7`,`9`,`10`,`11`. |
+
+> `#reports-killed` is a copy-paste artifact from a kill-log page; its bound field is `t1.text` (report body), not a kill. Only `reports-server` is registered in `searchInput`, but the two text inputs still contribute via their `data-search` on submit. Pagination identical to votes (30/page, edges, totals footer; live set was empty so `Всего: 0`).
+
+#### 14.5.3 Reports page actions
+
+| Label | Trigger | Endpoint | `Action({...})` data | Destructive |
+|-------|---------|----------|----------------------|-------------|
+| **открыть** (open) | `a[data-type="btn_open"]` → `player.open(steam_id)` | `POST /ajax/player.php` `action=get` | `{ script:'player', action:'get', data:{ steam_id } }` | **N** (read) — opens target's admin card |
+
+Reports has **no report-lifecycle mutation** (no resolve / claim / assign / mark-handled) — confirmed against both the template and the action catalog for `reports.html`, which lists only the shared player/squad actions (§14.6), no `report_*` verb.
 
 ---
 
-### 14.7 Notable UX & competitively interesting details
+### 14.6 Shared player-detail modal (the mutating surface)
 
-- **Card-list over grid:** votes/reports use a readable card layout (map thumbnails, status/threshold blocks) rather than a dense table — better for at-a-glance triage on mobile (`mobile-left`, `col-xs` grid). Worth copying for a moderation feed.
-- **Vote record is analytics-grade:** it captures `players_sum` vs `players_need` and the full map triple (current/next/target) with images — enables detecting vote-abuse patterns (e.g. repeated map-skip initiators). A competitor can go further by also logging each individual voter and per-server pass rates.
-- **One-click pivot to enforcement:** both feeds put an "открыть" button that deep-links the offender straight into the full admin card with the entire ban/kick/message arsenal — tight report→action loop.
-- **Rule-id driven bans with escalation defaults:** the reason `<select>` encodes a structured rule taxonomy with per-tier default durations (`data-first..four`). This standardizes moderation and feeds analytics; strong feature to match.
-- **Gaps to beat:**
-  - **No report lifecycle:** reports have no status/assignee/resolution/"handled-by" field or action — a moderator cannot mark a report resolved, claim it, or see who handled it. Building a proper report queue (open/claimed/resolved, SLA timers, dedupe of repeat reports on the same target) is a clear differentiator.
-  - **Reporter identity not surfaced** in the card — no way to weight trusted reporters or detect false-report spam. Adding reporter reputation is an opportunity.
-  - **No filters on the votes page** beyond server (no date range, no mode filter, no initiator search) and **no date-range filter on reports** — easy wins to exceed.
-  - Fixed 30/page with no adjustable page size or column sort on these feeds.
-  - Minor code-quality tell: reused ids (`#reports-killed`, duplicate `id="player_group-btn"`) indicate template copy-paste — a cleaner data model is a low bar to clear.
+Both pages embed `#playerModal`. **открыть** loads the player via `action=get` and renders a card that flips to sub-panels for punishment, group change, and messaging. These are the only state-changing capabilities reachable from votes & reports; per `action_catalog.txt`, `votes.html` and `reports.html` expose the identical action set (`script:'player'` + `script:'squad'`). Each row = a permission enforced server-side.
+
+| Capability | Script endpoint | Action | Key data params | Destructive |
+|-----------|-----------------|--------|-----------------|-------------|
+| Load player card | `/ajax/player.php` | `get` | `steam_id` | N |
+| Get comments | `/ajax/player.php` | `getComments` | `steam_id` | N |
+| Check bans (cross-panel) | `/ajax/player.php` | `checkBans` | `steam_id` | N |
+| Find twinks / friends | `/ajax/player.php` | `twink`, `twinkOnline`, `findFriends` | `steam_id` | N |
+| Online telemetry | `/ajax/player.php` | `getPlayerOnlineData` | `steam_id` | N |
+| Kits (list) | `/ajax/player.php` | `kits` | `steam_id` | N |
+| Download stat | `/ajax/player.php` | `downloadStat` | `steam_id` | N |
+| Kit save | `/ajax/player.php` | `kitSave` | `steam_id`, kit | **Y** |
+| Add comment | `/ajax/player.php` | `addComment` | `steam_id`, comment | **Y** |
+| Mark (flag) player | `/ajax/player.php` | `mark` | `steam_id`, `mark` | **Y** |
+| Change group/role | `/ajax/player.php` | `changeGroup` | `steam_id`, `group_id`, `date`(expire), `description`, `prefix`, `prefix_rgb`, `image` | **Y** |
+| Send in-game message | `/ajax/player.php` | `message` | `steam_id`, `msg`, `time`(repeat s), `log` | **Y** |
+| Ban-name allow/deny | `/ajax/player.php` | `addBanName`, `removeBanName` | name payload | **Y** |
+| Kick from server | `/ajax/squad.php` | `kick` | `steam_id`, `reason_id`, `description`, `noReason` | **Y** |
+| Ban (temp/perm) | `/ajax/squad.php` | `ban` | `server_id`(if online), `steam_id`, `reason_id`, `description`, `days` (`-1`=perm) | **Y** |
+| Unban | `/ajax/squad.php` | `unban` | `steam_id`, `unban`(bool) | **Y** |
+| Remove from squad | `/ajax/squad.php` | `removePlayer` | `server_id`, `steam_id` | **Y** |
+| Switch team | `/ajax/squad.php` | `changeTeam` | `server_id`, `steam_id` | **Y** |
+| Kill player | `/ajax/squad.php` | `kill` | `server_id`, `steam_id` | **Y** |
+
+**Ban/kick (Наказание) form:** `<select id="player_ban-reason">` = a rule catalog in `<optgroup>`s (Особые / Общие / Для сквадных / Для техники / Милсим), each option value a rule id (e.g. `110` = "1.1 Оскорбления"; `2` = DPAC anti-cheat auto-ban), carrying `data-first/second/third/four` (escalation-tier default day counts). Reason-type radios `player_ban-reason_type`: Кикнуть (`-1`), Забанить N дней for 1/2/3/4/5/6/7/10/14/30, and Забанить навсегда (perm, `data-day=0`). Comment `<textarea maxlength=512>`. Special case: reason `-1` (Другое) routes straight to `banPlayer`.
+
+**Group change (Смена группы):** groups `0` -Нет группы-, `1` Администратор, `2` Модератор, `3` VIP, `4` Камера, `5` Стажёр; plus expiry daterange, comment (128), prefix text (64), prefix RGB (16), image URL (256); hidden "VIP +1 месяц" quick button.
+
+**In-game message (Сообщение):** 18 canned templates including "Ваш репорт рассматривается модерацией" (your report is under review) — the de-facto report acknowledgement; "add record to card" checkbox `player_message-log`; free-text `<textarea maxlength=512>`; repeat select 1 раз / 30с / 40с / 60с (default) / 90с / 120с.
+
+---
+
+### 14.7 Permission / visibility logic
+
+- Every sub-panel ships in the fragment wrapped `class="hide"` (`#player_ban`, `#player_group`, `#player_message`, `#player_info`, `#template`) and is revealed by JS flip/clone — visibility is client-driven, not role-gated in markup.
+- No role/group conditional markup exists in these two fragments: the full ban catalog, all day tiers (incl. permanent), group assignment (incl. Администратор), kill, and messaging render regardless of viewer. Authorization is therefore **enforced server-side** on `/ajax/squad.php` and `/ajax/player.php` per action; the client renders the complete capability set. A competitor must not assume the client hides anything sensitive.
+- `open` (`action=get`) is the only capability the votes/reports feeds expose directly; everything destructive is one modal-flip away behind a server permission check.
+- Table reads (`/ajax/table.php`) accept arbitrary `page`/`numrows`/`search` from the client but respond only within the authenticated session's scope (empty report set observed for this account).
+
+---
+
+### 14.8 Notable UX & competitively interesting details
+
+- **Vote record is analytics-grade and under-exposed:** the payload carries `players_sum` vs `players_need`, the full map triple with pre-baked thumbnails, `duration` (seconds), and — critically — a complete `votes` roster JSON (`{"yes":[…SteamIDs…]}`) that the UI **never renders**. A competitor exposing per-voter breakdowns, per-server pass rates, and repeat-skip-initiator detection would out-analyze SQSTAT using data it already collects but discards.
+- **Server pre-renders presentation into data:** `cancel`, `map_current_img`, `map_next_img` arrive as HTML fragments, and `date` is pre-formatted for votes but raw for reports (client `formatDate`) — an inconsistency and an XSS-surface tell (raw HTML injected via `data-table`).
+- **One-click pivot to enforcement:** both feeds deep-link the offender straight into the full ban/kick/message arsenal — tight report→action loop worth matching.
+- **Rule-id driven bans with escalation defaults** (`data-first..four`) standardize moderation and feed analytics — strong feature to match.
+
+**Gaps to beat:**
+- **No report lifecycle:** confirmed via empty-schema + action catalog — reports have no status/assignee/resolution/"handled-by" field or verb. A moderator cannot claim, resolve, or dedupe reports. A proper queue (open/claimed/resolved, SLA timers, repeat-target dedupe) is a clear differentiator.
+- **Reporter identity not surfaced** (`t2.player` is the *target*; no reporter alias in template or search) — no trusted-reporter weighting or false-report-spam detection.
+- **Thin filters:** votes filters on `server_id` only (no date range, no `mode`, no initiator search); reports has no date-range filter. `order_by`/`order_sort` are wired in the protocol but `collum:[]` disables sorting on these feeds.
+- **Fixed 30/page**, no adjustable page size, no column sort.
+- **Code-quality tells:** reused/mis-purposed ids (`#reports-killed` bound to `t1.text`) signal template copy-paste — a cleaner data model is a low bar to clear.
 
 
 ---
@@ -2951,12 +4449,142 @@ Groups: `0` -Нет группы- (none), `1` Администратор, `2` М
 
 Two loosely related admin-utility pages that share the SPA shell but are functionally independent:
 
-- **Bug Tracker** — nav id `issues`, page fragment `frags/issues.html`. A GitHub-Issues-style ticket list where admins file bugs/suggestions against the SQSTAT panel itself.
-- **Video / Demos** — nav id `video`, page fragment `frags/video.html`. A large-file (MP4) uploader that ships recorded evidence/demo clips out to the project's YouTube + Telegram channels.
+- **Bug Tracker** — nav id `issues`, page fragment served by `GET /ajax/page.php?page=issues`. A GitHub-Issues-style ticket list where admins file bugs/suggestions against the SQSTAT panel itself.
+- **Video / Demos** — nav id `video`, page fragment served by `GET /ajax/page.php?page=video`. A large-file (MP4/AVI) uploader that fans recorded evidence/demo clips out to the project's YouTube + Telegram channels.
 
-Both are loaded the usual way (`pageLoad('issues')` / `pageLoad('video')` → `GET /ajax/page.php?page=…`), and each fragment carries its own inline `<script>` object (`var issues = {…}`, `var video = {…}`) that self-initializes on `$(document).ready`.
+Both fragments carry an inline `<script>` object (`var issues = {…}` / `var video = {…}`) that self-initializes on `$(document).ready`. `issues.init()` immediately fires `issues.list.get('open',1)`; `video.init()` only wires the drag-drop zone (no auto-load read).
 
-> Note: Neither page embeds the shared **player-detail** modal or any `script:'table'` DataTables grid. The bug tracker uses a hand-built `<ul class="list-group">` rendered client-side, and the video page is a drag-and-drop upload zone. None of the ~22 player-modal actions apply here; every action below is genuinely local to these two pages.
+> **Capture provenance.** Live contracts captured by an authenticated headless browser rendering each page and firing its auto-load reads only. Files: `caps/issues-video/issues.network.json`, `caps/issues-video/video.network.json`, `caps/issues-video/issues.content.html`, `caps/issues-video/video.content.html`. Mutating requests were intercepted and aborted — `_blocked.json` is empty (0 blocked). Auto-load reads captured: `issues_get` (fired on page init). All other actions (`issues_create`, `uploadVideo_token`, `uploadVideo`) are user-gesture-triggered and therefore **reconstructed from `custom.js` + fragment JS, not observed on the wire** — flagged as such below.
+
+> **Note.** Neither page embeds the shared player-detail modal nor any `script:'table'` DataTables grid. The bug tracker renders a hand-built `<ul class="list-group">` client-side; the video page is a drag-and-drop upload zone. None of the ~22 player-modal actions apply here; every action below is local to these two pages.
+
+---
+
+### 15.0 Live API Contracts
+
+All four actions route through the shared `Action()` helper (`custom.js:284`). Transport rules that define every contract below:
+
+- **URL** = `/ajax/<script>.php` where `<script>` is the `script:` key (`squad` for admin-scoped, `public` for the token-authorized upload). Method is always `POST`.
+- **Body encoding.** If `data` is a plain object, the helper sets `data.action = <action>` then flattens to a URL-encoded query via `$.map(data, (v,i) => '&'+i+'='+v).join('')`. This yields a body **with a leading `&`** and **arrays stringified by `Array.toString()` (comma-joined)**. If `data` is a `FormData`, it appends `action` to the form and sets `processData=false`, `contentType=false` (multipart).
+- **Response envelope** (JSON, `Content-Type: application/json; charset=utf-8`). The helper branches on `text.status`:
+  - `status == 'ok'` → `success(text)` fires.
+  - `status != 'ok'` **and** `text.auth === true` → hard `location.reload()` (session expired).
+  - otherwise → `error(text.msg, null)` → `addAlert(text.msg, …)`.
+- Every successful JSON payload observed also carries `exec_time: float` (server wall-clock seconds). `issues_get` additionally returns a `test: { getAdmin: float }` micro-benchmark block.
+
+#### 15.0.1 `issues_get` — list issues (CAPTURED)
+
+Contract source: `caps/issues-video/issues.network.json[1]` (live, status 200).
+
+`POST /ajax/squad.php`
+
+Request body (observed verbatim): `&state=open&page=1&action=issues_get`
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `state` | enum `open` \| `closed` | Y | Lifecycle filter. `open` from «Открытые», `closed` from «Закрытые» |
+| `page` | int (1-based) | Y | Page index. Server returns a fixed slice (page size 20 observed) |
+| `action` | const `issues_get` | Y | Appended by `Action()` |
+
+Response shape (from captured `response_schema`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | string enum `ok` | Success gate |
+| `exec_time` | float | Server exec seconds |
+| `test.getAdmin` | float | Server-side timing probe for the admin lookup (seconds) |
+| `issues` | array (20 observed → **page size = 20**) | Issue records, newest-id first |
+| `issues[].id` | int | Ticket number |
+| `issues[].user` | string | **Reporter's admin account name** (e.g. redacted `Enj0y`) — NOT rendered in the card |
+| `issues[].title` | string | Issue title / short label, rendered as the card `<label>` |
+| `issues[].body` | string | Free-text description (126 chars in sample; capped 512 on create) |
+| `issues[].create` | int | **Unix timestamp** — creation time |
+| `issues[].update` | int | **Unix timestamp** — last-modified time (currently == `create` in sample; unused by UI) |
+| `issues[].state` | string enum `open` \| `closed` | Lifecycle status |
+| `issues[].labels` | array of Label | Category tags |
+| `issues[].labels[].id` | int | Label id (`1`=Баг, `2`=Предложение) |
+| `issues[].labels[].name` | string | Label text (e.g. `Баг`) |
+| `issues[].labels[].color` | string | Hex color **without** leading `#` (e.g. `e11d21`); JS prepends `#` |
+| `issues[].labels[].url` | string (nullable/empty) | Reserved link target; empty string in all observed rows |
+
+Redacted example (single row, from captured `response_sample`):
+
+```json
+{
+  "test": { "getAdmin": 0.0062 },
+  "issues": [
+    {
+      "id": 56,
+      "user": "<redacted:reporter>",
+      "title": "<redacted:title>",
+      "body": "При выдаче бана не всегда игрока кикает …",
+      "labels": [ { "id": 1, "name": "<redacted:3>", "color": "e11d21", "url": "" } ],
+      "create": 1763650640,
+      "update": 1763650640,
+      "state": "open"
+    }
+  ],
+  "status": "ok",
+  "exec_time": 0.516
+}
+```
+
+> **Schema corrections vs. prior draft.** The record carries three fields the old chapter omitted: `user` (reporter account, distinct from `title`), `update` (second unix timestamp), and `labels[].url` (empty reserved link). `title` is server-derived and returned here — it is confirmed **not** a create-form input (create sends only `body`+`labels`).
+
+#### 15.0.2 `issues_create` — file a new ticket (RECONSTRUCTED, not captured)
+
+Contract source: fragment JS `issues.create.create()` in `issues.content.html`. Not observed on the wire (mutation).
+
+`POST /ajax/squad.php`
+
+Reconstructed body: `&body=<text>&labels=<csv>&action=issues_create` — `labels` is the multiselect `.val()` **array**, comma-joined by `Array.toString()` (e.g. `labels=1,2`; empty selection → `labels=`).
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `body` | string, ≤512 chars | Y (no client guard) | `#issuesModal_create-body` textarea |
+| `labels` | csv of int ids (`1`,`2`) | N | Selected label ids; empty allowed |
+| `action` | const `issues_create` | Y | Appended by `Action()` |
+
+Response: envelope only (`status:'ok'` expected). On success the client discards the response body and re-issues `issues_get('open',1)`, then hides the modal — so a new ticket is assumed to land in `open`; no client-supplied state, id, `title`, or `user` (server derives them). **Destructive: Y** (creates a row).
+
+#### 15.0.3 `uploadVideo_token` — mint a one-time upload link (RECONSTRUCTED, not captured)
+
+Contract source: fragment JS `video.token.gen()`. Not observed (user-triggered).
+
+`POST /ajax/squad.php`
+
+Reconstructed body: `&action=uploadVideo_token` (called with `data:{}` → only `action` present).
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `action` | const `uploadVideo_token` | Y | Sole param |
+
+Response:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | string enum `ok` | Success gate |
+| `token` | string | One-time upload credential, written read-only into `#upload-token` |
+
+Semantics (modal help text): the link is **valid 2 hours** and **usable exactly once**. **Destructive: Y** (mints a credential / server-side state).
+
+#### 15.0.4 `uploadVideo` — upload the MP4 (RECONSTRUCTED, not captured)
+
+Contract source: fragment JS `video.upload()`. Not observed (multipart mutation). **Note the endpoint switch to `public`.**
+
+`POST /ajax/public.php` — `multipart/form-data` (`processData=false`, `contentType=false`)
+
+| Part | Type | Required | Meaning |
+|---|---|---|---|
+| `action` | const `uploadVideo` | Y | Appended to the `FormData` by `Action()` |
+| `name` | string | N (no client guard) | `#video-name` — short title |
+| `description` | string | N (no client guard) | `#video-description` — clip description |
+| `file` | binary (MP4/AVI) | Y | First file from the drop-zone `input[type=file]` |
+| `token` | string \| null | conditional | `getURLParameter('token')` — read from the page URL `?token=…`; null when an authenticated admin uploads directly |
+
+Response: envelope only (`status:'ok'` expected). Client timeout `300000` ms (5 min). Upload progress is metered by the `Action()` `xhr.upload` `progress` listener, which emits `{ total: MB, upload: MB, speed: Mbit/s }` each tick. **Destructive: Y** (uploads + fans out to YouTube/Telegram).
+
+> **Two-endpoint auth split.** Token minting is `script:'squad'` (requires an authenticated admin session); the upload itself is `script:'public'`, authorized by the one-time `token` rather than a cookie. This is the mechanism for delegating a single upload to an otherwise-unauthenticated third party.
 
 ---
 
@@ -2964,89 +4592,92 @@ Both are loaded the usual way (`pageLoad('issues')` / `pageLoad('video')` → `G
 
 #### 15.1.1 Purpose & layout
 
-A minimal issue tracker for the panel itself (bugs and feature suggestions). The layout is a two-column split:
+A minimal issue tracker for the panel itself (bugs and feature suggestions). Two-column split (from `issues.content.html`):
 
-- **Left rail** (`#issues_list_buttons`, `position:fixed`, 240px): action buttons — Создать (Create), Открытые (Open), Закрытые (Closed).
-- **Right column** (`#issues_list`): a `list-group` of issue cards, populated by JS. Shows a spinner overlay (`.load_block`) while fetching and `Данных нет` (No data) when the list is empty.
+- **Left rail** (`#issues_list_buttons`, wrapped in `.block-box` `position:fixed; width:240px`): three buttons — `Создать` (Create, `.btn-success`), `Открытые` (Open, `.btn-default`), `Закрытые` (Closed, `.btn-default`).
+- **Right column** (`.col-md-8`): `<ul class="list-group" id="issues_list">` (`min-height:130px`), populated by `issues.list.build()`. A `.load_block` spinner overlay shows while `issues.list.get()` runs (parent gets `.load`); an empty result appends `<h3>… Данных нет</h3>` (No data).
 
-There is **no** DataTables grid, no server-side search, and no column sorting here — filtering is purely by the two state buttons, and paging is by a `page` integer argument (see below).
+No DataTables grid, no server-side search, no column sorting. Filtering is by the two state buttons; paging is by the `page` integer only.
 
 #### 15.1.2 Entity: Issue
 
-Inferred from the `issues_get` response shape consumed in `issues.list.build()` and the `issues_create` payload:
+See §15.0.1 for the authoritative field-by-field schema. Summary:
 
-| Field | Type | Source / meaning |
-|---|---|---|
-| `id` | int | Ticket number, rendered as `#<id>` in a `<hashtag>` element |
-| `title` | string | Issue title (shown bold). Note: **not** a create-form input — server-derived (likely first line / auto-generated), see gaps |
-| `body` | string | Free-text description, max 512 chars (`textarea maxlength="512"`) |
-| `state` | enum `open` \| `closed` | Lifecycle status. `open` → green "Открыто" (Open) with unlock icon; `closed` → "Закрыто" (Closed) with lock icon |
-| `create` | timestamp | Creation time, run through `formatDate()` for display |
-| `labels` | array of Label | Category tags (see below) |
+| Field | Type | Rendered? | Notes |
+|---|---|---|---|
+| `id` | int | Yes — `<hashtag>#id</hashtag>` | Ticket number |
+| `user` | string | **No** | Reporter account (present in payload, unused by card) |
+| `title` | string | Yes — `<label>` | Server-derived |
+| `body` | string | Yes — `<p>` | ≤512 chars on create |
+| `state` | enum `open`\|`closed` | Yes — `<code>` pill | `open`→green `Открыто` + unlock icon; `closed`→grey `Закрыто` + lock icon |
+| `create` | unix int | Yes — `formatDate()` `<small>` | e.g. `20/11/2025 15:57:20` |
+| `update` | unix int | No | Present, unused |
+| `labels[]` | array | Yes — `<span class="label">` | See below |
 
-Entity: **Label** (embedded array on each Issue)
+Entity: **Label** (embedded array)
 
 | Field | Type | Meaning |
 |---|---|---|
-| `name` | string | Label text, rendered with a `fa-tag` icon |
-| `color` | string | Hex color **without** `#` (JS prepends it: `background-color:#`+`l.color`) |
+| `id` | int | Label id (`1`/`2`) |
+| `name` | string | Text, rendered with `fa-tag` icon |
+| `color` | string | Hex **without** `#`; JS builds `background-color:#`+`color` |
+| `url` | string | Empty in all observed rows (reserved) |
 
-The create form hard-codes exactly two selectable labels:
+Create-form label options (hard-coded in `#issuesModal_create-labels`):
 
-| `value` | Label | Color |
+| `value` | Label | Color | Rendered pill |
+|---|---|---|---|
+| `1` | Баг (Bug) | `#e11d21` (red) | red `label label-default` |
+| `2` | Предложение (Suggestion) | `#207de5` (blue) | blue `label label-default` |
+
+#### 15.1.3 The list ("table")
+
+Rendered as cards, not a `<table>`. `issues.list.build(data)` emits one `<li class="list-group-item">` per issue:
+
+| Card row | Markup | Content |
 |---|---|---|
-| `1` | Баг (Bug) | `#e11d21` (red) |
-| `2` | Предложение (Suggestion) | `#207de5` (blue) |
+| Header | `<p>` | `<hashtag>#id</hashtag>` + `<label>title</label>` + pull-right state `<code>` pill + `<small>formatDate(create)</small>` |
+| Body | `<p>` | `body` verbatim (server-escaped) |
+| Labels | `<p>` | one `<span class="label label-default" style="background-color:#{color}">` per label |
 
-#### 15.1.3 The page's own "table" (issue list)
+Filter / sort / pagination:
 
-Rendered as cards, not a `<table>`. Each `<li class="list-group-item">` shows:
+| Control | Trigger | Effect |
+|---|---|---|
+| Open state | `issues.list.get('open',1)` | Fetch `state=open,page=1` |
+| Closed state | `issues.list.get('closed',1)` | Fetch `state=closed,page=1` |
+| Pagination | `get(state, page)` param exists | **No page-nav UI** — buttons hard-code `page=1`; server supports paging (20/page), frontend does not expose it |
 
-| Card element | Content |
-|---|---|
-| `#<id>` | Ticket number (`<hashtag>`) |
-| Title | `v.title` in a `<label>` |
-| State badge | `<code>` pill — green "Открыто" / grey "Закрыто" (pull-right) |
-| Date | `formatDate(v.create)` `<small>`, pull-right |
-| Body | Full description paragraph |
-| Labels | One `<span class="label">` per label with tag icon + colored background |
-
-Filter/sort/pagination controls:
-
-- **State filter:** two buttons call `issues.list.get('open',1)` / `issues.list.get('closed',1)`.
-- **Pagination:** `get(state, page=1)` sends a `page` param, but the fragment renders **no page navigation UI** — only page 1 is ever requested from the buttons. The backend clearly supports paging; the frontend does not yet expose it (competitive gap).
-- **No search box, no per-column sort.**
+No search box, no per-column sort.
 
 #### 15.1.4 Actions / capabilities
 
-| UI label | Trigger | action id | Script endpoint | Data params | Effect | State-changing? |
+| UI label | Trigger | action | Endpoint | Data keys (types) | Effect | Destructive |
 |---|---|---|---|---|---|---|
-| Открытые (Open) | `issues.list.get('open',1)` | `issues_get` | `POST /ajax/squad.php` | `state=open`, `page=1` | Fetch open issues → rebuild list | N (read) |
-| Закрытые (Closed) | `issues.list.get('closed',1)` | `issues_get` | `POST /ajax/squad.php` | `state=closed`, `page=1` | Fetch closed issues → rebuild list | N (read) |
-| Создать (Create) — open modal | `issues.create.show()` | — | — (client only) | — | Opens `#issuesModal_create`, inits the multiselect | N |
-| Создать (Create) — submit | `issues.create.create(this)` | `issues_create` | `POST /ajax/squad.php` | `body=<textarea>`, `labels=<array of value ids>` | Creates a new ticket, then reloads the open list and hides the modal | **Y** |
+| Открытые (Open) | `issues.list.get('open',1)` | `issues_get` | `POST /ajax/squad.php` | `state:string`, `page:int` | Fetch open → rebuild list | N |
+| Закрытые (Closed) | `issues.list.get('closed',1)` | `issues_get` | `POST /ajax/squad.php` | `state:string`, `page:int` | Fetch closed → rebuild list | N |
+| Создать → open modal | `issues.create.show()` | — | client only | — | Opens `#issuesModal_create`, inits multiselect | N |
+| Создать → submit | `issues.create.create(this)` | `issues_create` | `POST /ajax/squad.php` | `body:string(≤512)`, `labels:int[]→csv` | Create ticket, reload open list, hide modal | **Y** |
 
-Notes on the endpoint contract (from the shared `Action()` helper):
+Behavioral notes:
 
-- All calls go to `/ajax/squad.php`; body is `action=<id>&…` URL-encoded (objects are flattened to `&key=value`).
-- Success is gated on `text.status == 'ok'`; `text.auth === true` forces a full `location.reload()` (session expiry). Errors surface via `addAlert(msg, …)`.
-- On create success the client re-requests `issues_get(open,1)` — so a newly created issue is assumed to land in `open` state (no client-side status is sent).
-
-There is **no close/reopen/edit/delete/comment action in this fragment.** Admins can only create and read issues; the `closed` state exists in data but no UI here transitions an issue to it (likely handled elsewhere or by maintainers server-side). This is a notably thin CRUD surface.
+- During `issues_get`, `disable_buttons(true)` calls `.btnload('')` on all three rail buttons; `complete` re-enables via `.btnreset()`.
+- On `issues_create` submit, `btn.btnload('Создаём')`; success/error both `btn.btnreset()`.
+- **No close / reopen / edit / delete / comment action exists in this fragment.** The `closed` state and `update` field exist in data, but no UI here transitions an issue — admins can only create and read. Thin CRUD surface.
 
 #### 15.1.5 Create modal (`#issuesModal_create`)
 
-| Element | id | Type | Validation / notes |
-|---|---|---|---|
-| Описание проблемы (Problem description) | `issuesModal_create-body` | `textarea` rows=4 | `maxlength="512"`; no client-side "required" check — empty submit is possible client-side |
-| Метки (Labels) | `issuesModal_create-labels` | `<select multiple>` → Bootstrap `multiselect` | `nonSelectedText:'- Метки -'`, `enableHTML:true` (option labels contain styled `<span>` HTML). Optional; sends array of value ids (`1`/`2`) |
-| Создать (Create) | — | button | `btnload('Создаём')` spinner during submit; resets on success/error |
+| Element | `#id` | Type | maxlength | Options / default | Validation |
+|---|---|---|---|---|---|
+| Описание проблемы (Problem description) | `issuesModal_create-body` | `textarea` rows=4 | `512` | — | None client-side (empty submit possible) |
+| Метки (Labels) | `issuesModal_create-labels` | `<select type="multiselect" multiple>` → Bootstrap `multiselect` | — | opts `1`=Баг, `2`=Предложение; `nonSelectedText:'- Метки -'`, `enableHTML:true`; default none | Optional; sends csv of ids |
+| Создать (Create) | — (`onclick`) | `.btn-success` button | — | — | `btnload('Создаём')` during submit |
 
-`enableHTML:true` on the multiselect is what lets each option render as a colored pill (`Баг` red / `Предложение` blue) inside the dropdown.
+`enableHTML:true` lets each option's `label` attribute render as a colored pill (`Баг` red / `Предложение` blue) inside the dropdown.
 
 #### 15.1.6 Permissions / visibility
 
-No `class="hide"`, no role/group gating in this fragment. Every element is visible to anyone who can load the `issues` page — access control is entirely upstream (whether the nav item / `page.php?page=issues` is served). Both mutating and reading actions hit `script:'squad'`, implying this page is scoped to squad/panel admins rather than the general `public` script.
+No `class="hide"`, no role/group gating in the fragment. Both read and write actions hit `script:'squad'` — access control is entirely upstream (whether `page.php?page=issues` is served). No DOM-level gating.
 
 ---
 
@@ -3054,243 +4685,281 @@ No `class="hide"`, no role/group gating in this fragment. Every element is visib
 
 #### 15.2.1 Purpose & layout
 
-A big-file uploader for demo/evidence videos (rule-violation clips, highlights). Uploaded MP4s are fanned out by the backend pipeline: **Browser → Sqstat → YouTube + Telegram** (stated verbatim in the modal help text). Header links point at the project's Telegram (`t.me/sqstat`) and YouTube channel.
+A big-file uploader for demo/evidence videos. Backend fan-out is stated verbatim in the modal: **Браузер → Sqstat → YouTube + Telegram**. Header links target `t.me/sqstat` and YouTube channel `UC8Sofbi4vR6NxD9TJ59KiZg`. Layout (from `video.content.html`):
 
-Layout:
-
-- **Header row**: Telegram link, YouTube link, and a pull-right button **Генерировать ссылку** (Generate link) that opens the token modal.
-- **Drop zone** (`#drag.drop_file_zone`, ~76vh): full-height drag-and-drop area with a cloud-upload prompt "Загрузите файлэ" and a "(2ГБ)" size hint. Contains a hidden `<input type="file" accept=".mp4">`.
-- Two modals: upload metadata (`#loadModal`) and token generation (`#tokenModal`).
+- **Header row** (`<h3 class="text-center">`): Telegram link, YouTube link, pull-right `Генерировать ссылку` (Generate link) button → `video.token.show()`.
+- **Drop zone** `#drag.drop_file_zone` (`height:76vh`): full-height area with `<h2 id="load_state">… Загрузите файлэ</h2>` and a `(2ГБ)` size hint. Contains hidden `<input type="file" accept=".mp4,.avi">`.
+- Two modals: `#loadModal` (upload metadata + progress) and `#tokenModal` (token generation).
 
 #### 15.2.2 Entity: Video upload
 
-Inferred from the `uploadVideo` `FormData` payload:
+Fields per §15.0.4. Accepted extensions: `['.mp4','.avi']` (drop handler `dragFile(['.mp4','.avi'])`; the `<input accept>` is rewritten to `.mp4,.avi` by `dragFile`). Advertised ceiling **2 GB**. Client timeout **300 s**.
 
-| Field | Type | Source | Meaning |
-|---|---|---|---|
-| `name` | string | `#video-name` | Short title, e.g. placeholder «Нарушение правил Enj0y» (Rule violation, player Enj0y) |
-| `description` | string | `#video-description` | Free-text description of what happens in the clip |
-| `file` | binary (MP4) | drop zone `input[type=file]` | The video file itself |
-| `token` | string \| null | `getURLParameter('token')` | One-time upload token pulled from the page URL query string (see token flow) |
-
-Accepted types: the drop handler is wired for `['.mp4','.avi']` (`dragFile(['.mp4','.avi'])`) while the `<input accept=".mp4">` only advertises MP4. Effective size ceiling advertised: **2 GB**. Client upload timeout: **300 s** (`timeout: 300*1000`).
-
-> **Linkage to matches/players is not modeled client-side.** There is no match id, server id, round id, SteamID/UUID, or player selector in the payload — only free-text `name`/`description`. Any association to a specific match or offender is human-entered prose, not a foreign key. This is a meaningful contrast to a panel that could link demos directly to a match/kill/report record.
+> **No structured linkage.** The payload carries only free-text `name`/`description` plus `file`/`token` — no match id, server id, round id, SteamID/UUID, or player selector. Any association to a match or offender is human-entered prose, not a foreign key.
 
 #### 15.2.3 Entity: Upload token
 
 | Field | Type | Meaning |
 |---|---|---|
-| `token` | string | One-time upload credential returned by `uploadVideo_token`, shown read-only in `#upload-token` |
+| `token` | string | One-time credential from `uploadVideo_token`, shown read-only in `#upload-token` |
 
-Token semantics (from modal help text): the generated link is **valid for 2 hours** and **usable exactly once** («Ссылка доступна для загрузки 2 часа, загрузить можно 1 раз»). The intent is delegated uploads — an admin generates a link and hands it to someone (e.g. a player submitting evidence) who is not otherwise authenticated. On the upload page the token is read from the URL (`?token=…`) and attached to the `uploadVideo` call.
+Semantics: **valid 2 hours, single use** («Ссылка доступна для загрузки 2 часа, загрузить можно 1 раз»). Intended for delegated uploads — an admin mints a link and hands it to a third party; the upload page reads it from `?token=…` and attaches it to `uploadVideo`.
 
 #### 15.2.4 Actions / capabilities
 
-| UI label | Trigger | action id | Script endpoint | Data params | Effect | State-changing? |
+| UI label | Trigger | action | Endpoint | Data keys | Effect | Destructive |
 |---|---|---|---|---|---|---|
-| Генерировать ссылку → open modal | `video.token.show()` | — | — (client) | — | Opens `#tokenModal` | N |
-| Создать токен (Create token) | `video.token.gen()` | `uploadVideo_token` | `POST /ajax/squad.php` | *(none)* — `data:{}` | Returns a one-time upload `token`, populated into `#upload-token` | **Y** (mints a credential) |
-| Загрузить (Upload) | `video.upload()` | `uploadVideo` | `POST /ajax/public.php` | `FormData`: `name`, `description`, `file`, `token` | Uploads the MP4; backend forwards to YouTube + Telegram | **Y** |
-
-Key endpoint split (competitively interesting):
-
-- **Token minting uses `script:'squad'`** (authenticated admin context) — only a logged-in admin can create a token.
-- **The actual upload uses `script:'public'`** — the public endpoint, authorized by the one-time `token` rather than a session. This is what enables handing an upload link to an unauthenticated third party.
-
-Because `data` is a `FormData` instance, the `Action()` helper sets `processData=false`, `contentType=false`, and appends `action=uploadVideo` into the form — a standard multipart file POST with upload-progress instrumentation.
+| Генерировать ссылку → open modal | `video.token.show()` | — | client | — | Opens `#tokenModal` | N |
+| Создать токен (Create token) | `video.token.gen()` | `uploadVideo_token` | `POST /ajax/squad.php` | `{}` (action only) | Returns `token` → `#upload-token` | **Y** |
+| Загрузить (Upload) | `video.upload()` | `uploadVideo` | `POST /ajax/public.php` | FormData: `name:string`, `description:string`, `file:binary`, `token:string\|null` | Upload MP4/AVI; backend → YouTube + Telegram | **Y** |
 
 #### 15.2.5 Upload modal (`#loadModal`) — fields & UX
 
-| Element | id | Type | Notes |
+| Element | `#id` | Type | Notes |
 |---|---|---|---|
-| Название видео (Video name) | `video-name` | text | Help: "Короткое название видео" (short title). Placeholder example «Нарушение правил Enj0y» |
-| Описание видео (Video description) | `video-description` | textarea rows=2 | Help: "Опишите что происходит на видео" (describe what happens) |
-| Загрузить (Upload) | `video-upload` | button | Hidden during upload; triggers `video.upload()` |
-| Progress bar | `load_bar` | div | Live width %, big `%` label |
-| Progress detail | `load_bar-upload_progress` / `load_bar-upload_speed` | spans | "`<uploaded> / <total> МБ`" and "`<speed> Мбит/c`" (Mbit/s) |
+| Название видео (Video name) | `video-name` | text | Placeholder `Название видео`; help «Короткое название видео. Например "Нарушение правил Enj0y"» |
+| Описание видео (Video description) | `video-description` | textarea rows=2 | Help «Опишите что происходит на видео» |
+| Загрузить (Upload) | `video-upload` | `.btn-success` button | Hidden during upload (`.hide()`); triggers `video.upload()` |
+| Progress bar | `load_bar` | `.progress-bar` div | Width % live; inner `<h2>` shows `%` |
+| Progress detail | `load_bar-upload_progress` / `load_bar-upload_speed` | spans | `"<upload> / <total> МБ"` and `"<speed> Мбит/c"` |
 
-No explicit client-side validation (name/description can be blank; only extension is checked in the drop handler). During upload the modal is made non-dismissable: a `hide.bs.modal` handler calls `e.preventDefault()` so the user cannot close it mid-transfer; on error/completion the handler is detached (`.off('hide.bs.modal')`).
+No client-side field validation (name/description may be blank; only extension is checked in the drop handler). During upload the modal is made non-dismissable: a `hide.bs.modal` handler calls `e.preventDefault()`; on success the handler is detached (`.off('hide.bs.modal')`) after a 4 s delay, on error immediately. On error the bar flips to `.progress-bar-danger` and `#load_state` shows «Не удалось загрузить файл».
 
-Progress metering comes from the shared `Action()` helper's `xhr.upload` `progress` listener, which computes MB total, MB uploaded, and Mbit/s throughput each tick and hands them to the fragment's `progress` callback.
-
-Help text also warns that **YouTube has a daily upload quota** — videos may post "immediately or the next day" — whereas **Telegram uploads immediately**. So the two fan-out targets have different latency guarantees.
+Progress metering (`Action()` `xhr.upload` listener, `custom.js:363`): computes `total` MB, `upload` MB, and `speed` in Mbit/s (`((uploadedkBytes/elapsed)/1024)*8`) each tick. Help text warns YouTube has a daily quota (posts «сразу, или на следующий день») whereas Telegram posts «сразу» — differing latency guarantees.
 
 #### 15.2.6 Token modal (`#tokenModal`)
 
-| Element | id | Type | Notes |
+| Element | `#id` | Type | Notes |
 |---|---|---|---|
-| Token field | `upload-token` | text, `readonly` | Displays the minted token/link |
-| Создать токен (Create token) | `generate-token` | button | Calls `video.token.gen()`; `btnreset(600)` cooldown after |
-| Help text | — | — | "Ссылка доступна для загрузки 2 часа, загрузить можно 1 раз" (valid 2h, single use) |
+| Token field | `upload-token` | text `readonly` | Displays minted token |
+| Создать токен (Create token) | `generate-token` | `.btn-success` button | Calls `video.token.gen()`; `btnreset(600)` cooldown after |
+| Help | — | — | «Ссылка доступна для загрузки 2 часа, загрузить можно 1 раз» |
 
-Minor bug worth noting: `video.token.gen` is bound in the HTML as `onclick="video.token.gen()"` (no argument), but the JS body reads `gen: function(btn){ $btn = $(btn); … }` — so `btn` is `undefined` and `$btn` becomes an empty jQuery set; the `btnload()`/`btnreset()` spinner on the button silently no-ops. The Action call itself still works.
+> **Bug.** `gen` is bound as `onclick="video.token.gen()"` (no arg) but the body reads `gen: function(btn){ $btn = $(btn); … }` — `btn` is `undefined`, so `$btn` is an empty jQuery set and the `btnload()`/`btnreset()` spinner silently no-ops. The `Action()` call itself still fires and populates `#upload-token`.
 
 #### 15.2.7 Drag-and-drop mechanics
 
-`$.fn.dragFile(ext)` (custom.js) wires the drop zone: on `drop` or `click` it takes the first file, validates the extension against the allowed list, injects it into the hidden `<input type=file>` via a synthetic `DataTransfer`, and fires an `end` event carrying the file. The fragment's `init()` listens for `end` to open the metadata modal, and for `start`/`progress`/`error` (mostly console logging). Files failing the extension check are silently rejected (`return false`); a null file triggers `alert('Ошибка файла')` (File error).
+`$.fn.dragFile(ext)` (`custom.js:451`) wires `#drag`: on `drop` (or `click`) it takes `files[0]`, lowercases the extension, and rejects (`return false`) if `ext.indexOf('.'+file_ext) == -1`. Valid files are injected into the hidden `<input type=file>` via a synthetic `DataTransfer` and re-fired as an `end` event carrying `[file, file.name]`. `dragFile` also rewrites the input `accept` attr to `ext.join(',')` and toggles `.drop_file_zone-hover` on `dragenter`/`dragover`. The fragment's `init()` listens for `end` (open `#loadModal`; a null file → `alert('Ошибка файла')`), plus `start`/`progress`/`error` (console logging only). The `FileReader` binary-read path in `dragFile` is commented out — only the `DataTransfer` injection path is live.
 
 #### 15.2.8 Permissions / visibility
 
-No `class="hide"` or role checks in the fragment. The security model is endpoint-based rather than DOM-based:
+No `class="hide"` or role checks in the fragment. Security is endpoint-based:
 
-- Loading the `video` page and minting a token requires the authenticated `squad` context.
-- The `public` upload endpoint trusts the one-time, 2-hour, single-use `token` — this is the mechanism for delegating uploads to non-admins.
+- Loading `video` and minting a token require the authenticated `squad` context.
+- The `public` upload endpoint trusts the one-time, 2-hour, single-use `token` — the delegation mechanism for non-admins.
 
 ---
 
 ### 15.3 Competitively interesting takeaways
 
-- **Two-endpoint upload auth (`squad` mint + `public` consume):** a clean pattern for letting players submit evidence without accounts — admin generates a single-use, time-boxed link; upload happens on the public endpoint. Worth copying, and easy to beat by also binding the token to a specific report/match id so submitted footage auto-links to a case.
-- **No structured linkage of videos to matches/players/reports** — SQSTAT stores only free-text `name`/`description`. A competing panel that attaches demos to a match/kill/ban record (foreign keys, jump-to-timestamp) is strictly more useful.
-- **Fan-out to YouTube + Telegram with quota-aware messaging** — the backend externalizes storage to free platforms (2 GB clips) and honors YouTube's daily quota. Cheap hosting, but no in-panel playback and latency is inconsistent (YouTube may lag a day).
-- **Bug tracker is create/read only, no pagination UI, no status transitions** — `state=closed` and `page` exist in the API but are not fully wired in the UI. A richer tracker (assignee, comments, close/reopen, search, real pagination) is an easy differentiator.
-- **512-char body cap and only two labels (Bug/Suggestion)** — deliberately lightweight; the tracker is for panel feedback, not game moderation cases.
+- **Two-endpoint upload auth (`squad` mint + `public` consume):** clean pattern for player evidence submission without accounts. Easy to beat by binding the token to a specific report/match id so footage auto-links to a case.
+- **No structured video↔match/player/report linkage** — only free-text `name`/`description`. A panel that attaches demos to a match/kill/ban record (foreign keys, jump-to-timestamp) is strictly more useful.
+- **Fan-out to YouTube + Telegram with quota-aware messaging** — storage externalized to free platforms (2 GB clips), YouTube quota honored. Cheap hosting, but no in-panel playback and inconsistent latency.
+- **Bug tracker is create/read only** — `state=closed`, `page`, and `update` exist in the API but no UI wires status transitions, pagination, or edits. A richer tracker (assignee, comments, close/reopen, search, real pagination) is an easy differentiator.
+- **Reporter identity is captured but hidden** — `issues[].user` is returned yet never rendered; surfacing "filed by / assigned to" is a trivial UX win.
+- **512-char body cap, two labels (Bug/Suggestion)** — deliberately lightweight; for panel feedback, not game moderation.
 
 
 ---
 
 ## 16. Settings: Server Config, Rotation, Mods, Restarts
 
-This section documents SQSTAT's entire **server-management surface** — the operator-facing tooling that lets an admin reconfigure, restart, and reprovision a live Squad game server. It spans two physical locations in the SPA:
+This section is an **implementation spec** for SQSTAT's entire **server-management surface** — the operator-facing tooling that reconfigures, restarts, and reprovisions a live Squad game server. It is built from a **live browser capture** of `settings.php` plus the source fragments (`main.html`, `settings.html`, `custom.js`) that back the RPC actions. The surface spans two physical locations in the SPA:
 
-1. **The `settings` page** (`pageLoad('settings')` → `GET /ajax/page.php?page=settings`) — a tabbed configuration console: server inventory, admin permission groups, in-game rules, canned messages, Discord bot / webhook wiring. Its own RPC is `script:'settings'`.
-2. **The server dashboard on `main.html`** (the SPA shell, the "Управление" (Management) panel and its modals) — the live operations tooling: CodeMirror config-file editor, map-rotation editor, mod manager, RCON console, and the start/stop/restart/update lifecycle buttons. **All of these use `script:'squad'`** (a couple use `script:'public'`).
+1. **The `settings` page** (`pageLoad('settings')` → `GET /ajax/page.php?page=settings`) — a Bootstrap tabbed configuration console: server inventory, admin permission groups, in-game rules, canned messages, Discord bot / webhook wiring. Its persistence RPC is `script:'settings'`.
+2. **The server dashboard on `main.html`** (the SPA shell, the "Управление" (Management) accordion and its modals) — the live operations tooling: CodeMirror config-file editor, map-rotation editor, mod manager, RCON console, and the start/stop/restart/update lifecycle buttons. **All of these use `script:'squad'`** (map calendar uses `script:'public'`).
 
-> **Attribution note.** The task brief lists the config-editor / rotation / mod / restart actions under "settings," but in the captured markup they physically live in `main.html`, *not* in the `settings.html` fragment. The `settings.html` fragment only owns two RPC actions (`getServerSettings`, `setServerSettings`) plus a bulk `script:'settings'` save. Both surfaces are documented here because together they constitute the "settings / server-management" competitive area. Locations are called out per feature.
+> **Attribution note.** The task brief lists the config-editor / rotation / mod / restart actions under "settings," but in the captured markup they physically live in `main.html`, *not* in the `settings.html` fragment. The `settings.html` fragment owns only three `script:'settings'` operations (`getServerSettings`, `setServerSettings`, and the generic bulk save). Both surfaces are documented here because together they constitute the "settings / server-management" competitive area. Each contract below is tagged **[LIVE]** (observed in the browser capture) or **[SOURCE]** (read from the fragment/`custom.js`, fired only on user interaction so not auto-captured).
 
-The shared player-detail modal (Chat/Kills/Deaths/Kits/Games/Comments tabs, ~22 actions) is **not** part of this surface and is deliberately excluded.
-
----
-
-### 16.1 Purpose & navigation map
-
-| Surface | Entry point | Backing script | Nature |
-|---|---|---|---|
-| Settings console | left nav → `pageLoad('settings')`; deep-links via `#setting_servers` etc. | `settings` | Persisted configuration (bulk save) |
-| Server settings modal | Settings › Сервера tab › gear icon `setting.server.open(id)` | `settings` | Per-server CRUD |
-| Management panel | `main.html` server dashboard → "Управление" accordion | `squad` | Live server lifecycle |
-| Config editor | Управление › "Редактор конфигов" `configEditor.open()` | `squad` | Live file edit (CodeMirror) |
-| Mod manager | Управление › "Менеджер модов" `modManager.open()` | `squad` | Workshop mod install/remove |
-| Map rotation | dashboard gear `mapRotation.open('squad')` | `squad` | Rotation edit + weekday schedule |
-| Map calendar | dashboard calendar widget `mapCalendar.get()` | `public` | Read-only history of played maps |
-| User settings | avatar menu `userSettings.open()` (in `player_profile.html`) | `player` | Personal UI prefs |
-
-The Settings console is a Bootstrap tab layout: a left-hand `#setting_list` nav (`col-md-3`) and a right-hand `#settings_tabs` content pane (`col-md-9`). A single global **Сохранить (Save)** button (`setting.save(this)`) persists whichever tab is active. Tab state is reflected into the URL hash (`/?page=settings#setting_servers`) via `pushState`, so tabs are deep-linkable. There is a hidden/disabled **Основное (Main)** tab (`li.disabled.hide`) — a placeholder for a general-settings tab not yet shipped.
+The shared player-detail modal (Chat/Kills/Deaths/Kits/Games/Comments tabs) is **not** part of this surface and is deliberately excluded.
 
 ---
 
-### 16.2 Bulk-save mechanism (the `settings` script contract)
+### 16.1 Capture summary (ground truth)
 
-Every Settings tab shares one generic serializer. `setting.save()` prompts a confirm dialog ("Вы точно хотите сохранить настройки?" — Are you sure you want to save settings?) then POSTs:
+| Item | Value |
+|---|---|
+| Capture file (network) | `caps/settings/settings.network.json` |
+| Capture file (rendered `#content`) | `caps/settings/settings.content.html` (90 072 bytes, 1 679 lines) |
+| Blocked mutations | `caps/settings/_blocked.json` = `[]` (0 — interceptor caught nothing; the page fires no writes on load) |
+| **Live AJAX contracts captured** | **1** |
 
-```
-POST /ajax/settings.php
-  action = <implicit; per-tab>        // driven by script:'settings' + data.type
-  type   = <tab data-tab>             // servers | groups | rules | squad_messages | discordbot | discord
-  settings = <JSON.stringify(collect)>
-```
+**Key structural finding:** loading the Settings console fires exactly **one** network request — the fragment fetch itself. **No `getServerSettings` / `getConfigFiles` / `getRotation` / `getMods` read auto-fires on load.** The entire persisted configuration (servers, all 5 permission groups with their checked tokens, all rules, all canned messages, the full Discord bot + webhook config *including live webhook secrets*) is **server-rendered directly into the fragment HTML** as `data-setting` / `value=""` attributes. Every `script:'settings'` and `script:'squad'` action below is triggered later by a user opening a modal or clicking Save — hence tagged **[SOURCE]**. This server-render-everything model is itself the spec: the client is a thin serializer over a pre-hydrated DOM.
 
-`setting.collect(tab)` walks every `[data-setting]` element inside the active tab and encodes by its `type` attribute:
+#### Contract: `GET /ajax/page.php?page=settings` **[LIVE]**
 
-| Element `type` | Encoding | Example settings |
+| Field | Value |
+|---|---|
+| Method / path | `GET /ajax/page.php?page=settings` |
+| Request params | `page` — string — required — fragment id (`settings`) |
+| Status | `200` |
+| Content-Type | `text/html; charset=UTF-8` |
+| Response length | 85 722 bytes |
+| Response body | Raw HTML fragment: an inline `<script>` defining the global `setting` object (save/collect/setData serializers), followed by the `#settings_tabs` tab panes fully hydrated with live data. Not JSON. |
+
+Cite: `caps/settings/settings.network.json`.
+
+---
+
+### 16.2 Bulk-save mechanism (the `settings` script contract) **[SOURCE — inline JS, lines 3–98]**
+
+Every Settings tab shares one generic serializer, `setting.save(btn)`. It prompts a confirm dialog ("Вы точно хотите сохранить настройки?" — *Are you sure you want to save settings?*), builds the payload for the **currently active** tab, then POSTs.
+
+#### Contract: bulk settings save
+
+| Attribute | Value |
+|---|---|
+| Call | `Action({script:'settings', data:{type, settings}})` |
+| HTTP | `POST /ajax/settings.php` |
+| `type` | string — required — the active tab's `data-tab`; enum: `servers` \| `groups` \| `rules` \| `squad_messages` \| `discordbot` \| `discord` |
+| `settings` | string — required — `JSON.stringify()` of `setting[type].collect()` (per-tab override) or the generic `setting.collect(tab)` |
+| Destructive? | **Y** — overwrites the entire config blob for that tab |
+
+`setting.collect(tab)` walks every `[data-setting]` element inside the active tab and encodes by the element's `type` attribute:
+
+| Element `type` | Encoded as | Example keys |
 |---|---|---|
-| `checkbox` | `1` / `0` | `vip_sync`, `report_enabled` |
-| `list` | array of child `[data-list="text"]` text values | `servers`, `squad_rules`, `squad_messages` |
-| `group` | `{description, color, permissions:[…data-perm]}` | admin groups |
-| *(default)* | raw `.value` | `guild_id`, webhook URLs |
+| `checkbox` | `1` / `0` (int) | `vip_sync`, `report_enabled`, `licensed` |
+| `list` | array of child `[data-list="text"]` values (`dataset.value ?? text()`) | `servers`, `squad_rules`, `squad_messages` |
+| `group` | `{description:string, color:string, permissions:[…dataset.perm where :checked]}` | `Admin`, `Moderator`, `QueuePriority`, `Cameraman`, `Intern` |
+| *(default)* | raw `.value` string | `guild_id`, `vip_id`, all webhook URLs |
 
-This is the schema-inference goldmine: the panel's persisted config model is exactly the union of the `data-setting` keys below.
+`setting.setData(data)` is the inverse hydrator (only handles `checkbox`→`prop('checked', v=='1')` and default→`.val(v)`).
+
+> **Tab→collect override map:** `servers` and `groups` and `squad_messages` and `discordbot` and `discord` fall through to the generic `collect(tab)`. Only `rules` defines a custom `setting.squad_rules.collect()` — and it is a **stub** (returns `{}` with the real logic commented out; see §16.3 Rules). The rules "Добавить правило" (Add rule) button is rendered `disabled=""`. **Rules editing is non-functional in this build.**
 
 ---
 
 ### 16.3 Entities & data model
 
-#### Entity: **Server** (`servers` list + server modal)
+#### Entity: **Server** (`servers` list + `settingServer_modal`) **[SOURCE — lines 172–482]**
 
-The Сервера tab renders a **sortable** (`jQuery UI .sortable`, drag handle) list — drag order defines the server display order (index letters A, B, C…). Each row shows the server short-name, a license badge ("Лицензия"), and a connection dot (green `Подключено` / red `Нет подключения`), plus a power-off icon for disabled servers. The gear opens `settingServer_modal`.
+The Сервера (Servers) tab renders a **jQuery-UI `.sortable`** list (`[data-setting="servers"][type="list"]`, drag handle `.handle`); drag order defines display order (index letters A, B, C…). The live capture shows **7 servers** (ids 1, 6, 7, 8, 9, 10, 11). Each row: index letter, short name (`data-list="text" data-value="<id>"`), a `Лицензия` (License) badge, a connection dot (green `Подключено` / red `Нет подключения`), a red power-off icon if disabled, and a gear `onclick="setting.server.open(<id>)"`.
 
-Server fields (from modal `data-input` attrs + `setting.server.new()` defaults + `getServerSettings`/`setServerSettings` payloads):
+**Server modal fields** (`data-input` attrs; input types/maxlengths are the live values):
 
-| Field (`data-input`) | Type | Meaning |
+| Field (`data-input`) | Input | maxlength | Meaning / gloss |
+|---|---|---|---|
+| `id` | hidden | — | Server PK; empty ⇒ create new |
+| `licensed` | checkbox | — | Лицензионный сервер (licensed server) |
+| `disabled` | checkbox (danger slider) | — | Сервер неактивный (inactive/disabled) |
+| `short` | text | 16 | Индекс — internal server index/short code |
+| `ip` | text | 15 | IP address (placeholder `46.174.48.77`) |
+| `port` | text | 5 | **Порт JS агента** — port of the rnsquad Node JS agent (placeholder `3000`; confirms an out-of-process per-server agent) |
+| `name` | text | 128 | Server display name |
+| `ext_short` | text | 16 | Отображаемый индекс (public-facing display index) |
+| `chan_id` | text | — | Discord channel ID; channel auto-renamed to a live status string, template `🟢c_100x7_👮2` (green dot / current-map code / player count / admin count) |
+| `types` | list of checkboxes (`data-input="types" data-type="list"`) | — | Enabled game modes; `data-value` set: `AAS`, `RAAS`, `Invasion`, `tc`, `Insurgency`, `Destruction` |
+| `mods` | list of checkboxes (`data-input="mods" data-type="list"`) | — | Enabled mod flags; `data-value` set: `ge` (Global Escalation), `sd` (Steel Division), `supermod` (SuperMod), `KOTH`, `squadZ` |
+
+**Server actions:**
+
+| UI | Call | data keys | Response | Destructive? |
+|---|---|---|---|---|
+| gear → open | `getServerSettings` **[SOURCE]** | `server_id:int` | `{server:{…data-input fields…}}` → `form.set(text.server, modal)` | N |
+| Save | `setServerSettings` **[SOURCE]** | `form.get(modal)` = every `data-input` field | `{new:bool}` — if `new` truthy → `pageLoad('settings')` full refresh; toast `Сервер сохранён` | **Y** |
+
+> **Read-only gotcha (confirmed live, line 462):** `setForm()` runs `modal.find('input').attr('disabled', true)` after `getServerSettings`, so **editing an existing server through this modal is disabled** — the form is read-only once loaded. Only the `setting.server.new()` path (defaults `{licensed:'1', disabled:'0', port:'0', …}`) leaves fields editable. In-place IP editing happens elsewhere via `setServerIP` (§16.7). A competitor shipping true in-place server editing beats this.
+
+#### Entity: **Permission Group** (`groups` tab) **[LIVE — fully rendered, lines 489–1086]**
+
+Five hard-coded groups, each a `[data-setting="<Group>"][type="group"]` block with `description` (text ≤32, `data-group="description"`), `color` (hex text ≤16, `data-group="color"`, mirrored by a native `<input type="color">`), and a `[data-group="permissions"]` grid of `[data-perm]` checkboxes. The tab links to `https://squad.fandom.com/wiki/Server_Administration`.
+
+**The 21 permission tokens** (the full Squad `Admin`/`Admins.cfg` vocabulary), in rendered order across the 3 columns:
+
+`startvote`, `changemap`, `pause`, `cheat`, `private`, `balance`, `chat`, `kick`, `ban`, `config`, `cameraman`, `immune`, `manageserver`, `featuretest`, `reserve`, `demos`, `clientdemos`, `debug`, `teamchange`, `forceteamchange`, `canseeadminchat`.
+
+A **warning icon** (tooltip **"Не будет логироваться в панели"** — *Will not be logged in the panel*) is attached to exactly three tokens — `changemap`, `kick`, `ban` — flagging that performing those actions via the in-game admin cam/console bypasses SQSTAT's audit log.
+
+**Live default matrix** (● = checked in the captured HTML; group name shows `description` + `color`):
+
+| Token | Admin `#e50606` "Администратор" | Moderator `#2df044` "Модератор" | QueuePriority `#e2b032` "VIP" | Cameraman `#7d059e` "Камера" | Intern `#b57c03` "Стажёр" |
+|---|:--:|:--:|:--:|:--:|:--:|
+| startvote | | | | | |
+| changemap ⚠ | ● | | | | |
+| pause | ● | | | | |
+| cheat | ● | | | | |
+| private | | | | | |
+| balance | ● | ● | | ● | ● |
+| chat | ● | ● | | | ● |
+| kick ⚠ | ● | | | | |
+| ban ⚠ | ● | | | | |
+| config | ● | | | | |
+| cameraman | ● | ● | | ● | ● |
+| immune | | | | | |
+| manageserver | ● | | | | |
+| featuretest | ● | | | | |
+| reserve | ● | ● | ● | ● | ● |
+| demos | | | | | |
+| clientdemos | | | | ● | |
+| debug | ● | | | | |
+| teamchange | ● | ● | | ● | ● |
+| forceteamchange | | | | | |
+| canseeadminchat | ● | | | ● | ● |
+
+Interpretation: **Admin** = near-superuser (everything except `startvote`, `private`, `immune`, `demos`, `clientdemos`, `forceteamchange`); **QueuePriority** = reserve-slot only (pure VIP queue-skip, no admin powers); **Cameraman** = spectator/demo role (`cameraman`+`clientdemos`); **Moderator**/**Intern** = light in-game QoL (`balance`/`chat`/`teamchange`) with **no `kick`/`ban`/`config`/`manageserver`**. This matrix is the RBAC template a competitor should benchmark against.
+
+`groups`-tab save payload (per group): `{"<Group>": {description, color, permissions:[…checked data-perm…]}}` for all 5, wrapped by the bulk save (§16.2).
+
+#### Entity: **Rules** (`rules` tab, `data-tab="rules"`) **[SOURCE — lines 1099–1250]**
+
+Two-level: **categories** (`[data-setting="squad_category"]`, sortable `nav-tabs`, added by `setting.squad_rules.category.add()`) each containing **rules** (`[data-setting="squad_rules"][type="list"]`, `contenteditable` `[data-list="text"]` items). A "Прогрессивная система" (Progressive-punishment ladder) toggle. Add-rule button is **`disabled`**; the live `squad_rules` list is inside a `.hide` container holding a 24-item Russian rulebook (permaban, TK, solo-vehicle bans, CMD obedience, legible-nick rule, DPAC anti-cheat note, etc.). A drag-to-trash zone (`.sortable_delete`, red dashed) deletes items.
+
+> **Stub finding (confirmed, lines 1223–1243):** `setting.squad_rules.collect()` builds `let rules = {}` and `return rules` with the real serializer commented out. Combined with the disabled Add button, **rules cannot be saved** — the feature is scaffolded but inert.
+
+#### Entity: **Canned Messages** (`squad_messages` tab) **[LIVE — lines 1251–1311]**
+
+Flat sortable list (`[data-setting="squad_messages"][type="list"]`, `contenteditable`). Live capture holds **17** pre-written admin warn/broadcast strings (VIP grant notice, solo-vehicle warnings, squad-lock rules ("close squads only from 2 players"), tandem-kit ban, non-readable-nick warning, TK-apology prompt, report-received ack, etc.). `addMessage()` prepends a new editable `Text` item; drag-to-trash deletes. Saved via the generic bulk save as `squad_messages: [string]`.
+
+#### Entity: **Discord Bot config** (`discordbot` tab) **[LIVE — lines 1312–1524]**
+
+Bot invite is hard-coded: `https://discord.com/oauth2/authorize?client_id=532918416151937044`. All fields are `[data-setting]`; `*_sync`/`*_notify` are checkboxes (→ `1`/`0`), `*_id` are raw-string channel/role IDs.
+
+| Key(s) | Type | Live value (redacted) | Meaning |
+|---|---|---|---|
+| `guild_id` | text | `1112342015800262696` | Discord guild ID |
+| `vip_sync` / `vip_id` | checkbox● / text | `1179562293600727115` | Sync VIP role (default **on**) |
+| `moderator_sync` / `moderator_id` | checkbox / text | ∅ | Sync moderator role |
+| `moderatorInactive_sync` / `moderatorInactive_id` | checkbox / text | ∅ | "Inactive" role for mods with <10 h/month |
+| `customRole_notify` / `customRole_id` | checkbox / text | ∅ | Announce role grants in a channel |
+| `top1Kill_sync` / `top1Kill_id` | checkbox / text | ∅ | Role for **top-5 kills**, last 7 days (Discord-linked only) |
+| `top1Medic_sync` / `top1Medic_id` | checkbox / text | ∅ | Role for **top-5 revives**, last 7 days |
+| `topCMD_sync` / `topCMD_id` | checkbox / text | ∅ | Role for **top-3 CMD**, last 7 days |
+| `topSL_sync` / `topSL_id` | checkbox / text | ∅ | Role for **top-5 squad leaders**, last 7 days |
+| `topVehicle_sync` / `topVehicle_id` | checkbox / text | ∅ | Role for **top-5 mechanics/vehicle**, last 7 days |
+| `topMortar_sync` / `topMortar_id` | checkbox / text | ∅ | Role for **top-3 mortarmen**, last 7 days |
+| `clanKiller_sync` / `clanKiller_id` | checkbox / text | ∅ | Role for **top-5 "clan slayers"** |
+| `pilot_sync` / `pilot_id` | checkbox / text | ∅ | Role for **top-5 pilots**, last 7 days |
+| `knifeKiller_sync` / `knifeKiller_id` | checkbox / text | ∅ | Role for knife kills |
+| `seeders_sync` / `seeders_id` / `seeders_hours` | checkbox / text / text | ∅ (placeholder `20`) | Seeder role above `seeders_hours` hours/month |
+| `playtime_sync` + `playtime{100,300,500,1000,2000,3000,5000}_id` | checkbox / 7×text | ∅ | Tiered playtime roles at 100/300/500/1000/2000/3000/5000 hours |
+
+This is a **large, differentiated Discord gamification engine** — auto-awarding a dozen leaderboard-derived roles plus tiered playtime/seeder roles. Arguably the single richest feature in the panel to match or exceed.
+
+#### Entity: **Discord Webhooks** (`discord` tab) **[LIVE — lines 1525–1673]**
+
+Warning banner: "Не отправлейте эти значения или скриншоты… кому либо" (*don't share these values/screenshots*). Each row = an `_enabled` checkbox (→ `1`/`0`) + a webhook-URL / channel-ID text field.
+
+| Key(s) | Default | Purpose (gloss) |
 |---|---|---|
-| `id` | hidden int | Server PK (empty ⇒ create new) |
-| `licensed` | checkbox | Лицензионный сервер (licensed server) |
-| `disabled` | checkbox | Сервер неактивный (inactive/disabled) |
-| `short` | text (≤16) | Индекс — internal server index/short code |
-| `ext_short` | text (≤16) | Отображаемый индекс (public-facing display index) |
-| `ip` | text (≤15) | Server IP (e.g. `46.174.48.77`) |
-| `port` | text (≤5) | **Порт JS агента** — port of the *rnsquad JS agent*, default `3000` (confirms an out-of-process Node agent per server) |
-| `name` | text (≤128) | Server display name |
-| `chan_id` | text | Discord channel ID; channel name auto-renamed to a live status string e.g. `🟢c_100x7_👮2` (green / current map code / player count / admin count) |
-| `types` | list of checkboxes | Enabled game modes: `AAS`, `RAAS`, `Invasion`, `tc` (TC), `Insurgency`, `Destruction` |
-| `mods` | list of checkboxes | Enabled mod flags: `ge` (Global Escalation), `sd` (Steel Division), `supermod` (SuperMod), `KOTH`, `squadZ` |
+| `report_enabled` / `report` | off | In-game `!r` / `!report` destination |
+| `log_enabled` / `log` | **on** | Moderation journal (bans + map changes) |
+| `alert_enabled` / `alert` + `alert_everyone` | off | Alert when a **marked** player joins; `@everyone` when a joiner's IP matches a ban |
+| `cheater_enabled` / `cheater` | off | Cheater notifications |
+| `grief_enabled` / `grief` | off | FOB/HAB destruction (griefing) events |
+| `crash_enabled` / `crash` | off | Server-crash notifications |
+| `endmatch_enabled` / `endmatch` + `endmatch_broadcast` | off | Match-end summary; optional in-game broadcast |
+| `weekend_enabled` / `weekend` | **on** | Weekly stats image |
+| `monitoring_enabled` / `monitoring_id` / `monitoring` | **on** | Server-monitoring channel + webhook |
+| `request_enabled` / `request` | **on** | Admin-application submissions (links `/request.php`) |
+| `collab_ban_enabled` / `collab_ban` | **on** | Push bans to a **cross-server ("межсервер")** Discord |
+| `collab_warn_enabled` / `collab_warn` | **on** | Push suspicious players cross-server |
 
-**Important gotcha for a competitor:** on `getServerSettings` the modal calls `.find('input').attr('disabled', true)` — i.e. **editing existing servers via this modal is disabled in the current build** (read-only form). Only the `new()` path leaves fields editable. So server IP/port editing happens elsewhere (see `setServerIP`, §16.7). `setServerSettings` returning `text.new` triggers a full `pageLoad('settings')` refresh.
+> **CRITICAL PRIVACY / SECURITY FINDING (confirmed live).** Six of these fields render **real, un-redacted Discord webhook URLs with their bot tokens** directly into the HTML `value=""` attributes — `log`, `weekend`, `monitoring`, `request`, `collab_ban`, `collab_warn`. Any admin who can open the Settings page reads every webhook secret from page source (the banner ironically warns against sharing screenshots of the very tokens it leaks). Shape only, single redacted example: `https://discord.com/api/webhooks/<19-digit-id>/<68-char-token>`. **Do not replicate this** — store webhook secrets server-side, never echo tokens into markup; expose only a masked/"configured" indicator.
 
-#### Entity: **Permission Group** (`groups` tab)
+#### Entity: **User settings** (personal, `player` script) **[SOURCE — player_profile.html]**
 
-Five hard-coded Squad admin groups, each a `[data-setting="<Group>"][type="group"]` block: **Admin**, **Moderator**, **QueuePriority**, **Cameraman**, **Intern**. Each group has:
-
-| Field | Type | Meaning |
-|---|---|---|
-| `description` (`data-group="description"`) | text (≤32) | Localized display name (e.g. Admin → "Администратор") |
-| `color` (`data-group="color"`) | hex text (≤16) + native `<input type="color">` mirror | Group tag color (e.g. `e50606`) |
-| `permissions` | array of checked `[data-perm]` | Squad server-admin permission tokens |
-
-The 21 permission tokens (the full Squad `Admin` config vocabulary) are: `startvote`, `changemap`, `pause`, `cheat`, `private`, `balance`, `chat`, `kick`, `ban`, `config`, `cameraman`, `immune`, `manageserver`, `featuretest`, `reserve`, `demos`, `clientdemos`, `debug`, `teamchange`, `forceteamchange`, `canseeadminchat`. These map 1:1 to Squad's `Admins.cfg` groups. A warning icon (tooltip **"Не будет логироваться в панели"** — "Will not be logged in the panel") is attached to `changemap`, `kick`, and `ban`, flagging that using the in-game admin cam/console for those actions bypasses SQSTAT's audit log. Default Admin grants everything except `startvote`, `private`, `immune`, `demos`, `clientdemos`, `forceteamchange`; this is the effective template a competitor should benchmark against.
-
-The tab links out to the Squad wiki (`https://squad.fandom.com/wiki/Server_Administration`) for permission docs.
-
-#### Entity: **Rules** (`rules` tab, `data-tab="rules"`)
-
-A two-level structure: **categories** (`data-setting="squad_category"`, sortable nav-tabs) each containing **rules** (`data-setting="squad_rules"`, `type="list"`, `contenteditable` list items). A "Прогрессивная система" (Progressive system) toggle exists (escalating punishment ladder). Add-rule / add-category buttons and a drag-to-trash zone (`.sortable_delete`, red dashed drop target, "Удалить"). Note the client-side `setting.squad_rules.collect()` currently `return rules` as an empty object with the real logic commented out — **the rules-save serializer is stubbed/incomplete in this build** (a competitive weakness). The captured data holds a real 24-item Russian rulebook (bans, TK policy, solo-vehicle bans, CMD-obedience, nickname legibility, etc.).
-
-#### Entity: **Canned Messages** (`squad_messages` tab)
-
-A flat sortable list (`data-setting="squad_messages"`, `type="list"`, `contenteditable`) of pre-written admin warn/broadcast messages (VIP grant notice, vehicle-solo warnings, squad-lock rules, TK apology prompts, etc.). Add button `addMessage()` prepends a new editable item; drag-to-trash deletes. These feed the in-game `!warn`/message admin actions.
-
-#### Entity: **Discord Bot config** (`discordbot` tab)
-
-Bot invite link is hard-coded (`client_id=532918416151937044`). Fields (`data-setting`):
-
-| Key | Type | Meaning |
-|---|---|---|
-| `guild_id` | text | Discord server (guild) ID |
-| `vip_sync` / `vip_id` | checkbox / role ID | Sync VIP role |
-| `moderator_sync` / `moderator_id` | checkbox / role ID | Sync moderator role |
-| `moderatorInactive_sync` / `moderatorInactive_id` | checkbox / role ID | Give "Inactive" role to mods with <10h/month |
-| `customRole_notify` / `customRole_id` | checkbox / channel ID | Announce role grants in a channel |
-| `top1Kill_sync`/`_id`, `top1Medic_sync`/`_id`, `topCMD_sync`/`_id`, `topSL_sync`/`_id`, `topVehicle_sync`/`_id`, `topMortar_sync`/`_id`, `clanKiller_sync`/`_id`, `pilot_sync`/`_id`, `knifeKiller_sync`/`_id` | checkbox / role ID | Auto-award leaderboard roles (top-5 kills / top-5 medic / top-3 CMD / top-5 SL / top-5 mechanic / top-3 mortar / top-5 "clan slayer" / top-5 pilot / knife-kill role), scoped to last-7-days performance among Discord-linked players |
-| `seeders_sync` / `seeders_id` / `seeders_hours` | checkbox / role ID / int | Seeder role above N hours/month (default 20) |
-| `playtime_sync` + `playtime{100,300,500,1000,2000,3000,5000}_id` | checkbox / role IDs | Tiered playtime roles at 100/300/500/1000/2000/3000/5000 hours |
-
-This is a **large, differentiated Discord gamification engine** — arguably the most competitively interesting entity in the whole panel. A rival should treat the full "auto-award roles from live leaderboards" set as a feature to match.
-
-#### Entity: **Discord Webhooks** (`discord` tab)
-
-Carries a warning banner ("Не отправляйте эти значения… кому либо" — don't share these values/screenshots). Each row = an `_enabled` checkbox + a webhook-URL/channel text field:
-
-| Key(s) | Purpose |
-|---|---|
-| `report_enabled` / `report` | In-game `!r` / `!report` destination |
-| `log_enabled` / `log` | Moderation journal (bans + map changes) |
-| `alert_enabled` / `alert` + `alert_everyone` | Alert when a *marked* player joins; optional `@everyone` when a joiner's IP matches a ban |
-| `cheater_enabled` / `cheater` | Cheater notifications |
-| `grief_enabled` / `grief` | FOB/HAB destruction (griefing) events |
-| `crash_enabled` / `crash` | Server-crash notifications |
-| `endmatch_enabled` / `endmatch` + `endmatch_broadcast` | Match-end summary; optional in-game broadcast |
-| `weekend_enabled` / `weekend` | Weekly stats image |
-| `monitoring_enabled` / `monitoring_id` / `monitoring` | Server-monitoring channel + webhook |
-| `request_enabled` / `request` | Admin-application submissions (`/request.php`) |
-| `collab_ban_enabled` / `collab_ban` | Push bans to a **cross-server** ("межсервер") Discord |
-| `collab_warn_enabled` / `collab_warn` | Push suspicious players cross-server |
-
-> **Privacy/security finding:** the captured fragment contains **live, un-redacted Discord webhook URLs with tokens** rendered directly into the HTML `value=""` attributes (moderation log, weekly stats, monitoring, requests, collab-ban, collab-warn). Any admin who can load the Settings page can read every webhook secret from page source. This is a real leak vector a competitor should *not* replicate — store secrets server-side and never echo tokens into markup.
-
-#### Entity: **User settings** (personal, `player` script)
-
-`userSettings` modal (in `player_profile.html`), saved via `saveUserSettings`:
+`userSettings` modal, saved via `saveUserSettings`:
 
 | Key | Options | Meaning |
 |---|---|---|
@@ -3300,101 +4969,103 @@ Carries a warning banner ("Не отправляйте эти значения�
 
 ---
 
-### 16.4 CodeMirror config-file editor (`configEditor`, `script:'squad'`)
+### 16.4 Live API Contracts — server-management (`script:'squad'` / `'public'`) **[SOURCE — main.html]**
 
-Opened from Управление → "Редактор конфигов". A modal-xl split view: left = CodeMirror editor (`mode:"properties"`, line numbers, `spellcheck=false`), right = a file browser (`#configEditor_files`). CodeMirror assets are lazy-loaded (`codemirror.js`, `properties/properties.js`) only when the modal first opens; the second `default_editor` is a read-only pane for side-by-side default comparison.
+These actions do **not** auto-fire on the Settings page; they are triggered from the `main.html` "Управление" accordion and its modals. Every one below was read from source (`main.html` line refs cited). `server_id` is the ambient active-server global unless noted. Each write is wrapped in a `$.question` confirm and uses `retryAbort:false` (no silent auto-retry).
 
-**File browser** — `getConfigFiles` returns `{files: {<dirName>: {files:[{name, date, symlin}]}}}`. Files are grouped by directory (`<h3>` per dir), each button shows the filename, a link icon if `symlin` (symlink), and a formatted `moment` timestamp. Empty dirs are skipped.
+#### 16.4.1 Config-file editor (`configEditor`, lines 7394–7620)
 
-**Actions:**
+Modal-xl split view: left CodeMirror (`mode:"properties"`, line numbers, `spellcheck=false`), right file browser `#configEditor_files`. CodeMirror assets lazy-load on first open. `configEditor.server_id` is set at open (line 7394).
 
-| UI label | action id | script | data params | Effect | Destructive? |
+| UI label | action | data keys (types) | Response shape | Destructive? |
+|---|---|---|---|---|
+| *(browse)* | `getConfigFiles` | `server_id:int` | `{files: { <dirName>: { files:[ {name:string, date:unix-ms, symlin:bool} ] } }}` — grouped by dir; empty dirs skipped; `symlin` renders a link icon; `date` via `moment(...).format('DD.MM.YYYY HH:mm')` | N |
+| *(open file)* | `getConfigFile` | `server_id:int, file:string, dir:string` | `{text:string, hasDefault:bool}` — `text`→CodeMirror; `hasDefault` toggles the Default button | N |
+| Сохранить (Save) | `saveConfigFile` | `server_id:int, text:string(encodeURIComponent), file:string, dir:string` | `{}` | **Y** — overwrites the config file on disk |
+| По-умолчанию (Default) | `getDefaultConfig` | `file:string` *(no server_id)* | `{text:string}` → read-only compare pane; for `Server.cfg` also reveals the client-only Merge button | N |
+| Перезагрузить (Reload) | `reloadConfig` | `server_id:int` | `{}` | **Y** — hot-reload server config |
+| Отмена (Cancel) | *(local)* `configEditor.cancel()` | — | re-fetches current file (discards edits) | N |
+| Пересобрать (Merge) | *(client-only)* `configEditor.merge()` | — | `Server.cfg` only: merge current values over default template in-browser | N (until saved) |
+| Скролл (Sync scroll) | *(local)* | — | lock scroll between the two editors | N |
+
+> **Latent bug (confirmed, lines 7543 & 7565):** `saveConfigFile` and `reloadConfig` send the **ambient global `server_id`**, not `configEditor.server_id`. If the editor is ever opened for a non-active server, the save/reload targets the *wrong* server. Also there is **no client-side permission check** on save/reload — the boundary is entirely server-side. Hidden/disabled backup controls exist (`#configEditor_backup-save`, `#configEditor_backup-delete`, a "Текущая" version dropdown — all `class="hide"`/`disabled`): an in-progress config-versioning feature. Shipping visible config backups + a save diff beats this.
+
+#### 16.4.2 Map-rotation editor (`mapRotation`, lines 5800–5965; `script` = `mapRotation.mode`, passed as `'squad'`)
+
+Weekday tabs: **Стандартная (Default)** + Пн–Вс (Mon–Sun, `data-day` 1–7). Each day icon = ✔ green if a custom list exists, ✘ red if it falls back to default; the current active day gets `.current`.
+
+| UI label | action | data keys (types) | Response shape | Destructive? |
+|---|---|---|---|---|
+| *(load)* | `getRotation` | `server_id:int` | `{rotation:{lists:{default, "1".."7"}, current:int(1–7), isWin:bool}, list:{<layer>:{teams:[…]}}, canEdit:bool}` | N |
+| Изменить → Сохранить | `setRotation` | `server_id:int, rotation:string(encodeURIComponent of textarea), day:int` | `{}` → re-runs `getRotation(day)` | **Y** — overwrites that weekday's rotation |
+
+Edit modal is a raw `<textarea rows=30>` (one layer per line; `//` comments honored). Each line renders with faction-flag icons resolved from `list[layer].teams`. **Permission gate:** `getRotation.canEdit=false` ⇒ textarea `readonly`, Save/Cancel hidden (clean server-authoritative read-only). If `rotation.isWin` is truthy, `#serverMapRotation_tabs` is hidden entirely (a win-based/seeding rotation mode). Per-weekday rotations are a differentiator worth matching.
+
+#### 16.4.3 Map calendar (`mapCalendar`, `script:'public'`)
+
+FullCalendar widget of which layers were played on which dates.
+
+| action | script | data keys | Response | Destructive? |
+|---|---|---|---|---|
+| `mapCalendar` | **public** | `start:unix, end:unix, server_id:int` | `{maps:[…events]}` | N |
+
+Read-only and served by the **`public`** script (not `squad`) — map history is a lower-privilege read. A competitor could expose this as a shareable public "what's been played" view.
+
+#### 16.4.4 Mod manager (`modManager`, lines 7789–7945)
+
+Lists installed Steam Workshop mods with a live install-progress poller. `modManager.parseUrl()` accepts a raw workshop URL or bare ID.
+
+| UI label | action | data keys (types) | Response shape | Destructive? |
+|---|---|---|---|---|
+| *(list / poll)* | `getMods` | `server_id:int, only_status:bool` | `{mods:[{publishedfileid, …}], mod_status:{mod_id, …}}` — `only_status:true` polls just install progress | N |
+| Установить (Install) | `installMod` | `server_id:int, mod_id:string, fix:true` | `{}` | **Y** — download/install a workshop mod |
+| Удалить (Delete) | `deleteMod` | `server_id:int, mod_id:string` | `{}` | **Y** — remove an installed mod |
+
+During an active install, `getMods` returns `mod_status`; UI shows a spinner ("Идёт установка мода <mod_id>") and **auto-polls every 5 s** (`only_status:true`) while the modal is open, then re-fetches the full list on completion. Both install and delete are confirm-gated.
+
+#### 16.4.5 Server lifecycle & restart actions (lines 1085–2110)
+
+All in the "Управление" accordion. Every write is `$.question`-confirmed, `retryAbort:false`; lifecycle actions call `blockServerButtons(true)` to lock the start/stop/restart/update buttons in-flight.
+
+| UI label | action | script | data keys (types) | Effect | Destructive? |
 |---|---|---|---|---|---|
-| *(browse)* | `getConfigFiles` | squad | `server_id` | List config files grouped by dir | N |
-| *(open file)* | `getConfigFile` | squad | `server_id, file, dir` | Load file text into editor; response `{text, hasDefault}` | N |
-| Сохранить (Save) | `saveConfigFile` | squad | `server_id, text (URI-encoded), file, dir` | **Overwrite the server config file on disk** | **Y** |
-| По-умолчанию (Default) | `getDefaultConfig` | squad | `file` | Load stock/default version into read-only pane; enables split view | N |
-| Перезагрузить (Reload) | `reloadConfig` | squad | `server_id` | **Tell the server to hot-reload its config** | **Y** |
-| Отмена (Cancel) | *(local)* | — | — | Re-fetch current file, discarding edits | N |
-| Пересобрать (Merge) | *(client-only, `configEditor.merge`)* | — | — | For `Server.cfg` only: merge current values over the default template client-side | N (until saved) |
-| Скролл (Sync scroll) | *(local)* | — | — | Lock scroll between the two editors | N |
+| Включить (Start) | `start` | squad | `server_id:int` | Boot the game server | **Y** |
+| Выключить (Stop) | `stop` | squad | `server_id:int` | Shut down the server | **Y** |
+| Рестарт (Restart) | `restart` | squad | `server_id:int` | Restart the server process | **Y** |
+| Обновить (Update) | `update` | squad | `server_id:int, afterMapChange:bool` | Update server; `afterMapChange` (checkbox `#afterMapChange`, value `1`) defers until next map change | **Y** |
+| RCON restart | `rconRestart` | squad | `server_id:int` | Restart the RCON connection | **Y** |
+| Cacher restart | `cacherRestart` | squad | `server_id:int` | Restart the Steam Query/A2S cacher | **Y** |
+| Parser restart | `parserRestart` | squad | `server_id:int` | Restart the log-journal parser | **Y** |
+| Обновить бота (Update bot) | `botUpdate` | squad | *(none)* | Update the Discord bot (global; no server_id) | **Y** |
+| IP change | `setServerIP` | squad | `server_id:int, ip:string` (sent as raw query string, from `#server_ips` multiselect `onChange`) | Rebind the server IP; toast `Вы IP адрес`; hint to restart to apply | **Y** |
+| *(change map)* | `getServerMaps` | squad | `server_id:int` | List layers/factions for the change-map modal | N |
+| Monitoring chart | `serverMonitor` | squad | `start:unix, end:unix, server_id:int` | Time-series metrics for the monitor charts | N |
+| RCON console | `rconRaw` | squad | `server_id:int, command:string` | Send a raw RCON command | **Y** |
 
-Notable: **no auth check is visible client-side on `saveConfigFile`** — it blindly POSTs `server_id` from the ambient `server_id` global (note the save uses the global `server_id`, not `configEditor.server_id`, a subtle bug if the editor is ever opened for a non-active server). Direct-write to server config files + a hot-reload trigger is the highest-blast-radius capability on the panel; a competitor must gate this behind the `config`/`manageserver` permission and log every save with a diff. There are also **hidden, disabled** backup controls (`#configEditor_backup-save`, `#configEditor_backup-delete`, and a "Текущая" version dropdown, all `class="hide"` and `disabled`) — evidence of an in-progress config-versioning/backup feature not yet enabled. Shipping visible config backups/versioning would beat this.
-
----
-
-### 16.5 Map-rotation editor (`mapRotation`, `script:'squad'` — `mode` is parametrized)
-
-Opened via the dashboard gear `mapRotation.open('squad')`. `mode` (the RPC script) is passed in, so the same widget can drive different backends. The modal (`#serverMapRotation`) has weekday tabs: **Стандартная (Default)** + Пн–Вс (Mon–Sun, `data-day` 1–7). Each day tab's icon shows ✔ (green) if a custom list exists for that day, ✘ (red) if it falls back to default; the *current active* day is highlighted (`.current`).
-
-| UI label | action id | script | data params | Effect | Destructive? |
-|---|---|---|---|---|---|
-| *(load)* | `getRotation` | `<mode>` (squad) | `server_id` | Response `{rotation:{lists:{default,1..7}, current, isWin}, list, canEdit}` | N |
-| Изменить (Edit) → Сохранить | `setRotation` | `<mode>` (squad) | `server_id, rotation (URI-encoded textarea), day` | **Overwrite the rotation list for that weekday** | **Y** |
-
-The edit modal is a raw `<textarea rows=30>` of the rotation file (one layer per line; `//` comments honored client-side). Each rotation line is rendered as a list item with faction-flag icons resolved from `list[layer].teams`. **Permission gate:** `getRotation` returns a `canEdit` boolean; when false, `openEdit()` sets the textarea `readonly` and hides the Save/Cancel buttons — a clean server-authoritative read-only mode. If `rotation.isWin` is set the weekday tabs are hidden entirely (a "win-based"/seeding rotation mode). A per-day schedule (different rotation per weekday) is a nice differentiator worth matching.
+`update`'s **"После смены карты" (after map change)** deferral applies maintenance at the next natural map break instead of dropping players mid-round — a player-friendly touch worth copying. `botUpdate` also surfaces as an inline "Версия бота неактуальна" (bot out of date) dashboard banner.
 
 ---
 
-### 16.6 Map calendar (`mapCalendar`, `script:'public'`)
+### 16.5 Permission & visibility logic (predicates)
 
-A FullCalendar widget on the dashboard showing which map layers were played on which dates. `mapCalendar.get()` → action `mapCalendar`, data `{start (unix), end (unix), server_id}`, response `{maps:[…events]}` rendered as calendar events. **Read-only, and notably served by the `public` script** (not `squad`) — so map history is a public/less-privileged read. A competitor could surface this as a shareable public "what's been played" view.
-
----
-
-### 16.7 Server lifecycle & restart actions (`script:'squad'`)
-
-All live in the "Управление" accordion on `main.html`. Every one is wrapped in a `$.question` confirm dialog and uses `retryAbort:false` (no auto-retry on failure). `server_id` comes from the active-server global. Lifecycle actions call `blockServerButtons(true)` to lock the start/stop/restart/update buttons while the op is in flight.
-
-| UI label | action id | script | data params | Effect | Destructive? |
-|---|---|---|---|---|---|
-| Включить (Start) | `start` | squad | `server_id` | Boot the game server | **Y** |
-| Выключить (Stop) | `stop` | squad | `server_id` | Shut down the server | **Y** |
-| Рестарт (Restart) | `restart` | squad | `server_id` | Restart the server process | **Y** |
-| Обновить (Update) | `update` | squad | `server_id, afterMapChange (bool)` | Update server; optional deferral until after next map change | **Y** |
-| RCON | `rconRestart` | squad | `server_id` | Restart the RCON connection | **Y** |
-| Parser | `parserRestart` | squad | `server_id` | Restart the log-journal parser | **Y** |
-| *(Steam Query restart)* | `cacherRestart` | squad | `server_id` | Restart the Steam Query/A2S cacher | **Y** |
-| Обновить бота (Update bot) | `botUpdate` | squad | *(none)* | Update the Discord bot (global, no server_id) | **Y** |
-| IP dropdown change | `setServerIP` | squad | `server_id, ip` | Switch the server's bound IP (from `#server_ips` multiselect); shows a "restart to apply" hint when a `new_ip` differs from active | **Y** |
-| *(change map)* | `getServerMaps` | squad | `server_id` | List available layers/factions for the change-map modal | N |
-| Monitoring chart | `serverMonitor` | squad | `start, end, server_id` | Time-series metrics (network connections, etc.) for the monitor charts | N |
-
-The `botUpdate` prompt also surfaces on the dashboard as an inline "Версия бота неактуальна" (bot version out of date) banner with an "Обновить бота" quick-action. `update`'s **"После смены карты" (after map change)** deferral is a thoughtful UX touch — updates apply at the next natural map break instead of dropping players mid-round; worth copying.
+- **Server-authoritative read-only** is the dominant pattern:
+  - `getRotation.canEdit === false` ⇒ rotation textarea `readonly`, Save/Cancel hidden.
+  - `getServerSettings` success ⇒ `modal.find('input').attr('disabled', true)` (existing-server form is read-only).
+  - `getRotation.rotation.isWin === true` ⇒ weekday tabs hidden.
+  - `getConfigFile.hasDefault === true` ⇒ Default button shown; `file === 'Server.cfg'` ⇒ Merge button shown.
+- **No visible client-side permission check** guards `saveConfigFile` / `reloadConfig` / lifecycle actions — enforcement is entirely server-side (PHP). The 21-token group model (§16.3) is the RBAC vocabulary; `manageserver`, `config`, `ban`, `kick` are the sensitive tokens, and the panel warns `changemap`/`kick`/`ban` performed in-game aren't audit-logged.
+- **Hidden in-progress features** (`class="hide"` / `disabled`): the Основное (Main) settings tab (`#setting_main`, `li.disabled.hide`), config-editor backups + version dropdown, and the disabled rules Add-rule button. These reveal the rival's roadmap: general settings, config versioning/backups, and functional rules editing.
 
 ---
 
-### 16.8 Mod manager (`modManager`, `script:'squad'`)
+### 16.6 Competitively interesting details (copy / beat)
 
-Opened via "Менеджер модов". Lists installed Steam Workshop mods and supports install/remove with a **live install-progress poller**.
-
-| UI label | action id | script | data params | Effect | Destructive? |
-|---|---|---|---|---|---|
-| *(list)* | `getMods` | squad | `server_id, only_status` | Response `{mods:[…], mod_status}`; `only_status:true` polls just install progress | N |
-| Установить (Install) | `installMod` | squad | `server_id, mod_id, fix:true` | Download/install a workshop mod | **Y** |
-| Удалить (Delete) | `deleteMod` | squad | `server_id, mod_id` | Remove an installed mod | **Y** |
-
-`modManager.parseUrl()` accepts a raw workshop URL or ID. During an active install, `getMods` reports `mod_status` and the UI shows a spinner ("Идёт установка мода <mod_id>") and **auto-polls every 5s** (`only_status:true`) while the modal is open, then re-fetches the full list once install finishes. This progress-polling UX is polished and worth matching. Confirm dialogs guard both install and delete.
-
----
-
-### 16.9 Permission & visibility logic
-
-- **Server-authoritative read-only** is the dominant pattern: `getRotation` → `canEdit` toggles edit affordances; the server-settings modal disables all inputs after load for existing servers. The competitor takeaway: enforcement is (mostly) server-side, but the *action endpoints themselves are not visibly permission-checked client-side* — the security boundary is entirely on the PHP side.
-- The 21-token permission group model (§16.3) is the panel's RBAC vocabulary. `manageserver`, `config`, `ban`, `kick` are the sensitive tokens; the panel warns that `changemap`/`kick`/`ban` performed in-game aren't audit-logged.
-- **Hidden in-progress features** (all `class="hide"` / `disabled`): the Основное (Main) settings tab, config-editor backups + version dropdown, and rotation team-icon panels (`serverMapRotation_t1-ico`/`t2-ico`). These reveal the rival's roadmap: general settings, config versioning/backups, and richer rotation faction display.
-- The Управление panel itself is a Bootstrap collapse; the whole block is presumably server-gated by `manageserver` (only rendered for privileged operators), though the gating happens server-side before fragment delivery.
-
----
-
-### 16.10 Competitively interesting details (copy / beat)
-
-1. **Discord gamification engine** (§16.3) — auto-awarding a dozen leaderboard-derived roles (top killer/medic/CMD/SL/pilot/mortar/mechanic/knife/clan-slayer + tiered playtime + seeder roles) is a strong retention hook. This is the single richest feature to match or exceed.
-2. **Per-weekday map rotations** with a visual ✔/✘ schedule and a `win`/seeding rotation mode.
+1. **Discord gamification engine** (§16.3) — auto-award a dozen leaderboard-derived roles (top killer/medic/CMD/SL/mechanic/mortar/pilot/knife/clan-slayer) + tiered playtime + seeder roles, all scoped to Discord-linked players and a 7-day window. The single richest feature to match or exceed.
+2. **Per-weekday map rotations** with a visual ✔/✘ schedule and a `isWin`/seeding rotation mode.
 3. **Update "after map change" deferral** — player-friendly maintenance.
-4. **Live mod-install progress polling** and **CodeMirror config editing with a side-by-side default/merge** — polished ops UX.
+4. **Live mod-install progress polling** (5 s) and **CodeMirror config editing with side-by-side default + Server.cfg merge**.
 5. **Cross-server ("межсервер") ban & warn propagation** via shared Discord webhooks — a network-effect feature for server communities.
-6. **Things to beat, not copy:** (a) live Discord webhook **tokens leaked into page HTML** — a real secret-exposure bug; keep secrets server-side. (b) The server-settings modal is **read-only for existing servers** (editing disabled) — SQSTAT quietly cannot edit a server's name/IP/mods after creation from that modal; shipping true in-place server editing is an easy win. (c) The **rules-save serializer is stubbed** (`collect()` returns `{}`) — rules editing appears non-functional. (d) Config saves aren't diffed/versioned/backed-up (feature is present but hidden/disabled). (e) `saveConfigFile` reads the ambient global `server_id` rather than the editor's own `server_id`, a latent cross-server write bug.
+6. **Things to beat, not copy:** (a) live Discord webhook **tokens leaked into page HTML** (six fields) — a real secret-exposure bug; keep secrets server-side. (b) The server-settings modal is **read-only for existing servers**; ship true in-place editing. (c) The **rules-save serializer is a stub** (`collect()` returns `{}`, Add button disabled) — rules editing is inert. (d) Config saves aren't diffed/versioned/backed-up (feature present but hidden). (e) `saveConfigFile`/`reloadConfig` read the ambient global `server_id` rather than the editor's own — a latent cross-server write bug.
 
 
 ---
@@ -3405,138 +5076,252 @@ Opened via "Менеджер модов". Lists installed Steam Workshop mods an
 
 The **Журнал** (Journal / Audit Log) is a read-only, server-side-paginated audit trail of admin actions performed through the SQSTAT panel. It answers "who did what, on which server, and when."
 
-- **Nav item:** calls `pageLoad('logs')` → `GET /ajax/page.php?page=logs`, whose HTML fragment is injected into `#content`.
-- **Fragment file analyzed:** `frags/logs.html`. Lines 1–107 are the page's own content; lines 108+ are the shared **player-detail modal** (`#playerModal`) embedded on every page — its columns and ~22 actions are NOT part of this page and are documented in the shared-modal section, not here.
-- **Table bootstrap:** an inline `<script>` (bottom of fragment) calls `$('#logTable').buildTable({ table: 'logs', ... })`.
+- **Nav item:** calls `pageLoad('logs')` → `GET /ajax/page.php?page=logs` (`ctype: text/html`, ~114 KB fragment), whose HTML is injected into `#content`.
+- **Table bootstrap:** an inline `<script>` at the bottom of the fragment calls `$('#logTable').buildTable({ table:'logs', collum:['serverName','name','date','log'], numrows:100, searchInput:[...], end:<hashtag binder> })`.
+- The page is a single filter bar plus one server-driven table (`#logTable`). It has **no state-changing controls of its own** — the only interaction beyond filtering is clicking a `<hashtag>` player token inside a row to open the shared player modal.
 
-The page consists of a single filter bar plus one DataTable-style table (`#logTable`). There are **no state-changing controls of its own** — the only interaction beyond filtering is clicking a `<hashtag>` inside a row to open the shared player modal.
+**Ground truth:** all contract facts below are captured from a live authenticated headless session against `https://breaking.sqstat.ru`. Capture files: `caps/logs/logs.network.json` (3 AJAX contracts), `caps/logs/logs.content.html` (rendered `#content`). `_blocked.json` is empty — no mutating request was issued (read-only page, as expected).
 
 ---
 
-### 2. Entities & Fields
+### 2. Live API Contracts
 
-#### 2.1 Log Entry (`logs` table, alias `t1`)
+The page issues **one GET** (fragment) and **two POSTs** to `/ajax/table.php` — a deliberate two-phase load: phase 1 returns the page rows fast (`count_time: 0`, `totalRows: 0` deferred); phase 2 runs the expensive `COUNT(*)` only when needed. Both POSTs are dispatched through the generic `Action({script:'table', action:'logs', data:...})` helper (`custom.js:284`), which posts `application/x-www-form-urlencoded` to `/ajax/<script>.php`.
 
-The audit record. Inferred from the returned column set (`collum: ["serverName","name","date","log"]`), the `<thead>`, and the `data-search` aliases used by the filters.
+#### 2.1 `GET /ajax/page.php?page=logs` — page fragment
 
-| Field (returned) | UI column | SQL source (from filter aliases) | Meaning / Type |
+| Param | Type | Required | Meaning |
 |---|---|---|---|
-| `serverName` | Сервер (Server) | joined via `server_id` | Human-readable server name (e.g. `RAAS/AAS #1`). String. |
-| `name` | Админ (Admin) | `t2.player` (admins table `t2`) | Display name of the admin who performed the action. Joined from the admin/player table. String. |
-| `date` | Дата (Date) | `t1.startdate` / `t1.enddate` filter on the row's timestamp | Timestamp of the action. Rendered ~120px column, centered. |
-| `log` | Действие (Action) | `t1.log` | Free-text/structured description of the logged action. String; may embed `<hashtag>` tokens (clickable player references). |
+| `page` | string enum | yes | View id; `logs` for this page. |
 
-Implied underlying columns not shown but used for filtering/joins: `server_id` (FK to server), an admin FK (joins `t2.player`), and the timestamp used by `t1.startdate`/`t1.enddate` range filters.
+Returns the raw HTML `#content` fragment (filter bar + empty `<table id="logTable">`). No JSON. `status: 200`, `text/html; charset=UTF-8`.
 
-#### 2.2 Server (referenced entity)
+#### 2.2 `POST /ajax/table.php` (phase 1 — rows) — the audit query
 
-Populated as `<option value="<id>" label='<name>'>` in the multiselect. Observed IDs are non-contiguous (`1, 6, 7, 9, 10, 11`), confirming `server_id` is a stable DB primary key, not a UI index.
+Captured body (`caps/logs/logs.network.json`, contract #2), URL-decoded:
 
-| Field | Type | Example |
+```
+action=logs
+table=logs
+page=1
+numrows=100
+search={"text":{},"check":{},"multiselect":{},"managers":{},"slider":{}}
+order_by=false
+order_sort=false
+```
+
+**Request params:**
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `action` | string enum | yes | Server handler = table id. Always `logs`. |
+| `table` | string enum | yes | Same value `logs` (redundant with `action`; `buildTable` sends both). |
+| `page` | int (1-based) | yes | Page number. Row window is `[(page-1)*numrows, page*numrows)`. |
+| `numrows` | int | yes | Page size. Bootstrap value `100`. |
+| `search` | JSON string (URL-encoded) | yes | Filter object, always the 5 fixed buckets `{text,check,multiselect,managers,slider}`; empty `{}` = no filter. See §5 for key set. |
+| `order_by` | string \| `"false"` | yes | Sort column DB-alias, or literal `false` when unsorted. Logs page always sends `false`. |
+| `order_sort` | `"asc"` \| `"desc"` \| `"false"` | yes | Sort direction, or literal `false`. Logs page always sends `false`. |
+
+**Response** (`application/json`, `status:200`), schema from capture:
+
+| Field | Type | Meaning |
 |---|---|---|
-| `server_id` | int PK | `1` |
-| server label | string | `RAAS/AAS #1`, `INVASION #3`, `Custom для FW` |
+| `status` | string enum `"ok"` | Request status. On `auth===true` (not `ok`) the client calls `location.reload()` (re-auth bounce). |
+| `exec_time` | float — seconds | Total server handler time (e.g. `0.022`). |
+| `data.totalPage` | int | `0` in phase 1 (count deferred to phase 2). |
+| `data.totalRows` | int | `0` in phase 1 (deferred). |
+| `data.currentPage` | string — 1-based | Echo of requested page, as string (`"1"`). |
+| `data.custom` | bool | Whether a custom result set is returned. `false` for logs. |
+| `data.query_time` | float — seconds | Row-fetch time (e.g. `0.02`). |
+| `data.count_time` | int/float — seconds | `0` in phase 1 (no COUNT run). |
+| `data.row` | array (len ≤ `numrows`) | Audit rows. Row object schema below. |
 
-#### 2.3 Admin (referenced entity, alias `t2`)
+**`data.row[]` object** (per captured `response_schema` / redacted `response_sample`):
 
-The audit joins to a players/admins table aliased `t2`; the filterable field is `t2.player` (the admin's identity/name). This is the same identity that the shared modal opens when a `<hashtag>` is clicked.
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string — numeric PK (6-digit observed, e.g. `"262459"`) | Audit-row primary key. Monotonic, gaps present (`262459, 262458, 262457, 262456, 262455, 262453…`) → auto-increment, effectively newest-first. Rendered as `<tr id="trID-<id>" data-id="<id>">`. |
+| `server_id` | string int (`"0"`, `"1"`…) | FK to server. `"0"` = panel-global event (no game server; e.g. login) → `serverName` empty. |
+| `steam_id` | string — 36 chars (UUID-shaped) | Internal player identity of the event subject. **Returned but not rendered** — no column maps it (see §3 Finding). Distinct from the 17-digit SteamID64 embedded inside `log` text. |
+| `date` | string — **UNIX timestamp** (10-digit seconds, e.g. `"1783146994"`) | Event time. Rendered client-side (§3) into a relative badge. |
+| `log` | string — free text / HTML | Human-readable action description (Russian). May embed `<b>`, `<i>`, and `<hashtag>SteamID64</hashtag>` tokens. Example values in §6. |
+| `name` | string | Display name of the acting admin (e.g. `[BSS] seregatipich`). |
+| `serverName` | string (may be empty) | Denormalized server label (e.g. `RAAS/AAS #1`). Empty when `server_id="0"`. |
+
+Redacted phase-1 sample row:
+
+```json
+{ "id":"262459", "server_id":"0", "steam_id":"<uuid:36>",
+  "date":"1783146994", "log":"Авторизовался",
+  "name":"<redacted>", "serverName":"" }
+```
+
+#### 2.3 `POST /ajax/table.php` (phase 2 — pagination count)
+
+Identical body to phase 1 **plus `&pagination=true`**. Fired by `getPagination()` (`custom.js:986`) only when the phase-1 page came back full (`rows == numrows`) **or** `currentPage != 1` — i.e. it's skipped entirely when the whole result fits on page 1 (then `Всего` is taken from the row count directly).
+
+**Response** (captured contract #3):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | string enum `"ok"` | Status. |
+| `exec_time` | float — seconds | Handler time (e.g. `0.069`). |
+| `totalPage` | int | Total pages = `ceil(totalRows/numrows)`. Live value `1105`. |
+| `totalRows` | **string** — integer | Total matching rows, as string. Live value `"110488"` (~110 K audit records). |
+| `count_time` | float — seconds | Cost of the `COUNT(*)` (e.g. `0.06`) — isolated here so it never blocks the row render. |
+
+`totalRows` / `totalPage` drive the pager and the `Страница X из Y — Всего: N` (Page X of Y — Total: N) info line, both `Intl.NumberFormat`-grouped.
 
 ---
 
 ### 3. The Page's Own Table (`#logTable`)
 
-**Columns** (`<thead class="table-dark">`):
+**Rendered columns** (`<thead class="table-dark">`, from `logs.content.html`):
 
-| # | `<th>` | Width | Align | Data key |
-|---|---|---|---|---|
-| 1 | Сервер (Server) | 200px | left | `serverName` |
-| 2 | Админ (Admin) | auto | left | `name` |
-| 3 | Дата (Date) | 120px | center | `date` |
-| 4 | Действие (Action) | auto | left | `log` |
+| # | `<th>` | Width | Align | `collum` key → `data-contact` | Render |
+|---|---|---|---|---|---|
+| 1 | Сервер (Server) | 200px | left | `serverName` | Raw string wrapped in `<code>` when non-empty; blank for global events. |
+| 2 | Админ (Admin) | auto | left (`class="contact_name"`) | `name` | `<p class="text-center mb-0"><b>{name}</b></p>`. |
+| 3 | Дата (Date) | 120px | center | `date` | `formatDate(unix, badge=true, checkdate=true)` → `<span class="badge bg-success" data-unix="{unix}">{label}</span>`. |
+| 4 | Действие (Action) | auto | left | `log` | Free HTML string, verbatim (may contain `<b>`/`<i>`/`<hashtag>`). |
 
-**Data source / request.** `buildTable` issues the row request through the generic `Action()` helper:
+**Date badge logic** (`formatDate`, `custom.js:132-158`): label is relative via `checkToday()` — same calendar day → `Сегодня` (Today), day-1 → `Вчера` (Yesterday), else `DD.MM.YYYY`; time suffix `HH:MM:SS` always appended. Badge color: `bg-important` only if `!checkdate && date*1000 < Date.now()`; because the logs column passes `checkdate=true`, all rows render `bg-success` (green). Example: `<span class="badge bg-success" data-unix="1783146994">Сегодня 08:36:34</span>`.
 
-- **Endpoint:** `POST /ajax/table.php`
-- **Body:** `action=logs&table=logs&page=<n>&numrows=100&search=<urlencoded JSON>&order_by=<false|col>&order_sort=<asc|desc>`
-- `action` = the table name (`logs`); response is `{status:'ok', data:{ row:[...], query_time, count_time, ... }}`.
-- **Page size:** `numrows: 100` per page.
-- **Sorting:** no `order` array is passed in the bootstrap call, so **column-header sorting is not enabled** on this page (rows come back in the server's default order, effectively newest-first by date). The `buildTable` engine *supports* sort via `order_by`/`order_sort`, but the logs page opts out.
-- **Pagination:** server-side; `buildTable` renders a pager (`showPages: 9` desktop / `3` mobile) below the table when total rows exceed 100.
+**DataTables config (exact):**
 
-**Search JSON shape** (built by `buildTable` from the `searchInput` list, then `encodeURIComponent(JSON.stringify(...))`):
+| Property | Value | Note |
+|---|---|---|
+| Server table id (`action`/`table`) | `logs` | |
+| `collum` | `["serverName","name","date","log"]` | Column→row-key map. `steam_id`, `server_id`, `id` are returned but unmapped (see Finding). |
+| `numrows` (page size) | `100` | |
+| `order` | `[]` (omitted) | **No column sorting wired.** `buildTable` only attaches header sort handlers + `<i data-sort>` icons when `order` is non-empty (`custom.js:797-838`); logs opts out. |
+| `order_by` / `order_sort` | `false` / `false` | Always literal false → server default order (id-desc ≈ newest-first). |
+| `showPages` | `9` desktop / `3` mobile | Pager window radius around current page. |
+| `showOnePage` | `true` | Renders the `Всего` info line even for a single page. |
+| `floatHead` | `true` | Sticky header; scrolls table into view on (re)build. |
+| Default sort | none sent → **server default** (newest first) | |
+
+**Finding — returned-but-unrendered identity.** The phase-1 row carries `steam_id` (36-char UUID) and `server_id`, yet `collum` maps neither. The clickable player token in column 4 is a **17-digit SteamID64** embedded inside the `log` free-text (e.g. `<hashtag>7656119XXXXXXXXXX</hashtag>`), not the row's `steam_id` field. So the audit surface exposes two different identifiers for the same subject (a UUID it doesn't display + a SteamID64 baked into prose), and drill-down keys off the string inside the message, not a structured FK.
+
+---
+
+### 4. Two-Phase Request Sequence (reference)
 
 ```
+buildTable(#logTable)
+  ├─ preGetTable() → query = ["logs", "&table=logs&page=1&numrows=100&search=<json>&order_by=false&order_sort=false"]
+  ├─ getTable()               POST /ajax/table.php  (rows; timeout 120 s)   → data.row[], currentPage
+  │     └─ build()            renders <tbody>, then getPagination(rows)
+  └─ getPagination(rows)
+        └─ if rows==100 or currentPage!=1:
+             Action(...data + "&pagination=true")  POST /ajax/table.php     → totalPage, totalRows
+             → renders pager + "Страница X из Y — Всего: N"
+```
+
+`Action()` (`custom.js:284`) aborts any in-flight request of the same name before firing (`retryAbort`), so rapid re-filters don't stack. On non-`ok` with `auth===true` it forces `location.reload()`.
+
+---
+
+### 5. Filters / Search Controls
+
+Wired via `searchInput: ["logTable-user","logTable-name","logTable-startdate","logTable-enddate","logTable-server"]`. `buildTable` reads each input's `data-search` alias + `type` and bins it into the `search` JSON (`custom.js:733-778`). Only non-empty inputs are emitted; `+` is escaped to `%2B` in multiselect values.
+
+| Control | `#id` | `data-search` alias | Input type | Placeholder | Search bucket | Behavior / validation |
+|---|---|---|---|---|---|---|
+| Admin name | `logTable-user` | `t2.player` | text | Администратор (Administrator) | `text` | Substring match on acting admin. |
+| Action text | `logTable-name` | `t1.log` | text | Действие (Action) | `text` | Free-text substring over the `log` description. |
+| From date | `logTable-startdate` | `t1.startdate` | text, `readonly` (datetimepicker) | От (From) | `text` | Lower bound. Bootstrap datetimepicker `language:'ru'`, `pickTime:true`, side-by-side. `readonly` → only picker sets it. Clear addon `onclick="$('#logTable-startdate').val('')"`. |
+| To date | `logTable-enddate` | `t1.enddate` | text, `readonly` (datetimepicker) | До (To) | `text` | Upper bound. Same picker. Clear addon zeroes it. |
+| Server | `logTable-server` | `server_id` | `multiselect` (`multiple`) | `- Сервер -` | `multiselect` | `bootstrap-multiselect`, HTML-enabled, multi-value → array of `server_id`. |
+| Search | `logTable-btn` | — | button | Поиск (Search) | — | Fires `buildTable` rebuild with `isSearch:true, page:1`. |
+
+**Server multiselect options** (live `<option value label>` set — non-contiguous ids confirm `server_id` is a DB PK):
+
+| `server_id` | Label |
+|---|---|
+| `1` | RAAS/AAS #1 |
+| `6` | БЕЗ ГОЛОСОВАНИЯ #2 (No-voting #2) |
+| `7` | INVASION #3 |
+| `9` | Custom для FW |
+| `10` | Custom для MDC |
+| `11` | Custom для BSS |
+
+`server_id=0` (panel-global) is **not** a filter option — global events are only reachable by leaving the server filter empty.
+
+**Resulting `search` JSON shape** (empty when unfiltered, as captured):
+
+```json
 {
-  "text":        { "t2.player": "<admin>", "t1.log": "<action text>",
-                   "t1.startdate": "<from>", "t1.enddate": "<to>" },
+  "text":        { "t2.player":"<admin>", "t1.log":"<text>",
+                   "t1.startdate":"<unix|datestr>", "t1.enddate":"<unix|datestr>" },
   "check":       {},
-  "multiselect": { "server_id": ["1","7", ...] },
+  "multiselect": { "server_id":["1","7"] },
   "managers":    {},
   "slider":      {}
 }
 ```
 
-Only non-empty inputs are included. `+` characters are pre-escaped to `%2B`.
+Filter aliases reveal the server join: `t1` = the logs table (`t1.log`, `t1.startdate`, `t1.enddate` range on the timestamp, `server_id`), `t2` = the admins/players table (`t2.player`). Note: clearing a date field does **not** auto-refresh — the user must press Поиск (or Enter in a text field).
 
 ---
 
-### 4. Filters / Search Controls
+### 6. Logged Action Strings (`log` semantics)
 
-Declared in the filter bar and wired via `searchInput: ["logTable-name","logTable-startdate","logTable-enddate","logTable-user","logTable-server"]`.
+`log` is stored/returned as a **rendered Russian string**, not a normalized `{action_type,target,params}` record — filtering is substring-only. Distinct action templates observed in the live 100-row page (counts in parentheses):
 
-| Control | Element id | `data-search` alias | Type | Placeholder | Behavior |
+| `log` template (Russian) | English gloss | Structure |
+|---|---|---|
+| `Авторизовался` (n=2) | Logged in / Authenticated | Bare verb. `server_id=0`, no server, no target. Session-level audit. |
+| `Зашёл в камеру` (n=94) | Entered admin cam (spectator) | Bare verb; carries `server_id`/`serverName`. Dominant event type. |
+| `Забанил <b>{name}</b> <hashtag>{steamid64}</hashtag> на <b>{N}</b> дн <i>"{reason + до DD.MM.YYYY HH:MM}"</i>` | Banned {player} for {N} days, reason … | Target SteamID64 as clickable token; duration + expiry + reason embedded in prose. |
+| `Разбанил <b>{name}</b> <hashtag>{steamid64}</hashtag> ({steamid64})` | Unbanned {player} | Target twice (token + parenthetical). |
+| `Отправил сообщение <b>{tag}</b> <hashtag>{steamid64}</hashtag> - "{message}"` | Sent message to {player} — "…" | In-game admin DM; message body quoted. |
+
+The panel writes login, admin-camera entry, ban, unban, and admin-message events (and, per the shared action catalog, presumably kick/kits/mark/twink/group-change etc.) as free text. Because everything is one string, "all bans by admin X this week" is only answerable by substring-matching `Забанил` in `t1.log` — brittle.
+
+---
+
+### 7. Actions Available on This Page (Permissions/Capabilities)
+
+The audit journal is deliberately **read-only** — no ban/kick/edit/delete/export control of its own.
+
+| UI trigger | Action | Endpoint | Data params | Effect | Destructive? |
 |---|---|---|---|---|---|
-| Admin name | `logTable-user` | `t2.player` | text | Администратор (Administrator) | Substring filter on the acting admin. Enter key triggers search. |
-| Action text | `logTable-name` | `t1.log` | text | Действие (Action) | Free-text filter over the log/action description. Enter key triggers search. |
-| From date | `logTable-startdate` | `t1.startdate` | text (readonly, datetimepicker) | От (From) | Lower bound of date range. Bootstrap datetimepicker, `language: 'ru'`, `pickTime: true`, side-by-side. Clear icon zeroes the field. |
-| To date | `logTable-enddate` | `t1.enddate` | text (readonly, datetimepicker) | До (To) | Upper bound of date range. Same picker config; clear icon resets. |
-| Server | `logTable-server` | `server_id` | multiselect (`multiple`) | `- Сервер -` | `bootstrap-multiselect`, HTML-enabled, multi-value. Filters to selected `server_id`s. |
-| Search button | `logTable-btn` | — | button | Поиск (Search) | Fires the query with current filter state. |
+| Load / filter / paginate | `Action({script:'table', action:'logs'})` | `POST /ajax/table.php` | `table=logs&page&numrows=100&search&order_by=false&order_sort=false[&pagination=true]` | Fetch audit rows / count. | N (read) |
+| Click a `<hashtag>` in a row | `player.open($(this).text())` | — (opens shared `#playerModal` via `player`/`squad` scripts) | SteamID64 from the token text | Opens player-detail modal for the referenced subject. | N |
 
-Notes:
-- Date fields are `readonly` — values only settable via the picker (prevents malformed input).
-- The two date-clear `<span>` addons run inline `$('#...').val('')`; they clear the field but do **not** auto-refresh — the user must press Поиск (or Enter in a text field).
+`end` callback binds: `$('#logTable tbody > tr hashtag').on('click', …) → player.open($(this).text())` — every SteamID64 rendered in a log line is a drill-down into the shared modal.
+
+> The action tokens pre-extracted for `logs.html` in `action_catalog.txt` (`ban, kick, kill, kits, mark, message, twink, unban, addComment, getComments, changeGroup, changeTeam, checkBans, findFriends, removePlayer, addBanName, removeBanName, twinkOnline, getPlayerOnlineData, downloadStat, kitSave, get`) plus `script:'player'`/`script:'squad'` all belong to the **embedded shared player modal**, NOT to the audit journal. They are what the modal can do to whatever player you open from a log row — do not attribute them to this page.
 
 ---
 
-### 5. Actions Available on This Page (Permissions/Capabilities)
+### 8. Permission / Visibility Logic
 
-The audit journal is deliberately **read-only**. It exposes no ban/kick/edit/delete/export controls of its own.
-
-| UI trigger | Action id | Script endpoint | Data params | Effect | Destructive? |
-|---|---|---|---|---|---|
-| Load / filter / paginate the table | `logs` | `POST /ajax/table.php` | `table=logs&page&numrows=100&search&order_by&order_sort` | Fetch audit rows (server-side paginated/filtered). | N (read-only) |
-| Click a `<hashtag>` in a row | (opens modal) `player.open(steamid)` | — (then shared modal loads via `player`/`squad` scripts) | steam id from the clicked token | Opens the shared player-detail modal for the referenced identity. | N |
-
-The `end` callback binds: `$('#logTable tbody > tr hashtag').on('click', ...) → player.open($(this).text())`. So any player reference rendered inside a log line is a drill-down link into the shared modal.
-
-> The action tokens pre-extracted for `logs.html` in `action_catalog.txt` (`ban`, `kick`, `kill`, `kits`, `mark`, `message`, `twink`, `unban`, `addComment`, `getComments`, `changeGroup`, `changeTeam`, `checkBans`, `findFriends`, `removePlayer`, `addBanName`, `removeBanName`, `twinkOnline`, `getPlayerOnlineData`, `downloadStat`, `kitSave`, `get`) together with `script:'player'` and `script:'squad'` all belong to the **embedded shared player modal**, NOT to the audit journal. They are the actions the modal can perform on whatever player you open from a log row — do not attribute them to this page.
+- The journal's own markup contains no per-element `hide`/role gating — it is one filterable table. (All `hide`/`display:none` in the fragment are inside the shared `#playerModal`.)
+- Access control is therefore **page-level**: server-side gating of `pageLoad('logs')` by admin group. The fragment assumes the requester is authorized.
+- Session expiry is handled transparently by `Action()`: a non-`ok` response with `auth===true` triggers `location.reload()` → login bounce (no stale audit data).
+- The server-global rows (`server_id=0`, e.g. logins) have no server filter path, so a per-server admin filtering by their server would never see panel-level login events — an intrinsic visibility gap.
 
 ---
 
-### 6. Forms & Modals
+### 9. Retention & Scale (observed)
 
-The page has **no forms/modals of its own** beyond the filter bar. The only modal in the fragment is the shared `#playerModal` (player-detail), reached by clicking a player `<hashtag>` in a log row. Its fields, tabs, and actions are covered in the shared-modal section.
-
----
-
-### 7. Permission / Visibility Logic
-
-- The fragment contains no per-element `class="hide"` or role gating within the journal's own markup — the entire page is a single filterable table. (All `hide`/`display:none` elements in the file are inside the shared player modal.)
-- Access control for the journal is therefore expected to be **page-level** (server-side gating of `pageLoad('logs')` by admin group). The client fragment assumes the requester is already authorized to see it.
-- `Action()` transparently handles session expiry: if `table.php` responds `auth === true`, it triggers `location.reload()` (re-auth), so an expired session on the audit page bounces to login rather than showing stale data.
+- Live `totalRows = 110488` across `totalPage = 1105` at 100/page. `page` is unbounded and the date filter defaults to empty (full history). No client-side age cap or rotation notice.
+- `id` is a dense-ish auto-increment (small gaps from deleted/rolled-back events) — the sequence itself implies long-lived accumulation, not a rolling window.
+- Retention/rotation, if any, is enforced server-side and is not observable from the client. The isolated `count_time` (§2.3) suggests the count query is non-trivial at this row volume — hence the two-phase deferral.
 
 ---
 
-### 8. Notable UX & Competitively Interesting Details
+### 10. Competitively Interesting Details
 
-- **Minimal, single-purpose page.** Four columns, five filters, one button. It reads as an accountability/compliance view (who-did-what) rather than an operations console — the deliberate absence of any mutating control is the point: an audit log you can't edit is more trustworthy.
-- **The `log` column is free-text**, filtered by substring on `t1.log`. This implies actions are stored as rendered strings, not as a normalized `{action_type, target, params}` schema. **Competitive opportunity:** store audit events structurally (actor, action enum, target entity + id, before/after diff, server, timestamp) so you can filter by exact action type, link every target, and render a rich timeline. Their text-search-only model can't reliably answer "show all *bans* by admin X this week."
-- **No column sorting** is wired here (order array omitted) — you can filter but not re-sort. Easy to beat by enabling sort on Date/Admin/Server.
-- **Date range uses two separate readonly pickers** (`t1.startdate` / `t1.enddate`) rather than a single daterange widget (the engine supports a `daterange` type elsewhere). Clearing a date does not auto-refresh, a minor friction point.
-- **Server filter keys off DB `server_id`** (non-contiguous ids), and the server label is denormalized into the row (`serverName`) — cheap to render, but means historical server renames would rewrite past display names unless snapshotted.
-- **Drill-down via `<hashtag>`:** player identities embedded in log lines are live links into the shared modal — a nice touch that turns the audit log into an investigation entry point. Worth copying: make every actor and target in an audit row a clickable entity link.
-- **Retention:** nothing in the client indicates a retention/rotation policy or an age cap on queries — pagination is unbounded (`page` increments, `numrows=100`), and the date filter defaults to empty (all history). Retention, if any, is enforced server-side and is not observable from the fragment.
+- **Free-text `log`, not a structured event.** Filtered by substring on `t1.log`; duration, reason, expiry, target are baked into prose. **Opportunity:** store audit events as `{actor, action_enum, target_entity+id, before/after, server_id, ts}` so you can filter by exact action type, join every target, and render a real timeline. Their model can't reliably answer "all bans by admin X this week."
+- **Two identifiers, neither clean.** Row carries a 36-char UUID `steam_id` it never renders, while drill-down keys off a SteamID64 string parsed out of the message HTML. A normalized target FK + one canonical id would be strictly better.
+- **No column sorting** (empty `order`) — filter but can't re-sort. Trivial to beat by enabling Date/Admin/Server sort (engine already supports it via `order_by`/`order_sort`).
+- **Two separate readonly date pickers** rather than one daterange widget (`t1.startdate`/`t1.enddate`); clearing a date doesn't auto-refresh — minor friction.
+- **Deferred count (two-phase load)** is a genuinely good pattern at 110 K rows — worth copying: render rows immediately, compute `COUNT(*)` in a second request so pagination never blocks first paint.
+- **Global vs per-server split** (`server_id=0`) means login/session events live outside every server filter — an accountability blind spot to avoid.
+- **Drill-down via `<hashtag>`** turns the audit log into an investigation entry point. Worth copying — but make *every* actor and target a structured entity link, not a regex over rendered text.
 
 
 ---
@@ -3545,183 +5330,380 @@ The page has **no forms/modals of its own** beyond the filter bar. The only moda
 
 ### 1. Purpose & Navigation
 
-The Clan Management page is the detail/administration view for a single clan (internally also called a **squad** — see note below). It combines a clan "dashboard" (online chart, aggregate stats, top players, recent games) with a **roster manager** (add/remove members, assign roles, grant queue priority/VIP) and clan-level settings (tag protection, public visibility, expiry, tags).
+The Clan Management page is the detail/administration view for a single clan (internally also called a **squad** — see terminology note). It combines a clan **dashboard** (60-day online bar chart, aggregate combat stats, top-10 podium, recent games), a **roster manager** (add/remove members, assign leader/deputy roles, grant queue priority/VIP), a per-server **live presence** panel, and clan-level **settings** (tag protection, public visibility, expiry, tags, Discord role).
 
-- **Page id / nav:** `clan&id=N` — opened via `pageLoad('clan&id=<N>')` → `GET /ajax/page.php?page=clan&id=<N>`, returning the fragment analysed here (`clan_16.html`, `id=16`, clan `[MDC]`).
-- **Entry points:** Clicking a clan anywhere in the app navigates to `clan&id=N`. A new clan is created from the global "Добавить" (Add) menu item (`home_auth.html`, `onclick="createClan.open()"`), which opens the shared **Create-clan modal** (documented in §5).
-- **Terminology note — clan == squad:** The client object is `clan`, but the create/edit path posts to `script:'squad', action:'createSquad'`. "Clan" and "squad" are the same server-side entity; the roster-management actions use `script:'clan'` while creation/edit uses `script:'squad'`.
+- **Page id / nav:** `clan&id=N`, opened via `pageLoad('clan&id=<N>')` → `GET /ajax/page.php?page=clan&id=<N>`. Returns the HTML fragment analysed here. Live capture: `clan&id=16`, clan `[MDC]`.
+- **Entry points:** clicking a clan anywhere in the app navigates to `clan&id=N`. A new clan is created from the global "Добавить" (Add) menu (`onclick="createClan.open()"`), opening the shared **Create-clan modal** (§6). The page's "Редактировать" button calls `clan.edit()` → `createClan.edit(clan.data)`, reusing that same modal.
+- **Terminology — clan == squad:** the client object is `clan`, but create/edit posts to `script:'squad', action:'createSquad'` (`/ajax/squad.php`). "Clan" and "squad" are the same server-side entity; roster/settings ops use `script:'clan'` (`/ajax/clan.php`) while creation/edit uses `script:'squad'`.
+- **Bootstrap:** the fragment inlines the full clan record as `clan.data` and sets `clan.id`. Captured verbatim (id 16):
 
-> The fragment also embeds the shared **player-detail modal** (`#player_info`, tabs Chat/Kills/Deaths/Kits/Games/Comments with ~22 actions such as `ban`, `kick`, `kill`, `kits`, `mark`, `message`, `twink`, `addComment`, `changeExpire`, `transfer`, `vipPlayer`, …). Those belong to the shared modal, **not** to the clan page, and are opened here only indirectly via `player.open(steam_id)` when an admin clicks a roster row. They are documented in the player-profile section and are deliberately excluded from the clan-action table below.
+  ```json
+  {"id":"16","name":"[MDC]","tags":["Mdc |","MdcK |"],"discord_id":null,
+   "date":"1746523474","expire":"2620162800","max":"999","protected":"1","public":"1"}
+  ```
 
----
-
-### 2. Entities & Fields
-
-#### 2.1 Clan / Squad entity
-
-Inferred from `clan.data` (bootstrapped inline into the fragment) and the create/edit modal payload.
-
-| Field | Type | Meaning |
-|---|---|---|
-| `id` | int (string) | Clan primary key (`16` here). Used as `clan_id` in every clan action. |
-| `name` | string, ≤32 chars | Clan display name (e.g. `[MDC]`). |
-| `tags` | string[] | List of in-game name prefixes/clan tags (e.g. `["Mdc |", "MdcK |"]`). Drives tag-protection kicks and player search. |
-| `discord_id` | string, ≤64 chars \| null | Discord **role** ID linked to the clan (label "Discord ID роль"). |
-| `date` | unix ts (string) | Clan creation timestamp. |
-| `expire` | unix ts (string) | Priority/VIP subscription expiry (`2620162800` ≈ 11.01.2053 here). `0` = infinity. |
-| `max` | int (string) | Maximum priority (VIP/queue) slots (`999` here). Displayed as "Слотов: X из max". |
-| `protected` | 0/1 | "Защита тега" (tag protection) — auto-kicks players wearing the clan's tags who are not on the roster; lists refresh every 10 min. |
-| `public` | 0/1 | "Публичная страница" — makes this page viewable (read-only, without priority-queue info) without edit rights. |
-
-Derived/related data returned by `action:'list'` (not stored on the clan row itself):
-
-- `servers` — map of `server_id → [{team, name, playtime:{date,last_seen}}]`: which of the clan's members are currently online on each tracked server.
-- `discord` — `[{name, channel}]`: linked Discord voice channels (rendered in the hidden `#discord-block`, shown only if non-empty).
-- `access` — boolean: whether the current viewer may manage priority (controls whether the VIP column renders).
-
-#### 2.2 Clan member (roster row)
-
-Inferred from the `text.players[]` objects rendered by `clan.build()`.
-
-| Field | Type | Meaning |
-|---|---|---|
-| `steam_id` | string (SteamID64) | Member identity; row `data-id`. Links to Steam profile & `/player/<id>` stats. |
-| `name` | string | Current in-game nickname. |
-| `kit` | string \| null | Last-used kit/role (e.g. `Recruit`, `Rifleman`); row `data-kit`; renders a kit icon. `null` → "неизвестно" (unknown). |
-| `discord` | bool | Whether a Discord account is linked (green check / red cross). |
-| `date` | unix ts | Last seen ("Заходил"). |
-| `online` / `online_raw` | string / number | Naigrannoe (playtime) over the last 60 days; `online_raw` is the sort key. |
-| `type` | 0/1/2 | Role: `1` = **Глава** (leader), `2` = **Зам** (deputy), `0`/`''` = ordinary member. |
-| `vip_mode` | 0/1/2 | Priority state: `1` = priority ON, `0` = OFF (toggleable), `2` = priority granted from another source (shown as a ban-icon, not toggleable). |
-| `access` | bool | Whether the current viewer may **remove** this specific member (renders the delete button). |
-
-#### 2.3 Player search result (add-member modal)
-
-From `action:'findPlayer'` → `text.players[]`:
-
-| Field | Type | Meaning |
-|---|---|---|
-| `steam_id` | string | Candidate SteamID64. |
-| `name` | string | Nickname. |
-| `clan_id` | int \| null | If already in a clan, shows a check and disables the add button. |
-
-#### 2.4 Clan statistics payload
-
-From `action:'stats'` → `text.stats` / `text.chart`:
-
-- `chart.labels[]`, `chart.online[]` — bar-chart series ("Онлайн клана").
-- `stats.online`, `stats.boost` (online boost), `stats.server` (primary server), `stats.primetime[]` (`{start,end}` peak windows), `stats.kill`, `stats.die`, `stats.revive` (K/D computed client-side).
-- `stats.top[]` — `{steam_id, name, kill, die, revive}` top-10 members (top 5 rendered as a podium with kit art).
-- `stats.games[]` — `{id, name, map, cnt, start, end}` recent games the clan participated in.
+> The fragment also embeds the shared **player-detail modal** (`#player_info`) with ~22 `script:'player'`/`script:'squad'` actions (`get`, `ban`, `kick`, `kill`, `kits`, `mark`, `message`, `twink`, `addComment`, `changeExpire`, `changeGroup`, `changeTeam`, `getComments`, `getPlayerOnlineData`, `downloadStat`, …). Those belong to the **player profile / in-game squad** subsystems and are opened here only indirectly via `player.open(steam_id)` when an admin clicks a roster row. They are documented in their own sections and are excluded from the clan-action tables below. In particular, the `disband` / `rename` / `transfer` actions seen in `action_catalog.txt` live on the **in-game squad panel** (`main.html`), **not** on `clan.php`; the clan-page equivalents are `delete` (disband a clan), `createSquad` with a non-empty `id` (rename), and member `type` (ownership).
 
 ---
 
-### 3. The Page's Own Table — "Состав клана" (Clan Roster)
+### 2. Live API Contracts
 
-Table `#clan-table`. Rows are built client-side from `action:'list'`; there is **no DataTables/`script:'table'` server-side pagination here** — the whole roster is loaded at once and sorted client-side.
+Ground truth from headless capture (`caps/clans/clan_id_16.network.json`, 3 contracts, 0 blocked mutations). All AJAX calls are dispatched through `Action({script,action,data})`, which POSTs a URL-encoded body to `/ajax/<script>.php` and expects `application/json`. Reads fire automatically on page load; mutations require a user gesture and were not exercised by the capture.
 
-| # | Header | Meaning / render |
-|---|---|---|
-| 1 | Ник (Nick) | Nickname (bold) + kit icon & kit name. Click → opens shared player modal `player.open(steam_id)`. |
-| 2 | SteamID | SteamID64 as a `<hashtag>`; buttons: "открыть" (open Steam profile, new tab) and "статистика" (`/player/<id>`). |
-| 3 | Discord (icon) | Linked-Discord flag: green check / red cross. |
-| 4 | Заходил (Last seen) | Formatted last-seen date. |
-| 5 | Clock icon | Playtime over last 60 days. |
-| 6 | Роль (Role) | Глава (leader) / Зам (deputy) / blank. |
-| 7 | Star icon | Priority-queue (VIP) checkbox — **only rendered when `text.access` is true**. Checkbox toggles `vipPlayer`; `vip_mode==2` renders a non-editable ban icon ("priority from another source"). |
-| 8 | Wrench icon | Remove-member button (`clan.player.remove`) — **only rendered per-row when `v.access` is true**. |
+#### 2.1 `GET /ajax/page.php` — fragment loader
 
-**Controls above the table:** "Скачать" (download roster CSV) and "Добавить" (open add-member search modal).
-
-**Sorting:** Every `<th data-sort="true">` is click-sortable client-side (numeric-aware comparer reading each cell's `data-sort`). **No search box or pagination** on the roster itself.
-
-**Live counters:** `#clan-players_count` (total members) and `#clan-vip_count` (checked VIP boxes, recomputed on every toggle).
-
----
-
-### 4. Actions / Admin Capabilities
-
-All clan-scoped mutations post to `POST /ajax/clan.php` with `action=<id>&<data>` (via `Action({script:'clan', …})`), except **create/edit** which uses `script:'squad'` → `/ajax/squad.php`. Every payload carries `clan_id` (the current clan) unless noted.
-
-| UI label | action id | Script → endpoint | Data params | Effect | Destructive? |
-|---|---|---|---|---|---|
-| (roster load) | `list` | clan → `/ajax/clan.php` | `clan_id` | Fetch roster, per-server online, linked Discord. | N (read) |
-| (dashboard) | `stats` | clan | `clan_id`, `start`, `end` | Fetch online chart + aggregate stats for date range. | N (read) |
-| Найти/Добавить search | `findPlayer` | clan | `clan_id`, `find` | Search players (≥3 chars; by nick, SteamID, or clan tag) to add. | N (read) |
-| ➕ Add member | `addPlayer` | clan | `clan_id`, `steam_id`, `type` (0=member, 1=Глава, 2=Зам) | Add player to roster with a role. Role dropdown gated by `clan.canType`. | **Y** |
-| 🗑 Remove member | `removePlayer` | clan | `clan_id`, `steam_id` | Remove player from roster (confirm dialog "Удалить игрока из списка клана?"). | **Y** |
-| ⭐ Priority checkbox | `vipPlayer` | clan | `clan_id`, `steam_id`, `vip` (bool) | Grant/revoke queue priority (VIP) for a member. Reverts checkbox on error. | **Y** |
-| 📅 Change expiry | `changeExpire` | clan | `clan_id`, `date` (unix) | Change clan priority-subscription expiry (daterange button + confirm "Сменить дату?"). Presets: +1/2/3/6 months, +1 year, infinity, reset. | **Y** |
-| Public/Tag-protect toggles | `setting` | clan | `clan_id`, `key` (`public`\|`protected`), `value` (bool) | Toggle clan settings (public page / tag protection). | **Y** |
-| 🗑 Delete clan | `delete` | clan | `clan_id` | **Disband the clan** (confirm "Удалить клан?", 3s cooldown). On success redirects to `/`. | **Y (irreversible)** |
-| Редактировать (Edit) | `createSquad` | squad → `/ajax/squad.php` | `id`, `name`, `expire`, `max`, `discord_id`, `tags` (URL-encoded, comma-joined) | Edit clan (same modal/action as create; non-empty `id` = update). | **Y** |
-| (create new clan) | `createSquad` | squad | same as above with empty `id` | Create a new clan; on success `pageLoad('clan&id='+text.id)`. | **Y** |
-| Скачать (roster) | `downloadList` | clan (`post_to_url`) | `clan_id` | Download full roster (form-POST file download). | N (export) |
-| Скачать статистику | `downloadOnline` | clan (`post_to_url`) | `clan_id`, `start`, `end` | Download online statistics for the chart range. | N (export) |
-| (referenced) | `downloadStat` | clan | — | Stat export action id present in the action catalog for this page but not wired to a visible button in the fragment; likely a sibling export handler. | N (export) |
-
-**Notable:** there is **no dedicated "rename" or "transfer ownership" action** — renaming is done through the shared edit modal (`createSquad` with `name`), and "ownership" is expressed via member `type` (Глава/Зам) rather than a distinct transfer call. `changeExpire`/`vipPlayer` action ids are shared with the player modal but here operate at clan scope with `clan_id`.
-
----
-
-### 5. Forms & Modals
-
-#### 5.1 Create/Edit clan modal (`#createClan_modal`, defined in `home_auth.html`)
-
-Title "Создание клана" (Creation of clan). Reused for both create (`createClan.open()`) and edit (`createClan.edit(clan.data)`, invoked by the page's "Редактировать" button).
-
-| Field | Input | Constraints | Maps to |
+| Param | Type | Required | Meaning |
 |---|---|---|---|
-| Название клана (Clan name) | text `#createClan_name` | `maxlength=32` | `name` |
-| Окончание приоритета (Priority end) | daterange `#createClan_expire` | presets: justDay, infinity | `expire` (unix `data-start`) |
-| Приоритетов (Priority slots) | text `#createClan_max` | `maxlength=3`, placeholder `10` | `max` |
-| Discord ID роль (Discord role ID) | text `#createClan_discord_id` | `maxlength=64` | `discord_id` |
-| Теги (Tags) | tag-chip builder `#createClan_tags` | add via sub-modal, "очистить" (clear) all | `tags` (chips joined by comma, URL-encoded) |
-| `#createClan_id` | hidden | empty = create, set = edit | `id` |
+| `page` | string | Y | Literal `clan`. |
+| `id` | int | Y | Clan primary key. |
 
-**Tag sub-modal** (`#createClanTags_modal`): single text input `#createClanTag_name` + "Добавить" (Add); each tag renders as a removable success-label chip. `createClan.tags.clear()` wipes all.
+Response: `text/html; charset=UTF-8` (~144 KB), the `#content` fragment (inline `<style>`, markup, `var clan = {…}` bootstrap, and the clan/createClan scripts).
 
-Submit ("Сохранить") → `createSquad`; success closes modal and navigates to the (new) clan page.
+#### 2.2 `POST /ajax/clan.php` — `action=list` (roster + presence + Discord)
 
-#### 5.2 Add-member search modal (`#findPlayer`, in the clan fragment)
+Request body (URL-encoded): `clan_id=<int>&action=list`.
 
-- Search input `#clan-find_player` (placeholder "Ник или SteamID"), min 3 chars, 300 ms debounce, aborts in-flight request. Help text: can search by partial nick or clan-tag.
-- Results table `#clan-find_table` (Ник / SteamID / wrench). Each row: green check if already in a clan; otherwise a ➕ button (`addPlayer` type 0) plus — **when `clan.canType` is true** — a dropdown to add directly as Глава (type 1) or Зам (type 2).
+Response `application/json`:
 
-#### 5.3 Change-expiry control
+| Field | Type | Meaning |
+|---|---|---|
+| `access` | int (`0`/`1`) | Clan-level priority-management right for the current viewer. `1` → render VIP column + slot counter. |
+| `players` | array<Member> | Full roster (captured length 45). No server-side paging. |
+| `servers` | object<server_id → array<Presence>> | Per-tracked-server list of members currently online. Keys are server ids (`"1"`,`"6"`,`"7"`,`"9"`,`"10"`,`"11"`); value `[]` when nobody from the clan is on that server. |
+| `discord` | array<{name,channel}> | Linked Discord voice channels; `[]` when none. Drives `#discord-block` (shown only if non-empty). |
+| `status` | string | `"ok"` on success. |
+| `exec_time` | float | Server timing (seconds). |
 
-The left sidebar `#clan-expire_date` daterange button opens presets (justDay, +1/+2/+3/+6 months, +1 year, infinity, reset); selecting a date shows a confirm ("Сменить дату?") then fires `changeExpire`.
+`Member` object (roster row) — captured schema:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `steam_id` | string, 17 digits (SteamID64) | Member identity; becomes row `data-id`. |
+| `name` | string | Current in-game nickname. |
+| `vip` | string (`"0"`/`"1"`) | Raw VIP flag for the member (distinct from `vip_mode`; not directly rendered). |
+| `type` | string (`"0"`/`"1"`/`"2"`) | Role: `"1"`=Глава (leader), `"2"`=Зам (deputy), `"0"`=ordinary member. |
+| `date` | string, unix ts (10-digit, **seconds**) | Last seen ("Заходил"). |
+| `discord` | bool | Whether a Discord account is linked (green check / red cross). |
+| `vip_mode` | int (`0`/`1`/`2`) | Priority render state: `1`=priority ON (checked, toggleable), `0`=OFF (unchecked, toggleable), `2`=priority from another source → non-editable ban icon. |
+| `access` | bool | Per-row: may the viewer **remove** this member (renders the delete button). |
+| `online_raw` | int | Playtime over last 60 days in seconds; the numeric sort key for the clock column. |
+| `online` | string (HTML) | Pre-rendered playtime label, e.g. `<span class="label label-success">398ч 1…</span>`. |
+| `kit` | string | Last-used kit code (e.g. `"SL"`, `"Recruit"`); becomes row `data-kit`, drives the kit icon. Empty/`"undefined"` → "неизвестно". |
+
+`Presence` object (values inside `servers[server_id]`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | Member's in-game nickname on that server. |
+| `team` | string | Team/faction code (e.g. `"WPMC"`), maps to `/assets/img/ico/teams/<team>.png`. |
+| `playtime.date` | int, **milliseconds** (13-digit) | Session start (`Date.getTime()`). |
+| `playtime.last_seen` | int, **milliseconds** (13-digit) | Session last-seen. Session length rendered as `secToTime((last_seen - date)/1000)`. |
+
+> Timestamp gotcha to replicate/avoid: roster `date` is **unix seconds**, but `servers[].playtime.*` are **JS milliseconds**. Two different units in the same response.
+
+Redacted example:
+
+```json
+{"access":1,
+ "servers":{"1":[{"name":"<redacted>","team":"WPMC",
+   "playtime":{"date":1783131847742,"last_seen":1783152242849}}],
+  "6":[],"7":[],"9":[],"10":[],"11":[]},
+ "discord":[],
+ "players":[{"steam_id":"<redacted:17>","name":"<redacted>","vip":"<0|1>",
+   "type":"0","date":"1783152243","discord":true,"vip_mode":1,
+   "access":true,"online_raw":23893,
+   "online":"<span class=\"label label-success\">398ч 1…","kit":"SL"}],
+ "status":"ok","exec_time":0.092}
+```
+
+#### 2.3 `POST /ajax/clan.php` — `action=stats` (dashboard)
+
+Request body: `clan_id=<int>&start=<unix|undefined>&end=<unix|undefined>&action=stats`.
+
+> Captured initial-load body was `clan_id=16&start=undefined&end=undefined&action=stats` — on first render `stats(start,end)` is invoked with no arguments, so `start`/`end` serialise to the literal string `"undefined"`; the server treats missing/`undefined` as the default **last-60-days** window. Subsequent calls come from the `#clan-chartOnline_date` daterange with real unix bounds.
+
+Response `application/json`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `access` | int (`0`/`1`) | Priority-management right (same semantics as §2.2). |
+| `chart.labels` | array<string> (len 60) | X-axis day labels, format `DD.MM.YYYY`. |
+| `chart.online` | array<string> (len 60) | Daily online value per label (parallel to `labels`). |
+| `stats.online` | string | Total clan online, humanised (e.g. `"2726ч 0м"`). |
+| `stats.boost` | string | Online "boost" hours, humanised (e.g. `"446ч 51м"`). |
+| `stats.server` | string | Primary server display name (e.g. `"RAAS/AAS #1"`). |
+| `stats.primetime` | array<Primetime> | Peak-activity windows. |
+| `stats.kill` | int | Aggregate clan kills. |
+| `stats.die` | int | Aggregate clan deaths. |
+| `stats.revive` | int | Aggregate clan revives. K/D computed client-side as `kill/die` (→ `"1"` if either is 0). |
+| `stats.top` | array<Top> (len 10) | Top members by combat; first 5 rendered as podium. |
+| `stats.games` | array<Game> (len 10) | Recent games the clan participated in. |
+| `status` | string | `"ok"`. |
+| `exec_time` | float | Server timing. |
+
+`Primetime`: `{ start: string(unix), end: string(unix), cnt: int, sum: int, sort: string("HH:mm") }` — rendered as `HH:mm-HH:mm` chips.
+
+`Top`: `{ steam_id: string(17), name: string, kill: string(int), die: string(int), revive: string(int) }`.
+
+`Game`: `{ id: string(int), server_id: string(int), start: string(unix), end: string(unix), map: string, t1: string, t1_tickets: string(int), t2: string, t2_tickets: string(int), win: string(enum "t1"|"t2"|"draw"), is_seed: string("0"|"1"), name: string, cnt: string(int) }`. Links to `/game/<id>`; `cnt` = clan members that played it.
+
+Redacted example (trimmed to one element per array):
+
+```json
+{"access":1,
+ "chart":{"labels":["06.05.2026"],"online":["20"]},
+ "stats":{"online":"2726ч 0м","boost":"446ч 51м","server":"RAAS/AAS #1",
+   "primetime":[{"start":"1778424060","end":"1778528820","cnt":306,"sum":108852,"sort":"17:41"}],
+   "kill":9875,"die":5918,"revive":2698,
+   "top":[{"steam_id":"<redacted:17>","name":"<redacted>","kill":"1847","die":"347","revive":"206"}],
+   "games":[{"id":"33295","server_id":"1","start":"1783114006","end":"1783115978",
+     "map":"Harju RAAS v1","t1":"AFU","t1_tickets":"0","t2":"PLANMC","t2_tickets":"366",
+     "win":"t2","is_seed":"0","name":"<redacted>","cnt":"4"}]},
+ "status":"ok","exec_time":0.745}
+```
+
+#### 2.4 Mutating & search contracts (not fired during capture; shapes from inline JS)
+
+All `POST /ajax/clan.php` with the listed body; response is the standard `{status, …}` envelope surfaced through `Action`'s `success`/`error`.
+
+| action | Request body | Response used by client | Blocked in capture? |
+|---|---|---|---|
+| `findPlayer` | `clan_id`, `find`, `action=findPlayer` | `text.players[] = {steam_id, name, clan_id}` | read — not fired (needs ≥3-char input) |
+| `addPlayer` | `clan_id`, `steam_id`, `type`, `action=addPlayer` | success → `clan.build()` | mutation — interceptor would abort |
+| `removePlayer` | `clan_id`, `steam_id`, `action=removePlayer` | success → row removed | mutation — aborted |
+| `vipPlayer` | `clan_id`, `steam_id`, `vip`(bool), `action=vipPlayer` | success → recount checkboxes | mutation — aborted |
+| `changeExpire` | `clan_id`, `date`(unix), `action=changeExpire` | success → close confirm | mutation — aborted |
+| `setting` | `clan_id`, `key`(`public`\|`protected`), `value`(bool), `action=setting` | success (silent) | mutation — aborted |
+| `delete` | `clan_id`, `action=delete` | success → `location.href='/'` | mutation — aborted |
+| `createSquad` (squad) | `id`, `name`, `expire`, `max`, `discord_id`, `tags` → `POST /ajax/squad.php` | success → `pageLoad('clan&id='+text.id)` | mutation — aborted |
+| `downloadList` | `clan_id`, `action=downloadList` — **form-POST** via `post_to_url` | file download | export — not an `Action` |
+| `downloadOnline` | `clan_id`, `start`, `end`, `action=downloadOnline` — **form-POST** | file download | export — not an `Action` |
+
+`_blocked.json` for this capture is `[]` — the read-only harness only auto-fired the three reads (`page`, `list`, `stats`); no mutation was attempted, so nothing needed aborting.
 
 ---
 
-### 6. Permission / Visibility Logic
+### 3. Entities & Fields
 
-- **`text.access` (clan-level priority rights):** gates rendering of the entire **VIP/priority column** (header + per-row checkbox). Without it the roster is view-only for priority.
-- **`v.access` (per-member):** gates the **remove button** on each row — remove is authorised per member, not globally.
-- **`clan.canType`:** gates the ability to assign leader/deputy roles when adding members (role dropdown in search results and the leader/deputy add-menu). When false, members can only be added as ordinary (type 0).
-- **`vip_mode==2`:** priority coming "from another source" is shown as a locked ban icon — cannot be toggled off here.
-- **`public` setting:** exposes a read-only version of this page to non-editors (explicitly *excluding* queue-priority info).
-- **Hidden blocks:** the YooMoney "Продлить приоритет" (extend priority, 1000₽) donation form sits in a `.hide` row; `#discord-block` is hidden unless linked Discord channels exist. A `clan.pay()` stub exists but is empty.
+#### 3.1 Clan / Squad entity (`clan.data`)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string(int) | Primary key; used as `clan_id` in every clan action. |
+| `name` | string, ≤32 | Display name (`[MDC]`). |
+| `tags` | string[] | In-game name prefixes / clan tags (`["Mdc |","MdcK |"]`). Drive tag-protection kicks and `findPlayer` matching. |
+| `discord_id` | string ≤64 \| null | Linked Discord **role** ID ("Discord ID роль"). `null` when unset. |
+| `date` | string, unix ts (seconds) | Clan creation time (`1746523474`). |
+| `expire` | string, unix ts (seconds) | Priority/VIP subscription expiry (`2620162800` ≈ 11.01.2053). `"0"` = infinity. Header renders "Истекает: … (через N дней)". |
+| `max` | string(int) | Maximum priority (queue/VIP) slots (`"999"`). Header: "Слотов: <clan-vip_count> из max". |
+| `protected` | string(`"0"`/`"1"`) | "Защита тега" (tag protection): auto-kicks players wearing the clan's tags who are not on the roster; lists refresh every ~10 min. |
+| `public` | string(`"0"`/`"1"`) | "Публичная страница": exposes a read-only view (excluding queue-priority info) to non-editors. |
+
+Header also shows a static **Приоритет** (priority) badge — "Да" (green) when the subscription is active. This is derived from `expire` server-side, not a stored column.
+
+#### 3.2 Runtime flags (not on the clan row)
+
+| Flag | Source | Type | Effect |
+|---|---|---|---|
+| `text.access` | `list`/`stats` response | int 0/1 | Gates the entire VIP/priority column + slot counter. |
+| `v.access` | per `Member` in `list` | bool | Gates the remove button on that specific row. |
+| `clan.canType` | server-injected in `init()` (`clan.canType=true;`); bootstrap default `false` | bool | Gates the add-as-leader / add-as-deputy dropdown in search results. |
+| `vip_mode==2` | per `Member` | — | Locks priority as "from another source" (ban icon, not toggleable). |
+
+#### 3.3 Player search result (`findPlayer`)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `steam_id` | string(17) | Candidate SteamID64; row `data-id`. |
+| `name` | string | Nickname. |
+| `clan_id` | int \| null/0 | If already in a clan → render a green check and **suppress** the add controls; otherwise render add buttons. |
 
 ---
 
-### 7. Notable UX & Competitively Interesting Details
+### 4. The Page's Own Table — "Состав клана" (Clan Roster)
 
-- **Clan = paid priority-queue product.** The whole clan concept is monetised: clans have an `expire` date, a `max` number of priority/VIP slots, and an inline **YooMoney payment form** to extend priority. Members get queue priority via per-row toggles counted against the slot limit ("X из 999"). This is the core reason clans exist in SQSTAT — worth understanding before designing our own model.
-- **Tag protection (`protected`).** Auto-kicks players wearing the clan's registered tags who are not on the roster, refreshed every ~10 minutes. A strong anti-impersonation feature and a natural upsell.
-- **Rich clan dashboard:** aggregate online chart (date-ranged, CSV-exportable), boost, primetime windows, primary server, kills/deaths/revives/KD, a **top-5 podium with kit artwork** (gold/silver/bronze outline styling), top-10 list, and recent games — all per clan. Far beyond a plain member list.
-- **Per-server live presence:** the sidebar shows which members are currently online on each tracked server with session playtime — useful for admins spotting active clan stacks.
-- **Discord integration:** clan ↔ Discord **role** ID linkage plus display of linked Discord voice channels.
+Table `#clan-table`. Rows built client-side by `clan.build()` from `action:'list'`. **No DataTables / `script:'table'` server-side pagination** — the whole roster loads at once and sorts client-side.
+
+| # | Header | `data-sort` source | Render |
+|---|---|---|---|
+| 1 | Ник (Nick) | `v.name` | Bold nickname + kit icon (`/assets/img/ico/kits/<kit|Recruit>.svg`) + kit name. Click → `player.open(steam_id)`. |
+| 2 | SteamID | `v.steam_id` | `<hashtag>` id + "открыть" (Steam profile, new tab) + "статистика" (`/player/<id>`). |
+| 3 | Discord (icon) | `v.discord` | Green check / red cross. |
+| 4 | Заходил (Last seen) | `v.date` | `formatDate(v.date,…)`. |
+| 5 | Clock icon | `v.online_raw` | Pre-rendered `v.online` label (60-day playtime). |
+| 6 | Роль (Role) | `v.type` | `"1"`→Глава, `"2"`→Зам, else blank. |
+| 7 | Star icon (Приоритет) | `v.vip_mode` | **Only when `text.access`.** `vip_mode!=2` → checkbox `#vip_<steam_id>` (`onchange=clan.player.vip`), checked when `vip_mode==1`; `vip_mode==2` → non-editable ban icon (tooltip "У данного игрока есть приоритет от иного источника"). |
+| 8 | Wrench icon | — | **Only when `v.access`.** Remove button → `clan.player.remove(steam_id,this)`. |
+
+- **Controls above table:** "Скачать" (`clan.download.list()` → `downloadList`) and "Добавить" (`clan.find.open()` → search modal).
+- **Sorting:** every `<th data-sort="true">` is click-sortable client-side. Comparer: numeric when both cell `data-sort` values are numeric, else `localeCompare`; toggles asc/desc via `this.asc`. **No search box, no pagination** on the roster.
+- **Live counters:** `#clan-players_count` = `text.players.length`; `#clan-vip_count` = count of checked VIP checkboxes, recomputed on every toggle and on load.
+- Widths (px): Ник 350, SteamID 160, Discord 30, Заходил 120, clock 80, Роль 150, star 35, wrench 40.
+
+---
+
+### 5. Actions / Admin Capabilities
+
+Clan-scoped mutations `POST /ajax/clan.php` via `Action({script:'clan',…})`; create/edit uses `script:'squad'` → `/ajax/squad.php`. Every payload carries `clan_id = clan.id` unless noted. These equal the permission surface.
+
+| UI label | action | Script → endpoint | Data keys (type) | Effect | Destructive |
+|---|---|---|---|---|---|
+| (roster load) | `list` | clan | `clan_id` (int) | Fetch roster + per-server presence + Discord channels. | N (read) |
+| (dashboard) | `stats` | clan | `clan_id` (int), `start` (unix\|undefined), `end` (unix\|undefined) | Fetch online chart + aggregate combat stats. | N (read) |
+| Найти (search) | `findPlayer` | clan | `clan_id` (int), `find` (string, ≥3) | Search addable players (nick / SteamID / clan tag). | N (read) |
+| ➕ Add member | `addPlayer` | clan | `clan_id` (int), `steam_id` (string), `type` (0=member \| 1=Глава \| 2=Зам) | Add player with role; success → `clan.build()`. Role >0 gated by `clan.canType`. | **Y** |
+| 🗑 Remove member | `removePlayer` | clan | `clan_id` (int), `steam_id` (string) | Remove from roster. Confirm "Удалить игрока из списка клана?". | **Y** |
+| ⭐ Priority checkbox | `vipPlayer` | clan | `clan_id` (int), `steam_id` (string), `vip` (bool) | Grant/revoke queue priority. Checkbox disabled 3 s after toggle; reverts on error. | **Y** |
+| 📅 Change expiry | `changeExpire` | clan | `clan_id` (int), `date` (unix) | Change clan priority-subscription expiry. Daterange presets: justDay, +1/+2/+3/+6 months, +1 year, infinity, reset. Confirm "Сменить дату?". | **Y** |
+| Public / Tag-protect toggles | `setting` | clan | `clan_id` (int), `key` (`public`\|`protected`), `value` (bool) | Toggle clan settings. | **Y** |
+| 🗑 Disband clan | `delete` | clan | `clan_id` (int) | Delete the clan. Confirm "Удалить клан?" with **3 s cooldown**; on success `location.href='/'`. | **Y (irreversible)** |
+| Редактировать / Rename | `createSquad` | squad | `id` (int), `name`, `expire` (unix), `max` (int), `discord_id`, `tags` (URL-encoded, comma-joined) | Edit clan (non-empty `id`). Also serves rename. Success → `pageLoad('clan&id='+text.id)`. | **Y** |
+| (create new clan) | `createSquad` | squad | same, `id` empty | Create clan. | **Y** |
+| Скачать (roster) | `downloadList` | clan (`post_to_url`) | `clan_id` | Form-POST file download. | N (export) |
+| Скачать статистику | `downloadOnline` | clan (`post_to_url`) | `clan_id`, `start`, `end` (daterange bounds) | Form-POST file download. | N (export) |
+
+**No dedicated `rename`/`transfer`/`disband` actions on this page.** Renaming = `createSquad` with `name`; ownership/"transfer" = member `type` (Глава/Зам); disband = `delete`. The `rename`/`transfer`/`disband` action ids in the catalog belong to the in-game squad panel (`main.html`), and `downloadStat` belongs to the player modal (`script:'player'`, keyed by `steam_id`) — none are wired to clan-page controls.
+
+---
+
+### 6. Forms & Modals
+
+#### 6.1 Create/Edit clan modal (`#createClan_modal`, defined in `home_auth.html`)
+
+Title "Создание клана". Reused for create (`createClan.open()`) and edit (`createClan.edit(clan.data)`). Submit "Сохранить" → `createClan.send()` → `createSquad`.
+
+| Field | `#id` | Input | Constraints | Maps to |
+|---|---|---|---|---|
+| Название клана (Clan name) | `#createClan_name` | text | `maxlength=32` | `name` |
+| Окончание приоритета (Priority end) | `#createClan_expire` | daterange button | presets: `justDay`, `infinity`; `limitDate:false`; default create = today, edit = `moment.unix(clan.expire)` | `expire` (reads `data-start`, unix) |
+| Приоритетов (Priority slots) | `#createClan_max` | text | `maxlength=3`, placeholder `10` | `max` |
+| Discord ID роль (Discord role ID) | `#createClan_discord_id` | text | `maxlength=64` | `discord_id` |
+| Теги (Tags) | `#createClan_tags` | chip builder | added via sub-modal; "очистить" clears all | `tags` = chip innerHTML joined by `,`, then `encodeURIComponent` |
+| (hidden id) | `#createClan_id` | hidden | empty → create, set → edit | `id` |
+
+**Tag sub-modal** (`#createClanTags_modal`): single input `#createClanTag_name` (placeholder "тег") + "Добавить". `createClan.tags.add(name)` appends a `label label-success` chip and hides the sub-modal; `createClan.tags.clear()` empties `#createClan_tags`. On edit, existing `clan.tags` are re-added chip-by-chip.
+
+`send()` payload (verbatim):
+
+```js
+Action({script:'squad', action:'createSquad', data:{
+  id: $('#createClan_id').val(),
+  name: $('#createClan_name').val(),
+  expire: $('#createClan_expire').data('start'),
+  max: $('#createClan_max').val(),
+  discord_id: $('#createClan_discord_id').val(),
+  tags: encodeURIComponent($('#createClan_tags > span').map((i,v)=>v.innerHTML).get().join())
+}})
+```
+
+#### 6.2 Add-member search modal (`#findPlayer`, in the clan fragment)
+
+- Input `#clan-find_player` (placeholder "Ник или SteamID"), min **3 chars**, **300 ms** debounce, aborts the in-flight request on each keystroke. Help: "Не менее 3 символов. Можно искать по части ника или по клан-тегу" / "Если не находит, скорее всего игрок не заходил к нам".
+- Results table `#clan-find_table` (Ник / SteamID / wrench). Per row: `v.clan_id` truthy → green check (no add); else ➕ button `clan.player.add(steam_id,this,0)` plus — **when `clan.canType`** — a dropdown ("Добавить главу" → type 1, "Добавить зама" → type 2).
+
+#### 6.3 Change-expiry control
+
+Sidebar button `#clan-expire_date` (`type="daterange"`) with presets justDay / plus1Month / plus2Month / plus3Month / plus6Month / plus1Year / infinity / reset; `limitDate:false`; default seeded from `clan.data.expire`. Selecting fires the "Сменить дату?" confirm (button text "Меняем") → `changeExpire` with `date = data.start`.
+
+#### 6.4 Online-chart daterange
+
+`#clan-chartOnline_date` daterange presets: justMonth / justDay / justWeek / justYear / range / today / yesterday / currentWeek / lastWeek / currentMonth / lastMonth / last30days / last60days / last90days; default `last60days`. Selecting → `clan.stats(start,end)`; also feeds `downloadOnline`.
+
+---
+
+### 7. Permission / Visibility Logic
+
+- **`text.access` (int 0/1):** gates the whole VIP/priority column (header + per-row checkbox) and the slot counter. Without it the roster is priority-read-only.
+- **`v.access` (per-member bool):** gates the remove button on that row — remove is authorised per member, not globally.
+- **`clan.canType`:** gates leader/deputy assignment when adding members. Server-injected as `clan.canType=true;` in `init()` (bootstrap default `false`); false → members can only be added as type 0.
+- **`vip_mode==2`:** priority "from another source" renders as a locked ban icon — not toggleable here.
+- **`public` setting:** exposes a read-only page to non-editors, explicitly excluding queue-priority info.
+- **Hidden blocks:** the YooMoney "Продлить приоритет (1000руб)" donation form sits in a `.hide` row (receiver `41001649543147`, `label`/`targets`=clan id, `sum=1000`, `successURL=…/clans.php?id=16`); `#discord-block` stays hidden unless `text.discord` is non-empty. `clan.pay()` is an empty stub.
+
+---
+
+### 8. Notable UX & Competitively Interesting Details
+
+- **Clan = paid priority-queue product.** Clans have an `expire` date, a `max` slot cap, and an inline **YooMoney** payment form to extend priority; members get queue priority via per-row toggles counted against the cap ("35 из 999"). This monetisation is the core reason clans exist in SQSTAT.
+- **Tag protection (`protected`).** Auto-kicks players wearing the clan's registered tags who are not on the roster (~10-min refresh) — strong anti-impersonation feature and a natural upsell.
+- **Rich per-clan dashboard.** 60-day online bar chart (date-ranged, file-exportable), total online + boost hours, primetime windows (`start/end/cnt/sum/sort`), primary server, aggregate kills/deaths/revives + client-side K/D, a **top-5 podium with per-member kit artwork** (gold/silver/bronze outline), a top-10 list, and recent games (with map, teams, tickets, winner, seed flag, participant count) — far beyond a plain member list.
+- **Per-server live presence** with session length (ms-precision timestamps) — spot active clan stacks per server.
+- **Discord integration:** clan ↔ Discord **role** ID linkage plus display of linked voice channels.
 - **Direct role assignment on add:** add-as-leader / add-as-deputy from the search dropdown avoids a second edit step.
-- **Client-side roster sorting, no server pagination** — simple and fast for modest rosters but will not scale to very large clans; an area we could beat with proper server-side paging/search.
-- **Export everywhere:** roster and online stats are one-click CSV/file exports.
-- **Safety UX:** destructive actions (remove member, delete clan, change expiry) all use confirm dialogs; clan delete adds a 3-second cooldown before the confirm button arms.
-- **Naming inconsistency to exploit:** the split between `script:'clan'` (roster ops) and `script:'squad'` (`createSquad` for create/edit) suggests an older "squad" model retrofitted as "clan" — a clean unified data model is an easy differentiator.
+- **Client-side roster sorting, no server paging** — fast for modest rosters but won't scale; an area to beat with proper server-side paging/search.
+- **Safety UX:** remove-member, change-expiry, and disband all use confirm dialogs; disband adds a **3-second cooldown** before the confirm arms; VIP toggle self-disables for 3 s and reverts on error.
+- **Observable bugs/quirks to exploit:** (1) `stats` initial call sends `start=undefined&end=undefined` literally — sloppy client contract. (2) Mixed timestamp units in `list` (roster seconds vs presence milliseconds). (3) `script:'clan'` (roster/settings) vs `script:'squad'` (`createSquad`) split hints at an older "squad" model retrofitted as "clan" — a clean unified data model is an easy differentiator.
 
 
 ---
 
 ## 19. Public API
+
+### Live API Contracts
+
+**Capture method.** `/api/docs/` was rendered in a headless authenticated Chromium (capture label `api-top`). The page fires **0 XHR/AJAX** on load — it is a static, self-contained HTML documentation page (`_api_docs_.content.html`, 75 KB), not a DataTables/RPC surface. The "live contracts" below are therefore the docs' own **request tables** plus the **redacted JSON examples** embedded in each `<code>` block (capture file: `/tmp/caps/api-top/_api_docs_.content.html`; `_api_docs_.network.json` = `[]`; `_blocked.json` = `[]`, no mutations attempted). All SteamIDs/EOS IDs/names below are the docs' own placeholder values.
+
+Sidebar API version: **`0.8.3`**. Base URL: `https://breaking.sqstat.ru/api/<group>/<method>.php`. All requests `Content-Type: x-www-form-urlencoded`; all responses `application/json`.
+
+#### Response-envelope map (ground truth from live examples)
+
+The envelope is **inconsistent per endpoint** — this is the single most important spec detail and is confirmed by the captured examples. There is no uniform `{status,data}` wrapper.
+
+| Endpoint | Success wrapper key | `status` present? | Notable live-observed typing |
+|---|---|---|---|
+| `server/stat.php` | `data` (object) | Yes | `enabled`: bool; `map_start`: string unix(s); `players[].playtime`: `{date,last_seen}` JS-ms unix (int); `queue_players`: int; `vote`: object |
+| `server/chat.php` | `chat` (array, **top-level**) | Yes | all fields string; `date`: string unix(s) |
+| `server/setmap.php` | — (empty body) | Yes | no `data` payload documented |
+| `player/info.php` | **`info`** (object, NOT `data`) | Yes | see §Info-envelope below |
+| `player/stats.php` | **none — fields at root** | Yes (at root) | see §Stats-envelope below |
+| `player/vip.php` | fields at root (`msg`,`expire`,`player`) | Yes | `expire`: `{unix:string, human:string}` |
+| `player/ban.php` | fields at root (`msg`) | Yes | `msg`: string |
+| `player/hasBan.php` | fields at root (`ban`,`ban_count`,`mark`,`last_ban`) | Yes | `ban`: **singular object**; `mark`: `false`\|int; `last_ban`: int unix(s) |
+| `player/hasBanAll.php` | `data.ban` (array) | Yes | per-ban object **omits `description`** |
+| `player/comments.php` | `comments` (array, **top-level**) | Yes | all fields string; `date`: string unix(s) |
+| `player/bonus.php` | fields at root (`old`,`new`,`amount`) | Yes | integer bonus balances |
+| `clan/get.php` | **`clan`** (object) | Yes | `players[].online`: object\|`false` |
+
+> **Buildable takeaway:** a client library must special-case the unwrap per method — `stat`→`.data`, `info`→`.info`, `clan`→`.clan`, `chat`→`.chat`, `comments`→`.comments`, `stats`/`vip`/`ban`/`hasBan`/`bonus`→root. Numeric values are frequently returned as **JSON strings** (`"895"`, `"101440"`, `"71"`), unix timestamps as **string seconds** except `players[].playtime`/`clan.players[].online.playtime` which are **integer JS-milliseconds**. Nullable fields observed `null`: `discord`, `expire`, `group_id`, `group_description`, `image`, `prefix`, `prefix_rgb`.
+
+#### Info-envelope (`player/info.php`, redacted live example)
+
+Wrapper: `{"info":{…},"status":"ok"}`. Corrections vs a naive reading:
+- `ban` is a **singular object** (the single active/last ban), while `bans` is the **array** of history — each history item carries an extra **`impact`: bool** field not present in the request-table docs.
+- Booleans-as-JSON-bool: `baby`, `online`. String-numbers: `bonus` (`"895"`), `mark` (`"0"`), all `date`/`create_date`/`expire` unix seconds are strings.
+- `eos_id`: 32-char hex string (`"00000000000000000000000000000000"` when unset).
+
+```json
+{"info":{"baby":true,"ban":{"admin_id":"765…04","admin_name":"Admin 1","date":"1738043756","description":"","expire":"0","id":"70174","reason":"[Навсегда] Читы","steam_id":"765…01","unban":"0"},
+"bans":[{"admin_id":"765…05","admin_name":"Admin 2","date":"1738021793","description":"читы","expire":"1740613793","id":"70172","impact":false,"reason":"…п.12","steam_id":"765…01","unban":"1"}],
+"bonus":"895","create_date":"1733345407","date":"1738021803","discord":null,"eos_id":"0…0","expire":null,"group_description":null,"group_id":null,"image":null,"mark":"0","name":"Player 1",
+"names":[{"date":"1738021803","name":"Player 1"}],"online":false,
+"playtime":{"boost":"0","online":"895","queue":"0","server":"Server 1"},"prefix":null,"prefix_rgb":null,"steam_id":"765…01"},"status":"ok"}
+```
+
+#### Stats-envelope (`player/stats.php`, redacted live example)
+
+**No wrapper** — `damage`, `eos_id`, `games`, `is_play`, `kits`, `name`, `primetime`, `stats`, `status`, `steam_id`, `teamkill`, `weapons` are all at the JSON root. The important correction: **`weapons` is a nested object, not a flat array** — `weapons.vehicle[<name>]` and `weapons.weapon[<name>]`, each value `{cnt,damage,name}` (and `image` for hand weapons). `primetime[].cnt`/`.sum` are **integers**; other stats fields are string-numbers.
+
+```json
+{"damage":"101440","eos_id":"0…0","games":[{"end":"1751371119","id":"62997","map":"Sumari Bala Seed v1","playtime":"4540","server_id":"1","start":"1751349417","t1":"USA","t1_tickets":"0","t2":"MEA","t2_tickets":"0","win":"3"}],
+"is_play":false,"kits":[{"cnt":"15197","kit":"Rifleman","steam_id":"765…01"}],"name":"Player 1",
+"primetime":[{"cnt":101,"end":"1748251080","sort":"10:37","start":"1748158620","sum":678}],
+"stats":[{"name":"Online","value":"915h 46m"},{"name":"Winrate","value":"W:12 L:18 (40%)"},{"name":"K/D","value":"2.12"},{"name":"Kills","value":"310"},{"name":"Deaths","value":"146"},{"name":"Revivals","value":"1"}],
+"status":"ok","steam_id":"765…01","teamkill":"71",
+"weapons":{"vehicle":{"M1 Abrams":{"cnt":"20","damage":"11613","name":"M1 Abrams"}},"weapon":{"M16A4":{"cnt":"18","damage":"2758","image":"M16A4","name":"M16A4"}}}}
+```
+`stats[].name` value set observed: `Online`, `Boost`, `Favorite kit`, `Matches`, `Winrate`, `K/D`, `Kills`, `Deaths`, `Revivals`. `games[].win` is an enum code (observed `"0"` and `"3"` — win-status codes, not a boolean).
+
+#### Other live examples (redacted)
+
+- **stat.php** `vote`: `{"isVote":false,"votes":{"yes":[],"no":[]},"map":"","mode":"skip"}`; `last_restart`: `{"month":"07","year":"2025","day":"24","hour":"06","minute":"00","seconds":"45","ms":"314","unix":"1753326045"}` (all string parts). `players[].playtime`: `{"date":1753361173458,"last_seen":1753365019574}` (int JS-ms).
+- **vip.php**: `{"status":"ok","msg":"VIP выдан","expire":{"unix":"1753333199","human":"24.7.2025 22:54"},"player":{"name":"Player 1","steam_id":"765…01"}}`.
+- **hasBan.php**: `{"ban":{"id":"79086","steam_id":"765…01","date":"1753284989","reason":"…п.5 до 24.07.2025 18:36","description":"…","admin_id":"765…02","expire":"1753371389","unban":"0","admin_name":"Admin 1"},"ban_count":"1","mark":false,"last_ban":1753284989,"status":"ok"}` — **keyless**, returns acting-admin SteamID + nick.
+- **comments.php**: `{"comments":[{"id":"1","steam_id":"765…01","admin_id":"765…02","date":"1658163595","text":"Test","admin_name":"Admin 1"}],"status":"ok"}`.
+- **clan/get.php**: `{"clan":{"name":"Clan 1","players":[{"eos_id":"0…0","name":"Player 1","online":{"playtime":{"date":1753942016647,"last_seen":1753955053758},"server":"Server 1","team":"USMC"},"steam_id":"765…01"},{"eos_id":"0…1","name":"Player 2","online":false,"steam_id":"765…02"}],"tags":["[TAG1]","[TAG2]"]},"status":"ok"}` — `online` is either a live-presence object or `false`.
+
+---
 
 ### 1. Purpose & Nav Location
 
@@ -4035,6 +6017,88 @@ This public API is **entirely separate** from the internal `Action({script,actio
 
 ## 20. Top Online Leaderboard (Топ онлайна)
 
+### Live API Contracts
+
+**Capture method.** `top` rendered in a headless authenticated Chromium (label `api-top`). On load the page fires **exactly one** AJAX call — the `topPlayers` DataTables fetch — captured in `/tmp/caps/api-top/top.network.json` (1 contract). `_blocked.json` = `[]` (no mutations attempted or blocked). The rendered `#content` (pre-modal) is `top.content.html`.
+
+#### `POST /ajax/table.php` — action `topPlayers` (captured request)
+
+The `buildTable` bootstrap (`top.content.html`, inline `$(document).ready`) issues:
+
+```
+POST https://breaking.sqstat.ru/ajax/table.php
+Content-Type: application/x-www-form-urlencoded
+
+action=topPlayers&table=topPlayers&page=1&numrows=30
+&search={"text":{},"check":{},"multiselect":{"sort":"online"},"managers":{},"slider":{}}
+&order_by=false&order_sort=false
+```
+(`search` is URL-encoded in the wire capture.)
+
+**Request params (exact wire contract):**
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `action` | string const | Yes | Always `topPlayers` (equals the table id; `Action({script:'table',action:query[0]})`). |
+| `table` | string const | Yes | `topPlayers` — server-side dataset selector. |
+| `page` | int | Yes | 1-based page (default `1`). |
+| `numrows` | int | Yes | Page size, fixed `30`. |
+| `search` | JSON string | Yes | 5-bucket search envelope (see below). |
+| `order_by` | `false`\|col-alias | Yes | Sort column DB-alias, or `false` (default — header sort is not wired on this page). |
+| `order_sort` | `false`\|`asc`\|`desc` | Yes | Sort direction, or `false` (default). |
+| `pagination` | `true` | No | Appended for the **second** call (`query[1]+'&pagination=true'`) that returns page/row counts only. |
+
+**Search envelope (`search` JSON), 5 fixed buckets** produced by `buildTable` from `searchInput` (`custom.js`):
+
+| Bucket | Populated from | On this page |
+|---|---|---|
+| `text` | text inputs keyed by `data-search` DB-alias | `t2.name` (Ник), `t2.steam_id` (Steam ID) when non-empty |
+| `check` | checkbox filters | `{}` (none) |
+| `multiselect` | multiselect `data-search` key | `{"sort":"online"\|"bonus"\|"boost"}` |
+| `managers` | manager-picker filters | `{}` (none) |
+| `slider` | range sliders | `{}` (none) |
+
+Example populated search: `{"text":{"t2.name":"pl","t2.steam_id":"765…"},"check":{},"multiselect":{"sort":"boost"},"managers":{},"slider":{}}`.
+
+#### Captured response — **live status `error` (SQL info-disclosure)**
+
+The captured `topPlayers` fetch returned HTTP **200** with an **error debug payload**, not row data — the server-side query is currently broken and the endpoint **leaks the raw SQL and DB error to the client**:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | enum `"ok"`\|`"error"` | Captured value: **`"error"`**. |
+| `sql` | string | The **full raw SQL statement** (truncated in capture): `SELECT t1.steam_id, t2.type, t2.name, …`. |
+| `sql_error` | array | DB driver error tuple `[[<code>,<message>]]`. |
+| `exec_time` | float | Server exec seconds (`0.001`). |
+
+Redacted capture (`top.network.json`):
+```json
+{"method":"POST","url":"https://breaking.sqstat.ru/ajax/table.php",
+ "status":200,"ctype":"application/json; charset=utf-8",
+ "response_sample":{"sql_error":[["SELECT t1.steam_id, t2.type, t2.name,\r\n\t…"]],
+   "sql":"SELECT t1.steam_id, t2.type, t2.name,\r\n\t…","status":"error","exec_time":0.001}}
+```
+
+> **Competitive/security findings (from live evidence):**
+> - **Info-disclosure:** on query failure `table.php` returns the raw SQL text and driver error to any authenticated client. It exposes the join structure — aliases **`t1`** (has `steam_id`) and **`t2`** (has `type`, `name`) — i.e. a players table joined to an identity/type table. A competitor's equivalent must return an opaque error envelope, never raw SQL.
+> - **`t2.type`** in the SELECT (not surfaced in any visible column) hints the identity table carries a player `type`/category field worth investigating.
+> - The leaderboard's primary read path is **currently non-functional** on the live target (server-side SQL error), consistent with the page being nav-hidden/legacy (see §6).
+
+#### Intended success + pagination envelope (from `buildTable`, `custom.js`)
+
+On `status:"ok"` the main call returns rows the client maps by the `collum` array `['place','steam_id','name','online','bonuses','boost']`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | `"ok"` | Success flag. |
+| `data` | array\<row\> | Row objects; each row keyed by the `collum` aliases; optional `id`, `dataset{}` (→ `data-*`), tooltip attrs. |
+| `currentPage` | int (string) | Echoed page. |
+| `custom` | any | Optional per-table extra payload (passed to `end()` as `customData`). |
+
+The **second** call (`…&pagination=true`) returns counts only: `{status:"ok", totalPage:int, totalRows:int, count_time:<string>}`. It fires only when `rows == numrows` or `currentPage != 1`. The info line renders `Страница <currentPage> из <totalPage> · Всего: <totalRows>` via `Intl.NumberFormat` (thousands separators). Row-click handler: `player.open($(tr).find('td[data-contact="steam_id"] > hashtag').text())`, suppressed on Alt/Ctrl.
+
+---
+
 ### 1. Purpose and nav location
 
 A player activity leaderboard that ranks players across the whole database by cumulative online time, accrued bonuses, or boost. It is a pure read/browse page: a left-hand search/filter rail plus a right-hand ranked table. Clicking any row opens the shared **player-detail modal** for that player.
@@ -4173,9 +6237,21 @@ The page has **no form of its own** and **no page-specific modal** — only the 
 
 ## Permission, Role & Group Model (Synthesis)
 
-This cross-cutting chapter reconstructs the **complete authorization system** of SQSTAT (breaking.sqstat.ru) by synthesizing three per-section chapters — *05. Administration: Admins, Groups & Permissions*, *16. Settings (Server Management)*, and *18. Clan Management* — against the ground-truth JS (`frags/admins.html`, `custom.js`) and the `action_catalog.txt` action-id inventory. The goal is a single, precise picture of *who can do what, and how that is enforced.*
+This cross-cutting chapter reconstructs the **complete authorization system** of SQSTAT (breaking.sqstat.ru) by synthesizing three now spec-grade, LIVE-captured per-section chapters — *05. Administration: Admins, Groups & Permissions*, *16. Settings (Server Management)*, and *18. Clan Management* — against the ground-truth JS (`custom.js`, page fragments) and the `action_catalog.txt` action-id inventory. The goal is a single, precise, buildable picture of *who can do what, and how it is enforced*, with **every claim anchored to a concrete endpoint or captured field**.
 
-The headline finding: **SQSTAT has no unified RBAC engine. It layers three loosely-coupled authorization namespaces that share group *names* but not a common permission model**, and every client-side control is gated by opaque server-supplied booleans rather than a declarative capability set. This is the panel's single biggest architectural weakness and the richest area for a competitor to beat.
+The headline finding is unchanged and now confirmed against live wire data: **SQSTAT has no unified RBAC engine. It layers three loosely-coupled authorization namespaces that share group *names* but not a common permission model**, and every client-side control is gated by opaque server-supplied booleans (`player.get`) or in-DOM `data-perm`/`data-setting` attributes rather than a declarative capability set. This is the panel's single biggest architectural weakness and the richest area for a competitor to beat.
+
+### 0. Capture provenance (what backs each layer)
+
+Every contract below is transcribed from the source chapters' LIVE captures; mutations were never fired (interceptor aborts writes — the three `_blocked.json` files are all `[]`).
+
+| Layer | Backing capture(s) | Live read contracts | Key mutation (documented, **not fired**) |
+|---|---|---|---|
+| **L1 Panel role** | `caps/admins/admins.network.json` | 3 (`page.php?page=admins`, `table.php action=adminPlayers` rows, same `+pagination=true` count) | `player.php action=changeGroup` |
+| **L2 In-game tokens** | `caps/settings/settings.network.json` | 1 (`page.php?page=settings` — the whole group matrix is server-rendered into the fragment DOM, no read auto-fires) | `settings.php {type:'groups'}` (`setServerSettings`) |
+| **L3 Clan ownership** | `caps/clans/clan_id_16.network.json` | 3 (`page.php?page=clan&id=16`, `clan.php action=list`, `clan.php action=stats`) | `clan.php action=vipPlayer` / `addPlayer` / `removePlayer` / `setting` / `delete`; `squad.php action=createSquad` |
+
+**Aggregate: 7 live read contracts captured, 0 mutations executed.** The L2 permission matrix in §3 is not inferred — it is the **checked-checkbox state read directly from the captured settings fragment HTML** (`caps/settings/settings.content.html` lines 489–1086).
 
 ---
 
@@ -4185,626 +6261,1037 @@ SQSTAT authorization is not one system but three, stacked:
 
 | # | Layer | "Who is X?" defined where | "What can X do?" defined where | Scope | Edited via |
 |---|---|---|---|---|---|
-| **L1** | **Panel role / group** (staff identity) | `changeGroup` → per-player `group_id` (0–5) — *05. Admins* | Coarse server-side booleans returned on `player.get` (`canBan`, `canChangeGroup`, …) | **Global** (panel-wide, no `server_id`) | Admins page → player modal → **Группа (Group)** button |
-| **L2** | **In-game Squad admin permissions** (RCON power) | The *same* 5 group names, keyed by `data-setting` | 21 Squad `Admins.cfg` permission tokens per group (`ban`, `kick`, `cheat`, `manageserver`, …) — *16. Settings §3* | **Per Squad server** (written into each server's `Admins.cfg`) | Settings page → **groups** tab → `setServerSettings` |
-| **L3** | **Clan / squad membership** (ownership of a paid clan) | Clan roster `type` (0/1/2) + `vip_mode` — *18. Clans* | Per-viewer booleans `access`, `v.access`, `canType` on the clan payload | **Per clan** | Clan page roster (`addPlayer`, `removePlayer`, `vipPlayer`, `setting`) |
+| **L1** | **Panel role / group** (staff identity) | `changeGroup` → per-player `group_id` (`"0".."5"`) — *05. Admins* | Coarse server-computed booleans on `player.php action=get` (`canChangeGroup`, `canBan`, `canUnban`, `canSelfKick`, `canPermanent`, `is_you`) | **Global** (panel-wide, payload carries **no `server_id`**) | Admins page → player modal → **Группа (Group)** button → `changeGroup` |
+| **L2** | **In-game Squad admin permissions** (RCON power) | The *same* 5 group names, keyed by `[data-setting="<Group>"]` | 21 Squad `Admins.cfg` permission tokens per group (`data-perm` checkboxes) — *16. Settings §16.3* | **Per Squad server** (written into each server's `Admins.cfg`) | Settings page → **groups** tab → `settings.php {type:'groups'}` |
+| **L3** | **Clan / squad membership** (ownership of a paid clan) | Clan roster member `type` (`"0"/"1"/"2"`) + `vip`/`vip_mode` — *18. Clans* | Per-viewer flags `access` (clan), `v.access` (row), `clan.canType` on the `clan.php action=list` payload | **Per clan** (`clan_id`) | Clan page roster (`clan.php`: `addPlayer`, `removePlayer`, `vipPlayer`, `setting`) |
 
-The three layers **share the five group names** but are otherwise independent data:
+The three layers **share the five group names** but are otherwise independent data. Note the identity divergence in §7: L1 keys players by **UUID**, L3 keys members by **SteamID64** — the same field name `steam_id` carries two formats.
 
-| `group_id` (L1) | L1 Russian label (gloss) | Internal `name` (L1 & L2 key) | L2 settings block `data-setting` | Icon / color |
-|---|---|---|---|---|
-| `0` | -Нет группы- (No group) | *(clears group)* | — | — |
-| `1` | Администратор (Administrator) | *Admin* | `Admin` | `fa-user-circle-o` / `#e50606` red |
-| `2` | Модератор (Moderator) | `Moderator` | `Moderator` | `fa-id-badge` / `#2df044` green |
-| `3` | VIP | `QueuePriority` | `QueuePriority` | `fa-star` / per-record |
-| `4` | Камера (Camera) | *Camera* | `Cameraman` | `fa-video-camera` / `#7d059e` purple |
-| `5` | Стажёр (Trainee) | *Trainee* | `Intern` | `fa-graduation-cap` / `#b57c03` orange |
+| `group_id` (L1) | L1 label (gloss) | L2 `data-setting` key | L2 `description` label · `color` (captured) | L1 icon · color (captured) | In roster filter? |
+|---|---|---|---|---|---|
+| `0` | -Нет группы- (No group / **remove**) | — | — | — | No |
+| `1` | Администратор (Administrator) | `Admin` | "Администратор" · `#e50606` | `user-circle-o` · `e50606` red | Yes |
+| `2` | Модератор (Moderator) | `Moderator` | "Модератор" · `#2df044` | `id-badge` · `2df044` green | Yes |
+| `3` | VIP | `QueuePriority` | "VIP" · `#e2b032` | `star` · *(per-record)* | **No** |
+| `4` | Камера (Camera) | `Cameraman` | "Камера" · `#7d059e` | `video-camera` · `7d059e` purple | Yes |
+| `5` | Стажёр (Trainee) | `Intern` | "Стажёр" · `#b57c03` | `graduation-cap` · `b57c03` orange | Yes |
 
-> The mapping is confirmed by matching the `player.info.group.name` branch checks in `admins.html` (`== 'QueuePriority'`, `== 'Moderator'`, lines 1149–1152) to the five `data-setting` blocks enumerated in *16. Settings §3* (`Admin`, `Moderator`, `QueuePriority`, `Cameraman`, `Intern`). The L1 `description` field (e.g. "Администратор") is edited on the L2 groups tab (`data-group="description"`), so the two layers write to the same underlying group row — but L1 controls *panel* access while L2 controls *in-game* power, and neither is derivable from the other in the client.
-
----
-
-### 2. Layer 1 — Panel Roles & Scope
-
-**Fixed enum, not free-form roles.** Exactly six values (0 + five groups); no create-group / edit-capability UI exists in any fragment. One group per player (no stacking). See *05. Admins §2*.
-
-**Group grant is a single opaque action.** The entire lifecycle — add / promote / demote / expire / revoke — is one `changeGroup` call with a different `group_id` (and `0` = remove). There is **no** distinct `promote`/`demote`/`addAdmin`/`removeAdmin` action at the panel level. Payload (`player.php`, action `changeGroup`, lines 2239–2249):
-
-```
-steam_id, date(expire), group_id, description, prefix, prefix_rgb, image
-```
-
-**Scope is GLOBAL.** The `changeGroup` payload carries **no `server_id`** — contrast every L2/L3 action which always sends `server_id`/`clan_id`. A panel role therefore applies across all servers at once; there is no per-server panel-admin assignment.
-
-**A "group" carries cosmetic + identity payload, not just a tier:** `{group_id, expire, description, prefix (≤64), prefix_rgb, image (≤256)}` scoped to the player. Expiry (including `0` = infinity) lets trainee/camera access and VIP subscriptions auto-expire through the same mechanism.
-
-#### 2.1 The L1 permission flags (the effective panel-permission model as the client sees it)
-
-The server returns booleans on `player.get`; the modal only shows/hides controls (*05. Admins §3.3, §6*). These are the entire client-visible panel-permission vocabulary:
-
-| Flag | Gates (client show/hide) | Source line |
-|---|---|---|
-| `canChangeGroup` | The **Группа (Group)** button → whether the operator may assign *any* group (up to Administrator). | admins.html 1130–1133 |
-| `canBan` | Ban flow, name-ban, kits, and (online) kill; **also hides the Group button entirely when false** (1120). | 1119–1128, 1169 |
-| `canUnban` | The "unban" control on an existing ban. | 1114–1115 |
-| `canSelfKick` | The "kick without reason" (`kickNoReason`) control (online only). | 1172–1173 |
-| `canPermanent` | Whether the operator may issue a *permanent* ban (vs progressive) in the ban flow. | 1648 |
-| `is_you` | If target == operator: the group multiselect **and** expiry are **disabled** — you cannot edit your own group *in the UI*. | 2185–2190 |
-
-There is **no** flag for "can grant group X but not Y", no per-server flag, and no tiered promotion rule. `canChangeGroup` is binary: hold it and you can grant Administrator.
+> Mapping confirmed by reconciling the `#player_group-groups` `<select>` options (*05. Admins §2*, `admins.content.html:686–692`) against the five `[data-setting]` blocks captured live on the settings groups tab (*16. Settings §16.3*, colors read from the native `<input type="color">` mirrors). **Two distinct `description` fields, do not conflate:** L2 `[data-group="description"]` (text, maxlength **32**) is the group's *display label* ("Администратор"); L1 `changeGroup.description` (textarea, maxlength **128**) is a *per-player assignment note*. They share a name only.
 
 ---
 
-### 3. Layer 2 — In-Game Squad Permission Tokens
+### 2. Layer 1 — Panel Roles & the `changeGroup` Contract
 
-L2 is the real capability matrix, but it governs **in-game RCON power**, not panel access. Each of the five groups holds a subset of the **21 Squad `Admins.cfg` tokens** (*16. Settings §3*), edited on the settings **groups** tab and written per-server:
+**Fixed enum, not free-form roles.** Exactly six values (`0` + five groups). No create-group / edit-capability UI exists in any fragment; one group per player, no stacking (*05. Admins §2*).
+
+**Group grant is a single opaque action.** The entire lifecycle — add / promote / demote / issue-VIP / expire / revoke — is one `changeGroup` call with a different `group_id` (`0` = remove). There is **no** distinct `promote`/`demote`/`addAdmin`/`removeAdmin` action anywhere in `action_catalog.txt` at the panel level.
+
+#### 2.1 `changeGroup` — exact contract
+
+Transcribed verbatim from `player.group.set` (`custom.js` ~2233–2250). **NOT executed** during capture (`caps/admins/_blocked.json = []`).
+
+| | |
+|---|---|
+| **Method / path** | `POST /ajax/player.php` (body `action=changeGroup&…`) |
+| **Dispatch** | `Action({script:'player', action:'changeGroup', data:{…}})` |
+| **Scope** | **GLOBAL — no `server_id` in payload** (contrast every L2/L3 write, which always sends `server_id`/`clan_id`) |
+| **Confirm** | `$.question` "Сменить группу?" (renders chosen `<option>` label as `<h2>`); progress text "Меняем" (Changing) |
+| **On success** | Re-opens modal via `player.open(player.info.steam_id)` |
+| **Destructive?** | **Y** — this single call *is* the entire RBAC lifecycle |
+
+Request params (`data` keys, all form-urlencoded via `Action`):
+
+| Param | Type | Required | Meaning / validation |
+|---|---|---|---|
+| `action` | string | Y | Literal `changeGroup`. |
+| `steam_id` | string (**UUID, 36-char dashed**) | Y | Target player. `player.info.steam_id`. |
+| `date` | int (unix s) \| `0` | Y | Group/VIP expiry; `0` = infinity. From `#player_group-expire` `.data('start')`. |
+| `group_id` | enum `"0".."5"` | Y | Target group; `"0"` clears/revokes. From `#player_group-groups`. |
+| `description` | string, maxlength **128** | N | Free-text assignment note (`#player_group-description` textarea). |
+| `prefix` | string, maxlength **64** | N | In-game tag granted (`#player_group-prefix`). |
+| `prefix_rgb` | string `"r,g,b"`, maxlength **16** | N | Prefix color; two-way-synced with `<input type="color">` via `stringRgbToHex`/`hexToRgb` (`custom.js:1832–1845`), clears on parse failure. |
+| `image` | string (URL), maxlength **256** | N | Group image URL (`#player_group-image`). |
+
+Redacted example body:
+
+```
+action=changeGroup&steam_id=<uuid:36>&date=0&group_id=1
+&description=<note<=128>&prefix=<=64>&prefix_rgb=229,6,6&image=<url<=256>
+```
+
+> Lifecycle mapping (all one call): **add** = assign a `group_id`; **promote/demote** = `changeGroup` to a different `group_id`; **revoke** = `group_id:0`; **issue/extend VIP** = `group_id:3` + `date`. The hidden **"VIP +1 месяц"** button (`#player_group-btn.hide`) is just this call preset to `group_id:3`.
+
+#### 2.2 L1 permission flags (`player.php action=get` → `player.info.*`)
+
+The server returns booleans computed from the *viewer's own* group; the modal only `.show()`/`.hide()`/`disable`s controls (*05. Admins §3.3, §6*). This is the entire client-visible panel-permission vocabulary — there is **no** action×group matrix in the client.
+
+| Flag | Type | Gates (client show/hide/disable) | Source |
+|---|---|---|---|
+| `canChangeGroup` | bool | The **Группа (Group)** button → may assign *any* group up to Administrator. | admins.html 1130–1133 |
+| `canBan` | bool | Ban flow, name-ban, kits, (online) kill; **also hides the Group button entirely when false** (1120). | 1119–1128, 1169 |
+| `canUnban` | bool | "unban" control on an existing ban. | 1114–1115 |
+| `canSelfKick` | bool | `kickNoReason` ("kick without reason", online only). | 1172–1173 |
+| `canPermanent` | bool | Whether a *permanent* ban (vs progressive) is offered in the ban flow. | 1648 |
+| `is_you` | bool | If target == operator: `#player_group-groups` `multiselect('disable')` **and** `#player_group-expire` `prop('disabled',true)` — you cannot edit your own group *in the UI*. | 2185–2190 |
+
+There is **no** flag for "can grant group X but not Y", no per-server flag, no tiered promotion rule. `canChangeGroup` is binary: hold it, you can grant `group_id=1` (Administrator).
+
+---
+
+### 3. Layer 2 — In-Game Squad Permission Tokens (LIVE matrix)
+
+L2 is the real capability matrix, but it governs **in-game RCON power**, not panel access. Each of the five groups is a `[data-setting="<Group>"][type="group"]` block whose `[data-group="permissions"]` grid holds a subset of the **21 Squad `Admins.cfg` tokens**, rendered in this order (*16. Settings §16.3*):
 
 `startvote, changemap, pause, cheat, private, balance, chat, kick, ban, config, cameraman, immune, manageserver, featuretest, reserve, demos, clientdemos, debug, teamchange, forceteamchange, canseeadminchat`
 
-Default **Admin** template grants everything **except** `startvote, private, immune, demos, clientdemos, forceteamchange`. Tokens `changemap`, `kick`, `ban` carry a warning icon "Не будет логироваться в панели" (Will not be logged in the panel) — using the in-game admin cam/console for those **bypasses SQSTAT's audit log**.
+Three tokens — `changemap`, `kick`, `ban` — carry a ⚠ warning icon "Не будет логироваться в панели" (Will not be logged in the panel): performing them via the in-game admin cam/console **bypasses SQSTAT's audit log**.
 
-Inferred default token distribution by group (from the token names + group intent; the panel does not print each group's full set, but the group semantics are unambiguous):
+#### 3.1 The captured default matrix (● = checkbox checked in the live fragment, `settings.content.html:489–1086`)
 
-| Token → in-game capability | Admin (1) | Moderator (2) | QueuePriority/VIP (3) | Cameraman (4) | Intern (5) |
+This replaces the previously *inferred* distribution — it is now read from the wire.
+
+| Token | Admin `#e50606` | Moderator `#2df044` | VIP/QueuePriority `#e2b032` | Cameraman `#7d059e` | Intern `#b57c03` |
 |---|:--:|:--:|:--:|:--:|:--:|
-| `reserve` (queue priority / reserved slot) | ✓ | ✓ | **✓** | ✓ | ✓ |
-| `chat` (see/use admin chat) | ✓ | ✓ | — | — | ✓ |
-| `canseeadminchat` | ✓ | ✓ | — | — | ✓ |
-| `kick` | ✓ | ✓ | — | — | possibly |
-| `ban` | ✓ | ✓ | — | — | — |
-| `changemap` | ✓ | ~ | — | — | — |
-| `balance` / `teamchange` | ✓ | ~ | — | — | — |
-| `forceteamchange` | — (off by default) | — | — | — | — |
-| `pause` | ✓ | — | — | — | — |
-| `cheat` (admin cheat cmds) | ✓ | — | — | — | — |
-| `config` / `manageserver` | ✓ | — | — | — | — |
-| `cameraman` (admin cam) | ✓ | ~ | — | **✓** | — |
-| `demos` / `clientdemos` | — (off by default) | — | — | — | — |
-| `immune` (immune to admin actions) | — (off by default) | — | — | — | — |
-| `private` / `startvote` | — (off by default) | — | — | — | — |
-| `featuretest` / `debug` | ✓ | — | — | — | — |
+| startvote | | | | | |
+| changemap ⚠ | ● | | | | |
+| pause | ● | | | | |
+| cheat | ● | | | | |
+| private | | | | | |
+| balance | ● | ● | | ● | ● |
+| chat | ● | ● | | | ● |
+| kick ⚠ | ● | | | | |
+| ban ⚠ | ● | | | | |
+| config | ● | | | | |
+| cameraman | ● | ● | | ● | ● |
+| immune | | | | | |
+| manageserver | ● | | | | |
+| featuretest | ● | | | | |
+| reserve | ● | ● | ● | ● | ● |
+| demos | | | | | |
+| clientdemos | | | | ● | |
+| debug | ● | | | | |
+| teamchange | ● | ● | | ● | ● |
+| forceteamchange | | | | | |
+| canseeadminchat | ● | | | ● | ● |
 
-Legend: ✓ = expected on, ~ = operator's choice, — = expected off. **VIP's only meaningful token is `reserve`** — it is a monetized queue-priority perk, not staff power. **Cameraman** is a near-empty group whose defining token is `cameraman` (spectator/admin-cam for content creators). **Intern** is a supervised subset of Moderator.
+**Corrections vs prior inferred analysis** (now that this is captured, not guessed):
+- **Moderator** has *only* `balance, chat, cameraman, reserve, teamchange` — **no `kick`/`ban`/`config`/`manageserver` and no `canseeadminchat`** (prior guess of Moderator `kick`/`canseeadminchat` was wrong).
+- **Cameraman** holds `balance, cameraman, reserve, clientdemos, teamchange, canseeadminchat` — richer than a "near-empty" group; `clientdemos` is unique to it.
+- **VIP/QueuePriority** holds exactly one token: `reserve`. Pure monetized queue-priority, zero admin power.
+- **Intern** == Moderator's exact set *plus* `canseeadminchat` (a supervised-visibility subset).
+- **Admin** = everything **except** `startvote, private, immune, demos, clientdemos, forceteamchange`.
 
-> L2 is fully editable per group and per server via `setServerSettings`, so these are *defaults/intent*, not hard guarantees. The point for a competitor: L2 is where the fine-grained capability model actually lives — but it is siloed to in-game RCON and never merged with L1 panel access.
+#### 3.2 `setServerSettings` (groups save) — exact contract
+
+L2 is fully editable per group and per server (*16. Settings §16.2*). **NOT fired** during capture.
+
+| | |
+|---|---|
+| **Method / path** | `POST /ajax/settings.php` |
+| **Dispatch** | `Action({script:'settings', data:{type, settings}})` |
+| **Confirm** | "Вы точно хотите сохранить настройки?" |
+| **Destructive?** | **Y** — overwrites the entire config blob for that tab |
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `type` | enum `servers`\|`groups`\|`rules`\|`squad_messages`\|`discordbot`\|`discord` | Y | Active tab's `data-tab`. |
+| `settings` | JSON string | Y | `JSON.stringify(setting.collect(tab))`. |
+
+For `type='groups'`, `setting.collect` encodes each `[type="group"]` block as `{description:string(≤32), color:string(≤16 hex), permissions:[…dataset.perm where :checked]}`, wrapped as one object keyed by group name:
+
+```json
+{
+  "Admin":         {"description":"Администратор","color":"#e50606","permissions":["changemap","pause","cheat","balance","chat","kick","ban","config","cameraman","manageserver","featuretest","reserve","debug","teamchange","canseeadminchat"]},
+  "Moderator":     {"description":"Модератор","color":"#2df044","permissions":["balance","chat","cameraman","reserve","teamchange"]},
+  "QueuePriority": {"description":"VIP","color":"#e2b032","permissions":["reserve"]},
+  "Cameraman":     {"description":"Камера","color":"#7d059e","permissions":["balance","cameraman","reserve","clientdemos","teamchange","canseeadminchat"]},
+  "Intern":        {"description":"Стажёр","color":"#b57c03","permissions":["balance","chat","cameraman","reserve","teamchange","canseeadminchat"]}
+}
+```
+
+> L2 is where the fine-grained capability model actually lives — but it is siloed to in-game RCON and **never merged with L1 panel access**. Enforcement of `ban`/`kick`/`cheat` is by the Squad server reading `Admins.cfg`, out of the panel's control.
 
 ---
 
-### 4. Layer 3 — Clan Ownership Axis
+### 4. Layer 3 — Clan Ownership Axis (captured flags)
 
-Clan membership is a **separate ownership dimension** orthogonal to L1/L2 (*18. Clans §2, §6*):
+Clan membership is a **separate ownership dimension** orthogonal to L1/L2 (*18. Clans §2.2, §3.2, §7*). All roster flags arrive on `POST /ajax/clan.php action=list` (captured, `clan_id_16.network.json`).
 
-| Clan concept | Field | Values | Governs |
+| Concept | Field (source) | Type / values | Governs |
 |---|---|---|---|
-| Clan role | member `type` | `1` = Глава (leader), `2` = Зам (deputy), `0`/'' = member | Who leads the clan (the clan "owner" axis) |
-| Priority state | `vip_mode` | `1` = ON, `0` = OFF, `2` = granted elsewhere (locked) | Whether member holds a queue slot |
-| Viewer-may-manage-priority | `text.access` (clan-level) | bool | Renders the entire VIP/priority column |
-| Viewer-may-remove-this-member | `v.access` (per-row) | bool | Renders each row's remove button |
-| Viewer-may-assign-leader/deputy | `clan.canType` | bool | Enables the leader/deputy add-menu; else members join as type 0 |
+| Clan role | `players[].type` | string `"1"`=Глава (leader), `"2"`=Зам (deputy), `"0"`=member | The clan "owner" axis. |
+| Raw VIP flag | `players[].vip` | string `"0"`/`"1"` | Member's stored VIP flag (not directly rendered). |
+| Priority render state | `players[].vip_mode` | int `1`=ON (toggleable), `0`=OFF (toggleable), `2`=from another source → **locked ban icon** | Whether/how the priority checkbox renders. |
+| Viewer-may-manage-priority | `access` (top-level of `list`/`stats`) | int `0`/`1` | Renders the entire VIP/priority column + slot counter. |
+| Viewer-may-remove-this-member | `players[].access` (per row) | bool | Renders that row's remove button. |
+| Viewer-may-assign-leader/deputy | `clan.canType` (injected in `init()`, default `false`) | bool | Enables the leader/deputy add-menu; else members join as `type:0`. |
 
-Clan priority (VIP) is a **paid product**: clans have an `expire` date and a `max` slot count ("X из 999"), and grant priority per-member via `vipPlayer` counted against the pool. This is a *second, independent path to VIP* — distinct from L1 `changeGroup(group_id=3)`. `vip_mode==2` marks priority "from another source" as a locked ban icon, reconciling the two paths visually but not in data.
+Clan priority (VIP) is a **paid product**: the clan record (`clan.data`) carries `expire` (unix s; `"0"`=infinity), `max` (slot cap, captured `"999"`), `protected` (tag-kick), `public` (read-only page). Priority is granted per member via `vipPlayer`, counted against `max`.
+
+#### 4.1 Clan mutation contracts (all `POST /ajax/clan.php`, **not fired**)
+
+| action | Body params | Effect | Gate | Destructive |
+|---|---|---|---|---|
+| `list` | `clan_id` | roster + presence + Discord | (page reachable) | N (read) |
+| `stats` | `clan_id, start, end` | dashboard | (page reachable) | N (read) |
+| `findPlayer` | `clan_id, find`(≥3 chars) | addable-player search | `clan.canType`/`access` | N (read) |
+| `addPlayer` | `clan_id, steam_id, type`(`0`\|`1`\|`2`) | add member; `type>0` gated by `clan.canType` | `clan.canType` for leader/deputy | **Y** |
+| `removePlayer` | `clan_id, steam_id` | remove member | per-row `players[].access` | **Y** |
+| `vipPlayer` | `clan_id, steam_id, vip`(bool) | grant/revoke queue priority (vs `max`) | top-level `access` | **Y** |
+| `changeExpire` | `clan_id, date`(unix) | change subscription expiry | (manager) | **Y** |
+| `setting` | `clan_id, key`(`public`\|`protected`)`, value`(bool) | toggle clan flags | (manager) | **Y** |
+| `delete` | `clan_id` | disband (3 s confirm cooldown) → `location.href='/'` | (owner) | **Y (irreversible)** |
+| `createSquad` (`squad.php`) | `id, name, expire, max, discord_id, tags` | create (`id` empty) / edit+rename (`id` set) | (owner) | **Y** |
+
+This is a **second, independent path to VIP** — `clan.php action=vipPlayer` — distinct from L1 `player.php action=changeGroup(group_id=3)`. `vip_mode==2` marks priority "from another source" as a locked ban icon, reconciling the two paths *visually* but not in data.
 
 ---
 
 ### 5. The Permission Matrix — Actions × Enforcement
 
-There is **no client-visible action×group matrix**; the client only knows the L1 booleans of §2.1 plus L3 `access`/`canType`. The matrix below is **reconstructed** by grouping every action id from `action_catalog.txt` by its `script` endpoint, its gating flag/token, and the **inferred minimum group** required. "Inferred" columns are marked *(inf.)*; they are the analyst's best reconstruction from UI gating, `hide` logic, and Squad token semantics, not a value the panel prints.
+There is **no client-visible action×group matrix**; the client knows only the L1 booleans of §2.2 plus L3 `access`/`canType`. The matrix below is grouped by `script` endpoint, gating flag/token, and **inferred minimum group** *(inf.)* — reconstructed from UI gating + Squad token semantics, not a value the panel prints.
 
-#### 5.1 Read / lookup actions — available to all authenticated staff
+#### 5.1 Read / lookup actions — any authenticated staff
 
-Every logged-in operator who can open a page can fire these; no destructive flag gates them. `script:'table'` powers all DataTables loads.
+`script:'table'` powers all server-side DataTables loads (e.g. `action=adminPlayers`, `numrows=50`, two-request rows+`pagination=true` count).
 
 | action | script | Purpose | Min group *(inf.)* |
 |---|---|---|---|
 | `auth` | public | Login / session | any (pre-auth) |
-| `get` | player | Open player modal (returns the L1 flags) | any staff |
-| `getComments` | player | Read admin notes | any staff |
+| `get` | player | Open player modal (returns L1 flags) | any staff |
+| `getComments`, `getPlayerOnlineData` | player | Read notes / online history | any staff |
 | `twink`, `twinkOnline`, `findFriends`, `checkBans` | player | Alt-account / cross-ban lookup | any staff |
-| `getPlayerOnlineData` | player | Player online history | any staff |
-| `list`, `stats` | clan | Clan roster + dashboard | any staff / public if `public` |
+| `list`, `stats` | clan | Clan roster + dashboard | any staff / `public` clan |
 | `findPlayer` | clan | Player search to add | clan `canType`/`access` |
-| `statistics` | squad | Server statistics page | any staff |
-| `issues_get` | squad | Read issue reports | any staff |
-| `getServer`, `getServerMaps`, `getRotation`, `getMods`, `getConfigFile(s)`, `getDefaultConfig`, `serverMonitor`, `serverOnline`, `serverOnlineAdmins`, `serverOnlineBooster`, `network`, `mapCalendar` | squad | Server read/telemetry (dashboard/settings) | Admin *(inf.)* — page reachability gated |
-| `getServerSettings` | settings | Load settings tabs (groups, rules, discord) | Admin *(inf.)* |
+| `statistics`, `issues_get` | squad | Server statistics / issue reports | any staff |
+| `getServer`, `getServerMaps`, `getRotation`, `getMods`, `getConfigFile(s)`, `getDefaultConfig`, `serverMonitor`, `serverOnline*`, `network`, `mapCalendar` | squad/public | Server read/telemetry | Admin *(inf.)* — page reachability gated |
+| `getServerSettings` | settings | Load a server's settings into modal (then read-only) | Admin *(inf.)* |
 | `(table load)` | table | Server-side row data everywhere | any staff |
-| `downloadStat`, `downloadList`, `downloadOnline` | player/clan | CSV/file exports (form POST) | any staff / clan `access` |
+| `downloadStat`, `downloadList`, `downloadOnline` | player/clan | CSV/file exports (`post_to_url` form POST) | any staff / clan `access` |
 
 #### 5.2 Player-moderation actions — gated by L1 booleans (Moderator+ *(inf.)*)
 
-These are the shared player-modal actions embedded on **every** page. `script:'squad'` variants require the player **online** and always send `server_id` (per-server); `script:'player'` variants are global.
+Shared player-modal actions on **every** page. `script:'squad'` variants require the player **online** and always send `server_id` (per-server); `script:'player'` variants are global.
 
-| action | script | Per-server? | Client gate | Backed by L2 token *(inf.)* | Min group *(inf.)* |
-|---|---|:--:|---|---|---|
-| `ban` | squad | ✓ | `canBan` (+`canPermanent` for perma) | `ban` | Moderator+ |
-| `unban` | squad | — | `canUnban` | `ban` | Moderator+ |
-| `kick` | squad | ✓ | (online) | `kick` | Moderator+ |
-| `kickNoReason` | squad | ✓ | `canSelfKick` | `kick` | Moderator+ |
-| `kill` | squad | ✓ | `canBan` + online | `cheat`/`kick` | Moderator+ |
-| `changeTeam` | squad | ✓ | online + has team | `teamchange` | Moderator+ |
-| `removePlayer` | squad | ✓ | online + in squad | `kick` | Moderator+ |
-| `message` | player | (server ctx) | online | `chat` | Moderator+ |
-| `addBanName` / `removeBanName` | player | — | `canBan` | `ban` | Moderator+ |
-| `kits` / `kitSave` | player | — | `canBan` (kits shown) | — | Moderator+ |
-| `mark` | player | — | (modal) | — | Moderator+ |
-| `addComment` | player | — | (modal) | — | any staff |
-| `changeExpire` | player | — | (modal) | — | Moderator+ |
-| `transfer` | player | — | (modal) | — | Admin *(inf.)* |
+| action | script | Per-server? | Client gate (L1 flag) | Backed by L2 token *(inf.)* | Destructive |
+|---|---|:--:|---|---|:--:|
+| `ban` | squad | ✓ | `canBan` (+`canPermanent` for perma) | `ban` | Y |
+| `unban` | squad | — | `canUnban` | `ban` | Y |
+| `kick` | squad | ✓ | (online) | `kick` | Y |
+| `kickNoReason` | squad | ✓ | `canSelfKick` | `kick` | Y |
+| `kill` | squad | ✓ | `canBan` + online | `cheat`/`kick` | Y |
+| `changeTeam` | squad | ✓ | online + has team | `teamchange` | Y |
+| `removePlayer` | squad | ✓ | online + in squad | `kick` | Y |
+| `message` | player | (server ctx) | online | `chat` | Y |
+| `addBanName` / `removeBanName` | player | — | `canBan` | `ban` | Y |
+| `kits` / `kitSave` | player | — | `canBan` (kits shown) | — | Y (save) |
+| `mark` | player | — | (modal) | — | Y |
+| `addComment` | player | — | (modal) | — | Y |
 
 #### 5.3 Privileged / grant actions — Administrator-tier *(inf.)*
 
 | action | script | Client gate | Effect | Min group *(inf.)* |
 |---|---|---|---|---|
 | `changeGroup` | player | **`canChangeGroup`** | Grant/change/**revoke** any L1 group (incl. Administrator) or VIP; `group_id=0` removes | Administrator (super-admin) |
-| `vipPlayer` | player / clan | `access` (clan) / `canChangeGroup` | Grant/revoke queue priority | Admin / clan manager |
-| `setServerSettings` | settings | (settings page reachable) | Edit L2 token sets, rules, Discord wiring, **groups' permissions** | Admin (`manageserver`/`config`) |
+| `vipPlayer` | clan | clan `access` | Grant/revoke queue priority vs `max` | clan priority manager |
+| `setServerSettings` | settings | (settings page reachable) | Edit L2 token sets, groups, rules, Discord wiring | Admin (`manageserver`/`config`) |
 | `add` | player | (players page) | Add a new player record | Admin *(inf.)* |
 
-#### 5.4 Server-control actions (`script:'squad'`, main dashboard) — Administrator + `manageserver`/`config` *(inf.)*
+#### 5.4 Server-control actions (`script:'squad'`, main dashboard) — Admin + `manageserver`/`config` *(inf.)*
 
-The highest-blast-radius tier. All send `server_id`; reachability is gated by the operator's L1 group and (server-side) L2 `manageserver`/`config` tokens.
+Highest blast radius. All send `server_id`; each write is `$.question`-confirmed with `retryAbort:false`.
 
 | Category | action ids | L2 token *(inf.)* |
 |---|---|---|
-| Lifecycle | `start`, `stop`, `restart`, `update`, `botUpdate`, `reloadConfig` | `manageserver` |
+| Lifecycle | `start`, `stop`, `restart`, `update`(`afterMapChange`), `botUpdate`, `reloadConfig` | `manageserver` |
 | RCON / process | `rconRaw`, `rconRestart`, `parserRestart`, `cacherRestart`, `serverMonitor`, `setServerIP` | `manageserver` |
-| Match control | `changeMap`, `setRotation`, `getRotation`, `clearNext`, `broadcast`, `squadMessage` | `changemap` / `chat` |
-| In-game squad ops | `disband`, `demote` (demote squad leader), `rename`, `transfer` | `kick` / `teamchange` |
+| Match control | `changeMap`, `setRotation`, `clearNext`, `broadcast`, `squadMessage` | `changemap` / `chat` |
+| In-game squad ops | `disband`, `demote` (SL demotion), `rename`, `transfer` | `kick` / `teamchange` |
 | Config files | `getConfigFile(s)`, `getDefaultConfig`, `saveConfigFile` | `config` / `manageserver` |
 | Mods | `getMods`, `installMod`, `deleteMod` | `manageserver` |
-| Network / bans | `blockIP` | `ban` / `manageserver` |
-| Content | `uploadVideo`, `uploadVideo_token`, `issues_create`, `seeding*`, `createSquad`, `saveUserSettings` | mixed / self |
+| Network | `blockIP` | `ban` / `manageserver` |
 
-> Note on naming: `demote` here is an **in-game squad-leader demotion** (RCON), *not* an L1 role demotion — L1 demotion is `changeGroup` to a lower `group_id`. Do not conflate them.
-
-#### 5.5 Clan-scope actions (`script:'clan'`) — gated by L3, not L1
-
-| action | Client gate | Min authority |
-|---|---|---|
-| `addPlayer` | `canType` for leader/deputy; else any manager | clan manager |
-| `removePlayer` | per-row `v.access` | clan manager |
-| `vipPlayer` | clan `access` | clan priority manager |
-| `changeExpire`, `setting`, `delete` | (manager) | clan owner/manager |
-| `createSquad` (create/edit) | `script:'squad'` | clan owner |
+> `demote` here is an **in-game squad-leader demotion** (RCON), *not* an L1 role demotion — L1 demotion is `changeGroup` to a lower `group_id`. Likewise `disband`/`rename`/`transfer` are the in-game squad panel (`main.html`), *not* the clan page (whose equivalents are `delete`/`createSquad`/member `type`).
 
 ---
 
 ### 6. Enforcement Model
 
-Enforcement is **server-side, opaque, and per-endpoint** — there is no declarative policy in the client. Three complementary mechanisms:
+Enforcement is **server-side, opaque, and per-endpoint** — no declarative policy in the client. Three mechanisms:
 
-1. **Server-computed booleans (L1).** `player.get` returns `canBan`, `canUnban`, `canChangeGroup`, `canSelfKick`, `canPermanent`, `is_you`, computed from the *viewer's own* group. The client only calls `.show()`/`.hide()` on these; it never evaluates a group→action rule itself.
-2. **Client `hide`/`disable` is cosmetic only.** Every gated control is `class="hide"` in markup and revealed by JS (`#player_group` starts `hide`; the Group button is `.show()`-ed only if `canChangeGroup`; `is_you` merely `disable`s the multiselect). *16. Settings §231* confirms the same pattern server-wide: "the action endpoints themselves are not visibly permission-checked client-side — the security boundary is entirely on the PHP side." **A hidden control is not a protected control** — the real gate must be the `/ajax/<script>.php` handler.
-3. **L2 tokens flow to the game, not the panel.** `setServerSettings` writes the 21-token sets into each server's `Admins.cfg`; enforcement of in-game `ban`/`kick`/`cheat` is by the Squad server itself, out of the panel's control. The panel warns that `changemap`/`kick`/`ban` done in-game bypass its audit log entirely (*16. Settings §3*).
+1. **Server-computed booleans (L1).** `player.php action=get` returns `canBan`, `canUnban`, `canChangeGroup`, `canSelfKick`, `canPermanent`, `is_you`, computed from the *viewer's own* group. The client only `.show()`/`.hide()`s on these; it never evaluates a group→action rule.
+2. **Client `hide`/`disable` is cosmetic only.** `#player_group` is `class="hide"` in markup, revealed by the flip; the Group button is `.show()`-ed only if `canChangeGroup`; `is_you` merely `disable`s the multiselect. *16. Settings §16.5* confirms the same pattern server-wide — `saveConfigFile`/`reloadConfig`/lifecycle actions have **no visible client-side permission check**; the boundary is entirely PHP-side. **A hidden control is not a protected control.**
+3. **L2 tokens flow to the game, not the panel.** `setServerSettings` writes the 21-token sets into each server's `Admins.cfg`; in-game enforcement is by the Squad server itself. `changemap`/`kick`/`ban` done in-game are explicitly **not logged** (⚠ in §3).
 
 Because L1 gating is a handful of coarse booleans and the client cannot be trusted, **correctness rests entirely on each PHP endpoint re-deriving the viewer's group and checking it.** Any endpoint that trusts a client-sent `steam_id`/`server_id`/`group_id` without re-checking the caller is an escalation hole.
 
 ---
 
-### 7. VIP vs Admin vs Owner Distinctions
+### 7. VIP vs Admin vs Owner — and the identity-format split
 
 | Actor | How defined | Powers | Not |
 |---|---|---|---|
-| **VIP** | L1 `group_id=3` (`QueuePriority`) with expiry, **or** L3 clan `vipPlayer` against a slot pool | Queue priority / reserved slot (`reserve` token) only | Not staff; no panel moderation, no `canBan`/`canChangeGroup` |
-| **Camera** (4) / **Intern** (5) | L1 group | Camera: admin-cam spectator (`cameraman`); Intern: supervised subset of Moderator | Not full moderators; limited L2 tokens |
-| **Moderator** (2) | L1 group; `Moderator` header art (`/assets/img/moderator.jpg`) | Player moderation (ban/kick/kill/kits/mark/message) via `canBan`+ | No `canChangeGroup`, no `manageserver` *(inf.)* |
-| **Administrator** (1) | L1 group; typically the only holder of `canChangeGroup` | Everything: grants groups, edits L2, server control | — |
-| **Owner / super-admin** | **No explicit role.** De-facto = whoever the server hands `canChangeGroup`; on clans, `type=1` (Глава/leader) | Sole grantor of groups incl. Administrator; clan leader controls roster | Not a distinct enum value — invisible, unauditable |
+| **VIP** | L1 `changeGroup(group_id=3)` (`QueuePriority`) + expiry, **or** L3 `clan.php vipPlayer` vs `max` | Queue priority / reserved slot (`reserve` token) **only** | Not staff; no `canBan`/`canChangeGroup` |
+| **Camera (4)** | L1 group | `balance, cameraman, reserve, clientdemos, teamchange, canseeadminchat` | Cannot ban/kick/config |
+| **Intern (5)** | L1 group | `balance, chat, cameraman, reserve, teamchange, canseeadminchat` (Moderator + `canseeadminchat`) | No `kick`/`ban` |
+| **Moderator (2)** | L1 group; `Moderator` header art | `balance, chat, cameraman, reserve, teamchange`; player moderation via `canBan`+ | **No `canChangeGroup`, no `manageserver`, no in-game `kick`/`ban` token** |
+| **Administrator (1)** | L1 group; typically sole holder of `canChangeGroup` | Everything: grants groups, edits L2, server control | — |
+| **Owner / super-admin** | **No explicit role.** De-facto = whoever the server hands `canChangeGroup`; on clans, `type="1"` (Глава) | Sole grantor of groups incl. Administrator; clan leader controls roster | Not a distinct enum value — invisible, unauditable |
 
-There is **no first-class "owner" role.** Top authority is implicit in the `canChangeGroup` flag (panel) and clan `type=1` (clan). VIP conflates **monetization** with the **access-control** table; L2 conflates **in-game RCON** with the same group names. These conflations are the model's defining smell.
+There is **no first-class "owner" role.** Top authority is implicit in `canChangeGroup` (panel) and clan `type="1"` (clan).
+
+**Identity-format divergence (new, captured):** the field name `steam_id` is **not one type across layers**. L1 (`adminPlayers` rows, `changeGroup.steam_id`) is a **36-char dashed UUID** (matching this repo's `steam_id64 → UUID` migration). L3 (`clan.php action=list` `players[].steam_id`, and `Top`/`Game` blocks) is a **17-digit SteamID64 string**. Any reimplementation must map between the two; a layer that treats `steam_id` uniformly will mis-key across the panel/clan boundary.
 
 ---
 
 ### 8. Privilege-Escalation-Relevant Design
 
-Ordered by severity; all are structural, not incidental.
+Ordered by severity; all structural, all now anchored to captured contracts.
 
-1. **Unbounded grant ceiling.** `canChangeGroup` is binary and the group `<select>` includes `Администратор (1)` with no "max grantable level". Any operator the server marks `canChangeGroup=true` can promote **anyone (or an alt) to Administrator**, or self-elevate. There is no tiered "can grant up to N" rule anywhere in the client — the server must enforce a ceiling, and nothing in the captured code proves it does.
-2. **Self-edit is only *disabled*, not *forbidden*.** `is_you` merely `disable`s the multiselect/expiry client-side (admins.html 2185–2190). The `changeGroup` payload still accepts an arbitrary `steam_id`. If the PHP handler does not reject `steam_id == caller`, an operator can POST a self-promotion directly, bypassing the disabled control.
-3. **Client-only gating everywhere.** Per *16. Settings §231*, endpoints are not visibly permission-checked client-side. If any `/ajax/*.php` handler trusts client input, the entire `hide`-based model collapses. `saveConfigFile` is called out (*§16 §170*) as blindly POSTing the ambient `server_id` — direct server-config write is the highest-blast-radius action and shows the weakest client discipline.
-4. **No per-server panel scoping (L1 is global).** A single `changeGroup` makes someone admin across **all** servers; there is no way to scope panel-admin to one server. A compromised or rogue mid-tier admin is a fleet-wide problem.
-5. **Two divergent VIP paths, one lock.** L1 `changeGroup(3)` and L3 clan `vipPlayer` both grant priority; only `vip_mode==2` reconciles them visually. Divergent write paths to the same perk invite double-grants and accounting drift against the clan slot `max`.
-6. **Audit blind spots.** In-game `changemap`/`kick`/`ban` are explicitly **not logged** (*§16 §3*), and `changeGroup` has **no dedicated audit action** — promotion/demotion/removal all collapse into one opaque call whose only trace is the free-text `description` (*05. Admins §7*). Privilege changes are therefore under-audited by design.
-7. **Secret exposure to all settings-readers.** Live Discord webhook URLs with tokens are rendered into `value=""` attributes (*§16 §137*) — any operator who can reach Settings reads every webhook secret from page source. Violates least privilege for the L2/settings tier.
+1. **Unbounded grant ceiling.** `canChangeGroup` is binary and `#player_group-groups` includes `Администратор (group_id=1)` with no "max grantable level". Any operator marked `canChangeGroup=true` can `POST action=changeGroup&group_id=1` to promote **anyone (or an alt) to Administrator**, or self-elevate. Nothing in captured code proves a server-side ceiling.
+2. **Self-edit is only *disabled*, not *forbidden*.** `is_you` merely `disable`s the multiselect/expiry (admins.html 2185–2190). The `changeGroup` payload still accepts an arbitrary `steam_id`. If the PHP handler does not reject `steam_id == caller`, a direct POST self-promotes.
+3. **Client-only gating everywhere.** *16. Settings §16.5* confirms `saveConfigFile`/`reloadConfig`/lifecycle have no visible client permission check. `saveConfigFile` additionally POSTs the **ambient global `server_id`**, not `configEditor.server_id` (§16.4.1 latent bug) — highest-blast-radius write, weakest client discipline.
+4. **No per-server panel scoping (L1 is global).** `changeGroup` carries **no `server_id`**, so one call makes someone admin across **all** servers. A rogue mid-tier admin is a fleet-wide problem.
+5. **Two divergent VIP paths, one lock.** `changeGroup(group_id=3)` (L1) and `clan.php vipPlayer` (L3) both grant priority; only `vip_mode==2` reconciles them visually. Divergent write paths to the same perk invite double-grants and drift against clan `max`.
+6. **Audit blind spots.** In-game `changemap`/`kick`/`ban` are ⚠ **not logged** (§3), and `changeGroup` has **no dedicated audit action** — add/promote/demote/revoke all collapse into one opaque call whose only trace is the free-text `description` (≤128). Privilege changes are under-audited by design.
+7. **Secret exposure to all settings-readers.** Six live Discord webhook URLs **with bot tokens** render into `value=""` attributes on the `discord` tab (`log`, `weekend`, `monitoring`, `request`, `collab_ban`, `collab_warn` — *16. Settings §16.3*). Any operator who can reach Settings reads every webhook secret from page source. Violates least privilege.
 
 ---
 
 ### 9. Competitor Takeaways
 
-- **Collapse the three namespaces into one RBAC engine.** Separate cleanly: (a) roles/permissions, (b) subscriptions/perks (VIP), (c) in-game RCON tokens — but drive them from *one* declarative capability set with a real action×capability matrix, not scattered booleans.
-- **Add a grant ceiling and first-class owner role.** "Can grant up to level N", an explicit Owner, and hard self-edit prevention (server-enforced, not `disable`d) close the top escalation vectors.
-- **Per-server admin scoping.** Model panel-admin per server/server-group, not globally.
-- **Audit every privilege change and in-game admin action** with a dedicated, immutable event (who/what/old→new), including config saves with diffs — beating SQSTAT's unlogged `changeGroup` and in-game-action blind spots.
-- **Never echo secrets into markup**; gate config-write behind `config`/`manageserver` and re-check the caller server-side on *every* endpoint.
+- **Collapse the three namespaces into one RBAC engine.** Separate cleanly (a) roles/permissions, (b) subscriptions/perks (VIP), (c) in-game RCON tokens — but drive them from *one* declarative capability set with a real action×capability matrix, not scattered `player.get` booleans + in-DOM `data-perm` state.
+- **Unify identity.** One canonical player key across panel and clan surfaces; don't ship `steam_id` as UUID in L1 and SteamID64 in L3.
+- **Add a grant ceiling and first-class owner role.** "Can grant up to level N", an explicit Owner, and hard *server-enforced* self-edit prevention (not `disable`d) close the top escalation vectors.
+- **Per-server admin scoping.** Model panel-admin per server/server-group, not globally — add `server_id` to the grant contract.
+- **Audit every privilege change and in-game admin action** with a dedicated immutable event (who / what / old→new), config saves with diffs — beating SQSTAT's unlogged `changeGroup` and in-game blind spots.
+- **Never echo secrets into markup**; gate config-write behind `config`/`manageserver` and re-check the caller server-side on *every* `/ajax/*.php` endpoint.
 
-Cross-references: *05. Administration: Admins, Groups & Permissions* (L1 mechanics, `changeGroup`, flags), *16. Settings (Server Management) §3* (L2 groups tab, 21 tokens, enforcement note §231, webhook leak §137, config-save §170), *18. Clan Management §6* (L3 clan `access`/`canType`/`type`/`vip_mode`).
+Cross-references: *05. Admins* (L1 mechanics, `changeGroup` contract §2.1/§4.1, flags §2.2/§3.3, UUID identity §8); *16. Settings §16.2–16.3* (L2 groups tab, 21 tokens, LIVE default matrix, `setServerSettings`, webhook leak §16.3, config-save bug §16.4.1, enforcement §16.5); *18. Clans §2.2/§3.2/§5/§7* (L3 `access`/`v.access`/`canType`/`type`/`vip`/`vip_mode`, `vipPlayer`/`addPlayer`/`removePlayer` contracts, SteamID64 identity).
 
-
----
-
-## Entity & Data Model (Synthesis)
-
-> Cross-cutting synthesis chapter. This consolidates **every entity** observable across the SQSTAT panel (`breaking.sqstat.ru`) into one unified data-model reference: fields (with meaning/type), primary key, and relationships. It is reconstructed by triangulating the per-section chapters (01–20), the `buildTable` `collum` arrays and `data-search` SQL aliases leaked to the client, the `Action({script, action, data})` payloads catalogued in `action_catalog.txt`, and the publicly documented REST responses (chapter **19 — API**). The panel is PHP + a MySQL-family relational store; column types below are **inferred** from client usage, not from a schema dump (see §12 Gaps).
-
-**How to read this chapter.** Nothing here is invented: each entity cites the chapter(s) and the concrete artifact (table name, action id, `data-search` alias, or API field block) it was reconstructed from. Where a page only *embeds* the shared player-detail modal, the modal's fields are attributed to the **Player** entity (chapter **03 — Players**), never to the host page (per the shared-modal separation rule used throughout 02, 08, 09, 10, 13, 14, 17, 20).
 
 ---
 
-### 1. Identity model — the spine of the schema
+## Entity & Data Model
 
-Almost every entity foreign-keys to a **player identity**. SQSTAT carries a multi-key identity graph (chapters 03, 04, 07, 19):
+> **Cross-cutting, spec-grade synthesis.** This chapter is the unified database/ERD reference for the SQSTAT panel (`breaking.sqstat.ru`), rebuilt from the **LIVE captured API contracts** that now back the per-section chapters (01–20). Every field/type/enum below is transcribed from a captured `table.php` / `squad.php` / `clan.php` response, a captured `/api/*` docs example, or a captured `buildTable` config — not inferred from render code except where explicitly flagged **(inferred)**. Capture files are cited per entity. An engineer should be able to recreate the schema, the read/write endpoints, and the grids from this chapter alone.
+>
+> **Provenance root:** `caps/<area>/*.network.json` (contracts + redacted samples), `caps/<area>/*.content.html` (rendered `#content`, `buildTable` configs, form ids/maxlengths), `caps/<area>/_blocked.json` (mutation-interceptor log — `[]` everywhere: 0 mutations fired, all writes documented from client JS, never executed). Two areas are code-derived only: **chat** (`capture.py` crashed with `TargetClosedError` 2×, contracts from `custom.js`/`main.html`) and **player-profile** (fully server-side rendered, `network.json = []`).
 
-| Identity key | Type | Role | Where authoritative |
+---
+
+### 0. Wire conventions (read this first — they apply to every entity)
+
+These four conventions are the shape of the whole data layer; individual entity specs assume them.
+
+#### 0.1 Two transports
+
+| Transport | Endpoint | Body | Envelope | Auth |
+|---|---|---|---|---|
+| **Internal admin RPC** | `POST /ajax/<script>.php` (`script` ∈ `table`, `player`, `squad`, `clan`, `settings`, `public`) | `application/x-www-form-urlencoded`; `Action()` flattens `data` to `&k=v` pairs (**no URL-encoding of values** — callers pre-encode) + `action=<action>` | JSON `{status, exec_time, …}`; success gate `status=="ok"`; `auth===true` ⇒ `location.reload()` | session cookie |
+| **Public REST API** | `GET\|POST /api/<group>/<method>.php` (`group` ∈ `server`, `player`, `clan`) | `x-www-form-urlencoded` | JSON, **envelope inconsistent per endpoint** (§7) | `key` param (query/body), or none for `stat`/`hasBan`/public `clan` |
+
+#### 0.2 The universal `table.php` envelope (every DataTables grid)
+
+Every list grid (`allPlayers`, `banPlayers`, `vipPlayers`, `adminPlayers`, `playerChat`, `playerComments`, `playerMark`, `playerKills`, `playerDeath`, `playerRevive`, `playerDamage`, `playerTeamkill`, `games`, `votes`, `reports`, `ban_names`, `collabans`, `topPlayers`, `logs`, `playersOnline`, plus the 11 modal sub-tabs) funnels through **`POST /ajax/table.php`** with an identical request/response envelope. Documented once here; per-entity sections give only the `action=` id, the `data.row[]` schema, and the grid config.
+
+**Request** (`Action({script:'table', action:'<tableId>', data:'&table=<tableId>&…'})`):
+
+| Param | Type | Required | Meaning |
 |---|---|---|---|
-| `steam_id` | string, SteamID64 (17-digit) | **Primary player key** across the entire panel and the public API. Rendered in a `<hashtag>` element everywhere; the click target for the shared modal. | Player, and FK on nearly every other entity |
-| `eos_id` | string | Epic Online Services ID — Squad's newer engine identity; carried alongside `steam_id`. | Player, Match roster, live dashboard rows |
-| `discord` | string (Discord user/role id) | Links a player to a Discord account (and clans to a Discord **role**). Drives the Discord gamification/role-sync engine (ch. 16). | Player, Clan |
-| `admin_id` | SteamID64 of the acting staff member | Authorship key on bans, comments, audit log. Same value space as `steam_id` (admins are players with a group). | Ban, Comment, Log |
-| `server_id` | int (non-contiguous PK: 1, 6, 7, 9, 10, 11) | **Primary server key**; sparse ids confirm servers are soft-deleted, not renumbered (ch. 11, 12, 13, 17). | Server, and FK on every per-server event |
+| `action` | string | Y | Server table id (routes the query). |
+| `table` | string | Y | Duplicate of `action` (`buildTable` sends both). |
+| `page` | int | Y | 1-based page index. |
+| `numrows` | int | Y | Page size (per-grid; see each entity). |
+| `search` | URL-encoded JSON | Y | 5 fixed buckets `{text:{}, check:{}, multiselect:{}, managers:{}, slider:{}}`. Text inputs → `text` keyed by each control's `data-search` **raw SQL alias** (e.g. `t2.player`); checkboxes → `check` (value `"true"`/`"false"`); multiselect → `multiselect` (array); date-range → `text["<alias>.startdate"]`/`.enddate` (unix s, `0/0`=all-time). `+`→`%2B`. |
+| `order_by` | string \| `false` | Y | Sort column DB-alias, or literal `false` = server default. |
+| `order_sort` | `asc`\|`desc`\|`false` | Y | Sort direction, or `false`. |
+| `pagination` | `true` | N | When present ⇒ **count-only** variant (second parallel call). |
 
-Key structural fact (ch. 00, 05): **`squad.*` actions are per-server** (always send `server_id`), while **`player.*` actions are global** (no `server_id`). This bifurcation — a global player-record layer vs. a per-server live/RCON layer — is the single most important shape of the data model.
+**Data response** (rows call):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `data.row[]` | array[≤`numrows`] | Result rows (per-entity schema). |
+| `data.totalPage` | int | **0 on the data call** (real value from the count call). |
+| `data.totalRows` | int | **0 on the data call.** |
+| `data.currentPage` | string | Echoed page index (`"1"`). |
+| `data.custom` | bool | Custom/manager-scoped query flag. |
+| `data.query_time` | float — s | Row-query time. |
+| `data.count_time` | int/float — s | `0` on the data call. |
+| `status` | string enum `"ok"` | Non-`ok`+`auth:true` ⇒ reload. |
+| `exec_time` | float — s | Total handler time. |
+
+**Count response** (`&pagination=true`, fired only when the page fills or `currentPage!=1`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `totalPage` | int | Real page count. |
+| `totalRows` | **string OR int — inconsistent per table** | Real row count. Captured as string on `ban_names`/`vipPlayers`/`adminPlayers`/`games`/`logs`/`votes` (`"371"`, `"395"`, `"53"`, `"28571"`, `"110488"`, `"3991"`) but **int** on `collabans` (`17510`). Coerce. |
+| `count_time` | int/float — s | Isolated `COUNT(*)` cost. |
+| `status` / `exec_time` | `"ok"` / float | — |
+
+#### 0.3 Type conventions on the wire
+
+- **Every scalar is a JSON string** unless noted (`"0"`, `"1783085160"`, `"e50606"`). Integers, enums, booleans-as-`"0"/"1"`, and unix timestamps all arrive as strings. Exceptions: `game.time` (int seconds), `clan.stats.kill/die/revive` (int), `primetime.cnt/.sum` (int), presence `playtime.date/.last_seen` (int).
+- **Unix timestamps = string seconds** (10-digit) everywhere EXCEPT live-presence `playtime.{date,last_seen}` which are **integer JS milliseconds** (13-digit). §8 indexes every timestamp field.
+- **Pre-rendered HTML in JSON:** the server ships presentation cells as ready HTML strings alongside raw values in the same row. Confirmed HTML-string fields: `adminPlayers.{group,time,boost,bans,discord}`, `vipPlayers.{group,time}`, `banPlayers.expire`, `playerComments.{admin,player}`, `playerMark.{mark,ban,player}`, `playerTeamkill.{player,killed,kit}`, every combat row's `server` badge, `clan.list players[].online`, `votes.{cancel,map_current_img,map_next_img}`. A machine consumer must parse HTML out of these.
+
+#### 0.4 Live scale (row counts observed 2026-07-04)
+
+| Entity | Rows | Entity | Rows | Entity | Rows |
+|---|---|---|---|---|---|
+| Player (`allPlayers`) | **385 350** | Damage event | **13 413 500** | Comment | 1 090 |
+| VIP/privilege (`vipPlayers`) | 395 | Death event | 5 630 431 | Mark | 708 |
+| Admin roster (`adminPlayers`) | 53 | Kill event | 4 402 799 | Vote | 3 991 |
+| Ban (`banPlayers`) | (large) | Revive event | 1 217 973 | Audit log | 110 488 |
+| Ban-name (`ban_names`) | ~371 | Teamkill event | 653 590 | Report | 0 (this acct) |
+| Collab-ban (`collabans`) | 17 510 | Game/match | 28 571 | Issue | (page size 20) |
+
+---
+
+### 1. Identity model — the spine (LIVE-CONFIRMED, with a partial UUID migration)
+
+Almost every entity foreign-keys to a **player identity**. The live captures reveal a **migration in progress** from SteamID64 to a 36-char UUID surrogate (mirrors this repo's own `steam_id64 → UUID` PK migration, commit `b2ddb12`): the rewritten global player-record tables now emit a UUID under the legacy column name `steam_id`, while the high-volume event/archive tables and the entire public API still key on SteamID64.
+
+| Identity key | Type | Role | Authoritative |
+|---|---|---|---|
+| `steam_id` (as **UUID**) | string(36), dashed | **New player PK** on rewritten tables. | `adminPlayers`, `playerComments`, `playerMark`, `logs`, `changeGroup.steam_id`, `player.open()` arg |
+| `steam_id` (as **SteamID64**) | string(17) | Legacy player PK, still live on event/archive tables + public API + all `<hashtag>` rendering. | `banPlayers`, `playersOnline`, `playerKills/Death/Revive/Damage/Teamkill`, `votes`, `reports`, `collabans`, `clan.list`, `topPlayers`, all `/api/*` |
+| `admin_id` | string(17) SteamID64 | **Always SteamID64** — author key on bans (`t3`), comments (`t2`). Never migrated. | Ban, Comment |
+| `eos_id` | string(32) hex | Epic Online Services id (`0…0`×32 when unset). | Player, Match roster, live dashboard, marks |
+| `discord` | string(18) snowflake \| `null` | Discord user id (player) / Discord **role** id (clan). | Player, Clan |
+| `server_id` | string(int), **sparse PK** | Primary server key. Live set: **1, 6, 7, 8, 9, 10, 11** (2–5 retired; `8` only in settings). Confirms soft-delete, not renumber. `"0"` = panel-global event (audit logins). | Server + every per-server event |
+
+> **Capture matrix (which `steam_id` a table emits):** UUID(36) — `adminPlayers`, `playerComments`, `playerMark`, `logs`. Steam64(17) — `banPlayers`, `playersOnline`, combat tables, `votes`, `collabans`, `clan.list`, `topPlayers`, `/api/*`. Redacted-to-36 (unresolved) — `vipPlayers` JSON (`<hashtag>` renders Steam64; whether JSON carries raw Steam64 or UUID could not be confirmed under redaction). A reimplementation must treat `steam_id` as an **opaque identity column** and resolve to Steam64 only where the game protocol needs it.
+
+**Structural bifurcation (the single most important shape):** `squad.*` actions are **per-server** (always carry `server_id`) — the live/RCON layer; `player.*` actions are **global** (no `server_id`) — the record layer. Global player record vs. per-server live/RCON event is the primary schema fault line.
 
 ---
 
 ### 2. Master entity catalog
 
-| # | Entity | Primary key | Reconstructed from (table / action / API) | RPC script | Chapter |
-|---|---|---|---|---|---|
-| 1 | **Player** | `steam_id` | `player.get` / `allPlayers` table / `/api/player/info` | `player` | 03, 04, 07 |
-| 2 | **Name history** | (`steam_id`, `date`) | `player.info.names[]` / API `names[]` | `player` | 03, 19 |
-| 3 | **Location / IP history** | (`steam_id`, `date`, `ip`) | `player.info.location[]` | `player` | 03, 07 |
-| 4 | **Primetime bucket** | (`steam_id`, `start`) | `player.info.primetime[]` / API `primetime[]` | `player` | 03, 19 |
-| 5 | **Twin / alt link** | (`steam_id`, `compare_steam_id`) | `twink` / `twinkOnline` / `findFriends` | `player` | 03, 07 |
-| 6 | **Session / online series** | (`steam_id`, timestamp) | `getPlayerOnlineData` → `{minute,boost,queue}` | `player` | 03, 07, 20 |
-| 7 | **Playtime aggregate** | `steam_id` (per season) | `player.info.playtime` / `playersOnline` table / API `stats` | `player`/`table` | 04, 07 |
-| 8 | **Server** | `server_id` | `getServer` / settings `servers` list / stats `var servers` | `squad`/`settings` | 01, 11, 16 |
-| 9 | **IP / network connection** | (`server_id`, `ip`) | `network` action → `network.ips{}` | `squad` | 01 |
-| 10 | **Mod** | `mod_id` (Workshop id) | `getMods` / `installMod` / `deleteMod` | `squad` | 01, 16 |
-| 11 | **Rotation** | (`server_id`, `day`) | `getRotation` / `setRotation` | `squad` | 01, 16 |
-| 12 | **Config file** | (`server_id`, `dir`, `file`) | `getConfigFiles` / `saveConfigFile` | `squad` | 01, 16 |
-| 13 | **Server monitor sample** | (`server_id`, timestamp) | `serverMonitor` time-series | `squad` | 01 |
-| 14 | **Seeding priority (per day)** | (`start` day, `server_id`) | `seedingGetPriority` / `seedingSetPriority` | `squad` | 04 |
-| 15 | **Permission group** | `group_id` (0–5) / group `name` | `changeGroup` select / settings `groups` tab | `player`/`settings` | 05, 06, 16 |
-| 16 | **Group assignment** | `steam_id` (one per player) | `changeGroup` payload / `vipPlayers` table | `player` | 05, 06 |
-| 17 | **Admin roster row** | `steam_id` (has `group_id`) | `adminPlayers` table | `table` | 05 |
-| 18 | **VIP / privilege** | `steam_id` (group_id=3) | `vipPlayers` table / API `/player/vip` | `player` | 06, 19 |
-| 19 | **Clan (== squad)** | `id` (`clan_id`) | `clan.list` / `createSquad` / `/api/clan/get` | `clan`/`squad` | 18, 04 |
-| 20 | **Clan member** | (`clan_id`, `steam_id`) | `clan.list` → `players[]` | `clan` | 18 |
-| 21 | **Bonus economy** | `steam_id` (balance) | `player.info.bonus` / `/api/player/bonus` | `player` (API) | 04, 19, 20 |
-| 22 | **Ban** | `id` (ban row) | `banPlayers` table / `player.info.bans[]` / `/api/player/hasBan` | `squad`(write)/`table`(read) | 09, 19 |
-| 23 | **Ban-name (nickname blacklist)** | `name` | `ban_names` table / `addBanName` | `player`/`table` | 10 |
-| 24 | **Collab / Ru-Ban (federated ban)** | (`steam_id`, project) | `collabans` table / `checkBans` | `player`/`table` | 10, 19 |
-| 25 | **Project (federation source)** | project `name` | `checkBans` → `projects[]` / `#project_template` | `player` | 10 |
-| 26 | **Comment (admin note)** | `id` (comment row) | `playerComments` table / `getComments` / `/api/player/comments` | `player`/`table` | 08, 19 |
-| 27 | **Mark (suspicion flag)** | `steam_id` (one enum) | `playerMark` table / `mark` action | `player`/`table` | 08 |
-| 28 | **Audit log entry** | `id` (log row, alias `t1`) | `logs` table | `table` | 17 |
-| 29 | **Game / match** | `id` (game id) | `games` table / `/game/<id>` / `/api/player/stats` games[] | `table` | 12, 04 |
-| 30 | **Match detail (per-player)** | (`game_id`, `steam_id`) | `/game/<id>` (server-rendered, NOT captured) | — | 12 (gap) |
-| 31 | **Kill event** | event `id` (alias `t1`) | `playerKills` table | `table` | 13 |
-| 32 | **Death event** | event `id` | `playerDeath` table | `table` | 13 |
-| 33 | **Revive event** | event `id` | `playerRevive` table | `table` | 13 |
-| 34 | **Damage event** | event `id` | `playerDamage` table | `table` | 13 |
-| 35 | **Teamkill event** | event `id` | `playerTeamkill` table | `table` | 13 |
-| 36 | **Kit (usage / denial)** | (`steam_id`, `kit`) | `playerKits` table / `kits`+`kitSave` | `player` | 03, 04 |
-| 37 | **Weapon stat** | (`steam_id`, season, `weapon`) | player profile weapon cards / API `weapons[]` | (profile) | 04, 19 |
-| 38 | **Vehicle stat / destruction** | (`steam_id`, season, vehicle) | player profile vehicle tables | (profile) | 04 |
-| 39 | **Chat message** | (`t1`) row | `playerChat` table / `/api/server/chat` | `table` | 02, 19 |
-| 40 | **Vote** | vote row | `votes` table | `table` | 14 |
-| 41 | **Report** | (`t1`) row | `reports` table | `table` | 14 |
-| 42 | **Issue (bug tracker)** | `id` | `issues_get` / `issues_create` | `squad` | 15 |
-| 43 | **Video / demo** | (upload) | `uploadVideo` FormData | `public` | 15 |
-| 44 | **Upload token** | `token` | `uploadVideo_token` | `squad` | 15 |
-| 45 | **Season (dimension)** | `all`/`old`/`1`/`2` | player profile `?season=` | — | 04 |
-| 46 | **Statistics aggregate** | (server_id, day/hour/weekday) | `statistics` action payload | `squad` | 11 |
-| 47 | **User settings** | `steam_id` (self) | `saveUserSettings` JSON blob | `player` | 04, 16 |
-| 48 | **Discord config / webhooks** | (panel-global) | settings `discordbot`/`discord` tabs | `settings` | 16 |
+| # | Entity | PK | `steam_id` form | Read endpoint (`action=`) | RPC script | Capture | Ch. |
+|---|---|---|---|---|---|---|---|
+| 1 | **Player** | `steam_id` | mixed | `allPlayers` / `player.get` / `/api/player/info` | `table`/`player` | players, api | 03,04,07 |
+| 2 | Name history | (`steam_id`,`date`) | — | `player.get.names[]` / API `names[]` | `player` | api | 03,19 |
+| 3 | Location / IP history | (`steam_id`,`date`,`ip`) | — | `player.get.location[]` | `player` | 03 (render) | 03,07 |
+| 4 | Primetime bucket | (`steam_id`,`start`) | — | `player.get.primetime[]` / API `primetime[]` | `player` | api | 03,19 |
+| 5 | Twin / alt link | (`steam_id`,`compare_steam_id`) | S64 | `twink`/`twinkOnline`/`findFriends` | `player` | players (JS) | 03,07 |
+| 6 | Session / online series | (`steam_id`, ts) | S64 | `getPlayerOnlineData` | `player` | players (JS) | 03,07,20 |
+| 7 | Playtime-by-kit aggregate | (`steam_id`, season) | S64 | `playersOnline` table | `table` | online | 07,04 |
+| 8 | **Server** | `server_id` | — | `getServer` / stats `servers` / settings modal | `squad`/`settings` | dashboard, statistics, settings | 01,11,16 |
+| 9 | Map layer / Unit | (layer) | — | `getServerMaps` | `squad` | dashboard (render) | 01,16 |
+| 10 | Rotation | (`server_id`,`day`) | — | `getRotation` | `squad` | settings (JS) | 01,16 |
+| 11 | Config file | (`server_id`,`dir`,`file`) | — | `getConfigFiles`/`getConfigFile` | `squad` | settings (JS) | 01,16 |
+| 12 | Mod | `mod_id` | — | `getMods` | `squad` | settings (JS) | 01,16 |
+| 13 | Monitor sample | (`server_id`, ts) | — | `server.monitor[]` / `serverMonitor` | `squad` | dashboard | 01 |
+| 14 | Network connection | (`server_id`,`ip`) | — | `network` / root `ips` | `squad` | dashboard | 01 |
+| 15 | Statistics aggregate | (`server_id`, bucket) | — | `statistics` | `squad` | statistics | 11 |
+| 16 | Seeding priority | (`start` day,`server_id`) | — | `seedingGetPriority` | `squad` | profile (JS) | 04 |
+| 17 | Permission group | `group_id` 0–5 / `name` | — | `groups` settings tab | `settings` | admins, settings | 05,16 |
+| 18 | Group assignment | `steam_id` (1/player) | UUID/S64 | `changeGroup` / `adminPlayers` / `vipPlayers` | `player`/`table` | admins, vips | 05,06 |
+| 19 | VIP / privilege | `steam_id` (grp=3) | S64 | `vipPlayers` / `/api/player/vip` | `player`/`table` | vips, api | 06,19 |
+| 20 | **Clan (=squad)** | `id` | — | `clan.list` / `createSquad` / `/api/clan/get` | `clan`/`squad` | clans, api | 18,04 |
+| 21 | Clan member | (`clan_id`,`steam_id`) | S64 | `clan.list.players[]` | `clan` | clans | 18 |
+| 22 | Bonus economy | `steam_id` (scalar) | S64 | `player.get.bonus` / `/api/player/bonus` | `player`(API) | api,top | 04,19,20 |
+| 23 | **Ban** | `id` | S64 | `banPlayers` / `player.get.bans[]` / `/api/.../hasBan` | `squad`(w)/`table`(r) | bans, api | 09,19 |
+| 24 | Reason / rule | `value` (rule id) | — | `#player_ban-reason` `<option>` / `rules` tab | `squad` | bans, settings | 09,16 |
+| 25 | Ban-name | `name` | — | `ban_names` | `player`/`table` | bans | 10 |
+| 26 | Collab-ban (federated) | (`steam_id`, project) | S64 | `collabans` / `checkBans` / `/api/.../hasBanAll` | `player`/`table` | bans, api | 10,19 |
+| 27 | Project (federation src) | project `name` | — | `checkBans.projects[]` / `collabans.projects[]` | `player` | bans | 10 |
+| 28 | Comment | `id` | UUID | `playerComments` / `getComments` / `/api/.../comments` | `player`/`table` | notes, api | 08,19 |
+| 29 | Mark | `steam_id` (scalar) | UUID | `playerMark` / `mark` | `player`/`table` | notes | 08 |
+| 30 | Audit log entry | `id` | UUID | `logs` | `table` | logs | 17 |
+| 31 | **Game / match** | `id` | — | `games` / `/game/<id>` / API `stats.games[]` | `table` | games, api | 12,04 |
+| 32 | Match detail (per-player) | (`game_id`,`steam_id`) | — | `/game/<id>` (SSR, **not captured**) | — | — | 12 (gap) |
+| 33 | Kill event | `id` | S64 | `playerKills` | `table` | combat | 13 |
+| 34 | Death event | `id` | S64 | `playerDeath` | `table` | combat | 13 |
+| 35 | Revive event | `id` | S64 | `playerRevive` | `table` | combat | 13 |
+| 36 | Damage event | `id` | S64 | `playerDamage` | `table` | combat | 13 |
+| 37 | Teamkill event | `id` | S64 | `playerTeamkill` | `table` | combat | 13 |
+| 38 | Kit (usage / denial) | (`steam_id`,`kit`) | S64 | `playerKits` / `kits`+`kitSave` | `player` | players, profile | 03,04 |
+| 39 | Weapon stat | (`steam_id`, season, weapon) | S64 | profile SSR / API `weapons.weapon{}` | (profile) | profile, api | 04,19 |
+| 40 | Vehicle stat / destruction | (`steam_id`, season, vehicle) | S64 | profile SSR / API `weapons.vehicle{}` | (profile) | profile, api | 04 |
+| 41 | Chat message | `id` | S64 | `playerChat` / `/api/server/chat` | `table` | (code) | 02,19 |
+| 42 | Vote | `id` | S64 | `votes` | `table` | votes | 14 |
+| 43 | Report | (row) | S64 | `reports` | `table` | reports | 14 |
+| 44 | Issue (bug tracker) | `id` | — | `issues_get`/`issues_create` | `squad` | issues | 15 |
+| 45 | Label (issue) | `id` (1/2) | — | `issues_get.labels[]` | `squad` | issues | 15 |
+| 46 | Video / demo | (upload) | — | `uploadVideo` FormData | `public` | issues (JS) | 15 |
+| 47 | Upload token | `token` | — | `uploadVideo_token` | `squad` | issues (JS) | 15 |
+| 48 | Season (dimension) | `all`/`old`/`1`/`2` | — | profile `?season=` | — | profile | 04 |
+| 49 | User settings | `steam_id` (self) | — | `saveUserSettings` JSON blob | `player` | profile | 04,16 |
+| 50 | Discord config / webhooks | (panel-global) | — | `discordbot`/`discord` settings tabs | `settings` | settings | 16 |
 
 ---
 
 ### 3. Player & identity domain
 
-#### 3.1 Player (`player.info`) — the richest entity (ch. 03, 04, 07, 19)
+#### 3.1 Player — directory row (`allPlayers`) vs. full card (`player.get`) vs. API (`/api/player/info`)
 
-Loaded by `Action({script:'player', action:'get', data:{steam_id}})`. This is the app's central record; the shared modal reads it on every page.
+Three projections of the same entity. The directory list over-returns a denormalized identity+moderation payload per row.
+
+**`allPlayers` row** — captured `data.row[i]` (`caps/players/players.network.json`). Grid: `numrows=100`, `collum=["steam_id","name","date"]`, but the wire carries 10 fields:
+
+| Field | Wire type | Key | Meaning |
+|---|---|---|---|
+| `steam_id` | string(17) | **PK** | SteamID64, `<hashtag>` (copy). Row-click key. |
+| `eos_id` | string(32) | | EOS id — returned though not a visible column. |
+| `name` | string | | Current nickname. |
+| `date` | string — **unix s** | | Last login ("Заходил"/Last seen). |
+| `create_date` | string — **unix s** | | First seen ("Создан"/Created) — returned, not columned. |
+| `mark` | string enum `"0".."8"` | FK→Mark | Suspicion tag (§8.6). |
+| `bonus` | string(int) | | Bonus balance. |
+| `discord` | string(id) \| `null` | FK | Discord user id, nullable. |
+| `expire` | string — **unix s** \| `"0"` | | Group expiry; `"0"`=permanent. |
+| `group_id` | string enum `"0".."5"` | FK→Group | Current group. |
+
+**`player.get` full card** (`Action({script:'player',action:'get',data:{steam_id}})` → `POST /ajax/player.php`; `player.info = text.player`). The richest entity, read by the shared modal on every page. Fields (captured render + `/api/player/info` example `caps/api-top/_api_docs_.content.html`):
+
+| Field | Type | Key/notes | Meaning |
+|---|---|---|---|
+| `steam_id` | string(17/UUID) | **PK** | Identity. |
+| `eos_id` | string(32) | | EOS id. |
+| `name` | string | | Current nick. |
+| `names[]` | `{name, date(unix s)}` | 1:N | Name-history (§3.2). |
+| `date` / `create_date` | **unix s** | | Last login / first seen. |
+| `baby` | **bool** (JSON bool) | | New/young acct (<~30 h) risk flag. |
+| `bonus` | string(int) | | Bonus balance (`"895"`). |
+| `mark` | string `"0".."8"` | FK | Suspicion tag. |
+| `playtime` | `{online, boost, queue, server}` | | Aggregate playtime / boost / queue / favourite server (all string). |
+| `group_id, expire, group_description, prefix, prefix_rgb, image` | mixed, **nullable** | | Group-assignment payload (§7.2); all `null` when no group. |
+| `group` | `{name, color, icon, description}` | | Rendered group badge (special art `QueuePriority`/`Moderator`). |
+| `ban` | **singular object** `{id, admin_id, admin_name, date(unix), expire(unix\|"0"), reason, description, steam_id, unban}` \| falsy | | Active/last ban (§8.1). |
+| `bans[]` | array `{…same + impact:bool}` | 1:N | Full punishment history (extra `impact` bool per item). |
+| `canBan, canUnban, canPermanent, canChangeGroup, canSelfKick, is_you, name_banned, progressiveBan` | **bool** | | Server-provided capability flags = the effective client permission model. |
+| `vac` / `steam_info` | `{ban:{vac,ban,days}, squad:{time}}` | | VAC/game-ban + Squad hours. |
+| `discord` | string(18) \| `null`/`false` | FK | Discord user id. |
+| `location[]` | `{iso, loc, timezone, lat, lng, ip, date}` | 1:N | Geo-IP history, **raw IPs** (§3.3). [0]=current. |
+| `primetime[]` | `{start, end}` | 1:N | Habitual hours (§3.4). |
+| `clans[]` | `{clan_id, name}` | M:N→Clan | Memberships. |
+| `online` | `{server:{id,name}, team:{short}, squad:{id}}` \| `false` | | Live presence — pivot for all RCON actions. |
+| `stats` | object | | Aggregate combat (kill/die/revive/winrate/kit). |
+| `comments_count` | int | | Cached comment badge count. |
+
+**`player.php` action surface** (read + write, captured from modal JS; all Destructive writes never fired):
+
+| action | script | `data:{…}` | Response | Destr. |
+|---|---|---|---|---|
+| `get` | player | `{steam_id}` | `{player}` full entity | N |
+| `add` | player | `{steam_id}` | ack; opens new card | Y |
+| `mark` | player | `{steam_id, mark(0–8)}` | `{status}` | Y |
+| `getComments` | player | `{steam_id}` | `{comments:[{name,date(unix),text}]}` | N |
+| `addComment` | player | `{steam_id, text(≤256)}` | ack | Y |
+| `changeGroup` | player | `{steam_id, group_id, date, description, prefix, prefix_rgb, image}` | ack | Y |
+| `message` | player | `{steam_id, time, msg(≤512), log(bool)}` | ack | Y |
+| `addBanName`/`removeBanName` | player | `{name}` | ack | Y |
+| `kits` / `kitSave` | player | `{steam_id}` / `{steam_id, kits(JSON {kit:bool})}` | `{kits:[…]}` / ack | N / Y |
+| `twink` | player | `{steam_id}` | `{list:[{steam_id,name,perm,min_date,ips:[{loc,date,owner_date}]}]}` | N |
+| `twinkOnline` | player | `{steam_id, compare_steam_id, start(unix), end(unix)}` | `{calendar:[…events]}` | N |
+| `findFriends` | player | `{steam_id, compare_steam_id}` | `{in_friend:bool}` | N |
+| `checkBans` | player | `{steam_id}` | `{projects:[…]}` (§8.4) | N |
+| `getPlayerOnlineData` | player | `{steam_id, start, end}` | `{ts:{minute,boost,queue}}` series | N |
+| `downloadStat` | player (`post_to_url` form) | `{action, steam_id}` | file | N |
+
+**`squad.php` (RCON) player actions** — require player online, always carry `server_id`:
+
+| action | `data:{…}` | Effect | Destr. |
+|---|---|---|---|
+| `kick` | `{steam_id, reason_id, description, noReason}` | Kick (`noReason:true`=no-rule) | Y |
+| `ban` | `{server_id, steam_id, reason_id, description, days}` | Ban N days (`0`/`-1`=perma) | Y |
+| `unban` | `{steam_id, unban(bool)}` | Lift; `unban:true` fully erases | Y |
+| `removePlayer` | `{server_id, steam_id}` | Eject from squad | Y |
+| `changeTeam` | `{server_id, steam_id}` | Force team swap | Y |
+| `kill` | `{server_id, steam_id}` | Kill in-game | Y |
+
+**Shared modal — visibility predicates** (buttons default `display:none`/`.hide`, revealed by `setInfo()`):
+
+| Element | Shown iff |
+|---|---|
+| Наказать (ban flow) | `canBan` **and** no active ban |
+| Убить/Кикнуть без причины | `canBan`/`canSelfKick` **and** `online` truthy |
+| Разбанить | active ban **and** `canUnban` |
+| Группа (changeGroup) | `canChangeGroup` (**hidden entirely when `!canBan`**) |
+| Забанить ник ↔ Разбанить ник | toggled by `name_banned` |
+| Сообщение / Команда / Кик из сквада | `online` / `online.team` / `online.squad` present |
+| group select + expiry | **disabled** when `is_you` |
+
+#### 3.2 Name history — `{name, date(unix s)}`; **PK** (`steam_id`,`date`). 1:N from Player. Feeds "Другие ники" (Other nicks) + `with_other_names` search. Source: `player.get.names[]`, API `names[]`.
+
+#### 3.3 Location / IP history — `{iso, loc, timezone, lat, lng, ip, date(unix)}`; **PK** (`steam_id`,`date`,`ip`). [0]=current. Holds **raw IPs**; drives Leaflet map, same-IP alt-hunt, dashboard `ips` badge. Source: `player.get.location[]` (render). 1:N from Player, reflexive same-IP link to §3.5.
+
+#### 3.4 Primetime bucket — client `{start, end}`; API `{start(unix), end(unix), cnt(int), sum(int), sort("HH:mm")}`. **PK** (`steam_id`,`start`). Hour-of-day histogram. Source: `player.get.primetime[]`, API `primetime[]` (`caps/api-top`).
+
+#### 3.5 Twin / alt link — `twink` → `list[]` each `{steam_id, name, perm(bool), min_date(unix-delta), ips:[{loc, date(unix), owner_date(unix)}]}`. Two derived relations: `twinkOnline` (session-overlap calendar, keyed `compare_steam_id,start,end`) and `findFriends` (`{in_friend:bool}`). **Reflexive M:N on Player**, materialized on demand from shared-IP + Steam-friends + session overlap; no stored alt-group table.
+
+#### 3.6 Session / online series — `getPlayerOnlineData(steam_id,start,end)` → time-series keyed by ts, each `{minute, boost, queue}`. Granular counterpart of the playtime aggregate; powers the modal activity chart. **PK** (`steam_id`, ts).
+
+#### 3.7 Playtime-by-kit aggregate (`playersOnline` grid) — LIVE
+
+Per-player playtime rollup over a **date-range window**, broken out by kit. Grid: `numrows=100`, `collum=["name","online","boost","SL","CMD","Rifleman","Medic","LAT","MachineGunner","Marksman","Engineer","Pilot","Crewman"]`, columns 2–13 sortable (`order`), default sort = server default (playtime desc). Row-click → `player.open(steam_id)`. Source: `caps/online/playersOnline.network.json`.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `steam_id` | string(17) | **PK** — SteamID64. |
-| `eos_id` | string | Epic Online Services id. |
-| `name` | string | Current nickname. |
-| `names[]` | `{name, date}` | Historical nicknames → **Name-history** entity (§3.2). |
-| `date` | ts | Last login ("Заходил"). |
-| `create_date` | ts | First seen ("Создан"). |
-| `baby` | bool | New/young account (<~30 h) risk flag. |
-| `bonus` | number | Bonus-point balance → **Bonus economy** (§7.5). |
-| `playtime` | `{online, boost, server}` | Aggregate playtime, boost/seeding time, favourite server. |
-| `mark` | int 0–8 | Suspicion tag → **Mark** entity (§8.6). |
-| `group` | `{name, color, icon, description}` | Rendered group badge (special art for `QueuePriority`/`Moderator`). |
-| `group_id, expire, group_description, prefix, prefix_rgb, image` | mixed | Group-assignment payload (§7.2). |
-| `ban` | `{expire, reason, admin_name, date, description}` | Active ban (or falsy). |
-| `bans[]` | `{admin_name, date, reason, description, impact, unban}` | Full punishment history → **Ban** entity (§8.1). |
-| `canBan, canUnban, canPermanent, canChangeGroup, canSelfKick, is_you, name_banned, progressiveBan` | bool | Server-provided **capability flags** — the effective client-visible permission model (ch. 05 §3.3). |
-| `vac` / `steam_info` | `{ban:{vac,ban,days}, squad:{time}}` | Steam VAC/game-ban enrichment + Squad hours. |
-| `discord` | string \| false | Discord user id. |
-| `location[]` | `{iso, loc, timezone, lat, lng, ip, date}` | Geo-IP history → **Location/IP** entity (§3.3). |
-| `primetime[]` | `{start, end}` | Habitual active-hours → **Primetime** entity (§3.4). |
-| `clans[]` | `{clan_id, name}` | Clan memberships (M:N to **Clan**). |
-| `online` | `{server:{id,name}, team:{short}, squad:{id}}` \| false | Live presence — pivot for all live RCON actions. |
-| `stats` | object | Aggregate combat stats (kill/die/revive/winrate/kit). |
+| `steam_id` | string(17) | PK / drill key. |
+| `name` | string | Nick. |
+| `online` / `boost` / `queue` | string **`"Xч Yм"`** (pre-formatted RU h/m) | Total / boosted / queue playtime in window. `queue` returned but **not columned**. |
+| `SL,CMD,Rifleman,Medic,LAT,MachineGunner,Marksman,Engineer,Pilot,Crewman` | string `"Xч Yм"` | Per-kit playtime (11 kits) → implies stored `player_kit_time[steam_id, season, kit]=seconds`. |
 
-Auxiliary counters delivered with the card: `comments_count` (badge on the comments drawer, ch. 08).
-
-#### 3.2 Name history (ch. 03, 19)
-`{name, date}`; **PK** (`steam_id`, `date`). One-to-many from Player. Feeds "Другие ники" dropdown and the `with_other_names` search extension.
-
-#### 3.3 Location / IP history (ch. 03, 07)
-`{iso, loc, timezone, lat, lng, ip, date}`; **PK** (`steam_id`, `date`, `ip`). First element = current. Holds **raw IP addresses**; drives the Leaflet map, the same-IP alt-hunt, and the dashboard `location.same` "N players share this IP" badge.
-
-#### 3.4 Primetime bucket (ch. 03, 19)
-`{start, end}` (client) / `{start, end, cnt, sum, sort}` (API). Hour-of-day activity histogram per player. **PK** (`steam_id`, `start`).
-
-#### 3.5 Twin / alt link (ch. 03 §4.3, 07)
-Result of `twink` → `text.list[]`, each `{steam_id, name, perm, min_date, ips[]}` where `ips[]` = `{loc, date, owner_date}` shared-IP hits. Two derived relations:
-- `twinkOnline` — co-presence overlay of two accounts' sessions (`compare_steam_id, start, end`).
-- `findFriends` — Steam-friends boolean (`in_friend`) between (`steam_id`, `compare_steam_id`).
-
-This is a reflexive M:N **self-relationship on Player**, materialized on demand from shared-IP + Steam-friends + session overlap. No stored "alt group" table is exposed.
-
-#### 3.6 Session / online series (ch. 03, 07, 20)
-`getPlayerOnlineData(steam_id, start, end)` → time-series keyed by timestamp, each `{minute, boost, queue}`. Granular counterpart of the playtime aggregate; powers the modal activity chart and (unrealized) time-windowed leaderboards.
-
-#### 3.7 Playtime aggregate & per-role playtime (ch. 04, 07)
-Denormalized **per-player, per-season** rollup: `{online, boost, server}` plus per-kit playtime buckets. The `playersOnline` table projects this as 11 kit columns (`SL, CMD, Rifleman, Medic, LAT, MachineGunner, Marksman, Engineer, Pilot, Crewman`) — implying a stored `player_kit_time[steam_id, season, kit] = seconds`.
+Filter: `#playersOnline-user` (`data-search=player`, text), `#playersOnline-period` (daterange → `text["custom.period.startdate/.enddate"]` unix, default `today`), `#playersOnline-server` (multiselect → `multiselect["server_id"]`). **Durations are server-formatted strings** ⇒ sort must run server-side on underlying seconds.
 
 ---
 
 ### 4. Server & operations domain
 
-#### 4.1 Server (ch. 01, 11, 12, 16)
-**PK** `server_id` (sparse ids). Union of the stats `var servers` object, the settings modal, and live `getServer`:
+#### 4.1 Server — LIVE (`getServer`, `statistics.servers`, settings modal)
+
+**PK** `server_id` (sparse: 1,6,7,8,9,10,11). Read live via **`POST /ajax/squad.php` `action=getServer`** (`data:&server_id=<id>&last_chat_id=<int|false>`), polled every **5000 ms**. The one captured contract is `caps/dashboard/__server_id_1.network.json`.
+
+**Persistent server fields** (from `statistics.servers` map + settings modal):
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | int | PK. |
-| `name` | string | Full display name ("RAAS/AAS #1"). |
-| `short` / `ext_short` | string | Internal 1-letter index (A,B,C,E,F,G) / public display index. |
-| `ip` / `new_ip` | string | Bound IP / pending IP after restart. |
-| `port` | int | **rnsquad JS-agent port** (default 3000 — confirms an out-of-process Node agent per server). |
-| `start_params.port/.query/.beacon_port` | int | Game / Steam-query / RCON-beacon ports. |
+| `id` | string(int) | **PK.** |
+| `name` | string(≤128) | Display name ("RAAS/AAS #1"). |
+| `short` / `ext_short` | string(≤16) | Internal index (A,B,C,E,F,G) / public display index. |
+| `ip` | string(15) | Bound IP. `new_ip` = pending after restart. |
+| `port` | string(5) | **rnsquad JS-agent port** (default 3000 — per-server Node agent). |
 | `pass` | string | RCON/query password (blanked in captures). |
-| `license` / `licensed` / `license_valid` | key/bool | License key + validity. |
-| `disabled` | bool | Inactive flag. |
-| `sort` | int | Drag-order display index. |
-| `chan_id` | string | Discord channel id (auto-renamed to a live status string). |
-| `types` | set | Enabled modes: AAS, RAAS, Invasion, tc, Insurgency, Destruction. |
-| `mods` | set | Enabled mod flags: ge, sd, supermod, KOTH, squadZ. |
-| `version`/`build`/`region`/`cores`/`mem`/`EOS_ping`/`EOS_online` | mixed | Live health/telemetry (from `getServer`). |
-| `teams[0..1]` | `{short, name, unit}` | Current factions. |
-| `vote` | `{isVote, mode, map, votes:{yes[],no[]}}` | Live in-game map vote. |
+| `licensed` / `license` / `license_valid` | `"0"/"1"` / key / bool | License validity. |
+| `disabled` | `"0"/"1"` | Inactive flag. |
+| `sort` | string(int) | Drag-order display index. |
+| `chan_id` | string | Discord channel id (auto-renamed to live status `🟢c_100x7_👮2`). |
+| `types` | list<enum> | Modes: `AAS, RAAS, Invasion, tc, Insurgency, Destruction`. |
+| `mods` | list<enum> | Mod flags: `ge, sd, supermod, KOTH, squadZ`. |
 
-Related read-only children: **Server-monitor sample** (`serverMonitor` → `{mem, network_send/receive, disk_read/write, tps, network_connections}` per timestamp) and the online timelines `serverOnline` / `serverOnlineAdmins` / `serverOnlineBooster`.
+**Live `getServer.server` runtime fields** (selected; full spec ch.01 §2.1.1): `map, nextMap, map_start(unix-str), players.active[], players.dis[], squads[], teams[0..1]{short,name,unit}, isConnect(bool), block_start(bool\|{msg,code}), need_restart, outdated, eos_problem, last_restart{…parts,unix}, start_params{ip,port,query}, beacon_port, region, pings{region:ms}, squad_version{version,build}, version, vote{isVote,votes:{yes[],no[]},map,mode:skip|next|current}, calculateOnline{}, stat.online{date[],players[],admins[],queue[]}, monitor[]`. Root envelope adds `you(S64\|false), servers{id:{players,admins,queue}}, ips{ip:count}, panelAdmins[], global_online(int), is_sale(int), isSeeding(bool)`.
 
-#### 4.2 IP / network connection (ch. 01)
-`network` action → `network.ips{ip:{conn[], country, city}}` and `network.sockets[]`. Live TCP monitor with geolocation; a `blockIP(ip)` firewall action. **Unrelated to the ban network** (ch. 10 §10.3.5 caveat).
+**`players.active[]` row** (live roster): `{id, steam_id(17), eos_id(32), name, team("1"/"2"), squad(bool\|id), leader(bool), kit, ip, isAdmin(bool), color(bool\|hex), mark(int), warning(bool), vac(bool), baby(bool), playtime:{date,last_seen (unix MS)}, requests:{admins,report}, location:{iso,country,city}}`. **`squads[]` row:** `{id, name, team, size, locked(bool), cmd(bool), create_id(S64), create_name, eos_id(32), message(bool)}`.
 
-#### 4.3 Mod (ch. 01, 16)
-`getMods` → `{mods[], mod_status}`. **PK** Workshop `mod_id`. Fields: title, description, `mod_id`, updated date. Install/remove with a 5 s progress poller.
+**Server lifecycle actions** (`squad`, all Destructive, `$.question`-confirmed): `start, stop, restart, update{afterMapChange}, rconRestart, parserRestart, cacherRestart, botUpdate, setServerIP{ip}` — all `{server_id}` except `botUpdate` (global). Squad control: `disband, transfer, rename{team,squad}, demote{steam_id}, squadMessage{team,squad,time,msg}`. Messaging: `broadcast{server_id,msg}`. Map: `changeMap{next,map,vote,skip}, clearNext, setRotation{rotation,day}`. RCON: `rconRaw{command}`. Read: `getServerMaps, getRotation, serverMonitor, serverOnline, network, getConfigFiles, getConfigFile, getMods, mapCalendar`(`public`).
 
-#### 4.4 Rotation (ch. 01, 16)
-`getRotation` → `{rotation:{lists:{default,1..7}, current, isWin}, list, canEdit}`. **PK** (`server_id`, `day`), day ∈ {default, 1–7 = Mon–Sun}. `lists[day]` is a newline-delimited layer list (`//` comments honored). Per-weekday scheduling; `isWin` = win-based mode.
+#### 4.2 Map layer / Unit (`getServerMaps`, inferred-from-render) — Map: `{map, type(RAAS/AAS/Invasion/…), weather, markers, teams.t_1|t_2:{tickets, default:{faction,unit,prefix,postfix}, factions[]:{name,default,units[]}}}`. Unit: `{roles[], vehicles[]:{name,count,respawn,delay}}`.
 
-#### 4.5 Config file (ch. 01, 16)
-`getConfigFiles` → `{files:{<dir>:{files:[{name, date, symlin}]}}}`; `getConfigFile(server_id, file, dir)` → `{text, hasDefault}`. **PK** (`server_id`, `dir`, `file`). Edited via CodeMirror; `saveConfigFile` overwrites on disk, `reloadConfig` hot-reloads.
+#### 4.3 Rotation (`getRotation`) — `{rotation:{lists:{default,"1".."7"}, current(1–7), isWin(bool)}, list:{layer:{teams[]}}, canEdit(bool)}`. **PK** (`server_id`,`day`), day∈{default, 1–7=Mon–Sun}. `lists[day]`=newline-delimited layers (`//` comments honored). Write `setRotation{server_id, rotation(encodeURIComponent), day}`, Destructive; `canEdit=false` ⇒ readonly; `isWin=true` ⇒ weekday tabs hidden.
 
-#### 4.6 Seeding priority (ch. 04)
-`seedingGetPriority(start_day)` → `{server_list[]:{id, short, name, priority}, day:{min_players, use_unattached}}`. **PK** (`start` day, `server_id`). `priority < 999` ⇒ attached/priority; drives the seeding helper's per-day rotation.
+#### 4.4 Config file (`getConfigFiles`/`getConfigFile`) — `getConfigFiles` → `{files:{<dir>:{files:[{name, date(unix-ms), symlin(bool)}]}}}`; `getConfigFile{server_id,file,dir}` → `{text, hasDefault(bool)}`. **PK** (`server_id`,`dir`,`file`). Write `saveConfigFile{server_id,text(encodeURIComponent),file,dir}` (Y), `reloadConfig{server_id}` (Y), `getDefaultConfig{file}` (N).
+
+#### 4.5 Mod (`getMods`) — `{mods:[{publishedfileid,…}], mod_status:{mod_id,…}}`. **PK** Workshop `mod_id`. Write `installMod{server_id,mod_id,fix}` / `deleteMod{server_id,mod_id}` (Y); 5 s progress poll via `getMods{only_status:true}`.
+
+#### 4.6 Monitor sample (`server.monitor[]`, 60) — each `{date(unix-s), data:{pid, mem, network:{send,receive,format,connections(int)}, cpu[int], disk:{read,write}, freq[str], temp[int], tps}}`. **PK** (`server_id`, ts). `network.connections>300` ⇒ "under attack" banner.
+
+#### 4.7 Network connection (`network`) — `{network:{ips:{ip:{conn[],country,city}}, sockets[]}}`; `blockIP{ip}` firewall (Y). **PK** (`server_id`,`ip`). Live TCP monitor; **unrelated** to the ban network.
+
+#### 4.8 Statistics aggregate (`statistics`) — LIVE
+
+**`POST /ajax/squad.php`** body `&start=<unix>&end=<unix>&servers=<CSV ids>&action=statistics` (note: `servers` is **comma-joined**, not an array). Returns one JSON of pre-aggregated series; values often string-int. Source `caps/games-stats/statistics.network.json`. Not row entities — read-side rollups. Axis-label arrays: `days["DD.MM.YYYY"], hours["HH:00"], dayofweek[RU weekday]`.
+
+| Key | Shape | Meaning |
+|---|---|---|
+| `online`/`max`/`queue` | `{sid:{day:val}}` | avg online / peak+queue / avg queue |
+| `admins`/`maxAdmins` | `{day:val}` | avg / peak admins |
+| `bans` | `{day:val}` | punishments issued |
+| `new` | `{day:val}` | first-seen players |
+| `chat`/`teamkill` | `{sid:{day:val}}` | chat volume / teamkills |
+| `games`/`kills`/`death`/`revival`/`wound`/`damage` | `{sid:{day:val}}` | match & combat throughput |
+| `onlineHour`/`onlineDay` | `{sid:{HH:00\|weekday:val}}` | online by hour / weekday |
+| `modes` | `{AAS,Invasion,RAAS,Seed,Skirmish:count}` | match-count per mode |
+| `maps` | `{mapName:count}` (**mixed int/str**) | match-count per map (excl. Skirmish/Seed) |
+| `unique`/`kits` | `[]` | empty in this deployment |
+| `test` | `{sub:float}` | server-side per-query profiling (info-leak) |
+
+#### 4.9 Seeding priority (`seedingGetPriority(start_day)`) — `{server_list[]:{id,short,name,priority}, day:{min_players, use_unattached}}`. **PK** (`start` day,`server_id`). `priority<999` ⇒ attached. Write `seedingSetPriority{start, data(CSV), min_players, use_unattached}`.
 
 ---
 
 ### 5. Combat & match domain
 
-#### 5.1 Game / match (ch. 12, 04, 19)
-`games` table, **PK** `id`. Row click → `/game/<id>` (full-page, server-rendered).
+#### 5.1 Game / match (`games`) — LIVE
 
-| Field | Type | Meaning |
-|---|---|---|
-| `id` | int | PK. |
-| `server` / `server_id` | int | FK → Server. |
-| `map` | string | Layer name (`Gorodok_RAAS_v1`). |
-| `start` / `end` | ts | Round start/end (`end` blank while ongoing). |
-| `t1` / `t2` | string | Team/faction labels. |
-| `t1_tickets` / `t2_tickets` | int | Remaining tickets per side. |
-| `time` | int (s) | Round duration. |
-| `win` | enum `t1`\|`t2`\|null | Winner (null = draw/ongoing). |
+Grid: `numrows=100`, `collum=["server","map","start","end","t1","t2","time","win"]`, **no `order`** (sorting disabled), default newest-first by `start`. Row-click = full nav `window.location='/game/<id>'`. Source `caps/games-stats/games.network.json`.
 
-The API adds `playtime` (per-player minutes) on the `stats.games[]` projection, tying a player to a match.
+| Field | Type | Key/notes | Meaning |
+|---|---|---|---|
+| `id` | string(int) | **PK** | Match id → `/game/<id>`. |
+| `server_id` | string(int) | FK→Server | Numeric server FK (filter `server_id`). |
+| `server` | string(1) | | Short letter (`<code>[A]</code>`). |
+| `start` / `end` | string — **unix s** | | Round start/end (`end` blank/`0` while ongoing). Filter `t1.start`. |
+| `map` | string | | Layer name (`Harju RAAS v1`). Filter `t1.map`. |
+| `t1` / `t2` | string | | Faction tags/names. |
+| `t1_tickets` / `t2_tickets` | string(int) | | Remaining tickets. |
+| `win` | enum `"t1"`\|`"t2"`\|`""` | | Winner (empty=draw/ongoing). |
+| `is_seed` | `"0"/"1"` | | Seeding round — returned, **not columned/filterable**. |
+| `time` | **int** (s) | | Round duration (only int-typed field). |
 
-#### 5.2 Match detail (per-player) — **gap** (ch. 12)
-Reached by full navigation to `/game/<id>`; this HTML was **not captured**. Presumed schema: per-player kills/deaths/score, team rosters, ticket timeline. Documented as a gap. Logical **PK** (`game_id`, `steam_id`).
+API `stats.games[]` adds `playtime` (per-player minutes) + `win` as a **status code** (`"0"`,`"3"`, not boolean). Clan `stats.games[]` adds `name, cnt` (clan participants).
 
-#### 5.3 Combat events (ch. 13) — one physical event table, five projections
-`t1` = event row (`date`, `server_id`); player parties resolved by join under different aliases per page. **PK** event `id`.
+#### 5.2 Match detail (per-player) — **GAP**. `/game/<id>` full-page SSR, not captured. Presumed per-player K/D/score, rosters, ticket timeline. Logical **PK** (`game_id`,`steam_id`).
 
-| Entity | Table | Primary player (`steam_id`) | Secondary player | Weapon? | Extra |
-|---|---|---|---|---|---|
-| Kill | `playerKills` | killer | `victim_steam_id` (victim) | yes | — |
-| Death | `playerDeath` | the deceased | (killer filterable, not shown) | yes (killed-by) | — |
-| Revive | `playerRevive` | medic | revived player | no | — |
-| Damage | `playerDamage` | attacker | victim | yes | **damage magnitude stored but not shown in grid** |
-| Teamkill | `playerTeamkill` | offender (`player`) | victim (`killed`) | no | friendly-fire |
+#### 5.3 Combat events — LIVE, one physical event table (`t1`, holds `date`,`server_id`), five projections under swapped player aliases. **PK** event `id`. Source `caps/combat/*.network.json`. Grids: `numrows=500` (k/d/r/dmg), `100` (teamkills); no `order` (sort off); default newest-first; row-click → primary actor.
 
-Common fields: `steam_id`, `victim_steam_id`, `server` (`server_id`), `date`, actor name (`player_name`/`player`), target name (`name`/`killed`), `weapon`. Every combat event is a many-to-one to **Player** (twice) and to **Server**.
+| Table | numrows | `collum` | Primary `steam_id` | Secondary | Weapon | Extra fields |
+|---|---|---|---|---|---|---|
+| `playerKills` | 500 | steam_id,server,date,player_name,name,weapon | killer(17) | `victim_steam_id`(17) | `weapon` | `kit, game_id, map` |
+| `playerDeath` | 500 | steam_id,server,date,player_name,weapon | deceased(17) | (killer filterable, not shown) | `weapon`(killed-by) | `kit, game_id, map` (**no victim_steam_id/name**) |
+| `playerRevive` | 500 | steam_id,server,date,player_name,name | medic(17) | `victim_steam_id`(17) | — | `kit, game_id, map` |
+| `playerDamage` | 500 | steam_id,server,date,player_name,name,weapon | attacker(17) | `victim_steam_id`(17) | `weapon` | **`damage`(int) shipped but not columned**; `game_id, map` |
+| `playerTeamkill` | 100 | steam_id,server,date,player,killed | offender(17) | — | — | `killed`(HTML), `player`(HTML), `kit`(HTML img), `killed_group`/`player_group`(null); no weapon/victim_steam_id |
 
-#### 5.4 Kit (ch. 03, 04)
-Two facets sharing the kit dimension:
-- **Kit usage** — `playerKits` table / profile "Киты": `{kit, cnt}` where `cnt` = playtime minutes. Stored `player_kit_time[steam_id, season, kit]`.
-- **Kit denial** — `kits`/`kitSave`: per-kit boolean deny map `{kit: bool}` (license-risk warning). **PK** (`steam_id`, `kit`).
+Common: `id, steam_id, date(unix s), server(HTML badge), server_id`. Kills makes both parties openable (`#kill_template`); others only the primary. Every combat event = N:1 Player (×1–2) + N:1 Server + (round via `game_id`). **Page-specific `data-search` join aliases** (leaked): kills Кто=`t2.player`/Кого=`t4.player`; deaths/revives/teamkills Кто=`t5.player`/Кого=`t2.player`; damages Кто=`t2.player`/Кого=`t5.player`; all date=`t1.date`, server=`server_id`.
 
-#### 5.5 Weapon stat (ch. 04, 19)
-`{name, kills/cnt, damage, image}`; **PK** (`steam_id`, season, `weapon`). Per-weapon kills + total damage.
+#### 5.4 Kit (usage / denial) — **Usage:** `playerKits` grid `{kit, cnt(minutes)}` → stored `player_kit_time[steam_id,season,kit]`. **Denial:** `kits`→`{kits:[…]}` deny map, `kitSave{steam_id, kits(JSON {kit:bool})}` (Y, license-risk warning). **PK** (`steam_id`,`kit`).
 
-#### 5.6 Vehicle stat & vehicle destruction (ch. 04)
-Two tables:
-- **Driven/crewed** ("Техника"): `{vehicle, kills, damage}` — localized vehicle names.
-- **Destroyed** ("Уничтожение техники"): `{weapon, vehicle, count}` — keyed by weapon; uses **raw internal asset ids** (`T72A_IMF`, `MI8_AFU`), confirming it is pulled straight from parsed kill-log rows.
+#### 5.5 Weapon stat (profile SSR / API `weapons.weapon{<name>:{cnt,damage,name,image}}`) — per-weapon kills+damage. **PK** (`steam_id`, season, weapon). Profile "Оружие" cards: `{name, kills(fa-crosshairs), damage(fa-explosion)}`.
 
-#### 5.7 Season dimension (ch. 04)
-`all` / `old` (pre-ICO, 2016–2023-09-27) / `1` (Squad 6.0 ICO UE4) / `2` (Squad 9.0 UE5, default). All stat aggregates (§3.7, §5.4–5.6, §11) are partitioned by season; retention reaches back to **2016**.
+#### 5.6 Vehicle stat & destruction (profile SSR / API `weapons.vehicle{<name>:{cnt,damage,name}}`) — **Driven** ("Техника"): `{vehicle(localized), kills, damage}`. **Destroyed** ("Уничтожение техники"): `{weapon, vehicle(raw asset id e.g. `T72B3`,`Tigr_RWS`), count}` — keyed by weapon, raw ids confirm parse from kill-log. **PK** (`steam_id`, season, vehicle).
+
+#### 5.7 Skill/lifetime aggregate (profile "Скилл", per season) — `{kd(float), winrate(%), matches, wins, losses, kills, deaths, damage, revives, teamkills, online("Nч Nм")}`. Note wins+losses<matches (draws tracked). API `stats[]` = name/value pairs: `Online, Boost, Favorite kit, Matches, Winrate("W:12 L:18 (40%)"), K/D, Kills, Deaths, Revivals`.
+
+#### 5.8 Season dimension — `all` / `old` (2016-01-01–2023-09-27, pre-ICO) / `1` (Squad 6.0 ICO UE4, →2025-09-03) / `2` (Squad 9.0 UE5, default). All §3.7/§5.4–5.7/§4.8 aggregates partition by season; retention → **2016**. Switch = hard nav `?season=`.
 
 ---
 
-### 6. Statistics aggregates (ch. 11)
+### 6. Access-control & monetization domain
 
-The `statistics` action returns pre-aggregated series, not row entities. Keyed either flat `{day:val}` or nested per-server `{server_id:{day:val}}`, over `days`/`hours`/`dayofweek` axis buckets:
+#### 6.1 Permission group — fixed enum, **PK** `group_id` / internal `name` (LIVE from `#player_group-groups` + settings `groups` tab):
 
-| Response key | Grain | Meaning |
-|---|---|---|
-| `online` / `max` / `queue` | per-server per-day | avg online / peak (incl. queue) / queue length |
-| `admins` / `maxAdmins` | per-day | avg / peak admins online |
-| `bans` | per-day | punishments issued |
-| `new` | per-day | first-seen players |
-| `chat` / `teamkill` | per-server per-day | chat volume / teamkills |
-| `games` / `kills` / `death` / `revival` / `wound` | per-server per-day | match & combat throughput |
-| `onlineHour` / `onlineDay` | per-server per hour / weekday | online distribution |
-| `modes` / `maps` | per mode / per map | match-count distributions |
-
-These are derived from the event/session tables above; they are the read-side rollups of Combat events, Games, Chat, Sessions, and Bans.
-
----
-
-### 7. Access-control & monetization domain
-
-#### 7.1 Permission group (ch. 05, 06, 16)
-A **fixed enum**, not free-form roles. **PK** `group_id` / internal `name`:
-
-| group_id | Label | Internal name | Icon | Color |
+| group_id | Label (RU/EN) | Internal `name` | Icon (`icon`, no `fa-`) | Color (`color`, no `#`) |
 |---|---|---|---|---|
-| 0 | -Нет группы- | (clears) | — | — |
-| 1 | Администратор | Admin | user-circle | #e50606 |
-| 2 | Модератор | Moderator | id-badge | #2df044 |
-| 3 | **VIP** | QueuePriority | star | per-record |
-| 4 | Камера | Cameraman | video-camera | #7d059e |
-| 5 | Стажёр | Intern | graduation-cap | #b57c03 |
+| `0` | -Нет группы- / clears | *(clears)* | — | — |
+| `1` | Администратор / Admin | `Admin` | `user-circle-o` | `e50606` |
+| `2` | Модератор / Moderator | `Moderator` | `id-badge` | `2df044` |
+| `3` | **VIP** | `QueuePriority` | `star` | `e2b032` (per-record) |
+| `4` | Камера / Camera | `Cameraman` | `video-camera` | `7d059e` |
+| `5` | Стажёр / Trainee | `Intern` | `graduation-cap` | `b57c03` |
 
-The settings `groups` tab defines each group's **21 Squad permission tokens** (`startvote, changemap, pause, cheat, private, balance, chat, kick, ban, config, cameraman, immune, manageserver, featuretest, reserve, demos, clientdemos, debug, teamchange, forceteamchange, canseeadminchat`) plus `{description, color}`. This is the panel's RBAC vocabulary (mirrors Squad `Admins.cfg`).
+Each group carries **21 Squad permission tokens** (`groups` settings tab, LIVE default matrix in ch.16 §16.3): `startvote, changemap⚠, pause, cheat, private, balance, chat, kick⚠, ban⚠, config, cameraman, immune, manageserver, featuretest, reserve, demos, clientdemos, debug, teamchange, forceteamchange, canseeadminchat` (⚠ = "won't be audit-logged" when done in-game) + `{description(≤32), color(≤16)}`. This is the RBAC vocabulary (mirrors Squad `Admins.cfg`).
 
-#### 7.2 Group assignment (ch. 05, 06)
-Written by `changeGroup`. **One per player** (a scalar on Player, not a join table): `{steam_id, group_id, date(expire), description, prefix, prefix_rgb, image}`. `expire==0` ⇒ permanent. Same record grants staff roles AND VIP (group 3). Scope is **global** (no `server_id`).
+#### 6.2 Group assignment — **one per player** (scalar on Player, global, no `server_id`). Written by `changeGroup{steam_id, date(expire unix\|0=infinity), group_id, description(≤128), prefix(≤64), prefix_rgb(≤16 "r,g,b"), image(≤256 URL)}`. Same record grants staff roles AND VIP (grp 3). Read back on `adminPlayers`/`vipPlayers` rows.
 
-#### 7.3 Admin roster row (ch. 05)
-`adminPlayers` table = Player ⟕ Group filtered to `group_id ∈ {1,2,4,5}`, with accountability KPIs: `{steam_id, name, group, date, time (playtime/period), boost, bans (punishments issued/period), discord}`.
+#### 6.3 Admin roster (`adminPlayers`) — LIVE
 
-#### 7.4 VIP / privilege (ch. 06, 19)
-`vipPlayers` table = Player (`t2`) ⟕ group-assignment (`t1`): `{steam_id, name, expire, date, time, vipdesc}`. VIP is **group_id=3** granted via `changeGroup`; the API exposes `/player/vip` (`expire` XOR `add`). Distinct from the **clan-scoped** reserved-slot flag `vipPlayer` (§7.7).
+`caps/admins/admins.network.json`. Grid: `numrows=50`, sortable `steam_id,name,group,date,bans` (playtime/boost/discord not). Filter `#adminPlayers-group` (multiselect **1/2/4/5 only**, VIP excluded), `#adminPlayers-period` (daterange → `text["custom.period.startdate/.enddate"]`, default 30 days), `#adminPlayers-name`(`t2.player`).
 
-#### 7.5 Bonus economy (ch. 04, 19, 20)
-Integer loyalty currency `bonus` on Player. Mutated only via API `/player/bonus` (`method=add|remove|set`, `amount`) → `{old, new, amount}`. Surfaced on the profile, the `top` leaderboard (`bonuses` column), and player card.
+| Field | Wire type | Meaning |
+|---|---|---|
+| `steam_id` | **str(36) UUID** | Row key (migrated). |
+| `group_id` | str enum `"1".."5"` | Raw group. |
+| `expire` | str unix\|`""`/`"0"` | Group expiry. |
+| `description, prefix, prefix_rgb, image` | str (may be empty) | Group-assignment cosmetics. |
+| `name` | str | Nick (`t2.player`). |
+| `date` | str — **unix s** | Last seen. |
+| `color` | str(6) hex (no `#`) | Group color. |
+| `icon` | str (no `fa-`) | Group icon. |
+| `online` | `{online,boost,queue,server}` (all str) | Live presence. |
+| `discord`, `bans`, `group`, `time`, `boost` | **pre-rendered HTML** | Discord link / punishments-issued `<kbd>N</kbd>` / group chip / playtime / boost badges. |
 
-#### 7.6 Clan (== squad) (ch. 18, 04, 19)
-**PK** `id` (`clan_id`). Created/edited via `createSquad` (script `squad`); roster ops via script `clan`.
+#### 6.4 VIP / privilege (`vipPlayers`) — LIVE
+
+`caps/vips/vips.network.json`. Grid: `numrows=50`, `collum=["steam_id","name","expire","date","time","vipdesc"]`, no client sort. Join `t1`(assignment)×`t2`(player). Filter `#vipPlayers-name`(`t2.player`), `-desc`(`t1.description`), `-startdate`/`-enddate`.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | int | PK. |
-| `name` | string ≤32 | Display name / tag ("[MDC]"). |
-| `tags[]` | string[] | In-game name prefixes; drive tag-protection & search. |
-| `discord_id` | string ≤64 | Discord **role** id. |
-| `date` | ts | Creation. |
-| `expire` | ts | Priority-subscription expiry (0 = infinity). |
-| `max` | int | Max priority/VIP slots. |
-| `protected` | 0/1 | Tag-protection (auto-kick tag-wearers not on roster). |
-| `public` | 0/1 | Public read-only page. |
+| `steam_id` | str (`<hashtag>` S64; JSON redacted-36) | Drill key. |
+| `group_id` | str enum (sample `"3"`=VIP) | Privilege. |
+| `expire` | str **unix s** \| `""` | `""`/`0`=permanent (blank cell). |
+| `description` | str(≤128) | Raw note. |
+| `vipdesc` | str | **Rendered/expanded** note (distinct from `description`). |
+| `prefix`/`prefix_rgb`/`image` | str \| **null** | Cosmetics. |
+| `name` | str | Nick. |
+| `date` | str **unix s** | Last seen. |
+| `color`/`icon` | str `e2b032`/`star` | Group badge. |
+| `online` | `{online,boost,queue,server}` | Presence. |
+| `group`/`time` | **pre-rendered HTML** | Chip / playtime badge. |
 
-Monetized product: an inline YooMoney "extend priority" form; clans exist to sell queue priority.
+API `/player/vip` (`POST`): grant/extend, `expire` XOR `add` required; → `{msg, expire:{unix,human}, player:{name,steam_id}}`. **VIP = group_id 3**; distinct from clan-scoped reserved slot (§6.7).
 
-#### 7.7 Clan member (ch. 18)
-`clan.list` → `players[]`; **PK** (`clan_id`, `steam_id`). Fields: `{steam_id, name, kit, discord, date, online/online_raw (60-day playtime), type (0 member / 1 Глава-leader / 2 Зам-deputy), vip_mode (0 off / 1 on / 2 external), access}`. `vipPlayer(clan_id, steam_id, vip)` toggles the clan-scoped reserved slot (≠ global VIP). M:N between Clan and Player.
+#### 6.5 Bonus economy — integer currency `bonus` scalar on Player. Mutated only via API `/player/bonus` (`POST`, `method=add|remove|set`, `amount`) → `{old, new, amount}`. Surfaced on profile, `topPlayers` (`bonuses` col), player card, `playerMark.bonus`.
 
----
+#### 6.6 Clan (=squad) (`clan.list`/`createSquad`/`/api/clan/get`) — LIVE
 
-### 8. Moderation domain
-
-#### 8.1 Ban (ch. 09, 19)
-`banPlayers` table (alias `t1`), joined to banned player (`t2`) and issuing admin (`t3`). **PK** `id`.
+**PK** `id`. Bootstrap `clan.data` (captured id 16). Roster/settings ops = `script:'clan'`; create/edit = `script:'squad' action:'createSquad'`.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | int | PK (from API). |
-| `steam_id` | string | FK → banned Player. |
-| `reason` / `reason_id` (`rule`) | string / int | Resolved from the rules catalog (§8.2). |
-| `date` | ts | Issued ("Забанен"). |
-| `expire` | ts \| 0 | Expiry; 0 = permanent. |
-| `description` | string ≤512 | Admin comment. |
-| `admin_id` / `admin_name` | SteamID64 / string | Issuing admin (FK → Player). |
-| `impact` | bool | Counts toward progressive escalation. |
-| `unban` | bool/"1" | Later revoked (kept in history) vs error-erased. |
-| `server_id` | int | Sent when target online (live enforcement); archive is project-wide. |
+| `id` | string(int) | **PK** (= `clan_id`). |
+| `name` | string(≤32) | Display name (`[MDC]`). |
+| `tags[]` | string[] | In-game name prefixes; drive tag-protection + `findPlayer`. |
+| `discord_id` | string(≤64) \| **null** | Discord **role** id. |
+| `date` | string — **unix s** | Creation. |
+| `expire` | string — **unix s** \| `"0"` | Priority-subscription expiry (0=infinity). |
+| `max` | string(int) | Max priority slots. |
+| `protected` | `"0"/"1"` | Tag-protection (auto-kick tag-wearers off roster, ~10 min). |
+| `public` | `"0"/"1"` | Public read-only page. |
 
-`bans[]` on Player is the history; `ban` is the active one. API `hasBan`/`hasBanAll` expose `{ban_count, last_ban, mark}` aggregates.
+`clan.list` response envelope: `{access(0/1), players[], servers:{server_id:[Presence]}, discord:[{name,channel}], status, exec_time}`. `clan.stats{start,end}` → `{access, chart:{labels[60],online[60]}, stats:{online,boost,server,primetime[{start,end,cnt,sum,sort}], kill,die,revive(int), top[10]{steam_id,name,kill,die,revive}, games[10]}, status}`. Monetized: inline YooMoney "extend priority" form (receiver `41001649543147`, `sum=1000`).
 
-#### 8.2 Reason / rules catalog (ch. 09, 07, 16)
-The ban `<select>` options: **PK** rule id (`value`), with `data-first/second/third/four` = escalating day-tiers for the 1st–4th offense (cap commonly 30 → permanent). `<optgroup>` categories: Особые/Общие/Для сквадных/Для техники/Милсим. Editable (partly stubbed) in settings `rules` tab as categories → rules, with a "Progressive system" toggle.
+**Clan actions** (`clan.php` unless noted; all carry `clan_id`):
 
-#### 8.3 Ban-name (ch. 10)
-`ban_names` table, **PK** `name`: `{name, date}`. Nickname blacklist; `addBanName`/`removeBanName` reachable from every page. No exposed severity/regex/scope/author (gap).
+| action | script | `data:{…}` | Effect | Destr. |
+|---|---|---|---|---|
+| `list` / `stats` | clan | `clan_id` / `+start,end` | roster+presence / dashboard | N |
+| `findPlayer` | clan | `find(≥3)` | `{players:[{steam_id,name,clan_id}]}` | N |
+| `addPlayer` | clan | `steam_id, type(0/1/2)` | add member (type>0 gated `clan.canType`) | Y |
+| `removePlayer` | clan | `steam_id` | remove | Y |
+| `vipPlayer` | clan | `steam_id, vip(bool)` | toggle clan reserved slot | Y |
+| `changeExpire` | clan | `date(unix)` | change subscription expiry | Y |
+| `setting` | clan | `key(public\|protected), value(bool)` | toggle setting | Y |
+| `delete` | clan | `clan_id` | disband (→`/`) | Y (irrev) |
+| `createSquad` | **squad** | `id, name, expire, max, discord_id, tags(URL-enc CSV)` | create(empty id)/edit/rename | Y |
+| `downloadList`/`downloadOnline` | clan (`post_to_url`) | `clan_id[,start,end]` | file export | N |
 
-#### 8.4 Collab / Ru-Ban federated ban (ch. 10, 19)
-`collabans` table: `{steam_id, name, reason, date, expire, projects[]}`, **PK** (`steam_id`, project). A player aggregates ban records from many **Projects**.
-
-**Project (federation source)** — `{name, admin_name, reason, date, expire, cnt}` per contributing community. `checkBans` extends each with `{name, discord, online, ban:{total, current:{reason,date,expire}}}` — the trust/attribution model. Populated server/bot-side; `botUpdate` refreshes the enforcement agent. API mirror: `/player/hasBanAll`.
-
-#### 8.5 Comment (admin note) (ch. 08, 19)
-`playerComments` table joining comment (`t1`), author admin (`t2`), target player (`t5`). **PK** `id`.
+#### 6.7 Clan member (`clan.list.players[]`) — LIVE. **PK** (`clan_id`,`steam_id`). M:N Clan↔Player.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | int | PK (API). |
-| `steam_id` | string | FK → target Player. |
-| `admin_id` / `admin_name` | SteamID64 / string | FK → author Player. |
-| `date` | ts | Written. |
-| `text` | string ≤256 | Note body. |
+| `steam_id` | string(17) | Member identity (row `data-id`). |
+| `name` | string | Nick. |
+| `vip` | `"0"/"1"` | Raw VIP flag (not rendered). |
+| `type` | `"0"/"1"/"2"` | `1`=Глава/leader, `2`=Зам/deputy, `0`=member. |
+| `date` | string — **unix s** | Last seen. |
+| `discord` | **bool** | Discord linked (check/cross). |
+| `vip_mode` | int `0/1/2` | `1`=priority ON (toggleable), `0`=OFF, `2`=from another source (locked). |
+| `access` | **bool** | Per-row remove permission. |
+| `online_raw` | int (seconds) | 60-day playtime (sort key). |
+| `online` | **HTML string** | Pre-rendered playtime label. |
+| `kit` | string | Last kit (`data-kit`). |
 
-Append-only (no edit/delete in UI). `comments_count` cached on Player.
-
-#### 8.6 Mark (suspicion flag) (ch. 08, 03)
-A **single scalar enum on Player** (`mark` 0–8), not a join table. `playerMark` table view: `{steam_id, player, date (last-seen), mark, ban}`. Enum: 1 WallHack, 2 AimBot, 3 SpeedHack, 4 object-spawn, 5 reload-exploit, 6 grief, 7 config, 8 toxic, 0 clear. One mark at a time; no author/history exposed (gap).
-
-#### 8.7 Audit log entry (ch. 17)
-`logs` table (alias `t1`). **PK** `id`. Columns `{serverName (via server_id), name (via t2.player = admin), date, log}`. `log` is **free text** (not a normalized `{action_type, target, params}`), with embedded `<hashtag>` player drill-downs. Read-only. Note (ch. 16): in-game `changemap`/`kick`/`ban` bypass this log.
-
----
-
-### 9. Community & communications domain
-
-#### 9.1 Chat message (ch. 02, 19)
-`playerChat` table (chat `t1` ⟕ player `t2`). **PK** message `id` (from API). Fields `{id, steam_id, server_id, date, team, name, type, msg}`; UI-only `play` (TTS). `type` enum: `ChatAll, ChatTeam, ChatSquad, ChatAdmin, broadcast` (each with a server-provided display `color`). Client-side profanity flag (`obscene`). Broadcasts are logged back into the same feed.
-
-#### 9.2 Vote (ch. 14)
-`votes` table (card list, no `<thead>`). **PK** vote row. Fields: `{short, name (initiator), steam_id, date, cancel (status), mode, players_sum, players_need, map_current, map_next, map_vote, map_current_img, map_next_img}`. FK → initiator Player + Server.
-
-#### 9.3 Report (ch. 14)
-`reports` table (report `t1` ⟕ player `t2`). **PK** report row. Fields: `{short, date, player_name (target), steam_id (target), text}`. Reporter identity **not surfaced** (gap). No lifecycle/status/assignee field.
-
-#### 9.4 Issue (bug tracker) (ch. 15)
-`issues_get` / `issues_create` (script `squad`). **PK** `id`. Fields `{id, title, body ≤512, state (open|closed), create (ts), labels[]}`. **Label** child: `{name, color}` (only two: 1 Баг red, 2 Предложение blue). Create/read only; no close/edit/comment in UI.
-
-#### 9.5 Video / demo + upload token (ch. 15)
-- **Video upload** (`uploadVideo`, script `public`): FormData `{name, description, file (MP4 ≤2 GB), token}`. **No FK** to match/player/report — association is free-text prose only (gap/weakness). Fan-out: Browser → SQSTAT → YouTube + Telegram.
-- **Upload token** (`uploadVideo_token`, script `squad`): `{token}` — single-use, 2-hour credential enabling delegated (unauthenticated) uploads on the public endpoint.
-
-#### 9.6 User settings (ch. 04, 16)
-`saveUserSettings` (script `player`) — a JSON blob keyed by setting, per self: `{lang: ru|en, theme: 0|dark, show_country: hide|show}`. **PK** owner `steam_id`.
-
-#### 9.7 Discord config / webhooks (ch. 16)
-Panel-global settings (script `settings`, `discordbot`/`discord` tabs). Not a per-player entity but the config store behind the Discord gamification engine: `guild_id`, role-sync toggles + ids (`vip_sync`/`vip_id`, `moderator_sync`, tiered `playtime{100..5000}_id`, leaderboard roles `top1Kill`/`top1Medic`/`topCMD`/`topSL`/`topVehicle`/`topMortar`/`clanKiller`/`pilot`/`knifeKiller`, `seeders_*`), and webhook URLs (`report, log, alert, cheater, grief, crash, endmatch, weekend, monitoring, request, collab_ban, collab_warn`) each with an `_enabled` flag. **Security finding (ch. 16):** live webhook tokens are echoed into page HTML.
+`Presence` (`servers[sid][]`): `{name, team, playtime:{date, last_seen}}` — **playtime in JS milliseconds** (13-digit; the roster `date` above is seconds — mixed units in one response). Gates: `access`(int, whole VIP column), `v.access`(per-row remove), `clan.canType`(leader/deputy add), `vip_mode==2`(locked).
 
 ---
 
-### 10. Relationship / ER overview
+### 7. Moderation domain
 
-#### 10.1 Central hub
+#### 7.1 Ban (`banPlayers`) — LIVE
 
-**Player (`steam_id`)** is the hub; **Server (`server_id`)** is the secondary hub. Almost everything else is a spoke off one or both.
+`caps/bans/bans.network.json`. Grid: `numrows=100`, `collum`/`order=["steam_id","name","reason","date","expire"]` (all sortable). Join `t1`(bans)×`t2`(banned)×`t3`(admin). Filters: `-name`(`t2.player`), `-admin`(`t3.player`), `-reason`(`t1.reason`), `-description`(`t1.description`), `-permanent`(check `permanent`), date range.
+
+| Field | Type | Key/notes | Meaning |
+|---|---|---|---|
+| `id` | string(numeric) | **PK** (`t1.id`) | `data-id`/`trID-<id>`. |
+| `steam_id` | string(17) | FK→Player | Banned identity (`<hashtag>`, hidden col). Still Steam64 here. |
+| `name` | string | | Nick at ban time. |
+| `reason` | string | | Reason; **embeds expiry as `… до DD.MM.YYYY HH:MM`**. |
+| `description` | string(≤512) \| `""` | | Admin comment. |
+| `admin_id` | string(17) SteamID64 | FK→Admin | **Issuing admin (raw id, name resolved separately).** |
+| `date` | string — **unix s** | | Issued ("Забанен"). |
+| `expire` | **pre-rendered HTML** `<span class="badge">DD.MM.YYYY HH:MM</span>` | | NOT a raw ts; permanent renders distinct badge. |
+| `unban` | `"0"/"1"` | | `"1"`=revoked (kept in history), `"0"`=active. |
+| `impact` | bool (modal only) | | Counts toward progressive escalation. |
+| `permanent` | filter-only bool-string | | `expire==0` filter. |
+
+Write (`squad`): `ban{server_id(if online),steam_id,reason_id,description,days(0/-1=perma)}`, `unban{steam_id,unban(true=erase)}` (both Y). API `hasBan`/`hasBanAll` → `{ban(object), ban_count, mark, last_ban(unix)}` (`hasBanAll` per-ban omits `description`). `player.get.ban`=active, `.bans[]`=history (each +`impact`).
+
+#### 7.2 Reason / rule (`#player_ban-reason` `<option>`) — **PK** `value` (rule id, e.g. `1`,`2`,`110`,`160`,`173`,`510`,`520`). Attrs `data-first/second/third/four` = escalating ban-days per 1st–4th offense (cap commonly 30→perma; general `0/0/0/30`, flood `1/1/1/30`). `<optgroup>`: Особые/Общие/Для сквадных/Для техники/Милсим (Special/General/Squad-leaders/Vehicles/Milsim). Editable (but **save serializer is a stub** — `collect()` returns `{}`, Add button disabled) in settings `rules` tab.
+
+#### 7.3 Ban-name (`ban_names`) — LIVE
+
+`caps/bans/bannames.network.json`. Grid: `numrows=100`, `collum=["name","date",["button",…]]`, filter `#ban_names-name`(`t1.name`). **PK** `name`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | Banned nickname (the rule identity key). |
+| `date` | string — **unix s** | When added. |
+| `button` | int `1` | Render flag → per-row delete button. |
+
+Write `addBanName{name}`/`removeBanName{name}` (`player`, Y). **No severity/regex-flag/scope/expiry/author** exposed (gap). Live catalog ≈ 371.
+
+#### 7.4 Collab-ban (federated) (`collabans`) — LIVE
+
+`caps/bans/collabans.network.json`. Grid: `numrows=100`, `mode:list`, `collum=["steam_id","reason","date","expire"]` (reason/date/expire filled by `projects` callback cards, NOT top-level fields). Filter `-name`(`s.player`), `-reason`(`s.reason`), `-permanent`. **Row is flat** — only `name, steam_id, projects[]`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `steam_id` | string(17) | Player identity (hidden col, row-click). |
+| `name` | string | Nick (`<b>` or `Нет ника`/No nick). |
+| `projects[]` | array<Project> | Per-community ban breakdown. |
+
+**Project** `{name, admin_name, reason, date(unix s), expire(unix\|"0"), cnt(int)}` — `expire=="0"` ⇒ red "Перманент"; else amber "Временный"/Temporary. **PK** (`steam_id`, project). Live pool ≈ 17 510.
+
+**checkBans** (`player`, `{steam_id}`) → `{projects:[{name, discord?(url), online(seconds), ban:{total(int), current:null|{reason, date(unix), expire(unix|"0")}}}]}` — the trust/attribution model (per-source Discord + online-time). API `/player/hasBanAll` mirror. Federation sync is server/bot-side (`botUpdate` refreshes the enforcement agent); no client import.
+
+#### 7.5 Comment (`playerComments`) — LIVE
+
+`caps/notes/comments.network.json`. Grid: `numrows=100`, `collum=["steam_id","date","admin","player","text"]`. Join `t1`(comment)×`t2`(author admin)×`t5`(target). Filters `-name`(`t5.player`), `-admin`(`t2.player`), `-text`(`t1.text`). **PK** `id`. Live ≈ 1 090.
+
+| Field | Type | Key | Meaning |
+|---|---|---|---|
+| `id` | str(int) | **PK** | Comment id. |
+| `steam_id` | **str(36) UUID** | FK→Player | Target (migrated). |
+| `admin_id` | str(17) SteamID64 | FK→Author | Authoring admin. |
+| `date` | str — **unix s** | | Written. |
+| `text` | str, HTML-double-escaped (`&quot;`) | | Note body (≤256 on create). |
+| `admin`/`player` | **pre-rendered HTML** | | Author / target display blocks. |
+| `admin_color` | str(6) hex | | Author color. |
+| `admin_group` | str(1) | | Author group id. |
+| `player_color`/`player_group` | str \| **null** | | Target color/group. |
+
+Write `addComment{steam_id,text(≤256)}` (Y, author stamped server-side); read `getComments{steam_id}`→`{comments:[{name,date(unix),text}]}`. Append-only. API `/player/comments` → `[{id,steam_id,admin_id,date,text,admin_name}]`.
+
+#### 7.6 Mark (`playerMark`) — LIVE
+
+`caps/notes/mark.network.json`. **Single scalar enum on Player** (`mark` 0–8). Grid: `numrows=100`, `collum=["steam_id","player","date","mark","ban"]`. Filters `-name`(`t1.player`), `-mark`(multiselect `mark`, values 1–8, OR filter — no "unmarked"). **PK** `steam_id`. Live ≈ 708.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `steam_id` | **str(36) UUID** | Suspect identity (migrated, row key). |
+| `eos_id` | str(32) | EOS id. |
+| `name` | str (raw) | Nick. |
+| `date` | str — **unix s** | Last seen ("Заходил"). |
+| `create_date` | str — **unix s** | **When mark created** (persisted, not columned). |
+| `mark` | **pre-rendered HTML** icon | Enum→icon (§9). |
+| `bonus` | str(int) | Bonus balance. |
+| `discord` | str(18) snowflake | Discord id. |
+| `color` | str(6) hex | Nick color. |
+| `player_group` | str(1) | Group id. |
+| `ban`/`player` | **pre-rendered HTML** | Ban-status label / player block. |
+
+Write `mark{steam_id, mark(0–8)}` (Y; `0`=clear; **no confirm dialog**). One mark at a time; `create_date` stored but **no author** field (gap).
+
+#### 7.7 Audit log entry (`logs`) — LIVE
+
+`caps/logs/logs.network.json`. Grid: `numrows=100`, `collum=["serverName","name","date","log"]`, **no `order`** (sort off). Filters `-user`(`t2.player`), `-name`(`t1.log`), `-startdate`/`-enddate`(`t1.startdate`/`t1.enddate`), `-server`(`server_id`). **PK** `id`. Live ≈ 110 488.
+
+| Field | Type | Key | Meaning |
+|---|---|---|---|
+| `id` | str(numeric) | **PK** | Auto-inc (newest-first); `trID-<id>`. |
+| `server_id` | str(int) | FK→Server | `"0"`=panel-global (login) ⇒ empty `serverName`. |
+| `steam_id` | **str(36) UUID** | | Event subject — **returned but never rendered** (unmapped). |
+| `date` | str — **unix s** | | Event time. |
+| `log` | **free-text HTML** | | Rendered RU string; embeds `<b>`,`<i>`,`<hashtag>SteamID64</hashtag>` (drill-down keys off the S64 in prose, NOT the row `steam_id`). |
+| `name` | str | | Acting admin nick. |
+| `serverName` | str (may be empty) | | Denormalized server label. |
+
+`log` is **free text, not normalized** — filter is substring on `t1.log`. Templates observed: `Авторизовался`(login, srv 0), `Зашёл в камеру`(admin-cam), `Забанил <b>{name}</b> <hashtag>{s64}</hashtag> на <b>{N}</b> дн …`, `Разбанил …`, `Отправил сообщение …`. In-game `changemap`/`kick`/`ban` bypass this log (§6.1 ⚠).
+
+---
+
+### 8. Community & communications domain
+
+#### 8.1 Chat message (`playerChat`) — code-derived (live capture crashed)
+
+Grid: `numrows=300`, `collum=["steam_id","server","date","team","name","type","msg","play"]`, `order=["date"]` (only date sortable). Filters `-name`(`t2.player`), `-msg`(`t1.msg`, **maxlength 17**), `-server`(`server_id`), `-type`(multiselect), `-obscene`(check), `-date`(`t1.date`). Join `t1`(chat)×`t2`(player). **PK** `id`. Field spelling proxied from live-feed `data.chat[]`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string/int | **PK**. |
+| `steam_id` | string(17) | Author (hidden col, row-click). |
+| `server`/`server_id` | int→label | Origin server. |
+| `date` | **unix s** | Message time. |
+| `team` | int enum | Faction → `/assets/img/ico/teams/<team>.png`. |
+| `name` | string | Author nick. |
+| `color` | hex(no `#`) \| null | Author color (live feed). |
+| `type` | enum object `{name,color}` (grid) / `{name,color,icon}` (feed) | Scope badge. |
+| `msg` | string | Body (client profanity-flagged). |
+| `play` | empty | UI-only TTS cell. |
+
+`type` enum: `ChatAll`(Всем), `ChatTeam`(Команда), `ChatSquad`(Сквад), `ChatAdmin`(Админ чат), `broadcast`(gold). Outbound (write): `broadcast{server_id,msg(≥2)}`(squad,Y), `message{steam_id,time,msg(≤512),log}`(player,Y), `squadMessage{server_id,team,squad,time,msg(≤512)}`(squad,Y). API `/server/chat` → top-level `chat[]` (last 100).
+
+#### 8.2 Vote (`votes`) — LIVE
+
+`caps/votes-reports/votes.network.json`. Grid: `numrows=30`, `mode:custom` (card list, `collum:[]`, no sort), template `#template>li`. Filter `#votes-server`(`server_id`) only. **PK** `id`. Live ≈ 3 991.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | str(numeric) | **PK** (auto-inc). |
+| `server_id` | str(int) | FK→Server. |
+| `date` | str **`"HH:MM [DD.MM.YYYY]"`** | Pre-formatted (NOT unix). |
+| `steam_id` | str(17) | Initiator (→`player.open`). |
+| `name` | str | Initiator nick. |
+| `short` | str(1) | Server tag (`<kbd>`). |
+| `mode` | str enum RU (`"Пропуск карты"`=map skip; also change/re-roll) | Vote type. |
+| `map_current`/`map_next`/`map_vote` | str | Current / next / target (`-`=N/A). |
+| `players_sum`/`players_need` | str(int) | Collected / required (threshold). |
+| `duration` | str(int s) | Vote window — **not rendered**. |
+| `cancel` | **HTML** `<span class="label">` | Status badge. |
+| `votes` | str **JSON** `{"yes":[…S64…]}` | **Full per-voter roster — not bound to any card** (dark data). |
+| `map_current_img`/`map_next_img` | **HTML** | Map thumbnails. |
+
+FK→initiator Player + Server. No destructive action of its own.
+
+#### 8.3 Report (`reports`) — LIVE (0 rows this account; schema from `#template` + aliases)
+
+`caps/votes-reports/reports.network.json`. Grid: `numrows=30`, `mode:custom`, `callback.date→formatDate`. Filters `-name`(`t2.player`), `-killed`(`t1.text` — mis-named copy-paste), `-server`. Join `t1`(reports)×`t2`(target player).
+
+| Field (`data-table`) | Type | Meaning |
+|---|---|---|
+| `short` | str | Server tag (`<kbd>`). |
+| `date` | str/int | Timestamp (client `formatDate`). |
+| `player_name` | str | **Reported (target)** nick. |
+| `steam_id` | str(17) | Target identity (→`player.open`). |
+| `text` | str | Free-text report body. |
+
+**Reporter identity NOT surfaced**; **no lifecycle/status/assignee/resolution** field or verb (gap).
+
+#### 8.4 Issue (bug tracker) (`issues_get`/`issues_create`) — LIVE
+
+`caps/issues-video/issues.network.json`. **`POST /ajax/squad.php`** `action=issues_get` (`state=open|closed&page`, page size 20) → `{issues:[…], status, exec_time, test:{getAdmin}}`. **PK** `id`.
+
+| Field | Type | Rendered? | Meaning |
+|---|---|---|---|
+| `id` | int | Yes (`<hashtag>#id`) | Ticket number. |
+| `user` | string | **No** | Reporter admin account (captured, hidden). |
+| `title` | string | Yes | Server-derived (NOT a create input). |
+| `body` | string(≤512) | Yes | Description. |
+| `create` | **int unix** | Yes | Creation. |
+| `update` | **int unix** | No | Last-modified (==`create`, unused). |
+| `state` | enum `open`\|`closed` | Yes | Lifecycle. |
+| `labels[]` | array<Label> | Yes | Category tags. |
+
+**Label** `{id(1=Баг/Bug/`#e11d21`, 2=Предложение/Suggestion/`#207de5`), name, color(no `#`), url(empty)}`. Write `issues_create{body(≤512), labels(CSV int)}` (squad, Y). **No close/reopen/edit/comment/delete** UI (create+read only).
+
+#### 8.5 Video / demo + upload token — LIVE (code)
+
+`caps/issues-video/video.network.json`. **Video upload** `uploadVideo` (**`POST /ajax/public.php`**, multipart): `{name, description, file(MP4/AVI ≤2 GB), token(str\|null)}`. **No FK** to match/player/report — free-text only (gap). Fan-out Browser→SQSTAT→YouTube+Telegram. **Upload token** `uploadVideo_token` (`POST /ajax/squad.php`, `data:{}`) → `{token}` — single-use, 2-hour delegated credential. **PK** `token`. Two-endpoint auth split (squad mint / public consume).
+
+#### 8.6 User settings (`saveUserSettings`) — JSON blob per self: `{lang: ru|en, theme: 0|dark, show_country: hide|show}`. **PK** owner `steam_id`. Reloads on save.
+
+#### 8.7 Discord config / webhooks (settings `discordbot`/`discord` tabs) — LIVE, panel-global (not per-player). **Gamification engine:** `guild_id`, role-sync toggles+ids (`vip_sync`/`vip_id`, `moderator_sync`, `moderatorInactive_*`, `customRole_*`, leaderboard roles `top1Kill`/`top1Medic`/`topCMD`/`topSL`/`topVehicle`/`topMortar`/`clanKiller`/`pilot`/`knifeKiller`, `seeders_*` + `seeders_hours`, tiered `playtime{100,300,500,1000,2000,3000,5000}_id`). **Webhooks:** `{report, log, alert(+alert_everyone), cheater, grief, crash, endmatch(+endmatch_broadcast), weekend, monitoring(+monitoring_id), request, collab_ban, collab_warn}` each with `_enabled` flag. **SECURITY:** six webhook URLs (`log, weekend, monitoring, request, collab_ban, collab_warn`) render **live bot tokens** into page HTML `value=""` — do not replicate.
+
+---
+
+### 9. Enum & value-set appendix (LIVE)
+
+| Enum | Field(s) | Values |
+|---|---|---|
+| Group | `group_id` | `0` none/clear, `1` Admin, `2` Moderator, `3` VIP(`QueuePriority`), `4` Camera(`Cameraman`), `5` Trainee(`Intern`) |
+| Mark | `mark` | `1` WallHack, `2` AimBot, `3` SpeedHack, `4` object-spawn, `5` reload-exploit, `6` grief, `7` config, `8` toxic, `0` clear |
+| Chat type | `type` | `ChatAll, ChatTeam, ChatSquad, ChatAdmin, broadcast` |
+| Vote mode | `votes.mode` | RU strings — `Пропуск карты`(skip), + change/re-roll; live `getServer.vote.mode` ∈ `skip`\|`next`\|`current` |
+| Game winner | `games.win` | `"t1"`, `"t2"`, `""`; API `stats.games[].win` = status codes (`"0"`,`"3"`) |
+| Ban unban | `banPlayers.unban` | `"0"` active, `"1"` revoked-kept |
+| Clan member role | `type` | `0` member, `1` Глава/leader, `2` Зам/deputy |
+| Clan VIP mode | `vip_mode` | `0` off, `1` on, `2` external-locked |
+| Issue state | `state` | `open`, `closed` |
+| Issue label | `labels[].id` | `1` Баг(red), `2` Предложение(blue) |
+| Server modes | `types` | `AAS, RAAS, Invasion, tc, Insurgency, Destruction` |
+| Server mods | `mods` | `ge, sd, supermod, KOTH, squadZ` |
+| Stat modes | `modes` | `AAS, Invasion, RAAS, Seed, Skirmish` |
+| Season | `?season=` | `all`, `old`, `1`, `2`(default) |
+| Message cadence | `time` | `1`(once), `30`, `40`, `60`(default), `90`, `120` s |
+| Ban duration radio | `player_ban-reason_type` `data-day` | `-1`(kick), `1,2,3,4,5,6,7,10,14,30`, `0`(perma) |
+| 21 permission tokens | group perms | `startvote, changemap, pause, cheat, private, balance, chat, kick, ban, config, cameraman, immune, manageserver, featuretest, reserve, demos, clientdemos, debug, teamchange, forceteamchange, canseeadminchat` |
+| Kits (playtime cols) | — | `SL, CMD, Rifleman, Medic, LAT, MachineGunner, Marksman, Engineer, Pilot, Crewman` |
+| Server ids | `server_id` | `1, 6, 7, 8, 9, 10, 11` (+ `0` = panel-global audit) |
+
+---
+
+### 10. Unix-timestamp field index (unit trap)
+
+**String unix SECONDS** (10-digit): `player.date/create_date`, `names[].date`, `location[].date`, `primetime[].start/end`, ban `date`/`expire`(raw, when not pre-rendered), comment `date`, mark `date`/`create_date`, log `date`, game `start`/`end`, combat `date`, chat `date`, ban_name `date`, collab-ban project `date`/`expire`, clan `date`/`expire`, clan member `date`, vote `duration`(seconds count), group `expire`, VIP `expire`, seeding day keys, statistics `start`/`end`, issue `create`/`update`, API `map_start`, `checkBans.ban.current.date/expire`.
+
+**INT JS MILLISECONDS** (13-digit): `players.active[].playtime.{date,last_seen}`, `clan.list servers[].playtime.{date,last_seen}`, `getConfigFiles files[].date`, API `stat.players[].playtime.{date,last_seen}`, API `clan.players[].online.playtime.{date,last_seen}`.
+
+**Pre-formatted strings (NOT parseable as unix):** `banPlayers.expire`(HTML badge), `votes.date`(`"HH:MM [DD.MM.YYYY]"`), all `playersOnline`/`adminPlayers`/`vipPlayers` duration cells (`"Xч Yм"`).
+
+---
+
+### 11. Relationship / ER overview
+
+#### 11.1 Central hub
+
+**Player (`steam_id`)** = hub; **Server (`server_id`)** = secondary hub.
 
 ```
                          ┌───────── Name-history (1:N)
@@ -4813,622 +7300,991 @@ Panel-global settings (script `settings`, `discordbot`/`discord` tabs). Not a pe
                          ├───────── Session-series (1:N)            │ (reflexive
                          ├───────── Playtime/Kit-time (1:N/season)  │  alt/twin
    Group ──(0..1)────────┤                                          │  M:N via
-   (group_id enum)       │   ┌── Twin/alt link (M:N, reflexive) ◄───┘  shared IP
-                         │   │                                         + friends)
+   (group_id enum,       │   ┌── Twin/alt link (M:N, reflexive) ◄───┘  shared IP
+    global scalar)       │   │                                         + friends)
    Clan (clan_id) ──M:N──┤◄──┘
-   (clan_member)         │
-                         ●  PLAYER (steam_id) ──────────────────────────┐
-                        /│\                                             │
-        author │        │ │ target        subject │ │ target           │
-        ┌──────┘        │ │        ┌──────────────┘ │                  │
-     Comment (N:1×2)  Ban (N:1 + admin N:1)   Kill/Death/Revive/       │
-     Mark (1:1 enum)  Ban-name (by name)      Damage/Teamkill (N:1×2,  │
-     Audit-log (admin N:1)   Collab-ban ──M:N── Project                │
-                         │                                             │
-                         │  online.server.id / server_id               │
-                         ▼                                             ▼
-                      SERVER (server_id) ◄──────── Chat, Vote, Report, Game,
-                        │                          Combat-events, Statistics,
-                        ├── Rotation (1:N per day)  Audit-log, Session
+   (clan_member,         │
+    type/vip_mode)       ●  PLAYER (steam_id ∈ {UUID | Steam64})──────┐
+                        /│\                                            │
+        author │        │ │ target        actor │ │ target            │
+        ┌──────┘        │ │        ┌────────────┘ │                   │
+     Comment(N:1×2)  Ban(N:1 +admin N:1)  Kill/Death/Revive/          │
+     Mark(1:1 enum)  Ban-name(by name)    Damage/Teamkill (N:1×1–2,   │
+     Audit-log(admin N:1) Collab-ban ──M:N── Project                  │
+                         │  online.server.id / server_id              │
+                         ▼                                            ▼
+                      SERVER (server_id) ◄──── Chat, Vote, Report, Game,
+                        │                       Combat-events, Statistics,
+                        ├── Rotation (1:N /day)  Audit-log, Session, Monitor
                         ├── Config-file (1:N)
                         ├── Mod (1:N)
-                        ├── Monitor-sample (1:N)
-                        ├── IP/connection (1:N)
-                        └── Seeding-priority (1:N per day)
+                        ├── Network-conn (1:N)
+                        └── Seeding-priority (1:N /day)
 
-   Game (id) ──1:N── Match-detail (per player)   [/game/<id>, not captured]
+   Game (id) ──1:N── Match-detail (per player)   [/game/<id>, GAP — not captured]
    Video ── (no FK) ── free-text only
-   Bonus / VIP / User-settings ── scalar on Player
+   Bonus / VIP / User-settings / Mark ── scalar on Player
+   Discord-config ── panel-global (not per-player)
 ```
 
-#### 10.2 Foreign-key matrix (→ = "references")
+#### 11.2 Foreign-key matrix (→ = "references")
 
-| Entity | → Player | → Server | → Clan | → Game | → Group | → Project | → Admin(Player) |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| Name-history | ✓ | | | | | | |
-| Location/IP | ✓ | | | | | | |
-| Primetime | ✓ | | | | | | |
-| Session-series | ✓ | (via presence) | | | | | |
-| Playtime/Kit-time | ✓ | (favourite) | | | | | |
-| Twin/alt link | ✓ (×2 reflexive) | | | | | | |
-| Group assignment | ✓ | | | ✓ (group_id) | | |
-| Admin roster | ✓ | | | | ✓ | | |
-| VIP | ✓ | | | | ✓ (=3) | | |
-| Clan member | ✓ | (online per srv) | ✓ | | | | |
-| Ban | ✓ | ✓ (if live) | | | | | ✓ |
-| Ban-name | (by nick text) | | | | | | |
-| Collab-ban | ✓ | | | | | ✓ | ✓ (per project) |
+| Entity | →Player | →Server | →Clan | →Game | →Group | →Project | →Admin(Player) |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| Name-history / Location / Primetime / Session / Kit-time | ✓ | | | | | | |
+| Twin/alt link | ✓×2 (reflexive) | | | | | | |
+| Group assignment | ✓ | | | ✓(grp) | | | |
+| Admin roster / VIP | ✓ | (presence) | | | ✓ | | |
+| Clan member | ✓ | (per srv) | ✓ | | | | |
+| Ban | ✓ | ✓(if live) | | | | | ✓ |
+| Ban-name | (by nick) | | | | | | |
+| Collab-ban | ✓ | | | | | ✓ | ✓(per proj) |
 | Comment | ✓ | | | | | | ✓ |
-| Mark | ✓ (1:1) | | | | | | |
-| Audit-log | ✓ (hashtags) | ✓ | | | | | ✓ |
-| Chat | ✓ | ✓ | | | | | |
-| Vote | ✓ (initiator) | ✓ | | | | | |
-| Report | ✓ (target) | ✓ | | | | | |
+| Mark | ✓(1:1) | | | | | | |
+| Audit-log | ✓(hashtag+uuid) | ✓ | | | | | ✓ |
+| Chat / Vote(init) / Report(target) | ✓ | ✓ | | | | | |
 | Game | | ✓ | | — | | | |
 | Match-detail | ✓ | ✓ | | ✓ | | | |
-| Kill/Death/Revive/Damage/Teamkill | ✓ (×1–2) | ✓ | | (round) | | | |
-| Kit usage/deny | ✓ | | | | | | |
-| Weapon/Vehicle stat | ✓ | | | | | | |
-| Video | (prose only) | | | | | | |
+| Kill/Death/Revive/Damage/Teamkill | ✓×1–2 | ✓ | | (game_id) | | | |
+| Kit / Weapon / Vehicle stat | ✓ | | | | | | |
 | Statistics | (aggregate) | ✓ | | (aggregate) | | | |
+| Video | (prose only) | | | | | | |
 
-#### 10.3 Cardinality highlights
-- **Player 1:1 Mark** and **Player 1:1 Group** (scalars, not join tables) — a deliberate simplification; a player can hold exactly one mark and one group at a time (ch. 05, 08 note this as a beatable limitation).
-- **Player M:N Clan** via Clan-member (with role `type` and clan-scoped `vip_mode`).
-- **Player M:N Player** (reflexive) via Twin/alt — materialized on demand from shared IPs + Steam friends + session overlap, not stored as an explicit group.
-- **Player M:N Project** via Collab-ban (federated reputation).
-- **Combat event N:1 Player twice** (actor + target) + N:1 Server — one physical event table, five view projections.
-- **Game 1:N Match-detail** (the per-player round scoreboard) — the only entity whose schema is a documented gap.
+#### 11.3 Cardinality highlights
 
----
-
-### 11. Cross-identity & derived structures worth flagging
-
-- **Identity graph** (ch. 19 `/player/info`): `steam_id ↔ eos_id ↔ discord` with full `names[]` history — the backbone of alt detection and Discord role sync.
-- **Progressive-ban policy-as-data**: escalation tiers live on the Reason catalog (`data-first..four`), not in admin discretion (ch. 07, 09).
-- **Federated reputation**: Collab-ban + Project + `checkBans`/`hasBanAll` form a cross-community ban network keyed by `steam_id`, with per-source Discord + online-time attribution (ch. 10, 19).
-- **Season partitioning** (ch. 04): all per-player stat aggregates carry an implicit season dimension (2016 → present, cut on engine boundaries).
-- **Monetization scalars**: `bonus` (currency), VIP (`group_id=3` + `expire`), Subscriptions, and clan priority (`expire`+`max`+`vipPlayer`) are layered onto the same Player/Group/Clan tables rather than separate billing entities.
+- **Player 1:1 Mark** and **Player 1:1 Group** (scalars, not join tables) — one mark + one group at a time.
+- **Player M:N Clan** via Clan-member (role `type`, clan-scoped `vip_mode`).
+- **Player M:N Player** (reflexive) via Twin/alt — materialized on demand.
+- **Player M:N Project** via Collab-ban (federated reputation, keyed Steam64).
+- **Combat event N:1 Player twice + N:1 Server** — one physical event table (`t1`), five view projections.
+- **Game 1:N Match-detail** — the only entity whose schema is a documented gap.
 
 ---
 
 ### 12. Gaps / not observable from the client
 
-1. **Match-detail (`/game/<id>`)** — per-player round scoreboard schema (kills/deaths/score, rosters, ticket timeline) is server-rendered and was not captured (ch. 12).
-2. **Column types & constraints** — all types above are inferred from client rendering, `maxlength`, and API field labels; no DDL was available.
-3. **Ban-name matching semantics** — exact vs. substring vs. regex, plus any author/scope/severity/expiry columns, are not exposed (ch. 10).
-4. **Mark authorship/history** — no who-set/when audit for the suspicion flag (ch. 08).
-5. **Report reporter identity** and any lifecycle/status/assignee fields — absent from the client (ch. 14).
-6. **Video ↔ case linkage** — no foreign key to match/player/report; association is free-text only (ch. 15).
-7. **Federation sync mechanism** — how Collab-bans propagate between communities (push/poll/shared DB) is server/bot-side and not observable (ch. 10).
-8. **Statistics** are pre-aggregated series, not queryable row entities; the underlying rollup tables are not directly exposed (ch. 11).
-9. **Seeding, user-settings, and Discord-config** server schemas are inferred from payloads only (ch. 04, 16).
+1. **Match-detail (`/game/<id>`)** — per-player round scoreboard SSR, not captured (ch.12). PK (`game_id`,`steam_id`).
+2. **Column DDL/constraints** — types are wire-observed (all JSON strings); no schema dump.
+3. **`steam_id` identity type on `vipPlayers` JSON** — redacted to 36 chars; raw Steam64 vs UUID unconfirmed (ch.06). The UUID migration is **partial** — event/archive tables + public API still Steam64.
+4. **Ban-name matching semantics** (exact/substring/regex) + author/scope/severity/expiry — not exposed (ch.10).
+5. **Mark authorship** — `create_date` stored, but no who-set/history (ch.08).
+6. **Report reporter identity + lifecycle** — absent (ch.14).
+7. **Video ↔ case linkage** — no FK to match/player/report (ch.15).
+8. **Federation sync mechanism** — how Collab-bans propagate is server/bot-side (ch.10).
+9. **Statistics** are pre-aggregated series, not queryable rows (ch.11); `unique`/`kits` shipped empty.
+10. **Chat `data.row` field spelling** — proxied from live-feed `data.chat[]` (capture crashed, ch.02).
+11. **Seeding/user-settings/Discord-config server schemas** — inferred from payloads (ch.04,16). Rules-tab save serializer is a **stub** (inert).
 
-> For the permission/RBAC model that governs who may mutate these entities, see the **Permissions & Groups synthesis (chapter 90)**. For per-player forensic storage detail see **chapter 92**, and for the complete action/RPC/RCON surface that reads and writes these entities see **chapter 93**.
+> For who-may-mutate governance see **chapter 90 (Permissions & Groups)**; for per-player forensic storage see **chapter 92**; for the full action/RPC/RCON surface see **chapter 93**.
 
-
----
-
-## Per-Player Data & Logs Storage (Synthesis)
-
-> **Cross-cutting synthesis.** This chapter answers a single question exhaustively: *for one player, what does SQSTAT store, and how does an admin retrieve it?* It stitches together the per-section chapters — **03. Players Directory**, **04. Player Profile & Per-player Data Storage**, **08. Player Comments & Suspect Marking**, **09. Ban Management**, **13. Combat Logs**, **17. Admin Audit Journal**, **02. In-game Chat & Broadcast**, and **14. Votes & Reports** — into one model of *the per-player dossier*. It does not re-document each page; it maps every fact back to the chapter that owns it.
->
-> **Two surfaces, one identity.** Everything below is keyed to a single player identity (historically **SteamID64**, now migrating to a **UUID** primary key — see repo commit `6a7b3b3`). That identity is read through two distinct surfaces:
-> 1. **The shared player-detail modal** (`#player_info` / `#playerModal`), embedded on *every* page, opened by `player.open(steam_id)` → `Action({script:'player', action:'get'})` → `POST /ajax/player.php`. This is the **admin rap sheet** (see **03. Players Directory** §3–§4 for the full model). It returns the rich `player.info` object and lazily loads ~12 sub-tab tables via `script:'table'`.
-> 2. **The self-service player profile** at `/player/<steamid>?season=<…>` — a hard-navigation stat dashboard for the account owner (see **04. Player Profile**), *not* the admin rap sheet. It denormalizes per-season aggregate stats but exposes **none** of the forensic data (bans, chat, comments, marks, IPs, twins).
->
-> A competitor must not conflate the two: the modal is the moderation dossier; the profile page is the read-only scoreboard.
 
 ---
 
-### 1. The Dossier at a Glance — What Is Stored per Player
+## Per-Player Data & Logs Storage
 
-Every category of per-player data, with the entity/table it lives in, where it surfaces in the UI, how it is fetched, and the owning chapter.
+> **Cross-cutting spec.** This chapter answers one question at implementation grade: *for a single player identity, what does SQSTAT store, and by exactly which endpoint + payload + column schema does an admin retrieve it?* It is keyed to **the table endpoints** — every per-player log table (the modal detail sub-tabs `playerKills / playerDeath / playerRevive / playerDamage / playerTeamkill / playerVehicle / playerChat / playerWarn / playerKits / playerSquad / playerGames`, plus the comment/mark/ban/audit tables) is given its `table.php` `action=` id and its captured column schema. An engineer must be able to reimplement "the player dossier" from this chapter alone.
+>
+> **Ground truth.** Every contract, field type, column set and payload below is transcribed from the LIVE captured per-section chapters (read-only headless capture against `https://breaking.sqstat.ru`, `_blocked.json == []` — zero mutations fired): **03. Players Directory** (`caps/players/*`), **04. Player Profile** (`caps/players/_player_*`), **08. Comments & Marks** (`caps/notes/*`), **09. Ban Management** (`caps/bans/*`), **13. Combat Logs** (`caps/combat/*`), **17. Audit Journal** (`caps/logs/*`), **02. Chat** (reconstructed from `custom.js`/`frags/*`), **14. Votes & Reports**. This chapter does not re-capture; it re-projects those captures into one player-keyed model and cites the owning chapter per fact.
+>
+> **Two surfaces, one identity.** The dossier is read through two disjoint surfaces:
+> 1. **The shared player-detail modal** (`#player_info` → cloned into `#playerModal`), embedded on *every* page, opened by `player.open(steam_id)`. This is the **admin rap sheet**: one fat `player.info` RPC (§1.1) + up to 11 lazily-loaded `table.php` sub-tab grids (§3). Full moderation/forensic surface.
+> 2. **The self-service profile** at `GET /player/<id>?season=<…>` (04) — a hard-navigation SSR scoreboard (0 XHR). It exposes per-season aggregate stats but **none** of the forensic data (bans, chat, comments, marks, IPs, twins). Do not conflate the two.
+>
+> **Identity migration (LIVE-confirmed split).** The click-key of every row is nominally `steam_id`, but its captured *type differs by table* — the panel is mid-migration from SteamID64 to a UUID surrogate (repo commit `6a7b3b3`):
+>
+> | Returns `steam_id` as… | Tables (captured) | Chapter |
+> |---|---|---|
+> | **SteamID64** — `str(17)` | `allPlayers`, `banPlayers`, `playerKills/Death/Revive/Damage/Teamkill`, `playerChat` | 03, 09, 13, 02 |
+> | **UUID** — `str(36)` | `playerComments`, `playerMark`, `logs` | 08, 17 |
+>
+> `eos_id` (`str(32)`) and Discord snowflake are carried alongside as secondary identifiers. Treat `steam_id` as an opaque identity token whose wire type is table-dependent until the migration completes.
 
-| # | Data category | Stored entity / table | Primary key | Retrieval surface | Fetch (script→action / endpoint) | Owning chapter |
+---
+
+### 1. Retrieval Transports (how *anything* about a player is fetched)
+
+All four endpoints share the `Action({script, action, data})` wrapper (`custom.js:284`): `POST /ajax/<script>.php`, `Content-Type: application/x-www-form-urlencoded; charset=UTF-8`, body = `action=<action>` then each `data` key appended as `&k=v` (object) or raw-concatenated (string, **no value URL-encoding in the wrapper**). Success branch fires only on `status === "ok"`; `auth === true` ⇒ `location.reload()` (session expiry); else `msg` → error toast. `retryAbort:true` aborts any in-flight request of the same logical name.
+
+| Transport | `script` → endpoint | Returns | Used for |
+|---|---|---|---|
+| **Player RPC** | `player` → `POST /ajax/player.php` | the fat `player.info` object (§1.1) in one round-trip | modal header, badges, banners, `bans[]` accordion; forensic reads (twink/checkBans/comments/kits) |
+| **Table RPC** | `table` → `POST /ajax/table.php` | paginated `data.row[]` sets | every log sub-tab (§3) and every global grid; `&steam_id=<id>` appended scopes it to one player |
+| **Live-server RCON** | `squad` → `POST /ajax/squad.php` | ack `{status:"ok"}` | mutations requiring the player **online** (ban/kick/kill/changeTeam/removePlayer/broadcast/squadMessage) — §5 |
+| **Clan/economy** | `clan` → `POST /ajax/clan.php` | ack | `changeExpire` (ban/priority expiry), `vipPlayer` (clan-scoped VIP) — §6 |
+
+#### 1.1 `POST /ajax/player.php` `action=get` — the fat entity (single-call dossier core)
+
+**Request:** `{ steam_id: string }`. **Response:** `{ status:"ok", player:{…} }` → `player.info`. Field-by-field (03 §3):
+
+| Field | Type | Nullable | Meaning |
+|---|---|---|---|
+| `steam_id` | string(17) | N | SteamID64, primary identity, click-key. |
+| `eos_id` | string(32) | N | Epic Online Services id (copied into OWI report). |
+| `name` | string | N | Current nickname. |
+| `names[]` | `{name:string, date:unix}` | N | Nick history ("Другие ники" / Other nicks) dropdown. |
+| `date` | unix ts | N | Last login ("Заходил" / Last seen). |
+| `create_date` | unix ts | N | First seen ("Создан" / Created). |
+| `baby` | bool | N | New/young-account flag → red warning icon by online time. |
+| `bonus` | int | N | Bonus/currency balance ("Бонусы"). |
+| `playtime` | `{online, boost, server}` | N | Aggregate playtime, boost time, favourite server. |
+| `mark` | int enum `0`–`8` | N | Suspicion tag (§6 taxonomy); `0` = none. |
+| `group` | `{name, color, icon, description}` | N | Privilege badge (special art for VIP/Moderator). |
+| `group_id` | enum `"0".."5"` | N | `0` none · `1` Admin · `2` Moderator · `3` VIP · `4` Camera · `5` Trainee. |
+| `expire`, `group_description`, `prefix`, `prefix_rgb`, `image` | mixed | Y | Group-assignment fields consumed by the group form (§5). |
+| `ban` | `{expire, reason, admin_name, date(unix), description}` \| falsy | Y | Current **active** ban → red banner + corner ribbon. |
+| `bans[]` | `{admin_name, date(unix), reason, description, impact:bool, unban:"0"/"1"}` | N | Full punishment **history** → "Наказания" accordion. `impact`=counts toward escalation; `unban="1"`=revoked. |
+| `canBan` | bool | N | Gates Наказать/kill/banname/kits. |
+| `canUnban` | bool | N | Gates Разбанить. |
+| `canPermanent` | bool | N | Gates permanent-ban tier injection. |
+| `canChangeGroup` | bool | N | Gates Группа. |
+| `canSelfKick` | bool | N | Gates "Кикнуть без причины". |
+| `progressiveBan` | bool | N | Enables escalating day-tier relabel/lock on the ban form. |
+| `is_you` | bool | N | Self → group select + expiry disabled. |
+| `name_banned` | bool | N | Current nick on banned-names list → toggles banname/unbanname. |
+| `vac` | `{ban, days}` | N | VAC ban status. |
+| `steam_info` | `{ban:{vac, ban, days}, squad:{time}}` | N | Steam enrichment: VAC/game-ban badge + Squad hours. |
+| `discord` | string(id) \| false | Y | Discord user id → `discord.com/users/<id>`. |
+| `location[]` | `{iso, loc, timezone, lat, lng, ip, date(unix)}` | N | Geo-IP history (flag, city, tz, coords, **raw IP**, seen date). `[0]` = current. |
+| `primetime[]` | `{start:unix, end:unix}` | N | Typical active hours → `HH:mm`. |
+| `clans[]` | `{clan_id, name}` | N | Clan memberships → `/clan.php?id=`. |
+| `online` | `{server:{id,name}, team:{short}, squad:{id}}` \| false | Y | Live session — enables message/kill/changeTeam/removePlayer; `squad.id` prepends as a name badge. |
+| `stats` | object | N | Aggregate combat stats (kill, die, revive, winrate, kd, kit, kit_name) for the six stat cards. |
+| `comments_count` | int | N | Seeds the comments-drawer count badge. |
+
+> **Over-return note (03 §7.9):** the directory list `allPlayers` returns a denormalized identity+moderation payload *per row* (`eos_id, create_date, mark, bonus, discord, expire, group_id`) even though only `steam_id/name/date` render — a scraper with an admin session harvests the identity graph for all 385 K players from the list endpoint alone.
+
+---
+
+### 2. `table.php` — the universal per-player log transport
+
+Every log sub-tab and every global grid is **one** endpoint. Modal sub-tabs are the same request with the tab's `action=` and an appended `&steam_id=<id>` scoping filter.
+
+**Request (form-urlencoded body):**
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `action` | string | Y | Server table id (e.g. `playerKills`). |
+| `table` | string | Y | Duplicate of `action` (`buildTable` sends both). |
+| `page` | int | Y | 1-based page index. |
+| `numrows` | int | Y | Page size (per-tab values in §3.1). |
+| `search` | URL-encoded JSON | Y | 5-bucket filter `{text,check,multiselect,managers,slider}`; empty `{}` = unfiltered. `text` keyed by each control's `data-search` DB alias; `check` values are the strings `"true"`/`"false"`; date range writes `t1.date.startdate`/`t1.date.enddate` (unix, `0/0`=allTime). |
+| `order_by` | string \| `false` | Y | DB column alias to sort by, or literal `false` = server default. |
+| `order_sort` | `asc`\|`desc`\|`false` | Y | Sort direction, or `false`. |
+| `steam_id` | string | N | **Appended for modal sub-tabs** — scopes the grid to one player. Absent on global pages. |
+| `pagination` | `true` | N | Count-only variant (§2.1). |
+
+**Response — data call** (`200 application/json`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | string | `"ok"` on success. |
+| `exec_time` | float — s | Total server exec time. |
+| `data.totalPage` | int | **`0`** on the data call (real value from the count call). |
+| `data.totalRows` | int | **`0`** on the data call. |
+| `data.currentPage` | string | Echoed page index (e.g. `"1"`). |
+| `data.custom` | bool | Custom/manager-scoped result flag (`false` typical). |
+| `data.query_time` | float — s | Row-query wall time (perf telemetry). |
+| `data.count_time` | int — s | `0` on the data call (counting deferred). |
+| `data.row[]` | array(≤`numrows`) | Result rows; per-table schema in §3.2. |
+
+#### 2.1 `&pagination=true` — deferred count variant
+
+Same body + `&pagination=true`, fired as a second call (only when the first page filled or `currentPage != 1`). Splits the expensive `COUNT(*)` off the hot path:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `totalPage` | int | ceil(totalRows / numrows). |
+| `totalRows` | **string** (int) | Total matching rows. *Type inconsistent across tables* — some return int; treat as numeric. |
+| `count_time` | float — s | COUNT query time (console-logged). |
+| `status` | string | `"ok"`. |
+| `exec_time` | float — s | Total exec. |
+
+---
+
+### 3. The Per-Player Log Tables — keyed by `table.php action=` (the heart of the dossier)
+
+Every modal detail tab (03 §4.1) lazy-loads on `show.bs.tab`, POSTing `action=<table>&…&steam_id=<id>`. The modal `collum` (rendered columns) is a **scoped projection** of the same underlying row object the global grid returns; e.g. modal `playerKills` shows `[server,name,weapon,date]` because the opened player is *always* the killer, whereas the global `kills` page also renders killer/victim names. Row schemas (the full wire object) are the LIVE-captured ones from 13/02/08.
+
+#### 3.1 Sub-tab endpoint contract (server table id · scoped collum · page size)
+
+| Tab (RU / EN) | `action=` | modal `collum` (rendered, scoped) | `numrows` | `showPages` | Panel `#id` | Row schema |
 |---|---|---|---|---|---|---|
-| 1 | **Identity — SteamID64** | `player` | `steam_id` | Modal header, every table's hidden col | `player`→`get` / `player.php` | 03 §3 |
-| 2 | **Identity — EOS id** | `player.eos_id` | — | Modal header + OWI report | `player`→`get` | 03 §3 |
-| 3 | **Identity — UUID** (new) | `player` (migrated PK) | `uuid` | server-side | — | repo `6a7b3b3` |
-| 4 | **Name history / aliases** | `player.names[]` `{name,date}` | `steam_id` | "Другие ники" dropdown; searchable via `with_other_names` | `player`→`get`; search on `t2.player` | 03 §2.2, §3 |
-| 5 | **Discord id** | `player.discord` | — | "открыть" → discord.com/users/`<id>` | `player`→`get` | 03 §3 |
-| 6 | **VAC / game-ban status** | `player.vac` / `player.steam_info.ban` `{vac,ban,days}` | — | Steam badge in header | `player`→`get` | 03 §3 |
-| 7 | **Steam hours in Squad** | `player.steam_info.squad.time` | — | Header enrichment | `player`→`get` | 03 §3 |
-| 8 | **"New account" (baby) flag** | `player.baby` (bool) | — | Red warning icon by online time | `player`→`get` | 03 §3 |
-| 9 | **IP + Geo-IP history** | `player.location[]` `{iso,loc,timezone,lat,lng,ip,date}` | `steam_id` | "Другие локации" list + Leaflet map | `player`→`get`; `player.map.open(lat,lng)` | 03 §3 |
-| 10 | **Primetime (active hours)** | `player.primetime[]` `{start,end}` | `steam_id` | `<hashtag>` HH:mm ranges | `player`→`get` | 03 §3 |
-| 11 | **Aggregate + period playtime** | `player.playtime` `{online,boost,server}` | `steam_id` | Online/Boost/Queue tiles + chart | `player`→`get`; chart via `getPlayerOnlineData(start,end)` | 03 §3–§4 |
-| 12 | **Online session time-series** | (server-side) | `steam_id` | Chart / Календарь / По серверам tabs | `player`→`getPlayerOnlineData` `{steam_id,start,end}` | 03 §4 |
-| 13 | **Per-season stat aggregate** | `player_stat[steam_id,season]` | `steam_id`+season | Profile page "Скилл" block | rendered server-side (hard nav) | 04 §2.2 |
-| 14 | **Per-map / recent matches** | `playerGames` / matches | `steam_id` | Modal "Игры" tab; profile "Матчи" | `table`→`playerGames` (+`&steam_id`) | 03 §4.1; 04 §2.7 |
-| 15 | **Per-kit playtime** | `playerKits` / `player_kit_time` | `steam_id`(+season,kit) | Modal "Киты" tab; profile "Киты" | `table`→`playerKits` | 03 §4.1; 04 §2.3 |
-| 16 | **Per-weapon kills+damage** | `player_weapon_stat[steam_id,season,weapon]` | composite | Profile "Оружие" cards | server-side | 04 §2.4 |
-| 17 | **Vehicles driven / destroyed** | `playerVehicle`; profile veh tables | `steam_id` | Modal "Техника" tab; profile §2.5–§2.6 | `table`→`playerVehicle` | 03 §4.1; 04 §2.5–2.6 |
-| 18 | **Kills log** | combat event `t1` + player joins | `steam_id` | Modal "Убийства"; `kills` page | `table`→`playerKills` | 03 §4.1; 13 |
-| 19 | **Deaths log** | combat event `t1` | `steam_id` | Modal "Смерти"; `deaths` page | `table`→`playerDeath` | 03 §4.1; 13 |
-| 20 | **K/D & winrate** | derived from stats | `steam_id` | Stat cards; profile donut/trend | `player`→`get` (`stats`) | 03 §3; 04 §2.2 |
-| 21 | **Revives log** | combat event `t1` | `steam_id` | Modal "Поднятия"; `revives` page | `table`→`playerRevive` | 03 §4.1; 13 |
-| 22 | **Damage-dealt log** | combat event `t1` (`damage` field) | `steam_id` | Modal "Урон"; `damages` page | `table`→`playerDamage` | 03 §4.1; 13 |
-| 23 | **Teamkills log** | combat event `t1` (friendly-fire) | `steam_id` | Modal "Тимкиллы"; `teamkills` page | `table`→`playerTeamkill` | 03 §4.1; 13 |
-| 24 | **Kit-denial state** | per-kit deny flags `{kit:bool}` | `steam_id` | Modal "Киты" deny modal | `player`→`kits`/`kitSave` | 03 §4.2, §5.5 |
-| 25 | **Chat log** | `playerChat` (`t1` chat ⋈ `t2` player) | `steam_id` | Modal "Чат"; `chat` page | `table`→`playerChat` | 02; 03 §4.1 |
-| 26 | **Votes initiated** | `votes` log (`steam_id`=initiator) | `steam_id` | `votes` page (card list) | `table`→`votes` | 14 §14.3 |
-| 27 | **Reports against player** | `reports` (`t1` ⋈ `t2` player) | `steam_id`=target | `reports` page (card list) | `table`→`reports` | 14 §14.4 |
-| 28 | **Squad membership history** | `playerSquad` | `steam_id` | Modal "Сквады" tab | `table`→`playerSquad` | 03 §4.1 |
-| 29 | **Ban / punishment history** | `player.bans[]` (`t1` bans ⋈ `t3` admin) | `steam_id` | Modal "Наказания" accordion; `bans` page | `player`→`get`; `table`→`banPlayers` | 03 §3–§4; 09 |
-| 30 | **Active ban** | `player.ban` `{expire,reason,admin_name,date,description}` | `steam_id` | Red ban banner + corner ribbon | `player`→`get` | 09 §2.2, §5.4 |
-| 31 | **Warns** | `playerWarn` | `steam_id` | Modal "Варны" tab | `table`→`playerWarn` | 03 §4.1 |
-| 32 | **Name-ban state** | `player.name_banned` + banned-names list | `name` | Ban/unban-nick menu | `player`→`addBanName`/`removeBanName` | 03 §4.2; 09 §4 |
-| 33 | **Admin comments / notes** | `player_comment` (`t1` ⋈ `t2` admin ⋈ `t5` target) | `steam_id` | Comments drawer; `comments` page | `player`→`getComments`/`addComment` | 08 §2.1 |
-| 34 | **Suspicion mark** | `player_mark` (single enum 0–8) | `steam_id` | Mark banner + row highlight; `mark` page | `player`→`mark` | 08 §2.2; 03 §4.4 |
-| 35 | **Twins / alts (shared-IP)** | derived `text.list[]` `{steam_id,name,perm,min_date,ips[]}` | `steam_id` | Twink modal | `player`→`twink` | 03 §4.3 |
-| 36 | **Steam-friends edge** | derived `in_friend` | pair | Twink candidate button | `player`→`findFriends` `{steam_id,compare_steam_id}` | 03 §4.2 |
-| 37 | **Co-presence overlay** | derived session overlap | pair | Twink weekly calendar | `player`→`twinkOnline` `{…,start,end}` | 03 §4.2 |
-| 38 | **Cross-project ban federation** | remote `{projects:[{name,discord,online,ban}]}` | `steam_id` | Check-bans grid modal | `player`→`checkBans` | 09 §5.3 |
-| 39 | **Privilege group / role** | `player.group` `{name,color,icon,description}` + `group_id,expire,prefix,prefix_rgb,image` | `steam_id` | Group badge + group form | `player`→`get` / `changeGroup` | 03 §3, §5.2 |
-| 40 | **VIP status / expiry** | group id 3 + `expire`; profile VIP-until | `steam_id` | Group form; profile header; `vips` page | `player`→`changeGroup`; `clan`→`vipPlayer` | 03 §5.2; 04 §2.1; 06 |
-| 41 | **Clan membership** | `player.clans[]` `{clan_id,name}` | `steam_id` | Clan labels → `/clan.php?id=` | `player`→`get` | 03 §3; 18 |
-| 42 | **Bonus / economy balance** | `player.bonus` | `steam_id` | Bonus tile; profile "Ваши бонусы" | `player`→`get` | 03 §3; 04 §2.1 |
-| 43 | **Subscriptions** | (server-side) | `steam_id` | Profile "Подписки" | server-side | 04 §2.1 |
-| 44 | **Admin actions ON the player** | `logs` (`t1` ⋈ `t2` admin) | via `<hashtag>` | Audit journal `logs` page | `table`→`logs` | 17 |
+| Наказания / Bans | *(none — `player.info.bans[]`, accordion `#player_info_accordion-bans`, no table call)* | admin, date, reason, description, impact, unban | — | — | — | §1.1 `bans[]`; §7 |
+| Варны / Warns | `playerWarn` | `admin, text, date` (list via `#player_info_warn-template`) | 10 | 3 | `#player_info_warn-table` | admin, text, date(unix) |
+| Чат / Chat | `playerChat` | `server, date, team, type, msg` | **20** | 3 | `#player_info_chat-table` | §3.2 `playerChat` |
+| Тимкиллы / Teamkills | `playerTeamkill` | `server, date, killed, kit` | 10 | 3 | `#player_info_teamkill-table` | §3.2 `playerTeamkill` |
+| Киты / Kits | `playerKits` | `kit, cnt` | 10 | 3 | `#player_info_kits-table` | kit:string, cnt:int |
+| Сквады / Squads | `playerSquad` | `server, team, date, squad_id, name` | 10 | 3 | `#player_info_squad-table` | server(HTML), team, date(unix), squad_id, name |
+| Убийства / Kills | `playerKills` | `server, name, weapon, date` | 10 | 3 | `#player_info_kills-table` | §3.2 `playerKills` |
+| Смерти / Deaths | `playerDeath` | `server, weapon, date` | 10 | 3 | `#player_info_death-table` | §3.2 `playerDeath` |
+| Игры / Games | `playerGames` | `server, map, win, date` | 10 | 3 | `#player_info_games-table` | server(HTML), map, win(label), date(unix) |
+| Поднятия / Revives | `playerRevive` | `server, name, date` | 10 | 3 | `#player_info_revive-table` | §3.2 `playerRevive` |
+| Урон / Damage | `playerDamage` | `server, weapon, name, **damage**, date` | 10 | 3 | `#player_info_damage-table` | §3.2 `playerDamage` |
+| Техника / Vehicle | `playerVehicle` | `server, vehicle, weapon, damage, date` | 10 | 3 | `#player_info_vehicle-table` | server(HTML), vehicle, weapon, damage:int, date(unix) |
 
----
+- **Chat tab:** each `msg` cell is post-processed by `isObscene(text)` → red warning-triangle prefix. `type` renders `<code style="color:type.color">type.name</code>` (channel object `{name,color}`). Scoped `numrows` is 20 in the modal vs **300** on the global `chat` page (02 §3).
+- **Damage asymmetry (LIVE, 13 §13.8):** the modal `playerDamage` tab **renders** `damage` (collum includes it), but the *global* `damages` page returns `damage` in the row yet **omits it from `collum`** — never shown or sortable there. A documented easy win for a competitor (surface + sort by damage).
+- **Teamkills passive log:** no per-player TK tally / forgive / auto-action; enforcement only via the modal's ban/kick.
 
-### 2. Identity Graph — Everything Keyed to One Player
+#### 3.2 Captured row schemas (full wire object per event class — LIVE, 13)
 
-SQSTAT resolves a single human across many identifiers. This is the richest part of the dossier and the strongest competitive feature (see **03. Players Directory** §7.5 "Rich identity graph").
+All scalars are JSON strings unless noted. `date` = **unix epoch seconds** (string) everywhere. `server` = pre-rendered HTML badge `<code>[X]</code>`. `steam_id`/`victim_steam_id` = `str(17)` SteamID64.
 
-| Identifier | Field | Notes |
-|---|---|---|
-| SteamID64 | `steam_id` | Legacy primary key; still the click-key of every table row (rendered in `<hashtag>`). |
-| UUID | (new PK) | Panel migrated identity to a UUID primary key (repo commit `6a7b3b3`); SteamID becomes an attribute. |
-| EOS id | `eos_id` | Epic Online Services id (Squad's newer identity); copied into the OWI cheat report. |
-| Discord id | `discord` | Deep-links to `discord.com/users/<id>`. |
-| Current nick | `name` | With clan-tag prefix on the profile H1. |
-| Nick history | `names[]` `{name,date}` | Dropdown "Другие ники"; searchable via the `with_other_names` checkbox (**03** §2.2). |
-| Alt accounts | `twink` → `list[]` | Shared-IP candidates, each with own SteamID, perm-ban flag, IP match list, time delta. |
-| Steam-friend edge | `findFriends` → `in_friend` | Boolean per candidate pair. |
-| VAC / game ban | `vac`, `steam_info.ban` | Enriched from Steam. |
+**`playerKills`** (global `collum:["steam_id","server","date","player_name","name","weapon"]`)
 
-**Alt-hunting workflow (03 §4.3)** is a fully built shared-IP + Steam-friends + co-presence engine: `twink` returns candidates keyed by matching IPs (`ips[]` with `loc`, both accounts' seen-times, humanized `min_date` delta), `findFriends` confirms the Steam social edge, and `twinkOnline` overlays both accounts' weekly sessions on a FullCalendar to prove co-presence. `perm:true` red-flags candidates carrying a permanent ban.
-
----
-
-### 3. Location & Session Storage
-
-| Datum | Field / source | Structure | Surface |
+| Field | Type | Meaning | Rendered? |
 |---|---|---|---|
-| Raw IP addresses | `location[].ip` | one per distinct location, newest first (`location[0]`) | "Другие локации" list (raw IP printed under each entry) |
-| Country / city | `location[].iso`, `.loc` | ISO flag + city string | Header + list |
-| Timezone | `location[].timezone` | string, appended in parentheses | Header + list |
-| Coordinates | `location[].lat`, `.lng` | float pair → Leaflet OSM map (`player.map.open`) | `#player_map-modal` |
-| Location seen-date | `location[].date` | timestamp | Each list entry |
-| Primetime | `primetime[]` `{start,end}` | unix → `HH:mm–HH:mm` ranges | `#player_info-primetime` |
-| Total online / boost | `playtime.online`, `.boost` | aggregate | Tiles |
-| Favourite server | `playtime.server` | label | "Сервер" |
-| Online time-series | `getPlayerOnlineData(steam_id,start,end)` | three series **Онлайн / Буст / Очередь** | Chart with Chart/Calendar/Per-server sub-tabs |
+| `id` | str(num) | Event PK | no |
+| `steam_id` | str(17) | Killer — row-click key | hidden col 1 |
+| `victim_steam_id` | str(17) | Victim — makes target openable (kills only, via `#kill_template`) | no |
+| `game_id` | str(num) | Match id → `/game/<id>` | no |
+| `date` | str(unix) | Event time | Дата |
+| `weapon` | str | Weapon/entity id | Оружие |
+| `kit` | str | Killer kit id | no |
+| `player_name` | str | Killer name | Кто / Who |
+| `name` | str | Victim name | Кого / Whom |
+| `server_id` | str(num) | Server id (1/6/7/9/10/11) | no |
+| `map` | str | Map + layer | no |
+| `server` | HTML | Server badge | col 2 |
 
-**Competitive note:** raw IPs, timezones, and a map per player is heavy PII retention — a differentiator but also a privacy/compliance surface a competitor should treat carefully.
+**`playerDeath`** (`collum:["steam_id","server","date","player_name","weapon"]`) — no second-party column: `id, steam_id`(deceased)`, game_id, date, weapon`(actor that killed)`, kit, player_name, server_id, map, server`. Killer still **filterable** via the Кого input.
 
----
+**`playerRevive`** (`collum:["steam_id","server","date","player_name","name"]`) — `id, steam_id`(medic)`, victim_steam_id`(revived)`, game_id, date, kit, player_name`(medic)`, name`(revived)`, server_id, map, server`. No `weapon`.
 
-### 4. Combat & Activity Logs (per-player, event-grained)
+**`playerDamage`** (`collum:["steam_id","server","date","player_name","name","weapon"]`) — `id, steam_id`(attacker)`, victim_steam_id, game_id, date, `**`damage`**`:str(num), weapon, player_name`(attacker)`, name`(victim)`, server_id, map, server`. **`damage` present in every row but excluded from global `collum`.**
 
-All combat logs are the *same* joined event table (`t1` event ⋈ player joins) re-projected per event class (**13. Combat Logs** §13.2). Each is reachable two ways: as a modal sub-tab scoped to one player (`&steam_id=<id>`), or as a global page filtered by name.
+**`playerTeamkill`** (`collum:["steam_id","server","date","player","killed"]`, `numrows:100`) — server-renders HTML: `id, server_id, steam_id`(offender)`, killed`(HTML, team victim, incl. clan tag)`, date, killed_group`(null when none)`, player`(HTML, offender name)`, player_group`(null)`, kit`(HTML `<img>`)`, server`. No `weapon`, no `victim_steam_id`.
 
-| Event class | Modal tab / table | Global page | Columns (player-relevant) | Weapon? | Magnitude stored? |
+**`playerChat`** (`collum:["steam_id","server","date","team","name","type","msg","play"]`, global `numrows:300`, 02 §2.4) — `id, steam_id`(str17 author)`, server`/`server_id, date`(unix)`, team`(int enum → team icon)`, name, color`(hex, nullable)`, type`(object `{name,color}` in row; enum below)`, msg, play`(UI-only TTS cell, no server data).
+
+`type` scope enum: `ChatAll` (Всем/All), `ChatTeam` (Команда/Team), `ChatSquad` (Сквад/Squad), `ChatAdmin` (Админ чат/Admin), `broadcast` (Broadcast, gold `#DAA520`).
+
+#### 3.3 Global grid equivalents (same `action`, no `&steam_id`, big `numrows`)
+
+The same tables serve dedicated pages with the full filter sidebar and large page sizes. LIVE scale (13 §13.2):
+
+| Page | `action=` | `numrows` | Live totalRows | count_time | Кто→ / Кого→ aliases (leaked SQL) |
 |---|---|---|---|---|---|
-| Kills | Убийства / `playerKills` | `kills` | killer, victim (`victim_steam_id` clickable), weapon, date, server | Yes | — |
-| Deaths | Смерти / `playerDeath` | `deaths` | deceased, weapon-that-killed, date, server | Yes | — |
-| Revives | Поднятия / `playerRevive` | `revives` | medic, revived, date, server | No | — |
-| Damage | Урон / `playerDamage` | `damages` | attacker, victim, weapon, **damage**, date | Yes | **Yes** in modal tab; *hidden* on global `damages` page (13 §13.3) |
-| Teamkills | Тимкиллы / `playerTeamkill` | `teamkills` | offender, team-victim, date, server | No | — |
-| Games | Игры / `playerGames` | (profile Матчи) | server, map, win, date | — | — |
-| Squads | Сквады / `playerSquad` | — | server, team, date, squad_id, name | — | — |
-| Vehicle | Техника / `playerVehicle` | — | server, vehicle, weapon, damage, date | Yes | Yes |
-| Chat | Чат / `playerChat` | `chat` | server, date, team, type, msg (obscenity-flagged) | — | — |
+| `kills` | `playerKills` | 500 | 4,402,799 | 1.37 s | `t2.player` / `t4.player` |
+| `deaths` | `playerDeath` | 500 | 5,630,431 | 1.36 s | `t5.player` / `t2.player` |
+| `revives` | `playerRevive` | 500 | 1,217,973 | 0.27 s | `t5.player` / `t2.player` |
+| `damages` | `playerDamage` | 500 | 13,413,500 | 2.76 s | `t2.player` / `t5.player` |
+| `teamkills` | `playerTeamkill` | 100 | 653,590 | 0.10 s | `t5.player` / `t2.player` |
+| `chat` | `playerChat` | 300 | — | — | `t2.player` (name), `t1.msg` (body) |
 
-**Damage magnitude asymmetry (13 §13.8):** the model stores per-event damage (`playerDamage` / `player.info` Урон tab exposes it), yet the global `damages` grid omits the numeric column — a documented easy win for a competitor (show and sort by damage).
-
-**Teamkills is a passive log (13 §13.8):** no per-player TK tally, forgive, or auto-action on the page; enforcement is only via the shared modal's ban/kick.
+Shared server multiselect (`data-search="server_id"`, this tenant's own servers; note id gaps 2–5, 8): `1` RAAS/AAS #1 · `6` БЕЗ ГОЛОСОВАНИЯ #2 · `7` INVASION #3 · `9` Custom для FW · `10` Custom для MDC · `11` Custom для BSS. Combat/audit date range uses the shared `dateRange` widget (21 presets, `allTime` default `0/0`).
 
 ---
 
-### 5. Moderation & Forensic Records
+### 4. Forensic Reads — `player.php` derivations (not table calls)
 
-The punitive/annotative half of the dossier — the part **absent** from the self-service profile (**04** §1, §8).
+Extra `script:'player'` reads that enrich the dossier beyond `get` (03 §2.4). All non-destructive.
 
-#### 5.1 Bans & punishment history (**09. Ban Management**)
+| `action` | `data:{…}` | Response shape (captured/render) | Purpose |
+|---|---|---|---|
+| `getComments` | `{steam_id}` (UUID) | `{status:"ok", comments:[{name:str, date:unix-str, text:str}]}` | Comment thread → drawer (§6). |
+| `kits` | `{steam_id}` | `{kits:[{kit, deny:bool, date?:unix}]}` | Per-kit deny state (§5 kit modal). |
+| `twink` | `{steam_id}` | `{list:[{steam_id, name, perm:bool, min_date:unix-delta, ips:[{loc, date:unix, owner_date:unix}]}]}` | Shared-IP alt candidates. `perm`=candidate carries permanent ban; `min_date` humanized via `moment.duration(min_date*1000)`; each `ips[]` shows both accounts' seen-times side by side. |
+| `twinkOnline` | `{steam_id, compare_steam_id, start:unix, end:unix}` | `{calendar:[<fullcalendar events>]}` | Overlay two accounts' weekly sessions to prove co-presence. |
+| `findFriends` | `{steam_id, compare_steam_id}` | `{in_friend:bool}` | Steam-friends edge between two accounts. |
+| `checkBans` | `{steam_id}` | `{projects:[{name, discord?:url, online:int-sec, ban:{total:int, current:null\|{reason, date:unix, expire:unix\|"0"}}}]}` | Cross-project ban federation. `expire=="0"` ⇒ "Перманент"; else From/To. |
+| `getPlayerOnlineData` | `{steam_id, start:unix, end:unix}` | online/boost/queue time series | Chart with **График / Календарь / По серверам** (Chart/Calendar/Per-server) sub-tabs; three series **Онлайн / Буст / Очередь**. |
+| `downloadStat` | form POST (`post_to_url`) `{action, steam_id}` | file download | Stat export. |
 
-| Field | Source | Meaning |
+**Alt-hunting workflow (03 §4.3):** `twink` (shared-IP candidates) → `findFriends` (confirm Steam social edge) → `twinkOnline` (co-presence calendar). A complete anti-ban-evasion engine — the standout forensic feature.
+
+---
+
+### 5. Write Actions = Permissions (exact `Action({script,action,data:{…}})`)
+
+Every state-changing capability on the player, verbatim from captured modal JS (03 §2.4/§2.5, 09 §4, 02 §2.5). These equal the operator's permission surface; buttons default `display:none`/`.hide` and are revealed by `setInfo()` per server capability flags (§8).
+
+| UI label (RU / EN) | `action` | script → endpoint | `data:{…}` keys (type) | Effect | Destr. |
+|---|---|---|---|---|---|
+| open card | `get` | player → player.php | `steam_id` | Load `player.info`. | N |
+| Добавить / Add player | `add` | player | `steam_id` | Create record from SteamID64, open it. | Y |
+| Наказать→Кикнуть / Kick w/ reason | `kick` | squad | `steam_id, reason_id, description, noReason:false` | Kick with rulebook reason. Online only. | Y |
+| Кикнуть без причины / Kick no reason | `kick` | squad | `steam_id, reason_id, description, noReason:true` | Kick without rule (confirm). Gated `canSelfKick`. | Y |
+| Наказать→Забанить / Ban | `ban` | squad | `server_id`(if online)`, steam_id, reason_id, description, days` | Ban N days; `days=0`/`-1` = permanent. | Y |
+| Разбанить / Unban | `unban` | squad | `steam_id, unban:bool` | Lift ban; `unban:true` **fully erases** record, `false` keeps history (`unban="1"`). Gated `canUnban`. | Y |
+| Сообщение / Message | `message` | player | `steam_id, time:int-sec, msg:≤512, log:bool` | In-game DM repeated for `time`s; `log=true` mirrors onto card. | Y |
+| Команда / Switch team | `changeTeam` | squad | `server_id, steam_id` | Force team swap (confirm). Online only. | Y |
+| Убить / Kill | `kill` | squad | `server_id, steam_id` | Kill in-game, dissolves squad. Gated `canBan`+online. | Y |
+| Кик из сквада / Remove from squad | `removePlayer` | squad | `server_id, steam_id` | Eject from fireteam/squad. Online + in squad. | Y |
+| tag menu / Подозрение…·Снять метку | `mark` | player | `steam_id, mark:int 0–8` | Set/clear suspicion tag (`0` clears). | Y |
+| Группа→Сменить группу / Change group | `changeGroup` | player | `steam_id, group_id, date`(expire unix)`, description, prefix, prefix_rgb, image` | Assign group + expiry + custom prefix/RGB/image (**VIP grant** path). Gated `canChangeGroup`; disabled for self. | Y |
+| Забанить ник / Ban nickname | `addBanName` | player | `name` | Add current nick to banned-names blacklist. | Y |
+| Разбанить ник / Unban nickname | `removeBanName` | player | `name` | Remove nick from blacklist. | Y |
+| Киты→Сохранить / Kit deny save | `kitSave` | player | `steam_id, kits`(JSON `{kit:bool}`) | Toggle per-kit denial. Modal warns it "may violate server license terms." | Y |
+| comments drawer send | `addComment` | player | `steam_id, text:≤256` | Internal admin comment (author = session). | Y |
+| Проверить баны / Check bans | `checkBans` | player | `steam_id` | Cross-project ban lookup (§4). | N |
+| Поиск твинков / Find alts | `twink` | player | `steam_id` | Alt detection (§4). | N |
+| VIP (clan-scoped) | `vipPlayer` | clan | `clan_id, steam_id, vip:bool` | Grant/revoke clan-priority VIP. | Y |
+| ban/priority expiry edit | `changeExpire` | clan | ban-expiry payload | Adjust an existing ban/priority `expire`. | Y |
+| Копировать телепорт / Copy teleport | *(client)* | — | — | Copies `AdminTeleportToPlayer <steam_id>`. | N |
+| Заявка в OWI / OWI report | *(client)* | — | — | Copies cheat-report template (name/EOS/Steam URL). | N |
+| card link | *(client)* | — | — | Copies `https://<host>/?steam_id=<id>`. | N |
+
+> Only `players.html`/`playersOnline.html` expose the FULL write set (`ban/kick/kill/kits/changeGroup/changeTeam/add`). Other pages (`bans/chat/kills/…`) embed the same modal but a **reduced** action set (per `action_catalog.txt`: reads like `twink/checkBans/getPlayerOnlineData` present, write actions restricted). Actual gating is server-driven (§8).
+
+---
+
+### 6. Annotations — Comments & Suspicion Marks (LIVE schemas, UUID identity — 08)
+
+Two dedicated tables plus the modal write verbs. **Note the `steam_id` type flips to `str(36)` UUID here** (identity migration).
+
+#### 6.1 `POST /ajax/table.php action=playerComments` — global comment feed
+
+`buildTable({table:'playerComments', numrows:100})`, `collum:["steam_id","date","admin","player","text"]`, `searchInput:["playerComments-name"(→`t5.player`),"playerComments-admin"(→`t2.player`),"playerComments-text"(→`t1.text`)]`. Aliases confirm join `t1`=comments, `t2`=author admin, `t5`=target player. Row click → `player.open(td[data-contact="steam_id"])`.
+
+**Captured `data.row[]` schema:**
+
+| Field | Type | Meaning |
 |---|---|---|
-| `bans[]` `{admin_name,date,reason,description,impact,unban}` | `player`→`get` | Full punishment history (modal "Наказания" accordion). |
-| `ban` `{expire,reason,admin_name,date,description}` | `player`→`get` | Current active ban (red banner + ribbon). |
-| `impact` | ban row | Counts toward **progressive** escalation ("Влияет на наказание"). |
-| `unban` (`"1"`) | ban row | Later revoked — kept greyed in history, or fully erased if "issued in error". |
-| `reason_id` | rules catalog | Rule id (e.g. `110` insults, `160` cheating, `173` teamdamage) with `data-first/second/third/four` escalating day-tiers, cap `30` → permanent. |
-| `admin_name` | `t3.player` | Issuing admin — **author-attributed** (auditable). |
+| `id` | str(int) | Comment PK. |
+| `steam_id` | **str(36) UUID** | Target player identity (row-click key). |
+| `admin_id` | str(17) Steam64 | Authoring admin. |
+| `date` | str(10) **unix** | When written. |
+| `text` | str (HTML-escaped, `&quot;` double-escaped) | Note body; unescaped client-side via `.replace(/&amp;quot;/g,'"')`. |
+| `admin` | str (pre-rendered HTML) | Author display block `<code style="color:#<hex>">`. |
+| `admin_color` | str(6) hex | Author name color. |
+| `admin_group` | str(1) | Author group id. |
+| `player` | str (pre-rendered HTML) | Target display block. |
+| `player_color` | str \| null | Target color. |
+| `player_group` | str \| null | Target group. |
 
-Global `bans` page = `banPlayers` DataTable (`t1` ban ⋈ `t2` player ⋈ `t3` admin); mutation only through the modal (`ban`/`unban` on `script:'squad'`). `collabans` is the collaborative cross-community variant; `checkBans` federates ban status across projects (**09** §5.3).
+#### 6.2 `POST /ajax/table.php action=playerMark` — suspect watchlist
 
-#### 5.2 Comments & suspicion marks (**08. Player Comments & Suspect Marking**)
+`buildTable({table:'playerMark', numrows:100})`, `collum:["steam_id","player","date","mark","ban"]`, `searchInput:["playerMark-name"(→`t1.player`, text),"playerMark-mark"(→`mark`, multiselect, `value=1..8`)]`. Marked rows carry CSS `player_mark`. The multiselect is an **OR filter over the log** (values `1`–`8`; **no "unmarked"/`0` option**).
 
-| Feature | Entity | Author-attributed? | Multiplicity | Write action |
+**Captured `data.row[]` schema:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `steam_id` | **str(36) UUID** | Suspect identity (row-click key). |
+| `eos_id` | str(32) | EOS id. |
+| `name` | str (raw) | Nickname. |
+| `date` | str(10) **unix** | Last seen ("Заходил"). |
+| `create_date` | str(10) **unix** | **When the mark was created** (persisted, not shown as a column). |
+| `mark` | str (pre-rendered HTML `<i class="fa …">`) | Reason icon (enum → icon). |
+| `bonus` | str(int) | Bonus balance. |
+| `discord` | str(18) snowflake | Discord id. |
+| `color` | str(6) hex | Nickname color. |
+| `player_group` | str(1) | Player group id. |
+| `ban` | str (pre-rendered HTML `<span class="label …">`) | Ban-status label (Нет/None = not banned). |
+| `player` | str (pre-rendered HTML) | Colored nickname block. |
+
+#### 6.3 Write verbs & mark taxonomy
+
+| Verb | `action` | `data:{…}` | Response | Effect | Destr. |
+|---|---|---|---|---|---|
+| Read thread | `getComments` | `{steam_id}` | `{status:"ok", comments:[{name, date:unix, text}]}` | Populate drawer. | N |
+| Add note | `addComment` | `{steam_id, text}` (trimmed non-empty, ≤256) | `{status:"ok"}` | Persist note authored by session admin; re-runs `getComments`. | Y |
+| Set/clear mark | `mark` | `{steam_id, mark:int 0–8}` | `{status:"ok"}` | Write single mark enum (`0` clears); flip animation + banner + row highlight. | Y |
+
+**Mark enum (single scalar, replaced on set — a player carries exactly ONE):**
+
+| val | RU label / EN gloss | icon |
+|---|---|---|
+| 1 | Подозрение на WallHack / Suspected WallHack | `fa-eye` |
+| 2 | Подозрение на AimBot / AimBot | `fa-crosshairs` |
+| 3 | Подозрение на SpeedHack / SpeedHack | `fa-tachometer` |
+| 4 | Подозрение на спавн объектов / object spawning | `fa-bomb` |
+| 5 | Подозрение на перезарядку / reload exploit | `fa-refresh` |
+| 6 | Подозрение на гриф / griefing | `fa-free-code-camp` |
+| 7 | Подозрение на конфиг / illegal config | `fa-file-excel` |
+| 8 | Токсичный игрок / toxic | `fa-biohazard` |
+| 0 | Снять метку / clear (dropdown-only, not a filter option) | `fa-times` |
+
+**Drawer state predicates (08 §5.1):** container `#playerModal .player_comments`; `open()` toggles `open` class and **fetches only when it becomes open** (`if(container.toggleClass('open').hasClass('open')) get()`); composer `<input maxlength="256">`; submit on Enter or button; validation `text.trim()!=""` only; append-only (no edit/delete). **Mark predicates (08 §5.2):** each `<a onclick="player.mark.set(n)">` fires directly (**no confirm**); `render(mark)` shows `#player_info_mark` pulsing banner when `mark!="0"`, adds `.disabled` to the active option, toggles `player_mark` on `tr[data-id="<steam_id>"]`.
+
+> **Gaps (08 §6–7):** comments are **author-attributed** (accountability trail) but **immutable/append-only**; marks are **NOT author-attributed** (`create_date` = *when*, but no *who* — no mark history/audit). Only one mark per player despite the multi-select *filter*.
+
+---
+
+### 7. Bans & Punishment History (09)
+
+#### 7.1 `POST /ajax/table.php action=banPlayers` — global ban archive
+
+`buildTable`: `collum/order:["steam_id","name","reason","date","expire"]` (all sortable), `numrows:100`. `searchInput:["banPlayers-name"(→`t2.player`),"banPlayers-admin"(→`t3.player`),"banPlayers-reason"(→`t1.reason`),"banPlayers-description"(→`t1.description`),"banPlayers-permanent"(check `permanent`),"banPlayers-startdate","banPlayers-enddate"]`. Join: `t1`=bans, `t2`=banned player, `t3`=issuing admin. Row click → `player.open(<hashtag>)`.
+
+**Captured `data.row[]` schema:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | str(num) | Ban PK (`t1.id`) → `data-id`/`trID-<id>`. |
+| `steam_id` | str(17) Steam64 | Banned player (hidden col, drives row-click). |
+| `name` | str | Nick at ban time. |
+| `reason` | str | Reason text; **embeds expiry as trailing `… до DD.MM.YYYY HH:MM`**. |
+| `description` | str (may be `""`, ≤512) | Free-text admin comment. |
+| `admin_id` | str(17) Steam64 | Issuing admin (raw id; name resolved separately). |
+| `date` | str **unix** | When issued ("Забанен"). |
+| `expire` | str **pre-rendered HTML** | Server returns a ready `<span class="badge …">DD.MM.YYYY HH:MM</span>` (permanent → distinct badge), injected verbatim. |
+| `unban` | str `"0"`/`"1"` | `"1"` = revoked (kept in history), `"0"` = active. |
+
+Filter-only: `permanent` (check bucket, bool-as-string, = `expire==0`). Modal-only: `impact` (bool, counts toward progressive escalation).
+
+#### 7.2 Rules catalog (ban `<select>` = progressive policy-as-data)
+
+Each `<option value=<reason_id>>` (e.g. `1`=Другое, `2`=DPAC anti-cheat, `110`=Оскорбления/Insults, `160`=Cheating, `173`=Teamdamage) carries escalation attrs `data-first / data-second / data-third / data-four` = ban-days for the 1st/2nd/3rd/4th offense (`data-four="30"` common cap → permanent). `<optgroup>`: Особые/Общие/Для сквадных/Для техники/Милсим. When `progressiveBan`, only tiers up to `(#prior impact bans + 1)` are enabled; last enabled tier auto-checked as "Рекомендуемое" (Recommended). Permanent tier injected only when `canPermanent && progressiveBan`.
+
+#### 7.3 Cross-project ban federation
+
+`checkBans` (§4) → per-project cards `{name, discord?, online, ban:{total, current:{reason, date, expire}}}`. `expire=="0"` ⇒ "Перманент". `collabans` is the collaborative cross-community variant of `banPlayers`. Ban mutation only via the modal (`ban`/`unban` on `script:'squad'`, §5).
+
+---
+
+### 8. Admin Actions Journaled *About* the Player (17)
+
+#### 8.1 `POST /ajax/table.php action=logs` — audit trail
+
+`buildTable({table:'logs', collum:["serverName","name","date","log"], numrows:100, order:[]})` (no column sort wired). `searchInput:["logTable-user"(→`t2.player`),"logTable-name"(→`t1.log`),"logTable-startdate"(→`t1.startdate`),"logTable-enddate"(→`t1.enddate`),"logTable-server"(→`server_id`)]`. Two-phase load (rows fast, count deferred). Live scale: 110,488 rows / 1,105 pages.
+
+**Captured `data.row[]` schema:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | str(num) | Audit PK (auto-increment, effectively newest-first) → `trID-<id>`. |
+| `server_id` | str(int) | FK to server; `"0"` = panel-global (login) → empty `serverName`. |
+| `steam_id` | **str(36) UUID** | Event subject. **Returned but NOT rendered** — no `collum` maps it. |
+| `date` | str(10) **unix** | Event time → relative badge. |
+| `log` | str (free text / HTML) | Human-readable action (Russian); embeds `<b>/<i>/<hashtag>SteamID64</hashtag>` tokens. |
+| `name` | str | Acting admin display name. |
+| `serverName` | str (may be `""`) | Denormalized server label. |
+
+**Two identifiers, neither clean (17 §3):** the row carries a `str(36)` UUID `steam_id` it never renders, while drill-down keys off a `str(17)` SteamID64 parsed out of the `log` prose (`<hashtag>` → `player.open($(this).text())`). Structure is **free-text `log`**, substring-searchable on `t1.log` — cannot reliably answer "all *bans* by admin X this week." Read-only page (no mutation of its own).
+
+**Observed `log` templates:** `Авторизовался` (login, `server_id=0`), `Зашёл в камеру` (admin-cam, dominant), `Забанил <b>{name}</b> <hashtag>{id}</hashtag> на <b>{N}</b> дн <i>"{reason до …}"</i>`, `Разбанил <b>{name}</b> <hashtag>{id}</hashtag>`, `Отправил сообщение <b>{tag}</b> <hashtag>{id}</hashtag> - "{msg}"`.
+
+#### 8.2 Three overlapping audit trails
+
+A single admin action lands in **three** places: (1) the `logs` free-text journal; (2) author-attributed structured records — `player.bans[]` (`admin_name`) and `player_comment` (`admin_id`); (3) opt-in message-to-card records (`message` with `log=true`, 02 §5.1) — a permanent in-game-warning line on the player's card.
+
+---
+
+### 9. Permission / Visibility Logic (show/hide predicates)
+
+Buttons default hidden (inline `display:none` / `.hide`), revealed by `setInfo()` per **server-provided** capability flags on `player.info` — the server is the source of truth, the client only reflects it (03 §6, 09 §6):
+
+| Element | Predicate |
+|---|---|
+| Наказать (issue ban) | `canBan && !player.info.ban` (no active ban). |
+| Разбанить + corner ribbon | `player.info.ban && canUnban`. |
+| Убить / kill, kit/banname items | `canBan && player.info.online`. |
+| Кикнуть без причины | `canSelfKick`. |
+| Забанить ник ⟷ Разбанить ник | `canBan`; which one shows toggles on `name_banned`. |
+| Группа (`#player_info-group_btn`) | `canChangeGroup`; group select+expiry disabled when `is_you`. |
+| Message / Команда / Kill / removePlayer | require `player.info.online` (+ `online.squad.id` for removePlayer). |
+| Mark / twink / checkBans / comments / copy-teleport / OWI / downloadStat | ungated — visible to any admin who can open the card. |
+
+Session expiry: any `Action` response with `auth:true` → `location.reload()`.
+
+---
+
+### 10. Everything Queryable About One Player — master index
+
+Keyed by the retrieval call. `[modal]` = scoped by `&steam_id`; `[global]` = dedicated page.
+
+| Datum | Stored in | Endpoint / call | Type flags | Chapter |
 |---|---|---|---|---|
-| Admin notes | `player_comment` `{steam_id,date,admin,player,text≤256}` | **Yes** (`t2` admin) — append-only, no edit/delete | many per player (thread) | `player`→`addComment` |
-| Suspicion mark | `player_mark` single enum `0–8` | **No** (no mark-author audit — a documented gap) | exactly **one** per player | `player`→`mark` |
-
-Mark taxonomy (single scalar, replaced on set, `0` clears): `1` WallHack, `2` AimBot, `3` SpeedHack, `4` object-spawn, `5` reload-exploit, `6` grief, `7` config-exploit, `8` toxic. The `mark` page is a filterable watchlist with a **Бан** column (triage: flagged-but-not-yet-banned). See **08** §2.2, §7.
-
-#### 5.3 Votes & reports tied to the player (**14. Votes & Reports**)
-
-| Record | Player role | Fields | Gap |
-|---|---|---|---|
-| Vote | `steam_id` = **initiator** | `mode`, `cancel`(status), `players_sum`/`players_need`, `map_current/next/vote` | No per-voter storage; no initiator search filter. |
-| Report | `steam_id` = **target** (reported) | `text` (report body), `player_name`, `date`, `server` | **Reporter identity not surfaced**; no report lifecycle/resolution state. |
-
----
-
-### 6. Role / Economy / Membership State
-
-| State | Field / action | Notes |
-|---|---|---|
-| Privilege group | `group` `{name,color,icon,description}`, `group_id` | Ids: `0` none, `1` Admin, `2` Moderator, `3` VIP, `4` Camera, `5` Trainee. |
-| Group grant (branding) | `changeGroup` `{group_id,date(expire),description,prefix,prefix_rgb,image}` | Custom prefix text + RGB + image URL per player (monetizable cosmetics). |
-| VIP expiry | `expire` on group 3; profile "VIP до DD.MM.YYYY" | Also `vips` page; clan-scoped VIP toggle `clan`→`vipPlayer` `{clan_id,steam_id,vip}` (see **18. Clans**). |
-| Clan membership | `clans[]` `{clan_id,name}` | Links to clan page; clan priority expiry via `clan`→`changeExpire`. |
-| Bonus balance | `bonus` | Loyalty/economy currency (profile "Ваши бонусы"). |
-| Subscriptions | (server-side) | Profile "Подписки". |
-
----
-
-### 7. Admin Actions Journaled *About* the Player (**17. Admin Audit Journal**)
-
-The `logs` page is the accountability trail — "who did what, on which server, when." Row entity (`t1` logs ⋈ `t2` admin): `serverName`, `name` (acting admin), `date`, `log` (free-text action string).
-
-| Property | Value | Competitive note |
-|---|---|---|
-| Structure | **Free-text `log` string**, substring-searchable (`t1.log`) | Not a normalized `{action_type,target,params}` schema — cannot reliably answer "all *bans* by admin X this week" (17 §8). |
-| Player linkage | `<hashtag>` tokens inside `log` → `player.open()` | Drill-down into the modal from any journal line. |
-| Sorting | Disabled (no `order` config) | Easy to beat. |
-| Retention | No client-visible cap; unbounded pagination, `numrows=100` | Server-side policy not observable. |
-
-**Which actions get journaled:** the audit captures panel-side admin operations (bans, kicks, group changes, etc.). Note the journal records the *action*, while the player-facing consequence is separately stored — e.g. a ban lands in `player.bans[]` *and* an entry appears in `logs`. Admin comments are separately author-stamped in `player_comment` (**08** §6), and message-to-card logging (`message` with `log=true`, **02** §5.1) writes an in-game warning permanently onto the player's card. So there are effectively **three overlapping audit trails**: the `logs` journal, the author-attributed `bans[]`/`comments`, and opt-in message-card records.
+| Full identity + moderation entity | `player.info` | `player`→`get {steam_id}` | fat object §1.1 | 03 |
+| Kills log | `playerKills` | `table`→`playerKills` [modal/global] | date=unix; weapon | 13 |
+| Deaths log | `playerDeath` | `table`→`playerDeath` | no 2nd party | 13 |
+| Revives log | `playerRevive` | `table`→`playerRevive` | no weapon | 13 |
+| Damage log (+magnitude) | `playerDamage` | `table`→`playerDamage` | `damage` hidden on global grid | 13 |
+| Teamkills log | `playerTeamkill` | `table`→`playerTeamkill` | HTML-rendered, `numrows:100`, passive | 13 |
+| Vehicle log | `playerVehicle` | `table`→`playerVehicle` | modal-only | 03 |
+| Chat log | `playerChat` | `table`→`playerChat` | modal `numrows:20` / global `300`; obscenity-flagged | 02 |
+| Warns | `playerWarn` | `table`→`playerWarn` | list mode | 03 |
+| Kits used (count) | `playerKits` | `table`→`playerKits` | `{kit,cnt}` | 03 |
+| Squad history | `playerSquad` | `table`→`playerSquad` | modal-only | 03 |
+| Games / matches | `playerGames` | `table`→`playerGames` | + profile "Матчи" → `/game/<id>` | 03/04 |
+| Kit-denial state | per-kit `{kit:bool}` | `player`→`kits` / `kitSave` | write | 03 |
+| Admin comments | `playerComments` | `table`→`playerComments` + `player`→`getComments`/`addComment` | **UUID** id; author-stamped, append-only | 08 |
+| Suspicion mark | `playerMark` | `table`→`playerMark` + `player`→`mark` | **UUID** id; single enum, `create_date` but no author | 08 |
+| Bans / punishment history | `banPlayers` / `player.info.bans[]` | `table`→`banPlayers` [global] + `player`→`get` | Steam64 id; `admin_id`, `impact`, `unban` | 09 |
+| Active ban | `player.info.ban` | `player`→`get` | red banner | 09 |
+| Cross-project bans | remote federation | `player`→`checkBans` | `expire=="0"`=perm | 09 |
+| Twins / alts (shared-IP) | derived | `player`→`twink` | `perm`, `min_date`, `ips[]` | 03 |
+| Steam-friend edge | derived | `player`→`findFriends {steam_id,compare_steam_id}` | `in_friend:bool` | 03 |
+| Co-presence overlay | derived | `player`→`twinkOnline {…,start,end}` | calendar | 03 |
+| IP + geo history | `location[]` | `player`→`get` | raw IP, tz, lat/lng | 03 |
+| Primetime / sessions / playtime | `primetime[]`, `playtime`, `getPlayerOnlineData` | `player`→`get` / `getPlayerOnlineData {steam_id,start,end}` | 3-series chart | 03 |
+| Per-season aggregate stats | `player_stat[steam_id,season]` | SSR `GET /player/<id>?season=` | 0 XHR; back to 2016 | 04 |
+| Per-weapon / per-kit / vehicle stats | server-side | SSR profile | inline Chart.js arrays | 04 |
+| Privilege group / VIP / prefix | `player.group`, `group_id`, `expire` | `player`→`get` / `changeGroup`; `clan`→`vipPlayer` | Steam64 id | 03/06 |
+| Clan membership | `clans[]` | `player`→`get` | → `/clan.php?id=` | 03/18 |
+| Bonus / subscriptions | `bonus` / server-side | `player`→`get` / SSR profile | economy | 03/04 |
+| Votes initiated | `votes` | `table`→`votes` | initiator only; no per-voter store | 14 |
+| Reports against player | `reports` | `table`→`reports` | target only; **reporter not surfaced** | 14 |
+| Admin actions journaled | `logs` | `table`→`logs` | **UUID** id unrendered; free-text `log` | 17 |
 
 ---
 
-### 8. Retention & Time Horizon
+### 11. Retention, Gaps & Competitive Takeaways
 
-| Dimension | Horizon | Source |
-|---|---|---|
-| Stat seasons | Back to **2016** (Сезон 0 pre-ICO 2016→2023; С1 UE4 2023→2025; С2 UE5 2025→present; "Все сезоны" rollup) | 04 §2.8 — effectively permanent, sliced by game-version boundaries |
-| Combat logs | Date-range filters default to `allTime`; presets down to `last30days` | 13 §13.4 |
-| Chat archive | `allTime` default range | 02 §3 |
-| Bans | Full project-wide archive; permanent bans (`expire=0`) never expire | 09 |
-| Audit journal | Unbounded (no visible cap) | 17 §8 |
-| Comments | Append-only, immutable, unbounded | 08 §7 |
+**Retention horizon:** stat seasons reach back to **2016** (С0 pre-ICO 2016→2023 · С1 UE4 2023→2025 · С2 UE5 2025→present · "Все сезоны" rollup, 04 §2.8); combat/chat default to `allTime`; bans/comments/audit unbounded (no client-visible cap). Long per-player history is the headline feature; the season model is its retrieval index.
 
-**Long-horizon per-player history (back to 2016) is a headline competitive feature** (04 §7). The season model is the retrieval index over that history.
+**Identity-migration gap (LIVE):** `steam_id` is a `str(17)` SteamID64 on combat/chat/ban tables but a `str(36)` UUID on comment/mark/audit tables — a competitor must model identity as an opaque token with a per-table wire type until the `6a7b3b3` migration completes, and note the audit log even carries a UUID it never renders while drilling down via a SteamID64 baked into prose.
 
----
+**Known gaps to beat:**
+1. **Damage magnitude hidden** on the global `damages` grid (`damage` in row, out of `collum`) — surface + sort.
+2. **Teamkills passive** — no per-player TK tally / forgive / auto-action.
+3. **Marks not author-attributed** — `create_date` (when) but no who / no history; only one mark per player despite a multi-select *filter*; no "unmarked" filter.
+4. **Comments immutable & 256-char single-line**; body double-escaped (`&amp;quot;`) round-trip.
+5. **Audit `log` is free-text** — not `{actor, action_enum, target+id, before/after, server_id, ts}`; can't reliably answer "all bans by admin X this week"; no column sorting (`order:[]`).
+6. **Reports hide the reporter** and have no lifecycle/resolution state (14).
+7. **Raw SQL aliases leak** to the client (`data-search="t1.date"`, `t2.player`, `t5.player`) — maintenance smell + mild info-leak.
+8. **Heavy PII retention** (raw IPs, timezones, map per player) — differentiator and compliance surface.
 
-### 9. Retrieval Mechanics Summary
-
-Two transports serve the entire dossier:
-
-| Transport | Call | Returns | Used for |
-|---|---|---|---|
-| **Player RPC** | `Action({script:'player', action:'get', data:{steam_id}})` → `POST /ajax/player.php` | the fat `player.info` object (identity, location, primetime, playtime, group, ban, bans[], stats, clans, discord, vac) | modal header + banners, one round-trip |
-| **Table RPC** | `Action({script:'table', action:'<tableName>', data:'&table=…&page=&numrows=&search=<json>&order_by=&order_sort=&steam_id=<id>'})` → `POST /ajax/table.php` | paginated row sets | every sub-tab (`playerChat/Kills/Death/Revive/Damage/Teamkill/Vehicle/Games/Squad/Kits/Warn`) and every global page grid |
-
-- The modal loads `player.info` once, then **lazily** fires a `table` call per sub-tab as it is opened, each with `&steam_id=<id>` appended and small `numrows` (10–20). Global pages fire the same `table` action without `steam_id`, with large `numrows` (100–500) and full filter sidebars.
-- Twink/friends/checkBans/getPlayerOnlineData are extra `player`-script derivations, not table calls.
-- Session expiry (`auth:true`) forces `location.reload()` on any call.
-
----
-
-### 10. Coverage Matrix — Task Checklist vs. Storage Location
-
-Every item the task asked to confirm, and where it lives.
-
-| Requested datum | Stored? | Where retrieved | Chapter |
-|---|---|---|---|
-| SteamID / EOS / Discord / UUID | ✅ | modal header, `player.info` | 03; repo `6a7b3b3` |
-| Name history / aliases | ✅ | `names[]`, `with_other_names` search | 03 |
-| Twins / alts (shared-IP) | ✅ | `twink` modal | 03 §4.3 |
-| Steam friends edge | ✅ | `findFriends` | 03 §4.2 |
-| IP history | ✅ | `location[].ip` | 03 §3 |
-| Sessions / total & period playtime | ✅ | `playtime`, `getPlayerOnlineData` | 03 §4 |
-| Per-map stats / matches | ✅ | `playerGames`, profile Матчи | 03; 04 |
-| Per-role / kit stats | ✅ | `playerKits`, profile Киты | 03; 04 |
-| Kills / deaths / K-D | ✅ | combat logs + stat cards | 13; 04 |
-| Revives | ✅ | `playerRevive` | 13 |
-| Damage dealt | ✅ | `playerDamage` (magnitude in modal tab) | 13 |
-| Teamkills | ✅ | `playerTeamkill` (passive log) | 13 |
-| Kits used / kit-denial | ✅ | `playerKits` / `kits`+`kitSave` | 03; 04 |
-| Chat log | ✅ | `playerChat` | 02 |
-| Votes cast (initiated) | ✅ | `votes` (initiator) | 14 |
-| Reports by/against | ⚠️ | `reports` (target only; **reporter not surfaced**) | 14 |
-| Bans & mutes history + reasons/admins | ✅ | `bans[]`, `bans` page (`t3` admin) | 09 |
-| Admin comments / notes | ✅ | `player_comment` (author-stamped) | 08 |
-| Suspect marks | ⚠️ | `player_mark` (single enum, **no mark-author audit**) | 08 |
-| Clan membership | ✅ | `clans[]` | 03; 18 |
-| VIP status | ✅ | group 3 + `expire`, `vips` page | 03; 04; 06 |
-| Admin actions journaled on player | ✅ | `logs` (free-text, unstructured) | 17 |
-
----
-
-### 11. Competitive Takeaways (dossier-level)
-
-1. **One universal card, everywhere.** The `player.info` dossier opens identically from chat, kills, bans, votes, reports, logs, clans — no context switch. Muscle memory + tight report→enforce loop.
-2. **Deepest identity graph in class.** SteamID64 + EOS + Discord + VAC + Steam hours + IP/geo history + nick history + primetime + alts + Steam-friends + clan + economy on one screen.
-3. **Alt-hunting suite** (shared-IP timeline + Steam-friends + co-presence calendar) is the standout forensic feature.
-4. **Cross-project ban federation** (`checkBans`) is a network-effect moat.
-5. **Progressive-ban policy-as-data** (`data-first/second/third/four` per rule) auto-recommends duration by prior `impact` bans.
-6. **2016→present season retention** — very long per-player history, indexed by game-version seasons.
-7. **Author accountability is uneven** — bans and comments are admin-attributed and the `logs` journal exists, but **marks have no author/history audit** and the journal is **free-text (unstructured)**. Normalizing the audit schema and adding mark-author/history are clear differentiators.
-8. **Known gaps to beat:** damage magnitude hidden on the global grid; teamkills a passive log (no TK tally/forgive/auto-action); reports have no lifecycle and hide the reporter; one mark per player despite a multi-select *filter*; raw SQL aliases (`t1.player` etc.) leak into client `data-search`; PII (raw IPs) retained heavily.
+**Strengths to match/beat:** one universal card opened identically from every page; the deepest identity graph in class (SteamID64+EOS+Discord+VAC+Steam hours+IP/geo+nick history+primetime+alts+friends+clan+economy on one screen); the shared-IP+friends+co-presence alt-hunting suite; cross-project ban federation (network-effect moat); progressive-ban policy-as-data (`data-first/second/third/four`); split count/data queries with per-response telemetry for multi-million-row tables.
 
 
 ---
 
-## Complete Action / RPC / RCON Catalog (Synthesis)
+## Complete Action / RPC / RCON Catalog
 
-> Cross-cutting synthesis of every server-side capability SQSTAT (`breaking.sqstat.ru`) exposes to a logged-in admin. This chapter is the **union** of the per-section chapters — it consolidates the ~85 distinct `action` ids scattered across 28 page fragments into one authoritative reference. It is the panel's full **permission surface**: every row is a POST an authenticated session can issue.
+> Cross-cutting API reference for every server-side capability SQSTAT (`breaking.sqstat.ru`) exposes to a logged-in admin. This chapter is the **union** of the per-section chapters — it consolidates the ~90 distinct `action` ids scattered across 28 page fragments into one authoritative, buildable contract table. It is the panel's full **permission surface**: every row is a POST an authenticated session can issue.
+>
+> **Provenance & method.** Every contract below is tagged **[LIVE]** (observed in a read-only headless-browser capture — the app's own auto-load AJAX, recorded verbatim: request body + response schema) or **[SOURCE]** (read from the page fragment / `custom.js`; fires only on a user gesture, so the read-only capturer never triggered it). The capturer runs a network interceptor that **aborts every mutating Action** — across all 16 capture groups `_blocked.json == []`, i.e. **zero mutations were fired** and none needed aborting (the auto-load surface is pure reads). All request bodies and JSON schemas cite files under `caps/<group>/<page>.network.json`.
 
-### 1. How the RPC layer works
+---
 
-Every mutation and most reads go through a single JS helper defined in `custom.js`:
+### 1. How the RPC layer works (from `custom.js`)
+
+Every mutation and most reads go through one JS helper (`custom.js` lines 284–396):
 
 ```js
-Action({ script: '<script>', action: '<action>', data: {…} })
+Action({ script:'<script>', action:'<action>', data:{…} })
   → POST /ajax/<script>.php
-     body: action=<action>&<k1>=<v1>&<k2>=<v2>…
+     body: &<k1>=<v1>&<k2>=<v2>… + "action=<action>"
 ```
 
-Key mechanics extracted from the helper:
+| Mechanic | Detail (line ref) |
+|---|---|
+| **Endpoint = `script`** | Exactly **six** PHP endpoints exist: `public`, `player`, `squad`, `clan`, `settings`, and the DataTables-only `table`. `url:'/ajax/'+script+'.php'`, `type:'POST'` (line 327–329). The `action` id selects behaviour inside the endpoint; the endpoint is a coarse router. |
+| **Response envelope** | JSON `{status, msg, auth, exec_time, …}`. Success gate: `text.status == 'ok'` → `success(text)`; `text.auth === true` → `location.reload()` (session expiry); else `error(text.msg)` → `addAlert(msg,'exclamation-triangle')` (lines 333–341). |
+| **Three data encodings** | `FormData` → appends `action`, `contentType:false` (multipart uploads). Plain object → `$.map(data,(v,i)=>'&'+i+'='+v).join('')` then `+=action` — **NO URL-encoding**; callers must `encodeURIComponent` any value containing `&`/`=`/space (map layer, rotation body, RCON command, broadcast) (lines 313–324). String → `"action="+action+data`. |
+| **Bulk/file exports bypass `Action()`** | `post_to_url('/ajax/<script>.php', {action:'download…', …})` builds a hidden `<form target=_blank>` and submits it — a full-page POST that streams a file (lines 1798–1817). Used by `downloadStat`, `downloadList`, `downloadOnline`. |
+| **Abort/retry flags** | `retryAbort:true` aborts any in-flight request of the same `name` before firing (line 309); `pageAbort:true` cancels on navigation; `connectCheck:true` shows "Проверьте подключение к интернету!" when offline (line 344). |
+| **`script:'table'`** | The DataTables server-side processing endpoint — a distinct read contract (§6), driven by `$.fn.buildTable` (lines 605–1105), not the mutation `Action()` path. |
 
-- **Endpoint = `script`.** Only six PHP endpoints exist: `public`, `player`, `squad`, `clan`, `settings`, and the DataTables-only `table`. The `action` id is what actually selects behaviour inside each endpoint; the endpoint is just a coarse router.
-- **Envelope.** Responses are JSON with `{status:'ok'|…, msg, auth}`. A response carrying `auth:true` triggers `location.reload()` (session expiry). Otherwise `text.status=='ok'` runs the success callback; anything else surfaces `msg` via `addAlert()`.
-- **Two data encodings.** Most calls pass a `data:{}` object (jQuery serialises it to `&k=v`); a handful of RCON-facing calls hand-build the query string (e.g. `data: '&server_id='+id+'&steam_id='+sid`). Both reach PHP identically as URL-encoded POST fields.
-- **Bulk/file exports bypass `Action()`** and use `post_to_url('/ajax/<script>.php', {action:'download…', …})` to force a full-page POST that streams a file download.
-- **`script:'table'`** is the DataTables server-side processing endpoint (row data for every grid). It is not an `action` in the mutation sense and is covered per-page, not here.
+Because the shared **player-detail modal** (Chat/Kills/Deaths/Kits/Games/Comments tabs) is embedded into *every* page fragment, its ~22 actions appear in `action_catalog.txt` under all 20+ pages. They are listed **once** here under **player-mod** (§7), not duplicated per page.
 
-Because the shared **player-detail modal** (Chat/Kills/Deaths/Kits/Games/Comments tabs) is embedded into *every* page fragment, its ~22 actions appear in the ground-truth catalog under all 20+ pages. Those are listed **once** here under *player-mod*, not duplicated per page — see §4 for the "everywhere" invocation note.
+---
 
-### 2. Endpoint → category map (at a glance)
+### 2. Endpoint → category map
 
 | Endpoint (`/ajax/*.php`) | Primary role | Categories served |
 |---|---|---|
-| `public.php` | Unauthenticated / session bootstrap + public reads | auth, video (upload), map calendar |
-| `player.php` | Player database & annotations (non-RCON) | player-mod (DB side), stats read, user settings |
-| `squad.php` | Live-server RCON + server ops + seeding + statistics + issues | RCON, player-mod (RCON side), stats, seeding, issues, video token |
+| `public.php` | Unauthenticated / session bootstrap + public reads | auth, map calendar, video upload |
+| `player.php` | Player database & annotations (non-RCON) | player-mod (DB side), user settings |
+| `squad.php` | Live-server RCON + process control + config + seeding + statistics + issues + video token | RCON, player-mod (RCON side), server-config, stats, seeding, issues, video |
 | `clan.php` | Clan/community roster & config | clan, VIP |
-| `settings.php` | Per-server settings form | server-config |
-| `table.php` | DataTables row feeds (per page) | — (not an RPC action) |
+| `settings.php` | Per-server settings form (bulk save) | server-config |
+| `table.php` | DataTables row feeds (per page) | reads only — see §6 |
 
-The most sensitive observation for a competitor: **`squad.php` is a single endpoint that fronts raw RCON, process control (start/stop/restart/update), config file writes, seeding, and statistics.** One permission bit gating `squad.php` would be catastrophically coarse; SQSTAT must gate per-`action` server-side (not observable from the client, but implied by the group system in [05. Admins & Permissions](05-admins-permissions.md)).
+> **The single most sensitive observation:** `squad.php` alone fronts raw RCON, process control (start/stop/restart/update), config-file writes, seeding, statistics, and issues. One permission bit gating `squad.php` would be catastrophically coarse — authorization **must** be per-`action`, server-side.
+
+---
 
 ### 3. Category totals
 
-| Category | # actions | Endpoint(s) | Destructive actions present? |
+| Category | # actions | Endpoint(s) | Destructive present? |
 |---|---:|---|---|
-| player-mod | 23 | `player`, `squad` | Yes (ban/kick/kill/unban/removePlayer) |
-| RCON | 22 | `squad` | Yes (start/stop/restart/update/blockIP/disband) |
-| server-config | 17 | `squad`, `settings` | Yes (saveConfigFile/setRotation/installMod/deleteMod/setServerSettings) |
-| clan | 10 | `clan`, `player` | Yes (delete/setting/addPlayer) |
+| player-mod | 23 | `player`, `squad` | Yes (ban/kick/kill/unban/removePlayer/changeGroup/addBanName) |
+| RCON / process | 22 | `squad` | Yes (start/stop/restart/update/blockIP/disband/rconRaw) |
+| server-config | 15 | `squad`, `settings` | Yes (saveConfigFile/setRotation/installMod/deleteMod/setServerSettings/reloadConfig) |
+| clan | 10 | `clan`, `squad`, `player` | Yes (delete/setting/addPlayer/changeExpire/createSquad) |
 | VIP | 1 | `clan` | Yes (vipPlayer) |
 | stats | 6 | `squad`, `public` | No (read-only analytics) |
 | seeding | 5 | `squad` | Yes (seedingSetPriority/seedingSetServer) |
-| video | 2 | `public`, `squad` | Yes (uploadVideo) |
+| video | 2 | `squad`, `public` | Yes (uploadVideo) |
 | issues | 2 | `squad` | Yes (issues_create) |
 | auth | 1 | `public` | Yes (session) |
-| misc | 1 | `player` | No |
+| user-settings | 1 | `player` | No |
+| **DataTables feeds** | 19 tables | `table` | No (reads) |
 
-Grand total: **~85 distinct action ids** across 6 endpoints.
-
----
-
-### 4. player-mod — player moderation & annotation (23 actions)
-
-Invoked from the **shared player-detail modal** and its ban/kick/message sub-modals, which are embedded in *every* page (`players.html`, `bans.html`, `chat.html`, `admins.html`, `vips.html`, `kills.html`, `deaths.html`, `damages.html`, `teamkills.html`, `revives.html`, `votes.html`, `reports.html`, `comments.html`, `mark.html`, `logs.html`, `top.html`, `collabans.html`, `playersOnline.html`, `clan_16.html`, `main.html`). Cross-ref: [03. Players](03-players.md), [08. Notes & Suspects](08-notes-suspects.md), [09. Bans](09-bans.md).
-
-Split by endpoint: **DB/annotation actions → `player.php`**; **actions that must reach the live game server → `squad.php`** (RCON-backed).
-
-| Action id | Endpoint | Data params | Effect | Destructive |
-|---|---|---|---|:--:|
-| `ban` | squad | `server_id?`, `steam_id`, `reason_id`, `description`, `days` | Ban player (permanent when days=0); if online, RCON-kicks from `server_id` | **Yes** |
-| `kick` | squad | `steam_id`, `reason_id`, `description`, `noReason` | RCON-kick from live server (with/without reason string) | **Yes** |
-| `kill` | squad | `server_id`, `steam_id` | RCON-kill the player's current pawn (soft punish) | **Yes** |
-| `unban` | squad | `steam_id` (+ ban ref) | Lift an existing ban | **Yes** |
-| `changeTeam` | squad | `server_id`, `steam_id` | Force-swap player's team via RCON | **Yes** |
-| `removePlayer` | squad | `server_id`, `steam_id` | Remove/kick player from server roster | **Yes** |
-| `message` | player | `steam_id`, `time`, `msg`, `log` | Send in-game warn/message to player; optionally log it | No |
-| `changeGroup` | player | `steam_id`, `date`, `group_id`, `description`, `prefix`, `prefix_rgb`, `image` | Assign admin/VIP group + cosmetic prefix/color/icon, with expiry | **Yes** |
-| `mark` | player | `steam_id`, `mark` | Flag/annotate player (suspect marker) | No |
-| `addComment` | player | `steam_id`, `text` | Attach an internal note to the player | No |
-| `getComments` | player | `steam_id` | Read player's internal notes | No |
-| `checkBans` | player | `steam_id` | Cross-check player (and linked accounts) against ban DBs | No |
-| `findFriends` | player | `steam_id`, `compare_steam_id` | Compare Steam friend graphs (alt/twink detection) | No |
-| `twink` | player | `steam_id` | List shared-IP / linked accounts (twinks) | No |
-| `twinkOnline` | player | `steam_id`, `compare_steam_id`, `start`, `end` | Overlay two accounts' online sessions to prove co-play | No |
-| `addBanName` | player | `name` | Add player's nick to the banned-names blocklist | **Yes** |
-| `removeBanName` | player | `name` | Remove nick from banned-names blocklist | No |
-| `kits` | player | `steam_id` | Read the player's kit history | No |
-| `kitSave` | player | `steam_id`, `kits` | Persist edited kit assignment for the player | No |
-| `get` | player | `steam_id` | Load full player profile into the modal | No |
-| `add` | player | `steam_id` | Register/import a player record by SteamID | No |
-| `getPlayerOnlineData` | player | `steam_id`, `start`, `end` | Fetch online-time series for the profile chart | No |
-| `downloadStat` | player | `steam_id` (via `post_to_url`) | Export the player's stat sheet as a file | No |
+Grand total: **~90 distinct action/table ids** across 6 endpoints.
 
 ---
 
-### 5. RCON — live server & process control (22 actions)
+### 4. LIVE-captured RPC contracts (auto-loaded reads)
 
-All on `squad.php`, invoked from the **Server Dashboard** (`main.html`). Cross-ref: [01. Server Dashboard & RCON Control](01-dashboard.md). These are the operator's live levers on a running Squad server.
+Seven non-`table` RPC contracts fired automatically during capture and are recorded verbatim. Everything else in §7–§16 is **[SOURCE]** (interaction-triggered).
 
-| Action id | Data params | Effect | Destructive |
-|---|---|---|:--:|
-| `rconRaw` | `server_id`, `command` | **Send an arbitrary raw RCON command** to the server (free-text console) | **Yes** |
-| `start` | `server_id` | Start the game server process | **Yes** |
-| `stop` | `server_id` | Stop the game server process | **Yes** |
-| `restart` | `server_id` | Restart the game server | **Yes** |
-| `update` | `server_id`, `afterMapChange` | Trigger game update (optionally deferred to next map change) | **Yes** |
-| `rconRestart` | `server_id` | Restart the RCON bridge/connection | **Yes** |
-| `parserRestart` | `server_id` | Restart the log parser worker | **Yes** |
-| `cacherRestart` | `server_id` | Restart the cache worker | **Yes** |
-| `botUpdate` | — | Update the backend bot/agent | **Yes** |
-| `broadcast` | `server_id`, `msg` | Server-wide in-game broadcast | No |
-| `squadMessage` | `server_id`, `team`, `squad`, `time`, `msg` | Send a message to a specific squad | No |
-| `changeMap` | `server_id`, `next`, `map`, `vote` | Set current or next map (optionally via vote) | **Yes** |
-| `clearNext` | `server_id` | Clear the queued "next map" | No |
-| `disband` | `server_id`, `team`, `squad` | Disband a squad | **Yes** |
-| `rename` | `server_id`, `team`, `squad` | Rename a squad | No |
-| `demote` | `server_id`, `steam_id` (squad leader) | Demote a squad leader | **Yes** |
-| `transfer` | `server_id`, `team`, `squad` | Move a squad between teams | **Yes** |
-| `blockIP` | `ip` | Block an IP at the network layer | **Yes** |
-| `network` | `server_id` | Read live network/IP map for the server | No |
-| `getServer` | `server_id`, `last_chat_id` | Poll live server state + incremental chat | No |
-| `getServerMaps` | `server_id` | List available maps/units for the server | No |
-| `setServerIP` | `server_id`, `ip` | Set/rebind the server's IP | **Yes** |
+#### 4.1 `auth` — session bootstrap **[SOURCE — custom.js 253–266]**
+
+| Attribute | Value |
+|---|---|
+| HTTP | `POST /ajax/public.php` |
+| Request | `tz` — string — Y — browser IANA timezone (`Intl.DateTimeFormat().resolvedOptions().timeZone`); `action=auth` |
+| Response | `{status, url?:string}` — `url` present ⇒ `window.location.href = url` (Steam OAuth redirect) |
+| Destructive | **Y** (starts a session) |
+
+Clears the `PHPSESSID` cookie before firing (lines 240–246).
+
+#### 4.2 `getServer` — live server-state poll **[LIVE]**
+
+Cite: `caps/dashboard/__server_id_1.network.json`. The only auto-load read on the dashboard; polled every **5000 ms** for the active tab. Full field spec in [01. Dashboard §2.1](01-dashboard.md).
+
+| Attribute | Value |
+|---|---|
+| HTTP | `POST /ajax/squad.php` |
+| Captured body | `&server_id=1&last_chat_id=false&action=getServer` |
+| `server_id` | int — Y — active server tab id |
+| `last_chat_id` | int \| `false` — Y — chat delta cursor; `false` = full tail, else highest `chat[].id` seen |
+
+Response root: `{status:"ok", exec_time:float, test:{getAdmin,queue,stat,post,chat:float}, server:{…}, you:str(17)\|false, servers:map<id,{players:int,admins:int,queue:int}>, ips:map<ip,str-count>, panelAdmins:[{name,steam_id,online}], global_online:int, is_sale:int(0/1), isSeeding:bool, discord:[]}`. The `server` object (live) carries `map`, `nextMap`, `players.active[]` (14 rows), `players.dis[]`, `squads[]` (7 rows), `teams[]`, `monitor[]` (60 hw samples), `chat[]`, `calculateOnline`, `stat.online` — see [01. Dashboard §2.1.1–2.1.5](01-dashboard.md) for the full nested spec.
+
+**Live `players.active[]` row:** `id, eos_id:str(32), steam_id:str(17), name, team:"1"|"2", squad:bool|id, leader:bool, kit:str(raw token), ip, playtime:{date,last_seen:int(ms)}, requests:{admins,report:bool}, isAdmin:bool, color:bool|hex, warning:bool, mark:int, baby:bool, vac:bool, location:{iso,country,city}`.
+
+#### 4.3 `clan.list` — roster + presence + Discord **[LIVE]**
+
+Cite: `caps/clans/clan_id_16.network.json`. Full spec in [18. Clans §2.2](18-clans.md).
+
+| Attribute | Value |
+|---|---|
+| HTTP | `POST /ajax/clan.php` |
+| Captured body | `&clan_id=16&action=list` |
+| `clan_id` | int — Y — clan PK |
+
+Response: `{access:int(0/1), servers:map<server_id, [Presence]>, discord:[{name,channel}], players:[Member](45 rows), status, exec_time}`.
+- **Member:** `steam_id:str(17), name, vip:"0"|"1", type:"0"|"1"|"2" (0=member/1=Глава leader/2=Зам deputy), date:str(unix-sec), discord:bool, vip_mode:int(0/1/2; 2=priority from another source, locked), access:bool (row-level remove right), online_raw:int(sec, sort key), online:str(HTML label), kit:str`.
+- **Presence** (in `servers[id]`): `name, team:str(faction code), playtime:{date,last_seen:int(**ms**)}`. Unit gotcha: roster `date` is **seconds**, presence `playtime.*` are **milliseconds**.
+
+#### 4.4 `clan.stats` — clan dashboard **[LIVE]**
+
+Cite: `caps/clans/clan_id_16.network.json`. Full spec in [18. Clans §2.3](18-clans.md).
+
+| Attribute | Value |
+|---|---|
+| HTTP | `POST /ajax/clan.php` |
+| Captured body | `&clan_id=16&start=undefined&end=undefined&action=stats` |
+| `clan_id` | int — Y | `start`/`end` | unix \| literal `"undefined"` — on first render they serialise to the string `"undefined"` (client bug); server defaults to last-60-days |
+
+Response: `{access:int, chart:{labels:[str(DD.MM.YYYY)]×60, online:[str]×60}, stats:{online:str, boost:str, server:str, primetime:[{start,end:str(unix), cnt,sum:int, sort:str(HH:mm)}], kill:int, die:int, revive:int, top:[{steam_id(17),name,kill,die,revive:str}]×10, games:[Game]×10}, status, exec_time}`. **Game:** `{id,server_id,start,end:str, map, t1,t2:str(faction), t1_tickets,t2_tickets:str, win:enum("t1"|"t2"|"draw"), is_seed:"0"|"1", name, cnt:str}`.
+
+#### 4.5 `statistics` — aggregate analytics dashboard **[LIVE]**
+
+Cite: `caps/games-stats/statistics.network.json`. Cross-ref [11. Statistics](11-statistics.md).
+
+| Attribute | Value |
+|---|---|
+| HTTP | `POST /ajax/squad.php` |
+| Captured body | `&start=1780560007&end=1783152007&servers=1,6,7,9,10,11&action=statistics` |
+| `start` / `end` | unix-sec — Y — window (captured = 30-day span) |
+| `servers` | CSV of server ids — Y — e.g. `1,6,7,9,10,11` |
+
+Response (captured top-level keys): `{test:{…8 timings}, days:[str(DD.MM.YYYY)]×31, online:map<server_id, map<date,str>>, max:map<server_id,map<date,str>>, admins:map<date,int>, maxAdmins:map<date,int>, chat:map<server_id,map<date,str>>, teamkill:map<server_id,map<date,str>>, queue:map<server_id,map<date,str>>, unique:[], kits:[], onlineHour:map<server_id,map<"HH:00",str>>, onlineDay:map<server_id,map<RU-weekday,str>>, games:map<server_id,map<date,str>>, kills/death/revival/wound/damage:map<server_id,map<date,str>>, modes:{AAS,Invasion,RAAS,Seed,Skirmish:int}, maps:map<mapName,int>, new:map<date,int>, bans:map<date,str>, hours:[str]×24, dayofweek:[str(RU-weekday)]×7, status, exec_time}`. A per-server × per-day matrix across ~15 metrics — the heaviest read in the product.
+
+#### 4.6 `issues_get` — issue tracker list **[LIVE]**
+
+Cite: `caps/issues-video/issues.network.json`. Cross-ref [15. Issues & Video](15-issues-video.md).
+
+| Attribute | Value |
+|---|---|
+| HTTP | `POST /ajax/squad.php` |
+| Captured body | `&state=open&page=1&action=issues_get` |
+| `state` | enum `open`\|`closed` — Y | `page` | int — Y — pagination |
+
+Response: `{test:{getAdmin:float}, issues:[{id:int, user:str, title:str, body:str, labels:[{id:int, name:str, color:str(hex), url:str}], create:int(unix), update:int(unix), state:str}]×20, status, exec_time}`. Redacted example: `{"id":56,"user":"Enj0y","title":"Human","body":"При выдаче бана…","labels":[{"id":1,"name":"…","color":"e11d21","url":""}],"create":1763650640,"update":1763650640,"state":"open"}` (backed by an external tracker, likely GitHub Issues — `labels`/`state`/`page`/hex colors).
+
+#### 4.7 `topPlayers` — LIVE server-error finding **[LIVE]**
+
+Cite: `caps/api-top/top.network.json`. The Top page's DataTables feed (`action=topPlayers`, §6) returned **`{status:"error", sql_error:[[…]], sql:"SELECT t1.steam_id, t2.type, t2.name…"}`** on capture — the endpoint **leaks the raw failing SQL query** into the JSON response (a real information-disclosure bug; a competitor must never echo SQL to the client). See [20. Top](20-top.md).
 
 ---
 
-### 6. server-config — configuration, rotation, mods, settings (17 actions)
+### 5. Reads fired only on user interaction (not auto-captured) **[SOURCE]**
 
-`squad.php` (config editor, mod manager, rotation) + `settings.php` (per-server settings form). Cross-ref: [16. Settings: Server Config, Rotation, Mods, Restarts](16-settings.md).
+These fire when a modal/panel opens; the read-only capturer performs no clicks, so shapes are read from `main.html` render code — **inferred**, not observed. Response shapes detailed in [16. Settings §16.4](16-settings.md) and [01. Dashboard §2.2](01-dashboard.md).
 
-| Action id | Endpoint | Data params | Effect | Destructive |
-|---|---|---|---|:--:|
-| `getConfigFiles` | squad | `server_id` | List editable config files/dirs | No |
-| `getConfigFile` | squad | `server_id`, `file`, `dir` | Read a config file into the editor | No |
-| `saveConfigFile` | squad | `server_id`, `text`, `file`, `dir` | **Overwrite a raw server config file** | **Yes** |
-| `getDefaultConfig` | squad | `file` | Load stock/default version of a config file | No |
-| `reloadConfig` | squad | `server_id` | Hot-reload config on the server | **Yes** |
-| `getRotation` | squad | `server_id` | Read current map rotation + map list | No |
-| `setRotation` | squad | `server_id`, `rotation`, `day` | **Overwrite the map rotation** (optionally per-day) | **Yes** |
-| `getMods` | squad | `server_id`, `only_status` | List installed Workshop mods / status | No |
-| `installMod` | squad | `server_id`, `mod_id`, `fix` | **Install a Workshop mod** on the server | **Yes** |
-| `deleteMod` | squad | `server_id`, `mod_id` | Remove a Workshop mod | **Yes** |
-| `getServerSettings` | settings | `server_id` | Load the server settings form | No |
-| `setServerSettings` | settings | full settings form body | **Persist server settings** (name, limits, flags…) | **Yes** |
-| `serverMonitor` | squad | `start`, `end`, `server_id` | Read server health/monitor time series | No |
-| `serverOnline` | squad | `start`, `end`, `server_id` | Read online-count history | No |
-| `serverOnlineAdmins` | squad | `day`, `server_id` | Read admin-presence for a day | No |
-| `serverOnlineBooster` | squad | `day`, `server_id` | Read booster-presence for a day | No |
-| `setServerIP` *(also RCON)* | squad | `server_id`, `ip` | Listed under RCON §5; provisioning-adjacent | **Yes** |
-
----
-
-### 7. clan — community/clan roster & config (10 actions)
-
-`clan.php` (roster) + one `squad.php` creator + `player.php` export. Cross-ref: [18. Clan Management](18-clans.md), [04. Player Profile](04-player-profile.md) (create-squad entry point).
-
-| Action id | Endpoint | Data params | Effect | Destructive |
-|---|---|---|---|:--:|
-| `list` | clan | `clan_id` | List clan members (nick, kit, discord, joined) | No |
-| `findPlayer` | clan | `clan_id`, `find` | Search players to add to the clan | No |
-| `addPlayer` | clan | `clan_id`, `steam_id`, `type` | Add a player to the clan (role via `type`) | **Yes** |
-| `stats` | clan | `clan_id`, `start`, `end` | Clan online/boost/primetime analytics | No |
-| `setting` | clan | `clan_id`, `key`, `value` | Change a single clan setting (key/value) | **Yes** |
-| `changeExpire` | clan | `clan_id`, `date` | Change the clan's expiry date | **Yes** |
-| `delete` | clan | `clan_id` | **Delete the clan** (redirects to `/`) | **Yes** |
-| `createSquad` | squad | `id`, `name`, `expire`, `max`, `discord_id`, `tags` | Create a new clan/community | **Yes** |
-| `downloadList` | clan | `clan_id` (via `post_to_url`) | Export clan roster file | No |
-| `downloadOnline` | clan | `clan_id`, dates (via `post_to_url`) | Export clan online-history file | No |
-
----
-
-### 8. VIP (1 action)
-
-Cross-ref: [06. VIPs](06-vips.md), [18. Clan Management](18-clans.md). Note: `vips.html` itself only hosts the shared player modal + a search UI; the toggle that actually grants VIP lives in the clan roster view. VIP expiry more broadly rides on the player-mod `changeGroup` action (§4).
-
-| Action id | Endpoint | Data params | Effect | Destructive |
-|---|---|---|---|:--:|
-| `vipPlayer` | clan | `clan_id`, `steam_id`, `vip` (bool) | Toggle VIP slot for a clan member | **Yes** |
-
----
-
-### 9. stats — read-only analytics (6 actions)
-
-Analytics reads (no state change). Cross-ref: [11. Statistics](11-statistics.md), [12. Games](12-games.md), [20. Top](20-top.md).
-
-| Action id | Endpoint | Data params | Effect |
+| Action | Script | Params | Returns (inferred) |
 |---|---|---|---|
-| `statistics` | squad | `start`, `end`, `servers` | Aggregate statistics dashboard data |
-| `mapCalendar` | public | `start`, `end`, `server_id` | Map-history calendar events |
-| `serverMonitor` *(also §6)* | squad | `start`, `end`, `server_id` | Health time series |
-| `serverOnline` *(also §6)* | squad | `start`, `end`, `server_id` | Online-count history |
-| `serverOnlineAdmins` *(also §6)* | squad | `day`, `server_id` | Admin presence |
-| `serverOnlineBooster` *(also §6)* | squad | `day`, `server_id` | Booster presence |
+| `getRotation` | squad | `server_id:int` | `{rotation:{lists:{default,"1".."7"}, current:int, isWin:bool}, list:map<layer,{teams}>, canEdit:bool}` |
+| `getServerMaps` | squad | `server_id:int` | `{maps[], units[]}` map/faction/unit picker catalog |
+| `serverMonitor` | squad | `start,end:unix, server_id:int` | mem / network_send·receive / disk_read·write / tps / network_connections series |
+| `serverOnline` | squad | `start,end:unix, server_id:int` | `{players[],admins[],queue[],days[],maps{}}` |
+| `serverOnlineAdmins` | squad | `day, server_id:int` | `{events,resources}` per-admin presence timeline |
+| `serverOnlineBooster` | squad | `day, server_id:int` | `{events,resources}` booster timeline |
+| `network` | squad | `server_id:int` | `{network:{ips:map<ip,{conn[],country,city}>, sockets[]}}` |
+| `mapCalendar` | **public** | `server_id:int, start,end:unix` | `{maps:[…events]}` played-layer calendar |
+| `getConfigFiles` | squad | `server_id:int` | `{files:map<dir,{files:[{name,date:unix-ms,symlin:bool}]}>}` |
+| `getConfigFile` | squad | `server_id:int, file, dir:str` | `{text:str, hasDefault:bool}` |
+| `getDefaultConfig` | squad | `file:str` *(no server_id)* | `{text:str}` |
+| `getMods` | squad | `server_id:int, only_status:bool` | `{mods:[{publishedfileid,…}], mod_status:{…}}` |
+| `getServerSettings` | settings | `server_id:int` | `{server:{…data-input fields…}}` |
+| `getComments` | player | `steam_id` | player's internal notes |
+| `checkBans` / `findFriends` / `twink` / `twinkOnline` / `kits` / `get` / `getPlayerOnlineData` | player | see §7 | player-modal reads |
+| `seedingGetCalendar` / `seedingGetPriority` | squad | see §13 | seeding reads |
 
 ---
 
-### 10. seeding — seeding scheduler & priority (5 actions)
+### 6. DataTables feeds — `script:'table'` (all **[LIVE]**)
 
-All `squad.php`, invoked from `player_profile.html` seed-helper. Cross-ref: [04. Player Profile](04-player-profile.md).
+Every grid POSTs to `/ajax/table.php`. Common request shape (from `$.fn.buildTable`, `custom.js` 1092–1099):
 
-| Action id | Data params | Effect | Destructive |
-|---|---|---|:--:|
-| `seeding` | `start`, `isMobile`, `tab_id` | Start/join the live seeding session view | No |
-| `seedingGetCalendar` | `start`, `end` | Read seeding calendar events (+ `canServerAction`) | No |
-| `seedingGetPriority` | `start` | Read the seeding priority list for a day | No |
-| `seedingSetPriority` | `start`, `data`, `min_players`, `use_unattached` | **Write** the seeding priority order/rules | **Yes** |
-| `seedingSetServer` | `server_id` | Set the admin's seeding target server | **Yes** |
+```
+POST /ajax/table.php
+action=<table>&table=<table>&page=<n>&numrows=<size>
+  &search=<URI-encoded JSON>&order_by=<false|db-alias>&order_sort=<false|asc|desc>
+  [&pagination=true]        ← second call: returns only {totalPage,totalRows,count_time}
+```
+
+`search` JSON envelope: `{"text":{},"check":{},"multiselect":{},"managers":{},"slider":{}}` — each search input contributes to a bucket keyed by its `data-search` DB-alias (text/hidden→`text`, checkbox→`check`, multiselect→`multiselect`, managers→`managers`, range→`slider`, daterange→`text.<alias>.startdate`/`.enddate`). Data response: `{data:{totalPage:int, totalRows:int, currentPage:str, row:[…], custom:bool, query_time, count_time}, status:"ok", exec_time}`.
+
+| Table id (`action=`/`table=`) | Page | `numrows` | Auto-applied search filter (captured) | Row schema (captured `data.row[]` fields) |
+|---|---|---:|---|---|
+| `allPlayers` | players | 100 | `check.with_other_names=false`, `check.full_match=false` | `steam_id:str(36 UUID)`, `eos_id:str(32)`, `name`, `date:unix`, `create_date:unix`, `mark:str`, `bonus:str`, `discord:null`, `expire:str`, `group_id:str` |
+| `adminPlayers` | admins | 50 | `text.custom.period.startdate/enddate` (unix) | `steam_id:str(36)`, `group_id`, `expire`, `description`, `prefix`, `prefix_rgb`, `image`, `name`, `date:unix`, `color:hex`, `icon`, `discord`, `bans`, `online:{online,boost,queue,server}`, `group:str(HTML)`, `time`, `boost` |
+| `vipPlayers` | vips | 50 | — | `steam_id:str(36)`, `group_id`, `expire`, `description`, `prefix:null`, `prefix_rgb:null`, `image:null`, `name`, `date:unix`, `color:hex`, `icon`, `vipdesc`, `online:{…}`, `group`, `time` |
+| `banPlayers` | bans | 100 | `check.permanent=false` | `id`, `steam_id:str(36)`, `date:unix`, `reason`, `description`, `admin_id:str(17)`, `expire:str(HTML badge)`, `unban:"0"|"1"`, `name` |
+| `ban_names` | bannames | 100 | — | `name`, `date:unix`, `button:int` |
+| `collabans` | collabans | 100 | — | `name`, `steam_id:str(17)`, `projects:[{name,date:unix,reason,admin_name,expire,cnt}]` |
+| `playersOnline` | playersOnline | 100 | `text.custom.period.startdate/enddate` (unix, today) | `steam_id:str(17)`, `name`, `online`, `boost`, `queue`, then per-kit seconds: `SL,CMD,Rifleman,Medic,LAT,MachineGunner,Marksman,Engineer,Pilot,Crewman` |
+| `playerKills` | kills | 500 | `text.t1.date.startdate/enddate` (0=all) | `id`, `steam_id:str(17)`, `victim_steam_id:str(17)`, `game_id`, `date:unix`, `weapon`, `kit`, `player_name`, `server_id`, `map`, `name`, `server` |
+| `playerDeath` | deaths | 500 | `text.t1.date.*` | `id`, `steam_id`, `game_id`, `date:unix`, `weapon`, `kit`, `player_name`, `server_id`, `map`, `server` |
+| `playerRevive` | revives | 500 | `text.t1.date.*` | `id`, `steam_id`, `victim_steam_id`, `game_id`, `date:unix`, `kit`, `player_name`, `server_id`, `map`, `name`, `server` |
+| `playerDamage` | damages | 500 | `text.t1.date.*` | `id`, `steam_id`, `victim_steam_id`, `game_id`, `date:unix`, `damage`, `weapon`, `player_name`, `server_id`, `map`, `name`, `server` |
+| `playerTeamkill` | teamkills | 100 | `text.t1.date.*` | `id`, `server_id`, `steam_id`, `killed:str(HTML)`, `date:unix`, `killed_group:null`, `player:str(HTML)`, `player_group:null`, `kit`, `server` |
+| `games` | games | 100 | `text.t1.start.startdate/enddate` | `id`, `server_id`, `start:unix`, `end:unix`, `map`, `t1`, `t1_tickets`, `t2`, `t2_tickets`, `win:enum(t1/t2/draw)`, `is_seed:"0"|"1"`, `server`, `time:int` |
+| `logs` | logs | 100 | — | `id`, `server_id`, `steam_id:str(36)`, `date:unix`, `log:str(enum action code)`, `name:str(HTML)`, `serverName` |
+| `playerComments` | comments | 100 | — | `id`, `steam_id:str(36)`, `admin_id:str(17)`, `date:unix`, `text`, `admin:str(HTML)`, `admin_color:hex`, `admin_group`, `player:str(HTML)`, `player_color:null`, `player_group:null` |
+| `playerMark` | mark | 100 | — | `steam_id:str(36)`, `eos_id`, `name`, `date:unix`, `create_date:unix`, `mark:str(HTML)`, `bonus`, `discord`, `color:hex`, `player_group`, `ban:str(HTML)`, `player:str(HTML)` |
+| `votes` | votes | 30 | — | `id`, `server_id`, `date:unix`, `steam_id`, `map_current`, `map_next`, `map_vote:"0"|"1"`, `mode:enum`, `players_sum`, `players_need`, `duration`, `cancel:str(HTML)`, `votes:str(HTML)`, `name`, `short`, `map_current_img`, `map_next_img` |
+| `reports` | reports | 30 | — | *(empty in capture — 0 rows)*; same envelope |
+| `topPlayers` | top | 30 | `multiselect.sort=online` | **`{status:"error", sql_error, sql}`** in capture — see §4.7 |
+
+**Default sort:** every captured request sends `order_by=false&order_sort=false` (server default sort); clicking a `<th>` sets `order_by=<data-sort alias>&order_sort=asc|desc` and resets `page=1`. **Pagination** is a second POST with `&pagination=true` returning `{totalPage:int, totalRows:str, count_time, status, exec_time}` only. **Identity note:** DataTables player feeds carry `steam_id` as a **36-char (UUID-form) id**, while live game / clan / combat feeds use the **17-digit SteamID64** — a dual-identity scheme worth matching carefully.
 
 ---
 
-### 11. video (2 actions)
+### 7. player-mod — player moderation & annotation (23 actions) **[SOURCE]**
 
-Cross-ref: [15. Issues & Video](15-issues-video.md).
+Invoked from the shared player-detail modal + its ban/kick/message sub-modals, embedded in *every* page. Split: **DB/annotation → `player.php`**; **live-game → `squad.php`** (RCON-backed). Live-game data keys are captured-verbatim in [01. Dashboard §4.2](01-dashboard.md). Cross-ref [03. Players](03-players.md), [08. Notes](08-notes-suspects.md), [09. Bans](09-bans.md).
 
-| Action id | Endpoint | Data params | Effect | Destructive |
+| Action id | Endpoint | Data keys (type) | Effect | Destructive |
 |---|---|---|---|:--:|
-| `uploadVideo_token` | squad | — | Mint an upload token (CSRF/session gate) | No |
-| `uploadVideo` | public | `FormData` (file + token), 300 s timeout | **Upload a video** (evidence/clip) | **Yes** |
+| `ban` | squad | `server_id:int`, `steam_id:str`, `reason_id:int`, `description:str`, `days:int` | Ban (`days=0` → permanent); RCON-kicks if online | **Y** |
+| `kick` | squad | `steam_id:str`, `reason_id:int`, `description:str`, `noReason:bool` | RCON-kick; `noReason:true` skips reason string | **Y** |
+| `kill` | squad | `server_id:int`, `steam_id:str` | RCON-kill current pawn (soft punish) | **Y** |
+| `unban` | squad | `steam_id:str`, `unban:bool` | Lift ban; `unban:true` wipes the record | **Y** |
+| `changeTeam` | squad | `server_id:int`, `steam_id:str` | Force team-swap via RCON | **Y** |
+| `removePlayer` | squad | `server_id:int`, `steam_id:str` | Remove from squad without kicking | **Y** |
+| `message` | player | `steam_id:str`, `time:int`, `msg:str`, `log:bool` | In-game warn/message; `time`=repeat cadence; optional card log | No |
+| `changeGroup` | player | `steam_id:str`, `date:unix`, `group_id:int(0–5)`, `description:str`, `prefix:str`, `prefix_rgb:str`, `image:str` | Assign admin/VIP group + cosmetic prefix/color/icon, with expiry | **Y** |
+| `mark` | player | `steam_id:str`, `mark:int` | Flag/annotate (suspect marker) | No |
+| `addComment` | player | `steam_id:str`, `text:str` | Attach internal note | No |
+| `getComments` | player | `steam_id:str` | Read internal notes | No |
+| `checkBans` | player | `steam_id:str` | Cross-check vs ban DBs (self + linked) | No |
+| `findFriends` | player | `steam_id:str`, `compare_steam_id:str` | Compare Steam friend graphs (alt detection) | No |
+| `twink` | player | `steam_id:str` | List shared-IP / linked accounts | No |
+| `twinkOnline` | player | `steam_id:str`, `compare_steam_id:str`, `start`, `end:unix` | Overlay two accounts' sessions to prove co-play | No |
+| `addBanName` | player | `name:str` | Add nick to banned-names blocklist | **Y** |
+| `removeBanName` | player | `name:str` | Remove nick from blocklist | No |
+| `kits` | player | `steam_id:str` | Read kit history | No |
+| `kitSave` | player | `steam_id:str`, `kits` | Persist edited kit assignment | No |
+| `get` | player | `steam_id:str` | Load full profile into modal | No |
+| `add` | player | `steam_id:str` | Register/import a player record | No |
+| `getPlayerOnlineData` | player | `steam_id:str`, `start`, `end:unix` | Online-time series for profile chart | No |
+| `downloadStat` | player | `steam_id:str` (via `post_to_url`) | Export player stat sheet (file) | No |
+
+`changeGroup.group_id` enum (from the shared select): `0` Нет группы (none), `1` Администратор, `2` Модератор, `3` VIP, `4` Камера (spectator), `5` Стажёр (trainee).
 
 ---
 
-### 12. issues (2 actions)
+### 8. RCON — live server & process control (22 actions) **[SOURCE]**
 
-`squad.php`, `issues.html`. Backed by an external issue tracker (labels/state/paging). Cross-ref: [15. Issues & Video](15-issues-video.md).
+All `squad.php`, from the dashboard `main.html`. Data keys captured-verbatim in [01. Dashboard §4](01-dashboard.md) / [16. Settings §16.4.5](16-settings.md).
 
-| Action id | Data params | Effect | Destructive |
+| Action id | Data keys (type) | Effect | Destructive |
 |---|---|---|:--:|
-| `issues_get` | `state`, `page` | List issues (paginated, filtered by state) | No |
-| `issues_create` | `body`, `labels` | **Create an issue** with labels | **Yes** |
+| `rconRaw` | `server_id:int`, `command:str(URI-enc)` | **Arbitrary raw RCON command** (free-text console; JSON pretty-printed in CodeMirror) | **Y** |
+| `start` | `server_id:int` | Start the game server process | **Y** |
+| `stop` | `server_id:int` | Stop the server | **Y** |
+| `restart` | `server_id:int` | Restart the server | **Y** |
+| `update` | `server_id:int`, `afterMapChange:bool` | Update; `afterMapChange` defers to next map break | **Y** |
+| `rconRestart` | `server_id:int` | Restart the RCON bridge | **Y** |
+| `parserRestart` | `server_id:int` | Restart the log-journal parser | **Y** |
+| `cacherRestart` | `server_id:int` | Restart the Steam-query/A2S cacher | **Y** |
+| `botUpdate` | *(none — global)* | Update the sqstat bot agent | **Y** |
+| `broadcast` | `server_id:int`, `msg:str` | Server-wide broadcast (min 2 chars) | No |
+| `squadMessage` | `server_id:int`, `team:str`, `squad:str`, `time:int`, `msg:str` | Repeating message to a specific squad | No |
+| `changeMap` | `server_id:int`, `next:bool\|'skip'`, `map:str(URI-enc)`, `vote:bool`, `skip?:bool` | Set current / next map, or skip round | **Y** |
+| `clearNext` | `server_id:int` | Clear the queued next map | No |
+| `disband` | `server_id:int`, `team:str`, `squad:str` | Disband a squad | **Y** |
+| `rename` | `server_id:int`, `team:str`, `squad:str` | Clear a squad's name | No |
+| `demote` | `server_id:int`, `steam_id:str(leader)` | Strip Commander | **Y** |
+| `transfer` | `server_id:int`, `team:str`, `squad:str` | Move a squad to the other team | **Y** |
+| `blockIP` | `ip:str` | Firewall-block an IP (network modal; `.hide`-gated) | **Y** |
+| `network` | `server_id:int` | Read live IP/connection map | No |
+| `getServer` | `server_id:int`, `last_chat_id` | Live poll (see §4.2) | No |
+| `getServerMaps` | `server_id:int` | Map/faction/unit picker catalog | No |
+| `setServerIP` | `server_id:int`, `ip:str` (raw query string) | Rebind server IP (effective after restart) | **Y** |
+
+RCON console ships a built-in Squad admin command dictionary + typeahead (`AdminKick(ById)`, `AdminBan(ById)`, `AdminBroadcast`, `AdminChangeMap`, `AdminSetNextMap`, `AdminEndMatch`, `AdminSlomo`, `AdminSetServerPassword`, `AdminSetMaxNumPlayers`, `AdminForceTeamChange(ById)`, `AdminDisbandSquad`, `AdminDemoteCommander(ById)`, `ListPlayers`, `ListSquads`, `ShowServerInfo`, …) — see [01. Dashboard §4.7](01-dashboard.md).
 
 ---
 
-### 13. auth & misc (2 actions)
+### 9. server-config — config, rotation, mods, settings (15 actions) **[SOURCE]**
 
-Cross-ref: [00. Overview](00-overview.md), [05. Admins & Permissions](05-admins-permissions.md).
+`squad.php` (config editor / mod manager / rotation on `main.html`) + `settings.php` (bulk settings save). Response shapes captured-verbatim in [16. Settings §16.4](16-settings.md).
 
-| Action id | Endpoint | Category | Data params | Effect | Destructive |
+| Action id | Endpoint | Data keys (type) | Response | Destructive |
+|---|---|---|---|:--:|
+| `getConfigFiles` | squad | `server_id:int` | `{files:map<dir,{files:[{name,date:unix-ms,symlin:bool}]}>}` | No |
+| `getConfigFile` | squad | `server_id:int`, `file:str`, `dir:str` | `{text:str, hasDefault:bool}` | No |
+| `saveConfigFile` | squad | `server_id:int`, `text:str(URI-enc)`, `file:str`, `dir:str` | `{}` | **Y** |
+| `getDefaultConfig` | squad | `file:str` | `{text:str}` | No |
+| `reloadConfig` | squad | `server_id:int` | `{}` — hot-reload | **Y** |
+| `getRotation` | squad | `server_id:int` | `{rotation:{lists,current,isWin}, list, canEdit:bool}` | No |
+| `setRotation` | squad | `server_id:int`, `rotation:str(URI-enc)`, `day:int` | `{}` → re-runs `getRotation(day)` | **Y** |
+| `getMods` | squad | `server_id:int`, `only_status:bool` | `{mods:[…], mod_status:{…}}` | No |
+| `installMod` | squad | `server_id:int`, `mod_id:str`, `fix:true` | `{}` | **Y** |
+| `deleteMod` | squad | `server_id:int`, `mod_id:str` | `{}` | **Y** |
+| `getServerSettings` | settings | `server_id:int` | `{server:{…fields…}}` (form set read-only after load) | No |
+| `setServerSettings` | settings | all `data-input` fields | `{new:bool}` — `new` truthy → full `pageLoad('settings')` | **Y** |
+| bulk save | settings | `type:enum(servers\|groups\|rules\|squad_messages\|discordbot\|discord)`, `settings:str(JSON)` | `{}` — overwrites that tab's config blob | **Y** |
+| `serverMonitor` | squad | `start`, `end:unix`, `server_id:int` | health time series | No |
+| `mapCalendar` | public | `server_id:int`, `start`, `end:unix` | `{maps:[…]}` | No |
+
+> **Latent bug ([16. Settings §16.4.1](16-settings.md)):** `saveConfigFile`/`reloadConfig` send the ambient global `server_id`, not the editor's own — cross-server write hazard if the editor is opened for a non-active server. The `rules` bulk-save serializer is a **stub** (`collect()` returns `{}`, Add button `disabled`) — rules editing is inert.
+
+---
+
+### 10. clan — community/clan roster & config (10 actions)
+
+`clan.php` (roster/settings) + `squad.php` (`createSquad`) + `player.php` export. `list`/`stats` are **[LIVE]** (§4.3–4.4); the rest **[SOURCE]** (`caps/clans/_blocked.json == []`, mutations not fired). Full detail in [18. Clans §5](18-clans.md).
+
+| Action id | Endpoint | Data keys (type) | Effect | Destructive |
+|---|---|---|---|:--:|
+| `list` | clan | `clan_id:int` | Roster + presence + Discord (**[LIVE]**) | No |
+| `stats` | clan | `clan_id:int`, `start`, `end:unix\|undefined` | Dashboard chart + combat stats (**[LIVE]**) | No |
+| `findPlayer` | clan | `clan_id:int`, `find:str(≥3)` | Search addable players → `[{steam_id,name,clan_id}]` | No |
+| `addPlayer` | clan | `clan_id:int`, `steam_id:str`, `type:0\|1\|2` | Add member with role (>0 gated by `clan.canType`) | **Y** |
+| `removePlayer` | clan | `clan_id:int`, `steam_id:str` | Remove from roster | **Y** |
+| `vipPlayer` | clan | `clan_id:int`, `steam_id:str`, `vip:bool` | Grant/revoke queue priority | **Y** |
+| `changeExpire` | clan | `clan_id:int`, `date:unix` | Change priority-subscription expiry | **Y** |
+| `setting` | clan | `clan_id:int`, `key:enum(public\|protected)`, `value:bool` | Toggle clan setting | **Y** |
+| `delete` | clan | `clan_id:int` | **Delete the clan** (3 s cooldown; success → `location.href='/'`) | **Y (irreversible)** |
+| `createSquad` | squad | `id:int`, `name`, `expire:unix`, `max:int`, `discord_id`, `tags:str(URI-enc CSV)` | Create (empty `id`) / edit / rename a clan | **Y** |
+| `downloadList` | clan (`post_to_url`) | `clan_id` | Export roster file | No |
+| `downloadOnline` | clan (`post_to_url`) | `clan_id`, `start`, `end` | Export clan online-history file | No |
+
+---
+
+### 11. VIP (1 action) **[SOURCE]**
+
+`vips.html` hosts only the shared player modal + search UI; the real grant toggle lives in the clan roster. Cross-ref [06. VIPs](06-vips.md), [18. Clans](18-clans.md).
+
+| Action id | Endpoint | Data keys (type) | Effect | Destructive |
+|---|---|---|---|:--:|
+| `vipPlayer` | clan | `clan_id:int`, `steam_id:str`, `vip:bool` | Toggle VIP/priority slot for a clan member | **Y** |
+
+---
+
+### 12. stats — read-only analytics (6 actions)
+
+`statistics` is **[LIVE]** (§4.5); `mapCalendar` **[SOURCE]**; the four `server*` reads **[SOURCE]** (interaction-triggered). Cross-ref [11. Statistics](11-statistics.md), [12. Games](12-games.md), [20. Top](20-top.md).
+
+| Action id | Endpoint | Data keys (type) | Effect |
+|---|---|---|---|
+| `statistics` | squad | `start`, `end:unix`, `servers:CSV` | Aggregate statistics dashboard (**[LIVE]**, §4.5) |
+| `mapCalendar` | public | `server_id:int`, `start`, `end:unix` | Map-history calendar |
+| `serverMonitor` | squad | `start`, `end:unix`, `server_id:int` | Hardware health time series |
+| `serverOnline` | squad | `start`, `end:unix`, `server_id:int` | Online-count history |
+| `serverOnlineAdmins` | squad | `day`, `server_id:int` | Admin-presence timeline |
+| `serverOnlineBooster` | squad | `day`, `server_id:int` | Booster-presence timeline |
+
+---
+
+### 13. seeding — seeding scheduler & priority (5 actions) **[SOURCE]**
+
+All `squad.php`, from `player_profile.html` seed-helper (data keys read verbatim from `frags/player_profile.html`). Cross-ref [04. Player Profile](04-player-profile.md).
+
+| Action id | Data keys (type) | Effect | Destructive |
+|---|---|---|:--:|
+| `seeding` | `start:bool`, `isMobile:bool`, `tab_id:str` | Start/join the live seeding session view | No |
+| `seedingGetCalendar` | `start:unix`, `end:unix` | Read seeding calendar → `{seed:[…events], canServerAction:bool}` | No |
+| `seedingGetPriority` | `start` | Read the seeding priority list for a day | No |
+| `seedingSetPriority` | `start` (day), `data`, `min_players:int`, `use_unattached:bool` | **Write** seeding priority order/rules | **Y** |
+| `seedingSetServer` | `server_id` | Set the admin's seeding target server | **Y** |
+
+---
+
+### 14. video (2 actions) **[SOURCE]**
+
+`video.html` (page GET is **[LIVE]**; the two actions **[SOURCE]** — no auto-fire). Data keys read verbatim from `frags/video.html`. Cross-ref [15. Issues & Video](15-issues-video.md).
+
+| Action id | Endpoint | Data keys (type) | Effect | Destructive |
+|---|---|---|---|:--:|
+| `uploadVideo_token` | squad | *(none)* | Mint an upload token (session/CSRF gate) | No |
+| `uploadVideo` | public | `FormData`: `name:str`, `description:str`, `file:File`, `token:str` (from `?token=`), 300 s timeout | **Upload a video** (evidence/clip) | **Y** |
+
+---
+
+### 15. issues (2 actions)
+
+`squad.php`, `issues.html`. `issues_get` is **[LIVE]** (§4.6); `issues_create` **[SOURCE]**. Backed by an external tracker (GitHub-style labels/state/paging). Cross-ref [15. Issues & Video](15-issues-video.md).
+
+| Action id | Data keys (type) | Effect | Destructive |
+|---|---|---|:--:|
+| `issues_get` | `state:enum(open\|closed)`, `page:int` | List issues (paginated) — see §4.6 | No |
+| `issues_create` | `body:str`, `labels` | Create an issue with labels | **Y** |
+
+---
+
+### 16. auth & user-settings (2 actions) **[SOURCE]**
+
+Cross-ref [00. Overview](00-overview.md), [05. Admins & Permissions](05-admins-permissions.md), [16. Settings §16.3](16-settings.md).
+
+| Action id | Endpoint | Category | Data keys (type) | Effect | Destructive |
 |---|---|---|---|---|:--:|
-| `auth` | public | auth | `tz` (browser timezone) | Session bootstrap / login handshake; may return `url` to redirect | **Yes** |
-| `saveUserSettings` | player | misc | `data` (JSON blob) | Persist the admin's own UI/user settings | No |
+| `auth` | public | auth | `tz:str` | Session bootstrap; may return `url` to redirect (see §4.1) | **Y** |
+| `saveUserSettings` | player | user-settings | `lang:enum(ru\|en)`, `theme:enum(0\|dark)`, `show_country:enum(hide\|show)` | Persist the admin's own UI settings | No |
 
 ---
 
-### 14. Destructive-surface matrix (blast radius)
+### 17. Destructive-surface matrix (blast radius)
 
-The competitively important slice: which actions **change third-party state** and how far the blast radius reaches. Any permission model must gate these individually.
+The competitively important slice: which actions change third-party state and how far the blast reaches. A permission model must gate these individually.
 
 | Blast radius | Representative actions | Endpoint | Risk |
 |---|---|---|---|
 | **Whole game server** | `start`, `stop`, `restart`, `update`, `changeMap`, `setRotation`, `saveConfigFile`, `reloadConfig`, `installMod`, `deleteMod`, `setServerSettings`, `setServerIP` | squad / settings | Server downtime / misconfig |
-| **Arbitrary console** | `rconRaw` | squad | Anything RCON allows — superset of every other server action |
+| **Arbitrary console** | `rconRaw` | squad | Superset of every other server action |
 | **Individual player (live)** | `ban`, `kick`, `kill`, `unban`, `changeTeam`, `removePlayer`, `blockIP`, `demote`, `disband`, `transfer` | squad | In-game punishment |
 | **Player record (DB)** | `changeGroup`, `addBanName`, `kitSave`, `mark`, `addComment` | player | Persistent DB annotation / privileges |
-| **Community** | `createSquad`, `delete`, `setting`, `addPlayer`, `vipPlayer`, `changeExpire` | clan | Clan roster / VIP economy |
+| **Community** | `createSquad`, `delete`, `setting`, `addPlayer`, `vipPlayer`, `changeExpire` | clan / squad | Clan roster / VIP economy |
 | **Scheduling** | `seedingSetPriority`, `seedingSetServer` | squad | Seeding fairness |
-| **Content/tracker** | `uploadVideo`, `issues_create` | public/squad | External artifacts |
+| **Content/tracker** | `uploadVideo`, `issues_create` | public / squad | External artifacts |
 
-### 15. Competitive takeaways
+---
 
-1. **Single raw-RCON escape hatch.** `rconRaw` (§5) is a free-text console; any admin who can reach it effectively holds every other server-side capability. A competing panel should treat `rconRaw` as its own top-tier permission and audit-log every command (SQSTAT routes it through `squad.php` like everything else — see [01. Dashboard](01-dashboard.md)).
-2. **Endpoint ≠ permission.** Six PHP files front ~85 actions; `squad.php` alone fronts RCON, process control, config writes, seeding, statistics, and issues. Authorization must be per-`action`, never per-endpoint.
-3. **Uniform envelope.** The `{status, msg, auth}` contract + `Action()` helper is trivial to reimplement; the moat is the **breadth** of the action set (live RCON + config editor + mod manager + seeding + clan economy + statistics in one SPA), not the transport.
-4. **Shared modal = 23 actions everywhere.** Because the player-detail modal ships on every page, a competitor gets maximal leverage by building that one component well; it is the single most-reused surface in the product.
-5. **Export via full-page POST.** `download*` actions deliberately sidestep the AJAX helper (`post_to_url`) to stream files — an easy-to-miss but load-bearing pattern for CSV/roster exports.
+### 18. Capture provenance (what's LIVE vs SOURCE)
+
+| Contract | Status | Cite |
+|---|---|---|
+| `getServer` | **LIVE** | `caps/dashboard/__server_id_1.network.json` |
+| `clan.list`, `clan.stats` | **LIVE** | `caps/clans/clan_id_16.network.json` |
+| `statistics` | **LIVE** | `caps/games-stats/statistics.network.json` |
+| `issues_get` | **LIVE** | `caps/issues-video/issues.network.json` |
+| 18 DataTables feeds + `page.php` GETs | **LIVE** | `caps/*/*.network.json` (§6) |
+| `topPlayers` (SQL-error leak) | **LIVE** | `caps/api-top/top.network.json` |
+| player-mod, RCON, config, seeding, video, clan mutations, `auth`, `saveUserSettings` | **SOURCE** | `custom.js` + page fragments; `_blocked.json == []` (never fired) |
+
+The read-only capturer performed **zero mutations** (all 16 `_blocked.json` are `[]`). The player-profile detail capture (`caps/players/_player_*.network.json`) is `[]` — the profile page auto-loads nothing, so all player-modal actions remain SOURCE-derived.
+
+---
+
+### 19. Competitive takeaways
+
+1. **Single raw-RCON escape hatch.** `rconRaw` (§8) is a free-text console; any admin who reaches it effectively holds every other server-side capability. Treat it as its own top-tier permission and audit-log every command.
+2. **Endpoint ≠ permission.** Six PHP files front ~90 actions; `squad.php` alone fronts RCON, process control, config writes, seeding, statistics, and issues. Authorization must be per-`action`, never per-endpoint.
+3. **Server-render-everything settings.** The Settings console fires **one** request (the fragment) — all config (incl. live Discord webhook tokens) is pre-hydrated into the DOM. This leaks six real webhook secrets into page source ([16. Settings §16.3](16-settings.md)); keep secrets server-side.
+4. **Two information-disclosure bugs in the live capture:** `topPlayers` echoes the raw failing **SQL** into the JSON response (§4.7); the settings page leaks webhook tokens. Both are "beat, don't copy."
+5. **Uniform envelope, no URL-encoding.** The `{status,msg,auth}` contract + `Action()` helper is trivial to reimplement — but the helper does **not** URL-encode object-form `data`, so any value with a raw `&`/`=` corrupts the body. The moat is the **breadth** of the action set, not the transport.
+6. **DataTables uniformity.** 18 grids share one `table.php` contract (envelope + `search` bucket JSON + two-phase pagination); page sizes 30/50/100/500. A dual-identity scheme (36-char UUID in DB feeds vs 17-digit SteamID64 in live feeds) is the subtle detail to get right.
+7. **Shared modal = 23 actions everywhere.** The player-detail modal ships on every page; building that one component well yields maximal leverage.
+8. **Export via full-page POST.** `download*` actions deliberately sidestep the AJAX helper (`post_to_url`) to stream files — an easy-to-miss but load-bearing pattern.

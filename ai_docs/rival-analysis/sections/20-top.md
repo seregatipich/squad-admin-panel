@@ -1,5 +1,87 @@
 ## 20. Top Online Leaderboard (Топ онлайна)
 
+### Live API Contracts
+
+**Capture method.** `top` rendered in a headless authenticated Chromium (label `api-top`). On load the page fires **exactly one** AJAX call — the `topPlayers` DataTables fetch — captured in `/tmp/caps/api-top/top.network.json` (1 contract). `_blocked.json` = `[]` (no mutations attempted or blocked). The rendered `#content` (pre-modal) is `top.content.html`.
+
+#### `POST /ajax/table.php` — action `topPlayers` (captured request)
+
+The `buildTable` bootstrap (`top.content.html`, inline `$(document).ready`) issues:
+
+```
+POST https://breaking.sqstat.ru/ajax/table.php
+Content-Type: application/x-www-form-urlencoded
+
+action=topPlayers&table=topPlayers&page=1&numrows=30
+&search={"text":{},"check":{},"multiselect":{"sort":"online"},"managers":{},"slider":{}}
+&order_by=false&order_sort=false
+```
+(`search` is URL-encoded in the wire capture.)
+
+**Request params (exact wire contract):**
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `action` | string const | Yes | Always `topPlayers` (equals the table id; `Action({script:'table',action:query[0]})`). |
+| `table` | string const | Yes | `topPlayers` — server-side dataset selector. |
+| `page` | int | Yes | 1-based page (default `1`). |
+| `numrows` | int | Yes | Page size, fixed `30`. |
+| `search` | JSON string | Yes | 5-bucket search envelope (see below). |
+| `order_by` | `false`\|col-alias | Yes | Sort column DB-alias, or `false` (default — header sort is not wired on this page). |
+| `order_sort` | `false`\|`asc`\|`desc` | Yes | Sort direction, or `false` (default). |
+| `pagination` | `true` | No | Appended for the **second** call (`query[1]+'&pagination=true'`) that returns page/row counts only. |
+
+**Search envelope (`search` JSON), 5 fixed buckets** produced by `buildTable` from `searchInput` (`custom.js`):
+
+| Bucket | Populated from | On this page |
+|---|---|---|
+| `text` | text inputs keyed by `data-search` DB-alias | `t2.name` (Ник), `t2.steam_id` (Steam ID) when non-empty |
+| `check` | checkbox filters | `{}` (none) |
+| `multiselect` | multiselect `data-search` key | `{"sort":"online"\|"bonus"\|"boost"}` |
+| `managers` | manager-picker filters | `{}` (none) |
+| `slider` | range sliders | `{}` (none) |
+
+Example populated search: `{"text":{"t2.name":"pl","t2.steam_id":"765…"},"check":{},"multiselect":{"sort":"boost"},"managers":{},"slider":{}}`.
+
+#### Captured response — **live status `error` (SQL info-disclosure)**
+
+The captured `topPlayers` fetch returned HTTP **200** with an **error debug payload**, not row data — the server-side query is currently broken and the endpoint **leaks the raw SQL and DB error to the client**:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | enum `"ok"`\|`"error"` | Captured value: **`"error"`**. |
+| `sql` | string | The **full raw SQL statement** (truncated in capture): `SELECT t1.steam_id, t2.type, t2.name, …`. |
+| `sql_error` | array | DB driver error tuple `[[<code>,<message>]]`. |
+| `exec_time` | float | Server exec seconds (`0.001`). |
+
+Redacted capture (`top.network.json`):
+```json
+{"method":"POST","url":"https://breaking.sqstat.ru/ajax/table.php",
+ "status":200,"ctype":"application/json; charset=utf-8",
+ "response_sample":{"sql_error":[["SELECT t1.steam_id, t2.type, t2.name,\r\n\t…"]],
+   "sql":"SELECT t1.steam_id, t2.type, t2.name,\r\n\t…","status":"error","exec_time":0.001}}
+```
+
+> **Competitive/security findings (from live evidence):**
+> - **Info-disclosure:** on query failure `table.php` returns the raw SQL text and driver error to any authenticated client. It exposes the join structure — aliases **`t1`** (has `steam_id`) and **`t2`** (has `type`, `name`) — i.e. a players table joined to an identity/type table. A competitor's equivalent must return an opaque error envelope, never raw SQL.
+> - **`t2.type`** in the SELECT (not surfaced in any visible column) hints the identity table carries a player `type`/category field worth investigating.
+> - The leaderboard's primary read path is **currently non-functional** on the live target (server-side SQL error), consistent with the page being nav-hidden/legacy (see §6).
+
+#### Intended success + pagination envelope (from `buildTable`, `custom.js`)
+
+On `status:"ok"` the main call returns rows the client maps by the `collum` array `['place','steam_id','name','online','bonuses','boost']`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | `"ok"` | Success flag. |
+| `data` | array\<row\> | Row objects; each row keyed by the `collum` aliases; optional `id`, `dataset{}` (→ `data-*`), tooltip attrs. |
+| `currentPage` | int (string) | Echoed page. |
+| `custom` | any | Optional per-table extra payload (passed to `end()` as `customData`). |
+
+The **second** call (`…&pagination=true`) returns counts only: `{status:"ok", totalPage:int, totalRows:int, count_time:<string>}`. It fires only when `rows == numrows` or `currentPage != 1`. The info line renders `Страница <currentPage> из <totalPage> · Всего: <totalRows>` via `Intl.NumberFormat` (thousands separators). Row-click handler: `player.open($(tr).find('td[data-contact="steam_id"] > hashtag').text())`, suppressed on Alt/Ctrl.
+
+---
+
 ### 1. Purpose and nav location
 
 A player activity leaderboard that ranks players across the whole database by cumulative online time, accrued bonuses, or boost. It is a pure read/browse page: a left-hand search/filter rail plus a right-hand ranked table. Clicking any row opens the shared **player-detail modal** for that player.

@@ -9,6 +9,104 @@ Both are SPA fragments loaded via `pageLoad('bannames')` / `pageLoad('collabans'
 
 ---
 
+### Live API Contracts
+
+> Ground truth captured 2026-07-04 from `breaking.sqstat.ru` via read-only headless browser. Sources: `caps/bans/bannames.network.json`, `caps/bans/collabans.network.json`, and the inline JS in `caps/bans/bannames.content.html` / `caps/bans/collabans.content.html`. Zero mutations fired (`_blocked.json` = `[]`); `addBanName`/`removeBanName` shapes are reconstructed from the modal JS.
+
+#### C-A. Fragment loads
+
+| Page | Method + path | Response |
+|---|---|---|
+| bannames | `GET /ajax/page.php?page=bannames` | ~3.7 KB HTML: sidebar + `#ban_names` table + `#add_ban_names_modal`. Self-contained (no shared modal). |
+| collabans | `GET /ajax/page.php?page=collabans` | ~115 KB HTML: sidebar + `#banPlayers` table shell + `#ban_template`/`#project_template` + full shared player modal + inline script. |
+
+#### C-B. `ban_names` read — `POST /ajax/table.php` (action `ban_names`)
+
+**Request** (form-urlencoded): `action=ban_names&table=ban_names&page=1&numrows=100&search=<urlencoded-json>&order_by=false&order_sort=false` [`&pagination=true` for the count call].
+`search` default: `{"text":{},"check":{},"multiselect":{},"managers":{},"slider":{}}`; the nick filter feeds `text["t1.name"]`.
+
+**Response** `application/json`, `status:"ok"`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `data.row[i].name` | string | The banned nickname (the rule's identity key). |
+| `data.row[i].date` | string (**unix seconds**) | When the rule was added (e.g. `"1775743360"`); client renders via `formatDate`. |
+| `data.row[i].button` | int (`1`) | Render flag → server signals the per-row delete button should be drawn. |
+| `data.totalPage` / `data.totalRows` | int | 0 in the row call. |
+| `data.custom` | bool | `false`. |
+| `data.query_time` / `data.count_time` | int/float (s) | Server timings. |
+| `status` / `exec_time` | `"ok"` / float | Status + handler time. |
+
+**Pagination call** (`&pagination=true`) — live sample: `{ "totalPage": 4, "totalRows": "371", "count_time": 0, "status": "ok", "exec_time": 0.002 }`. Note `totalRows` here is a **string** ("371"), unlike `collabans` which returns an int — do not assume a fixed type. Live catalog size ≈ **371 banned nicknames**.
+
+The captured schema confirms the client-visible record is exactly `{name, date, button}` — **no severity, regex flag, scope, expiry, or author field is returned** (see Gaps).
+
+#### C-C. `collabans` read — `POST /ajax/table.php` (action `collabans`)
+
+**Request**: `action=collabans&table=collabans&page=1&numrows=100&search=<urlencoded-json>&order_by=false&order_sort=false` [`&pagination=true`].
+`search` default: `{"text":{},"check":{},"multiselect":{},"managers":{},"slider":{}}`.
+
+**Response** `application/json`, `status:"ok"` — the per-row shape is **flatter than previously inferred**: a row carries only `name`, `steam_id`, and a nested `projects[]` array. There are **no top-level `reason`/`date`/`expire` fields**; the "Причина / Забанен / До" columns are rendered by the `projects` callback into per-community cards.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `data.row[i].name` | string | Player nickname; callback renders `<b>name</b>` or `<code>Нет ника</code>` when empty. |
+| `data.row[i].steam_id` | string (Steam64) | Player identity (hidden first column); row-click → `player.open(steam_id)`. |
+| `data.row[i].projects[]` | array<Project> | Per-community ban breakdown (see below). |
+| `data.totalPage`/`totalRows`/`custom`/`query_time`/`count_time` | int/bool/float | Envelope. |
+
+**Project object `projects[j]`:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | Contributing community/project name. |
+| `admin_name` | string | Admin who issued that project's ban (rendered in `<code>`). |
+| `reason` | string | That project's stated reason (e.g. `"[Навсегда] нежелательный"`). |
+| `date` | string (**unix seconds**) | That project's ban date. |
+| `expire` | string (unix seconds) \| `"0"` | `"0"` ⇒ red `label-danger`/`panel-danger` + "Перманент"; else `label-warning`/`panel-warning` + "Временный". |
+| `cnt` | string (numeric) | Number of ban records that project logged (rendered with a gavel icon). |
+
+Redacted example row:
+
+```json
+{ "name": "<nick>", "steam_id": "<steam64>",
+  "projects": [ { "name": "<community>", "date": "1783149951",
+    "reason": "[Навсегда] нежелательный", "admin_name": "<admin>",
+    "expire": "0", "cnt": "1" } ] }
+```
+
+**Pagination call** — live sample: `{ "totalPage": 176, "totalRows": 17510, "count_time": 0.37, "status": "ok", "exec_time": 0.37 }`. Live federated pool size ≈ **17,510 banned players** across contributing communities. Here `totalRows` is an **int** (contrast `ban_names`).
+
+#### C-D. Mutation & network contracts (reconstructed — never fired)
+
+| Action | script → endpoint | Request data | Effect | Destructive |
+|---|---|---|---|---|
+| `addBanName` | `player` → `POST /ajax/player.php` | JSON `{name: string}` (from `#add_ban_names_name` on bannames, or `player.info.name` from a context menu) | Inserts a banned-nick rule; on `status:'ok'` hides modal + `buildTable('rebuild')`. | **Y** |
+| `removeBanName` | `player` → `POST /ajax/player.php` | JSON `{name: string}` (read from the row's `[data-contact="name"]` HTML) | Deletes the rule matching that nick; rebuilds table. | **Y** |
+| `checkBans` | `player` → `POST /ajax/player.php` | JSON `{steam_id: string}` | Returns `{projects:[…]}` cross-project ban status (schema in chapter 09 §C-5). | N (read) |
+| `ban` / `unban` | `squad` → `POST /ajax/squad.php` | see chapter 09 §C-4 | New bans enter the federated pool via the normal `ban` action; federation is server-side. | **Y** |
+| `botUpdate` | `squad` → `POST /ajax/squad.php` | (none) | On `main.html`, triggers the enforcement bot to update (the agent that syncs bans/bannames in-game). Confirmation dialog first. | **Y** |
+| `downloadList` | `clan` → `POST /ajax/clan.php` (form-post → file download) | `clan_id` | On `clan_16.html`, exports a roster file. Not a ban-sync trigger. | N |
+
+**Ru-Ban sync finding:** no client action pushes/imports federated bans from these two pages. `collabans` + `checkBans` are **read** views over a server-aggregated pool; `botUpdate` refreshes the enforcement agent. Propagation between communities (push API / polling / shared DB) is server/bot-side and not observable client-side. The `network` action in `main.html` is the live TCP/DOS monitor — unrelated to the ban network; do not conflate.
+
+#### DataTables configs (from captured content JS)
+
+| | `ban_names` (bannames) | `banPlayers`/`collabans` (collabans) |
+|---|---|---|
+| `table` (action id) | `ban_names` | `collabans` |
+| `collum` | `["name","date",["button", "<button onclick=remove_ban_names(this)…>"]]` | `["steam_id","reason","date","expire"]` |
+| `mode` | `table` | `list` |
+| `numrows` | `100` | `100` |
+| `template` | `#player_template > div` | `#ban_template > div` (cards from `#project_template`) |
+| `searchInput` | `["ban_names-name"]` (→ `t1.name`) | `["banPlayers-name","banPlayers-permanent","banPlayers-reason"]` |
+| callbacks | `date` → `formatDate` | `name` (empty→"Нет ника"), `date` → `formatDate`, `projects` → clone `#project_template` per project |
+| row click | — (delete button per row) | `player.open(td[data-contact=steam_id]>hashtag .text())` |
+
+Filter aliases on the collabans sidebar: `#banPlayers-name` → `s.player`, `#banPlayers-reason` → `s.reason`, `#banPlayers-permanent` (check bucket). Add-nick modal on bannames: single `#add_ban_names_name` input (placeholder "Ник"), **no client-side validation** — an empty submit sends `name=''`.
+
+---
+
 ### 10.1 Purpose and nav location
 
 | Page id | Nav label (RU / gloss) | Purpose |
@@ -82,16 +180,15 @@ Note: `addBanName` / `removeBanName` are **ubiquitous** — they appear on nearl
 
 #### 10.3.2 Entities & fields
 
-**Entity A — federated ban row (`collabans` table).** Inferred from `buildTable({table:'collabans', collum:["steam_id","reason","date","expire"]})`, the table `<th>`s, and the `#ban_template`.
+**Entity A — federated ban row (`collabans` table).** LIVE-captured shape (§C-C) — the row is **flat**: only `name`, `steam_id`, `projects[]`. The `reason`/`date`/`expire` in the `buildTable` `collum` config are **column slots populated by the `projects` callback cards**, not top-level row fields.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `steam_id` | string (Steam64) | Player identity; the hidden first column. Row click → `player.open(steam_id)`. |
 | `name` | string | Player nickname; callback renders `<b>name</b>` or `<code>Нет ника</code>` ("No nick") when empty. |
-| `reason` | string | Ban reason (aggregate/representative). Column "Причина". |
-| `date` | datetime | When banned. Column "Забанен" (Banned). |
-| `expire` | datetime / `0` | Ban expiry; `0` = permanent. Column "До" (Until). |
-| `projects` | array<Project> | Per-community ban breakdown (see Entity B), rendered as cards. |
+| `projects` | array<Project> | Per-community ban breakdown (see Entity B), rendered as cards into the reason/date/expire column area. |
+
+> Correction vs. earlier inference: there are **no** scalar `reason`/`date`/`expire` fields on the collabans row. Every ban attribute is per-project inside `projects[]`.
 
 **Entity B — per-project ban card (`project`).** Inferred from `#project_template` `data-project="…"` bindings and the `projects` callback.
 
