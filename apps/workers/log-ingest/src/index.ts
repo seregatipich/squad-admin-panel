@@ -99,6 +99,7 @@ async function main() {
           .catch((err) =>
             log.error({ err: (err as Error).message, kind: command.kind }, 'match assembly failed'),
           );
+      },
       onChat: (chat) => {
         handleChat(db, redis, { serverId, chat }).catch((err) =>
           log.error({ err: (err as Error).message }, 'chat handling failed'),
