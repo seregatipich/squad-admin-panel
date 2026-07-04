@@ -20,6 +20,11 @@ export type LiveEvent =
       data: { server_id: string; state: string; player_count?: number };
     }
   | {
+      type: 'rcon.roster';
+      ts: string;
+      data: { server_id: string; player_count: number; polled_at: string };
+    }
+  | {
       type: 'bridge.connection';
       ts: string;
       data: { state: 'up' | 'down'; down_for_s: number };

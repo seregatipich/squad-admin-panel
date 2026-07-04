@@ -28,7 +28,12 @@ export async function upsertPlayers(db: DatabaseClient, incoming: RconPlayer[]):
   if (incoming.length === 0) return;
   for (const p of incoming) {
     const normalised = normalise(p.name);
-    const steamBigint = BigInt(p.steam_id64);
+    const steamBigint = p.steam_id64 ? BigInt(p.steam_id64) : null;
+
+    const matchClause =
+      steamBigint === null
+        ? eq(players.eosId, p.eos_id)
+        : or(eq(players.eosId, p.eos_id), eq(players.steamId64, steamBigint));
 
     const existing = await db
       .select({
@@ -38,7 +43,7 @@ export async function upsertPlayers(db: DatabaseClient, incoming: RconPlayer[]):
         eosId: players.eosId,
       })
       .from(players)
-      .where(or(eq(players.eosId, p.eos_id), eq(players.steamId64, steamBigint)))
+      .where(matchClause)
       .limit(1);
 
     if (existing[0]) {

@@ -10,6 +10,7 @@ import { LiveIndicator } from '@/components/LiveIndicator';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { nextBackoffMs } from '@/lib/ws-backoff';
+import { LivePlayers } from './live-players';
 
 interface ServerRow {
   id: string;
@@ -469,6 +470,8 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           <div className="text-neutral-500 text-xs">нет настроек</div>
         )}
       </section>
+
+      <LivePlayers serverId={server.id} />
 
       <section className="flex flex-wrap items-center gap-2">
         <ActionButton
