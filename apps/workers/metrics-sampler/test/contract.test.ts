@@ -13,7 +13,7 @@ let child: ChildProcess | null = null;
 let redis: Redis | null = null;
 
 afterEach(async () => {
-  if (child && !child.killed) {
+  if (child && child.exitCode === null && child.signalCode === null) {
     child.kill('SIGTERM');
     await new Promise((r) => child?.once('exit', r));
   }
