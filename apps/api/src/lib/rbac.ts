@@ -20,6 +20,7 @@ export interface PermissionContext {
   canManageIssues: boolean;
   canManageBanSources: boolean;
   canManageIntegrations: boolean;
+  canManageClans: boolean;
   isOwner: boolean;
 }
 
@@ -68,6 +69,7 @@ interface RoleContextRow extends Record<string, unknown> {
   can_manage_issues: boolean | null;
   can_manage_ban_sources: boolean | null;
   can_manage_integrations: boolean | null;
+  can_manage_clans: boolean | null;
   squad_permissions: string[] | null;
 }
 
@@ -89,6 +91,7 @@ export async function loadUserPermissions(
       r.can_manage_issues,
       r.can_manage_ban_sources,
       r.can_manage_integrations,
+      r.can_manage_clans,
       COALESCE(
         (SELECT array_agg(rsp.squad_permission_key ORDER BY rsp.squad_permission_key)
          FROM role_squad_permissions rsp WHERE rsp.role_id = r.id),
@@ -113,6 +116,7 @@ export async function loadUserPermissions(
       canManageIssues: false,
       canManageBanSources: false,
       canManageIntegrations: false,
+      canManageClans: false,
       isOwner: false,
     };
     cache.set(playerId, { value: empty, expiresAt: Date.now() + TTL_MS });
@@ -126,6 +130,7 @@ export async function loadUserPermissions(
   const canManageIssues = isOwner ? true : (row.can_manage_issues ?? false);
   const canManageBanSources = isOwner ? true : panelAccess && (row.can_manage_ban_sources ?? false);
   const canManageIntegrations = isOwner ? true : (row.can_manage_integrations ?? false);
+  const canManageClans = isOwner ? true : (row.can_manage_clans ?? false);
   const squadPermissions = isOwner
     ? new Set<SquadPermissionKey>(SQUAD_PERMISSION_KEYS)
     : new Set<SquadPermissionKey>(
@@ -159,6 +164,7 @@ export async function loadUserPermissions(
     canManageIssues,
     canManageBanSources,
     canManageIntegrations,
+    canManageClans,
     isOwner,
   };
   cache.set(playerId, { value, expiresAt: Date.now() + TTL_MS });

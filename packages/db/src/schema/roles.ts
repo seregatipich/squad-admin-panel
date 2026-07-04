@@ -14,6 +14,7 @@ export const roles = pgTable(
     canManageIssues: boolean('can_manage_issues').notNull().default(false),
     canManageBanSources: boolean('can_manage_ban_sources').notNull().default(false),
     canManageIntegrations: boolean('can_manage_integrations').notNull().default(false),
+    canManageClans: boolean('can_manage_clans').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
   (table) => ({
