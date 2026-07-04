@@ -14,14 +14,15 @@ const expiresAt = new Date(now.getTime() + TTL_MS);
 const c = new pg.Client({ connectionString: process.env.DATABASE_URL });
 await c.connect();
 
-await c.query(
-  `INSERT INTO players (steam_id64, role_id) VALUES ($1, (SELECT id FROM roles WHERE name='Owner')) ON CONFLICT (steam_id64) DO UPDATE SET role_id=(SELECT id FROM roles WHERE name='Owner')`,
+const { rows } = await c.query(
+  `INSERT INTO players (steam_id64, role_id) VALUES ($1, (SELECT id FROM roles WHERE name='Owner')) ON CONFLICT (steam_id64) DO UPDATE SET role_id=(SELECT id FROM roles WHERE name='Owner') RETURNING id`,
   [STEAM_ID],
 );
+const playerId = rows[0].id;
 
 await c.query(
-  `INSERT INTO sessions (id, steam_id64, expires_at, last_activity_at, ip, user_agent) VALUES ($1, $2, $3, $4, NULL, $5)`,
-  [tokenId, STEAM_ID, expiresAt, now, 'e2e-test-runner'],
+  `INSERT INTO sessions (id, player_id, expires_at, last_activity_at, ip, user_agent) VALUES ($1, $2, $3, $4, NULL, $5)`,
+  [tokenId, playerId, expiresAt, now, 'e2e-test-runner'],
 );
 
 await c.end();
