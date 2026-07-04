@@ -1,25 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import {
-  availableMarkTypes,
+  highestSeverityTone,
   type MarkTypeOption,
+  markIconEmoji,
+  markTypeMenuItems,
   type PlayerMark,
   partitionMarks,
   severityTone,
 } from './marks';
 
-function makeType(id: number, sortOrder: number): MarkTypeOption {
+function makeType(id: number, sortOrder: number, severity = id): MarkTypeOption {
   return {
     id,
     slug: `type-${id}`,
     label_en: `Type ${id}`,
     label_ru: `Тип ${id}`,
-    icon: 'flag',
-    severity: id,
+    icon: 'crosshair',
+    severity,
     sort_order: sortOrder,
   };
 }
 
-function makeMark(id: string, markTypeId: number, active: boolean): PlayerMark {
+function makeMark(
+  id: string,
+  markTypeId: number,
+  active: boolean,
+  severity = markTypeId,
+): PlayerMark {
   return {
     id,
     player_id: 'p1',
@@ -38,8 +45,8 @@ function makeMark(id: string, markTypeId: number, active: boolean): PlayerMark {
       slug: `type-${markTypeId}`,
       label_en: `Type ${markTypeId}`,
       label_ru: `Тип ${markTypeId}`,
-      icon: 'flag',
-      severity: markTypeId,
+      icon: 'crosshair',
+      severity,
     },
   };
 }
@@ -60,19 +67,20 @@ describe('partitionMarks', () => {
   });
 });
 
-describe('availableMarkTypes', () => {
-  it('excludes types that already have an active mark and sorts by sort_order', () => {
+describe('markTypeMenuItems', () => {
+  it('lists every type sorted by sort_order and flags the active ones', () => {
     const types = [makeType(3, 3), makeType(1, 1), makeType(2, 2)];
-    const activeMarks = [makeMark('m1', 2, true)];
-    const options = availableMarkTypes(types, activeMarks);
-    expect(options.map((t) => t.id)).toEqual([1, 3]);
+    const activeMark = makeMark('m1', 2, true);
+    const items = markTypeMenuItems(types, [activeMark]);
+    expect(items.map((entry) => entry.type.id)).toEqual([1, 2, 3]);
+    expect(items.map((entry) => entry.activeMark?.id ?? null)).toEqual([null, 'm1', null]);
   });
 
-  it('ignores cleared marks when computing availability', () => {
+  it('never treats a cleared mark as active in the menu', () => {
     const types = [makeType(1, 1), makeType(2, 2)];
-    const activeMarks = partitionMarks([makeMark('m1', 1, false)]).active;
-    const options = availableMarkTypes(types, activeMarks);
-    expect(options.map((t) => t.id)).toEqual([1, 2]);
+    const clearedMark = makeMark('m1', 1, false);
+    const items = markTypeMenuItems(types, partitionMarks([clearedMark]).active);
+    expect(items.every((entry) => entry.activeMark === null)).toBe(true);
   });
 });
 
@@ -82,5 +90,28 @@ describe('severityTone', () => {
     expect(severityTone(4)).toBe('amber');
     expect(severityTone(3)).toBe('amber');
     expect(severityTone(1)).toBe('neutral');
+  });
+});
+
+describe('highestSeverityTone', () => {
+  it('returns null when there are no marks', () => {
+    expect(highestSeverityTone([])).toBeNull();
+  });
+
+  it('picks the tone of the most severe mark', () => {
+    expect(highestSeverityTone([{ severity: 1 }, { severity: 5 }, { severity: 3 }])).toBe('red');
+    expect(highestSeverityTone([{ severity: 2 }, { severity: 3 }])).toBe('amber');
+    expect(highestSeverityTone([{ severity: 1 }, { severity: 2 }])).toBe('neutral');
+  });
+});
+
+describe('markIconEmoji', () => {
+  it('maps known icon slugs to emoji', () => {
+    expect(markIconEmoji('crosshair')).toBe('🎯');
+    expect(markIconEmoji('skull')).toBe('💀');
+  });
+
+  it('falls back to a flag for unknown slugs', () => {
+    expect(markIconEmoji('does-not-exist')).toBe('🚩');
   });
 });

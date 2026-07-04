@@ -60,6 +60,36 @@ export type LiveEvent =
           edited: boolean;
         };
       };
+    }
+  | {
+      type: 'mark.changed';
+      ts: string;
+      data: {
+        player_id: string;
+        action: 'set' | 'cleared';
+        mark: {
+          id: string;
+          player_id: string;
+          mark_type_id: number;
+          comment: string | null;
+          created_by: string;
+          created_by_name: string | null;
+          created_at: string;
+          cleared_by: string | null;
+          cleared_by_name: string | null;
+          cleared_at: string | null;
+          clear_reason: string | null;
+          active: boolean;
+          mark_type: {
+            id: number;
+            slug: string;
+            label_en: string;
+            label_ru: string;
+            icon: string;
+            severity: number;
+          };
+        };
+      };
     };
 
 export interface LiveBus {
