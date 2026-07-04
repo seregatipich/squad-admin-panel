@@ -44,6 +44,22 @@ export type LiveEvent =
       type: 'worker.heartbeat';
       ts: string;
       data: { worker: string; healthy: boolean };
+    }
+  | {
+      type: 'note.created';
+      ts: string;
+      data: {
+        player_id: string;
+        note: {
+          id: string;
+          player_id: string;
+          author: { id: string; name: string; role_color: string | null };
+          body: string;
+          created_at: string;
+          updated_at: string | null;
+          edited: boolean;
+        };
+      };
     };
 
 export interface LiveBus {
