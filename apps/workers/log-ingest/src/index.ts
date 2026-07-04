@@ -9,6 +9,7 @@ import { dropCutoverServers } from './cutover.js';
 import { TailManager } from './manager.js';
 import { LogIngestor } from './parser/ingest.js';
 import { publish } from './publish.js';
+import { handleReport } from './report/store.js';
 import { tailContainerLogs } from './tail.js';
 
 const requiredEnv = (name: string): string => {
@@ -80,6 +81,11 @@ async function main() {
             },
           })
           .catch(() => undefined);
+      },
+      onReport: (report) => {
+        handleReport(db, redis, { serverId, report }).catch((err) =>
+          log.error({ err: (err as Error).message }, 'report handling failed'),
+        );
       },
     });
     const abort = tailContainerLogs({
