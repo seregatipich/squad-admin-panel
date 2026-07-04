@@ -67,12 +67,29 @@ describeIfDb('migration regressions', () => {
     expect((rows as unknown[]).length).toBe(1);
   });
 
-  it('servers has deleted_by_steam_id64 column', async () => {
-    const rows = await db.execute(sql`
+  it('migration 0020 replaces deleted_by_steam_id64 with deleted_by_player_id', async () => {
+    const current = await db.execute(sql`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'servers' AND column_name = 'deleted_by_player_id';
+    `);
+    const legacy = await db.execute(sql`
       SELECT column_name FROM information_schema.columns
       WHERE table_schema = 'public' AND table_name = 'servers' AND column_name = 'deleted_by_steam_id64';
     `);
-    expect((rows as unknown[]).length).toBe(1);
+    expect((current as unknown[]).length).toBe(1);
+    expect((legacy as unknown[]).length).toBe(0);
+  });
+
+  it('migration 0020 gives players a UUID primary key', async () => {
+    const rows = await db.execute(sql`
+      SELECT a.attname AS column_name
+      FROM pg_index i
+      JOIN pg_class t ON t.oid = i.indrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+      JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
+      WHERE n.nspname = 'public' AND t.relname = 'players' AND i.indisprimary;
+    `);
+    expect(rows).toEqual([expect.objectContaining({ column_name: 'id' })]);
   });
 
   it('servers has deletion_backup_marker_id column', async () => {
