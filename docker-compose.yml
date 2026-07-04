@@ -220,6 +220,19 @@ services:
         condition: service_completed_successfully
     logging: *default-logging
 
+  worker-presence-daily:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: presence-daily } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
   worker-diag-flush:
     build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: diag-flush } }
     restart: unless-stopped
