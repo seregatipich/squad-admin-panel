@@ -1,8 +1,11 @@
-import { startHeartbeat } from '@squad/shared-config';
+import { createDiscordRedactingStream, startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino from 'pino';
 
-const log = pino({ level: process.env.LOG_LEVEL ?? 'info', base: { service: 'worker-discord' } });
+const log = pino(
+  { level: process.env.LOG_LEVEL ?? 'info', base: { service: 'worker-discord' } },
+  createDiscordRedactingStream(process.stdout),
+);
 
 async function main() {
   log.info('worker-discord idle — deferred to later phase');

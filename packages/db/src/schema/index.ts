@@ -3,6 +3,7 @@ export * from './banned-name-rules.js';
 export * from './clans.js';
 export * from './config-versions.js';
 export * from './diagnostic-events.js';
+export * from './discord.js';
 export * from './events.js';
 export * from './issue-comments.js';
 export * from './issue-label-links.js';

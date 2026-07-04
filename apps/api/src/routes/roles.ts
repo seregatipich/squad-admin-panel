@@ -24,6 +24,7 @@ const createBody = z.object({
   can_edit_roles: z.boolean().default(false),
   can_manage_issues: z.boolean().default(false),
   can_manage_ban_sources: z.boolean().default(false),
+  can_manage_integrations: z.boolean().default(false),
 });
 
 const updateBody = z.object({
@@ -36,6 +37,7 @@ const updateBody = z.object({
   can_edit_roles: z.boolean().optional(),
   can_manage_issues: z.boolean().optional(),
   can_manage_ban_sources: z.boolean().optional(),
+  can_manage_integrations: z.boolean().optional(),
 });
 
 const idParam = z.object({ id: z.string().uuid() });
@@ -51,6 +53,7 @@ interface RoleWithCount extends Record<string, unknown> {
   can_edit_roles: boolean;
   can_manage_issues: boolean;
   can_manage_ban_sources: boolean;
+  can_manage_integrations: boolean;
   squad_permissions: string[];
   assigned_users_count: number;
 }
@@ -60,6 +63,7 @@ async function listRolesWithCounts(db: DatabaseClient): Promise<RoleWithCount[]>
     SELECT r.id, r.name, r.color, r.description, r.is_system_role,
       r.panel_access, r.can_assign_roles, r.can_edit_roles, r.can_manage_issues,
       r.panel_access, r.can_assign_roles, r.can_edit_roles, r.can_manage_ban_sources,
+      r.panel_access, r.can_assign_roles, r.can_edit_roles, r.can_manage_integrations,
       COALESCE(
         (SELECT array_agg(rsp.squad_permission_key ORDER BY rsp.squad_permission_key)
          FROM role_squad_permissions rsp WHERE rsp.role_id = r.id), ARRAY[]::text[]
@@ -129,6 +133,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
             canEditRoles: req.body.can_edit_roles,
             canManageIssues: req.body.can_manage_issues,
             canManageBanSources: req.body.can_manage_ban_sources,
+            canManageIntegrations: req.body.can_manage_integrations,
           });
           if (req.body.squad_permissions.length > 0) {
             await tx.insert(roleSquadPermissions).values(
@@ -206,6 +211,8 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
             updates.canManageIssues = req.body.can_manage_issues;
           if (req.body.can_manage_ban_sources !== undefined)
             updates.canManageBanSources = req.body.can_manage_ban_sources;
+          if (req.body.can_manage_integrations !== undefined)
+            updates.canManageIntegrations = req.body.can_manage_integrations;
           if (Object.keys(updates).length > 0) {
             await tx.update(roles).set(updates).where(eq(roles.id, req.params.id));
           }

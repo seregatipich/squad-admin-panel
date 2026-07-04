@@ -13,6 +13,7 @@ export const roles = pgTable(
     canEditRoles: boolean('can_edit_roles').notNull().default(false),
     canManageIssues: boolean('can_manage_issues').notNull().default(false),
     canManageBanSources: boolean('can_manage_ban_sources').notNull().default(false),
+    canManageIntegrations: boolean('can_manage_integrations').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
   (table) => ({

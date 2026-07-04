@@ -35,6 +35,7 @@ import depotRoutes from '../../src/routes/depot.js';
 import hostRoutes from '../../src/routes/host.js';
 import hostActionsRoutes from '../../src/routes/host-actions.js';
 import issuesRoutes from '../../src/routes/issues.js';
+import integrationsDiscordRoutes from '../../src/routes/integrations-discord.js';
 import logsRoutes from '../../src/routes/logs.js';
 import marksRoutes from '../../src/routes/marks.js';
 import meTokensRoutes from '../../src/routes/me-tokens.js';
@@ -477,6 +478,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(playerNotesRoutes);
   await app.register(auditRoutes);
   await app.register(logsRoutes);
+  await app.register(integrationsDiscordRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(banSourcesRoutes);

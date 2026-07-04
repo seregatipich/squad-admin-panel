@@ -139,6 +139,12 @@ export const PERMISSIONS = [
   { key: 'api_token:create', category: 'api_tokens', label: 'Создавать API tokens' },
   { key: 'api_token:revoke', category: 'api_tokens', label: 'Ревокать tokens' },
   { key: 'discord:link', category: 'discord', label: 'Привязать Discord', unimplemented: true },
+  {
+    key: 'integration:manage',
+    category: 'discord',
+    label: 'Управлять интеграциями (Discord)',
+    dangerous: true,
+  },
   { key: 'trigger:view', category: 'triggers', label: 'Видеть авто-правила', unimplemented: true },
   {
     key: 'trigger:edit',

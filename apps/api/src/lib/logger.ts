@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Writable } from 'node:stream';
+import { createDiscordRedactingStream } from '@squad/shared-config';
 import pino, { type DestinationStream, multistream } from 'pino';
 
 export interface RequestContext {
@@ -40,7 +41,7 @@ export function buildLogger(level: string): { logger: pino.Logger; lateSink: Lat
   const mixin = () => als.getStore() ?? {};
   const base = { service: 'api' };
   const lateSink = new LateSink();
-  const sinkStream: DestinationStream = { write: (chunk) => lateSink.write(chunk) };
+  const sinkStream: DestinationStream = createDiscordRedactingStream(lateSink);
   if (isDev) {
     const pretty = pino.transport({
       target: 'pino-pretty',
@@ -49,7 +50,7 @@ export function buildLogger(level: string): { logger: pino.Logger; lateSink: Lat
     const logger = pino(
       { level, base, redact, mixin },
       multistream([
-        { level: level as pino.Level, stream: pretty },
+        { level: level as pino.Level, stream: createDiscordRedactingStream(pretty) },
         { level: level as pino.Level, stream: sinkStream },
       ]),
     );
@@ -58,7 +59,7 @@ export function buildLogger(level: string): { logger: pino.Logger; lateSink: Lat
   const logger = pino(
     { level, base, redact, mixin },
     multistream([
-      { level: level as pino.Level, stream: process.stdout },
+      { level: level as pino.Level, stream: createDiscordRedactingStream(process.stdout) },
       { level: level as pino.Level, stream: sinkStream },
     ]),
   );
