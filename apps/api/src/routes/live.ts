@@ -13,6 +13,7 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
     (socket, req) => {
       let lastPongAt = Date.now();
       let closed = false;
+      const connectionPlayerId = req.user?.playerId ?? null;
 
       app.diag
         .emit({
@@ -48,6 +49,9 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
       }, PING_INTERVAL_MS);
 
       const unsubscribe = app.liveBus.subscribe((event) => {
+        if (event.type === 'session.revoked' && event.data.player_id !== connectionPlayerId) {
+          return;
+        }
         safeSend(event);
       });
 

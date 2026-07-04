@@ -65,6 +65,8 @@ export type LiveEvent =
       type: 'mark_type.changed';
       ts: string;
       data: { action: 'created' | 'updated' | 'reordered' };
+      type: 'session.revoked';
+      data: { player_id: string; session_id: string };
     };
 
 export interface LiveBus {
