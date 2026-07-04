@@ -29,6 +29,7 @@ import adminsCfgRoutes from '../../src/routes/admins-cfg.js';
 import auditRoutes from '../../src/routes/audit.js';
 import authRoutes from '../../src/routes/auth.js';
 import bannedNamesRoutes from '../../src/routes/banned-names.js';
+import clansRoutes from '../../src/routes/clans.js';
 import depotRoutes from '../../src/routes/depot.js';
 import hostRoutes from '../../src/routes/host.js';
 import hostActionsRoutes from '../../src/routes/host-actions.js';
@@ -470,6 +471,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(playerRoutes);
   await app.register(issuesRoutes);
   await app.register(marksRoutes);
+  await app.register(clansRoutes);
   await app.register(auditRoutes);
   await app.register(logsRoutes);
   await app.register(adminsCfgRoutes);
