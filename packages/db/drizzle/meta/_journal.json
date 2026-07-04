@@ -169,6 +169,13 @@
 			"when": 1781269250000,
 			"tag": "0023_clan_manage_flag",
 			"breakpoints": true
+		},
+		{
+			"idx": 24,
+			"version": "7",
+			"when": 1781269251000,
+			"tag": "0024_matches_and_sessions",
+			"breakpoints": true
 		}
 	]
 }
