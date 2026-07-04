@@ -34,6 +34,7 @@ const GROUPS: NavGroup[] = [
     label: 'Настройки',
     items: [
       { href: '/settings/account', label: 'Аккаунт' },
+      { href: '/settings/message-templates', label: 'Шаблоны сообщений', permission: 'role:edit' },
       { href: '/settings/tokens', label: 'API-токены' },
     ],
   },
