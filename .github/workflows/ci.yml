@@ -18,6 +18,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo run typecheck
+      - name: Run panel-bridge plugin tests
+        run: pnpm turbo run test --filter=panel-bridge
       - run: pnpm exec biome check .
       - name: Run tests with coverage
         run: pnpm test:cov
@@ -72,3 +74,5 @@ jobs:
         run: docker build -f docker/worker.Dockerfile --build-arg WORKER=log-ingest -t squad-admin-panel/worker-log-ingest:ci .
       - name: build worker-rcon image
         run: docker build -f docker/worker.Dockerfile --build-arg WORKER=rcon -t squad-admin-panel/worker-rcon:ci .
+      - name: build rnsquadjs sidecar image
+        run: docker build -f docker/rnsquadjs.Dockerfile -t squad-panel/rnsquadjs:ci .

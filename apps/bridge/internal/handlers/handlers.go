@@ -139,6 +139,8 @@ func (d *Dispatcher) Handle(
 		return d.processInfo(req)
 	case "container_run":
 		return d.containerRun(ctx, req)
+	case "container_run_rnsquadjs":
+		return d.containerRunRnsquadjs(ctx, req)
 	case "container_start":
 		return d.containerStart(ctx, req)
 	case "container_stop":
@@ -529,6 +531,31 @@ func (d *Dispatcher) containerRun(ctx context.Context, req *rpc.Request) rpc.Res
 		SavedHost:    p.SavedHost,
 		DepotVolume:  p.DepotVolume,
 		UlimitNofile: p.UlimitNofile,
+	})
+	if err != nil {
+		code := rpc.CodeRuntimeError
+		if isForbidden(err) {
+			code = rpc.CodeForbidden
+		}
+		return rpc.NewErrorResponse(req.ID, code, err.Error())
+	}
+	body, _ := json.Marshal(map[string]string{"container_id": id, "status": "started"})
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+type containerRunRnsquadjsParams struct {
+	ServerID string            `json:"server_id"`
+	Env      map[string]string `json:"env"`
+}
+
+func (d *Dispatcher) containerRunRnsquadjs(ctx context.Context, req *rpc.Request) rpc.Response {
+	var p containerRunRnsquadjsParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
+	}
+	id, err := d.Docker.RunRNSquadJS(ctx, runner.RNSquadJSRunSpec{
+		ServerID: p.ServerID,
+		Env:      p.Env,
 	})
 	if err != nil {
 		code := rpc.CodeRuntimeError
