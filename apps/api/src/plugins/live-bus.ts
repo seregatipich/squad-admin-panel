@@ -115,6 +115,21 @@ export type LiveEvent =
           };
         };
       };
+    }
+  | {
+      type: 'chat.message';
+      ts: string;
+      data: {
+        id: string;
+        server_id: string;
+        ts: string;
+        channel: 'ChatAll' | 'ChatTeam' | 'ChatSquad' | 'ChatAdmin';
+        player_id: string | null;
+        player_name: string;
+        steam_id64: string | null;
+        eos_id: string | null;
+        message: string;
+      };
     };
 
 export interface IssuePlayerRef {
