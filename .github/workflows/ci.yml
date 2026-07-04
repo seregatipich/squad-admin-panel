@@ -45,6 +45,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo run typecheck
+      - name: Build production artifacts
+        run: pnpm turbo run build
       - name: Apply database migrations
         run: pnpm --filter @squad/db migrate
       - name: Run panel-bridge plugin tests
