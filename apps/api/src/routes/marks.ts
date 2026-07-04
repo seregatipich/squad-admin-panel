@@ -20,6 +20,7 @@ const clearMarkBody = z
   .object({ clear_reason: z.string().trim().max(COMMENT_MAX).optional() })
   .nullish();
 const listQuery = z.object({ include_cleared: z.enum(['true', 'false']).optional() });
+const markTypesQuery = z.object({ include_inactive: z.enum(['true', 'false']).optional() });
 
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
   if (!req.user) {
@@ -56,25 +57,30 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
   await ensureMarkTypes(app.db);
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
-  fast.get('/api/v1/mark-types', { config: { audit: false } }, async (req, reply) => {
-    const denied = panelGuard(req, reply);
-    if (denied) return denied;
-    const rows = await app.db
-      .select()
-      .from(markTypes)
-      .where(eq(markTypes.isActive, true))
-      .orderBy(asc(markTypes.sortOrder));
-    return rows.map((t) => ({
-      id: t.id,
-      slug: t.slug,
-      label_en: t.labelEn,
-      label_ru: t.labelRu,
-      icon: t.icon,
-      severity: t.severity,
-      is_active: t.isActive,
-      sort_order: t.sortOrder,
-    }));
-  });
+  fast.get(
+    '/api/v1/mark-types',
+    { schema: { querystring: markTypesQuery }, config: { audit: false } },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+      const includeInactive = req.query.include_inactive === 'true';
+      const rows = await app.db
+        .select()
+        .from(markTypes)
+        .where(includeInactive ? undefined : eq(markTypes.isActive, true))
+        .orderBy(asc(markTypes.sortOrder));
+      return rows.map((t) => ({
+        id: t.id,
+        slug: t.slug,
+        label_en: t.labelEn,
+        label_ru: t.labelRu,
+        icon: t.icon,
+        severity: t.severity,
+        is_active: t.isActive,
+        sort_order: t.sortOrder,
+      }));
+    },
+  );
 
   fast.get(
     '/api/v1/players/:playerId/marks',

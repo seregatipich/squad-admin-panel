@@ -60,6 +60,11 @@ export type LiveEvent =
           edited: boolean;
         };
       };
+    }
+  | {
+      type: 'mark_type.changed';
+      ts: string;
+      data: { action: 'created' | 'updated' | 'reordered' };
     };
 
 export interface LiveBus {

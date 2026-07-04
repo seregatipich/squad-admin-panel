@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { getLiveBus } from '@/lib/live-bus';
 import {
   availableMarkTypes,
   type MarkTypeOption,
@@ -40,6 +41,13 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
 
   useEffect(() => {
     void reload();
+  }, [reload]);
+
+  useEffect(() => {
+    const bus = getLiveBus();
+    return bus.subscribe((event) => {
+      if (event.type === 'mark_type.changed') void reload();
+    });
   }, [reload]);
 
   const { active, cleared } = partitionMarks(marks);

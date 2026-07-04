@@ -33,6 +33,11 @@ export type LiveEvent =
       type: 'note.created';
       ts: string;
       data: { player_id: string; note: PlayerNote };
+    }
+  | {
+      type: 'mark_type.changed';
+      ts: string;
+      data: { action: 'created' | 'updated' | 'reordered' };
     };
 
 export interface PlayerNote {

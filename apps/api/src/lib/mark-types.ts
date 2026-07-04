@@ -1,6 +1,36 @@
 import type { DatabaseClient } from '@squad/db';
 import { markTypes } from '@squad/db/schema';
 
+export const MARK_TYPE_ICONS = [
+  'scan-eye',
+  'crosshair',
+  'gauge',
+  'boxes',
+  'refresh-cw',
+  'skull',
+  'file-warning',
+  'message-square-warning',
+  'flag',
+  'shield-alert',
+  'bug',
+  'ban',
+  'alert-triangle',
+  'eye-off',
+  'radar',
+  'zap',
+] as const;
+
+export type MarkTypeIcon = (typeof MARK_TYPE_ICONS)[number];
+
+const MARK_TYPE_ICON_SET: ReadonlySet<string> = new Set(MARK_TYPE_ICONS);
+
+export const MARK_TYPE_SEVERITY_MIN = 1;
+export const MARK_TYPE_SEVERITY_MAX = 5;
+
+export function isMarkTypeIcon(value: string): value is MarkTypeIcon {
+  return MARK_TYPE_ICON_SET.has(value);
+}
+
 export interface MarkTypeSeed {
   id: number;
   slug: string;
