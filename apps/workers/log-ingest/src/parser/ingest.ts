@@ -1,6 +1,7 @@
 import { type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
 import { v7 as uuidv7 } from 'uuid';
 import { MatchAssembler, type MatchCommand, parseNewGame, parseRoundTickets } from './match.js';
+import { type ParsedChat, parseChatFromLogLine } from './chat.js';
 import {
   BEACON_BIND,
   detectSquadFatal,
@@ -32,6 +33,7 @@ export interface SquadFatalReport {
 export interface IngestorCallbacks {
   onParseError?: (report: ParseErrorReport) => void;
   onSquadFatal?: (report: SquadFatalReport) => void;
+  onChat?: (chat: ParsedChat) => void;
 }
 
 /** One instance per Squad server under observation. */
@@ -45,6 +47,7 @@ export class LogIngestor {
   private readonly onReport?: (report: ParsedReport) => void;
   private readonly onMatch?: (command: MatchCommand) => void;
   private readonly matchAssembler: MatchAssembler;
+  private readonly onChat?: (chat: ParsedChat) => void;
 
   constructor(params: {
     serverId: string;
@@ -54,6 +57,7 @@ export class LogIngestor {
     onSquadFatal?: (report: SquadFatalReport) => void;
     onReport?: (report: ParsedReport) => void;
     onMatch?: (command: MatchCommand) => void;
+    onChat?: (chat: ParsedChat) => void;
   }) {
     this.serverId = params.serverId;
     this.beaconPort = params.beaconPort;
@@ -63,6 +67,7 @@ export class LogIngestor {
     this.onReport = params.onReport;
     this.onMatch = params.onMatch;
     this.matchAssembler = new MatchAssembler(params.serverId);
+    this.onChat = params.onChat;
   }
 
   ingest(line: string): EventEnvelope[] {
@@ -87,6 +92,10 @@ export class LogIngestor {
         });
       }
       return [];
+    }
+    if (this.onChat) {
+      const chat = parseChatFromLogLine(parsed);
+      if (chat) this.onChat(chat);
     }
     if (this.onReport) {
       const report = parseReportFromLogLine(parsed);

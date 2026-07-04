@@ -5,6 +5,7 @@ import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
+import { handleChat } from './chat/store.js';
 import { dropCutoverServers } from './cutover.js';
 import { TailManager } from './manager.js';
 import { DEFAULT_SEED_ONLINE_THRESHOLD, handleMatchCommand } from './match/store.js';
@@ -98,6 +99,10 @@ async function main() {
           .catch((err) =>
             log.error({ err: (err as Error).message, kind: command.kind }, 'match assembly failed'),
           );
+      onChat: (chat) => {
+        handleChat(db, redis, { serverId, chat }).catch((err) =>
+          log.error({ err: (err as Error).message }, 'chat handling failed'),
+        );
       },
     });
     const abort = tailContainerLogs({

@@ -1,9 +1,15 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { ChatRingBuffer } from '../lib/chat-ring-buffer.js';
 
 const PING_INTERVAL_MS = 10_000;
 const PONG_TIMEOUT_MS = 30_000;
+const CHAT_BUFFER_PER_SERVER = 100;
 
 const liveRoutes: FastifyPluginAsync = async (app) => {
+  const chatBuffer = new ChatRingBuffer(CHAT_BUFFER_PER_SERVER);
+  const stopChatBuffer = app.liveBus.subscribe((event) => chatBuffer.push(event));
+  app.addHook('onClose', async () => stopChatBuffer());
+
   app.get(
     '/api/v1/ws/live',
     {
@@ -54,6 +60,8 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
         }
         safeSend(event);
       });
+
+      for (const buffered of chatBuffer.tail()) safeSend(buffered);
 
       socket.on('message', (raw) => {
         try {

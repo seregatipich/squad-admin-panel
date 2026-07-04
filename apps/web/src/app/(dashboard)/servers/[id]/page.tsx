@@ -11,6 +11,7 @@ import { LogConsole, type LogEntry } from '@/components/LogConsole';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { nextBackoffMs } from '@/lib/ws-backoff';
 import { LivePlayers } from './live-players';
+import { ChatPanel } from './ChatPanel';
 
 interface ServerRow {
   id: string;
@@ -570,6 +571,10 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
                 : 'Сервер остановлен — здесь будут последние 200 строк после запуска.'
           }
         />
+      </section>
+
+      <section>
+        <ChatPanel serverId={id} />
       </section>
 
       <ForceStopDialog

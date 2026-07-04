@@ -68,7 +68,26 @@ export type LiveEvent =
       type: 'mark.changed';
       ts: string;
       data: { player_id: string; action: 'set' | 'cleared'; mark: LivePlayerMark };
+    }
+  | {
+      type: 'chat.message';
+      ts: string;
+      data: ChatMessage;
     };
+
+export type ChatChannel = 'ChatAll' | 'ChatTeam' | 'ChatSquad' | 'ChatAdmin';
+
+export interface ChatMessage {
+  id: string;
+  server_id: string;
+  ts: string;
+  channel: ChatChannel;
+  player_id: string | null;
+  player_name: string;
+  steam_id64: string | null;
+  eos_id: string | null;
+  message: string;
+}
 
 export interface PlayerNote {
   id: string;
