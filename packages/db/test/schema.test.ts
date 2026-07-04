@@ -40,4 +40,18 @@ describe('schema surface', () => {
     expect(cols.rconPort.notNull).toBe(true);
     expect(cols.rconPasswordEncrypted.notNull).toBe(true);
   });
+
+  it('exports the issue-tracker tables and roles.can_manage_issues flag', () => {
+    for (const name of ['issues', 'issueLabels', 'issueLabelLinks', 'issueComments']) {
+      expect(schema).toHaveProperty(name);
+    }
+    expect(getTableColumns(schema.roles).canManageIssues.notNull).toBe(true);
+  });
+
+  it('issues.author_player_id is NOT NULL and assignee is nullable', () => {
+    const cols = getTableColumns(schema.issues);
+    expect(cols.authorPlayerId.notNull).toBe(true);
+    expect(cols.assigneePlayerId.notNull).toBe(false);
+    expect(cols.state.notNull).toBe(true);
+  });
 });

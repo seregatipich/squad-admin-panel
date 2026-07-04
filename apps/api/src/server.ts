@@ -40,6 +40,7 @@ import bannedNamesRoutes from './routes/banned-names.js';
 import depotRoutes from './routes/depot.js';
 import hostRoutes from './routes/host.js';
 import hostActionsRoutes from './routes/host-actions.js';
+import issuesRoutes from './routes/issues.js';
 import liveRoutes from './routes/live.js';
 import logsRoutes from './routes/logs.js';
 import meTokensRoutes from './routes/me-tokens.js';
@@ -140,6 +141,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(roleMembersRoutes);
   await app.register(usersRoutes);
   await app.register(playerRoutes);
+  await app.register(issuesRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(auditRoutes);

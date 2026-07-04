@@ -5,6 +5,10 @@ import * as bannedNameRulesSchema from '../src/schema/banned-name-rules.js';
 import * as configVersionsSchema from '../src/schema/config-versions.js';
 import * as diagnosticEventsSchema from '../src/schema/diagnostic-events.js';
 import * as eventsSchema from '../src/schema/events.js';
+import * as issueCommentsSchema from '../src/schema/issue-comments.js';
+import * as issueLabelLinksSchema from '../src/schema/issue-label-links.js';
+import * as issueLabelsSchema from '../src/schema/issue-labels.js';
+import * as issuesSchema from '../src/schema/issues.js';
 import * as panelMetaSchema from '../src/schema/panel-meta.js';
 import * as playerApiTokensSchema from '../src/schema/player-api-tokens.js';
 import * as playerIpHistorySchema from '../src/schema/player-ip-history.js';
@@ -25,6 +29,10 @@ describe('individual schema module exports', () => {
     { mod: configVersionsSchema, name: 'config-versions' },
     { mod: diagnosticEventsSchema, name: 'diagnostic-events' },
     { mod: eventsSchema, name: 'events' },
+    { mod: issueCommentsSchema, name: 'issue-comments' },
+    { mod: issueLabelLinksSchema, name: 'issue-label-links' },
+    { mod: issueLabelsSchema, name: 'issue-labels' },
+    { mod: issuesSchema, name: 'issues' },
     { mod: panelMetaSchema, name: 'panel-meta' },
     { mod: playerApiTokensSchema, name: 'player-api-tokens' },
     { mod: playerIpHistorySchema, name: 'player-ip-history' },

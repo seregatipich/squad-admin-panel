@@ -183,6 +183,7 @@ import authSteamRoutes from '../src/routes/auth-steam.js';
 import depotRoutes from '../src/routes/depot.js';
 import hostRoutes from '../src/routes/host.js';
 import hostActionsRoutes from '../src/routes/host-actions.js';
+import issuesRoutes from '../src/routes/issues.js';
 import liveRoutes from '../src/routes/live.js';
 import logsRoutes from '../src/routes/logs.js';
 import meTokensRoutes from '../src/routes/me-tokens.js';
@@ -224,6 +225,10 @@ describe('routes import graph', () => {
 
   it('host exports a Fastify plugin', () => {
     expect(typeof hostRoutes).toBe('function');
+  });
+
+  it('issues exports a Fastify plugin', () => {
+    expect(typeof issuesRoutes).toBe('function');
   });
 
   it('live exports a Fastify plugin', () => {

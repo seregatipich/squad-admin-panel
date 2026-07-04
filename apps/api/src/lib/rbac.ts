@@ -17,6 +17,7 @@ export interface PermissionContext {
   panelAccess: boolean;
   canAssignRoles: boolean;
   canEditRoles: boolean;
+  canManageIssues: boolean;
   isOwner: boolean;
 }
 
@@ -57,6 +58,7 @@ interface RoleContextRow extends Record<string, unknown> {
   panel_access: boolean | null;
   can_assign_roles: boolean | null;
   can_edit_roles: boolean | null;
+  can_manage_issues: boolean | null;
   squad_permissions: string[] | null;
 }
 
@@ -75,6 +77,7 @@ export async function loadUserPermissions(
       r.panel_access,
       r.can_assign_roles,
       r.can_edit_roles,
+      r.can_manage_issues,
       COALESCE(
         (SELECT array_agg(rsp.squad_permission_key ORDER BY rsp.squad_permission_key)
          FROM role_squad_permissions rsp WHERE rsp.role_id = r.id),
@@ -96,6 +99,7 @@ export async function loadUserPermissions(
       panelAccess: false,
       canAssignRoles: false,
       canEditRoles: false,
+      canManageIssues: false,
       isOwner: false,
     };
     cache.set(playerId, { value: empty, expiresAt: Date.now() + TTL_MS });
@@ -106,6 +110,7 @@ export async function loadUserPermissions(
   const panelAccess = isOwner ? true : (row.panel_access ?? false);
   const canAssignRoles = isOwner ? true : (row.can_assign_roles ?? false);
   const canEditRoles = isOwner ? true : (row.can_edit_roles ?? false);
+  const canManageIssues = isOwner ? true : (row.can_manage_issues ?? false);
   const squadPermissions = isOwner
     ? new Set<SquadPermissionKey>(SQUAD_PERMISSION_KEYS)
     : new Set<SquadPermissionKey>(
@@ -130,6 +135,7 @@ export async function loadUserPermissions(
     panelAccess,
     canAssignRoles,
     canEditRoles,
+    canManageIssues,
     isOwner,
   };
   cache.set(playerId, { value, expiresAt: Date.now() + TTL_MS });
