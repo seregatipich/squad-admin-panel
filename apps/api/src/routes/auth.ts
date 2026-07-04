@@ -43,6 +43,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       permissions: Array.from(req.user.permissions.permissions),
       can_manage_ban_sources: req.user.permissions.canManageBanSources,
       can_manage_clans: req.user.permissions.canManageClans,
+      can_manage_issues: req.user.permissions.canManageIssues,
     };
   });
 
