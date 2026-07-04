@@ -10,6 +10,7 @@ export * from './issue-labels.js';
 export * from './issues.js';
 export * from './message-templates.js';
 export * from './marks.js';
+export * from './external-ban-sources.js';
 export * from './panel-meta.js';
 export * from './player-api-tokens.js';
 export * from './player-ip-history.js';

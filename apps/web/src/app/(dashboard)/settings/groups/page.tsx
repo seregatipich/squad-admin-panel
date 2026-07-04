@@ -22,6 +22,7 @@ interface RoleRow {
   panel_access: boolean;
   can_assign_roles: boolean;
   can_edit_roles: boolean;
+  can_manage_ban_sources: boolean;
   squad_permissions: SquadPermissionKey[];
   assigned_users_count: number;
 }
@@ -79,6 +80,8 @@ export default function GroupsPage() {
       if (patch.panel_access !== undefined) body.panel_access = patch.panel_access;
       if (patch.can_assign_roles !== undefined) body.can_assign_roles = patch.can_assign_roles;
       if (patch.can_edit_roles !== undefined) body.can_edit_roles = patch.can_edit_roles;
+      if (patch.can_manage_ban_sources !== undefined)
+        body.can_manage_ban_sources = patch.can_manage_ban_sources;
       if (patch.squad_permissions !== undefined) body.squad_permissions = patch.squad_permissions;
       const res = await fetch(`/api/v1/roles/${role.id}`, {
         method: 'PUT',
@@ -111,6 +114,7 @@ export default function GroupsPage() {
       panel_access: false,
       can_assign_roles: false,
       can_edit_roles: false,
+      can_manage_ban_sources: false,
     };
     let attempt = 0;
     while (attempt < 5) {
@@ -257,12 +261,16 @@ function RoleCard({
     debounce({ squad_permissions: next });
   };
 
-  const setFlag = (key: 'panel_access' | 'can_assign_roles' | 'can_edit_roles', value: boolean) => {
+  const setFlag = (
+    key: 'panel_access' | 'can_assign_roles' | 'can_edit_roles' | 'can_manage_ban_sources',
+    value: boolean,
+  ) => {
     if (!canEdit) return;
     const patch: Partial<RoleRow> = { [key]: value } as Partial<RoleRow>;
     if (key === 'panel_access' && !value) {
       patch.can_assign_roles = false;
       patch.can_edit_roles = false;
+      patch.can_manage_ban_sources = false;
     }
     onLocal(patch);
     debounce(patch);
@@ -360,7 +368,7 @@ function RoleCard({
         </label>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-2 text-sm md:grid-cols-3">
+      <div className="mt-4 grid grid-cols-1 gap-2 text-sm md:grid-cols-2 lg:grid-cols-4">
         <FlagSwitch
           label="🖥️ Доступ к панели"
           enabled={role.panel_access}
@@ -378,6 +386,12 @@ function RoleCard({
           enabled={role.can_edit_roles}
           disabled={!canEdit || !role.panel_access}
           onChange={(v) => setFlag('can_edit_roles', v)}
+        />
+        <FlagSwitch
+          label="🛡️ Может управлять источниками банов"
+          enabled={role.can_manage_ban_sources}
+          disabled={!canEdit || !role.panel_access}
+          onChange={(v) => setFlag('can_manage_ban_sources', v)}
         />
       </div>
 

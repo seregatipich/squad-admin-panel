@@ -33,6 +33,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       canonical_name: req.user.canonicalName,
       avatar_url: req.user.avatarUrl,
       permissions: Array.from(req.user.permissions.permissions),
+      can_manage_ban_sources: req.user.permissions.canManageBanSources,
     };
   });
 

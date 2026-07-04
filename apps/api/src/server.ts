@@ -38,6 +38,7 @@ import authRoutes from './routes/auth.js';
 import steamRoutes from './routes/auth-steam.js';
 import bannedNamesRoutes from './routes/banned-names.js';
 import clansRoutes from './routes/clans.js';
+import banSourcesRoutes from './routes/ban-sources.js';
 import depotRoutes from './routes/depot.js';
 import hostRoutes from './routes/host.js';
 import hostActionsRoutes from './routes/host-actions.js';
@@ -152,6 +153,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(playerNotesRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(bannedNamesRoutes);
+  await app.register(banSourcesRoutes);
   await app.register(auditRoutes);
   await app.register(logsRoutes);
   await app.register(liveRoutes);
