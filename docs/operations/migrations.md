@@ -55,6 +55,14 @@ If a migration shipped to production must be reverted, the path is:
 
 Naming convention: `NNNN_short_descriptive_slug.sql` (lowercase, underscores). The `NNNN` prefix is assigned by Drizzle from the journal sequence — never renumber existing files.
 
+### Hand-written constraint DDL
+
+Some cross-row invariants can only be enforced by triggers, which Drizzle does not generate from the schema TS. Where a feature needs them, the trigger/function DDL lives in a committed, idempotent `.sql` file under `packages/db/sql/` and must be appended to that feature's generated migration in step 3 above.
+
+| File | Enforces |
+|---|---|
+| `packages/db/sql/clans-constraints.sql` | `clans` / `clan_members` invariants: a tag is globally unique across active clans, a clan has exactly one leader once it has members, priority members never exceed `max_priority_slots`, and `max_priority_slots` cannot be lowered below the current priority count. |
+
 ## Applying migrations manually
 
 ```bash
