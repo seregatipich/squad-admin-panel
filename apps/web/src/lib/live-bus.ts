@@ -33,6 +33,21 @@ export type LiveEvent =
       type: 'note.created';
       ts: string;
       data: { player_id: string; note: PlayerNote };
+    }
+  | {
+      type: 'issue.created';
+      ts: string;
+      data: { issue: IssueView };
+    }
+  | {
+      type: 'issue.updated';
+      ts: string;
+      data: { issue: IssueView };
+    }
+  | {
+      type: 'issue.comment.created';
+      ts: string;
+      data: { issue_id: string; comment: IssueComment };
     };
 
 export interface PlayerNote {
@@ -43,6 +58,44 @@ export interface PlayerNote {
   created_at: string;
   updated_at: string | null;
   edited: boolean;
+}
+
+export type IssueState = 'open' | 'in_progress' | 'closed';
+
+export interface IssuePlayerRef {
+  id: string;
+  name: string;
+}
+
+export interface IssueLabel {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export interface IssueView {
+  id: string;
+  number: number;
+  title: string;
+  body: string;
+  state: IssueState;
+  author_player_id: string;
+  assignee_player_id: string | null;
+  author: IssuePlayerRef | null;
+  assignee: IssuePlayerRef | null;
+  labels: IssueLabel[];
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+}
+
+export interface IssueComment {
+  id: string;
+  issue_id: string;
+  author_player_id: string;
+  author: IssuePlayerRef | null;
+  body: string;
+  created_at: string;
 }
 
 export type LiveBusState = 'connecting' | 'open' | 'closed';

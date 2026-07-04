@@ -6,6 +6,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { ensureSystemIssueLabels } from '../lib/issue-labels.js';
+import type { IssueCommentLiveView, IssueLiveView, IssuePlayerRef } from '../plugins/live-bus.js';
 
 const TITLE_MAX = 200;
 const BODY_MAX = 4000;
@@ -71,19 +72,45 @@ function auditActor(req: FastifyRequest): AuditActor {
   };
 }
 
-function serializeIssue(row: IssueRow, labels: IssueLabelView[]) {
+function playerRef(id: string | null, names: Map<string, string>): IssuePlayerRef | null {
+  if (!id) return null;
+  return { id, name: names.get(id) ?? id };
+}
+
+function serializeIssue(
+  row: IssueRow,
+  labels: IssueLabelView[],
+  names: Map<string, string>,
+): IssueLiveView {
   return {
     id: row.id,
     number: Number(row.number),
     title: row.title,
     body: row.body,
-    state: row.state,
+    state: row.state as IssueLiveView['state'],
     author_player_id: row.authorPlayerId,
     assignee_player_id: row.assigneePlayerId,
+    author: playerRef(row.authorPlayerId, names),
+    assignee: playerRef(row.assigneePlayerId, names),
     labels,
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
     closed_at: row.closedAt ? row.closedAt.toISOString() : null,
+  };
+}
+
+function serializeComment(
+  row: { id: string; authorPlayerId: string; body: string; createdAt: Date },
+  issueId: string,
+  names: Map<string, string>,
+): IssueCommentLiveView {
+  return {
+    id: row.id,
+    issue_id: issueId,
+    author_player_id: row.authorPlayerId,
+    author: playerRef(row.authorPlayerId, names),
+    body: row.body,
+    created_at: row.createdAt.toISOString(),
   };
 }
 
@@ -134,6 +161,28 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
     return rows[0] ?? null;
   }
 
+  async function resolvePlayerNames(ids: Array<string | null>): Promise<Map<string, string>> {
+    const unique = Array.from(new Set(ids.filter((id): id is string => Boolean(id))));
+    const names = new Map<string, string>();
+    if (unique.length === 0) return names;
+    const rows = await app.db
+      .select({ id: players.id, name: players.canonicalName })
+      .from(players)
+      .where(inArray(players.id, unique));
+    for (const row of rows) names.set(row.id, row.name);
+    return names;
+  }
+
+  fast.get('/api/v1/issues/labels', async (req, reply) => {
+    const user = currentUser(req, reply);
+    if (!user) return;
+    const rows = await app.db
+      .select({ id: issueLabels.id, name: issueLabels.name, color: issueLabels.color })
+      .from(issueLabels)
+      .orderBy(issueLabels.name);
+    return { items: rows };
+  });
+
   fast.post('/api/v1/issues', { schema: { body: createBody } }, async (req, reply) => {
     const user = currentUser(req, reply);
     if (!user) return;
@@ -166,7 +215,8 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       return { error: 'insert_failed' };
     }
     const labels = (await labelsForIssues([id])).get(id) ?? [];
-    const view = serializeIssue(created, labels);
+    const names = await resolvePlayerNames([created.authorPlayerId, created.assigneePlayerId]);
+    const view = serializeIssue(created, labels, names);
 
     reply.code(201);
     await writeAuditEntry(app.db, {
@@ -179,6 +229,11 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       after: view,
       context: { requestId: req.id, method: req.method, url: req.url },
       statusCode: reply.statusCode,
+    });
+    app.liveBus.publish({
+      type: 'issue.created',
+      ts: new Date().toISOString(),
+      data: { issue: view },
     });
     return view;
   });
@@ -220,8 +275,11 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       .offset((page - 1) * per_page);
 
     const labelMap = await labelsForIssues(rows.map((row) => row.id));
+    const names = await resolvePlayerNames(
+      rows.flatMap((row) => [row.authorPlayerId, row.assigneePlayerId]),
+    );
     return {
-      items: rows.map((row) => serializeIssue(row, labelMap.get(row.id) ?? [])),
+      items: rows.map((row) => serializeIssue(row, labelMap.get(row.id) ?? [], names)),
       total,
       page,
       per_page,
@@ -244,14 +302,15 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       .where(eq(issueComments.issueId, issue.id))
       .orderBy(issueComments.createdAt);
 
+    const names = await resolvePlayerNames([
+      issue.authorPlayerId,
+      issue.assigneePlayerId,
+      ...comments.map((comment) => comment.authorPlayerId),
+    ]);
+
     return {
-      ...serializeIssue(issue, labels),
-      comments: comments.map((comment) => ({
-        id: comment.id,
-        author_player_id: comment.authorPlayerId,
-        body: comment.body,
-        created_at: comment.createdAt.toISOString(),
-      })),
+      ...serializeIssue(issue, labels, names),
+      comments: comments.map((comment) => serializeComment(comment, issue.id, names)),
     };
   });
 
@@ -304,7 +363,8 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const beforeLabels = (await labelsForIssues([issue.id])).get(issue.id) ?? [];
-      const beforeView = serializeIssue(issue, beforeLabels);
+      const beforeNames = await resolvePlayerNames([issue.authorPlayerId, issue.assigneePlayerId]);
+      const beforeView = serializeIssue(issue, beforeLabels, beforeNames);
 
       const updates: Partial<typeof issues.$inferInsert> = { updatedAt: new Date() };
       if (req.body.title !== undefined) updates.title = req.body.title;
@@ -333,7 +393,11 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'update_failed' };
       }
       const afterLabels = (await labelsForIssues([issue.id])).get(issue.id) ?? [];
-      const afterView = serializeIssue(updated, afterLabels);
+      const afterNames = await resolvePlayerNames([
+        updated.authorPlayerId,
+        updated.assigneePlayerId,
+      ]);
+      const afterView = serializeIssue(updated, afterLabels, afterNames);
 
       await writeAuditEntry(app.db, {
         actor: auditActor(req),
@@ -345,6 +409,11 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
         after: afterView,
         context: { requestId: req.id, method: req.method, url: req.url },
         statusCode: reply.statusCode,
+      });
+      app.liveBus.publish({
+        type: 'issue.updated',
+        ts: new Date().toISOString(),
+        data: { issue: afterView },
       });
       return afterView;
     },
@@ -378,13 +447,17 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(500);
         return { error: 'insert_failed' };
       }
-      const view = {
-        id: row.id,
-        issue_id: issue.id,
-        author_player_id: user.playerId,
-        body: req.body.body,
-        created_at: row.createdAt.toISOString(),
-      };
+      const names = await resolvePlayerNames([user.playerId]);
+      const view = serializeComment(
+        {
+          id: row.id,
+          authorPlayerId: user.playerId,
+          body: req.body.body,
+          createdAt: row.createdAt,
+        },
+        issue.id,
+        names,
+      );
 
       reply.code(201);
       await writeAuditEntry(app.db, {
@@ -397,6 +470,11 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
         after: view,
         context: { requestId: req.id, method: req.method, url: req.url },
         statusCode: reply.statusCode,
+      });
+      app.liveBus.publish({
+        type: 'issue.comment.created',
+        ts: new Date().toISOString(),
+        data: { issue_id: issue.id, comment: view },
       });
       return view;
     },
