@@ -3,6 +3,7 @@ import { and, desc, eq, gte } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
+import type { LiveEvent } from '../../src/plugins/live-bus.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   assertAuditRow,
@@ -340,5 +341,115 @@ describeIfDb('audit trail contains both set and clear for the actor', () => {
       .orderBy(desc(auditLog.createdAt));
     expect(setRows.length).toBeGreaterThanOrEqual(1);
     expect(clearRows.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describeIfDb('mark.changed live events', () => {
+  it('publishes on set and clear with the enriched mark payload', async () => {
+    const [live] = await h.db
+      .insert(players)
+      .values({
+        steamId64: testSteamId(810050),
+        canonicalName: 'LiveSuspect',
+        canonicalNameNormalized: 'livesuspect',
+      })
+      .returning({ id: players.id });
+    if (!live) throw new Error('failed to seed live player');
+
+    const received: LiveEvent[] = [];
+    const unsub = h.app.liveBus.subscribe((event) => received.push(event));
+    try {
+      const created = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/players/${live.id}/marks`,
+        headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ mark_type_id: 8, comment: 'toxic chat' }),
+      });
+      expect(created.statusCode).toBe(201);
+      const markId = (created.json() as { id: string }).id;
+
+      const setEvt = received.find((e) => e.type === 'mark.changed' && e.data.action === 'set');
+      expect(setEvt).toBeDefined();
+      if (setEvt && setEvt.type === 'mark.changed') {
+        expect(setEvt.data.player_id).toBe(live.id);
+        expect(setEvt.data.mark.mark_type_id).toBe(8);
+        expect(setEvt.data.mark.active).toBe(true);
+        expect(setEvt.data.mark.created_by_name).toBe('MarkOwner');
+        expect(setEvt.data.mark.mark_type.slug).toBe('toxic');
+        expect(setEvt.data.mark.comment).toBe('toxic chat');
+      }
+
+      received.length = 0;
+      const cleared = await h.app.inject({
+        method: 'DELETE',
+        url: `/api/v1/players/${live.id}/marks/${markId}`,
+        headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ clear_reason: 'resolved' }),
+      });
+      expect(cleared.statusCode).toBe(200);
+
+      const clrEvt = received.find((e) => e.type === 'mark.changed' && e.data.action === 'cleared');
+      expect(clrEvt).toBeDefined();
+      if (clrEvt && clrEvt.type === 'mark.changed') {
+        expect(clrEvt.data.player_id).toBe(live.id);
+        expect(clrEvt.data.mark.active).toBe(false);
+        expect(clrEvt.data.mark.cleared_by_name).toBe('MarkOwner');
+        expect(clrEvt.data.mark.clear_reason).toBe('resolved');
+      }
+    } finally {
+      unsub();
+    }
+  });
+});
+
+describeIfDb('GET /api/v1/marks/active-summary', () => {
+  it('lists only players that currently have at least one active mark', async () => {
+    const [clearedOnly] = await h.db
+      .insert(players)
+      .values({
+        steamId64: testSteamId(810051),
+        canonicalName: 'ClearedOnly',
+        canonicalNameNormalized: 'clearedonly',
+      })
+      .returning({ id: players.id });
+    if (!clearedOnly) throw new Error('failed to seed cleared-only player');
+
+    const created = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${clearedOnly.id}/marks`,
+      headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ mark_type_id: 5 }),
+    });
+    const markId = (created.json() as { id: string }).id;
+    await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/players/${clearedOnly.id}/marks/${markId}`,
+      headers: { cookie: ownerCookie },
+    });
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/marks/active-summary',
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const items = (
+      res.json() as {
+        items: Array<{ player_id: string; marks: Array<{ slug: string; severity: number }> }>;
+      }
+    ).items;
+
+    const target = items.find((i) => i.player_id === targetPlayerId);
+    expect(target).toBeDefined();
+    expect(target?.marks.length).toBeGreaterThanOrEqual(1);
+    expect(target?.marks[0]).toHaveProperty('slug');
+    expect(target?.marks[0]).toHaveProperty('severity');
+
+    expect(items.find((i) => i.player_id === clearedOnly.id)).toBeUndefined();
+  });
+
+  it('rejects unauthenticated access with 401', async () => {
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/marks/active-summary' });
+    expect(res.statusCode).toBe(401);
   });
 });

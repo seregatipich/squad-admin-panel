@@ -53,6 +53,33 @@ function serializeMark(row: PlayerMarkRow) {
   };
 }
 
+interface EnrichedMarkJoin {
+  mark: PlayerMarkRow;
+  typeSlug: string;
+  typeLabelEn: string;
+  typeLabelRu: string;
+  typeIcon: string;
+  typeSeverity: number;
+  authorName: string | null;
+  clearerName: string | null;
+}
+
+function enrichMark(row: EnrichedMarkJoin) {
+  return {
+    ...serializeMark(row.mark),
+    mark_type: {
+      id: row.mark.markTypeId,
+      slug: row.typeSlug,
+      label_en: row.typeLabelEn,
+      label_ru: row.typeLabelRu,
+      icon: row.typeIcon,
+      severity: row.typeSeverity,
+    },
+    created_by_name: row.authorName,
+    cleared_by_name: row.clearerName,
+  };
+}
+
 const marksRoutes: FastifyPluginAsync = async (app) => {
   await ensureMarkTypes(app.db);
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -81,6 +108,96 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
       }));
     },
   );
+  function enrichedMarkQuery() {
+    const author = alias(players, 'mark_author');
+    const clearer = alias(players, 'mark_clearer');
+    return app.db
+      .select({
+        mark: playerMarks,
+        typeSlug: markTypes.slug,
+        typeLabelEn: markTypes.labelEn,
+        typeLabelRu: markTypes.labelRu,
+        typeIcon: markTypes.icon,
+        typeSeverity: markTypes.severity,
+        authorName: author.canonicalName,
+        clearerName: clearer.canonicalName,
+      })
+      .from(playerMarks)
+      .innerJoin(markTypes, eq(markTypes.id, playerMarks.markTypeId))
+      .leftJoin(author, eq(author.id, playerMarks.createdBy))
+      .leftJoin(clearer, eq(clearer.id, playerMarks.clearedBy));
+  }
+
+  async function loadMarkDto(markId: string) {
+    const rows = await enrichedMarkQuery().where(eq(playerMarks.id, markId)).limit(1);
+    const row = rows[0];
+    return row ? enrichMark(row) : null;
+  async function publishMarkChange(
+    playerId: string,
+    markId: string,
+    action: 'set' | 'cleared',
+  ): Promise<void> {
+    const mark = await loadMarkDto(markId);
+    if (!mark) return;
+    app.liveBus.publish({
+      type: 'mark.changed',
+      ts: new Date().toISOString(),
+      data: { player_id: playerId, action, mark },
+    });
+  fast.get('/api/v1/mark-types', { config: { audit: false } }, async (req, reply) => {
+    const denied = panelGuard(req, reply);
+    if (denied) return denied;
+    const rows = await app.db
+      .select()
+      .from(markTypes)
+      .where(eq(markTypes.isActive, true))
+      .orderBy(asc(markTypes.sortOrder));
+    return rows.map((t) => ({
+      id: t.id,
+      slug: t.slug,
+      label_en: t.labelEn,
+      label_ru: t.labelRu,
+      icon: t.icon,
+      severity: t.severity,
+      is_active: t.isActive,
+      sort_order: t.sortOrder,
+    }));
+  });
+
+  fast.get('/api/v1/marks/active-summary', { config: { audit: false } }, async (req, reply) => {
+    const denied = panelGuard(req, reply);
+    if (denied) return denied;
+    const rows = await app.db
+      .select({
+        playerId: playerMarks.playerId,
+        markTypeId: markTypes.id,
+        slug: markTypes.slug,
+        labelEn: markTypes.labelEn,
+        labelRu: markTypes.labelRu,
+        icon: markTypes.icon,
+        severity: markTypes.severity,
+      })
+      .from(playerMarks)
+      .innerJoin(markTypes, eq(markTypes.id, playerMarks.markTypeId))
+      .where(isNull(playerMarks.clearedAt))
+      .orderBy(desc(markTypes.severity), asc(markTypes.sortOrder));
+    const byPlayer = new Map<string, Array<Record<string, unknown>>>();
+    for (const row of rows) {
+      const marks = byPlayer.get(row.playerId) ?? [];
+      marks.push({
+        mark_type_id: row.markTypeId,
+        slug: row.slug,
+        label_en: row.labelEn,
+        label_ru: row.labelRu,
+        icon: row.icon,
+        severity: row.severity,
+      });
+      byPlayer.set(row.playerId, marks);
+    }
+    return {
+      items: Array.from(byPlayer.entries()).map(([player_id, marks]) => ({ player_id, marks })),
+    };
+  });
 
   fast.get(
     '/api/v1/players/:playerId/marks',
@@ -90,42 +207,14 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
       if (denied) return denied;
       const { playerId } = req.params;
       const includeCleared = req.query.include_cleared === 'true';
-      const author = alias(players, 'mark_author');
-      const clearer = alias(players, 'mark_clearer');
       const whereClause = includeCleared
         ? eq(playerMarks.playerId, playerId)
         : and(eq(playerMarks.playerId, playerId), isNull(playerMarks.clearedAt));
-      const rows = await app.db
-        .select({
-          mark: playerMarks,
-          typeSlug: markTypes.slug,
-          typeLabelEn: markTypes.labelEn,
-          typeLabelRu: markTypes.labelRu,
-          typeIcon: markTypes.icon,
-          typeSeverity: markTypes.severity,
-          authorName: author.canonicalName,
-          clearerName: clearer.canonicalName,
-        })
-        .from(playerMarks)
-        .innerJoin(markTypes, eq(markTypes.id, playerMarks.markTypeId))
-        .leftJoin(author, eq(author.id, playerMarks.createdBy))
-        .leftJoin(clearer, eq(clearer.id, playerMarks.clearedBy))
+      const rows = await enrichedMarkQuery()
         .where(whereClause)
         .orderBy(desc(playerMarks.createdAt));
       return {
-        items: rows.map((r) => ({
-          ...serializeMark(r.mark),
-          mark_type: {
-            id: r.mark.markTypeId,
-            slug: r.typeSlug,
-            label_en: r.typeLabelEn,
-            label_ru: r.typeLabelRu,
-            icon: r.typeIcon,
-            severity: r.typeSeverity,
-          },
-          created_by_name: r.authorName,
-          cleared_by_name: r.clearerName,
-        })),
+        items: rows.map(enrichMark),
         total: rows.length,
       };
     },
@@ -221,6 +310,8 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
         statusCode: 201,
       });
 
+      await publishMarkChange(playerId, row.id, 'set');
+
       reply.code(201);
       return serializeMark(row);
     },
@@ -278,6 +369,8 @@ const marksRoutes: FastifyPluginAsync = async (app) => {
         context: { player_id: playerId, mark_type_id: row.markTypeId, request_id: req.id },
         statusCode: 200,
       });
+
+      await publishMarkChange(playerId, row.id, 'cleared');
 
       return serializeMark(row);
     },

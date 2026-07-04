@@ -95,6 +95,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
         <h1 className="text-2xl font-semibold">{player.canonical_name}</h1>
       </div>
 
+      <PlayerMarks playerId={playerId} />
+
       <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
         <h2 className="text-xs uppercase tracking-widest text-neutral-400">Профиль</h2>
         <dl className="grid grid-cols-[160px_1fr] gap-y-1 text-sm">
@@ -126,7 +128,6 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
       <PanelAccessSection playerId={playerId} canManage={canManageRoles} />
 
-      <PlayerMarks playerId={playerId} />
       <NotesSection playerId={playerId} me={me} />
 
       <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">

@@ -1,7 +1,10 @@
 'use client';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import { PlayerMarkBadge } from '@/components/PlayerMarkBadge';
+import { highestSeverityTone, type MarkTone, type MarkTypeMini } from '@/lib/marks';
+import { useLiveSubscription } from '@/lib/use-live-bus';
 
 interface Player {
   id: string;
@@ -22,12 +25,37 @@ const POLL_MS = 8000;
 /** Treat a player as "online" when their last_seen_at is within one poll cycle. */
 const ONLINE_WINDOW_MS = 90_000;
 
+const rowToneClasses: Record<MarkTone, string> = {
+  red: 'bg-red-950/25',
+  amber: 'bg-amber-950/20',
+  neutral: 'bg-neutral-800/30',
+};
+
 export default function PlayersPage() {
   const [data, setData] = useState<PlayersResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [onlyOnline, setOnlyOnline] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [markSummary, setMarkSummary] = useState<Record<string, MarkTypeMini[]>>({});
+
+  const loadMarkSummary = useCallback(async () => {
+    try {
+      const r = await fetch('/api/v1/marks/active-summary', {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!r.ok) return;
+      const body = (await r.json()) as {
+        items: Array<{ player_id: string; marks: MarkTypeMini[] }>;
+      };
+      const next: Record<string, MarkTypeMini[]> = {};
+      for (const item of body.items) next[item.player_id] = item.marks;
+      setMarkSummary(next);
+    } catch {
+      /* keep the previous summary on transient failures */
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,12 +73,21 @@ export default function PlayersPage() {
       }
     }
     void load();
-    const t = setInterval(load, POLL_MS);
+    void loadMarkSummary();
+    const t = setInterval(() => {
+      void load();
+      void loadMarkSummary();
+    }, POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(t);
     };
-  }, []);
+  }, [loadMarkSummary]);
+
+  const onMarkChanged = useCallback(() => {
+    void loadMarkSummary();
+  }, [loadMarkSummary]);
+  useLiveSubscription('mark.changed', onMarkChanged);
 
   const now = Date.now();
   const rows = useMemo(() => {
@@ -133,8 +170,13 @@ export default function PlayersPage() {
               {rows.map((p) => {
                 const age = Date.now() - new Date(p.last_seen_at).getTime();
                 const online = age <= ONLINE_WINDOW_MS;
+                const playerMarks = markSummary[p.id] ?? [];
+                const markTone = highestSeverityTone(playerMarks);
                 return (
-                  <tr key={p.id} className="border-t border-neutral-900">
+                  <tr
+                    key={p.id}
+                    className={`border-t border-neutral-900 ${markTone ? rowToneClasses[markTone] : ''}`}
+                  >
                     <td className="p-2">
                       <span
                         className={`inline-block h-2.5 w-2.5 rounded-full ${online ? 'bg-emerald-500' : 'bg-neutral-600'}`}
@@ -142,12 +184,15 @@ export default function PlayersPage() {
                       />
                     </td>
                     <td className="p-2">
-                      <Link
-                        href={`/players/${p.id}`}
-                        className="text-sky-400 hover:text-sky-300 font-medium"
-                      >
-                        {p.canonical_name}
-                      </Link>
+                      <span className="inline-flex items-center gap-2">
+                        <Link
+                          href={`/players/${p.id}`}
+                          className="text-sky-400 hover:text-sky-300 font-medium"
+                        >
+                          {p.canonical_name}
+                        </Link>
+                        <PlayerMarkBadge marks={playerMarks} />
+                      </span>
                     </td>
                     <td className="p-2 font-mono text-xs">
                       {p.steam_id64 ? (
