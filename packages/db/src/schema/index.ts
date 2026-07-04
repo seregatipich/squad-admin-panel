@@ -15,6 +15,7 @@ export * from './player-api-tokens.js';
 export * from './player-ip-history.js';
 export * from './player-name-history.js';
 export * from './player-reports.js';
+export * from './player-notes.js';
 export * from './players.js';
 export * from './role-permissions.js';
 export * from './role-squad-permissions.js';

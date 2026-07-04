@@ -48,6 +48,7 @@ import marksRoutes from './routes/marks.js';
 import meTokensRoutes from './routes/me-tokens.js';
 import messageTemplatesRoutes from './routes/message-templates.js';
 import permissionsRoutes from './routes/permissions.js';
+import playerNotesRoutes from './routes/player-notes.js';
 import playerRoutes from './routes/players.js';
 import roleMembersRoutes from './routes/role-members.js';
 import rolesRoutes from './routes/roles.js';
@@ -148,6 +149,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(issuesRoutes);
   await app.register(marksRoutes);
   await app.register(clansRoutes);
+  await app.register(playerNotesRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(auditRoutes);

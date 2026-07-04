@@ -7,6 +7,7 @@ import { use, useCallback, useEffect, useState } from 'react';
 
 import { PlayerMarks } from '@/components/PlayerMarks';
 import { RoleColorDot } from '@/components/RoleColorDot';
+import { NotesSection } from './NotesSection';
 
 interface Player {
   id: string;
@@ -126,6 +127,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <PanelAccessSection playerId={playerId} canManage={canManageRoles} />
 
       <PlayerMarks playerId={playerId} />
+      <NotesSection playerId={playerId} me={me} />
 
       <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
         <h2 className="text-xs uppercase tracking-widest text-neutral-400">
