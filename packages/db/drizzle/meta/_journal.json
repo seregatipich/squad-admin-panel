@@ -162,6 +162,13 @@
 			"when": 1781269249000,
 			"tag": "0022_wave5_batch2",
 			"breakpoints": true
+		},
+		{
+			"idx": 23,
+			"version": "7",
+			"when": 1781269250000,
+			"tag": "0023_clan_manage_flag",
+			"breakpoints": true
 		}
 	]
 }
