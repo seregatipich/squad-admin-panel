@@ -16,6 +16,7 @@ import { fireAutoPrune } from '../lib/auto-prune.js';
 import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
 import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
+import { relaunchSidecar, sidecarContainerName } from '../lib/rnsquadjs.js';
 import { softDeleteServer } from '../lib/server-delete.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
@@ -368,6 +369,15 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           message: 'start succeeded',
           payload: { durationMs: Date.now() - startT0, container_id: containerId },
         });
+        // A manual stop disables docker's restart policy on the sidecar, so a
+        // stop→start cycle leaves a cutover server with no log publisher unless
+        // we relaunch it here. Non-fatal: the squad container is already up.
+        await relaunchSidecar(app, s.id).catch((err: unknown) => {
+          req.log.warn(
+            { err: (err as Error).message, id: s.id },
+            'rnsquadjs sidecar relaunch on start failed (continuing)',
+          );
+        });
         return { status: 'starting' };
       } catch (err) {
         const errorMessage = (err as Error).message;
@@ -540,6 +550,16 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           message: 'container_stop succeeded',
           payload: { ok: containerStopOk, durationMs: Date.now() - containerStopT0 },
         });
+        // Stop the RNSquadJS sidecar too. It is not load-bearing for the
+        // server lifecycle, so a failure here must not fail the stop.
+        await app.bridge
+          .containerStop({ name: sidecarContainerName(s.id), timeout_sec: 30 })
+          .catch((err: unknown) => {
+            req.log.warn(
+              { err: (err as Error).message, id: s.id },
+              'rnsquadjs sidecar stop failed (continuing)',
+            );
+          });
         await req.diag.emit({
           component: 'api',
           kind: 'server.stop.done',
@@ -599,6 +619,15 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       });
       await app.bridge.containerStop({ name, timeout_sec: 60 }).catch(() => {});
       await app.bridge.containerStart({ name });
+      // The sidecar was not part of the restart, but a prior manual stop may
+      // have left it down; relaunch it so a restarted cutover server keeps its
+      // log publisher. Non-fatal: the squad container is already restarting.
+      await relaunchSidecar(app, s.id).catch((err: unknown) => {
+        req.log.warn(
+          { err: (err as Error).message, id: s.id },
+          'rnsquadjs sidecar relaunch on restart failed (continuing)',
+        );
+      });
       return { status: 'restarting' };
     },
   );

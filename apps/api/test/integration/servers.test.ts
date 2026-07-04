@@ -1,7 +1,8 @@
 import { players, roles, serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
+import { relaunchSidecar } from '../../src/lib/rnsquadjs.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
@@ -9,6 +10,16 @@ import {
   loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
+
+// The start/restart routes relaunch the per-server rnsquadjs sidecar via
+// relaunchSidecar, which performs real fs writes under /run and consults
+// redis/bridge. Stub the whole helper so these route tests assert the call
+// contract (invoked on success, non-fatal on failure) without touching the
+// host runtime dir. The helper's own behaviour is covered in lib/rnsquadjs.test.
+vi.mock('../../src/lib/rnsquadjs.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/lib/rnsquadjs.js')>()),
+  relaunchSidecar: vi.fn().mockResolvedValue({ containerId: 'rnsquadjs-test', mode: 'shadow' }),
+}));
 
 const OWNER_STEAM_ID = 76561198000000999n;
 
@@ -29,6 +40,7 @@ const createBody = {
 let h: IntegrationHarness;
 
 beforeEach(async () => {
+  vi.mocked(relaunchSidecar).mockClear();
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
     bridge: makeFakeBridge(),
@@ -230,6 +242,49 @@ describe('POST /api/v1/servers/:id/start', () => {
     expect(resp.statusCode).toBe(200);
     expect(resp.json()).toEqual({ status: 'running', note: 'already running' });
   });
+
+  it('relaunches the rnsquadjs sidecar after the squad container starts', async () => {
+    h.bridge.containerInspect = async () => ({ state: 'not_found' });
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug: 'start-relaunch-sidecar' },
+      })
+    ).json<{ id: string }>();
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/start`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(relaunchSidecar).toHaveBeenCalledWith(expect.anything(), id);
+  });
+
+  it('still returns 200 when the sidecar relaunch rejects', async () => {
+    h.bridge.containerInspect = async () => ({ state: 'not_found' });
+    vi.mocked(relaunchSidecar).mockRejectedValueOnce(new Error('rnsquadjs image missing'));
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug: 'start-relaunch-reject' },
+      })
+    ).json<{ id: string }>();
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/start`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(resp.json()).toEqual({ status: 'starting' });
+  });
 });
 
 describe('POST /api/v1/servers/:id/stop', () => {
@@ -320,6 +375,56 @@ describe('POST /api/v1/servers/:id/stop', () => {
     expect(resp.statusCode).toBe(200);
     expect(statusAtStopCall).toBe('stopping');
   });
+
+  it('stops the rnsquadjs sidecar alongside the squad container', async () => {
+    const containerStop = vi.fn(async () => ({ status: 'ok' }));
+    h.bridge.containerStop = containerStop;
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug: 'stop-sidecar-test' },
+      })
+    ).json<{ id: string }>();
+    await h.db.delete(serverCredentials).where(eq(serverCredentials.serverId, id));
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/stop`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(containerStop).toHaveBeenCalledWith({ name: `squad-${id}`, timeout_sec: 60 });
+    expect(containerStop).toHaveBeenCalledWith({ name: `rnsquadjs-${id}`, timeout_sec: 30 });
+  });
+
+  it('still returns 200 when the sidecar stop rejects', async () => {
+    const containerStop = vi.fn(async ({ name }: { name: string }) => {
+      if (name.startsWith('rnsquadjs-')) throw new Error('sidecar gone');
+      return { status: 'ok' };
+    });
+    h.bridge.containerStop = containerStop;
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug: 'stop-sidecar-reject' },
+      })
+    ).json<{ id: string }>();
+    await h.db.delete(serverCredentials).where(eq(serverCredentials.serverId, id));
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/stop`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(resp.json()).toEqual({ status: 'stopping' });
+  });
 });
 
 describe('POST /api/v1/servers/:id/restart', () => {
@@ -346,6 +451,47 @@ describe('POST /api/v1/servers/:id/restart', () => {
     expect(resp.json()).toEqual({ status: 'restarting' });
     expect(startCalls).toBe(1);
     await assertAuditRow(h, { action: 'server.restart', resource: 'server', targetId: id });
+  });
+
+  it('relaunches the rnsquadjs sidecar after the squad container restarts', async () => {
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug: 'restart-relaunch-sidecar' },
+      })
+    ).json<{ id: string }>();
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/restart`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(relaunchSidecar).toHaveBeenCalledWith(expect.anything(), id);
+  });
+
+  it('still returns 200 when the sidecar relaunch rejects on restart', async () => {
+    vi.mocked(relaunchSidecar).mockRejectedValueOnce(new Error('rnsquadjs image missing'));
+    const cookie = await login();
+    const { id } = (
+      await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/servers',
+        headers: { cookie },
+        payload: { ...createBody, slug: 'restart-relaunch-reject' },
+      })
+    ).json<{ id: string }>();
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/restart`,
+      headers: { cookie },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(resp.json()).toEqual({ status: 'restarting' });
   });
 });
 

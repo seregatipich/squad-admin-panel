@@ -14,13 +14,23 @@ const (
 	DepotVolumeName  = "squad-depot"
 	ServerImage      = "squad-server:latest"
 	DepotInitImage   = "squad-panel/depot-init:latest"
+	RNSquadJSImage   = "squad-panel/rnsquadjs:latest"
+	PanelSocketRoot  = "/run/squad-panel/rnsquadjs"
 )
 
 var (
-	serverContainerRegex = regexp.MustCompile(`^squad-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
-	depotJobRegex        = regexp.MustCompile(`^squad-depot-init-[0-9]{14}$`)
-	cfgFileRegex         = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}\.cfg$`)
-	allowedImages        = map[string]struct{}{
+	serverContainerRegex    = regexp.MustCompile(`^squad-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
+	depotJobRegex           = regexp.MustCompile(`^squad-depot-init-[0-9]{14}$`)
+	rnsquadjsContainerRegex = regexp.MustCompile(`^rnsquadjs-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
+	cfgFileRegex            = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}\.cfg$`)
+	// allowedImages gates the caller-supplied image of the generic
+	// container_run RPC. RNSquadJSImage is deliberately absent: the sidecar
+	// image is launchable ONLY via container_run_rnsquadjs, which hardcodes
+	// the image and applies sidecar-specific hardening (read-only rootfs,
+	// uid 1001, isolated socket subdir). Allowing it here would let a
+	// compromised API container launch the sidecar image with squad-server
+	// mounts and bypass that hardening.
+	allowedImages = map[string]struct{}{
 		ServerImage:    {},
 		DepotInitImage: {},
 	}
@@ -48,7 +58,7 @@ var (
 )
 
 func ContainerName(name string) error {
-	if !serverContainerRegex.MatchString(name) && !depotJobRegex.MatchString(name) {
+	if !serverContainerRegex.MatchString(name) && !depotJobRegex.MatchString(name) && !rnsquadjsContainerRegex.MatchString(name) {
 		return fmt.Errorf("%w: container name %q does not match allowed pattern", ErrForbidden, name)
 	}
 	return nil

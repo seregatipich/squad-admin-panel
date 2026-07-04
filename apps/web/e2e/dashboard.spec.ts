@@ -4,7 +4,7 @@ test.describe('dashboard page', () => {
   test('Owner sees full sidebar nav', async ({ ownerPage }) => {
     await ownerPage.goto('/dashboard');
     const nav = ownerPage.locator('nav');
-    for (const item of ['Серверы', 'Игроки', 'Журнал действий', 'Роли', 'Пользователи']) {
+    for (const item of ['Серверы', 'Игроки', 'Журнал действий', 'Группы', 'Пользователи']) {
       await expect(nav).toContainText(item);
     }
   });

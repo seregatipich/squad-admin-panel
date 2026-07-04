@@ -2,6 +2,7 @@ packages:
   - 'apps/*'
   - 'apps/workers/*'
   - 'packages/*'
+  - 'docker/rnsquadjs/plugins/*'
 
 onlyBuiltDependencies:
   - '@biomejs/biome'

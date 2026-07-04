@@ -466,6 +466,14 @@ describe('all wrapper methods dispatch the correct method id', () => {
           depot_volume: 'squad-depot',
         }),
     ],
+    [
+      'container_run_rnsquadjs',
+      (c) =>
+        c.containerRunRnsquadjs({
+          server_id: '01999999-9999-7999-8999-999999999999',
+          env: { PANEL_BRIDGE_MODE: 'shadow' },
+        }),
+    ],
     ['container_start', (c) => c.containerStart({ name: 'squad-x' })],
     ['container_stop', (c) => c.containerStop({ name: 'squad-x' })],
     ['container_rm', (c) => c.containerRm({ name: 'squad-x' })],

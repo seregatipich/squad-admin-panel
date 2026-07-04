@@ -44,6 +44,11 @@ func uuidLike(s string) bool {
 	return uuidRegexp.MatchString(s)
 }
 
+// PanelSocketPath validates p lies under the rnsquadjs sidecar socket/config root.
+func PanelSocketPath(p string) (string, error) {
+	return Path(p, PanelSocketRoot)
+}
+
 const sentinelFirstOwnerPath = "/var/lib/squad-panel/.first-owner-claimed"
 
 func PanelSentinelPath(p string) (string, error) {

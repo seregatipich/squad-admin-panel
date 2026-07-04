@@ -5,7 +5,9 @@ import Redis from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const TEST_REDIS_URL = 'redis://127.0.0.1:6379/14';
-const PASS = 'g3rlRkR6QTfGoN4svPLjEA7dCDbS553C';
+const DATABASE_URL =
+  process.env.DATABASE_URL ??
+  'postgres://admin:g3rlRkR6QTfGoN4svPLjEA7dCDbS553C@127.0.0.1:5432/admin';
 const ENTRY = path.resolve(import.meta.dirname, '../dist/index.js');
 const WORKER = 'log-ingest';
 const HB_KEY = `worker:heartbeat:${WORKER}`;
@@ -14,7 +16,7 @@ let child: ChildProcess | null = null;
 let redis: Redis | null = null;
 
 afterEach(async () => {
-  if (child && !child.killed) {
+  if (child && child.exitCode === null && child.signalCode === null) {
     child.kill('SIGTERM');
     await new Promise((r) => child?.once('exit', r));
   }
@@ -29,7 +31,7 @@ describe(`${WORKER} worker contract`, () => {
       env: {
         ...process.env,
         REDIS_URL: TEST_REDIS_URL,
-        DATABASE_URL: `postgres://admin:${PASS}@127.0.0.1:5432/admin`,
+        DATABASE_URL,
         BRIDGE_SOCKET: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
         NODE_ENV: 'test',
       },
@@ -54,7 +56,7 @@ describe(`${WORKER} worker contract`, () => {
       env: {
         ...process.env,
         REDIS_URL: TEST_REDIS_URL,
-        DATABASE_URL: `postgres://admin:${PASS}@127.0.0.1:5432/admin`,
+        DATABASE_URL,
         BRIDGE_SOCKET: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
         NODE_ENV: 'test',
       },

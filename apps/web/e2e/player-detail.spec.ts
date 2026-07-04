@@ -1,41 +1,47 @@
 import { expect, test } from './_fixtures';
 import { runSql } from './helpers';
 
-function seedPlayer(steamId: string, name: string) {
+function seedPlayer(steamId: string, name: string): string {
   runSql(
     `INSERT INTO players (steam_id64, canonical_name, canonical_name_normalized) VALUES (${steamId}, '${name}', '${name.toLowerCase()}') ON CONFLICT (steam_id64) DO NOTHING`,
   );
+  const playerId = runSql(`SELECT id FROM players WHERE steam_id64=${steamId} LIMIT 1`);
   runSql(
-    `INSERT INTO player_name_history (steam_id64, name, name_normalized) VALUES (${steamId}, '${name}', '${name.toLowerCase()}') ON CONFLICT DO NOTHING`,
+    `INSERT INTO player_name_history (player_id, name, name_normalized) VALUES ('${playerId}', '${name}', '${name.toLowerCase()}') ON CONFLICT DO NOTHING`,
   );
+  return playerId;
 }
 
 function teardownPlayer(steamId: string) {
-  runSql(`DELETE FROM player_name_history WHERE steam_id64=${steamId}`);
+  const playerId = runSql(`SELECT id FROM players WHERE steam_id64=${steamId} LIMIT 1`);
+  if (playerId) {
+    runSql(`DELETE FROM player_name_history WHERE player_id='${playerId}'`);
+  }
   runSql(`DELETE FROM players WHERE steam_id64=${steamId}`);
 }
 
 test.describe('player detail page', () => {
-  const probeId = '76561198000000099';
+  const probeSteamId = '76561198000000099';
   const probeName = 'pw-player-detail-probe';
+  let probeUuid = '';
 
   test.beforeAll(() => {
-    seedPlayer(probeId, probeName);
+    probeUuid = seedPlayer(probeSteamId, probeName);
   });
 
   test.afterAll(() => {
-    teardownPlayer(probeId);
+    teardownPlayer(probeSteamId);
   });
 
   test('shows player profile section', async ({ ownerPage }) => {
-    await ownerPage.goto(`/players/${probeId}`);
+    await ownerPage.goto(`/players/${probeUuid}`);
     await expect(ownerPage.locator('h2', { hasText: 'Профиль' })).toBeVisible({ timeout: 10_000 });
     await expect(ownerPage.locator(`text=${probeName}`).first()).toBeVisible();
   });
 
-  test('shows panel-access section for Owner', async ({ ownerPage }) => {
-    await ownerPage.goto(`/players/${probeId}`);
-    await expect(ownerPage.locator('h2', { hasText: 'Доступ к панели' })).toBeVisible({
+  test('shows role widget for Owner', async ({ ownerPage }) => {
+    await ownerPage.goto(`/players/${probeUuid}`);
+    await expect(ownerPage.locator('h2', { hasText: 'Роль' }).first()).toBeVisible({
       timeout: 10_000,
     });
   });

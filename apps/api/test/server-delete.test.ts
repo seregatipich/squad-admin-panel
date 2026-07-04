@@ -112,6 +112,8 @@ describe('softDeleteServer (orchestrator)', () => {
     expect(directoryDelete).toHaveBeenCalledWith({
       path: `/var/lib/squad-panel/saved/${seeded.id}`,
     });
+    expect(containerRm).toHaveBeenCalledWith({ name: `squad-${seeded.id}` });
+    expect(containerRm).toHaveBeenCalledWith({ name: `rnsquadjs-${seeded.id}` });
     expect(ufwRule).toHaveBeenCalledTimes(4);
     for (const call of ufwRule.mock.calls) {
       expect(call[0].action).toBe('remove');

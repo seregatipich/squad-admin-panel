@@ -8,6 +8,33 @@ on:
 jobs:
   node:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U admin -d admin"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://admin:test_password@localhost:5432/admin
+      POSTGRES_PASSWORD: test_password
+      REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -18,13 +45,15 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo run typecheck
+      - name: Build production artifacts
+        run: pnpm turbo run build
+      - name: Apply database migrations
+        run: pnpm --filter @squad/db migrate
+      - name: Run panel-bridge plugin tests
+        run: pnpm turbo run test --filter=panel-bridge
       - run: pnpm exec biome check .
       - name: Run tests with coverage
         run: pnpm test:cov
-        env:
-          DATABASE_URL: postgres://admin:test_password@localhost:5432/admin
-          POSTGRES_PASSWORD: test_password
-          REDIS_URL: redis://localhost:6379
       - name: Upload coverage artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -47,7 +76,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25.11'
       - run: go vet ./...
       - run: go test -race -count=1 ./...
       - name: govulncheck
@@ -72,3 +101,5 @@ jobs:
         run: docker build -f docker/worker.Dockerfile --build-arg WORKER=log-ingest -t squad-admin-panel/worker-log-ingest:ci .
       - name: build worker-rcon image
         run: docker build -f docker/worker.Dockerfile --build-arg WORKER=rcon -t squad-admin-panel/worker-rcon:ci .
+      - name: build rnsquadjs sidecar image
+        run: docker build -f docker/rnsquadjs.Dockerfile -t squad-panel/rnsquadjs:ci .
