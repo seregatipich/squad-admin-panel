@@ -134,6 +134,20 @@
       "when": 1777482049000,
       "tag": "0018_diagnostic_events_utc_invariant",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1778014596000,
+      "tag": "0019_license_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1781269247000,
+      "tag": "0020_uuid_player_id",
+      "breakpoints": true
     }
   ]
 }
