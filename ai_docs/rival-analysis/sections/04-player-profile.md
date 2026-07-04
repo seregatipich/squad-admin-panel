@@ -1,19 +1,66 @@
 ## 04. Player Profile & Per-player Data Storage
 
+> **Ground truth:** the contracts, DOM structure, cross-project switcher and live stat values below were captured read-only (headless) from `https://breaking.sqstat.ru/player/7656119XXXXXXXXXX`. Capture files: `caps/players/_player_7656119XXXXXXXXXX.content.html`, `caps/players/_player_7656119XXXXXXXXXX.network.json`, `caps/players/_player_7656119XXXXXXXXXX.png`.
+
 ### 1. Purpose & Nav Location
 
-**Route:** `/player/<steamid>` (e.g. `/player/76561199478348885`), optionally `?season=<all|old|1|2>`.
+**Route:** `GET /player/<steamid>` (captured: `/player/7656119XXXXXXXXXX`), optionally `?season=<all|old|1|2>` (default `2`).
 
-Reached from the top-right user dropdown: **Профиль (Profile)** → `/player/<steamid>`. This is a **full HTML document** (it ships its own `<nav>`, not a `#content` fragment), meaning the profile is a hard navigation / bookmarkable page rather than an `pageLoad()` AJAX fragment.
+Reached from the top-right user dropdown **Профиль (Profile)** → `/player/<steamid>`, or by opening ANY player's SteamID. This is a **full HTML document** (ships its own `<nav>`, not a `#content` fragment) — a hard navigation / bookmarkable page, not a `pageLoad()` AJAX fragment.
 
-**Critical framing:** the captured `player_profile.html` is the **self-service public player profile / stat dashboard** for the *logged-in* player viewing their own SteamID (`[BSS] seregatipich`). It is the **read-facing statistics surface**, plus three account-owner tools bolted onto the same page (settings, clan creation, seeding helper). It is **NOT** the admin "per-player rap sheet." The heavy moderation/forensic per-player data (bans, mutes, chat, comments, suspect marks, IP history, twins/alts, votes, reports, kills/deaths logs) is **not rendered here** — it lives in:
+**Critical framing:** the profile is the **public read-facing statistics dashboard** for a given SteamID. The captured page (`[Wind]  xcv`, `7656119XXXXXXXXXX`) is **not** the logged-in viewer — confirming `/player/<id>` is a public per-player stat page for **any** player, plus three account-owner tools that only function for the profile owner (settings, clan creation, seeding helper). It is **NOT** the admin "per-player rap sheet." The heavy moderation/forensic per-player data (bans, mutes, chat, comments, suspect marks, IP history, twins/alts, votes, reports, kills/deaths logs) is **not rendered here** — it lives in:
 
-- the **shared player-detail modal** embedded on every page (Chat/Kills/Deaths/Kits/Games/Comments tabs, ~22 actions), and
-- the dedicated admin DataTables pages, all of which use `script: 'player'`: `bans.html`, `bannames.html`, `collabans.html`, `chat.html`, `comments.html`, `mark.html`, `damages.html`, `deaths.html`, `kills.html`, `revives.html`, `teamkills.html`, `reports.html`, `votes.html`, `logs.html`, `vips.html`, `admins.html`, `top.html`.
+- the **shared player-detail modal** embedded on every page (Chat/Kills/Deaths/Kits/Games/Comments tabs, ~25 actions — fully documented in §03), and
+- the dedicated admin DataTables pages, all `script: 'player'`: `bans.html`, `bannames.html`, `collabans.html`, `chat.html`, `comments.html`, `mark.html`, `damages.html`, `deaths.html`, `kills.html`, `revives.html`, `teamkills.html`, `reports.html`, `votes.html`, `logs.html`, `vips.html`, `admins.html`, `top.html`.
 
-So this section documents (a) the **denormalized per-player statistics model** exposed here and (b) the **owner-account actions** on this page. It cross-references where the forensic data lives without misattributing it to this page.
+So this section documents (a) the **denormalized per-player, per-season statistics model** exposed here and (b) the **owner-account actions** on this page. It cross-references where the forensic data lives without misattributing it to this page.
 
-Only **two script endpoints** are invoked from this page: `player` and `squad`. Only **two actions touch `player`**: `saveUserSettings`. Everything else (`createSquad`, `seeding*`) is `squad`.
+---
+
+### 1a. Live API Contracts
+
+**Captured contract count: 0 XHR / AJAX requests.** The profile is **fully server-side rendered**: all stat blocks (kits, skill, weapons, vehicles, matches, charts) arrive inline in the initial HTML document; the Chart.js canvases are hydrated from **inline literal arrays** in a `<script>` at the bottom of the page, not from a data endpoint.
+
+| Contract | Method + path | Request params | Response | Notes |
+|---|---|---|---|---|
+| Profile document | `GET /player/<steam_id>` | path `steam_id`; query `?season=<all\|old\|1\|2>` (default `2`) | full HTML (`#content` ≈ 31 KB captured) | No `#content` fragment endpoint; whole page including `<nav>`. Bookmarkable/SEO-able. |
+| Season switch | `GET /player/<steam_id>?season=<v>` | `season` | full HTML | **Hard navigation** (`window.location.href`), not AJAX. |
+| Project switch | `GET https://<project>.sqstat.ru/player/<steam_id>?season=<v>` | host swap | full HTML on the sibling project | Cross-project federation switcher (see §2.0). |
+
+**Owner-action endpoints** (present in page JS but **not fired by page load**, so uncaptured as live contracts): `saveUserSettings` (`player`), and `createSquad` / `seeding` / `seedingSetServer` / `seedingGetCalendar` / `seedingGetPriority` / `seedingSetPriority` (`squad`). Documented from JS in §4–§5. The ~25 shared-modal moderation actions do **not** appear on this page.
+
+> Capture interceptor blocked **0** mutations here (`_blocked.json = []`) — the page auto-loads nothing mutating.
+
+**Chart hydration (captured inline data, not endpoints):**
+
+| Canvas `#id` | Chart.js type | Inline data source (captured) |
+|---|---|---|
+| `player_kd_chart` | doughnut | `[kills, deaths]` e.g. `[2563, 1265]`, labels Убийств/Смертей. |
+| `player_kd_year` | stacked bar | monthly `labels[]` (`2024-07`…`2026-07`) + kills[] + deaths[] arrays; tooltip footer computes `K/D = kill/die`. |
+| `player_aim` | bubble | `data:[[x_count, y_damage, r], …]` per weapon — damage/accuracy scatter. |
+
+---
+
+### 2.0 Cross-project federation switcher (`#stat-project`)
+
+The profile header carries a **project multiselect** (`#stat-project`) listing **12 sibling SQSTAT deployments**, each an `<option value=<slug> data-url=https://<slug>.sqstat.ru/player/<steam_id>?season=2>`. `onChange` hard-navigates to `event[0].dataset.url` — i.e. the **same SteamID's profile on another project**. Captured projects:
+
+| slug | host | label |
+|---|---|---|
+| `breaking` | breaking.sqstat.ru | BSS *(current)* |
+| `prot` | prot.sqstat.ru | Protocol |
+| `bb` | bb.sqstat.ru | BlackBerry |
+| `pub` | pub.sqstat.ru | Русский паблик |
+| `bzp` | bzp.sqstat.ru | Битва за пиво |
+| `rsgs` | rsgs.sqstat.ru | RSGS |
+| `hutor` | hutor.sqstat.ru | Hype Hutor |
+| `sqstat` | sqstat.ru | Русское сообщество |
+| `nklv` | nklv.sqstat.ru | Сибирский анклав |
+| `red` | red.sqstat.ru | RED:S |
+| `phoenix` | phoenix.sqstat.ru | Phoenix |
+| `5thmr` | 5thmr.sqstat.ru | Пятый мотострелковый |
+
+This confirms SQSTAT is a **multi-tenant federation** (subdomain per community) sharing one identity space (same SteamID resolves on every project) — the same federation the modal's `checkBans` queries. A strong competitive signal: they run stats+moderation as a hosted SaaS for many Squad communities off one codebase.
 
 ---
 
@@ -23,56 +70,59 @@ The page denormalizes a large per-player, **per-season** stat aggregate. Seasons
 
 #### 2.1 Player identity / account header
 
+Captured page: `[Wind]  xcv` / `7656119XXXXXXXXXX`, season 2.
+
 | Field | UI label | Meaning / type |
 |---|---|---|
-| SteamID64 | (URL + dropdown) | 17-digit Steam ID, the profile primary key (`/player/76561199478348885`). |
-| Display name | `[BSS] seregatipich` (H1) | Current in-game name incl. clan tag prefix. `data-text` mirrors it for a glitch/hover effect. |
-| Bonus balance | Ваши бонусы (Your bonuses) | Integer loyalty/currency balance (e.g. `24307`). Spendable in-panel economy. |
-| VIP status | VIP | Either "нет" or "до DD.MM.YYYY" (VIP until date). Green check when active. |
-| Subscriptions | Подписки (Subscriptions) | Active recurring subscriptions, or "нет активных" (none active). Distinct from one-off VIP. |
-| Rank | Ранг ??? | Present but **`class="hide"`** — a rank/progress-bar feature is built but disabled/hidden in this deployment. |
-| Role image | (background) | `/assets/img/roles/RGF/SL.png` — faction (RGF) + main kit (SL) drive a hero image. |
+| SteamID64 | (URL + `#stat-project`/`#stat-season`) | 17-digit Steam ID, the profile primary key (`/player/7656119XXXXXXXXXX`). |
+| Display name | `[Wind]  xcv` (H1) | Current in-game name incl. clan tag prefix. `data-text` mirrors it for a glitch/hover effect. |
+| Bonus balance | Ваши бонусы (Your bonuses) | Integer loyalty/currency balance. **Owner-only** — this economy block was NOT present in the captured foreign-player page; it renders only when the viewer owns the profile. |
+| VIP status | VIP | "нет" or "до DD.MM.YYYY". **Owner-only** (see above). |
+| Subscriptions | Подписки (Subscriptions) | Active recurring subscriptions, or "нет активных". **Owner-only**. Distinct from one-off VIP. |
+| Rank | Ранг ??? | Present but **`class="hide"`** — a rank/progress-bar feature built but disabled in this deployment (confirmed in capture: `<h2 class="text-center hide">Ранг ???</h2>`). |
+| Role image | `#role_image` (background) | Captured: `/assets/img/roles/RGF/Medic.png` (`height:440px; saturate(160%) brightness(1.4)`) + overlaid kit svg — faction (RGF) + main kit (Medic) drive the hero image. |
+| Live-server banner | (top-right block) | A "current server" card (`RAAS/AAS #1`, map thumb `Sumari Seed v1 (14/100)`, disabled "Подключиться" button) — server-population widget shown even on a foreign profile. |
 
 #### 2.2 Skill / lifetime aggregate (per season)
 
 Rendered in the "Скилл (Skill)" block. This is the core scoreboard row.
 
-| Field | UI label | Type | Example |
+| Field | UI label | Type | Captured example (`[Wind] xcv`, S2) |
 |---|---|---|---|
-| K/D ratio | К/Д | float | `0.51` |
-| Win rate | Винрейт | percent | `49.6%` |
-| Matches | МАТЧЕЙ | int | `281` |
-| Wins | ПОБЕД | int | `131` |
-| Losses | ПРОИГРЫШЕЙ | int | `133` |
-| Kills | УБИЙСТВА | int | `332` |
-| Deaths | СМЕРТИ | int | `647` |
-| Damage | УРОН | int | `77,659` |
-| Revives | ПОДНЯТИЯ (pick-ups/revives) | int | `108` |
-| Teamkills | ТИМКИЛЛЫ | int | `75` |
-| Online time | ОНЛАЙН | duration `Nч Nм` | `284ч 4м` (≈ playtime) |
+| K/D ratio | К/Д | float | `2.03` |
+| Win rate | Винрейт | percent | `62%` |
+| Matches | МАТЧЕЙ | int | `893` |
+| Wins | ПОБЕД | int | `530` |
+| Losses | ПРОИГРЫШЕЙ | int | `325` |
+| Kills | УБИЙСТВА | int | `2,563` |
+| Deaths | СМЕРТИ | int | `1,265` |
+| Damage | УРОН | int | `520,046` |
+| Revives | ПОДНЯТИЯ (pick-ups/revives) | int | `3,093` |
+| Teamkills | ТИМКИЛЛЫ | int | `156` |
+| Online time | ОНЛАЙН | duration `Nч Nм` | `670ч 19м` |
 
-Note wins+losses (131+133=264) < matches (281): draws/incomplete rounds are tracked separately. Charts derived from this entity: `player_kd_chart` (K/D donut), `player_kd_year` (K/D trend over the season), `player_aim` (damage/accuracy line).
+Note wins+losses (530+325=855) < matches (893): draws/incomplete rounds are tracked separately. Charts derived from this entity: `player_kd_chart` (K/D donut, `[kill, die]`), `player_kd_year` (stacked-bar kills/deaths per month, K/D in tooltip), `player_aim` (bubble scatter, `[count, damage, radius]` per weapon).
 
 #### 2.3 Kit usage (per player, per season)
 
-"Киты (Kits)" table — playtime accumulated per role/kit.
+"Киты (Kits)" table — playtime accumulated per role/kit, sorted desc. Captured kit names: `Medic`, `LAT`, `SL`, `Rifleman`, `Crewman`, `Marksman`, `HAT` (icon `/assets/img/ico/kits/<Kit>.svg`).
 
 | Column | Meaning |
 |---|---|
-| Kit | Role icon (`/assets/img/ico/kits/<Kit>.svg`) + name: `SL`, `SLPilot`, `Rifleman`, `SLCrewman`, `Medic`, `Sniper`, `Sapper`. |
-| Playtime | Time in that kit, `Nч Nм` (e.g. SL `78ч 27м`). |
+| Kit | Role icon + name. |
+| Playtime | Time in that kit, `Nч Nм` (captured: Medic `258ч 36м`, LAT `130ч 33м`, SL `114ч 33м`). |
 
 Implies a stored `player_kit_time[steamid, season, kit] = seconds`.
 
 #### 2.4 Weapon stats (per player, per weapon, per season)
 
-"Оружие (Weapon)" cards — one card per weapon, sorted by kills desc.
+"Оружие (Weapon)" cards — one card per weapon, sorted by kills desc. Image `/assets/img/weapons/<file>.png` with `onerror` fallback to `EMPTY.png`.
 
 | Field | Icon | Meaning |
 |---|---|---|
-| Weapon name | — | `АК-74`, `2Б14`, `Colt Canada C7`, `СВД`, `M4A1`, `РПГ-28`, `M67`, ... |
-| Kills | crosshairs | Kills with that weapon (e.g. AK-74 → 29). |
-| Damage | explosion | Total damage with that weapon (e.g. AK-74 → 6,720). |
+| Weapon name | — | Captured: `АК-74`, `Colt Canada C7`, `M4A1`, `АКС-74У`, `РПГ-7`, `РГД-5`, `C14 Timberwolf`, `Ф1`, `АКМ`, `СВД`. |
+| Kills | crosshairs (`fa-crosshairs`) | Kills with that weapon (captured AK-74 → `404`). |
+| Damage | explosion (`fa-explosion`) | Total damage (captured AK-74 → `78,362`). |
 
 Implies `player_weapon_stat[steamid, season, weapon] = {kills, damage}`.
 
@@ -82,32 +132,34 @@ Vehicles the player **operated** and scored from.
 
 | Column | Label | Meaning |
 |---|---|---|
-| # | — | Rank index (1..N). |
-| Vehicle | Техника | Vehicle name (`Тигр`, `AAV-7`, `БМП-1`, `LAV-25`). |
-| Kills | Убийств | Kills scored while in that vehicle. |
-| Damage | Урон | Damage dealt from that vehicle. |
+| # | — | Rank index (1..10, top-N slab). |
+| Vehicle | Техника | **Localized** vehicle name. Captured: `ASLAV`, `Stryker`, `AAV-7`, `Тигр`, `Coyote`, `UB-32`, `ZBL-08`, `БТР-80`, `M1151`, `Град`. |
+| Kills | Убийств | Kills scored while in that vehicle (captured ASLAV → `14`). |
+| Damage | Урон | Damage dealt from that vehicle (captured ASLAV → `2,374`). |
 
 #### 2.6 Vehicle destruction — kills-against ("Уничтожение техники")
 
-Enemy vehicles the player **destroyed**, keyed by the weapon used.
+Enemy vehicles the player **destroyed**, keyed by the weapon used. Top-10 slab.
 
 | Column | Label | Meaning |
 |---|---|---|
-| # | — | Rank index. |
-| Weapon | Оружие | Weapon/projectile used (`2A46M`, `M1126`, `AK74M`, `RPG28`, `S8`, ...). |
-| Vehicle | Техника | Internal asset name of the destroyed vehicle (`T72A_IMF`, `Kraz_6322`, `MI8_AFU`, `Armored_Technical4Seater`, ...). |
-| Count | Количество | Number destroyed. |
+| # | — | Rank index (1..10). |
+| Weapon | Оружие | Weapon/projectile used. Captured: `RPG7`, `M72A5`, `M72A6`, `C90`, `Kord`, `FFV751`, `M72A7`, `RPG28`, `M3MAAWS`, `M2`. |
+| Vehicle | Техника | **Raw internal asset name** of the destroyed vehicle. Captured: `Tigr_RWS`, `T72B3`, `Technical2Seater_White`, `US_Util`, `BRDM-2L1_AFU`, `CTM131_Logistic`, `M1151_M240`, `TLF_Util`, `RHIB_RUS`. |
+| Count | Количество | Number destroyed (captured RPG7 vs Tigr_RWS → `23`). |
 
-Note: this table uses **raw internal asset IDs** (not the localized names used in §2.5), suggesting it is pulled straight from raw kill-log rows.
+Note (confirmed in this capture): this table uses **raw internal asset IDs** (`Tigr_RWS`, `T72B3`) while §2.5 uses localized names — the two tables draw from different sources; destruction is pulled straight from raw kill-log rows. A localization gap a competitor can beat.
 
 #### 2.7 Recent matches ("Матчи")
 
+Top-10 recent games.
+
 | Column | Label | Meaning |
 |---|---|---|
-| # | — | Row index. |
-| Map | Карта | Layer name (`Gorodok RAAS v1`) + external link icon → `/game/<gameId>` (per-match detail page, e.g. `/game/33290`). |
-| Teams | Стороны | Two faction icons (`AFU` vs `RGF`, etc.) for the two sides. |
-| Win | Победа | `label-success` "Да" (Yes) or `label-danger` "Нет" (No) — whether the player's side won. |
+| # | — | Row index (1..10). |
+| Map | Карта | Layer name + external-link icon `<a href="/game/<gameId>" target="_blank">`. Captured game ids `33286`–`33295`, e.g. `Harju RAAS v1` → `/game/33295`. |
+| Teams | Стороны | Two faction icons `/assets/img/ico/teams/<FACTION>.png` (captured `AFU`, `PLANMC`, `IMF`, `MEI`, `RGF`, plus named brigades `58th Motorized Brigade.png`). |
+| Win | Победа | `label-success` "Да" + check, or `label-danger` "Нет" + xmark — whether the player's side won. |
 
 The `/game/<id>` link ties each stat row back to a full match record (separate page).
 
@@ -219,5 +271,8 @@ Generic pattern: every `[data-setting]` control is harvested into `data[setting]
 
 ### 8. Gaps / Cross-references
 
-- The **forensic per-player rap sheet** (bans/mutes history, chat log, comments/notes, suspect marks, IP history, twins/alts/friends, votes, reports, per-round kills/deaths/revives/teamkills detail) is **not on this page** — it is the shared player-detail modal + the `script:'player'` DataTables pages (`bans/chat/comments/mark/damages/deaths/kills/revives/teamkills/reports/votes/logs/collabans/bannames`). Document those in their own sections for the full storage model.
-- Exact `saveUserSettings`/`createSquad`/`seeding*` server-side schemas (column types, ownership checks) are not observable from the client; inferred from payloads only.
+- The **forensic per-player rap sheet** (bans/mutes history, chat log, comments/notes, suspect marks, IP history, twins/alts/friends, votes, reports, per-round kills/deaths/revives/teamkills detail) is **not on this page** — it is the shared player-detail modal (§03) + the `script:'player'` DataTables pages (`bans/chat/comments/mark/damages/deaths/kills/revives/teamkills/reports/votes/logs/collabans/bannames`). Document those in their own sections for the full storage model.
+- Exact `saveUserSettings`/`createSquad`/`seeding*` server-side schemas (column types, ownership checks) are not observable from the client; inferred from JS payloads only, and **none fired at page load** so none captured as live contracts.
+- The profile emits **zero XHR contracts** (fully SSR); there is no JSON stat endpoint to reverse-engineer from this page — the numbers are baked into the HTML and the Chart.js inline arrays.
+
+**Capture provenance:** `caps/players/_player_7656119XXXXXXXXXX.content.html` (SSR `#content`, cross-project + season switchers, all stat blocks, inline Chart.js data), `caps/players/_player_7656119XXXXXXXXXX.network.json` (`[]` — 0 AJAX, re-run twice to confirm), `caps/players/_blocked.json` (`[]`), `caps/players/_player_7656119XXXXXXXXXX.png` (rendered screenshot).
