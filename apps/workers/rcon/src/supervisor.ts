@@ -9,6 +9,7 @@ import { RconClient } from './client.js';
 import { parseListPlayers } from './parse-list-players.js';
 import { parseServerInfo } from './parse-server-info.js';
 import { upsertPlayers } from './persist.js';
+import { buildRoster, type RosterEntry } from './roster.js';
 
 export interface Target {
   serverId: string;
@@ -92,6 +93,7 @@ class PerServerSupervisor {
   private consecutivePollFails = 0;
   private consecutiveA2SFails = 0;
   private consecutiveLowTick = 0;
+  private rosterFirstSeen = new Map<string, string>();
 
   constructor(
     private readonly target: Target,
@@ -137,6 +139,36 @@ class PerServerSupervisor {
           server_id: this.target.serverId,
           state,
           ...(playerCount !== undefined ? { player_count: playerCount } : {}),
+        }),
+      );
+    } catch {
+      // best-effort fan-out; the SET above is the source of truth
+    }
+  }
+
+  private async writeRoster(entries: RosterEntry[], polledAt: string): Promise<void> {
+    const key = `rcon:roster:${this.target.serverId}`;
+    try {
+      await this.opts.redis.set(
+        key,
+        JSON.stringify({ server_id: this.target.serverId, polled_at: polledAt, players: entries }),
+        'EX',
+        90,
+      );
+    } catch {
+      // roster cache is telemetry; the live event below still fans out
+    }
+    try {
+      await this.opts.redis.publish(
+        'live-bus',
+        JSON.stringify({
+          type: 'rcon.roster',
+          ts: polledAt,
+          data: {
+            server_id: this.target.serverId,
+            player_count: entries.length,
+            polled_at: polledAt,
+          },
         }),
       );
     } catch {
@@ -276,6 +308,10 @@ class PerServerSupervisor {
         const info = rawInfo ? parseServerInfo(rawInfo) : null;
         await upsertPlayers(this.opts.db, players);
         this.consecutivePollFails = 0;
+        const polledAt = new Date().toISOString();
+        const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
+        this.rosterFirstSeen = firstSeen;
+        await this.writeRoster(entries, polledAt);
         const pollMs = Date.now() - start;
         this.opts.log.info(
           {
@@ -286,16 +322,18 @@ class PerServerSupervisor {
           'poll listplayers',
         );
         await this.emitEvent('rcon.players_polled', {
-          players: players.map((p) => ({
-            steam_id64: p.steam_id64,
-            eos_id: p.eos_id,
-            name: p.name,
-            team_id: p.team_id,
-            squad_id: p.squad_id,
-            is_leader: p.is_leader ?? false,
-            role: p.role ?? undefined,
-          })),
-          polled_at: new Date().toISOString(),
+          players: players
+            .filter((p) => p.steam_id64 !== null)
+            .map((p) => ({
+              steam_id64: p.steam_id64,
+              eos_id: p.eos_id,
+              name: p.name,
+              team_id: p.team_id,
+              squad_id: p.squad_id,
+              is_leader: p.is_leader ?? false,
+              role: p.role ?? undefined,
+            })),
+          polled_at: polledAt,
           latency_ms: Date.now() - start,
         });
         await this.writeStatus('connected', {

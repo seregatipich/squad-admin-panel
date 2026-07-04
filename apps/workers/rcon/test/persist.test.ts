@@ -37,7 +37,7 @@ function makeDb(
 
   const updateChain = {
     set: vi.fn().mockReturnValue({
-      where: vi.fn().mockImplementation((args: unknown) => {
+      where: vi.fn().mockImplementation((_args: unknown) => {
         updatedValues.push({
           table: 'players',
           set: updateChain.set.mock.calls[updateChain.set.mock.calls.length - 1]?.[0],
@@ -112,5 +112,33 @@ describe('upsertPlayers', () => {
     await upsertPlayers(db, players);
     const selectMock = (db as { select: ReturnType<typeof vi.fn> }).select;
     expect(selectMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('creates an EOS-only player with a null steam_id64', async () => {
+    const db = makeDb([]);
+    await upsertPlayers(db, [makePlayer({ steam_id64: null, name: 'EpicOnly' })]);
+    const inserted = (db as { _insertedValues: Array<{ values: Record<string, unknown> }> })
+      ._insertedValues;
+    const playerRow = inserted.find((row) => 'canonicalName' in row.values);
+    expect(playerRow?.values.steamId64).toBeNull();
+    expect(playerRow?.values.eosId).toBe('abcdef0123456789abcdef0123456789');
+  });
+
+  it('does not steam-link an EOS-only player onto an existing row', async () => {
+    const db = makeDb([
+      {
+        id: '00000000-0000-7000-8000-000000000002',
+        steamId64: null,
+        canonicalName: 'OldName',
+        eosId: 'abcdef0123456789abcdef0123456789',
+      },
+    ]);
+    await upsertPlayers(db, [makePlayer({ steam_id64: null })]);
+    const insertMock = (db as { insert: ReturnType<typeof vi.fn> }).insert;
+    const auditInsert = (
+      db as { _insertedValues: Array<{ values: Record<string, unknown> }> }
+    )._insertedValues.find((row) => row.values.actionType === 'player.steam_linked');
+    expect(auditInsert).toBeUndefined();
+    expect(insertMock).toHaveBeenCalled();
   });
 });

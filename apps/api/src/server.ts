@@ -62,6 +62,7 @@ import serverInstallRoutes from './routes/server-install.js';
 import serverLogsRoutes from './routes/server-logs.js';
 import serverMetricsRoutes from './routes/server-metrics.js';
 import serverRnsquadjsRoutes from './routes/server-rnsquadjs.js';
+import serverRosterRoutes from './routes/server-roster.js';
 import serverSettingsRoutes from './routes/server-settings.js';
 import serverUpdateRoutes from './routes/server-update.js';
 import serverRoutes from './routes/servers.js';
@@ -134,6 +135,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(hostRoutes);
   await app.register(hostActionsRoutes);
   await app.register(serverRoutes);
+  await app.register(serverRosterRoutes);
   await app.register(serverSettingsRoutes);
   await app.register(serverUpdateRoutes);
   await app.register(archiveRoutes);
