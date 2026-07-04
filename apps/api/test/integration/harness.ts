@@ -35,6 +35,7 @@ import hostActionsRoutes from '../../src/routes/host-actions.js';
 import issuesRoutes from '../../src/routes/issues.js';
 import logsRoutes from '../../src/routes/logs.js';
 import meTokensRoutes from '../../src/routes/me-tokens.js';
+import messageTemplatesRoutes from '../../src/routes/message-templates.js';
 import permissionsRoutes from '../../src/routes/permissions.js';
 import playerRoutes from '../../src/routes/players.js';
 import roleMembersRoutes from '../../src/routes/role-members.js';
@@ -448,6 +449,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
 
   await app.register(authRoutes);
   await app.register(meTokensRoutes);
+  await app.register(messageTemplatesRoutes);
   await app.register(permissionsRoutes);
   await app.register(rolesRoutes);
   await app.register(roleMembersRoutes);
