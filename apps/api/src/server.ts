@@ -43,6 +43,7 @@ import hostActionsRoutes from './routes/host-actions.js';
 import issuesRoutes from './routes/issues.js';
 import liveRoutes from './routes/live.js';
 import logsRoutes from './routes/logs.js';
+import marksRoutes from './routes/marks.js';
 import meTokensRoutes from './routes/me-tokens.js';
 import messageTemplatesRoutes from './routes/message-templates.js';
 import permissionsRoutes from './routes/permissions.js';
@@ -144,6 +145,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(usersRoutes);
   await app.register(playerRoutes);
   await app.register(issuesRoutes);
+  await app.register(marksRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(auditRoutes);
