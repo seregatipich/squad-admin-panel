@@ -6,7 +6,7 @@ Single-host deployment model. The entire panel stack runs via `docker compose up
 
 - Ubuntu 22.04 / 24.04 LTS or Debian 12.
 - Docker Engine 24+ with Compose v2 (`docker compose version`).
-- Go 1.25+ if building the bridge locally (binary can also be pre-built in CI).
+- Go 1.25.11+ if building the bridge locally (binary can also be pre-built in CI).
 - ~50 GB free disk for the `squad-depot` volume.
 - `sudo` access on the host.
 

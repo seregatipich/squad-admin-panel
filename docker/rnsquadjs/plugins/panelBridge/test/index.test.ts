@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PanelBridgeContext } from '../src/index.js';
 import { startPanelBridge } from '../src/index.js';
@@ -14,6 +17,19 @@ vi.mock('ioredis', () => ({
 }));
 
 const SERVER_ID = '019dbaa5-1234-7abc-8def-0123456789ab';
+const socketDirs: string[] = [];
+
+const uniqueSocketPath = (): string => {
+  const dir = mkdtempSync(join(tmpdir(), 'panelbridge-index-'));
+  socketDirs.push(dir);
+  return join(dir, 'rcon.sock');
+};
+
+const cleanupSocketDirs = (): void => {
+  for (const dir of socketDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
 
 const makeContext = (emitter: EventEmitter, onUnsubscribe: () => void): PanelBridgeContext => ({
   serverId: SERVER_ID,
@@ -32,6 +48,7 @@ describe('startPanelBridge teardown', () => {
   afterEach(() => {
     vi.clearAllMocks();
     delete process.env.PANEL_BRIDGE_MODE;
+    cleanupSocketDirs();
   });
 
   it('unwires every emitter listener, calls the status unsubscribe, and ignores late events', async () => {
@@ -72,6 +89,7 @@ describe('production-mode type filter', () => {
     vi.clearAllMocks();
     delete process.env.PANEL_BRIDGE_MODE;
     delete process.env.PANEL_BRIDGE_SOCKET;
+    cleanupSocketDirs();
   });
 
   it('publishes only legacy-parity types in production, everything in shadow', async () => {
@@ -99,7 +117,7 @@ describe('production-mode type filter', () => {
     redis.xadd.mockClear();
 
     process.env.PANEL_BRIDGE_MODE = 'production';
-    process.env.PANEL_BRIDGE_SOCKET = `${process.cwd()}/.tmp-prod-filter.sock`;
+    process.env.PANEL_BRIDGE_SOCKET = uniqueSocketPath();
     const prodEmitter = new EventEmitter();
     const prodBridge = await startPanelBridge(makeContext(prodEmitter, vi.fn()));
     prodEmitter.emit('CHAT_MESSAGE', chatRaw);
