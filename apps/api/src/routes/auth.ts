@@ -34,6 +34,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       avatar_url: req.user.avatarUrl,
       permissions: Array.from(req.user.permissions.permissions),
       can_manage_ban_sources: req.user.permissions.canManageBanSources,
+      can_manage_clans: req.user.permissions.canManageClans,
     };
   });
 
