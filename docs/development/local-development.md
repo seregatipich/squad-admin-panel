@@ -4,7 +4,7 @@
 
 - Ubuntu 22.04 / 24.04 LTS or Debian 12 (the bridge uses Linux-only APIs).
 - Docker Engine 24+ and Compose v2.
-- Node 22, pnpm 9.15 (the repo pins via `packageManager`), Go 1.25.
+- Node 22, pnpm 9.15 (the repo pins via `packageManager`), Go 1.25.11+.
 - `sudo` access for [`scripts/install-host-bridge.sh`](../../scripts/install-host-bridge.sh).
 
 ## First run

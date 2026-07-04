@@ -1,6 +1,6 @@
 module github.com/breaking-squad/squad-admin-panel/apps/bridge
 
-go 1.25.0
+go 1.25.11
 
 require (
 	github.com/coreos/go-systemd/v22 v22.7.0
