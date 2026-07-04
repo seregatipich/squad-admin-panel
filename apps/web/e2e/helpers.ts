@@ -40,18 +40,19 @@ export async function seedOwner(steamId64?: string): Promise<{ uid: string; toke
   runSql(
     `INSERT INTO players (steam_id64, canonical_name, canonical_name_normalized, role_id) VALUES (${sid}, '${name}', '${name}', '${ownerRoleId}') ON CONFLICT (steam_id64) DO UPDATE SET role_id='${ownerRoleId}'`,
   );
+  const playerId = runSql(`SELECT id FROM players WHERE steam_id64=${sid} LIMIT 1`);
   runSql(
-    `INSERT INTO player_name_history (steam_id64, name, name_normalized) VALUES (${sid}, '${name}', '${name}') ON CONFLICT DO NOTHING`,
+    `INSERT INTO player_name_history (player_id, name, name_normalized) VALUES ('${playerId}', '${name}', '${name}') ON CONFLICT DO NOTHING`,
   );
 
   const { token, tokenId } = mintRawToken();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   runSql(
-    `INSERT INTO sessions (id, steam_id64, expires_at, last_activity_at) VALUES ('${tokenId}', ${sid}, '${expiresAt}', now())`,
+    `INSERT INTO sessions (id, player_id, expires_at, last_activity_at) VALUES ('${tokenId}', '${playerId}', '${expiresAt}', now())`,
   );
 
   const sessionJson = JSON.stringify({
-    steamId64: String(sid),
+    playerId,
     expiresAt,
     lastActivityAt: new Date().toISOString(),
     ip: null,
@@ -63,13 +64,17 @@ export async function seedOwner(steamId64?: string): Promise<{ uid: string; toke
 }
 
 export async function teardownOwner(uid: string) {
-  const tokenIds = runSql(`SELECT id FROM sessions WHERE steam_id64=${uid}`);
+  const playerId = runSql(`SELECT id FROM players WHERE steam_id64=${uid}`);
+  if (!playerId) return;
+  const tokenIds = runSql(`SELECT id FROM sessions WHERE player_id='${playerId}'`);
   for (const tid of tokenIds.split('\n').filter(Boolean)) {
     redisCmd(['DEL', `session:${tid}`]);
     runSql(`DELETE FROM sessions WHERE id='${tid}'`);
   }
   runSql(`UPDATE players SET role_id=NULL WHERE steam_id64=${uid}`);
-  runSql(`DELETE FROM player_name_history WHERE steam_id64=${uid} AND name LIKE 'pw-owner-%'`);
+  runSql(
+    `DELETE FROM player_name_history WHERE player_id='${playerId}' AND name LIKE 'pw-owner-%'`,
+  );
   try {
     runSql(`DELETE FROM players WHERE steam_id64=${uid}`);
   } catch {
