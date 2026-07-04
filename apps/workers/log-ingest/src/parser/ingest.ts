@@ -12,6 +12,7 @@ import {
   RCON_ADMIN_COMMAND,
   SERVER_EXIT_CODE,
 } from './patterns.js';
+import { type ParsedReport, parseReportFromLogLine } from './report.js';
 
 export interface ParseErrorReport {
   lineSample: string;
@@ -40,6 +41,7 @@ export class LogIngestor {
   private readonly joinCorrelationWindowMs: number;
   private readonly onParseError?: (report: ParseErrorReport) => void;
   private readonly onSquadFatal?: (report: SquadFatalReport) => void;
+  private readonly onReport?: (report: ParsedReport) => void;
 
   constructor(params: {
     serverId: string;
@@ -47,12 +49,14 @@ export class LogIngestor {
     joinCorrelationWindowMs?: number;
     onParseError?: (report: ParseErrorReport) => void;
     onSquadFatal?: (report: SquadFatalReport) => void;
+    onReport?: (report: ParsedReport) => void;
   }) {
     this.serverId = params.serverId;
     this.beaconPort = params.beaconPort;
     this.joinCorrelationWindowMs = params.joinCorrelationWindowMs ?? 2500;
     this.onParseError = params.onParseError;
     this.onSquadFatal = params.onSquadFatal;
+    this.onReport = params.onReport;
   }
 
   ingest(line: string): EventEnvelope[] {
@@ -77,6 +81,13 @@ export class LogIngestor {
         });
       }
       return [];
+    }
+    if (this.onReport) {
+      const report = parseReportFromLogLine(parsed);
+      if (report) {
+        this.onReport(report);
+        return [];
+      }
     }
     try {
       return this.handleMessage(parsed.category, parsed.message, parsed.ts.toISOString());
