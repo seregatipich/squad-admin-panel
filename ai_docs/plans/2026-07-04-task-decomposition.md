@@ -32,6 +32,296 @@
 
 ---
 
+## Порядок имплементации (по зависимостям, «волнами»)
+
+Задачи упорядочены **топологически** по полю «Зависимости». Внутри одной волны задачи независимы друг от друга и могут выполняться параллельно; каждая волна зависит только от предыдущих. Сквозной номер `#` — глобальный порядок имплементации (1 → 187). Полное описание каждой задачи — в тематических секциях ниже (WS-*) и в соответствующем GitHub-issue `[ID]`.
+
+> Легенда фаз: P0 — критический вертикальный срез, P1–P3 — последующие приоритеты, P4 — backlog. Волны считаются по зависимостям, а не по фазам, поэтому в одной волне могут встречаться разные фазы.
+
+### Волна 1 — 3 задач · ux, infra
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 1 | `INFRA-1` | P0 | Скелет проекта и docker compose | — |
+| 2 | `UX-1` | P0 | Dark mode (default), inline-валидация форм, loading/empty… | — |
+| 3 | `UX-2` | P1 | i18n EN/RU (включая RU-ошибки); все строки P0 — через i18n… | — |
+
+### Волна 2 — 5 задач · infra
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 4 | `INFRA-2` | P0 | CI/CD и публикация образов | INFRA-1 |
+| 5 | `INFRA-3` | P0 | Observability baseline | INFRA-1 |
+| 6 | `INFRA-4` | P0 | Bridge — агент на хосте | INFRA-1 |
+| 7 | `INFRA-5` | P0 | Схема БД: ядро | INFRA-1 |
+| 8 | `INFRA-8` | P0 | Backup/restore через restic | INFRA-1 |
+
+### Волна 3 — 7 задач · infra, auth, groups
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 9 | `AUTH-1` | P0 | Steam OpenID 2.0 логин | INFRA-5 |
+| 10 | `SYNC-2` | P0 | Генерация managed-сегмента | INFRA-5 |
+| 11 | `INFRA-6` | P0 | Audit log с hash-chain | INFRA-5 |
+| 12 | `INFRA-7` | P0 | Setup wizard | INFRA-5 |
+| 13 | `INFRA-9` | P0 | Host dashboard | INFRA-4 |
+| 14 | `SRV-1` | P0 | Wizard установки сервера | INFRA-4, INFRA-5 |
+| 15 | `ROT-1` | P1 | Каталог слоёв (layers) + ADR «своя ротация vs встроенные м… | INFRA-4, INFRA-5 |
+
+### Волна 4 — 2 задач · rbac, servers
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 16 | `ROLE-1` | P0 | CRUD ролей + модель | INFRA-5, INFRA-6 |
+| 17 | `SRV-2` | P0 | Запуск в Docker | SRV-1 |
+
+### Волна 5 — 11 задач · moderation, auth, events
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 18 | `AUTH-2` | P0 | Login-time check и 403-страницы | AUTH-1, ROLE-1 |
+| 19 | `AUTH-3` | P0 | First-login Owner assignment | INFRA-7, AUTH-1, ROLE-1 |
+| 20 | `EVT-1` | P0 | Парсинг SquadGame.log (worker log-ingest) | INFRA-4, INFRA-5, SRV-2 |
+| 21 | `ROLE-3` | P0 | Страница `/settings/groups` — inline-редактор | ROLE-1 |
+| 22 | `RCON-1` | P0 | RCON-клиент (worker-rcon) | INFRA-4, SRV-2 |
+| 23 | `MSG-1` | P1 | Шаблоны сообщений (canned messages) | INFRA-5, INFRA-6, ROLE-1 |
+| 24 | `DISCORD-1` | P1 | Настройки Discord-интеграции и безопасное хранение вебхуков | INFRA-5, INFRA-6, ROLE-1 |
+| 25 | `BANNAME-1` | P1 | Правила бана по никнейму: модель + CRUD + UI | INFRA-5, INFRA-6, ROLE-1 |
+| 26 | `CBAN-1` | P1 | Внешние источники банов: модель + управление подписками | INFRA-5, INFRA-6, ROLE-1 |
+| 27 | `VIDEO-1` | P1 | Медиа-хранилище: таблица, upload API, лимиты, стриминг | INFRA-1, INFRA-5, INFRA-6, ROLE-1 |
+| 28 | `ISSUE-1` | P2 | Модель и API внутреннего трекера тикетов | INFRA-5, INFRA-6, ROLE-1 |
+
+### Волна 6 — 15 задач · auth, events, servers
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 29 | `AUTH-4` | P0 | Sliding sessions TTL 24h | AUTH-2 |
+| 30 | `EVT-2` | P0 | UI событий | EVT-1 |
+| 31 | `LOG-1` | P0 | Retention raw-логов — 10 дней | EVT-1 |
+| 32 | `PLAYER-1` | P0 | Алгоритм обработки подключения (§1.1.2) | INFRA-5, EVT-1 |
+| 33 | `SRV-3` | P0 | Start/Stop/Restart/Delete | SRV-2, RCON-1 |
+| 34 | `SRV-4` | P0 | Статус и health | SRV-2, RCON-1, EVT-1 |
+| 35 | `AUTH-6` | P1 | API tokens | AUTH-2 |
+| 36 | `SEED-1` | P1 | Детекция seeding-состояния сервера и сид-прогресс | INFRA-6, RCON-1, EVT-1, ROT-1 |
+| 37 | `ROT-3` | P1 | Виджет «текущая/следующая карта» + быстрая смена | INFRA-6, RCON-1, EVT-1, ROT-1 |
+| 38 | `CHAT-1` | P1 | Live chat viewer / фильтрация | EVT-1 |
+| 39 | `ROLE-6` | P1 | P1-доработки редактора | ROLE-3, SYNC-2 |
+| 40 | `MATCH-1` | P1 | Сущность match и worker-сборка из событий | INFRA-5, RCON-1, EVT-1 |
+| 41 | `ISSUE-2` | P2 | UI трекера `/issues`: список, создание, карточка тикета | UX-1, UX-2, ISSUE-1 |
+| 42 | `STATS-1` | P2 | [Блокирующее исследование] Верификация RNSquadJS | RCON-1 |
+| 43 | `INT-4` | P4 | Plugin system (hooks на events) | EVT-1 |
+
+### Волна 7 — 19 задач · moderation, automation, players
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 44 | `AUTH-5` | P0 | Session management UI | AUTH-4 |
+| 45 | `MOD-1` | P0 | Live players list | PLAYER-1, RCON-1 |
+| 46 | `PLAYER-2` | P0 | История никнеймов | PLAYER-1 |
+| 47 | `PLAYER-3` | P0 | История IP + GeoIP | PLAYER-1 |
+| 48 | `PRES-1` | P0 | Таблица player_sessions | PLAYER-1, EVT-1 |
+| 49 | `ROLE-2` | P0 | Назначение/снятие роли игроку | AUTH-4, ROLE-1 |
+| 50 | `SRV-5` | P0 | Координированное обновление depot | SRV-3 |
+| 51 | `CHATLOG-1` | P1 | Таблица chat_messages и запись из log-ingest | INFRA-5, PLAYER-1, EVT-1, CHAT-1 |
+| 52 | `CLAN-1` | P1 | Модель данных кланов: clans + clan_members | INFRA-5, PLAYER-1 |
+| 53 | `LOG-2` | P1 | Browse/download логов через UI | INFRA-4, LOG-1 |
+| 54 | `MARK-1` | P1 | Модель меток подозрения + API | INFRA-5, INFRA-6, PLAYER-1 |
+| 55 | `REPORT-1` | P1 | Приём in-game репортов (!report) и схема хранения | INFRA-5, PLAYER-1, EVT-1 |
+| 56 | `VOTE-1` | P1 | Захват встроенных голосований Squad из SquadGame.log | INFRA-5, PLAYER-1, EVT-1 |
+| 57 | `COMBAT-1` | P1 | Расширение worker log-ingest combat-событиями | PLAYER-1, EVT-1 |
+| 58 | `AUTO-1` | P2 | Triggers | RCON-1, EVT-1, CHAT-1 |
+| 59 | `AUTO-2` | P2 | Scheduler | SRV-3, RCON-1 |
+| 60 | `AUTO-4` | P2 | In-game chat commands | RCON-1, CHAT-1 |
+| 61 | `LOG-3` | P2 | Архив логов в backup | INFRA-8, LOG-1 |
+| 62 | `STATS-2` | P2 | Sidecar-инфраструктура | SRV-1, STATS-1 |
+
+### Волна 8 — 15 задач · chat, clans, stats
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 63 | `SYNC-1` | P0 | Транзакционная очередь синка | INFRA-4, ROLE-1, ROLE-2 |
+| 64 | `PRES-2` | P0 | Дневные агрегаты player_daily_presence | PRES-1 |
+| 65 | `ROLE-4` | P0 | Страница членов роли `/settings/groups/{role_id}/members` | ROLE-2, SYNC-2 |
+| 66 | `CHATLOG-2` | P1 | API архива чата: поиск, фильтры, пагинация | PLAYER-2, CHATLOG-1 |
+| 67 | `MSG-3` | P1 | Broadcast с страницы сервера и сообщение скваду | RCON-1, MOD-1, CHATLOG-1, MSG-1 |
+| 68 | `CLAN-2` | P1 | API управления кланом: CRUD, rename, expire, настройки, di… | INFRA-6, ROLE-1, CLAN-1 |
+| 69 | `COMBAT-2` | P1 | Схема хранения combat_events (partitioned, uuid FK) | INFRA-5, COMBAT-1 |
+| 70 | `MATCH-2` | P1 | Per-match ростер (match_players) | PRES-1, MOD-1, MATCH-1 |
+| 71 | `AUTO-3` | P2 | Alerts | PLAYER-3, EVT-1 |
+| 72 | `SEED-3` | P2 | Сид-календарь и расписание сид-стартов | INFRA-6, AUTO-2, SEED-1, ROT-1 |
+| 73 | `CHATLOG-5` | P2 | Серверный профанити-детект и флаги сообщений | INFRA-6, ROLE-1, CHATLOG-1 |
+| 74 | `CLAN-7` | P2 | Онлайн-участники клана по серверам (live) | PRES-1, MOD-1, CLAN-1 |
+| 75 | `CLAN-8` | P2 | История матчей клана | EVT-1, PRES-1, CLAN-1 |
+| 76 | `MARK-4` | P2 | Управление таксономией меток | ROLE-1, MARK-1 |
+| 77 | `STATS-3` | P2 | Worker stats-importer | STATS-2 |
+
+### Волна 9 — 20 задач · stats, presence, analytics
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 78 | `SYNC-3` | P0 | Worker config-sync: read-modify-write | INFRA-4, SYNC-1, SYNC-2, RCON-1 |
+| 79 | `PRES-3` | P0 | UI: график и аккумуляторы | PRES-2 |
+| 80 | `LEAD-1` | P1 | Материализованные агрегаты для топов: player_stat_periods… | INFRA-5, EVT-1, PRES-2, STATS-3 |
+| 81 | `CBAN-2` | P1 | Worker ban-sync: периодический импорт и merge | AUTO-3, CBAN-1 |
+| 82 | `PRES-4` | P1 | P1: boost/queue, календарь, по серверам | ROLE-1, PRES-2 |
+| 83 | `COMBAT-3` | P1 | API боевых логов с keyset-пагинацией | PLAYER-2, ROLE-1, COMBAT-2 |
+| 84 | `MATCH-4` | P1 | API списка и карточки матчей | ROLE-1, MATCH-1, MATCH-2 |
+| 85 | `WL-1` | P1 | Shortcuts для whitelist | ROLE-2, ROLE-4 |
+| 86 | `AN-1` | P2 | Dashboard: peak players по времени суток, match outcomes,… | EVT-1, PRES-2, MATCH-1 |
+| 87 | `AN-2` | P2 | Public stats portal (опциональный, отдельный read-only сло… | EVT-1, PRES-2, STATS-3 |
+| 88 | `SEED-4` | P2 | Уведомления «нужен сид» | INFRA-6, AUTO-3, SEED-1, SEED-3 |
+| 89 | `MSG-4` | P2 | Запланированные и повторяющиеся broadcast через scheduler | AUTO-2, MSG-1, MSG-3 |
+| 90 | `ECON-1` | P2 | Модель данных экономики: леджер бонусов и баланс | INFRA-5, INFRA-6, PRES-2 |
+| 91 | `INT-2` | P2 | GeoIP-аномалии | PLAYER-3, AUTO-3 |
+| 92 | `PRES-5` | P2 | Праймтайм | PLAYER-3, PRES-2 |
+| 93 | `MATCH-3` | P2 | Per-match результативность игроков | EVT-1, MATCH-2 |
+| 94 | `DOSSIER-1` | P2 | Техника в combat-пайплайне: события и каталог локализации | COMBAT-1, COMBAT-2 |
+| 95 | `DOSSIER-3` | P2 | Время по китам/ролям: player_kit_time | PLAYER-1, RCON-1, PRES-2 |
+| 96 | `WL-2` | P2 | Шаблон whitelist-группы на все серверы | ROLE-4 |
+| 97 | `WL-3` | P3 | Applications portal + approval workflow + авто-expire | ROLE-2, ROLE-4 |
+
+### Волна 10 — 13 задач · groups, analytics, stats
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 98 | `SYNC-4` | P0 | Drift detection | SYNC-3 |
+| 99 | `SYNC-5` | P0 | Per-server lifecycle синка | SYNC-3, SRV-1 |
+| 100 | `LEAD-2` | P1 | API лидербордов `/api/v1/leaderboards` | PLAYER-2, LEAD-1 |
+| 101 | `CFG-1` | P1 | Monaco-редактор 19 .cfg файлов | INFRA-4, SYNC-3, RCON-1 |
+| 102 | `SYNC-9` | P1 | [Исследование] RemoteAdminListHosts.cfg как альтернатива p… | SYNC-3 |
+| 103 | `MATCH-5` | P1 | UI: страница /matches — список с фильтрами | UX-1, UX-2, MATCH-4 |
+| 104 | `VIPSUB-1` | P1 | Срочные назначения ролей: `role_expires_at` + worker-чисти… | INFRA-6, ROLE-2, SYNC-3 |
+| 105 | `LEAD-6` | P2 | Сидинг: детекция, учёт и топ сидеров | EVT-1, PRES-1, LEAD-1 |
+| 106 | `SEED-2` | P2 | Учёт сид-вклада игроков и бонусы сидерам | INFRA-6, ROLE-2, PRES-2, PRES-4, SEED-1 |
+| 107 | `CLAN-6` | P2 | Агрегированная статистика клана и график активности | PRES-2, PRES-4, PRES-5, STATS-3, AN-1, CLAN-1 |
+| 108 | `ECON-2` | P2 | Worker-economy: начисление бонусов за онлайн/буст/сид | PRES-2, PRES-4, ECON-1 |
+| 109 | `ECON-3` | P2 | Настройки экономики организации `/settings/economy` | INFRA-6, ROLE-1, ECON-1 |
+| 110 | `DOSSIER-2` | P2 | Агрегаты досье: пер-оружейная и пер-техника статистика | COMBAT-2, DOSSIER-1 |
+
+### Волна 11 — 9 задач · economy, vip, automation
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 111 | `ROT-2` | P1 | Редактор ротации LayerRotation.cfg (пул, порядок, drag-and… | INFRA-6, SYNC-3, CFG-1, ROT-1 |
+| 112 | `CFG-2` | P1 | Git-versioning и drift | CFG-1 |
+| 113 | `SRV-6` | P1 | Update одного сервера и License Management | SRV-1, CFG-1 |
+| 114 | `ECON-5` | P2 | Лидерборд по бонусам | PRES-2, ECON-1, ECON-2 |
+| 115 | `GAME-1` | P2 | Map voting: автоголосование за следующую карту, конфигурац… | RCON-1, EVT-1, CFG-1, VOTE-1 |
+| 116 | `DOSSIER-4` | P2 | Тренд K/D по месяцам и винрейт | COMBAT-2, MATCH-2, DOSSIER-2 |
+| 117 | `VIPSUB-3` | P2 | Тиры VIP-привилегий (каталог) | ROLE-1, ECON-3, VIPSUB-1 |
+| 118 | `VIPSUB-4` | P2 | Напоминания об истечении VIP | RCON-1, EVT-1, AUTO-3, VIPSUB-1 |
+| 119 | `ECON-6` | P3 | Трата бонусов на привилегии (внутренний магазин) | SYNC-3, ECON-1, ECON-3, VIPSUB-1 |
+
+### Волна 12 — 2 задач · automation, stats
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 120 | `ROT-4` | P2 | Календарь ротации: планирование слоёв и недельные профили | INFRA-6, EVT-1, AUTO-2, SEED-3, ROT-1, ROT-2, ROT-3 |
+| 121 | `DOSSIER-5` | P2 | API консолидированного досье | ROLE-1, DOSSIER-2, DOSSIER-3, DOSSIER-4 |
+
+### Волна 13 — 1 задач · players
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 122 | `PLAYER-4` | P0 | Карточка игрока `/players/{id}` — identity-секции | PLAYER-2, PLAYER-3, ROLE-5 |
+
+### Волна 14 — 21 задач · moderation, stats, chat
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 123 | `ROLE-5` | P0 | Виджет роли на карточке игрока | PLAYER-4, ROLE-2 |
+| 124 | `LEAD-3` | P1 | UI `/leaderboards`: страница топов с окнами периодов | PLAYER-4, UX-2, LEAD-2 |
+| 125 | `CHATLOG-3` | P1 | UI: глобальный архив чата `/chat` | PLAYER-4, CHAT-1, CHATLOG-2 |
+| 126 | `CHATLOG-4` | P1 | История чата на карточке игрока | PLAYER-4, CHATLOG-2 |
+| 127 | `MSG-2` | P1 | Прямое сообщение игроку с карточки и live-листа | PLAYER-4, RCON-1, MOD-1, CHATLOG-1, MSG-1 |
+| 128 | `MOD-2` | P1 | Moderation actions | PLAYER-4, SYNC-3, RCON-1 |
+| 129 | `MARK-2` | P1 | UI меток на карточке игрока | PLAYER-4, MARK-1 |
+| 130 | `PNOTE-1` | P1 | Заметки админов: модель, per-player история и лента на кар… | INFRA-5, INFRA-6, PLAYER-4 |
+| 131 | `REPORT-2` | P1 | API и очередь модерации репортов | INFRA-6, PLAYER-4, ROLE-1, REPORT-1 |
+| 132 | `VOTE-2` | P1 | UI лога голосований с фильтрами | PLAYER-4, VOTE-1 |
+| 133 | `ALT-8` | P1 | Permission `player:view_ips` как отдельный панельный флаг | PLAYER-4, ROLE-1, ROLE-2 |
+| 134 | `COMBAT-4` | P1 | UI «Боевой лог» — единая страница с фасетами | PLAYER-4, UX-1, UX-2, COMBAT-3 |
+| 135 | `MATCH-6` | P1 | UI: карточка матча /matches/{id} | PLAYER-4, EVT-2, MATCH-3, MATCH-4, MATCH-5 |
+| 136 | `MATCH-7` | P1 | «Последние матчи» на карточке игрока | PLAYER-4, MATCH-4, MATCH-5 |
+| 137 | `ECON-4` | P2 | UI экономики на карточке игрока: баланс, история, корректи… | PLAYER-4, ECON-1, ECON-3 |
+| 138 | `INT-1` | P2 | Steam Web API | PLAYER-4 |
+| 139 | `DISCORD-4` | P2 | OAuth-линковка Discord-аккаунта к игроку | AUTH-1, PLAYER-4, DISCORD-1 |
+| 140 | `CBAN-3` | P2 | Агрегированный реестр + «найден в N внешних банлистах» на… | PLAYER-4, CBAN-2 |
+| 141 | `STATS-4` | P2 | API + UI | PLAYER-4, STATS-3 |
+| 142 | `VIPSUB-2` | P2 | VIP-roster: страница `/vips` | PLAYER-4, PRES-2, VIPSUB-1 |
+| 143 | `INT-3` | P4 | External ban sources + cheater detection | PLAYER-4, EVT-1 |
+
+### Волна 15 — 25 задач · moderation, stats, analytics
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 144 | `PLAYER-5` | P0 | Список `/users` (игроки с ролями) | ROLE-5, SYNC-3 |
+| 145 | `DISCORD-2` | P1 | Worker discord-notify: маршрутизация событий в вебхуки | SYNC-4, EVT-1, MOD-2, DISCORD-1 |
+| 146 | `MOD-3` | P1 | Evidence | MOD-2 |
+| 147 | `MARK-3` | P1 | Страница watchlist подозреваемых `/suspects` | PLAYER-2, MOD-2, MARK-1, MARK-2 |
+| 148 | `BANNAME-2` | P1 | Enforcement: автокик по нику при подключении | RCON-1, EVT-1, MOD-2, BANNAME-1 |
+| 149 | `REPORT-3` | P1 | Связка репортов с модерацией и обратная связь репортёру | RCON-1, MOD-1, MOD-2, REPORT-2 |
+| 150 | `ALT-1` | P1 | Движок кандидатов в альты по общим IP + эвристики | PLAYER-2, PLAYER-3, MOD-2, ALT-8 |
+| 151 | `VIDEO-2` | P1 | Привязка медиа к игроку/матчу/бану/репорту и просмотр в ис… | PLAYER-4, EVT-1, MOD-2, VIDEO-1 |
+| 152 | `PLAYER-6` | P1 | Поиск и admin tools | PLAYER-2, PRES-4, MOD-2 |
+| 153 | `COMBAT-5` | P1 | Teamkill-трекинг: агрегат на игрока и модерация | PLAYER-4, MOD-2, AUTO-3, COMBAT-2 |
+| 154 | `LEAD-4` | P2 | Топ по бонусам и бусту (экономика) | PRES-4, LEAD-1, LEAD-2, LEAD-3 |
+| 155 | `LEAD-5` | P2 | Серверный стат-дашборд `/statistics` (расширение AN-1) | ROLE-1, EVT-1, PRES-2, MOD-2, AN-1, LEAD-1 |
+| 156 | `LEAD-7` | P2 | Сезоны лидербордов | AUTO-2, AUTO-3, LEAD-1, LEAD-3 |
+| 157 | `CLAN-5` | P2 | Tag protection: авто-кик самозванцев с клан-тегом | PLAYER-2, RCON-1, MOD-2, CLAN-1 |
+| 158 | `GAME-2` | P2 | Team balancer: autobalance по skill/hours, manual кнопка,… | RCON-1, STATS-4, CLAN-1 |
+| 159 | `MOD-4` | P2 | Массовые операции модерации | MOD-2 |
+| 160 | `PNOTE-2` | P2 | Глобальная лента заметок `/notes` | ROLE-2, PNOTE-1 |
+| 161 | `CBAN-4` | P2 | Проверка входящих при подключении (checkBans-on-join) | RCON-1, EVT-1, MOD-2, AUTO-3, CBAN-2, CBAN-3 |
+| 162 | `VOTE-3` | P2 | Аналитика голосований | AN-1, VOTE-1, VOTE-2 |
+| 163 | `COMBAT-6` | P2 | Live-стрим боевых событий (WebSocket) | CHAT-1, COMBAT-1, COMBAT-4 |
+| 164 | `DOSSIER-6` | P2 | UI-вкладки досье на карточке игрока: Скилл / Оружие / Техн… | PLAYER-4, COMBAT-4, DOSSIER-5 |
+| 165 | `MOD-5` | P3 | Appeals portal + workflow | MOD-2 |
+| 166 | `CBAN-5` | P3 | Публикация собственного банлиста (outbound-федерация) | AUTH-6, MOD-2, CBAN-1, CBAN-2 |
+| 167 | `ISSUE-3` | P3 | Связь тикетов с сущностями панели и авто-тикеты из модерации | PLAYER-4, MOD-2, ISSUE-1, ISSUE-2 |
+| 168 | `VIPSUB-5` | P3 | Подписки и самообслуживание VIP | ECON-4, ECON-6, VIPSUB-1, VIPSUB-3 |
+
+### Волна 16 — 12 задач · moderation, integrations, clans
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 169 | `CLAN-3` | P1 | Ростер: поиск, add/remove, роли участников, передача лидер… | PLAYER-6, PRES-2, CLAN-1, CLAN-2 |
+| 170 | `ALT-2` | P1 | Ручное подтверждение/отклонение связи + таблица player_links | INFRA-6, ALT-1 |
+| 171 | `DISCORD-3` | P2 | Шаблоны Discord-сообщений | UX-2, DISCORD-2 |
+| 172 | `BANNAME-3` | P2 | Quick-add ника из любого контекста + бейдж на карточке | PLAYER-2, PLAYER-4, BANNAME-1, BANNAME-2 |
+| 173 | `REPORT-4` | P2 | Подача репорта из панели и evidence | PLAYER-4, MOD-3, REPORT-2 |
+| 174 | `ALT-3` | P2 | Co-play граф «Часто играет с» | PRES-1, PRES-2, ALT-1 |
+| 175 | `ALT-4` | P2 | Сравнение онлайна двух игроков (co-presence календарь) | PRES-4, ALT-1 |
+| 176 | `VIDEO-3` | P2 | Делегированная загрузка по одноразовому токену | VIDEO-1, VIDEO-2 |
+| 177 | `UX-3` | P2 | Keyboard shortcuts (Ctrl+K global search по игрокам/сервер… | PLAYER-5, UX-1 |
+| 178 | `DISCORD-5` | P3 | Роль-синк: роль панели → роль Discord | ROLE-2, DISCORD-2, DISCORD-4 |
+| 179 | `REPORT-5` | P3 | Аналитика репортов и trusted-reporter | AUTO-3, AN-1, REPORT-3 |
+| 180 | `VIDEO-4` | P4 | Внешняя публикация медиа: YouTube/Telegram fan-out | INFRA-3, VIDEO-1, VIDEO-2 |
+
+### Волна 17 — 5 задач · moderation, clans, integrations
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 181 | `CLAN-4` | P1 | Клан-приоритет: пул слотов + интеграция с whitelist/reserve | ROLE-2, SYNC-2, SYNC-3, WL-1, CLAN-1, CLAN-3 |
+| 182 | `ALT-6` | P1 | Блоки «Возможные альты» и «Часто играет с» на карточке игр… | PLAYER-4, ALT-1, ALT-2, ALT-3, ALT-4 |
+| 183 | `ALT-5` | P2 | Проверка Steam-друзей между двумя аккаунтами | INT-1, ALT-1, ALT-2 |
+| 184 | `ALT-7` | P2 | Предупреждение об альтах при бане | MOD-2, AUTO-3, ALT-1, ALT-2 |
+| 185 | `DISCORD-6` | P3 | Discord-бот: команды и статус-каналы | RCON-1, MOD-1, DISCORD-4, DISCORD-5 |
+
+### Волна 18 — 1 задач · clans
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 186 | `CLAN-9` | P1 | UI: директория кланов и карточка клана | PLAYER-4, UX-2, CLAN-2, CLAN-3, CLAN-4, CLAN-6, CLAN-7, CLAN-8 |
+
+### Волна 19 — 1 задач · clans
+
+| # | Задача | Фаза | Название | Зависит от |
+|---:|---|:--:|---|---|
+| 187 | `CLAN-10` | P3 | Публичные страницы кланов | AN-2, CLAN-6, CLAN-8, CLAN-9 |
+
+---
+
 # WS-0. Фундамент (предусловие для всего P0)
 
 ### INFRA-1. Скелет проекта и docker compose [P0]
@@ -447,13 +737,16 @@ Country switch alert (смена страны <24 ч → audit + notification), 
 # WS-14. Gameplay features [P3]
 
 ### GAME-1. Map voting: автоголосование за следующую карту, конфигурация кандидатов и времени, история; применение через `AdminSetNextLayer`. Учесть встроенную Layer Voting систему Squad (LayerVoting*.cfg) — сначала ADR: своя реализация vs конфигурация встроенной.
+**Зависимости:** RCON-1, EVT-1, CFG-1, VOTE-1.
 ### GAME-2. Team balancer: autobalance по skill/hours, manual кнопка, rules engine (не разбивать сквады, уважать clan tags); требует STATS-* для skill-данных.
+**Зависимости:** RCON-1, STATS-4, CLAN-1.
 
 ---
 
 # WS-15. Analytics и public pages [P2/P3]
 
 ### AN-1. [P2] Dashboard: peak players по времени суток, match outcomes, popular maps (источник — events + presence); per-server разрез; export CSV/JSON.
+**Зависимости:** EVT-1, PRES-2, MATCH-1.
 ### AN-2. [P2] Public stats portal (опциональный, отдельный read-only слой без сессий панели). [P3] Embeddable-виджеты (online count, current map) и кастомизируемые внешние страницы.
 **Зависимости:** EVT-1, PRES-2, STATS-3.
 
@@ -464,6 +757,7 @@ Country switch alert (смена страны <24 ч → audit + notification), 
 ### UX-1. [P0] Dark mode (default), inline-валидация форм, loading/empty states с CTA, человекочитаемые ошибки (EN в P0), OpenAPI/Swagger UI на `/api/docs` (генерация из схем, не вручную).
 ### UX-2. [P1] i18n EN/RU (включая RU-ошибки); все строки P0 — через i18n-слой с самого начала, чтобы P1 был переводом, а не рефакторингом.
 ### UX-3. [P2] Keyboard shortcuts (Ctrl+K global search по игрокам/серверам/страницам).
+**Зависимости:** UX-1, PLAYER-5.
 
 ---
 
