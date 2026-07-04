@@ -266,3 +266,23 @@ The dual anchor for first-owner survives `DROP DATABASE` + restore: the sentinel
 - **Soft-cut behind a feature flag** — kept email/password as a backdoor. Rejected: doubled the auth attack surface and the spec explicitly required "единственный способ входа".
 - **Discord OAuth as alternative** — rejected for Phase 1; Discord remains a linked identity for notifications/bot scope (P1+).
 - **Steam OAuth instead of OpenID 2.0** — Steam has no OAuth endpoint. OpenID 2.0 is the only public auth surface Steam offers.
+
+## 2026-06-12 — RNSquadJS sidecar replaces the in-house log parser; worker-rcon retained
+
+- Per-server RNSquadJS sidecar containers (pinned upstream SHA, panelBridge plugin compiled in) publish log-derived events to `events:server:{id}`; cutover is per-server via the `rnsquadjs:cutover-servers` Redis set, with `worker-log-ingest` skipping cutover members.
+- `worker-rcon` is NOT replaced: since the April spec it grew A2S polling, realtime tickrate, lag-spike detection and the `rcon:status:changed` live bus. The sidecar publishes its own `rnsquadjs:status:{id}` key and never touches `rcon:status:{id}`.
+
+### Rationale
+
+The in-house SquadGame.log parser is the most fragile part of the pipeline (regex drift across Squad updates); RNSquadJS's parser is battle-tested by the community. Replacing only the log pipeline bounds the migration risk: a 24h shadow soak with an event-parity gate (≥99%) precedes any cutover, and rollback is one API call (`POST /servers/:id/rnsquadjs {mode:'shadow'}`).
+
+### Consequences
+
+- The sidecar image is launchable only via the dedicated `container_run_rnsquadjs` bridge RPC (hardened: fd-anchored dir creation, env-key allowlist, fixed mounts) — not via the generic `container_run`.
+- Production-mode sidecars publish only the legacy-parity event types; the 13 additional mapped types stay shadow-only until the shared EVENT_TYPES enum is deliberately extended.
+- Known follow-up before fleet rollout: per-server transition lock for the cutover endpoint (concurrent opposite transitions in a sub-second window can race; single-operator canary use is safe).
+
+### Alternatives considered
+
+- **Full worker-rcon replacement (April spec §3.6)** — rejected for now: two more months of in-house rcon features would need porting into the plugin, ballooning scope and risk.
+- **Loopback HTTP config endpoint (April spec §3.5)** — impossible from a host-network sidecar against a loopback guard; file-based config via bind mount (D1).

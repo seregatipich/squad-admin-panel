@@ -3,8 +3,12 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
@@ -13,6 +17,10 @@ import (
 type DockerRunner struct {
 	Bin string
 	R   Runner
+	// SocketRoot overrides the rnsquadjs per-server socket/config root
+	// (production default validate.PanelSocketRoot). Tests point it at a
+	// temp dir so ensureSidecarDir does not touch the real /run tree.
+	SocketRoot string
 }
 
 func NewDocker(r Runner) *DockerRunner {
@@ -107,6 +115,235 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	}
 	if exit != 0 {
 		return strings.TrimSpace(string(so)), fmt.Errorf("docker run exit %d: %s", exit, strings.TrimSpace(string(se)))
+	}
+	return strings.TrimSpace(string(so)), nil
+}
+
+// sidecarUID is the unprivileged uid the rnsquadjs sidecar runs as. The
+// per-server socket dir must be owned by it so the sidecar can create
+// rcon.sock inside the read-only container.
+const sidecarUID = 1001
+
+// sidecarSockModeRaw is the raw syscall mode for the only sidecar-writable
+// level: group rwx + setgid, nothing for others. In a raw syscall mode the
+// setgid bit is octal 0o2000 (S_ISGID); os.ModeSetgid (a high FileMode bit)
+// must NOT be used here because Fchmod takes the raw bitmask, not a FileMode.
+// os.Stat still surfaces 0o2000 as os.ModeSetgid, which the tests assert.
+const sidecarSockModeRaw uint32 = 0o2770
+
+// sidecarServerDirModeRaw is the raw syscall mode for the per-server parent
+// dir holding the host-authored config.json: group r-x + setgid, no group
+// write. It stays root-owned (never chowned) so the sidecar (uid 1001) cannot
+// rewrite config.json through the rw bind; only the nested sock subdir is
+// sidecar-writable.
+const sidecarServerDirModeRaw uint32 = 0o2750
+
+// allowedSidecarEnv is the exhaustive set of environment keys the API may
+// pass through to the rnsquadjs sidecar. A compromised API container cannot
+// inject loader/runtime overrides (LD_PRELOAD, NODE_OPTIONS, ...) because the
+// bridge drops any key outside this allowlist before composing docker args.
+var allowedSidecarEnv = map[string]struct{}{
+	"SERVER_ID":           {},
+	"LOG_FILE":            {},
+	"PANEL_BRIDGE_MODE":   {},
+	"PANEL_BRIDGE_SOCKET": {},
+	"REDIS_URL":           {},
+}
+
+// RNSquadJSRunSpec describes a per-server rnsquadjs sidecar launch.
+type RNSquadJSRunSpec struct {
+	ServerID string            `json:"server_id"`
+	Env      map[string]string `json:"env"`
+}
+
+// validateSidecarEnv enforces the env allowlist and rejects keys or values
+// that could break out of a single `-e KEY=VALUE` docker token. '=' is barred
+// in keys only; values legitimately carry ':' '/' '@' (e.g. a redis URL).
+func validateSidecarEnv(env map[string]string) error {
+	for key, value := range env {
+		if key == "" {
+			return fmt.Errorf("%w: empty sidecar env key", validate.ErrForbidden)
+		}
+		if _, ok := allowedSidecarEnv[key]; !ok {
+			return fmt.Errorf("%w: sidecar env key %q not in allowlist", validate.ErrForbidden, key)
+		}
+		if strings.ContainsAny(key, "=\x00\n\r") {
+			return fmt.Errorf("%w: sidecar env key %q contains a forbidden character", validate.ErrForbidden, key)
+		}
+		if strings.ContainsAny(value, "\x00\n\r") {
+			return fmt.Errorf("%w: sidecar env value for %q contains a forbidden character", validate.ErrForbidden, key)
+		}
+	}
+	return nil
+}
+
+// socketRoot returns the configured rnsquadjs socket/config root, defaulting
+// to the production constant when SocketRoot is unset.
+func (d *DockerRunner) socketRoot() string {
+	if d.SocketRoot != "" {
+		return d.SocketRoot
+	}
+	return validate.PanelSocketRoot
+}
+
+func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, error) {
+	if err := validate.ServerUUID(spec.ServerID); err != nil {
+		return nil, err
+	}
+	name := "rnsquadjs-" + spec.ServerID
+	if err := validate.ContainerName(name); err != nil {
+		return nil, err
+	}
+	if err := validateSidecarEnv(spec.Env); err != nil {
+		return nil, err
+	}
+	serverDir := d.socketRoot() + "/" + spec.ServerID
+	logsBind := fmt.Sprintf("%s/%s/SquadGame/Saved/Logs:/squad/Logs:ro", validate.PanelSavedRoot, spec.ServerID)
+	socketBind := fmt.Sprintf("%s/sock:/run/panelBridge:rw", serverDir)
+	configBind := fmt.Sprintf("%s/config.json:/app/config.json:ro", serverDir)
+
+	args := []string{
+		"run", "-d",
+		"--pull", "never",
+		"--name", name,
+		"--label", "panel.server_id=" + spec.ServerID,
+		"--label", "panel.kind=rnsquadjs",
+		"--network", "host",
+		"--user", "1001:1001",
+		"--read-only",
+		"--restart", "unless-stopped",
+		"-v", logsBind,
+		"-v", socketBind,
+		"-v", configBind,
+	}
+	keys := make([]string, 0, len(spec.Env))
+	for k := range spec.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", k, spec.Env[k]))
+	}
+	args = append(args, validate.RNSquadJSImage)
+	return args, nil
+}
+
+// ensureSidecarDir builds the two-level per-server tree the sidecar needs:
+//
+//	{root}/{id}/       0o2750, root-owned        — holds host-authored config.json
+//	{root}/{id}/sock/  0o2770, chown uid 1001    — the only sidecar-writable level
+//
+// Splitting the levels keeps config.json out of any sidecar-writable mount: the
+// container sees {id}/sock bound rw at /run/panelBridge and config.json bound
+// :ro, so a compromised sidecar cannot rewrite the host config. In production
+// the per-server parent additionally must resolve under PanelSocketRoot; the
+// check is skipped when SocketRoot is test-overridden to a temp dir.
+//
+// Every mutation is anchored to a verified file descriptor, never a reusable
+// path string. The root is opened O_NOFOLLOW|O_DIRECTORY, each level is created
+// with Mkdirat and reopened O_NOFOLLOW|O_DIRECTORY relative to its parent fd,
+// and chmod/chown run as Fchmod/Fchown on that fd. A racer with rename access
+// to the parents (the API container bind-mounts the tree rw as uid 0)
+// therefore cannot swap a verified directory for a symlink between the check
+// and the privileged chmod/chown: a swapped-in symlink makes the O_NOFOLLOW
+// reopen fail closed with ELOOP/ENOTDIR.
+func (d *DockerRunner) ensureSidecarDir(serverID string) error {
+	root := d.socketRoot()
+	if d.SocketRoot == "" {
+		if _, err := validate.PanelSocketPath(root + "/" + serverID); err != nil {
+			return err
+		}
+	}
+	rootFd, err := syscall.Open(root, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return forbidNonDir("sidecar root", root, err)
+	}
+	defer syscall.Close(rootFd)
+
+	idFd, err := openVerifiedSidecarDir(rootFd, serverID, sidecarServerDirModeRaw, false)
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(idFd)
+
+	sockFd, err := openVerifiedSidecarDir(idFd, "sock", sidecarSockModeRaw, true)
+	if err != nil {
+		return err
+	}
+	return syscall.Close(sockFd)
+}
+
+// openVerifiedSidecarDir creates name under parentFd (tolerating an existing
+// entry), reopens it O_NOFOLLOW|O_DIRECTORY relative to parentFd so a planted
+// symlink fails closed, then forces the exact mode with Fchmod (Mkdirat honours
+// the umask, which strips setgid and group bits). When chownToSidecar it
+// Fchowns the inode to the sidecar uid; a non-root caller (dev/test) hits
+// EPERM, tolerated because a non-root bridge cannot drive containers anyway.
+// Returns the open fd; the caller owns closing it.
+func openVerifiedSidecarDir(parentFd int, name string, mode uint32, chownToSidecar bool) (int, error) {
+	if err := syscall.Mkdirat(parentFd, name, mode); err != nil && !errors.Is(err, syscall.EEXIST) {
+		return -1, fmt.Errorf("create sidecar dir %q: %w", name, err)
+	}
+	fd, err := syscall.Openat(parentFd, name, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, forbidNonDir("sidecar path", name, err)
+	}
+	if err := syscall.Fchmod(fd, mode); err != nil {
+		syscall.Close(fd)
+		return -1, fmt.Errorf("chmod sidecar dir %q: %w", name, err)
+	}
+	if !chownToSidecar {
+		return fd, nil
+	}
+	if err := syscall.Fchown(fd, sidecarUID, -1); err != nil {
+		if errors.Is(err, syscall.EPERM) && os.Geteuid() != 0 {
+			return fd, nil
+		}
+		syscall.Close(fd)
+		return -1, fmt.Errorf("chown sidecar dir %q: %w", name, err)
+	}
+	return fd, nil
+}
+
+// forbidNonDir maps the "not a real directory" open failures (a planted
+// symlink yields ELOOP under O_NOFOLLOW; a non-directory yields ENOTDIR under
+// O_DIRECTORY) onto validate.ErrForbidden so callers can match the policy
+// error, and wraps any other open failure verbatim.
+func forbidNonDir(what, path string, err error) error {
+	if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.ENOTDIR) {
+		return fmt.Errorf("%w: %s %q is not a real directory", validate.ErrForbidden, what, path)
+	}
+	return fmt.Errorf("open %s %q: %w", what, path, err)
+}
+
+func (d *DockerRunner) RunRNSquadJS(ctx context.Context, spec RNSquadJSRunSpec) (string, error) {
+	args, err := d.composeRNSquadJSArgs(spec)
+	if err != nil {
+		return "", err
+	}
+	if err := d.ensureSidecarDir(spec.ServerID); err != nil {
+		return "", err
+	}
+	// config.json is rendered by the API into the (root-owned) server dir. If it
+	// is absent when docker runs the :ro bind, docker (root) silently creates a
+	// DIRECTORY at the bind source, so fail loudly before launching the sidecar.
+	//
+	// This check stays a path-based Lstat (not fd-anchored) on purpose: unlike
+	// the chmod/chown in ensureSidecarDir it drives no privileged mutation, so
+	// the surviving check-to-bind race is non-escalating. The config content is
+	// API-supplied by design, and the worst a delete race can do is let docker
+	// create an empty dir at the bind source, which the sidecar entrypoint
+	// rejects so the container exits — a nuisance, never a privilege escalation.
+	configPath := d.socketRoot() + "/" + spec.ServerID + "/config.json"
+	if info, err := os.Lstat(configPath); err != nil || !info.Mode().IsRegular() {
+		return "", fmt.Errorf("config.json not rendered for %s", spec.ServerID)
+	}
+	so, se, exit, err := d.R.Run(ctx, d.Bin, args, nil)
+	if err != nil {
+		return strings.TrimSpace(string(so)), err
+	}
+	if exit != 0 {
+		return strings.TrimSpace(string(so)), fmt.Errorf("docker run rnsquadjs exit %d: %s", exit, strings.TrimSpace(string(se)))
 	}
 	return strings.TrimSpace(string(so)), nil
 }

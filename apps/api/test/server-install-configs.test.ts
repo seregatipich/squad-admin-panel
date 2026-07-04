@@ -28,6 +28,14 @@ import {
   makeFakeBridge,
 } from './integration/harness.js';
 
+// writeSidecarConfig performs real fs writes under /run; stub it so install
+// tests never touch the host's runtime dir. buildSidecarEnv / sidecar naming
+// stay real so the env asserted below is the production shape.
+vi.mock('../src/lib/rnsquadjs.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/lib/rnsquadjs.js')>()),
+  writeSidecarConfig: vi.fn().mockResolvedValue(undefined),
+}));
+
 const OWNER_STEAM_ID = 76561198000000999n;
 
 const createBody = {
@@ -246,6 +254,60 @@ describe('server install depot seeding', () => {
       expect(versions).toHaveLength(19);
       const adminsRow = versions.find((v) => v.filename === 'Admins.cfg');
       expect(adminsRow?.content).toBe('');
+    });
+  });
+
+  describe('D) rnsquadjs sidecar launch', () => {
+    const depotRoot = '/opt/panel-data/depot';
+
+    beforeEach(async () => {
+      vi.stubEnv('PANEL_DEPOT_HOST_PATH', depotRoot);
+      bridge = makeFakeBridge();
+      seedDepotFiles(bridge, depotRoot);
+      h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, bridge });
+    });
+
+    it('launches the sidecar in shadow mode and seeds the ro Logs bind source', async () => {
+      const runRnsquadjs = vi
+        .fn()
+        .mockResolvedValue({ container_id: 'rnsquadjs-xyz', status: 'started' });
+      bridge.containerRunRnsquadjs = runRnsquadjs;
+
+      const cookie = await loginAs(h);
+      const serverId = await createServer(h, cookie);
+      await runInstallAndWaitForDone(h, cookie, serverId);
+
+      expect(runRnsquadjs).toHaveBeenCalledTimes(1);
+      const arg = runRnsquadjs.mock.calls[0]![0] as {
+        server_id: string;
+        env: Record<string, string>;
+      };
+      expect(arg.server_id).toBe(serverId);
+      // No cutover flag set for this fresh id → shadow, not production.
+      expect(arg.env.PANEL_BRIDGE_MODE).toBe('shadow');
+      expect(arg.env.SERVER_ID).toBe(serverId);
+
+      // The bridge bind-mounts <saved>/<id>/SquadGame/Saved/Logs read-only;
+      // install must create that dir (via a .keep file) before the sidecar
+      // starts, otherwise the ro bind has no source.
+      expect(
+        bridge.files.get(`/var/lib/squad-panel/saved/${serverId}/SquadGame/Saved/Logs/.keep`),
+      ).toBeDefined();
+    });
+
+    it('completes the install even when the sidecar launch rejects (non-fatal)', async () => {
+      bridge.containerRunRnsquadjs = vi
+        .fn()
+        .mockRejectedValue(new Error('rnsquadjs image missing'));
+
+      const cookie = await loginAs(h);
+      const serverId = await createServer(h, cookie);
+      // runInstallAndWaitForDone throws on a terminal 'error' step; the sidecar
+      // failure must not produce one — the install still reaches 'done'.
+      await runInstallAndWaitForDone(h, cookie, serverId);
+
+      const [row] = await h.db.select().from(servers).where(eq(servers.id, serverId));
+      expect(row?.status).toBe('running');
     });
   });
 });

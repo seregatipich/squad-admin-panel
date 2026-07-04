@@ -13,6 +13,8 @@ import {
   type ContainerLogsParams,
   type ContainerRunParams,
   type ContainerRunResult,
+  type ContainerRunRnsquadjsParams,
+  type ContainerRunRnsquadjsResult,
   type ContainerStatsResult,
   type DirectoryDeleteParams,
   type DirectoryDeleteResult,
@@ -194,6 +196,9 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
 
   containerRun = (p: ContainerRunParams) =>
     this.call<ContainerRunResult>('container_run', p, { timeoutMs: 60_000 });
+
+  containerRunRnsquadjs = (p: ContainerRunRnsquadjsParams) =>
+    this.call<ContainerRunRnsquadjsResult>('container_run_rnsquadjs', p, { timeoutMs: 60_000 });
 
   containerStart = (p: ContainerControlParams) =>
     this.call<{ status: string }>('container_start', p, { timeoutMs: 30_000 });

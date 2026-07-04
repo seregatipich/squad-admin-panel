@@ -214,3 +214,14 @@ Phases 0–2 are reversible with a single revert. Phase 3 onwards requires rolli
 1. **Canary server.** Pick one specific server UUID for Phases 1 and 3, or add the `is_canary` column and let the operator flag any server.
 2. **`POST /admin/rnsquadjs/rollout` UX.** New page in the dashboard, or CLI-only via `pnpm` script?
 3. **Phase 0 log fixture size.** 50 lines is enough for parity smoke; do you want a longer (~10 k lines) capture for stress testing the parser too?
+
+## 12. Execution deviations (2026-06-12)
+
+Recorded during the integration-completion pass (see `docs/superpowers/plans/2026-06-12-rnsquadjs-integration-completion.md` for full rationale):
+
+- **D1 — config.json is a bind-mounted file, not HTTP.** The loopback-guarded `/internal/rnsquadjs/config/:id` endpoint is unreachable from a host-network sidecar, and `curl -o` cannot write to a `--read-only` rootfs. The API renders `/run/squad-panel/rnsquadjs/{id}/config.json` (atomic tmp+rename, chown 1001, 0600); the bridge bind-mounts it read-only at `/app/config.json`.
+- **D2 — per-server socket subdirectory.** `{root}/{id}/sock/` is the only sidecar-writable level (mounted at `/run/panelBridge`); the shared-root single-socket layout in §3.2 would collide across sidecars and let the sidecar rewrite its own config through the rw parent.
+- **D3 — inverted kill switch.** Redis set `rnsquadjs:cutover-servers` (empty = fully legacy) instead of §9's `SREM rcon:enabled-servers` design; no population bootstrap needed.
+- **D4 — cutover transfers the log pipeline only.** `worker-rcon` (A2S, tickrate, lag-spike, rcon:status live-bus) stays authoritative; the sidecar writes `rnsquadjs:status:{id}` and, in production mode, publishes only the legacy-parity event types (player.connected/disconnected, match.started/ended). §3.6's worker-rcon removal is deferred indefinitely.
+- **D5 — fail-safe defaults.** `PANEL_BRIDGE_MODE` defaults to shadow; sidecar `REDIS_URL` must be host-loopback (`redis://127.0.0.1:6379`).
+- **D6 — panelBridge compiles into the upstream.** Upstream loads plugins from a static compiled-in registry and `lib/` exists only after `yarn build`; the plugin sources are copied into `src/plugins/panelBridge/`, registered via `docker/rnsquadjs/upstream.patch`, and built by rollup inside the image. The config `plugins` field is an array (`[{name:'panelBridge',enabled:true,options:{}}]`); absent plugins are disabled.

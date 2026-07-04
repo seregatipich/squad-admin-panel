@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/rpc"
+	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/runner"
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
 )
 
@@ -59,6 +60,22 @@ func TestValidateDeletableDir_RejectsEverythingElse(t *testing.T) {
 		if !errors.Is(err, validate.ErrForbidden) {
 			t.Errorf("expected ErrForbidden for %q, got %v", p, err)
 		}
+	}
+}
+
+func TestContainerRunRnsquadjs_BadUUIDReturnsForbidden(t *testing.T) {
+	d := &Dispatcher{Docker: runner.NewDocker(&runner.Fake{})}
+	params, _ := json.Marshal(map[string]any{
+		"server_id": "not-a-uuid",
+		"env":       map[string]string{},
+	})
+	req := &rpc.Request{ID: "req-rns-1", Method: "container_run_rnsquadjs", Params: params}
+	resp := d.Handle(context.Background(), req, func(rpc.StreamFrame) {})
+	if resp.OK {
+		t.Fatalf("expected error response, got success")
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeForbidden {
+		t.Fatalf("expected CodeForbidden, got %+v", resp.Error)
 	}
 }
 

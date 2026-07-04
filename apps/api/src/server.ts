@@ -15,6 +15,7 @@ import type { AppConfig } from './config.js';
 import { loadEncryptionKey } from './lib/crypto.js';
 import diagPlugin from './lib/diag.js';
 import { buildLogger } from './lib/logger.js';
+import { createRconClient } from './lib/rcon.js';
 import auditPlugin from './plugins/audit.js';
 import authPlugin from './plugins/auth.js';
 import bridgePlugin from './plugins/bridge.js';
@@ -51,6 +52,7 @@ import forceStopRoutes from './routes/server-force-stop.js';
 import serverInstallRoutes from './routes/server-install.js';
 import serverLogsRoutes from './routes/server-logs.js';
 import serverMetricsRoutes from './routes/server-metrics.js';
+import serverRnsquadjsRoutes from './routes/server-rnsquadjs.js';
 import serverSettingsRoutes from './routes/server-settings.js';
 import serverUpdateRoutes from './routes/server-update.js';
 import serverRoutes from './routes/servers.js';
@@ -76,6 +78,7 @@ export async function buildServer(config: AppConfig) {
 
   app.decorate('encryptionKey', loadEncryptionKey(config.APP_ENCRYPTION_KEY));
   app.decorate('config', config);
+  app.decorate('rcon', createRconClient());
 
   await app.register(helmet, { global: true });
   await app.register(cookie, { secret: config.SESSION_SECRET });
@@ -125,6 +128,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(serverUpdateRoutes);
   await app.register(archiveRoutes);
   await app.register(serverInstallRoutes);
+  await app.register(serverRnsquadjsRoutes);
   await app.register(forceStopRoutes);
   await app.register(serverLogsRoutes);
   await app.register(serverMetricsRoutes);
