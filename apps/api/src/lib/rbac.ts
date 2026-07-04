@@ -17,6 +17,7 @@ export interface PermissionContext {
   panelAccess: boolean;
   canAssignRoles: boolean;
   canEditRoles: boolean;
+  canManageIntegrations: boolean;
   isOwner: boolean;
 }
 
@@ -31,12 +32,16 @@ const PANEL_PERMS_GATED_BY_EDIT: ReadonlySet<PermissionKey> = new Set<Permission
   'role:edit',
   'role:delete',
 ]);
+const PANEL_PERMS_GATED_BY_INTEGRATIONS: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'integration:manage',
+]);
 const ALL_PANEL_PERMS: ReadonlySet<PermissionKey> = new Set<PermissionKey>(PERMISSION_KEYS);
 
 function derivePanelPermissions(
   panelAccess: boolean,
   canAssignRoles: boolean,
   canEditRoles: boolean,
+  canManageIntegrations: boolean,
   isOwner: boolean,
 ): Set<PermissionKey> {
   if (isOwner) return new Set(ALL_PANEL_PERMS);
@@ -45,6 +50,7 @@ function derivePanelPermissions(
   for (const key of ALL_PANEL_PERMS) {
     if (PANEL_PERMS_GATED_BY_ASSIGN.has(key) && !canAssignRoles) continue;
     if (PANEL_PERMS_GATED_BY_EDIT.has(key) && !canEditRoles) continue;
+    if (PANEL_PERMS_GATED_BY_INTEGRATIONS.has(key) && !canManageIntegrations) continue;
     out.add(key);
   }
   return out;
@@ -57,6 +63,7 @@ interface RoleContextRow extends Record<string, unknown> {
   panel_access: boolean | null;
   can_assign_roles: boolean | null;
   can_edit_roles: boolean | null;
+  can_manage_integrations: boolean | null;
   squad_permissions: string[] | null;
 }
 
@@ -75,6 +82,7 @@ export async function loadUserPermissions(
       r.panel_access,
       r.can_assign_roles,
       r.can_edit_roles,
+      r.can_manage_integrations,
       COALESCE(
         (SELECT array_agg(rsp.squad_permission_key ORDER BY rsp.squad_permission_key)
          FROM role_squad_permissions rsp WHERE rsp.role_id = r.id),
@@ -96,6 +104,7 @@ export async function loadUserPermissions(
       panelAccess: false,
       canAssignRoles: false,
       canEditRoles: false,
+      canManageIntegrations: false,
       isOwner: false,
     };
     cache.set(playerId, { value: empty, expiresAt: Date.now() + TTL_MS });
@@ -106,6 +115,7 @@ export async function loadUserPermissions(
   const panelAccess = isOwner ? true : (row.panel_access ?? false);
   const canAssignRoles = isOwner ? true : (row.can_assign_roles ?? false);
   const canEditRoles = isOwner ? true : (row.can_edit_roles ?? false);
+  const canManageIntegrations = isOwner ? true : (row.can_manage_integrations ?? false);
   const squadPermissions = isOwner
     ? new Set<SquadPermissionKey>(SQUAD_PERMISSION_KEYS)
     : new Set<SquadPermissionKey>(
@@ -117,7 +127,13 @@ export async function loadUserPermissions(
     .from(rolePermissions)
     .where(eq(rolePermissions.roleId, row.role_id));
 
-  const permissions = derivePanelPermissions(panelAccess, canAssignRoles, canEditRoles, isOwner);
+  const permissions = derivePanelPermissions(
+    panelAccess,
+    canAssignRoles,
+    canEditRoles,
+    canManageIntegrations,
+    isOwner,
+  );
   for (const entry of explicit) {
     if (isPermissionKey(entry.key)) permissions.add(entry.key);
   }
@@ -130,6 +146,7 @@ export async function loadUserPermissions(
     panelAccess,
     canAssignRoles,
     canEditRoles,
+    canManageIntegrations,
     isOwner,
   };
   cache.set(playerId, { value, expiresAt: Date.now() + TTL_MS });

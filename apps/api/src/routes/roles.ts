@@ -22,6 +22,7 @@ const createBody = z.object({
   panel_access: z.boolean().default(false),
   can_assign_roles: z.boolean().default(false),
   can_edit_roles: z.boolean().default(false),
+  can_manage_integrations: z.boolean().default(false),
 });
 
 const updateBody = z.object({
@@ -32,6 +33,7 @@ const updateBody = z.object({
   panel_access: z.boolean().optional(),
   can_assign_roles: z.boolean().optional(),
   can_edit_roles: z.boolean().optional(),
+  can_manage_integrations: z.boolean().optional(),
 });
 
 const idParam = z.object({ id: z.string().uuid() });
@@ -45,6 +47,7 @@ interface RoleWithCount extends Record<string, unknown> {
   panel_access: boolean;
   can_assign_roles: boolean;
   can_edit_roles: boolean;
+  can_manage_integrations: boolean;
   squad_permissions: string[];
   assigned_users_count: number;
 }
@@ -52,7 +55,7 @@ interface RoleWithCount extends Record<string, unknown> {
 async function listRolesWithCounts(db: DatabaseClient): Promise<RoleWithCount[]> {
   const rows = await db.execute<RoleWithCount>(sql`
     SELECT r.id, r.name, r.color, r.description, r.is_system_role,
-      r.panel_access, r.can_assign_roles, r.can_edit_roles,
+      r.panel_access, r.can_assign_roles, r.can_edit_roles, r.can_manage_integrations,
       COALESCE(
         (SELECT array_agg(rsp.squad_permission_key ORDER BY rsp.squad_permission_key)
          FROM role_squad_permissions rsp WHERE rsp.role_id = r.id), ARRAY[]::text[]
@@ -120,6 +123,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
             panelAccess: req.body.panel_access,
             canAssignRoles: req.body.can_assign_roles,
             canEditRoles: req.body.can_edit_roles,
+            canManageIntegrations: req.body.can_manage_integrations,
           });
           if (req.body.squad_permissions.length > 0) {
             await tx.insert(roleSquadPermissions).values(
@@ -193,6 +197,8 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
           if (req.body.can_assign_roles !== undefined)
             updates.canAssignRoles = req.body.can_assign_roles;
           if (req.body.can_edit_roles !== undefined) updates.canEditRoles = req.body.can_edit_roles;
+          if (req.body.can_manage_integrations !== undefined)
+            updates.canManageIntegrations = req.body.can_manage_integrations;
           if (Object.keys(updates).length > 0) {
             await tx.update(roles).set(updates).where(eq(roles.id, req.params.id));
           }

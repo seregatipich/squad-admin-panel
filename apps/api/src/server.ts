@@ -39,6 +39,7 @@ import steamRoutes from './routes/auth-steam.js';
 import depotRoutes from './routes/depot.js';
 import hostRoutes from './routes/host.js';
 import hostActionsRoutes from './routes/host-actions.js';
+import integrationsDiscordRoutes from './routes/integrations-discord.js';
 import liveRoutes from './routes/live.js';
 import logsRoutes from './routes/logs.js';
 import meTokensRoutes from './routes/me-tokens.js';
@@ -142,6 +143,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(adminsCfgRoutes);
   await app.register(auditRoutes);
   await app.register(logsRoutes);
+  await app.register(integrationsDiscordRoutes);
   await app.register(liveRoutes);
   await app.register(steamRoutes);
   await app.register(setupRoutes);

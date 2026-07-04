@@ -8,6 +8,7 @@ vi.mock('ioredis', () => ({
 }));
 vi.mock('@squad/shared-config', () => ({
   startHeartbeat: vi.fn(() => vi.fn()),
+  createDiscordRedactingStream: vi.fn((inner) => inner),
 }));
 vi.mock('pino', () => {
   const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn(), fatal: vi.fn() };
