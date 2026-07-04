@@ -1,7 +1,47 @@
-import { type DatabaseClient, playerNameHistory, players } from '@squad/db';
+import {
+  type ChatScope,
+  type ChatSource,
+  chatMessages,
+  type DatabaseClient,
+  playerNameHistory,
+  players,
+} from '@squad/db';
 import { desc, eq, or } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { ChatChannel, ParsedChat } from '../parser/chat.js';
+
+const CHANNEL_SCOPE: Record<ChatChannel, ChatScope> = {
+  ChatAll: 'all',
+  ChatTeam: 'team',
+  ChatSquad: 'squad',
+  ChatAdmin: 'admin',
+};
+
+export interface ChatRecord {
+  playerId: string;
+  serverId: string;
+  sentAt: Date;
+  scope: ChatScope;
+  message: string;
+  source?: ChatSource;
+  teamId?: number | null;
+  squadId?: number | null;
+  isFlagged?: boolean;
+}
+
+export async function recordChatMessage(db: DatabaseClient, record: ChatRecord): Promise<void> {
+  await db.insert(chatMessages).values({
+    playerId: record.playerId,
+    serverId: record.serverId,
+    sentAt: record.sentAt,
+    scope: record.scope,
+    message: record.message,
+    source: record.source ?? 'log',
+    teamId: record.teamId ?? null,
+    squadId: record.squadId ?? null,
+    isFlagged: record.isFlagged ?? false,
+  });
+}
 
 export const LIVE_BUS_CHANNEL = 'live-bus';
 
@@ -91,5 +131,15 @@ export async function handleChat(
   const playerId = await resolvePlayerId(db, chat);
   const frame = buildChatFrame(playerId, serverId, chat);
   if (redis) await redis.publish(LIVE_BUS_CHANNEL, JSON.stringify(frame));
+  if (playerId) {
+    await recordChatMessage(db, {
+      playerId,
+      serverId,
+      sentAt: new Date(chat.ts),
+      scope: CHANNEL_SCOPE[chat.channel],
+      message: chat.message,
+      source: 'log',
+    }).catch(() => undefined);
+  }
   return frame;
 }
