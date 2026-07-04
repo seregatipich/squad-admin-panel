@@ -9,6 +9,11 @@
       "development": "./src/index.ts",
       "default": "./dist/index.js"
     },
+    "./banned-names": {
+      "types": "./dist/banned-names.d.ts",
+      "development": "./src/banned-names.ts",
+      "default": "./dist/banned-names.js"
+    },
     "./role-colors": {
       "types": "./dist/role-colors.d.ts",
       "development": "./src/role-colors.ts",

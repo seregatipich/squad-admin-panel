@@ -1,4 +1,5 @@
 export * from './audit-log.js';
+export * from './banned-name-rules.js';
 export * from './config-versions.js';
 export * from './diagnostic-events.js';
 export * from './events.js';

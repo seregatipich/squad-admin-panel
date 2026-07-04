@@ -1,3 +1,4 @@
+export * from './banned-names.js';
 export * from './bridge-methods.js';
 export * from './diag.js';
 export * from './heartbeat.js';

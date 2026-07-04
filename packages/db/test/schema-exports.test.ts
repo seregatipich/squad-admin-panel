@@ -1,6 +1,7 @@
 import { getTableColumns, getTableName } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import * as auditLogSchema from '../src/schema/audit-log.js';
+import * as bannedNameRulesSchema from '../src/schema/banned-name-rules.js';
 import * as configVersionsSchema from '../src/schema/config-versions.js';
 import * as diagnosticEventsSchema from '../src/schema/diagnostic-events.js';
 import * as eventsSchema from '../src/schema/events.js';
@@ -20,6 +21,7 @@ import * as sessionsSchema from '../src/schema/sessions.js';
 describe('individual schema module exports', () => {
   const modules = [
     { mod: auditLogSchema, name: 'audit-log' },
+    { mod: bannedNameRulesSchema, name: 'banned-name-rules' },
     { mod: configVersionsSchema, name: 'config-versions' },
     { mod: diagnosticEventsSchema, name: 'diagnostic-events' },
     { mod: eventsSchema, name: 'events' },

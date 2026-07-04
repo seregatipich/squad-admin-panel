@@ -28,6 +28,7 @@ import statusReconcilerPlugin from '../../src/plugins/status-reconciler.js';
 import adminsCfgRoutes from '../../src/routes/admins-cfg.js';
 import auditRoutes from '../../src/routes/audit.js';
 import authRoutes from '../../src/routes/auth.js';
+import bannedNamesRoutes from '../../src/routes/banned-names.js';
 import depotRoutes from '../../src/routes/depot.js';
 import hostRoutes from '../../src/routes/host.js';
 import hostActionsRoutes from '../../src/routes/host-actions.js';
@@ -466,6 +467,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(auditRoutes);
   await app.register(logsRoutes);
   await app.register(adminsCfgRoutes);
+  await app.register(bannedNamesRoutes);
 
   // Test fixture: legacy "Viewer" role used by older permission-bound
   // tests (depot, host-actions, logs, rbac, ...). The production seed
