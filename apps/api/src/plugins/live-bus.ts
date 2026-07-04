@@ -60,6 +60,11 @@ export type LiveEvent =
           edited: boolean;
         };
       };
+    }
+  | {
+      type: 'session.revoked';
+      ts: string;
+      data: { player_id: string; session_id: string };
     };
 
 export interface LiveBus {

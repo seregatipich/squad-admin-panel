@@ -1,6 +1,8 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import { useLiveSubscription } from '@/lib/use-live-bus';
+import { isCurrentSessionRevoked, type SessionRevokedEvent } from './sessionEvents';
 
 const POLL_MS = 30_000;
 
@@ -50,6 +52,18 @@ export default function AccountSettings() {
   const [revokingAll, setRevokingAll] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const sessionsRef = useRef<ActiveSession[]>([]);
+  sessionsRef.current = sessions;
+
+  const onSessionRevoked = useCallback((event: SessionRevokedEvent) => {
+    const currentSession = sessionsRef.current.find((s) => s.current);
+    if (isCurrentSessionRevoked(event, currentSession?.id ?? null)) {
+      window.location.href = '/login';
+      return;
+    }
+    setSessions((prev) => prev.filter((s) => s.id !== event.data.session_id));
+  }, []);
+  useLiveSubscription('session.revoked', onSessionRevoked);
 
   useEffect(() => {
     let cancelled = false;

@@ -10,6 +10,7 @@ import postgres from 'postgres';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createSession } from '../src/lib/sessions.js';
 import authPlugin, { SESSION_COOKIE } from '../src/plugins/auth.js';
+import liveBusPlugin, { type LiveEvent } from '../src/plugins/live-bus.js';
 import authRoutes from '../src/routes/auth.js';
 import { createIsolatedSchema, makeFakeBridge, runMigrations } from './integration/harness.js';
 
@@ -35,6 +36,7 @@ async function buildApp(opts: { dbUrl: string }) {
   // biome-ignore lint/suspicious/noExplicitAny: simplified test config
   app.decorate('config', testConfig as any);
   await app.register(cookie, { secret: 'a'.repeat(48) });
+  await app.register(liveBusPlugin);
   await app.register(authPlugin);
   await app.register(authRoutes);
   await app.ready();
@@ -136,17 +138,23 @@ describe('POST /api/v1/auth/logout', () => {
 
   it('revokes the current session and clears cookie', async () => {
     const { token, sessionId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000301n);
+    const revokedIds = new Set<string>();
+    const unsub = h.app.liveBus.subscribe((event: LiveEvent) => {
+      if (event.type === 'session.revoked') revokedIds.add(event.data.session_id);
+    });
     const res = await h.app.inject({
       method: 'POST',
       url: '/api/v1/auth/logout',
       cookies: { [SESSION_COOKIE]: token },
     });
+    unsub();
     expect(res.statusCode).toBe(200);
     const remaining = await h.db
       .select()
       .from(sessionsTable)
       .where(eq(sessionsTable.id, sessionId));
     expect(remaining.length).toBe(0);
+    expect(revokedIds.has(sessionId)).toBe(true);
   });
 });
 
@@ -219,17 +227,26 @@ describe('DELETE /api/v1/me/sessions/:id', () => {
       userAgent: 'b',
       ttlMs: 21600 * 1000,
     });
+    const revoked: Array<{ playerId: string; sessionId: string }> = [];
+    const unsub = h.app.liveBus.subscribe((event: LiveEvent) => {
+      if (event.type === 'session.revoked')
+        revoked.push({ playerId: event.data.player_id, sessionId: event.data.session_id });
+    });
     const res = await h.app.inject({
       method: 'DELETE',
       url: `/api/v1/me/sessions/${second.session.id}`,
       cookies: { [SESSION_COOKIE]: token },
     });
+    unsub();
     expect(res.statusCode).toBe(200);
     const rows = await h.db
       .select()
       .from(sessionsTable)
       .where(eq(sessionsTable.id, second.session.id));
     expect(rows.length).toBe(0);
+    expect(revoked.some((e) => e.sessionId === second.session.id && e.playerId === playerId)).toBe(
+      true,
+    );
   });
 
   it("returns 404 for another user's session", async () => {
@@ -248,12 +265,23 @@ describe('DELETE /api/v1/me/sessions/:id', () => {
       userAgent: 'b',
       ttlMs: 21600 * 1000,
     });
+    const revokedIds = new Set<string>();
+    const unsub = h.app.liveBus.subscribe((event: LiveEvent) => {
+      if (event.type === 'session.revoked') revokedIds.add(event.data.session_id);
+    });
     const res = await h.app.inject({
       method: 'DELETE',
       url: `/api/v1/me/sessions/${otherSession.session.id}`,
       cookies: { [SESSION_COOKIE]: token },
     });
+    unsub();
     expect(res.statusCode).toBe(404);
+    expect(revokedIds.has(otherSession.session.id)).toBe(false);
+    const stillThere = await h.db
+      .select()
+      .from(sessionsTable)
+      .where(eq(sessionsTable.id, otherSession.session.id));
+    expect(stillThere.length).toBe(1);
   });
 });
 
@@ -271,24 +299,35 @@ describe('DELETE /api/v1/me/sessions', () => {
   });
 
   it('logs out all sessions for the player', async () => {
-    const { token, playerId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000700n);
-    await createSession(h.db, h.redis, {
+    const { token, sessionId, playerId } = await seedAuthedPlayer(
+      h.db,
+      h.redis,
+      76561198000000700n,
+    );
+    const second = await createSession(h.db, h.redis, {
       playerId,
       ip: null,
       userAgent: 'b',
       ttlMs: 21600 * 1000,
+    });
+    const revokedIds = new Set<string>();
+    const unsub = h.app.liveBus.subscribe((event: LiveEvent) => {
+      if (event.type === 'session.revoked') revokedIds.add(event.data.session_id);
     });
     const res = await h.app.inject({
       method: 'DELETE',
       url: '/api/v1/me/sessions',
       cookies: { [SESSION_COOKIE]: token },
     });
+    unsub();
     expect(res.statusCode).toBe(200);
     const remaining = await h.db
       .select()
       .from(sessionsTable)
       .where(eq(sessionsTable.playerId, playerId));
     expect(remaining.length).toBe(0);
+    expect(revokedIds.has(sessionId)).toBe(true);
+    expect(revokedIds.has(second.session.id)).toBe(true);
   });
 
   it('returns 401 when not authenticated', async () => {

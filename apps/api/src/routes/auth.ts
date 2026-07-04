@@ -15,7 +15,15 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       const token = req.cookies[SESSION_COOKIE];
       if (token) {
-        await revokeSession(app.db, app.redis, tokenIdFromToken(token));
+        const sessionId = tokenIdFromToken(token);
+        await revokeSession(app.db, app.redis, sessionId);
+        if (req.user) {
+          app.liveBus.publish({
+            type: 'session.revoked',
+            ts: new Date().toISOString(),
+            data: { player_id: req.user.playerId, session_id: sessionId },
+          });
+        }
       }
       reply.clearCookie(SESSION_COOKIE, { path: '/' });
       return { ok: true };
@@ -79,6 +87,11 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'session_not_found' };
       }
       await revokeSession(app.db, app.redis, req.params.id);
+      app.liveBus.publish({
+        type: 'session.revoked',
+        ts: new Date().toISOString(),
+        data: { player_id: req.user.playerId, session_id: req.params.id },
+      });
       return { ok: true };
     },
   );
@@ -93,8 +106,20 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         reply.code(401);
         return { error: 'unauthenticated' };
       }
+      const ownSessions = await app.db
+        .select({ id: sessionsTable.id })
+        .from(sessionsTable)
+        .where(eq(sessionsTable.playerId, req.user.playerId));
       await revokeAllForPlayer(app.db, app.redis, req.user.playerId);
       reply.clearCookie(SESSION_COOKIE, { path: '/' });
+      const ts = new Date().toISOString();
+      for (const revoked of ownSessions) {
+        app.liveBus.publish({
+          type: 'session.revoked',
+          ts,
+          data: { player_id: req.user.playerId, session_id: revoked.id },
+        });
+      }
       return { ok: true };
     },
   );
