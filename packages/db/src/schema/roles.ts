@@ -11,6 +11,7 @@ export const roles = pgTable(
     panelAccess: boolean('panel_access').notNull().default(false),
     canAssignRoles: boolean('can_assign_roles').notNull().default(false),
     canEditRoles: boolean('can_edit_roles').notNull().default(false),
+    canManageBanSources: boolean('can_manage_ban_sources').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
   (table) => ({
