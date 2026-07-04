@@ -8,11 +8,8 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 
-import DiscordIntegrationPage, {
-  DISCORD_EVENT_TYPES,
-  eventLabel,
-  looksLikeWebhookUrl,
-} from './page';
+import { DISCORD_EVENT_TYPES, eventLabel, looksLikeWebhookUrl } from './discord-events';
+import DiscordIntegrationPage from './page';
 
 describe('DiscordIntegrationPage', () => {
   it('is a valid React component', () => {
