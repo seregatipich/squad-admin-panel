@@ -9,6 +9,7 @@ import { MetricHistoryModal, type MetricKey } from '@/components/MetricHistoryMo
 import { RestartBridgeButton } from '@/components/RestartBridgeButton';
 import { formatBytes, formatBytesPerSec, formatPercent, formatUptime, ratio } from '@/lib/format';
 import { computeHostHealth, type HealthLevel, thresholdTone } from '@/lib/host-health';
+import { AnalyticsPanel } from './analytics-panel';
 
 interface BridgeStatus {
   connected: boolean;
@@ -364,6 +365,8 @@ export default function DashboardPage() {
           />
         </div>
       </section>
+
+      <AnalyticsPanel servers={servers.map((s) => ({ id: s.id, display_name: s.display_name }))} />
 
       <DiskBreakdownModal
         open={diskModalOpen}

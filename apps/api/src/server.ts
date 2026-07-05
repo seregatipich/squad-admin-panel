@@ -33,6 +33,7 @@ import redisPlugin from './plugins/redis.js';
 import requestContextPlugin from './plugins/request-context.js';
 import statusReconcilerPlugin from './plugins/status-reconciler.js';
 import adminsCfgRoutes from './routes/admins-cfg.js';
+import analyticsRoutes from './routes/analytics.js';
 import auditRoutes from './routes/audit.js';
 import authRoutes from './routes/auth.js';
 import steamRoutes from './routes/auth-steam.js';
@@ -163,6 +164,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(logsRoutes);
   await app.register(integrationsDiscordRoutes);
   await app.register(liveRoutes);
+  await app.register(analyticsRoutes);
   await app.register(steamRoutes);
   await app.register(setupRoutes);
 
