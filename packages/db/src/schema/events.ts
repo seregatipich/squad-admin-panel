@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   index,
   integer,
@@ -26,6 +27,9 @@ export const events = pgTable(
     pk: primaryKey({ columns: [table.eventId, table.occurredAt] }),
     serverOccurredIdx: index('events_server_occurred_idx').on(table.serverId, table.occurredAt),
     kindOccurredIdx: index('events_kind_occurred_idx').on(table.kind, table.occurredAt),
+    actorOccurredIdx: index('events_actor_occurred_idx')
+      .on(table.actorId, table.occurredAt.desc())
+      .where(sql`${table.actorId} IS NOT NULL`),
   }),
 );
 
