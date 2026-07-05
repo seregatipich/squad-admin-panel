@@ -3,20 +3,13 @@
 import Link from 'next/link';
 import { use, useCallback, useEffect, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
-
-interface ClanMember {
-  player_id: string;
-  canonical_name: string;
-  member_role: string;
-  has_priority: boolean;
-}
+import RosterPanel from './RosterPanel';
 
 interface ClanDetail {
   id: string;
   name: string;
   tags: string[];
   description: string | null;
-  members: ClanMember[];
 }
 
 interface OnlineMember {
@@ -323,38 +316,7 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
         </div>
       </section>
 
-      <section className="space-y-2">
-        <h2 className="text-lg font-medium">Ростер</h2>
-        <div className="overflow-x-auto rounded border border-neutral-800">
-          <table className="w-full text-sm">
-            <thead className="bg-neutral-950 text-xs uppercase tracking-widest text-neutral-500">
-              <tr>
-                <th className="text-left p-2">Участник</th>
-                <th className="text-left p-2">Роль</th>
-                <th className="text-left p-2">Приоритет</th>
-              </tr>
-            </thead>
-            <tbody>
-              {clan?.members.map((member) => (
-                <tr key={member.player_id} className="border-t border-neutral-900">
-                  <td className="p-2">
-                    <Link
-                      href={`/players/${member.player_id}`}
-                      className="text-sky-400 hover:text-sky-300"
-                    >
-                      {member.canonical_name}
-                    </Link>
-                  </td>
-                  <td className="p-2 text-neutral-400">
-                    {ROLE_LABELS[member.member_role] ?? member.member_role}
-                  </td>
-                  <td className="p-2 text-neutral-400">{member.has_priority ? 'да' : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <RosterPanel clanId={clanId} />
 
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">

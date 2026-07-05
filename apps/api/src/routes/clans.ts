@@ -8,6 +8,7 @@ import {
   players,
   servers,
 } from '@squad/db/schema';
+import { normalizePlayerName } from '@squad/shared-config';
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -100,6 +101,41 @@ const expireBody = z.object({
   priority_expires_at: z.string().datetime({ offset: true }).nullable(),
 });
 
+const assignableMemberRole = z.enum(['deputy', 'member']);
+
+const rosterQuery = z.object({
+  q: z.string().trim().min(1).max(64).optional(),
+  sort: z
+    .enum(['name', 'role', 'priority', 'joined_at', 'last_seen', 'online'])
+    .default('joined_at'),
+  order: z.enum(['asc', 'desc']).default('asc'),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+const addMemberBody = z.object({
+  player_id: z.string().uuid(),
+  member_role: assignableMemberRole.default('member'),
+});
+
+const setMemberRoleBody = z.object({ member_role: assignableMemberRole });
+
+const transferBody = z.object({ player_id: z.string().uuid() });
+
+const memberParams = z.object({ id: z.string().uuid(), playerId: z.string().uuid() });
+
+interface RosterRow {
+  player_id: string;
+  member_role: string;
+  has_priority: boolean;
+  joined_at: string;
+  canonical_name: string;
+  steam_id64: string | null;
+  eos_id: string | null;
+  last_seen_at: string | null;
+  online_60d: number;
+}
+
 function clanSnapshot(row: ClanRow) {
   return {
     id: row.id,
@@ -167,6 +203,17 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
       .where(and(eq(clanMembers.clanId, clanId), eq(clanMembers.playerId, playerId)))
       .limit(1);
     return rows[0]?.role ?? null;
+  }
+
+  async function clanManageLevel(
+    clanId: string,
+    user: NonNullable<FastifyRequest['user']>,
+  ): Promise<'full' | 'deputy' | null> {
+    if (user.permissions.canManageClans) return 'full';
+    const role = await membershipRole(clanId, user.playerId);
+    if (role === 'leader') return 'full';
+    if (role === 'deputy') return 'deputy';
+    return null;
   }
 
   fast.get('/api/v1/clans', { config: { audit: false } }, async (req, reply) => {
@@ -741,6 +788,327 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         context: { requestId: req.id, method: req.method, url: req.url },
       });
       return { ok: true };
+    },
+  );
+
+  fast.get(
+    '/api/v1/clans/:id/members',
+    { schema: { params: clanIdParams, querystring: rosterQuery }, config: { audit: false } },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      if (!req.user.permissions.panelAccess) {
+        reply.code(403);
+        return { error: 'forbidden' };
+      }
+      const clan = await loadActiveClan(req.params.id);
+      if (!clan) {
+        reply.code(404);
+        return { error: 'clan_not_found' };
+      }
+      const { q, sort, order, page, limit } = req.query;
+      const offset = (page - 1) * limit;
+
+      const filters = [sql`cm.clan_id = ${clan.id}`];
+      if (q) {
+        const nameMatch = normalizePlayerName(q);
+        const exactMatch = q.toLowerCase();
+        filters.push(
+          sql`(p.canonical_name_normalized LIKE ${`%${nameMatch}%`} OR p.steam_id64::text = ${exactMatch} OR p.eos_id = ${exactMatch})`,
+        );
+      }
+      const whereSql = and(...filters);
+
+      const sortColumn = {
+        name: sql`p.canonical_name`,
+        role: sql`cm.member_role`,
+        priority: sql`cm.has_priority`,
+        joined_at: sql`cm.joined_at`,
+        last_seen: sql`p.last_seen_at`,
+        online: sql`online_60d`,
+      }[sort];
+      const direction = order === 'asc' ? sql`ASC` : sql`DESC`;
+
+      const rows = (await app.db.execute(sql`
+        SELECT cm.player_id, cm.member_role, cm.has_priority,
+               cm.joined_at::text AS joined_at,
+               p.canonical_name, p.steam_id64::text AS steam_id64, p.eos_id,
+               p.last_seen_at::text AS last_seen_at,
+               COALESCE(pres.online, 0)::int AS online_60d
+        FROM clan_members cm
+        JOIN players p ON p.id = cm.player_id
+        LEFT JOIN (
+          SELECT player_id, SUM(online_seconds) AS online
+          FROM player_daily_presence
+          WHERE day >= (CURRENT_DATE - INTERVAL '60 days')
+          GROUP BY player_id
+        ) pres ON pres.player_id = cm.player_id
+        WHERE ${whereSql}
+        ORDER BY ${sortColumn} ${direction} NULLS LAST, cm.joined_at ASC
+        LIMIT ${limit} OFFSET ${offset}
+      `)) as unknown as RosterRow[];
+
+      const countRows = (await app.db.execute(sql`
+        SELECT COUNT(*)::int AS total
+        FROM clan_members cm
+        JOIN players p ON p.id = cm.player_id
+        WHERE ${whereSql}
+      `)) as unknown as Array<{ total: number }>;
+      const total = countRows[0]?.total ?? 0;
+
+      return {
+        clan_id: clan.id,
+        items: rows.map((row) => ({
+          player_id: row.player_id,
+          canonical_name: row.canonical_name,
+          steam_id64: row.steam_id64,
+          eos_id: row.eos_id,
+          member_role: row.member_role,
+          has_priority: row.has_priority,
+          joined_at: new Date(row.joined_at).toISOString(),
+          last_seen_at: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : null,
+          online_60d_seconds: Number(row.online_60d),
+        })),
+        total,
+        page,
+        limit,
+      };
+    },
+  );
+
+  fast.post(
+    '/api/v1/clans/:id/members',
+    { schema: { params: clanIdParams, body: addMemberBody }, config: { audit: false } },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      const clan = await loadActiveClan(req.params.id);
+      if (!clan) {
+        reply.code(404);
+        return { error: 'clan_not_found' };
+      }
+      const level = await clanManageLevel(clan.id, req.user);
+      if (!level) {
+        reply.code(403);
+        return { error: 'forbidden' };
+      }
+      if (level === 'deputy' && req.body.member_role !== 'member') {
+        reply.code(403);
+        return { error: 'forbidden' };
+      }
+      const [player] = await app.db
+        .select({ id: players.id })
+        .from(players)
+        .where(eq(players.id, req.body.player_id))
+        .limit(1);
+      if (!player) {
+        reply.code(404);
+        return { error: 'player_not_found' };
+      }
+      try {
+        await app.db.insert(clanMembers).values({
+          clanId: clan.id,
+          playerId: req.body.player_id,
+          memberRole: req.body.member_role,
+          hasPriority: false,
+        });
+      } catch (err) {
+        const { code } = pgError(err);
+        if (code === '23505') {
+          reply.code(409);
+          return { error: 'player_already_in_clan' };
+        }
+        throw err;
+      }
+      await writeAuditEntry(app.db, {
+        actor: auditActor(req),
+        actorIp: req.ip ?? null,
+        actionType: 'clan.member.add',
+        targetType: 'clan',
+        targetId: clan.id,
+        before: null,
+        after: { player_id: req.body.player_id, member_role: req.body.member_role },
+        context: { requestId: req.id, method: req.method, url: req.url },
+      });
+      reply.code(201);
+      return {
+        clan_id: clan.id,
+        player_id: req.body.player_id,
+        member_role: req.body.member_role,
+      };
+    },
+  );
+
+  fast.patch(
+    '/api/v1/clans/:id/members/:playerId',
+    { schema: { params: memberParams, body: setMemberRoleBody }, config: { audit: false } },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      const clan = await loadActiveClan(req.params.id);
+      if (!clan) {
+        reply.code(404);
+        return { error: 'clan_not_found' };
+      }
+      const level = await clanManageLevel(clan.id, req.user);
+      if (level !== 'full') {
+        reply.code(403);
+        return { error: 'forbidden' };
+      }
+      const currentRole = await membershipRole(clan.id, req.params.playerId);
+      if (!currentRole) {
+        reply.code(404);
+        return { error: 'member_not_found' };
+      }
+      if (currentRole === 'leader') {
+        reply.code(409);
+        return { error: 'cannot_demote_leader' };
+      }
+      if (currentRole !== req.body.member_role) {
+        await app.db
+          .update(clanMembers)
+          .set({ memberRole: req.body.member_role })
+          .where(
+            and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)),
+          );
+      }
+      await writeAuditEntry(app.db, {
+        actor: auditActor(req),
+        actorIp: req.ip ?? null,
+        actionType: 'clan.member.role',
+        targetType: 'clan',
+        targetId: clan.id,
+        before: { player_id: req.params.playerId, member_role: currentRole },
+        after: { player_id: req.params.playerId, member_role: req.body.member_role },
+        context: { requestId: req.id, method: req.method, url: req.url },
+      });
+      return {
+        clan_id: clan.id,
+        player_id: req.params.playerId,
+        member_role: req.body.member_role,
+      };
+    },
+  );
+
+  fast.delete(
+    '/api/v1/clans/:id/members/:playerId',
+    { schema: { params: memberParams }, config: { audit: false } },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      const clan = await loadActiveClan(req.params.id);
+      if (!clan) {
+        reply.code(404);
+        return { error: 'clan_not_found' };
+      }
+      const level = await clanManageLevel(clan.id, req.user);
+      if (!level) {
+        reply.code(403);
+        return { error: 'forbidden' };
+      }
+      const currentRole = await membershipRole(clan.id, req.params.playerId);
+      if (!currentRole) {
+        reply.code(404);
+        return { error: 'member_not_found' };
+      }
+      if (level === 'deputy' && currentRole !== 'member') {
+        reply.code(403);
+        return { error: 'forbidden' };
+      }
+      if (currentRole === 'leader') {
+        reply.code(409);
+        return { error: 'sole_leader_removal' };
+      }
+      await app.db
+        .delete(clanMembers)
+        .where(and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)));
+      await writeAuditEntry(app.db, {
+        actor: auditActor(req),
+        actorIp: req.ip ?? null,
+        actionType: 'clan.member.remove',
+        targetType: 'clan',
+        targetId: clan.id,
+        before: { player_id: req.params.playerId, member_role: currentRole },
+        after: null,
+        context: { requestId: req.id, method: req.method, url: req.url },
+      });
+      return { ok: true };
+    },
+  );
+
+  fast.post(
+    '/api/v1/clans/:id/transfer-leadership',
+    { schema: { params: clanIdParams, body: transferBody }, config: { audit: false } },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      const clan = await loadActiveClan(req.params.id);
+      if (!clan) {
+        reply.code(404);
+        return { error: 'clan_not_found' };
+      }
+      const level = await clanManageLevel(clan.id, req.user);
+      if (level !== 'full') {
+        reply.code(403);
+        return { error: 'forbidden' };
+      }
+      const newLeaderRole = await membershipRole(clan.id, req.body.player_id);
+      if (!newLeaderRole) {
+        reply.code(404);
+        return { error: 'member_not_found' };
+      }
+      if (newLeaderRole === 'leader') {
+        reply.code(409);
+        return { error: 'already_leader' };
+      }
+      const [currentLeader] = await app.db
+        .select({ playerId: clanMembers.playerId })
+        .from(clanMembers)
+        .where(and(eq(clanMembers.clanId, clan.id), eq(clanMembers.memberRole, 'leader')))
+        .limit(1);
+      const previousLeaderId = currentLeader?.playerId ?? null;
+      await app.db.transaction(async (tx) => {
+        if (previousLeaderId) {
+          await tx
+            .update(clanMembers)
+            .set({ memberRole: 'deputy' })
+            .where(
+              and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, previousLeaderId)),
+            );
+        }
+        await tx
+          .update(clanMembers)
+          .set({ memberRole: 'leader' })
+          .where(
+            and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.body.player_id)),
+          );
+      });
+      await writeAuditEntry(app.db, {
+        actor: auditActor(req),
+        actorIp: req.ip ?? null,
+        actionType: 'clan.leadership.transfer',
+        targetType: 'clan',
+        targetId: clan.id,
+        before: { leader_id: previousLeaderId },
+        after: { leader_id: req.body.player_id },
+        context: { requestId: req.id, method: req.method, url: req.url },
+      });
+      return {
+        ok: true,
+        clan_id: clan.id,
+        leader_id: req.body.player_id,
+        previous_leader_id: previousLeaderId,
+      };
     },
   );
 };
