@@ -1,5 +1,6 @@
 import type { DatabaseClient } from '@squad/db';
 import { playerDailyPresence, playerSessions, players, roles, servers } from '@squad/db/schema';
+import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
@@ -281,5 +282,205 @@ describeIfDb('player presence API (PRES-4)', () => {
     expect(body.by_server).toEqual([]);
     expect(body.sessions).toEqual([]);
     expect(body.bonus.value_seconds).toBe(0);
+  });
+});
+
+interface DailyPresenceResponse {
+  range: number;
+  from: string;
+  to: string;
+  total_time_played_seconds: number;
+  live: { online: boolean; since: string | null };
+  series: Array<{
+    day: string;
+    online_seconds: number;
+    boost_seconds: number;
+    queue_seconds: number;
+  }>;
+}
+
+describeIfDb('player daily presence API (PRES-3)', () => {
+  let h: IntegrationHarness;
+  let cookie: string;
+
+  beforeAll(async () => {
+    h = await buildIntegrationApp({
+      seedOwner: { steamId64: OWNER_STEAM_ID + 5_000n },
+      bridge: makeFakeBridge(),
+      reusePublicSchema: true,
+    });
+    // biome-ignore lint/style/noNonNullAssertion: seedOwner guarantees ownerPlayerId
+    cookie = await loginAs(h, h.seed.ownerPlayerId!);
+  });
+
+  afterAll(async () => {
+    await h.cleanup();
+  });
+
+  async function daily(
+    playerId: string,
+    range: 30 | 90 | 365 = 30,
+    end = '2026-07-05',
+  ): Promise<DailyPresenceResponse> {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${playerId}/presence/daily?range=${range}&end=${end}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json() as DailyPresenceResponse;
+  }
+
+  it('rejects unauthenticated access with 401', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${uuidv7()}/presence/daily`,
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('rejects a player without panel_access with 403', async () => {
+    const noAccessRole = await seedRole(h.db, { panelAccess: false });
+    const denied = await seedPlayer(h.db, { roleId: noAccessRole });
+    const deniedCookie = await loginAs(h, denied);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${uuidv7()}/presence/daily`,
+      headers: { cookie: deniedCookie },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'forbidden' });
+  });
+
+  it('sums daily hours across servers per day and orders by day (AC)', async () => {
+    const serverA = await seedServer(h.db, 'DailyEU');
+    const serverB = await seedServer(h.db, 'DailyUS');
+    const player = await seedPlayer(h.db, { name: 'DailyPlayer' });
+
+    await h.db.insert(playerDailyPresence).values([
+      {
+        playerId: player,
+        serverId: serverA,
+        day: '2026-07-03',
+        onlineSeconds: 3600,
+        boostSeconds: 1800,
+        queueSeconds: 0,
+        sessionCount: 2,
+      },
+      {
+        playerId: player,
+        serverId: serverB,
+        day: '2026-07-03',
+        onlineSeconds: 1800,
+        boostSeconds: 0,
+        queueSeconds: 600,
+        sessionCount: 1,
+      },
+      {
+        playerId: player,
+        serverId: serverA,
+        day: '2026-07-05',
+        onlineSeconds: 7200,
+        boostSeconds: 0,
+        queueSeconds: 0,
+        sessionCount: 3,
+      },
+    ]);
+
+    const body = await daily(player, 30);
+
+    expect(body.range).toBe(30);
+    expect(body.to).toBe('2026-07-05');
+    expect(body.from).toBe('2026-06-06');
+    expect(body.series).toEqual([
+      { day: '2026-07-03', online_seconds: 5400, boost_seconds: 1800, queue_seconds: 600 },
+      { day: '2026-07-05', online_seconds: 7200, boost_seconds: 0, queue_seconds: 0 },
+    ]);
+  });
+
+  it('honours the range preset window boundaries (AC)', async () => {
+    const server = await seedServer(h.db, 'RangeSrv');
+    const player = await seedPlayer(h.db, { name: 'RangePlayer' });
+
+    await h.db.insert(playerDailyPresence).values([
+      {
+        playerId: player,
+        serverId: server,
+        day: '2026-06-20',
+        onlineSeconds: 3600,
+        sessionCount: 1,
+      },
+      {
+        playerId: player,
+        serverId: server,
+        day: '2026-01-10',
+        onlineSeconds: 3600,
+        sessionCount: 1,
+      },
+    ]);
+
+    const window30 = await daily(player, 30);
+    expect(window30.from).toBe('2026-06-06');
+    expect(window30.series.map((row) => row.day)).toEqual(['2026-06-20']);
+
+    const window365 = await daily(player, 365);
+    expect(window365.from).toBe('2025-07-06');
+    expect(window365.series.map((row) => row.day)).toEqual(['2026-01-10', '2026-06-20']);
+  });
+
+  it('surfaces total_time_played_seconds from the players row (AC)', async () => {
+    const player = await seedPlayer(h.db, { name: 'PlaytimePlayer' });
+    await h.db
+      .update(players)
+      .set({ totalTimePlayedSeconds: 123_456 })
+      .where(eq(players.id, player));
+
+    const body = await daily(player);
+    expect(body.total_time_played_seconds).toBe(123_456);
+  });
+
+  it('detects an open session as live with its connect time (AC)', async () => {
+    const server = await seedServer(h.db, 'LiveSrv');
+    const player = await seedPlayer(h.db, { name: 'LivePlayer' });
+
+    await h.db.insert(playerSessions).values([
+      {
+        playerId: player,
+        serverId: server,
+        mode: 'online',
+        connectedAt: new Date('2026-07-05T11:15:00.000Z'),
+        disconnectedAt: null,
+      },
+    ]);
+
+    const body = await daily(player);
+    expect(body.live).toEqual({ online: true, since: '2026-07-05T11:15:00.000Z' });
+  });
+
+  it('reports offline when every session is closed (AC)', async () => {
+    const server = await seedServer(h.db, 'ClosedSrv');
+    const player = await seedPlayer(h.db, { name: 'ClosedPlayer' });
+
+    await h.db.insert(playerSessions).values([
+      {
+        playerId: player,
+        serverId: server,
+        mode: 'online',
+        connectedAt: new Date('2026-07-05T09:00:00.000Z'),
+        disconnectedAt: new Date('2026-07-05T10:00:00.000Z'),
+        durationSeconds: 3600,
+      },
+    ]);
+
+    const body = await daily(player);
+    expect(body.live).toEqual({ online: false, since: null });
+  });
+
+  it('returns an empty series for a player with no daily aggregates (AC)', async () => {
+    const player = await seedPlayer(h.db, { name: 'FreshDaily' });
+    const body = await daily(player);
+    expect(body.series).toEqual([]);
+    expect(body.total_time_played_seconds).toBe(0);
+    expect(body.live).toEqual({ online: false, since: null });
   });
 });

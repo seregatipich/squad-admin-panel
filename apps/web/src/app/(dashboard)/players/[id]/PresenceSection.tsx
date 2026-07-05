@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
+import { PresenceChart } from './PresenceChart';
 import {
   BONUS_FORMULA_LABEL,
   buildWeekGrid,
@@ -59,6 +60,8 @@ export function PresenceSection({ playerId }: { playerId: string }) {
   return (
     <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4">
       <h2 className="text-xs uppercase tracking-widest text-neutral-400">Присутствие</h2>
+
+      <PresenceChart playerId={playerId} />
 
       {error ? (
         <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
