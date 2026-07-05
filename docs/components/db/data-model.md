@@ -387,16 +387,16 @@ Deduplicated log of observed `(steam_id64, ip)` pairs. When a player connects wi
 
 ## `player_name_history`
 
-Deduplicated log of observed `(steam_id64, name_normalized)` pairs. Normalization (lowercase + trim) prevents near-duplicates from inflating the table.
+Deduplicated log of observed `(player_id, name_normalized)` pairs. Normalization (`normalizePlayerName` in `@squad/shared-config`) prevents clan-tag and casing variants from inflating the table: the same base nickname observed 50 times in a day collapses to a single row (`observation_count` incremented, `last_seen_at` bumped).
 
 **Columns**
 
 | Column | Type | Nullable | Default | Notes |
 |---|---|---|---|---|
 | `id` | `bigserial` | NO | auto | Primary key |
-| `steam_id64` | `bigint` | NO | — | FK → `players.steam_id64` ON DELETE CASCADE |
-| `name` | `text` | NO | — | Display name as observed |
-| `name_normalized` | `text` | NO | — | `lower(trim(name))` |
+| `player_id` | `uuid` | NO | — | FK → `players.id` ON DELETE CASCADE |
+| `name` | `text` | NO | — | Display name as observed (UTF-8 preserved as-is) |
+| `name_normalized` | `text` | NO | — | `normalizePlayerName(name)`: lowercase + strip leading clan tags (`[]`/`()`/`<>`) and leading non-letter chars |
 | `first_seen_at` | `timestamptz` | NO | `now()` | |
 | `last_seen_at` | `timestamptz` | NO | `now()` | |
 | `observation_count` | `integer` | NO | `1` | Incremented on upsert |
@@ -405,7 +405,7 @@ Deduplicated log of observed `(steam_id64, name_normalized)` pairs. Normalizatio
 
 | Name | Columns | Type |
 |---|---|---|
-| `player_name_history_steam_name_key` | `(steam_id64, name_normalized)` | UNIQUE |
+| `player_name_history_player_name_key` | `(player_id, name_normalized)` | UNIQUE |
 | `player_name_history_name_normalized_idx` | `name_normalized` | plain |
 | `player_name_history_last_seen_at_idx` | `last_seen_at` | plain |
 
@@ -421,7 +421,7 @@ One row per Steam account that has ever been seen on any managed server. The `st
 |---|---|---|---|---|
 | `steam_id64` | `bigint` | NO | — | Primary key |
 | `canonical_name` | `text` | NO | — | Most recently observed display name |
-| `canonical_name_normalized` | `text` | NO | — | `lower(trim(canonical_name))` |
+| `canonical_name_normalized` | `text` | NO | — | `normalizePlayerName(canonical_name)`: lowercase + strip leading clan tags and non-letter chars |
 | `eos_id` | `text` | YES | NULL | Epic Online Services ID; unique where non-NULL |
 | `battle_eye_guid` | `text` | YES | NULL | BattleEye GUID |
 | `last_known_ip` | `inet` | YES | NULL | Last observed connect IP |

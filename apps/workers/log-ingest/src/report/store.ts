@@ -1,4 +1,5 @@
 import { type DatabaseClient, events, playerNameHistory, playerReports, players } from '@squad/db';
+import { normalizePlayerName } from '@squad/shared-config';
 import { and, desc, eq, gte, isNull, or } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { ParsedReport } from '../parser/report.js';
@@ -25,10 +26,6 @@ export interface HandleReportResult {
   targetPlayerId: string | null;
 }
 
-function normalizeName(name: string): string {
-  return name.trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
 async function resolveByIdentity(
   db: DatabaseClient,
   identity: { eosId: string | null; steamId64: string | null },
@@ -46,7 +43,7 @@ async function resolveByIdentity(
 }
 
 async function resolveByName(db: DatabaseClient, rawName: string): Promise<string | null> {
-  const normalized = normalizeName(rawName);
+  const normalized = normalizePlayerName(rawName);
   if (!normalized) return null;
   const direct = await db
     .select({ id: players.id })

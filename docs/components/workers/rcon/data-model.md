@@ -10,20 +10,20 @@ Upserted on every `ListPlayers` poll via `persist.ts:upsertPlayers`.
 |---|---|---|
 | `steam_id64` | `bigint` PK | Conflict target for upsert |
 | `canonical_name` | `text` | Latest name seen |
-| `canonical_name_normalized` | `text` | Trimmed, whitespace-collapsed, lowercased |
+| `canonical_name_normalized` | `text` | `normalizePlayerName` (`@squad/shared-config`): lowercase + strip leading clan tags and non-letter chars |
 | `eos_id` | `text` | `COALESCE(excluded.eos_id, players.eos_id)` — never overwrites a known value with null |
 | `last_seen_at` | `timestamptz` | Updated on every upsert |
 | `updated_at` | `timestamptz` | Updated on every upsert |
 
 ### `player_name_history`
 
-Upserted alongside `players`. Unique on `(steam_id64, name_normalized)`.
+Upserted alongside `players`. Unique on `(player_id, name_normalized)`, so a name change inserts a new row while repeat logins under the same normalized name update the existing one.
 
 | Column | Type | Notes |
 |---|---|---|
-| `steam_id64` | `bigint` FK → `players` | |
-| `name` | `text` | Raw name |
-| `name_normalized` | `text` | Normalised name |
+| `player_id` | `uuid` FK → `players.id` | |
+| `name` | `text` | Raw name (UTF-8 preserved) |
+| `name_normalized` | `text` | `normalizePlayerName`: lowercase + strip leading clan tags and non-letter chars |
 | `last_seen_at` | `timestamptz` | Updated on conflict |
 | `observation_count` | `int` | Incremented on conflict |
 

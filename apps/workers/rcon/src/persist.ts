@@ -1,11 +1,8 @@
 import { auditLog, type DatabaseClient, playerNameHistory, players } from '@squad/db';
+import { normalizePlayerName } from '@squad/shared-config';
 import { eq, or, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { RconPlayer } from './parse-list-players.js';
-
-function normalise(name: string): string {
-  return name.trim().replace(/\s+/g, ' ').toLowerCase();
-}
 
 async function writeSystemAudit(
   db: DatabaseClient,
@@ -27,7 +24,7 @@ async function writeSystemAudit(
 export async function upsertPlayers(db: DatabaseClient, incoming: RconPlayer[]): Promise<void> {
   if (incoming.length === 0) return;
   for (const p of incoming) {
-    const normalised = normalise(p.name);
+    const normalised = normalizePlayerName(p.name);
     const steamBigint = p.steam_id64 ? BigInt(p.steam_id64) : null;
 
     const matchClause =

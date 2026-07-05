@@ -1,4 +1,5 @@
 import { playerIpHistory, playerNameHistory, players, roles } from '@squad/db/schema';
+import { normalizePlayerName } from '@squad/shared-config';
 import { and, desc, eq, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -21,17 +22,19 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       config: { permissions: ['player:view'], audit: false },
     },
     async (req) => {
-      const q = req.query.q?.toLowerCase().trim();
+      const q = req.query.q?.trim();
       let whereClause: SQL | undefined;
       if (q) {
+        const exactMatch = q.toLowerCase();
+        const nameMatch = normalizePlayerName(q);
         const nameHistoryMatch = sql`EXISTS (
           SELECT 1 FROM player_name_history h
-          WHERE h.player_id = players.id AND h.name_normalized LIKE ${`%${q}%`}
+          WHERE h.player_id = players.id AND h.name_normalized LIKE ${`%${nameMatch}%`}
         )`;
         whereClause = or(
-          sql`canonical_name_normalized LIKE ${`%${q}%`}`,
-          sql`steam_id64::text = ${q}`,
-          sql`eos_id = ${q}`,
+          sql`canonical_name_normalized LIKE ${`%${nameMatch}%`}`,
+          sql`steam_id64::text = ${exactMatch}`,
+          sql`eos_id = ${exactMatch}`,
           nameHistoryMatch,
         );
       }
