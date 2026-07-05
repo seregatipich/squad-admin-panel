@@ -395,6 +395,75 @@ describeIfDb('GET /api/v1/chat/messages — filters', () => {
   });
 });
 
+describeIfDb('GET /api/v1/chat/messages — playerId (per-player history)', () => {
+  it('filters to exactly one player by exact id including an EOS-only player', async () => {
+    const body = await list(ownerCookie, `?playerId=${p2Id}&limit=300`);
+    expect(body.items).toHaveLength(3);
+    expect(body.items.every((item) => item.player.id === p2Id)).toBe(true);
+    expect(body.items.every((item) => item.player.nickname === 'BravoEos')).toBe(true);
+  });
+
+  it('returns the same rows for playerId as the equivalent EOS playerQuery', async () => {
+    const byId = await list(ownerCookie, `?playerId=${p2Id}&limit=300`);
+    const byQuery = await list(ownerCookie, `?playerQuery=${P2_EOS}&limit=300`);
+    expect(byId.items.map((item) => item.id).sort()).toEqual(
+      byQuery.items.map((item) => item.id).sort(),
+    );
+  });
+
+  it('honors playerId on the count endpoint', async () => {
+    expect(await count(ownerCookie, `?playerId=${p1Id}`)).toBe(3);
+    expect(await count(ownerCookie, `?playerId=${p2Id}`)).toBe(3);
+    expect(await count(ownerCookie, `?playerId=${p3Id}`)).toBe(2);
+  });
+
+  it('combines playerId with the in-tab server, scope and text filters', async () => {
+    const scoped = await list(ownerCookie, `?playerId=${p1Id}&serverId=${SERVER_TWO}&limit=300`);
+    expect(scoped.items).toHaveLength(2);
+    expect(scoped.items.every((item) => item.serverId === SERVER_TWO)).toBe(true);
+
+    const byScope = await list(ownerCookie, `?playerId=${p1Id}&scope=admin&limit=300`);
+    expect(byScope.items).toHaveLength(1);
+    expect(byScope.items[0]?.scope).toBe('admin');
+
+    const byText = await list(
+      ownerCookie,
+      `?playerId=${p1Id}&text=${encodeURIComponent('overwatch')}&limit=300`,
+    );
+    expect(byText.items).toHaveLength(1);
+    expect(byText.items[0]?.message).toContain('overwatch');
+  });
+
+  it('intersects playerId with a non-matching playerQuery to zero rows', async () => {
+    const body = await list(ownerCookie, `?playerId=${p1Id}&playerQuery=bravo&limit=300`);
+    expect(body.items).toHaveLength(0);
+  });
+
+  it('counts a player 30-day window using playerId with a from bound', async () => {
+    const from = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+    const qs = `?playerId=${p2Id}&from=${encodeURIComponent(from)}`;
+    expect(await count(ownerCookie, qs)).toBe(3);
+  });
+
+  it('rejects a malformed playerId with 400', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/chat/messages?playerId=not-a-uuid',
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects playerId without panel_access with 403', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/chat/messages?playerId=${p2Id}`,
+      headers: { cookie: noPanelCookie },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});
+
 describeIfDb('GET /api/v1/chat/messages — keyset pagination', () => {
   it('pages through every row exactly once with no loss or duplication', async () => {
     const collected: number[] = [];
