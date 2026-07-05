@@ -43,3 +43,4 @@ apps/web/test-results/
 .stryker-tmp/
 reports/mutation/
 
+.playwright-mcp/

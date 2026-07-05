@@ -84,6 +84,7 @@ describe('createDiscordRedactingStream', () => {
         throw new Error('inner boom');
       },
     });
+    stream.on('error', () => {});
     const err = await new Promise<Error | null | undefined>((resolve) => {
       stream.write('x', (e) => resolve(e));
     });
