@@ -15,13 +15,18 @@
 -- The whole file is idempotent (IF NOT EXISTS everywhere) so it can be
 -- re-applied without error.
 
+-- DOSSIER-1: event_type gains 'vehicle_destroyed', victim_player_id is NULLABLE
+-- (vehicle victims have no player), and victim_vehicle / attacker_vehicle carry
+-- the raw Squad asset-IDs localized via vehicle_catalog.
 CREATE TABLE IF NOT EXISTS combat_events (
   id                bigint      GENERATED ALWAYS AS IDENTITY,
   event_type        text        NOT NULL,
   server_id         uuid        NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   match_id          bigint,
   attacker_player_id uuid       REFERENCES players(id) ON DELETE SET NULL,
-  victim_player_id  uuid        NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  victim_player_id  uuid        REFERENCES players(id) ON DELETE CASCADE,
+  victim_vehicle    text,
+  attacker_vehicle  text,
   weapon            text,
   damage            numeric,
   attacker_kit      text,
@@ -29,7 +34,7 @@ CREATE TABLE IF NOT EXISTS combat_events (
   occurred_at       timestamptz NOT NULL,
   CONSTRAINT combat_events_pkey PRIMARY KEY (id, occurred_at),
   CONSTRAINT combat_events_event_type_chk
-    CHECK (event_type IN ('death','damage','wound','revive'))
+    CHECK (event_type IN ('death','damage','wound','revive','vehicle_destroyed'))
 ) PARTITION BY RANGE (occurred_at);
 
 CREATE INDEX IF NOT EXISTS combat_events_server_occurred_idx

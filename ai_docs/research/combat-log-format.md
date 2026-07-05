@@ -118,3 +118,34 @@ COMBAT-1 emits **envelope** events (free-text `kind`: `combat_damage`,
 and resolves attacker/victim to `players.id`. The typed `combat_events` table
 (partitioned, kill/death/revive/damage/teamkill projections) is **COMBAT-2** and
 is out of scope here.
+
+## 9. Vehicles (DOSSIER-1)
+
+DOSSIER-1 extends the parser with vehicle damage/destruction and the possess
+tracking needed to attribute `attacker_vehicle`. The line shapes are pinned here
+the same way as the player rules (env-gated; the regex constants in `combat.ts`
+are the one place to adjust once validated against a live host). The raw asset-ID
+(e.g. `BP_MBT_T72B3`) is stored verbatim in `combat_events.victim_vehicle` /
+`attacker_vehicle` and localized through `vehicle_catalog`; an unknown asset-ID
+never blocks writing the event.
+
+| Rule | Category | Anchor | Key groups |
+|---|---|---|---|
+| `vehicle-damaged` | `LogSquad` | `Vehicle:<asset>_C_<id> ActualDamage=<n> from <attacker> (Online IDs:…)? caused by <weapon>_C` | victimVehicle, damage, attacker, weapon |
+| `vehicle-destroyed` | `LogSquadTrace` | `[DedicatedServer]ASQVehicle::Die(): Vehicle:<asset>_C_<id> KillingDamage=<n> from <attacker> (Online IDs:…)? caused by <weapon>_C` | victimVehicle, damage, attacker, weapon |
+| `possess` | `LogSquad` | `OnPossess(): PC=<name> (Online IDs:…) Pawn=<pawn>_C_<id>` | name, ids, pawn |
+| `unpossess` | `LogSquad` | `OnUnPossess(): PC=<name> (Online IDs:…)` | name, ids |
+
+- **Vehicle victim** — anchored on `Vehicle:` rather than `Player:`, so the
+  player damage/death rules never match a vehicle line and vice-versa. Victim
+  has no player identity: the event is written with `victim_player_id = NULL`
+  and `victim_vehicle` set.
+- **`attacker_vehicle`** — the ingestor keeps a per-player map of the last
+  possessed pawn (keyed by EOS → steam → normalized name). A `Pawn=` whose name
+  matches `/soldier/i` (or an `OnUnPossess`) clears the entry (dismount);
+  anything else records the vehicle asset. When a combat/vehicle event fires,
+  the attacker's current vehicle is stamped onto `attacker_vehicle` (turret
+  kills, vehicle-vs-vehicle).
+- **No-attacker vehicle damage** — deployable/environment damage (`from nullptr`)
+  is emitted with `attacker = null` and `attacker_vehicle = null`, mirroring the
+  player environmental-damage case.

@@ -7,7 +7,7 @@ import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
 import { ChatFlagDetector } from './chat/flag-rules.js';
 import { handleChat } from './chat/store.js';
-import { handleCombat } from './combat/store.js';
+import { handleCombat, handleVehicle } from './combat/store.js';
 import { dropCutoverServers } from './cutover.js';
 import { TailManager } from './manager.js';
 import { DEFAULT_SEED_ONLINE_THRESHOLD, handleMatchCommand } from './match/store.js';
@@ -130,6 +130,17 @@ async function main() {
             log.error(
               { err: (err as Error).message, kind: command.kind },
               'combat handling failed',
+            ),
+          );
+      },
+      onVehicle: (command) => {
+        combatChain = combatChain
+          .then(() => handleVehicle(db, redis, command))
+          .then(() => undefined)
+          .catch((err) =>
+            log.error(
+              { err: (err as Error).message, kind: command.kind },
+              'vehicle handling failed',
             ),
           );
       },

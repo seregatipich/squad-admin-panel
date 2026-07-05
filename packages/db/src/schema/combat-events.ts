@@ -14,7 +14,13 @@ import {
 import { players } from './players.js';
 import { servers } from './servers.js';
 
-export const COMBAT_EVENT_TYPES = ['death', 'damage', 'wound', 'revive'] as const;
+export const COMBAT_EVENT_TYPES = [
+  'death',
+  'damage',
+  'wound',
+  'revive',
+  'vehicle_destroyed',
+] as const;
 export type CombatEventType = (typeof COMBAT_EVENT_TYPES)[number];
 
 export const combatEvents = pgTable(
@@ -29,9 +35,11 @@ export const combatEvents = pgTable(
     attackerPlayerId: uuid('attacker_player_id').references(() => players.id, {
       onDelete: 'set null',
     }),
-    victimPlayerId: uuid('victim_player_id')
-      .notNull()
-      .references(() => players.id, { onDelete: 'cascade' }),
+    victimPlayerId: uuid('victim_player_id').references(() => players.id, {
+      onDelete: 'cascade',
+    }),
+    victimVehicle: text('victim_vehicle'),
+    attackerVehicle: text('attacker_vehicle'),
     weapon: text('weapon'),
     damage: numeric('damage'),
     attackerKit: text('attacker_kit'),
@@ -60,7 +68,7 @@ export const combatEvents = pgTable(
       .with({ pages_per_range: 32 }),
     eventTypeChk: check(
       'combat_events_event_type_chk',
-      sql`event_type IN ('death','damage','wound','revive')`,
+      sql`event_type IN ('death','damage','wound','revive','vehicle_destroyed')`,
     ),
   }),
 );

@@ -38,6 +38,25 @@ export interface ParsedCombat {
   weapon: string | null;
   damage: number | null;
   isSuicide: boolean;
+  attackerVehicle: string | null;
+}
+
+export type VehicleEventKind = 'vehicle_destroyed' | 'vehicle_damage';
+
+export interface ParsedVehicleEvent {
+  kind: VehicleEventKind;
+  ts: string;
+  tick: number;
+  attacker: CombatIdentity | null;
+  victimVehicle: string;
+  attackerVehicle: string | null;
+  weapon: string | null;
+  damage: number | null;
+}
+
+export interface ParsedPossess {
+  identity: CombatIdentity;
+  vehicle: string | null;
 }
 
 const COMBAT_IDS = /EOS:\s*(?<eos>[0-9a-f]{32})(?:\s+steam:\s*(?<steam>\d{17}))?/i;
@@ -53,6 +72,19 @@ const DEATH =
 
 const REVIVE =
   /^(?<medic>.+?) \(Online IDs:(?<medicIds>[^)]*)\) has revived (?<revived>.+?) \(Online IDs:(?<revivedIds>[^)]*)\)/;
+
+const VEHICLE_DAMAGE =
+  /^Vehicle:(?<victim>[A-Za-z0-9_.-]+?)(?:_C)?(?:_\d+)? ActualDamage=(?<damage>[0-9.]+) from (?<attacker>.+?)(?: \(Online IDs:(?<ids>[^)]*)\))? caused by (?<weapon>[A-Za-z0-9_.-]+)_C/;
+
+const VEHICLE_DESTROY =
+  /^\[DedicatedServer\](?:ASQVehicle::)?Die\(\): Vehicle:(?<victim>[A-Za-z0-9_.-]+?)(?:_C)?(?:_\d+)? KillingDamage=-?(?<damage>[0-9.]+) from (?<attacker>.+?)(?: \(Online IDs:(?<ids>[^)]*)\))? caused by (?<weapon>[A-Za-z0-9_.-]+)_C/;
+
+const POSSESS =
+  /^OnPossess\(\): PC=(?<name>.+?) \(Online IDs:(?<ids>[^)]*)\) Pawn=(?<pawn>[A-Za-z0-9_.-]+?)(?:_C)?(?:_\d+)?$/;
+
+const UNPOSSESS = /^OnUnPossess\(\): PC=(?<name>.+?) \(Online IDs:(?<ids>[^)]*)\)/;
+
+const SOLDIER_PAWN = /soldier/i;
 
 const NON_HUMAN_ACTOR = new Set(['nullptr', 'null', 'none', '']);
 
@@ -110,6 +142,7 @@ function parseDamageLike(kind: CombatKind, regex: RegExp, parsed: LogLine): Pars
     weapon: match.groups.weapon ?? null,
     damage: Number.isFinite(damageValue) ? damageValue : null,
     isSuicide: isSuicide(attacker, victim),
+    attackerVehicle: null,
   };
 }
 
@@ -143,6 +176,7 @@ export function parseCombatRevive(parsed: LogLine): ParsedCombat | null {
     weapon: null,
     damage: null,
     isSuicide: false,
+    attackerVehicle: null,
   };
 }
 
@@ -156,7 +190,72 @@ export function parseCombat(parsed: LogLine): ParsedCombat | null {
   return null;
 }
 
+function parseVehicleLike(
+  kind: VehicleEventKind,
+  regex: RegExp,
+  parsed: LogLine,
+): ParsedVehicleEvent | null {
+  const match = regex.exec(parsed.message);
+  if (!match?.groups) return null;
+  const attacker = resolveAttacker(match.groups.attacker ?? '', match.groups.ids);
+  const damageValue = Number(match.groups.damage);
+  return {
+    kind,
+    ts: parsed.ts.toISOString(),
+    tick: parsed.tick,
+    attacker,
+    victimVehicle: match.groups.victim ?? '',
+    attackerVehicle: null,
+    weapon: match.groups.weapon ?? null,
+    damage: Number.isFinite(damageValue) ? damageValue : null,
+  };
+}
+
+export function parseVehicleDamage(parsed: LogLine): ParsedVehicleEvent | null {
+  if (parsed.category !== COMBAT_DAMAGE_CATEGORY) return null;
+  return parseVehicleLike('vehicle_damage', VEHICLE_DAMAGE, parsed);
+}
+
+export function parseVehicleDestroy(parsed: LogLine): ParsedVehicleEvent | null {
+  if (parsed.category !== COMBAT_TRACE_CATEGORY) return null;
+  return parseVehicleLike('vehicle_destroyed', VEHICLE_DESTROY, parsed);
+}
+
+export function parseCombatVehicle(parsed: LogLine): ParsedVehicleEvent | null {
+  if (parsed.category === COMBAT_TRACE_CATEGORY) return parseVehicleDestroy(parsed);
+  if (parsed.category === COMBAT_DAMAGE_CATEGORY) return parseVehicleDamage(parsed);
+  return null;
+}
+
+export function parsePossess(parsed: LogLine): ParsedPossess | null {
+  if (parsed.category !== COMBAT_DAMAGE_CATEGORY) return null;
+  const enter = POSSESS.exec(parsed.message);
+  if (enter?.groups) {
+    const pawn = enter.groups.pawn ?? '';
+    const isSoldier = SOLDIER_PAWN.test(pawn);
+    return {
+      identity: buildIdentity(enter.groups.name ?? '', enter.groups.ids),
+      vehicle: isSoldier || !pawn ? null : pawn,
+    };
+  }
+  const leave = UNPOSSESS.exec(parsed.message);
+  if (leave?.groups) {
+    return { identity: buildIdentity(leave.groups.name ?? '', leave.groups.ids), vehicle: null };
+  }
+  return null;
+}
+
+export function identityKey(identity: CombatIdentity): string {
+  if (identity.eosId) return `eos:${identity.eosId}`;
+  if (identity.steamId64) return `steam:${identity.steamId64}`;
+  return `name:${normalizeName(identity.name)}`;
+}
+
 export interface CombatRecordCommand extends ParsedCombat {
+  serverId: string;
+}
+
+export interface VehicleRecordCommand extends ParsedVehicleEvent {
   serverId: string;
 }
 

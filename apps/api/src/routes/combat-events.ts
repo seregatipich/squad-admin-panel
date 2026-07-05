@@ -221,6 +221,8 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
           weapon: combatEvents.weapon,
           damage: combatEvents.damage,
           attackerKit: combatEvents.attackerKit,
+          victimVehicle: combatEvents.victimVehicle,
+          attackerVehicle: combatEvents.attackerVehicle,
           isTeamkill: combatEvents.isTeamkill,
           occurredAt: combatEvents.occurredAt,
           attackerId: combatEvents.attackerPlayerId,
@@ -230,7 +232,7 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
         })
         .from(combatEvents)
         .leftJoin(attacker, eq(attacker.id, combatEvents.attackerPlayerId))
-        .innerJoin(victim, eq(victim.id, combatEvents.victimPlayerId))
+        .leftJoin(victim, eq(victim.id, combatEvents.victimPlayerId))
         .where(pageWhere)
         .orderBy(desc(combatEvents.occurredAt), desc(combatEvents.id))
         .limit(query.limit);
@@ -245,12 +247,14 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
           weapon: row.weapon,
           damage: row.damage,
           attackerKit: row.attackerKit,
+          victimVehicle: row.victimVehicle,
+          attackerVehicle: row.attackerVehicle,
           isTeamkill: row.isTeamkill,
           occurredAt: row.occurredAt.toISOString(),
           attacker: row.attackerId
             ? { player_id: row.attackerId, current_name: row.attackerName }
             : null,
-          victim: { player_id: row.victimId, current_name: row.victimName },
+          victim: row.victimId ? { player_id: row.victimId, current_name: row.victimName } : null,
         })),
         nextCursor: last ? encodeCursor(last.occurredAt, last.id) : null,
         approxTotal: await approxTotal(query, baseWhere),
@@ -315,11 +319,13 @@ const combatEventsRoutes: FastifyPluginAsync = async (app) => {
           weapon: combatEvents.weapon,
           damage: combatEvents.damage,
           attackerKit: combatEvents.attackerKit,
+          victimVehicle: combatEvents.victimVehicle,
+          attackerVehicle: combatEvents.attackerVehicle,
           isTeamkill: combatEvents.isTeamkill,
         })
         .from(combatEvents)
         .leftJoin(attacker, eq(attacker.id, combatEvents.attackerPlayerId))
-        .innerJoin(victim, eq(victim.id, combatEvents.victimPlayerId))
+        .leftJoin(victim, eq(victim.id, combatEvents.victimPlayerId))
         .where(where)
         .orderBy(desc(combatEvents.occurredAt), desc(combatEvents.id))
         .limit(batchSize);
@@ -348,6 +354,8 @@ const CSV_COLUMNS = [
   'attacker_name',
   'victim_player_id',
   'victim_name',
+  'victim_vehicle',
+  'attacker_vehicle',
   'weapon',
   'damage',
   'attacker_kit',
@@ -362,11 +370,13 @@ interface CsvSourceRow {
   occurredAt: Date;
   attackerId: string | null;
   attackerName: string | null;
-  victimId: string;
+  victimId: string | null;
   victimName: string | null;
   weapon: string | null;
   damage: string | null;
   attackerKit: string | null;
+  victimVehicle: string | null;
+  attackerVehicle: string | null;
   isTeamkill: boolean;
 }
 
@@ -388,6 +398,8 @@ function csvRow(row: CsvSourceRow): string {
     row.attackerName,
     row.victimId,
     row.victimName,
+    row.victimVehicle,
+    row.attackerVehicle,
     row.weapon,
     row.damage,
     row.attackerKit,
