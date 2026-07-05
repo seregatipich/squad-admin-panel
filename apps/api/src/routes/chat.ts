@@ -21,6 +21,7 @@ const boolFlag = z.enum(['true', 'false']);
 const listQuery = z.object({
   serverId: z.union([z.string().uuid(), z.array(z.string().uuid())]).optional(),
   scope: z.union([scopeEnum, z.array(scopeEnum)]).optional(),
+  playerId: z.string().uuid().optional(),
   playerQuery: z.string().trim().min(1).max(128).optional(),
   text: z.string().min(1).optional(),
   from: z.coerce.date().optional(),
@@ -34,6 +35,7 @@ const listQuery = z.object({
 const countQuery = listQuery.pick({
   serverId: true,
   scope: true,
+  playerId: true,
   playerQuery: true,
   text: true,
   from: true,
@@ -117,6 +119,8 @@ const chatRoutes: FastifyPluginAsync = async (app) => {
     query: CountQuery,
   ): Promise<{ where: SQL | undefined; empty: boolean }> {
     const clauses: SQL[] = [];
+
+    if (query.playerId) clauses.push(eq(chatMessages.playerId, query.playerId));
 
     const serverIds = asArray(query.serverId);
     if (serverIds.length > 0) clauses.push(inArray(chatMessages.serverId, serverIds));
