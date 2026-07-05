@@ -12,6 +12,7 @@ import { ChatHistorySection } from './ChatHistorySection';
 import { NotesSection } from './NotesSection';
 import { PresenceSection } from './PresenceSection';
 import { RecentMatchesSection } from './RecentMatchesSection';
+import { VotesSection } from './VotesSection';
 
 interface Player {
   id: string;
@@ -139,6 +140,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <NotesSection playerId={playerId} me={me} />
 
       <RecentMatchesSection playerId={playerId} />
+
+      <VotesSection playerId={playerId} />
 
       <ChatHistorySection playerId={playerId} />
 
