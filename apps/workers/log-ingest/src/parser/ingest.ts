@@ -1,6 +1,7 @@
 import { type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
 import { v7 as uuidv7 } from 'uuid';
 import { type ParsedChat, parseChatFromLogLine } from './chat.js';
+import { type CombatRecordCommand, parseCombat } from './combat.js';
 import { MatchAssembler, type MatchCommand, parseNewGame, parseRoundTickets } from './match.js';
 import {
   BEACON_BIND,
@@ -42,6 +43,7 @@ export interface IngestorCallbacks {
   onSquadFatal?: (report: SquadFatalReport) => void;
   onChat?: (chat: ParsedChat) => void;
   onVote?: (command: VoteRecordCommand) => void;
+  onCombat?: (command: CombatRecordCommand) => void;
 }
 
 /** One instance per Squad server under observation. */
@@ -58,6 +60,7 @@ export class LogIngestor {
   private readonly onChat?: (chat: ParsedChat) => void;
   private readonly onVote?: (command: VoteRecordCommand) => void;
   private readonly voteAssembler: VoteAssembler;
+  private readonly onCombat?: (command: CombatRecordCommand) => void;
 
   constructor(params: {
     serverId: string;
@@ -69,6 +72,7 @@ export class LogIngestor {
     onMatch?: (command: MatchCommand) => void;
     onChat?: (chat: ParsedChat) => void;
     onVote?: (command: VoteRecordCommand) => void;
+    onCombat?: (command: CombatRecordCommand) => void;
   }) {
     this.serverId = params.serverId;
     this.beaconPort = params.beaconPort;
@@ -81,6 +85,7 @@ export class LogIngestor {
     this.onChat = params.onChat;
     this.onVote = params.onVote;
     this.voteAssembler = new VoteAssembler(params.serverId);
+    this.onCombat = params.onCombat;
   }
 
   ingest(line: string): EventEnvelope[] {
@@ -111,6 +116,7 @@ export class LogIngestor {
       if (chat) this.onChat(chat);
     }
     if (this.onVote) this.handleVoteLine(parsed);
+    if (this.onCombat) this.handleCombatLine(parsed);
     if (this.onReport) {
       const report = parseReportFromLogLine(parsed);
       if (report) {
@@ -268,6 +274,12 @@ export class LogIngestor {
   private feedVote(commands: VoteRecordCommand[]): void {
     if (!this.onVote) return;
     for (const command of commands) this.onVote(command);
+  }
+
+  private handleCombatLine(parsed: ReturnType<typeof parseLine>): void {
+    if (!parsed || !this.onCombat) return;
+    const combat = parseCombat(parsed);
+    if (combat) this.onCombat({ ...combat, serverId: this.serverId });
   }
 
   private build(
