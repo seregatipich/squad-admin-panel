@@ -1,7 +1,15 @@
 import { type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
 import { v7 as uuidv7 } from 'uuid';
 import { type ParsedChat, parseChatFromLogLine } from './chat.js';
-import { type CombatRecordCommand, parseCombat } from './combat.js';
+import {
+  type CombatIdentity,
+  type CombatRecordCommand,
+  identityKey,
+  parseCombat,
+  parseCombatVehicle,
+  parsePossess,
+  type VehicleRecordCommand,
+} from './combat.js';
 import { MatchAssembler, type MatchCommand, parseNewGame, parseRoundTickets } from './match.js';
 import {
   BEACON_BIND,
@@ -44,6 +52,7 @@ export interface IngestorCallbacks {
   onChat?: (chat: ParsedChat) => void;
   onVote?: (command: VoteRecordCommand) => void;
   onCombat?: (command: CombatRecordCommand) => void;
+  onVehicle?: (command: VehicleRecordCommand) => void;
 }
 
 /** One instance per Squad server under observation. */
@@ -61,6 +70,8 @@ export class LogIngestor {
   private readonly onVote?: (command: VoteRecordCommand) => void;
   private readonly voteAssembler: VoteAssembler;
   private readonly onCombat?: (command: CombatRecordCommand) => void;
+  private readonly onVehicle?: (command: VehicleRecordCommand) => void;
+  private readonly occupiedVehicleByPlayer = new Map<string, string>();
 
   constructor(params: {
     serverId: string;
@@ -73,6 +84,7 @@ export class LogIngestor {
     onChat?: (chat: ParsedChat) => void;
     onVote?: (command: VoteRecordCommand) => void;
     onCombat?: (command: CombatRecordCommand) => void;
+    onVehicle?: (command: VehicleRecordCommand) => void;
   }) {
     this.serverId = params.serverId;
     this.beaconPort = params.beaconPort;
@@ -86,6 +98,7 @@ export class LogIngestor {
     this.onVote = params.onVote;
     this.voteAssembler = new VoteAssembler(params.serverId);
     this.onCombat = params.onCombat;
+    this.onVehicle = params.onVehicle;
   }
 
   ingest(line: string): EventEnvelope[] {
@@ -116,7 +129,7 @@ export class LogIngestor {
       if (chat) this.onChat(chat);
     }
     if (this.onVote) this.handleVoteLine(parsed);
-    if (this.onCombat) this.handleCombatLine(parsed);
+    if (this.onCombat || this.onVehicle) this.handleCombatLine(parsed);
     if (this.onReport) {
       const report = parseReportFromLogLine(parsed);
       if (report) {
@@ -277,9 +290,47 @@ export class LogIngestor {
   }
 
   private handleCombatLine(parsed: ReturnType<typeof parseLine>): void {
-    if (!parsed || !this.onCombat) return;
-    const combat = parseCombat(parsed);
-    if (combat) this.onCombat({ ...combat, serverId: this.serverId });
+    if (!parsed) return;
+
+    const possess = parsePossess(parsed);
+    if (possess) {
+      this.updateOccupiedVehicle(possess.identity, possess.vehicle);
+      return;
+    }
+
+    if (this.onVehicle) {
+      const vehicle = parseCombatVehicle(parsed);
+      if (vehicle) {
+        this.onVehicle({
+          ...vehicle,
+          attackerVehicle: this.attackerVehicleFor(vehicle.attacker),
+          serverId: this.serverId,
+        });
+        return;
+      }
+    }
+
+    if (this.onCombat) {
+      const combat = parseCombat(parsed);
+      if (combat) {
+        this.onCombat({
+          ...combat,
+          attackerVehicle: this.attackerVehicleFor(combat.attacker),
+          serverId: this.serverId,
+        });
+      }
+    }
+  }
+
+  private updateOccupiedVehicle(identity: CombatIdentity, vehicle: string | null): void {
+    const key = identityKey(identity);
+    if (vehicle) this.occupiedVehicleByPlayer.set(key, vehicle);
+    else this.occupiedVehicleByPlayer.delete(key);
+  }
+
+  private attackerVehicleFor(attacker: CombatIdentity | null): string | null {
+    if (!attacker) return null;
+    return this.occupiedVehicleByPlayer.get(identityKey(attacker)) ?? null;
   }
 
   private build(

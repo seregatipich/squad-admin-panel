@@ -86,10 +86,12 @@ interface CombatRow {
   weapon: string | null;
   damage: string | null;
   attackerKit: string | null;
+  victimVehicle: string | null;
+  attackerVehicle: string | null;
   isTeamkill: boolean;
   occurredAt: string;
   attacker: CombatSide | null;
-  victim: CombatSide;
+  victim: CombatSide | null;
 }
 interface ListResponse {
   rows: CombatRow[];
@@ -290,12 +292,31 @@ describeIfDb('combat-events API (COMBAT-3)', () => {
 
     const lines = res.payload.trim().split('\r\n');
     expect(lines[0]).toBe(
-      'id,event_type,server_id,match_id,occurred_at,attacker_player_id,attacker_name,victim_player_id,victim_name,weapon,damage,attacker_kit,is_teamkill',
+      'id,event_type,server_id,match_id,occurred_at,attacker_player_id,attacker_name,victim_player_id,victim_name,victim_vehicle,attacker_vehicle,weapon,damage,attacker_kit,is_teamkill',
     );
     expect(lines).toHaveLength(1001);
     expect(lines[1]).toContain('death');
     expect(lines[1]).toContain('SniperWolf');
     expect(lines[1]).toContain('TargetDummy');
+  });
+
+  it('returns vehicle_destroyed rows with a null victim player and the raw asset id', async () => {
+    await h.db.execute(sql`
+      INSERT INTO combat_events
+        (event_type, server_id, match_id, attacker_player_id, victim_player_id,
+         victim_vehicle, attacker_vehicle, weapon, occurred_at)
+      VALUES
+        ('vehicle_destroyed', ${serverB}::uuid, 9001, ${sniper}::uuid, NULL,
+         'T72B3', 'BTR82A', 'BP_Projectile_HEAT', ${BASE.toISOString()}::timestamptz + interval '5 hour')
+    `);
+    const body = await list(`?serverId=${serverB}&type=vehicle_destroyed`);
+    expect(body.rows).toHaveLength(1);
+    const row = body.rows[0];
+    expect(row.eventType).toBe('vehicle_destroyed');
+    expect(row.victim).toBeNull();
+    expect(row.victimVehicle).toBe('T72B3');
+    expect(row.attackerVehicle).toBe('BTR82A');
+    expect(row.attacker?.player_id).toBe(sniper);
   });
 
   it('rejects an unauthenticated request', async () => {

@@ -181,11 +181,15 @@ describeIfDb('combat_events foreign keys', () => {
     ).rejects.toThrow(/violates foreign key constraint/);
   });
 
-  it('rejects a NULL victim_player_id (victim is mandatory)', async () => {
-    await expect(
-      sql`INSERT INTO combat_events (event_type, server_id, victim_player_id, occurred_at)
-          VALUES ('death', ${SERVER_1}, NULL, ${monthStart})`,
-    ).rejects.toThrow(/null value in column "victim_player_id"/);
+  it('accepts a NULL victim_player_id for a vehicle_destroyed event (DOSSIER-1)', async () => {
+    const [row] = await sql`
+      INSERT INTO combat_events (event_type, server_id, victim_player_id, victim_vehicle, occurred_at)
+      VALUES ('vehicle_destroyed', ${SERVER_1}, NULL, 'T72B3', ${monthStart})
+      RETURNING id, victim_vehicle
+    `;
+    expect(row.id).toBeDefined();
+    expect(row.victim_vehicle).toBe('T72B3');
+    await sql`DELETE FROM combat_events WHERE id = ${row.id}`;
   });
 
   it('inserts and reads back through the drizzle table definition', async () => {

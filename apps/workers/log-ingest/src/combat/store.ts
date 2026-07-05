@@ -15,6 +15,7 @@ import {
   type CombatRecordCommand,
   detectTeamkill,
   type RosterTeamMember,
+  type VehicleRecordCommand,
 } from '../parser/combat.js';
 
 export const LIVE_BUS_CHANNEL = 'live-bus';
@@ -212,6 +213,7 @@ function buildPayload(
     victim_name: command.victim.name,
     weapon: command.weapon,
     damage: command.damage,
+    attacker_vehicle: command.attackerVehicle,
     is_teamkill: isTeamkill,
     is_suicide: command.isSuicide,
   };
@@ -263,6 +265,7 @@ export async function handleCombat(
         victim_player_id: victimPlayerId,
         weapon: command.weapon,
         damage: command.damage,
+        attacker_vehicle: command.attackerVehicle,
         is_teamkill: isTeamkill,
         is_suicide: command.isSuicide,
         occurred_at: occurredAt.toISOString(),
@@ -278,6 +281,98 @@ export async function handleCombat(
     attackerPlayerId,
     victimPlayerId,
     isTeamkill,
+    matchId,
+  };
+}
+
+export interface HandleVehicleResult {
+  eventId: string;
+  kind: VehicleRecordCommand['kind'];
+  inserted: boolean;
+  attackerPlayerId: string | null;
+  victimVehicle: string;
+  attackerVehicle: string | null;
+  matchId: string | null;
+}
+
+function deterministicVehicleEventId(command: VehicleRecordCommand): string {
+  const key = [
+    command.serverId,
+    command.kind,
+    command.ts,
+    command.tick,
+    command.attacker?.name ?? '',
+    command.victimVehicle,
+    command.weapon ?? '',
+    command.damage ?? '',
+  ].join('|');
+  return uuidv5(key, COMBAT_EVENT_NAMESPACE);
+}
+
+export async function handleVehicle(
+  db: DatabaseClient,
+  redis: CombatRedis | null,
+  command: VehicleRecordCommand,
+): Promise<HandleVehicleResult> {
+  const occurredAt = new Date(command.ts);
+  const attackerPlayerId = await resolveOrCreatePlayer(db, command.attacker);
+  const matchId = await resolveMatchId(db, command.serverId, occurredAt);
+  const eventId = deterministicVehicleEventId(command);
+
+  const payload = {
+    match_id: matchId,
+    attacker_player_id: attackerPlayerId,
+    attacker_name: command.attacker?.name ?? null,
+    victim_vehicle: command.victimVehicle,
+    attacker_vehicle: command.attackerVehicle,
+    weapon: command.weapon,
+    damage: command.damage,
+  };
+
+  const inserted = await db
+    .insert(events)
+    .values({
+      eventId,
+      serverId: command.serverId,
+      occurredAt,
+      kind: command.kind,
+      version: 1,
+      actorKind: 'system',
+      actorId: attackerPlayerId,
+      correlationId: matchId,
+      payload,
+    })
+    .onConflictDoNothing({ target: [events.eventId, events.occurredAt] })
+    .returning({ eventId: events.eventId });
+
+  const wasInserted = inserted.length > 0;
+
+  if (wasInserted && redis) {
+    const frame = JSON.stringify({
+      type: 'combat.vehicle',
+      ts: new Date().toISOString(),
+      data: {
+        server_id: command.serverId,
+        match_id: matchId,
+        kind: command.kind,
+        attacker_player_id: attackerPlayerId,
+        victim_vehicle: command.victimVehicle,
+        attacker_vehicle: command.attackerVehicle,
+        weapon: command.weapon,
+        damage: command.damage,
+        occurred_at: occurredAt.toISOString(),
+      },
+    });
+    await redis.publish(LIVE_BUS_CHANNEL, frame);
+  }
+
+  return {
+    eventId,
+    kind: command.kind,
+    inserted: wasInserted,
+    attackerPlayerId,
+    victimVehicle: command.victimVehicle,
+    attackerVehicle: command.attackerVehicle,
     matchId,
   };
 }

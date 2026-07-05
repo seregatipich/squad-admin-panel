@@ -83,6 +83,7 @@ import settingsChatFlagsRoutes from './routes/settings-chat-flags.js';
 import settingsEconomyRoutes from './routes/settings-economy.js';
 import setupRoutes from './routes/setup.js';
 import usersRoutes from './routes/users.js';
+import vehicleCatalogRoutes from './routes/vehicle-catalog.js';
 import voteAnalyticsRoutes from './routes/vote-analytics.js';
 import votesRoutes from './routes/votes.js';
 
@@ -182,6 +183,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(clansRoutes);
   await app.register(chatRoutes);
   await app.register(combatEventsRoutes);
+  await app.register(vehicleCatalogRoutes);
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);
   await app.register(eventsRoutes);
