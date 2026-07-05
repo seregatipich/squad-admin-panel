@@ -11,10 +11,13 @@ async function noAppError(body: string) {
   expect(body).not.toContain('500 Internal Server Error');
 }
 
-const EVENT_LABEL = /Игрок подключился|Игрок отключился|Матч начался|Матч завершён|Сервер|Опрос игроков|RCON/i;
+const EVENT_LABEL =
+  /Игрок подключился|Игрок отключился|Матч начался|Матч завершён|Сервер|Опрос игроков|RCON/i;
 
 test('EVT-2: global events log renders with rows and filters', async ({ ownerPage }) => {
-  const resPromise = ownerPage.waitForResponse((r) => r.url().includes('/api/v1/events?') && r.ok());
+  const resPromise = ownerPage.waitForResponse(
+    (r) => r.url().includes('/api/v1/events?') && r.ok(),
+  );
   await ownerPage.goto('/events', { waitUntil: 'networkidle' });
   await resPromise;
   await noAppError(await ownerPage.content());
@@ -24,7 +27,9 @@ test('EVT-2: global events log renders with rows and filters', async ({ ownerPag
 });
 
 test('EVT-2: per-server events log renders', async ({ ownerPage }) => {
-  const resPromise = ownerPage.waitForResponse((r) => r.url().includes('/api/v1/events?') && r.ok());
+  const resPromise = ownerPage.waitForResponse(
+    (r) => r.url().includes('/api/v1/events?') && r.ok(),
+  );
   await ownerPage.goto(`/servers/${SRV_EVT}/events`, { waitUntil: 'networkidle' });
   await resPromise;
   await noAppError(await ownerPage.content());
