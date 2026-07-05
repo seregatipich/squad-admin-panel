@@ -64,12 +64,22 @@ describe(`${WORKER} worker contract`, () => {
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    await sleep(2000);
+    redis = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: null });
+    await redis.del(HB_KEY);
+    let ready = false;
+    for (let i = 0; i < 40; i++) {
+      if ((await redis.ttl(HB_KEY)) > 0) {
+        ready = true;
+        break;
+      }
+      await sleep(500);
+    }
+    expect(ready).toBe(true);
     const exitPromise = new Promise<number>((resolve) =>
       child?.once('exit', (code) => resolve(code ?? -1)),
     );
     child.kill('SIGTERM');
     const code = await Promise.race([exitPromise, sleep(5000).then(() => -1 as number)]);
     expect(code).toBe(0);
-  }, 10_000);
+  }, 35_000);
 });
