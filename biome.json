@@ -6,8 +6,11 @@
     "useIgnoreFile": true
   },
   "files": {
+    "experimentalScannerIgnores": [".claude", ".playwright-mcp"],
     "includes": [
       "**",
+      "!**/.claude",
+      "!**/.playwright-mcp",
       "!**/node_modules",
       "!**/dist",
       "!**/.next",
