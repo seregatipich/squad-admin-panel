@@ -39,6 +39,7 @@ import issuesRoutes from '../../src/routes/issues.js';
 import logsRoutes from '../../src/routes/logs.js';
 import markTypesRoutes from '../../src/routes/mark-types.js';
 import marksRoutes from '../../src/routes/marks.js';
+import matchesRoutes from '../../src/routes/matches.js';
 import meTokensRoutes from '../../src/routes/me-tokens.js';
 import messageTemplatesRoutes from '../../src/routes/message-templates.js';
 import permissionsRoutes from '../../src/routes/permissions.js';
@@ -368,6 +369,14 @@ export interface BuildAppOptions {
   seedOwner?: { steamId64: bigint; canonicalName?: string };
   /** Whether to run status-reconciler + other heavy plugins. Off by default. */
   withStatusReconciler?: boolean;
+  /**
+   * Run against the already-migrated shared `public` schema instead of a
+   * fresh isolated schema. Requires the target database to be migrated ahead
+   * of time (e.g. `db:migrate`). Use for suites that need the hand-authored
+   * wave-5 tables, whose `public`-qualified DDL cannot be replayed into an
+   * isolated schema. Isolate such suites with their own dedicated database.
+   */
+  reusePublicSchema?: boolean;
 }
 
 export interface IntegrationHarness {
@@ -385,8 +394,12 @@ export interface IntegrationHarness {
 }
 
 export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<IntegrationHarness> {
-  const schemaInfo = await createIsolatedSchema();
-  await runMigrations(schemaInfo.url);
+  const schemaInfo = opts.reusePublicSchema
+    ? { schema: 'public', url: HOST_DB_URL, drop: async () => undefined }
+    : await createIsolatedSchema();
+  if (!opts.reusePublicSchema) {
+    await runMigrations(schemaInfo.url);
+  }
 
   // Hand-build the drizzle client with a tighter connection pool so a
   // parallel-run test suite doesn't overwhelm the shared live Postgres.
@@ -478,6 +491,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(issuesRoutes);
   await app.register(marksRoutes);
   await app.register(markTypesRoutes);
+  await app.register(matchesRoutes);
   await app.register(clansRoutes);
   await app.register(playerNotesRoutes);
   await app.register(auditRoutes);

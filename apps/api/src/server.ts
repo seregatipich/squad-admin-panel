@@ -48,6 +48,7 @@ import liveRoutes from './routes/live.js';
 import logsRoutes from './routes/logs.js';
 import markTypesRoutes from './routes/mark-types.js';
 import marksRoutes from './routes/marks.js';
+import matchesRoutes from './routes/matches.js';
 import meTokensRoutes from './routes/me-tokens.js';
 import messageTemplatesRoutes from './routes/message-templates.js';
 import permissionsRoutes from './routes/permissions.js';
@@ -154,6 +155,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(issuesRoutes);
   await app.register(marksRoutes);
   await app.register(markTypesRoutes);
+  await app.register(matchesRoutes);
   await app.register(clansRoutes);
   await app.register(playerNotesRoutes);
   await app.register(adminsCfgRoutes);
