@@ -315,6 +315,14 @@ function ChatTableRow({ row, serverName }: { row: ChatRow; serverName: string | 
         </span>
       </td>
       <td className="px-3 py-2 text-neutral-200" style={{ wordBreak: 'break-word' }}>
+        {row.isFlagged ? (
+          <span
+            className="mr-1.5 rounded bg-red-950 px-1.5 py-0.5 text-[10px] uppercase text-red-300"
+            title="Помечено фильтром чата"
+          >
+            флаг
+          </span>
+        ) : null}
         {row.message}
       </td>
     </tr>
