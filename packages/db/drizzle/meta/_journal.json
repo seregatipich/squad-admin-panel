@@ -183,6 +183,13 @@
 			"when": 1781269252000,
 			"tag": "0025_presence_roster_chatlog",
 			"breakpoints": true
+		},
+		{
+			"idx": 26,
+			"version": "7",
+			"when": 1781269253000,
+			"tag": "0026_econ_bonus_ledger",
+			"breakpoints": true
 		}
 	]
 }
