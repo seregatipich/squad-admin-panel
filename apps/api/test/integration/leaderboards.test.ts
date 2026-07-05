@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { playerStatPeriods, players, roles, servers } from '@squad/db/schema';
+import { playerNameHistory, playerStatPeriods, players, roles, servers } from '@squad/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -258,5 +258,102 @@ describeIfDb('GET /api/v1/leaderboards', () => {
     expect(miss.headers['x-cache']).toBe('miss');
     expect(hit.headers['x-cache']).toBe('hit');
     expect(hit.json()).toEqual(miss.json());
+  });
+
+  it('searches by partial nickname', async () => {
+    const res = await fetchLeaderboard('?metric=online&period=alltime&search=alph');
+    const body = res.json() as LeaderboardBody;
+    expect(body.rows.map((r) => r.current_name)).toEqual(['Alpha']);
+    expect(body.total_rows).toBe(1);
+  });
+
+  it('searches by exact steam_id64', async () => {
+    const steam = testSteamId(830011).toString();
+    const res = await fetchLeaderboard(`?metric=online&period=alltime&search=${steam}`);
+    const body = res.json() as LeaderboardBody;
+    expect(body.rows.map((r) => r.current_name)).toEqual(['Bravo']);
+  });
+
+  it('searches by exact eos_id', async () => {
+    const res = await fetchLeaderboard('?metric=online&period=alltime&search=eos-charlie');
+    const body = res.json() as LeaderboardBody;
+    expect(body.rows.map((r) => r.current_name)).toEqual(['Charlie']);
+  });
+
+  it('searches by a historical nickname via player_name_history', async () => {
+    await h.db.insert(playerNameHistory).values({
+      playerId: bravo,
+      name: 'OldNickForBravo',
+      nameNormalized: 'oldnickforbravo',
+    });
+    const res = await fetchLeaderboard('?metric=online&period=alltime&search=oldnickfor');
+    const body = res.json() as LeaderboardBody;
+    expect(body.rows.map((r) => r.current_name)).toEqual(['Bravo']);
+  });
+
+  it('keeps a stable global rank across pages when metric values tie (tie-break player_id)', async () => {
+    const tied = await h.db
+      .insert(players)
+      .values([
+        {
+          steamId64: testSteamId(830020),
+          canonicalName: 'TieA',
+          canonicalNameNormalized: 'tiea',
+        },
+        {
+          steamId64: testSteamId(830021),
+          canonicalName: 'TieB',
+          canonicalNameNormalized: 'tieb',
+        },
+        {
+          steamId64: testSteamId(830022),
+          canonicalName: 'TieC',
+          canonicalNameNormalized: 'tiec',
+        },
+        {
+          steamId64: testSteamId(830023),
+          canonicalName: 'TieD',
+          canonicalNameNormalized: 'tied',
+        },
+      ])
+      .returning({ id: players.id });
+    const tiedIdsAscending = tied.map((p) => p.id).sort();
+    await h.db.insert(playerStatPeriods).values(
+      tied.map((p) => ({
+        playerId: p.id,
+        serverId: null,
+        periodType: 'day',
+        periodStart: '2026-06-15',
+        onlineSeconds: 4242,
+      })),
+    );
+
+    const staleKeys = await h.redis.keys('leaderboard:online:day:2026-06-15:*');
+    if (staleKeys.length > 0) await h.redis.del(...staleKeys);
+
+    const query = 'metric=online&period=day&period_start=2026-06-15';
+    const firstPage = await fetchLeaderboard(`?${query}&per_page=2&page=1`);
+    const secondPage = await fetchLeaderboard(`?${query}&per_page=2&page=2`);
+    const firstBody = firstPage.json() as LeaderboardBody;
+    const secondBody = secondPage.json() as LeaderboardBody;
+
+    expect(firstBody.total_rows).toBe(4);
+    expect(firstBody.total_pages).toBe(2);
+    expect(firstBody.rows.map((r) => r.rank)).toEqual([1, 2]);
+    expect(secondBody.rows.map((r) => r.rank)).toEqual([3, 4]);
+    const paged = [...firstBody.rows, ...secondBody.rows].map((r) => r.player_id);
+    expect(paged).toEqual(tiedIdsAscending);
+  });
+
+  it('returns an opaque error envelope when the query fails (no SQL leaked)', async () => {
+    const res = await fetchLeaderboard('?metric=online&period=day&period_start=9999-99-99');
+    expect(res.statusCode).toBe(500);
+    const body = res.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('internal_error');
+    const serialized = JSON.stringify(body).toLowerCase();
+    expect(serialized).not.toContain('select');
+    expect(serialized).not.toContain('from ');
+    expect(serialized).not.toContain('player_stat_periods');
+    expect(serialized).not.toContain('date/time');
   });
 });
