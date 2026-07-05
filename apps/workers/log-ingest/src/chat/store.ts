@@ -9,6 +9,7 @@ import {
 import { desc, eq, or } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { ChatChannel, ParsedChat } from '../parser/chat.js';
+import type { ChatFlagDetector } from './flag-rules.js';
 
 const CHANNEL_SCOPE: Record<ChatChannel, ChatScope> = {
   ChatAll: 'all',
@@ -27,6 +28,7 @@ export interface ChatRecord {
   teamId?: number | null;
   squadId?: number | null;
   isFlagged?: boolean;
+  matchedRuleId?: string | null;
 }
 
 export async function recordChatMessage(db: DatabaseClient, record: ChatRecord): Promise<void> {
@@ -40,6 +42,7 @@ export async function recordChatMessage(db: DatabaseClient, record: ChatRecord):
     teamId: record.teamId ?? null,
     squadId: record.squadId ?? null,
     isFlagged: record.isFlagged ?? false,
+    matchedRuleId: record.matchedRuleId ?? null,
   });
 }
 
@@ -127,11 +130,13 @@ export async function handleChat(
   db: DatabaseClient,
   redis: ChatPublisher | null,
   { serverId, chat }: { serverId: string; chat: ParsedChat },
+  detector?: ChatFlagDetector | null,
 ): Promise<ChatMessageFrame> {
   const playerId = await resolvePlayerId(db, chat);
   const frame = buildChatFrame(playerId, serverId, chat);
   if (redis) await redis.publish(LIVE_BUS_CHANNEL, JSON.stringify(frame));
   if (playerId) {
+    const matchedRuleId = detector ? await detector.detect(chat.message).catch(() => null) : null;
     await recordChatMessage(db, {
       playerId,
       serverId,
@@ -139,6 +144,8 @@ export async function handleChat(
       scope: CHANNEL_SCOPE[chat.channel],
       message: chat.message,
       source: 'log',
+      isFlagged: matchedRuleId !== null,
+      matchedRuleId,
     }).catch(() => undefined);
   }
   return frame;

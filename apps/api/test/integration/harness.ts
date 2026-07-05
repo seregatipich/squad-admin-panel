@@ -61,6 +61,7 @@ import serverRosterRoutes from '../../src/routes/server-roster.js';
 import serverSettingsRoutes from '../../src/routes/server-settings.js';
 import serverUpdateRoutes from '../../src/routes/server-update.js';
 import serverRoutes from '../../src/routes/servers.js';
+import settingsChatFlagsRoutes from '../../src/routes/settings-chat-flags.js';
 import settingsEconomyRoutes from '../../src/routes/settings-economy.js';
 import usersRoutes from '../../src/routes/users.js';
 
@@ -503,6 +504,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(playerMatchesRoutes);
   await app.register(economyRoutes);
   await app.register(settingsEconomyRoutes);
+  await app.register(settingsChatFlagsRoutes);
   await app.register(clansRoutes);
   await app.register(chatRoutes);
   await app.register(playerNotesRoutes);

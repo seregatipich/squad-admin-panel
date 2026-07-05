@@ -1,6 +1,7 @@
 export * from './audit-log.js';
 export * from './banned-name-rules.js';
 export * from './bonus-transactions.js';
+export * from './chat-flag-rules.js';
 export * from './chat-messages.js';
 export * from './clans.js';
 export * from './config-versions.js';

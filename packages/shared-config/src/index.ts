@@ -1,5 +1,6 @@
 export * from './banned-names.js';
 export * from './bridge-methods.js';
+export * from './chat-flag-rules.js';
 export * from './diag.js';
 export * from './discord-redaction.js';
 export * from './heartbeat.js';

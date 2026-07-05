@@ -12,6 +12,7 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { chatFlagRules } from './chat-flag-rules.js';
 import { players } from './players.js';
 import { servers } from './servers.js';
 
@@ -38,6 +39,9 @@ export const chatMessages = pgTable(
     message: text('message').notNull(),
     source: text('source').notNull().default('log'),
     isFlagged: boolean('is_flagged').notNull().default(false),
+    matchedRuleId: uuid('matched_rule_id').references(() => chatFlagRules.id, {
+      onDelete: 'set null',
+    }),
   },
   (table) => ({
     pk: primaryKey({ columns: [table.id, table.sentAt] }),
