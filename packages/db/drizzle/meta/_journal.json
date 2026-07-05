@@ -225,6 +225,13 @@
 			"when": 1781269258000,
 			"tag": "0031_alerts",
 			"breakpoints": true
+		},
+		{
+			"idx": 32,
+			"version": "7",
+			"when": 1781269259000,
+			"tag": "0032_geo_anomalies_and_vehicles",
+			"breakpoints": true
 		}
 	]
 }
