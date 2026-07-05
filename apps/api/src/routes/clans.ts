@@ -1,5 +1,5 @@
 import type { ClanRow } from '@squad/db/schema';
-import { clanMembers, clans, players } from '@squad/db/schema';
+import { clanMembers, clans, playerSessions, players, servers } from '@squad/db/schema';
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -210,6 +210,84 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
           joined_at: m.joinedAt.toISOString(),
         })),
       };
+    },
+  );
+
+  fast.get(
+    '/api/v1/clans/:id/online',
+    { schema: { params: clanIdParams }, config: { audit: false } },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      if (!req.user.permissions.panelAccess) {
+        reply.code(403);
+        return { error: 'forbidden' };
+      }
+      const clan = await loadActiveClan(req.params.id);
+      if (!clan) {
+        reply.code(404);
+        return { error: 'clan_not_found' };
+      }
+      const rows = await app.db
+        .select({
+          serverId: playerSessions.serverId,
+          serverName: servers.displayName,
+          serverSlug: servers.slug,
+          playerId: players.id,
+          canonicalName: players.canonicalName,
+          connectedAt: playerSessions.connectedAt,
+        })
+        .from(clanMembers)
+        .innerJoin(
+          playerSessions,
+          and(
+            eq(playerSessions.playerId, clanMembers.playerId),
+            isNull(playerSessions.disconnectedAt),
+          ),
+        )
+        .innerJoin(players, eq(players.id, clanMembers.playerId))
+        .innerJoin(servers, eq(servers.id, playerSessions.serverId))
+        .where(eq(clanMembers.clanId, clan.id))
+        .orderBy(asc(servers.displayName), asc(playerSessions.connectedAt));
+
+      const byServer = new Map<
+        string,
+        {
+          server_id: string;
+          server_name: string;
+          server_slug: string;
+          members: Array<{
+            player_id: string;
+            name: string;
+            team: string | null;
+            squad: string | null;
+            session_started_at: string;
+          }>;
+        }
+      >();
+      for (const row of rows) {
+        let group = byServer.get(row.serverId);
+        if (!group) {
+          group = {
+            server_id: row.serverId,
+            server_name: row.serverName,
+            server_slug: row.serverSlug,
+            members: [],
+          };
+          byServer.set(row.serverId, group);
+        }
+        group.members.push({
+          player_id: row.playerId,
+          name: row.canonicalName,
+          team: null,
+          squad: null,
+          session_started_at: row.connectedAt.toISOString(),
+        });
+      }
+
+      return { clan_id: clan.id, servers: Array.from(byServer.values()) };
     },
   );
 
