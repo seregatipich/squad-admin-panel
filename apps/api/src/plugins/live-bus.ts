@@ -150,7 +150,12 @@ export type LiveEvent =
         is_teamkill: boolean;
         is_suicide: boolean;
         occurred_at: string;
+      };
+    }
+  | {
       type: 'vote.ended';
+      ts: string;
+      data: {
         vote_id: string;
         vote_type: string;
         initiator_player_id: string | null;

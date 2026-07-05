@@ -99,7 +99,10 @@ export type LiveEvent =
         is_suicide: boolean;
         occurred_at: string;
       };
+    }
+  | {
       type: 'vote.ended';
+      ts: string;
       data: VoteEndedData;
     };
 
