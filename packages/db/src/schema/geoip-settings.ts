@@ -16,6 +16,8 @@ export const geoipSettings = pgTable('geoip_settings', {
   lastRefreshedAt: timestamp('last_refreshed_at', { withTimezone: true, mode: 'date' }),
   enabled: boolean('enabled').notNull().default(false),
   keyVersion: integer('key_version').notNull().default(1),
+  countrySwitchWindowHours: integer('country_switch_window_hours').notNull().default(24),
+  multiCountryThreshold: integer('multi_country_threshold').notNull().default(3),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });
 
