@@ -83,6 +83,22 @@ export type LiveEvent =
       type: 'match.ended';
       ts: string;
       data: { server_id: string; match_id?: string | null };
+    }
+  | {
+      type: 'combat.event';
+      ts: string;
+      data: {
+        server_id: string;
+        match_id: string | null;
+        kind: 'combat_damage' | 'combat_wound' | 'combat_death' | 'combat_revive';
+        attacker_player_id: string | null;
+        victim_player_id: string | null;
+        weapon: string | null;
+        damage: number | null;
+        is_teamkill: boolean;
+        is_suicide: boolean;
+        occurred_at: string;
+      };
     };
 
 export type ChatChannel = 'ChatAll' | 'ChatTeam' | 'ChatSquad' | 'ChatAdmin';

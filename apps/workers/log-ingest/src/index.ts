@@ -7,6 +7,7 @@ import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
 import { ChatFlagDetector } from './chat/flag-rules.js';
 import { handleChat } from './chat/store.js';
+import { handleCombat } from './combat/store.js';
 import { dropCutoverServers } from './cutover.js';
 import { TailManager } from './manager.js';
 import { DEFAULT_SEED_ONLINE_THRESHOLD, handleMatchCommand } from './match/store.js';
@@ -58,6 +59,7 @@ async function main() {
     log.info({ serverId, beaconPort }, 'attaching log tail');
     let matchChain: Promise<void> = Promise.resolve();
     let voteChain: Promise<void> = Promise.resolve();
+    let combatChain: Promise<void> = Promise.resolve();
     const ingestor = new LogIngestor({
       serverId,
       beaconPort,
@@ -119,6 +121,17 @@ async function main() {
           .then(() => handleVote(db, redis, command))
           .then(() => undefined)
           .catch((err) => log.error({ err: (err as Error).message }, 'vote handling failed'));
+      },
+      onCombat: (command) => {
+        combatChain = combatChain
+          .then(() => handleCombat(db, redis, command))
+          .then(() => undefined)
+          .catch((err) =>
+            log.error(
+              { err: (err as Error).message, kind: command.kind },
+              'combat handling failed',
+            ),
+          );
       },
     });
     const abort = tailContainerLogs({
