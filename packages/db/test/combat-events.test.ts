@@ -36,7 +36,14 @@ function planText(rows: Array<Record<string, unknown>>): string {
 beforeAll(async () => {
   if (!DATABASE_URL) return;
   sql = postgres(DATABASE_URL, { max: 1, onnotice: () => undefined });
-  await sql.unsafe('DROP TABLE IF EXISTS combat_events CASCADE');
+  // Isolate the combat_events DDL in a dedicated schema: `test:cov` runs the
+  // @squad/db and @squad/api vitest processes concurrently against the same
+  // database, so dropping/recreating the shared public.combat_events here would
+  // race the api combat-events suite (reusePublicSchema). FK targets (players,
+  // servers) stay in public via the search_path fallback.
+  await sql.unsafe('DROP SCHEMA IF EXISTS combat_events_dbtest CASCADE');
+  await sql.unsafe('CREATE SCHEMA combat_events_dbtest');
+  await sql.unsafe('SET search_path TO combat_events_dbtest, public');
   await sql.unsafe(COMBAT_SQL);
 
   await sql`
@@ -88,7 +95,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!sql) return;
-  await sql.unsafe('DROP TABLE IF EXISTS combat_events CASCADE');
+  await sql.unsafe('DROP SCHEMA IF EXISTS combat_events_dbtest CASCADE');
   await sql`DELETE FROM players WHERE id = ANY(${PLAYERS.map(([id]) => id)})`;
   await sql`DELETE FROM servers WHERE id = ANY(${[SERVER_1, SERVER_2]})`;
   await sql.end({ timeout: 5 });
@@ -122,7 +129,7 @@ describeIfDb('combat_events table shape', () => {
 
   it('carries all required indexes including the partial teamkill and BRIN indexes', async () => {
     const rows = await sql<{ indexname: string; indexdef: string }[]>`
-      SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'combat_events'
+      SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'combat_events' AND schemaname = 'combat_events_dbtest'
     `;
     const byName = new Map(rows.map((r) => [r.indexname, r.indexdef]));
     expect(byName.has('combat_events_server_occurred_idx')).toBe(true);
