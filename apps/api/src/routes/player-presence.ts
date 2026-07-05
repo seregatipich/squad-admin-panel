@@ -1,5 +1,5 @@
-import { playerDailyPresence, playerSessions, servers } from '@squad/db/schema';
-import { and, asc, eq, gt, isNull, lt, or, sql } from 'drizzle-orm';
+import { playerDailyPresence, playerSessions, players, servers } from '@squad/db/schema';
+import { and, asc, eq, gt, gte, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -17,6 +17,26 @@ const presenceQuery = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .optional(),
 });
+
+const DAILY_RANGE_DAYS = { '30': 30, '90': 90, '365': 365 } as const;
+const dailyPresenceQuery = z.object({
+  range: z.enum(['30', '90', '365']).default('30'),
+  end: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+});
+
+function resolveDailyWindow(
+  range: keyof typeof DAILY_RANGE_DAYS,
+  endDay: string | undefined,
+): { rangeDays: number; fromDay: string; toDay: string } {
+  const rangeDays = DAILY_RANGE_DAYS[range];
+  const toDay = endDay ?? new Date().toISOString().slice(0, 10);
+  const endMidnight = Date.parse(`${toDay}T00:00:00.000Z`);
+  const fromDay = new Date(endMidnight - (rangeDays - 1) * DAY_MS).toISOString().slice(0, 10);
+  return { rangeDays, fromDay, toDay };
+}
 
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
   if (!req.user) {
@@ -134,6 +154,68 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
         by_server: byServer,
         sessions,
         week: { from: weekStart.toISOString().slice(0, 10), to: endDay },
+      };
+    },
+  );
+
+  fast.get(
+    '/api/v1/players/:playerId/presence/daily',
+    {
+      schema: { params: playerIdParams, querystring: dailyPresenceQuery },
+      config: { audit: false },
+    },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+
+      const { playerId } = req.params;
+      const { rangeDays, fromDay, toDay } = resolveDailyWindow(req.query.range, req.query.end);
+
+      const seriesRows = await app.db
+        .select({
+          day: playerDailyPresence.day,
+          online: sql<number>`COALESCE(SUM(${playerDailyPresence.onlineSeconds}), 0)::int`,
+          boost: sql<number>`COALESCE(SUM(${playerDailyPresence.boostSeconds}), 0)::int`,
+          queue: sql<number>`COALESCE(SUM(${playerDailyPresence.queueSeconds}), 0)::int`,
+        })
+        .from(playerDailyPresence)
+        .where(
+          and(
+            eq(playerDailyPresence.playerId, playerId),
+            gte(playerDailyPresence.day, fromDay),
+            lte(playerDailyPresence.day, toDay),
+          ),
+        )
+        .groupBy(playerDailyPresence.day)
+        .orderBy(asc(playerDailyPresence.day));
+
+      const [playerRow] = await app.db
+        .select({ total: players.totalTimePlayedSeconds })
+        .from(players)
+        .where(eq(players.id, playerId))
+        .limit(1);
+
+      const [openSession] = await app.db
+        .select({ connectedAt: playerSessions.connectedAt })
+        .from(playerSessions)
+        .where(and(eq(playerSessions.playerId, playerId), isNull(playerSessions.disconnectedAt)))
+        .orderBy(asc(playerSessions.connectedAt))
+        .limit(1);
+
+      return {
+        range: rangeDays,
+        from: fromDay,
+        to: toDay,
+        total_time_played_seconds: playerRow?.total ?? 0,
+        live: openSession
+          ? { online: true, since: openSession.connectedAt.toISOString() }
+          : { online: false, since: null },
+        series: seriesRows.map((row) => ({
+          day: row.day,
+          online_seconds: row.online,
+          boost_seconds: row.boost,
+          queue_seconds: row.queue,
+        })),
       };
     },
   );
