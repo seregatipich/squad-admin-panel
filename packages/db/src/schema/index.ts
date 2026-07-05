@@ -12,6 +12,7 @@ export * from './economy-settings.js';
 export * from './events.js';
 export * from './external-ban-sources.js';
 export * from './game-votes.js';
+export * from './geoip-settings.js';
 export * from './issue-comments.js';
 export * from './issue-label-links.js';
 export * from './issue-labels.js';

@@ -1,4 +1,4 @@
-import type { DatabaseClient } from '@squad/db';
+import type { DatabaseClient, GeoLookup } from '@squad/db';
 import type { Diag } from '@squad/diag';
 import { CONSUMER_GROUP, type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
 import type Redis from 'ioredis';
@@ -28,6 +28,7 @@ export interface SupervisorOptions {
   pollIntervalMs?: number;
   initialBackoffMs?: number;
   maxBackoffMs?: number;
+  geoLookup?: GeoLookup | null;
 }
 
 export class RconSupervisor {
@@ -306,7 +307,7 @@ class PerServerSupervisor {
         const rawInfo = await this.client.exec('ShowServerInfo').catch(() => '');
         const players = parseListPlayers(rawPlayers);
         const info = rawInfo ? parseServerInfo(rawInfo) : null;
-        await upsertPlayers(this.opts.db, players);
+        await upsertPlayers(this.opts.db, players, this.opts.geoLookup ?? null);
         this.consecutivePollFails = 0;
         const polledAt = new Date().toISOString();
         const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);

@@ -1,4 +1,10 @@
-import { playerIpHistory, playerNameHistory, players, roles } from '@squad/db/schema';
+import {
+  geoipSettings,
+  playerIpHistory,
+  playerNameHistory,
+  players,
+  roles,
+} from '@squad/db/schema';
 import { normalizePlayerName } from '@squad/shared-config';
 import { and, desc, eq, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
@@ -11,6 +17,33 @@ import { revokeAllForPlayer } from '../lib/sessions.js';
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const roleAssignBody = z.object({ role_id: z.string().uuid().nullable() });
 const listQuery = z.object({ q: z.string().min(1).max(64).optional() });
+
+interface CountryRow {
+  countryCode: string | null;
+  countryName: string | null;
+  lastSeenAt: Date;
+}
+
+function dedupeCountries(rows: CountryRow[]): Array<{
+  country_code: string;
+  country_name: string | null;
+  last_seen_at: Date;
+}> {
+  const seen = new Map<
+    string,
+    { country_code: string; country_name: string | null; last_seen_at: Date }
+  >();
+  for (const row of rows) {
+    if (!row.countryCode) continue;
+    if (seen.has(row.countryCode)) continue;
+    seen.set(row.countryCode, {
+      country_code: row.countryCode,
+      country_name: row.countryName,
+      last_seen_at: row.lastSeenAt,
+    });
+  }
+  return [...seen.values()];
+}
 
 const playerRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -79,14 +112,25 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         .from(playerNameHistory)
         .where(eq(playerNameHistory.playerId, id))
         .orderBy(desc(playerNameHistory.lastSeenAt));
-      const ipsVisible = req.user?.permissions.permissions.has('player:view_ips') ?? false;
-      const ips = ipsVisible
-        ? await app.db
-            .select()
-            .from(playerIpHistory)
-            .where(eq(playerIpHistory.playerId, id))
-            .orderBy(desc(playerIpHistory.lastSeenAt))
-        : [];
+
+      // P0 gate = panel_access (spec correction #3): every panel-access role
+      // sees IPs + precise location; legacy narrow roles (Viewer) do not.
+      const ipsVisible = req.user?.permissions.panelAccess ?? false;
+
+      const ipRows = await app.db
+        .select()
+        .from(playerIpHistory)
+        .where(eq(playerIpHistory.playerId, id))
+        .orderBy(desc(playerIpHistory.lastSeenAt));
+
+      const [geoSettings] = await app.db
+        .select({ enabled: geoipSettings.enabled })
+        .from(geoipSettings)
+        .limit(1);
+      const geoConfigured = geoSettings?.enabled ?? false;
+
+      const locations = dedupeCountries(ipRows);
+
       return {
         player: {
           id: row.id,
@@ -105,13 +149,23 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
           observation_count: n.observationCount,
         })),
         ips: ipsVisible
-          ? ips.map((ip) => ({
+          ? ipRows.map((ip) => ({
               ip: String(ip.ip),
+              country_code: ip.countryCode,
+              country_name: ip.countryName,
+              region: ip.region,
+              city: ip.city,
+              timezone_offset: ip.timezoneOffset,
+              latitude: ip.latitude,
+              longitude: ip.longitude,
               first_seen_at: ip.firstSeenAt,
               last_seen_at: ip.lastSeenAt,
+              observation_count: ip.observationCount,
             }))
           : [],
+        locations,
         ips_visible: ipsVisible,
+        geo_configured: geoConfigured,
       };
     },
   );

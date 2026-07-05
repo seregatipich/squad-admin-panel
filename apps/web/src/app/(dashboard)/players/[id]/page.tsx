@@ -34,7 +34,21 @@ interface NameHistory {
 
 interface IpHistory {
   ip: string;
+  country_code: string | null;
+  country_name: string | null;
+  region: string | null;
+  city: string | null;
+  timezone_offset: string | null;
+  latitude: number | null;
+  longitude: number | null;
   first_seen_at: string;
+  last_seen_at: string;
+  observation_count: number;
+}
+
+interface CountryLocation {
+  country_code: string;
+  country_name: string | null;
   last_seen_at: string;
 }
 
@@ -42,7 +56,9 @@ interface PlayerResponse {
   player: Player;
   names: NameHistory[];
   ips: IpHistory[];
+  locations: CountryLocation[];
   ips_visible: boolean;
+  geo_configured: boolean;
 }
 
 interface SingleRole {
@@ -88,7 +104,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   }
   if (!data) return <div className="text-neutral-500">Загрузка…</div>;
 
-  const { player, names, ips, ips_visible } = data;
+  const { player, names, ips, locations, ips_visible, geo_configured } = data;
   const canManageRoles = me?.permissions.includes('user:manage_roles') ?? false;
 
   return (
@@ -179,43 +195,12 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
         )}
       </section>
 
-      {ips_visible ? (
-        <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-            История IP ({ips.length})
-          </h2>
-          {ips.length === 0 ? (
-            <div className="text-neutral-500 text-sm">пока пусто</div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="text-xs uppercase tracking-widest text-neutral-500">
-                <tr>
-                  <th className="text-left p-1">IP</th>
-                  <th className="text-left p-1">Первый раз</th>
-                  <th className="text-left p-1">Последний раз</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ips.map((ip) => (
-                  <tr key={ip.ip} className="border-t border-neutral-900">
-                    <td className="p-1 font-mono">{ip.ip}</td>
-                    <td className="p-1 text-neutral-500">
-                      {new Date(ip.first_seen_at).toLocaleString()}
-                    </td>
-                    <td className="p-1 text-neutral-500">
-                      {new Date(ip.last_seen_at).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
-      ) : (
-        <section className="rounded border border-neutral-800 bg-neutral-950 p-4 text-xs text-neutral-500">
-          У вас нет разрешения <code className="text-neutral-300">player:view_ips</code> — IP скрыт.
-        </section>
-      )}
+      <LocationSection
+        ips={ips}
+        locations={locations}
+        ipsVisible={ips_visible}
+        geoConfigured={geo_configured}
+      />
     </div>
   );
 }
@@ -384,6 +369,135 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
           </button>
         </div>
       )}
+    </section>
+  );
+}
+
+function flagEmoji(countryCode: string | null): string {
+  if (!countryCode || countryCode.length !== 2) return '🏳️';
+  const base = 0x1f1e6;
+  const upper = countryCode.toUpperCase();
+  const first = upper.charCodeAt(0) - 65;
+  const second = upper.charCodeAt(1) - 65;
+  if (first < 0 || first > 25 || second < 0 || second > 25) return '🏳️';
+  return String.fromCodePoint(base + first) + String.fromCodePoint(base + second);
+}
+
+function locationLabel(ip: IpHistory): string {
+  const parts = [ip.country_name ?? ip.country_code].filter(Boolean) as string[];
+  const detail = [ip.region, ip.city].filter(Boolean) as string[];
+  const head = parts.join('');
+  const tail = detail.length > 0 ? ` − ${detail.join(' / ')}` : '';
+  const tz = ip.timezone_offset ? ` (${ip.timezone_offset})` : '';
+  return `${head}${tail}${tz}`;
+}
+
+function LocationSection({
+  ips,
+  locations,
+  ipsVisible,
+  geoConfigured,
+}: {
+  ips: IpHistory[];
+  locations: CountryLocation[];
+  ipsVisible: boolean;
+  geoConfigured: boolean;
+}) {
+  if (!ipsVisible) {
+    return (
+      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
+        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Локация</h2>
+        {locations.length === 0 ? (
+          <div className="text-sm text-neutral-500">нет данных о локации</div>
+        ) : (
+          <ul className="space-y-1 text-sm">
+            {locations.map((loc) => (
+              <li key={loc.country_code} className="flex items-center gap-2">
+                <span>{flagEmoji(loc.country_code)}</span>
+                <span>{loc.country_name ?? loc.country_code}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="text-xs text-neutral-600">
+          IP и точная локация доступны только пользователям с доступом к панели.
+        </p>
+      </section>
+    );
+  }
+
+  const current = ips[0] ?? null;
+  const others = ips.slice(1);
+
+  return (
+    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4">
+      <h2 className="text-xs uppercase tracking-widest text-neutral-400">Локация ({ips.length})</h2>
+
+      {current === null ? (
+        <div className="text-sm text-neutral-500">пока пусто</div>
+      ) : (
+        <div className="space-y-2">
+          <div className="text-[10px] uppercase tracking-widest text-neutral-500">Текущая</div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+            <span className="text-lg leading-none">{flagEmoji(current.country_code)}</span>
+            {current.country_code ? (
+              <span className="font-medium">{locationLabel(current)}</span>
+            ) : (
+              <span className="text-amber-400/90">
+                гео недоступно
+                {geoConfigured ? '' : ': добавьте MaxMind ключ в настройках'}
+              </span>
+            )}
+            <span className="font-mono text-neutral-300">{current.ip}</span>
+            <span className="text-neutral-500">
+              {new Date(current.last_seen_at).toLocaleString()}
+            </span>
+            <span className="font-mono text-neutral-600">×{current.observation_count}</span>
+          </div>
+        </div>
+      )}
+
+      {others.length > 0 ? (
+        <div className="space-y-2">
+          <div className="text-[10px] uppercase tracking-widest text-neutral-500">
+            Другие локации
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-xs uppercase tracking-widest text-neutral-500">
+                <tr>
+                  <th className="text-left p-1">Локация</th>
+                  <th className="text-left p-1">IP</th>
+                  <th className="text-left p-1">Заходов</th>
+                  <th className="text-left p-1">Последний раз</th>
+                </tr>
+              </thead>
+              <tbody>
+                {others.map((ip) => (
+                  <tr key={ip.ip} className="border-t border-neutral-900">
+                    <td className="p-1">
+                      <span className="mr-1">{flagEmoji(ip.country_code)}</span>
+                      {ip.country_code ? (
+                        locationLabel(ip)
+                      ) : (
+                        <span className="text-amber-400/80">
+                          гео недоступно
+                          {geoConfigured ? '' : ': добавьте MaxMind ключ'}
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-1 font-mono">{ip.ip}</td>
+                    <td className="p-1 font-mono">{ip.observation_count}</td>
+                    <td className="p-1 text-neutral-500">
+                      {new Date(ip.last_seen_at).toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

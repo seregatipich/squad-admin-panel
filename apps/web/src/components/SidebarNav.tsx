@@ -52,6 +52,11 @@ const GROUPS: NavGroup[] = [
         label: 'Discord',
         permission: 'integration:manage',
       },
+      {
+        href: '/settings/integrations/geoip',
+        label: 'GeoIP (MaxMind)',
+        permission: 'integration:manage',
+      },
     ],
   },
 ];

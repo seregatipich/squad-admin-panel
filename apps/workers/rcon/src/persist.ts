@@ -1,4 +1,12 @@
-import { auditLog, type DatabaseClient, playerNameHistory, players } from '@squad/db';
+import {
+  auditLog,
+  type DatabaseClient,
+  type GeoLookup,
+  playerNameHistory,
+  players,
+  recordIpObservation,
+  resolveGeo,
+} from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
 import { eq, or, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
@@ -21,7 +29,11 @@ async function writeSystemAudit(
   });
 }
 
-export async function upsertPlayers(db: DatabaseClient, incoming: RconPlayer[]): Promise<void> {
+export async function upsertPlayers(
+  db: DatabaseClient,
+  incoming: RconPlayer[],
+  geoLookup: GeoLookup | null = null,
+): Promise<void> {
   if (incoming.length === 0) return;
   for (const p of incoming) {
     const normalised = normalizePlayerName(p.name);
@@ -78,6 +90,14 @@ export async function upsertPlayers(db: DatabaseClient, incoming: RconPlayer[]):
             observationCount: sql`${playerNameHistory.observationCount} + 1`,
           },
         });
+
+      if (p.ip) {
+        await recordIpObservation(db, {
+          playerId,
+          ip: p.ip,
+          geo: resolveGeo(geoLookup, p.ip),
+        });
+      }
     } else {
       const playerId = uuidv7();
       await db.insert(players).values({
@@ -99,6 +119,14 @@ export async function upsertPlayers(db: DatabaseClient, incoming: RconPlayer[]):
         eos_id: p.eos_id,
         canonical_name: p.name,
       });
+
+      if (p.ip) {
+        await recordIpObservation(db, {
+          playerId,
+          ip: p.ip,
+          geo: resolveGeo(geoLookup, p.ip),
+        });
+      }
     }
   }
 }

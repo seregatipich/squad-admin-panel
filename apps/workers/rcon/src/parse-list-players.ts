@@ -24,6 +24,7 @@ export interface RconPlayer {
   squad_id: number | null;
   is_leader: boolean | null;
   role: string | null;
+  ip?: string | null;
 }
 
 const ACTIVE_HEADER = /^-----\s*Active Players\s*-----$/;
