@@ -6,6 +6,7 @@ export * from './clans.js';
 export * from './config-versions.js';
 export * from './diagnostic-events.js';
 export * from './discord.js';
+export * from './economy-settings.js';
 export * from './events.js';
 export * from './external-ban-sources.js';
 export * from './issue-comments.js';

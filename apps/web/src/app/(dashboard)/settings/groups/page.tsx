@@ -24,6 +24,7 @@ interface RoleRow {
   can_edit_roles: boolean;
   can_manage_ban_sources: boolean;
   can_manage_clans: boolean;
+  can_manage_economy: boolean;
   squad_permissions: SquadPermissionKey[];
   assigned_users_count: number;
 }
@@ -84,6 +85,8 @@ export default function GroupsPage() {
       if (patch.can_manage_ban_sources !== undefined)
         body.can_manage_ban_sources = patch.can_manage_ban_sources;
       if (patch.can_manage_clans !== undefined) body.can_manage_clans = patch.can_manage_clans;
+      if (patch.can_manage_economy !== undefined)
+        body.can_manage_economy = patch.can_manage_economy;
       if (patch.squad_permissions !== undefined) body.squad_permissions = patch.squad_permissions;
       const res = await fetch(`/api/v1/roles/${role.id}`, {
         method: 'PUT',
@@ -118,6 +121,7 @@ export default function GroupsPage() {
       can_edit_roles: false,
       can_manage_ban_sources: false,
       can_manage_clans: false,
+      can_manage_economy: false,
     };
     let attempt = 0;
     while (attempt < 5) {
@@ -270,7 +274,8 @@ function RoleCard({
       | 'can_assign_roles'
       | 'can_edit_roles'
       | 'can_manage_ban_sources'
-      | 'can_manage_clans',
+      | 'can_manage_clans'
+      | 'can_manage_economy',
     value: boolean,
   ) => {
     if (!canEdit) return;
@@ -280,6 +285,7 @@ function RoleCard({
       patch.can_edit_roles = false;
       patch.can_manage_ban_sources = false;
       patch.can_manage_clans = false;
+      patch.can_manage_economy = false;
     }
     onLocal(patch);
     debounce(patch);
@@ -407,6 +413,12 @@ function RoleCard({
           enabled={role.can_manage_clans}
           disabled={!canEdit || !role.panel_access}
           onChange={(v) => setFlag('can_manage_clans', v)}
+        />
+        <FlagSwitch
+          label="💰 Может управлять экономикой"
+          enabled={role.can_manage_economy}
+          disabled={!canEdit || !role.panel_access}
+          onChange={(v) => setFlag('can_manage_economy', v)}
         />
       </div>
 
