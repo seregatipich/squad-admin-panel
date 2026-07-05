@@ -26,6 +26,7 @@ import liveBusPlugin from '../../src/plugins/live-bus.js';
 import requestContextPlugin from '../../src/plugins/request-context.js';
 import statusReconcilerPlugin from '../../src/plugins/status-reconciler.js';
 import adminsCfgRoutes from '../../src/routes/admins-cfg.js';
+import alertRulesRoutes from '../../src/routes/alert-rules.js';
 import analyticsRoutes from '../../src/routes/analytics.js';
 import auditRoutes from '../../src/routes/audit.js';
 import authRoutes from '../../src/routes/auth.js';
@@ -531,6 +532,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(analyticsRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(banSourcesRoutes);
+  await app.register(alertRulesRoutes);
 
   // Test fixture: legacy "Viewer" role used by older permission-bound
   // tests (depot, host-actions, logs, rbac, ...). The production seed
