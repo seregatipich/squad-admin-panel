@@ -43,6 +43,7 @@ import chatRoutes from './routes/chat.js';
 import clansRoutes from './routes/clans.js';
 import depotRoutes from './routes/depot.js';
 import economyRoutes from './routes/economy.js';
+import eventsRoutes from './routes/events.js';
 import hostRoutes from './routes/host.js';
 import hostActionsRoutes from './routes/host-actions.js';
 import integrationsDiscordRoutes from './routes/integrations-discord.js';
@@ -174,6 +175,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(chatRoutes);
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);
+  await app.register(eventsRoutes);
   await app.register(playerNotesRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(bannedNamesRoutes);

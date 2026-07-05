@@ -20,6 +20,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: '/players', label: 'Игроки' },
       { href: '/matches', label: 'Матчи' },
+      { href: '/events', label: 'События' },
       { href: '/votes', label: 'Голосования' },
       { href: '/chat', label: 'Чат' },
       { href: '/banned-names', label: 'Забаненные ники' },

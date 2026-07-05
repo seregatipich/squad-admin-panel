@@ -3,15 +3,15 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('next/navigation', () => ({
   redirect: vi.fn(),
   useRouter: vi.fn(() => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() })),
-  usePathname: vi.fn(() => '/servers/abc/events'),
+  usePathname: vi.fn(() => '/events'),
   useSearchParams: vi.fn(() => new URLSearchParams()),
 }));
 
-import ServerEventsPage from './page';
+import EventsPage from './page';
 
-describe('ServerEventsPage', () => {
+describe('EventsPage', () => {
   it('is a valid React component', () => {
-    expect(ServerEventsPage).toBeDefined();
-    expect(typeof ServerEventsPage).toBe('function');
+    expect(EventsPage).toBeDefined();
+    expect(typeof EventsPage).toBe('function');
   });
 });

@@ -35,6 +35,7 @@ import chatRoutes from '../../src/routes/chat.js';
 import clansRoutes from '../../src/routes/clans.js';
 import depotRoutes from '../../src/routes/depot.js';
 import economyRoutes from '../../src/routes/economy.js';
+import eventsRoutes from '../../src/routes/events.js';
 import hostRoutes from '../../src/routes/host.js';
 import hostActionsRoutes from '../../src/routes/host-actions.js';
 import integrationsDiscordRoutes from '../../src/routes/integrations-discord.js';
@@ -513,6 +514,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(chatRoutes);
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);
+  await app.register(eventsRoutes);
   await app.register(playerNotesRoutes);
   await app.register(auditRoutes);
   await app.register(logsRoutes);
