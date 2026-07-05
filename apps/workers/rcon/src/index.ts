@@ -113,10 +113,16 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info({ sig }, 'shutdown');
+    const forceExit = setTimeout(() => {
+      log.warn('graceful shutdown timed out; forcing exit');
+      process.exit(0);
+    }, 3000);
+    forceExit.unref();
     stopHeartbeat?.();
     if (interval) clearInterval(interval);
-    await supervisor.stop();
+    await supervisor.stop().catch(() => undefined);
     await redis.quit().catch(() => undefined);
+    clearTimeout(forceExit);
     process.exit(0);
   };
   process.once('SIGINT', shutdown);
