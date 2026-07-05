@@ -31,7 +31,7 @@ async function seedRole(
   const id = uuidv7();
   await db.insert(roles).values({
     id,
-    name: `VehRole-${id.slice(0, 12)}`,
+    name: `VehRole-${id}`,
     color: 'neutral',
     isSystemRole: false,
     panelAccess: opts.panelAccess,
