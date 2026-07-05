@@ -75,6 +75,7 @@ import settingsChatFlagsRoutes from './routes/settings-chat-flags.js';
 import settingsEconomyRoutes from './routes/settings-economy.js';
 import setupRoutes from './routes/setup.js';
 import usersRoutes from './routes/users.js';
+import votesRoutes from './routes/votes.js';
 
 // Side-effect import: augments the Fastify types with our plugin context.
 import './plugins/types.js';
@@ -168,6 +169,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(settingsChatFlagsRoutes);
   await app.register(clansRoutes);
   await app.register(chatRoutes);
+  await app.register(votesRoutes);
   await app.register(playerNotesRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(bannedNamesRoutes);

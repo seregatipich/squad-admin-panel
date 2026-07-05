@@ -83,7 +83,27 @@ export type LiveEvent =
       type: 'match.ended';
       ts: string;
       data: { server_id: string; match_id?: string | null };
+    }
+  | {
+      type: 'vote.ended';
+      ts: string;
+      data: VoteEndedData;
     };
+
+export interface VoteEndedData {
+  vote_id: string;
+  server_id: string;
+  vote_type: string;
+  initiator_player_id: string | null;
+  map_current: string | null;
+  map_next: string | null;
+  map_target: string | null;
+  votes_collected: number;
+  votes_required: number;
+  result: string | null;
+  started_at: string;
+  ended_at: string;
+}
 
 export type ChatChannel = 'ChatAll' | 'ChatTeam' | 'ChatSquad' | 'ChatAdmin';
 

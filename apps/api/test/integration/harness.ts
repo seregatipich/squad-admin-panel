@@ -64,6 +64,7 @@ import serverRoutes from '../../src/routes/servers.js';
 import settingsChatFlagsRoutes from '../../src/routes/settings-chat-flags.js';
 import settingsEconomyRoutes from '../../src/routes/settings-economy.js';
 import usersRoutes from '../../src/routes/users.js';
+import votesRoutes from '../../src/routes/votes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_FOLDER = path.resolve(__dirname, '../../../../packages/db/drizzle');
@@ -507,6 +508,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(settingsChatFlagsRoutes);
   await app.register(clansRoutes);
   await app.register(chatRoutes);
+  await app.register(votesRoutes);
   await app.register(playerNotesRoutes);
   await app.register(auditRoutes);
   await app.register(logsRoutes);
