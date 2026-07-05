@@ -6,6 +6,7 @@ import {
   playerNameHistory,
   players,
 } from '@squad/db';
+import { normalizePlayerName } from '@squad/shared-config';
 import { desc, eq, or } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { ChatChannel, ParsedChat } from '../parser/chat.js';
@@ -70,10 +71,6 @@ export interface ChatMessageFrame {
   data: ChatMessageData;
 }
 
-function normalizeName(name: string): string {
-  return name.trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
 async function resolvePlayerId(db: DatabaseClient, chat: ParsedChat): Promise<string | null> {
   const filters = [];
   if (chat.eosId) filters.push(eq(players.eosId, chat.eosId));
@@ -87,7 +84,7 @@ async function resolvePlayerId(db: DatabaseClient, chat: ParsedChat): Promise<st
     if (rows[0]) return rows[0].id;
   }
 
-  const normalized = normalizeName(chat.playerName);
+  const normalized = normalizePlayerName(chat.playerName);
   if (!normalized) return null;
   const direct = await db
     .select({ id: players.id })

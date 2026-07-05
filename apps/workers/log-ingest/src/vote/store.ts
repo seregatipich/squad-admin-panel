@@ -6,6 +6,7 @@ import {
   playerNameHistory,
   players,
 } from '@squad/db';
+import { normalizePlayerName } from '@squad/shared-config';
 import { desc, eq, or } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { VoteIdentity, VoteRecordCommand } from '../parser/vote.js';
@@ -21,10 +22,6 @@ export interface HandleVoteResult {
   inserted: boolean;
   initiatorPlayerId: string | null;
   ballotCount: number;
-}
-
-function normalizeName(name: string): string {
-  return name.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 async function resolveByIdentity(
@@ -44,7 +41,7 @@ async function resolveByIdentity(
 }
 
 async function resolveByName(db: DatabaseClient, rawName: string): Promise<string | null> {
-  const normalized = normalizeName(rawName);
+  const normalized = normalizePlayerName(rawName);
   if (!normalized) return null;
   const direct = await db
     .select({ id: players.id })

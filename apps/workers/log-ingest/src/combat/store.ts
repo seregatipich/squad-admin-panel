@@ -6,6 +6,7 @@ import {
   playerNameHistory,
   players,
 } from '@squad/db';
+import { normalizePlayerName } from '@squad/shared-config';
 import { and, desc, eq, gte, isNull, lte, or } from 'drizzle-orm';
 import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
 import {
@@ -34,10 +35,6 @@ export interface HandleCombatResult {
   matchId: string | null;
 }
 
-function normalizeName(name: string): string {
-  return name.trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
 async function resolveByIdentity(
   db: DatabaseClient,
   identity: { eosId: string | null; steamId64: string | null },
@@ -55,7 +52,7 @@ async function resolveByIdentity(
 }
 
 async function resolveByName(db: DatabaseClient, rawName: string): Promise<string | null> {
-  const normalized = normalizeName(rawName);
+  const normalized = normalizePlayerName(rawName);
   if (!normalized) return null;
   const direct = await db
     .select({ id: players.id })
@@ -73,7 +70,7 @@ async function resolveByName(db: DatabaseClient, rawName: string): Promise<strin
 }
 
 async function createPlayer(db: DatabaseClient, identity: CombatIdentity): Promise<string | null> {
-  const normalized = normalizeName(identity.name);
+  const normalized = normalizePlayerName(identity.name);
   const steamBigint = identity.steamId64 ? BigInt(identity.steamId64) : null;
   const playerId = uuidv7();
   try {
