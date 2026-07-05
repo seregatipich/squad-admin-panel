@@ -8,6 +8,7 @@ import {
 } from '@squad/db';
 import { and, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import type { MatchCommand } from '../parser/match.js';
+import { applyMatchCombatStats, loadMatchCombatStats } from './combat.js';
 
 export const DEFAULT_JOIN_GRACE_SECONDS = 60;
 
@@ -328,6 +329,17 @@ export async function handleMatchClose(
         playSeconds: sqlExcluded('play_seconds'),
       },
     });
+
+  const combatStats = await loadMatchCombatStats(db, {
+    serverId: match.serverId,
+    matchStart: match.startedAt,
+    matchEnd: match.endedAt,
+  });
+  await applyMatchCombatStats(db, {
+    matchId: match.id,
+    playerIds: roster.map((entry) => entry.playerId),
+    stats: combatStats,
+  });
 
   return { written: roster.length };
 }
