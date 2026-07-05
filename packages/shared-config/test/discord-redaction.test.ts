@@ -77,4 +77,17 @@ describe('createDiscordRedactingStream', () => {
     sink.stream.write('{"level":30,"msg":"nothing to hide"}\n');
     expect(sink.read()).toBe('{"level":30,"msg":"nothing to hide"}\n');
   });
+
+  it('propagates an inner write error to the stream callback', async () => {
+    const stream = createDiscordRedactingStream({
+      write() {
+        throw new Error('inner boom');
+      },
+    });
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      stream.write('x', (e) => resolve(e));
+    });
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('inner boom');
+  });
 });

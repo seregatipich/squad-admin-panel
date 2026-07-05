@@ -51,6 +51,21 @@ describe('validateChatFlagPattern', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('accepts safe regex exercising group skipping, quantifiers and char classes', () => {
+    expect(validateChatFlagPattern('(?<=pre)word', 'regex').ok).toBe(true);
+    expect(validateChatFlagPattern('(?<!no)word', 'regex').ok).toBe(true);
+    expect(validateChatFlagPattern('(?<tag>word)', 'regex').ok).toBe(true);
+    expect(validateChatFlagPattern('(?:group)+word', 'regex').ok).toBe(true);
+    expect(validateChatFlagPattern('(?=ahead)word', 'regex').ok).toBe(true);
+    // '?' quantifier (optional + lazy) and char-class scanning branches
+    expect(validateChatFlagPattern('colou?r', 'regex').ok).toBe(true);
+    expect(validateChatFlagPattern('ab??c', 'regex').ok).toBe(true);
+    expect(validateChatFlagPattern('[a-z]word', 'regex').ok).toBe(true);
+    expect(validateChatFlagPattern('[^0-9]word', 'regex').ok).toBe(true);
+    expect(validateChatFlagPattern('[\\]x]word', 'regex').ok).toBe(true);
+    expect(validateChatFlagPattern('a{2,4}word', 'regex').ok).toBe(true);
+  });
+
   it('rejects catastrophic-backtracking regex (nested unbounded quantifiers)', () => {
     for (const evil of [
       '(a+)+$',
