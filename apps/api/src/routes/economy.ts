@@ -4,7 +4,7 @@ import {
   bonusTransactions,
   players,
 } from '@squad/db/schema';
-import { and, desc, eq, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, lte, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -27,10 +27,16 @@ const adjustBody = z.object({
 });
 const historyQuery = z.object({
   type: z.enum(BONUS_TX_TYPES).optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
   limit: z.coerce.number().int().min(1).max(MAX_LIMIT).optional(),
   before: z.coerce.number().int().positive().optional(),
 });
-const countQuery = z.object({ type: z.enum(BONUS_TX_TYPES).optional() });
+const countQuery = z.object({
+  type: z.enum(BONUS_TX_TYPES).optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+});
 
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
   if (!req.user) {
@@ -40,6 +46,21 @@ function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string }
   if (!req.user.permissions.panelAccess) {
     reply.code(403);
     return { error: 'forbidden' };
+  }
+  return null;
+}
+
+function manageGuard(
+  req: FastifyRequest,
+  reply: FastifyReply,
+): { error: string; required?: string } | null {
+  if (!req.user) {
+    reply.code(401);
+    return { error: 'unauthenticated' };
+  }
+  if (!req.user.permissions.canManageEconomy) {
+    reply.code(403);
+    return { error: 'forbidden', required: 'can_manage_economy' };
   }
   return null;
 }
@@ -92,6 +113,8 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
       const limit = req.query.limit ?? DEFAULT_LIMIT;
       const conditions = [eq(bonusTransactions.playerId, playerId)];
       if (req.query.type) conditions.push(eq(bonusTransactions.type, req.query.type));
+      if (req.query.from) conditions.push(gte(bonusTransactions.createdAt, req.query.from));
+      if (req.query.to) conditions.push(lte(bonusTransactions.createdAt, req.query.to));
       if (req.query.before !== undefined) {
         conditions.push(lt(bonusTransactions.id, BigInt(req.query.before)));
       }
@@ -120,6 +143,8 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
       const { playerId } = req.params;
       const conditions = [eq(bonusTransactions.playerId, playerId)];
       if (req.query.type) conditions.push(eq(bonusTransactions.type, req.query.type));
+      if (req.query.from) conditions.push(gte(bonusTransactions.createdAt, req.query.from));
+      if (req.query.to) conditions.push(lte(bonusTransactions.createdAt, req.query.to));
       const rows = await app.db
         .select({ count: sql<number>`count(*)::int` })
         .from(bonusTransactions)
@@ -132,9 +157,11 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/players/:playerId/bonus-adjustments',
     {
       schema: { params: playerIdParams, body: adjustBody },
-      config: { permissions: ['role:edit'], audit: false },
+      config: { audit: false },
     },
     async (req, reply) => {
+      const denied = manageGuard(req, reply);
+      if (denied) return denied;
       const actorId = req.user?.playerId;
       if (!actorId) {
         reply.code(401);

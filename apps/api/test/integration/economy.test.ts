@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { bonusTransactions, players, roles } from '@squad/db/schema';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -15,15 +16,20 @@ import {
 const OWNER_STEAM = testSteamId(820001);
 const NO_PANEL_STEAM = testSteamId(820002);
 const ADMIN_STEAM = testSteamId(820003);
+const ECON_MANAGER_STEAM = testSteamId(820004);
+const ROLE_EDITOR_STEAM = testSteamId(820005);
 const EOS_ONLY_EOS = 'eos-econ1-000000000000000000000001';
 
 let h: IntegrationHarness;
 let ownerCookie: string;
 let noPanelCookie: string;
 let adminCookie: string;
+let econManagerCookie: string;
+let roleEditorCookie: string;
 let balancePlayerId: string;
 let reconPlayerId: string;
 let pagePlayerId: string;
+let datePlayerId: string;
 let eosPlayerId: string;
 
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
@@ -108,6 +114,7 @@ beforeAll(async () => {
   balancePlayerId = await seedPlayer(820010, 'BalancePlayer');
   reconPlayerId = await seedPlayer(820011, 'ReconPlayer');
   pagePlayerId = await seedPlayer(820012, 'PagePlayer');
+  datePlayerId = await seedPlayer(820013, 'DatePlayer');
 
   const [eos] = await h.db
     .insert(players)
@@ -152,6 +159,41 @@ beforeAll(async () => {
     })
     .onConflictDoNothing();
   adminCookie = await loginAsSteam(ADMIN_STEAM);
+
+  const [econManagerRole] = await h.db
+    .insert(roles)
+    .values({
+      id: randomUUID(),
+      name: 'EconManagerTest',
+      panelAccess: true,
+      canManageEconomy: true,
+    })
+    .returning({ id: roles.id });
+  await h.db.insert(players).values({
+    steamId64: ECON_MANAGER_STEAM,
+    canonicalName: 'EconManager',
+    canonicalNameNormalized: 'econmanager',
+    roleId: econManagerRole?.id ?? null,
+  });
+  econManagerCookie = await loginAsSteam(ECON_MANAGER_STEAM);
+
+  const [roleEditorRole] = await h.db
+    .insert(roles)
+    .values({
+      id: randomUUID(),
+      name: 'RoleEditorTest',
+      panelAccess: true,
+      canEditRoles: true,
+      canManageEconomy: false,
+    })
+    .returning({ id: roles.id });
+  await h.db.insert(players).values({
+    steamId64: ROLE_EDITOR_STEAM,
+    canonicalName: 'RoleEditor',
+    canonicalNameNormalized: 'roleeditor',
+    roleId: roleEditorRole?.id ?? null,
+  });
+  roleEditorCookie = await loginAsSteam(ROLE_EDITOR_STEAM);
 }, 120_000);
 
 afterAll(async () => {
@@ -302,7 +344,7 @@ describeIfDb('POST /api/v1/players/:id/bonus-adjustments', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('rejects a panel user without role:edit with 403 even though it can read the balance', async () => {
+  it('rejects a panel user without can_manage_economy with 403 even though it can read the balance', async () => {
     const read = await h.app.inject({
       method: 'GET',
       url: `/api/v1/players/${balancePlayerId}/bonus-balance`,
@@ -317,6 +359,33 @@ describeIfDb('POST /api/v1/players/:id/bonus-adjustments', () => {
       payload: JSON.stringify({ amount: 10, comment: 'nope' }),
     });
     expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: 'forbidden', required: 'can_manage_economy' });
+  });
+
+  it('rejects a role editor without can_manage_economy with 403 (gate is economy, not role:edit)', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${balancePlayerId}/bonus-adjustments`,
+      headers: { cookie: roleEditorCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ amount: 10, comment: 'nope' }),
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: 'forbidden', required: 'can_manage_economy' });
+  });
+
+  it('allows a non-owner with can_manage_economy to adjust the balance', async () => {
+    const targetId = await seedPlayer(820014, 'ManagerTarget');
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${targetId}/bonus-adjustments`,
+      headers: { cookie: econManagerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ amount: 5, comment: 'econ manager grant' }),
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json() as { balance: number; transaction: { type: string; comment: string } };
+    expect(body.balance).toBe(5);
+    expect(body.transaction.type).toBe('adjust');
+    expect(body.transaction.comment).toBe('econ manager grant');
   });
 
   it('returns 404 when adjusting an unknown player', async () => {
@@ -490,5 +559,72 @@ describeIfDb('GET /api/v1/players/:id/bonus-transactions', () => {
       headers: { cookie: noPanelCookie },
     });
     expect(res.statusCode).toBe(403);
+  });
+});
+
+describeIfDb('GET /api/v1/players/:id/bonus-transactions date filters', () => {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const mo = now.getUTCMonth();
+  const prevMonth = new Date(Date.UTC(y, mo - 1, 10, 12, 0, 0));
+  const currMonth = new Date(Date.UTC(y, mo, 10, 12, 0, 0));
+  const nextMonth = new Date(Date.UTC(y, mo + 1, 10, 12, 0, 0));
+  const currMonthStart = new Date(Date.UTC(y, mo, 1, 0, 0, 0));
+  const nextMonthStart = new Date(Date.UTC(y, mo + 1, 1, 0, 0, 0));
+  const afterNext = new Date(Date.UTC(y, mo + 2, 1, 0, 0, 0));
+
+  beforeAll(async () => {
+    const rows: Array<[Date, number]> = [
+      [prevMonth, 10],
+      [currMonth, 20],
+      [nextMonth, 30],
+    ];
+    for (const [createdAt, amount] of rows) {
+      await h.db.insert(bonusTransactions).values({
+        playerId: datePlayerId,
+        amount,
+        type: 'earn_online',
+        referenceType: 'daily_presence',
+        referenceId: createdAt.toISOString().slice(0, 10),
+        createdAt,
+      });
+    }
+  }, 60_000);
+
+  it('filters the ledger to a single month with a from/to window', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url:
+        `/api/v1/players/${datePlayerId}/bonus-transactions` +
+        `?from=${currMonthStart.toISOString()}&to=${nextMonthStart.toISOString()}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { items: Array<{ amount: number }> };
+    expect(body.items.length).toBe(1);
+    expect(body.items[0]?.amount).toBe(20);
+  });
+
+  it('applies from as an inclusive lower bound', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${datePlayerId}/bonus-transactions?from=${currMonth.toISOString()}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { items: Array<{ amount: number }> };
+    expect(body.items.map((tx) => tx.amount).sort((a, b) => a - b)).toEqual([20, 30]);
+  });
+
+  it('counts only rows inside the from/to window', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url:
+        `/api/v1/players/${datePlayerId}/bonus-transactions/count` +
+        `?from=${currMonthStart.toISOString()}&to=${afterNext.toISOString()}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { count: number }).count).toBe(2);
   });
 });

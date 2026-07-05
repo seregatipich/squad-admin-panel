@@ -7,6 +7,7 @@ import { use, useCallback, useEffect, useState } from 'react';
 
 import { PlayerMarks } from '@/components/PlayerMarks';
 import { RoleColorDot } from '@/components/RoleColorDot';
+import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
 import { NotesSection } from './NotesSection';
 import { RecentMatchesSection } from './RecentMatchesSection';
@@ -129,6 +130,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       </section>
 
       <PanelAccessSection playerId={playerId} canManage={canManageRoles} />
+
+      <BonusSection playerId={playerId} />
 
       <NotesSection playerId={playerId} me={me} />
 
