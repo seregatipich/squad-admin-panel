@@ -106,28 +106,33 @@ async function main() {
     await supervisor.reconcile(targets);
   }
 
-  await reconcile();
-  const interval = setInterval(() => {
-    reconcile().catch((err) => log.error({ err: (err as Error).message }, 'reconcile failed'));
-  }, 15_000);
-
-  const stopHeartbeat = startHeartbeat({
-    redis,
-    name: 'rcon',
-    statusFn: () => `targets=${supervisor.size()}`,
-    onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
-  });
-
+  let interval: NodeJS.Timeout | undefined;
+  let stopHeartbeat: (() => void) | undefined;
+  let shuttingDown = false;
   const shutdown = async (sig: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     log.info({ sig }, 'shutdown');
-    stopHeartbeat();
-    clearInterval(interval);
+    stopHeartbeat?.();
+    if (interval) clearInterval(interval);
     await supervisor.stop();
     await redis.quit().catch(() => undefined);
     process.exit(0);
   };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
+
+  await reconcile();
+  interval = setInterval(() => {
+    reconcile().catch((err) => log.error({ err: (err as Error).message }, 'reconcile failed'));
+  }, 15_000);
+
+  stopHeartbeat = startHeartbeat({
+    redis,
+    name: 'rcon',
+    statusFn: () => `targets=${supervisor.size()}`,
+    onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
+  });
 
   log.info('worker-rcon ready');
 }
