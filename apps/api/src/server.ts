@@ -41,6 +41,7 @@ import banSourcesRoutes from './routes/ban-sources.js';
 import bannedNamesRoutes from './routes/banned-names.js';
 import chatRoutes from './routes/chat.js';
 import clansRoutes from './routes/clans.js';
+import combatEventsRoutes from './routes/combat-events.js';
 import depotRoutes from './routes/depot.js';
 import economyRoutes from './routes/economy.js';
 import eventsRoutes from './routes/events.js';
@@ -174,6 +175,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(settingsChatFlagsRoutes);
   await app.register(clansRoutes);
   await app.register(chatRoutes);
+  await app.register(combatEventsRoutes);
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);
   await app.register(eventsRoutes);
