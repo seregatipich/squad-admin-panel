@@ -20,6 +20,7 @@ const METRIC_COLUMNS = {
 type Metric = keyof typeof METRIC_COLUMNS;
 
 const COMBAT_METRICS = new Set<Metric>(['kills', 'deaths', 'teamkills', 'revives', 'kd']);
+const COMBAT_STATS_AVAILABLE = false;
 const CACHE_PREFIX = 'leaderboard:';
 const CACHE_TTL_SECONDS = 60;
 const MAX_LIMIT = 200;
@@ -34,6 +35,7 @@ const leaderboardsQuery = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .optional(),
   server_id: z.union([z.literal('all'), z.string().uuid()]).default('all'),
+  order: z.enum(['asc', 'desc']).default('desc'),
   search: z.string().trim().min(1).max(64).optional(),
   page: z.coerce.number().int().min(1).optional(),
   per_page: z.coerce.number().int().min(1).max(MAX_LIMIT).optional(),
@@ -96,7 +98,7 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
       const denied = panelGuard(req, reply);
       if (denied) return denied;
 
-      const { metric, period, server_id, search } = req.query;
+      const { metric, period, server_id, order, search } = req.query;
       let periodStart: string;
       try {
         periodStart = resolvePeriodStart(period, req.query.period_start);
@@ -134,7 +136,7 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
         searchFilter,
       );
 
-      const cacheKey = `${CACHE_PREFIX}${metric}:${period}:${periodStart}:${server_id}:${search ?? ''}:${limit}:${offset}`;
+      const cacheKey = `${CACHE_PREFIX}${metric}:${period}:${periodStart}:${server_id}:${order}:${search ?? ''}:${limit}:${offset}`;
       const cached = await app.redis.get(cacheKey).catch(() => null);
       if (cached) {
         reply.header('x-cache', 'hit');
@@ -174,7 +176,10 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
           .from(playerStatPeriods)
           .innerJoin(players, eq(players.id, playerStatPeriods.playerId))
           .where(whereClause)
-          .orderBy(desc(metricColumn), asc(playerStatPeriods.playerId))
+          .orderBy(
+            order === 'asc' ? asc(metricColumn) : desc(metricColumn),
+            asc(playerStatPeriods.playerId),
+          )
           .limit(limit)
           .offset(offset);
 
@@ -197,6 +202,7 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
         period_start: periodStart,
         server_id: server_id === 'all' ? null : server_id,
         available: !COMBAT_METRICS.has(metric),
+        combat_available: COMBAT_STATS_AVAILABLE,
         total_rows: total,
         total_pages: Math.max(1, Math.ceil(total / limit)),
         rows: rows.map((row, index) => ({

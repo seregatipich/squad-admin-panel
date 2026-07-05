@@ -345,6 +345,22 @@ describeIfDb('GET /api/v1/leaderboards', () => {
     expect(paged).toEqual(tiedIdsAscending);
   });
 
+  it('defaults to descending order and flips to ascending on request', async () => {
+    const desc = await fetchLeaderboard('?metric=online&period=alltime');
+    const asc = await fetchLeaderboard('?metric=online&period=alltime&order=asc');
+    const descBody = desc.json() as LeaderboardBody;
+    const ascBody = asc.json() as LeaderboardBody;
+    expect(descBody.rows.map((r) => r.current_name)).toEqual(['Charlie', 'Alpha', 'Bravo']);
+    expect(ascBody.rows.map((r) => r.current_name)).toEqual(['Bravo', 'Alpha', 'Charlie']);
+    expect(ascBody.rows.map((r) => r.rank)).toEqual([1, 2, 3]);
+  });
+
+  it('reports combat stats as unavailable until the importer ships', async () => {
+    const res = await fetchLeaderboard('?metric=online&period=alltime');
+    const body = res.json() as LeaderboardBody & { combat_available: boolean };
+    expect(body.combat_available).toBe(false);
+  });
+
   it('returns an opaque error envelope when the query fails (no SQL leaked)', async () => {
     const res = await fetchLeaderboard('?metric=online&period=day&period_start=9999-99-99');
     expect(res.statusCode).toBe(500);
