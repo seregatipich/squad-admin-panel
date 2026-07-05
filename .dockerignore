@@ -1,0 +1,17 @@
+**/node_modules
+.git
+.github
+data
+.claude
+.playwright-mcp
+.turbo
+**/.turbo
+**/dist
+**/.next
+**/coverage
+**/test-results
+**/playwright-report
+**/*.tsbuildinfo
+ai_docs
+docs/screenshots
+*.log
