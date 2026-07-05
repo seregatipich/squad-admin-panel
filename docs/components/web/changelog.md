@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-07-05 — PNOTE-2 global notes feed
+
+### Added
+
+- `apps/web/src/app/(dashboard)/notes/page.tsx` — new `/notes` page: cross-player admin-notes feed over `GET /api/v1/notes`. Columns: date, author (role-color dot), target player (links to `/players/{id}#notes`), note body (truncate + expand). Filter bar combines text search, target-nickname, author select (`GET /api/v1/notes/authors`), and a date range; keyset "показать ещё" pagination; "Экспорт CSV" downloads the current filtered selection via `GET /api/v1/notes/export`. A "Показывать удалённые" toggle appears only when the API reports `can_view_deleted`; deleted rows render struck-through with the deleting admin. Dark theme, Russian labels, mobile-friendly.
+- `notes` link added to the sidebar "Управление" group.
+- `NotesSection` (player card) gained an `id="notes"` anchor so the feed's target link opens the player's notes section.
+- `apps/web/src/app/(dashboard)/notes/page.test.tsx` — validates the component export.
+
 ## 2026-07-05 — AN-1 dashboard analytics widgets
 
 ### Added

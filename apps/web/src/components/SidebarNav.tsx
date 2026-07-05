@@ -23,6 +23,7 @@ const GROUPS: NavGroup[] = [
       { href: '/events', label: 'События' },
       { href: '/votes', label: 'Голосования' },
       { href: '/chat', label: 'Чат' },
+      { href: '/notes', label: 'Заметки' },
       { href: '/banned-names', label: 'Забаненные ники' },
       { href: '/issues', label: 'Тикеты' },
       { href: '/settings/groups', label: 'Группы', permission: 'role:view' },
