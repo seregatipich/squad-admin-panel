@@ -10,8 +10,8 @@ import { LiveIndicator } from '@/components/LiveIndicator';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { nextBackoffMs } from '@/lib/ws-backoff';
-import { LivePlayers } from './live-players';
 import { ChatPanel } from './ChatPanel';
+import { LivePlayers } from './live-players';
 
 interface ServerRow {
   id: string;
