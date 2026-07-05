@@ -70,6 +70,7 @@ import serverRosterRoutes from './routes/server-roster.js';
 import serverSettingsRoutes from './routes/server-settings.js';
 import serverUpdateRoutes from './routes/server-update.js';
 import serverRoutes from './routes/servers.js';
+import settingsEconomyRoutes from './routes/settings-economy.js';
 import setupRoutes from './routes/setup.js';
 import usersRoutes from './routes/users.js';
 
@@ -160,6 +161,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(markTypesRoutes);
   await app.register(matchesRoutes);
   await app.register(economyRoutes);
+  await app.register(settingsEconomyRoutes);
   await app.register(clansRoutes);
   await app.register(chatRoutes);
   await app.register(playerNotesRoutes);
