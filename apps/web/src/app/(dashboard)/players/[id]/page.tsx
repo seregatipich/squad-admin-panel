@@ -10,6 +10,7 @@ import { RoleColorDot } from '@/components/RoleColorDot';
 import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
 import { NotesSection } from './NotesSection';
+import { PresenceSection } from './PresenceSection';
 import { RecentMatchesSection } from './RecentMatchesSection';
 
 interface Player {
@@ -132,6 +133,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <PanelAccessSection playerId={playerId} canManage={canManageRoles} />
 
       <BonusSection playerId={playerId} />
+
+      <PresenceSection playerId={playerId} />
 
       <NotesSection playerId={playerId} me={me} />
 

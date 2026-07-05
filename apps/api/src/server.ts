@@ -57,6 +57,7 @@ import messageTemplatesRoutes from './routes/message-templates.js';
 import permissionsRoutes from './routes/permissions.js';
 import playerMatchesRoutes from './routes/player-matches.js';
 import playerNotesRoutes from './routes/player-notes.js';
+import playerPresenceRoutes from './routes/player-presence.js';
 import playerRoutes from './routes/players.js';
 import roleMembersRoutes from './routes/role-members.js';
 import rolesRoutes from './routes/roles.js';
@@ -163,6 +164,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(markTypesRoutes);
   await app.register(matchesRoutes);
   await app.register(playerMatchesRoutes);
+  await app.register(playerPresenceRoutes);
   await app.register(economyRoutes);
   await app.register(settingsEconomyRoutes);
   await app.register(settingsChatFlagsRoutes);
