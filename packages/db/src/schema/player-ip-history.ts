@@ -1,9 +1,11 @@
 import {
   bigserial,
+  doublePrecision,
   index,
   inet,
   integer,
   pgTable,
+  text,
   timestamp,
   uniqueIndex,
   uuid,
@@ -18,6 +20,13 @@ export const playerIpHistory = pgTable(
       .notNull()
       .references(() => players.id, { onDelete: 'cascade' }),
     ip: inet('ip').notNull(),
+    countryCode: text('country_code'),
+    countryName: text('country_name'),
+    region: text('region'),
+    city: text('city'),
+    timezoneOffset: text('timezone_offset'),
+    latitude: doublePrecision('latitude'),
+    longitude: doublePrecision('longitude'),
     firstSeenAt: timestamp('first_seen_at', { withTimezone: true, mode: 'date' })
       .defaultNow()
       .notNull(),

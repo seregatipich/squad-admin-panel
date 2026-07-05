@@ -48,6 +48,7 @@ import eventsRoutes from './routes/events.js';
 import hostRoutes from './routes/host.js';
 import hostActionsRoutes from './routes/host-actions.js';
 import integrationsDiscordRoutes from './routes/integrations-discord.js';
+import integrationsGeoipRoutes from './routes/integrations-geoip.js';
 import issuesRoutes from './routes/issues.js';
 import leaderboardsRoutes from './routes/leaderboards.js';
 import liveRoutes from './routes/live.js';
@@ -189,6 +190,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(auditRoutes);
   await app.register(logsRoutes);
   await app.register(integrationsDiscordRoutes);
+  await app.register(integrationsGeoipRoutes);
   await app.register(liveRoutes);
   await app.register(analyticsRoutes);
   await app.register(steamRoutes);

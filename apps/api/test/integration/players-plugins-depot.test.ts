@@ -48,12 +48,28 @@ describe('GET /api/v1/players + /players/:playerId', () => {
       lastSeenAt: new Date('2026-04-23T00:00:00Z'),
       observationCount: 5,
     });
-    await h.db.insert(playerIpHistory).values({
-      playerId: testPlayerId,
-      ip: '203.0.113.5',
-      firstSeenAt: new Date('2026-01-01T00:00:00Z'),
-      lastSeenAt: new Date('2026-04-23T00:00:00Z'),
-    });
+    await h.db.insert(playerIpHistory).values([
+      {
+        playerId: testPlayerId,
+        ip: '203.0.113.5',
+        countryCode: 'DE',
+        countryName: 'Germany',
+        region: 'Berlin',
+        city: 'Berlin',
+        timezoneOffset: 'Europe/Berlin',
+        latitude: 52.52,
+        longitude: 13.405,
+        observationCount: 3,
+        firstSeenAt: new Date('2026-01-01T00:00:00Z'),
+        lastSeenAt: new Date('2026-04-23T00:00:00Z'),
+      },
+      {
+        playerId: testPlayerId,
+        ip: '198.51.100.9',
+        firstSeenAt: new Date('2026-02-01T00:00:00Z'),
+        lastSeenAt: new Date('2026-03-01T00:00:00Z'),
+      },
+    ]);
   });
 
   it('lists seeded players ordered by last_seen_at desc', async () => {
@@ -73,7 +89,7 @@ describe('GET /api/v1/players + /players/:playerId', () => {
     expect(player?.canonical_name).toBe('TestPlayer');
   });
 
-  it('detail view shows names and ips for Owner (has player:view_ips)', async () => {
+  it('detail view shows names, ips + frozen geo for a panel_access user (Owner)', async () => {
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'GET',
@@ -83,16 +99,34 @@ describe('GET /api/v1/players + /players/:playerId', () => {
     expect(resp.statusCode).toBe(200);
     const body = resp.json<{
       names: Array<{ name: string }>;
-      ips: Array<{ ip: string }>;
+      ips: Array<{
+        ip: string;
+        country_code: string | null;
+        city: string | null;
+        timezone_offset: string | null;
+        observation_count: number;
+      }>;
+      locations: Array<{ country_code: string; country_name: string | null }>;
       ips_visible: boolean;
+      geo_configured: boolean;
     }>();
     expect(body.ips_visible).toBe(true);
     expect(body.names).toHaveLength(1);
-    expect(body.ips).toHaveLength(1);
-    expect(body.ips[0]?.ip).toBe('203.0.113.5');
+    expect(body.ips).toHaveLength(2);
+    const geoIp = body.ips.find((i) => i.ip === '203.0.113.5');
+    expect(geoIp?.country_code).toBe('DE');
+    expect(geoIp?.city).toBe('Berlin');
+    expect(geoIp?.timezone_offset).toBe('Europe/Berlin');
+    expect(geoIp?.observation_count).toBe(3);
+    const nullGeoIp = body.ips.find((i) => i.ip === '198.51.100.9');
+    expect(nullGeoIp?.country_code).toBeNull();
+    expect(body.locations).toEqual([
+      { country_code: 'DE', country_name: 'Germany', last_seen_at: expect.anything() },
+    ]);
+    expect(body.geo_configured).toBe(false);
   });
 
-  it('detail view hides IPs from a user without player:view_ips', async () => {
+  it('detail view hides IPs from a non-panel_access user but still shows country-only locations', async () => {
     const viewerRoleRows = await h.db
       .select({ id: roles.id })
       .from(roles)
@@ -112,9 +146,16 @@ describe('GET /api/v1/players + /players/:playerId', () => {
       headers: { cookie },
     });
     expect(resp.statusCode).toBe(200);
-    const body = resp.json<{ ips: unknown[]; ips_visible: boolean }>();
+    const body = resp.json<{
+      ips: unknown[];
+      ips_visible: boolean;
+      locations: Array<{ country_code: string; country_name: string | null }>;
+    }>();
     expect(body.ips_visible).toBe(false);
     expect(body.ips).toEqual([]);
+    expect(body.locations).toEqual([
+      { country_code: 'DE', country_name: 'Germany', last_seen_at: expect.anything() },
+    ]);
   });
 
   it('returns 404 for unknown playerId', async () => {

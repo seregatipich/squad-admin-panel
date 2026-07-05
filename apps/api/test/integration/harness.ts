@@ -40,6 +40,7 @@ import eventsRoutes from '../../src/routes/events.js';
 import hostRoutes from '../../src/routes/host.js';
 import hostActionsRoutes from '../../src/routes/host-actions.js';
 import integrationsDiscordRoutes from '../../src/routes/integrations-discord.js';
+import integrationsGeoipRoutes from '../../src/routes/integrations-geoip.js';
 import issuesRoutes from '../../src/routes/issues.js';
 import leaderboardsRoutes from '../../src/routes/leaderboards.js';
 import logsRoutes from '../../src/routes/logs.js';
@@ -525,6 +526,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(auditRoutes);
   await app.register(logsRoutes);
   await app.register(integrationsDiscordRoutes);
+  await app.register(integrationsGeoipRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(analyticsRoutes);
   await app.register(bannedNamesRoutes);
