@@ -45,3 +45,6 @@ reports/mutation/
 
 .playwright-mcp/
 .env.tk104
+
+# Playwright verification evidence artifacts
+apps/web/e2e-evidence/
