@@ -1,8 +1,10 @@
 import { sql } from 'drizzle-orm';
 import {
   bigint,
+  check,
   index,
   inet,
+  integer,
   pgTable,
   text,
   timestamp,
@@ -31,6 +33,7 @@ export const players = pgTable(
     totalTimePlayedSeconds: bigint('total_time_played_seconds', { mode: 'number' })
       .notNull()
       .default(0),
+    bonusBalance: integer('bonus_balance').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
@@ -44,6 +47,7 @@ export const players = pgTable(
     ),
     lastSeenAtIdx: index('players_last_seen_at_idx').on(table.lastSeenAt),
     roleIdIdx: index('players_role_id_idx').on(table.roleId).where(sql`role_id IS NOT NULL`),
+    bonusBalanceChk: check('players_bonus_balance_nonneg_chk', sql`bonus_balance >= 0`),
   }),
 );
 

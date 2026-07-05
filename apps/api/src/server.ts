@@ -40,6 +40,7 @@ import banSourcesRoutes from './routes/ban-sources.js';
 import bannedNamesRoutes from './routes/banned-names.js';
 import clansRoutes from './routes/clans.js';
 import depotRoutes from './routes/depot.js';
+import economyRoutes from './routes/economy.js';
 import hostRoutes from './routes/host.js';
 import hostActionsRoutes from './routes/host-actions.js';
 import integrationsDiscordRoutes from './routes/integrations-discord.js';
@@ -154,6 +155,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(issuesRoutes);
   await app.register(marksRoutes);
   await app.register(markTypesRoutes);
+  await app.register(economyRoutes);
   await app.register(clansRoutes);
   await app.register(playerNotesRoutes);
   await app.register(adminsCfgRoutes);
