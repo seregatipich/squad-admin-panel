@@ -4,6 +4,7 @@ export * from './bonus-transactions.js';
 export * from './chat-flag-rules.js';
 export * from './chat-messages.js';
 export * from './clans.js';
+export * from './combat-events.js';
 export * from './config-versions.js';
 export * from './diagnostic-events.js';
 export * from './discord.js';
