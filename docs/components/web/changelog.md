@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-07-05 — AN-1 dashboard analytics widgets
+
+### Added
+
+- `apps/web/src/app/(dashboard)/dashboard/analytics-panel.tsx` — dashboard analytics widget rendering a peak-players-by-hour bar chart, match-outcome distribution, popular maps/layers, summary stat tiles, per-server + time-window filters, and CSV/JSON export buttons. Fetches `GET /api/v1/analytics/dashboard`. Dark theme, Russian labels, accessible (single-hue magnitude bars, legend + direct labels so identity is never color-alone).
+- `apps/web/src/app/(dashboard)/dashboard/analytics-data.ts` — pure presentation helpers (hour/duration formatting, outcome percentages, peak scaling, window range, query builder) with `analytics-data.test.ts` unit coverage; `analytics-panel.test.tsx` validates the component export.
+
 ## 2026-05-05 — Server settings editor page
 
 ### Added

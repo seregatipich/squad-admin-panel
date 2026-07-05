@@ -1,5 +1,11 @@
 # `api` — changelog
 
+## 2026-07-05 — AN-1 dashboard analytics
+
+### Added
+
+- `GET /api/v1/analytics/dashboard` — read-only analytics aggregates gated by `panel_access` (auth required, no permission gate; no audit rows). Query params: `server_id`, `from`, `to` (ISO 8601, default last 7 days, clamped to 92 days), `limit` (popular maps/layers cap), `format=json|csv`. Computes peak concurrent players by hour-of-day (sampled at hourly ticks from `player_sessions`, UTC), match-outcome distribution + popular maps/layers (from `matches`), and an online-hours / unique-players summary (from `player_daily_presence`). Per-server breakdown via `server_id`. `format=csv` returns a `section,key,value` long-format attachment.
+
 ## 2026-04-28
 
 ### Documentation

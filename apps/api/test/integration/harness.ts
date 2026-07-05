@@ -26,6 +26,7 @@ import liveBusPlugin from '../../src/plugins/live-bus.js';
 import requestContextPlugin from '../../src/plugins/request-context.js';
 import statusReconcilerPlugin from '../../src/plugins/status-reconciler.js';
 import adminsCfgRoutes from '../../src/routes/admins-cfg.js';
+import analyticsRoutes from '../../src/routes/analytics.js';
 import auditRoutes from '../../src/routes/audit.js';
 import authRoutes from '../../src/routes/auth.js';
 import banSourcesRoutes from '../../src/routes/ban-sources.js';
@@ -347,7 +348,10 @@ export async function runMigrations(url: string) {
       .filter((f) => f.endsWith('.sql'))
       .sort();
     for (const file of files) {
-      const contents = readFileSync(path.join(MIGRATIONS_FOLDER, file), 'utf-8');
+      const contents = readFileSync(path.join(MIGRATIONS_FOLDER, file), 'utf-8').replace(
+        /\bpublic\./gi,
+        '',
+      );
       const statements = contents
         .split(/-->\s*statement-breakpoint\s*/i)
         .map((s) => s.trim())
@@ -484,6 +488,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(logsRoutes);
   await app.register(integrationsDiscordRoutes);
   await app.register(adminsCfgRoutes);
+  await app.register(analyticsRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(banSourcesRoutes);
 
