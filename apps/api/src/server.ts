@@ -38,6 +38,7 @@ import authRoutes from './routes/auth.js';
 import steamRoutes from './routes/auth-steam.js';
 import banSourcesRoutes from './routes/ban-sources.js';
 import bannedNamesRoutes from './routes/banned-names.js';
+import chatRoutes from './routes/chat.js';
 import clansRoutes from './routes/clans.js';
 import depotRoutes from './routes/depot.js';
 import hostRoutes from './routes/host.js';
@@ -155,6 +156,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(marksRoutes);
   await app.register(markTypesRoutes);
   await app.register(clansRoutes);
+  await app.register(chatRoutes);
   await app.register(playerNotesRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(bannedNamesRoutes);
