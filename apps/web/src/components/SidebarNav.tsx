@@ -23,6 +23,7 @@ const GROUPS: NavGroup[] = [
       { href: '/clans', label: 'Кланы' },
       { href: '/matches', label: 'Матчи' },
       { href: '/events', label: 'События' },
+      { href: '/combat-log', label: 'Боевой лог' },
       { href: '/votes', label: 'Голосования' },
       { href: '/chat', label: 'Чат' },
       { href: '/notes', label: 'Заметки' },
