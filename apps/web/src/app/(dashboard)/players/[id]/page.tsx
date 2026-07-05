@@ -9,6 +9,7 @@ import { PlayerMarks } from '@/components/PlayerMarks';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
+import { GeoAnomaliesSection } from './GeoAnomaliesSection';
 import { NotesSection } from './NotesSection';
 import { PresenceSection } from './PresenceSection';
 import { RecentMatchesSection } from './RecentMatchesSection';
@@ -196,6 +197,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       </section>
 
       <LocationSection
+        playerId={playerId}
         ips={ips}
         locations={locations}
         ipsVisible={ips_visible}
@@ -393,11 +395,13 @@ function locationLabel(ip: IpHistory): string {
 }
 
 function LocationSection({
+  playerId,
   ips,
   locations,
   ipsVisible,
   geoConfigured,
 }: {
+  playerId: string;
   ips: IpHistory[];
   locations: CountryLocation[];
   ipsVisible: boolean;
@@ -498,6 +502,8 @@ function LocationSection({
           </div>
         </div>
       ) : null}
+
+      <GeoAnomaliesSection playerId={playerId} />
     </section>
   );
 }
