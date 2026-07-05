@@ -73,6 +73,16 @@ export type LiveEvent =
       type: 'chat.message';
       ts: string;
       data: ChatMessage;
+    }
+  | {
+      type: 'match.started';
+      ts: string;
+      data: { server_id: string; match_id?: string | null };
+    }
+  | {
+      type: 'match.ended';
+      ts: string;
+      data: { server_id: string; match_id?: string | null };
     };
 
 export type ChatChannel = 'ChatAll' | 'ChatTeam' | 'ChatSquad' | 'ChatAdmin';
