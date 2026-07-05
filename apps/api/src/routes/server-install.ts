@@ -306,8 +306,6 @@ async function runInstall(
   } catch (err) {
     emit('rnsquadjs', `sidecar launch failed (non-fatal): ${(err as Error).message}`, 'stderr');
   }
-
-  emit('done', 'install complete; container running');
 }
 
 export function rewriteRconCfg(existing: string, opts: { port: number; password: string }): string {
@@ -405,6 +403,15 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             },
             { diag: installDiag, actorPlayerId },
           );
+          // Spec §2.7.7 — push initial Admins.cfg with the current managed
+          // segment to the freshly installed server. Worker config-sync
+          // picks this up and writes the marker-fenced section into the
+          // baseline Admins.cfg the seedConfigs step just created.
+          await publishAdminsCfgSyncForServer(app.redis, id, {
+            reason: 'server.install.completed',
+            actor_player_id: actor.kind === 'steam' ? actor.playerId : null,
+            enqueued_at: new Date().toISOString(),
+          });
           await writeAuditEntry(app.db, {
             actor,
             actorIp,
@@ -424,51 +431,50 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             message: 'install complete',
             payload: { totalDurationMs: Date.now() - startedAt },
           });
-          // Spec §2.7.7 — push initial Admins.cfg with the current managed
-          // segment to the freshly installed server. Worker config-sync
-          // picks this up and writes the marker-fenced section into the
-          // baseline Admins.cfg the seedConfigs step just created.
-          await publishAdminsCfgSyncForServer(app.redis, id, {
-            reason: 'server.install.completed',
-            actor_player_id: actor.kind === 'steam' ? actor.playerId : null,
-            enqueued_at: new Date().toISOString(),
+          app.installProgress.publish(id, {
+            ts: new Date().toISOString(),
+            step: 'done',
+            message: 'install complete; container running',
           });
         } catch (err) {
           const errorMessage = (err as Error).message;
           app.log.error({ err, server_id: id }, 'install failed');
-          app.installProgress.publish(id, {
-            ts: new Date().toISOString(),
-            step: 'error',
-            message: errorMessage,
-            stream: 'stderr',
-          });
-          await app.db
-            .update(servers)
-            .set({ status: 'failed', updatedAt: new Date() })
-            .where(eq(servers.id, id));
-          await writeAuditEntry(app.db, {
-            actor,
-            actorIp,
-            actionType: 'server.install.failed',
-            targetType: 'server',
-            targetId: id,
-            context: { error: errorMessage, durationMs: Date.now() - startedAt },
-            statusCode: 500,
-            durationMs: Date.now() - startedAt,
-          });
-          await installDiag.emit({
-            component: 'api',
-            kind: 'server.install.failed',
-            severity: 'error',
-            serverId: id,
-            actorPlayerId,
-            message: `install failed: ${errorMessage}`,
-            payload: {
-              stage: 'runInstall',
-              errorMessage,
-              totalDurationMs: Date.now() - startedAt,
-            },
-          });
+          try {
+            await app.db
+              .update(servers)
+              .set({ status: 'failed', updatedAt: new Date() })
+              .where(eq(servers.id, id));
+            await writeAuditEntry(app.db, {
+              actor,
+              actorIp,
+              actionType: 'server.install.failed',
+              targetType: 'server',
+              targetId: id,
+              context: { error: errorMessage, durationMs: Date.now() - startedAt },
+              statusCode: 500,
+              durationMs: Date.now() - startedAt,
+            });
+            await installDiag.emit({
+              component: 'api',
+              kind: 'server.install.failed',
+              severity: 'error',
+              serverId: id,
+              actorPlayerId,
+              message: `install failed: ${errorMessage}`,
+              payload: {
+                stage: 'runInstall',
+                errorMessage,
+                totalDurationMs: Date.now() - startedAt,
+              },
+            });
+          } finally {
+            app.installProgress.publish(id, {
+              ts: new Date().toISOString(),
+              step: 'error',
+              message: errorMessage,
+              stream: 'stderr',
+            });
+          }
         }
       })();
       return { status: 'installing', server_id: id };
