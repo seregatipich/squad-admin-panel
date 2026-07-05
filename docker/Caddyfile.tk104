@@ -1,0 +1,33 @@
+{
+	email {$ACME_EMAIL:admin@example.com}
+	servers {
+		metrics
+	}
+}
+
+tk104.duckdns.org {
+	encode zstd gzip
+
+	tls {
+		dns duckdns {env.DUCKDNS_TOKEN}
+		resolvers 1.1.1.1 8.8.8.8
+	}
+
+	@api path /api/* /health /ready /metrics
+	handle @api {
+		reverse_proxy api:3000 {
+			header_up X-Request-Id {http.request.header.X-Request-Id}
+			health_uri /health
+			health_interval 15s
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

@@ -44,3 +44,4 @@ apps/web/test-results/
 reports/mutation/
 
 .playwright-mcp/
+.env.tk104

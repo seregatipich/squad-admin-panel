@@ -1,0 +1,126 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '5'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: admin
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U admin -d admin']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--save', '60', '1', '--appendonly', 'no']
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging: *default-logging
+
+  migrator:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: 'no'
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+    working_dir: /app/packages/db
+    command: ['node', '--enable-source-maps', 'dist/migrate.js']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *default-logging
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_HOST: 0.0.0.0
+      API_PORT: 3000
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      SESSION_SECRET: ${SESSION_SECRET}
+      APP_DOMAIN: tk104.duckdns.org
+      PANEL_PUBLIC_URL: https://tk104.duckdns.org
+      COOKIE_SECURE: 'true'
+      STEAM_API_KEY: ${STEAM_API_KEY:-}
+      STEAM_WEB_API_KEY: ${STEAM_WEB_API_KEY:-}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-21600}
+      SESSION_TOUCH_THROTTLE_SECONDS: ${SESSION_TOUCH_THROTTLE_SECONDS:-60}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:3000/health']
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_APP_DOMAIN: tk104.duckdns.org
+      API_URL: http://api:3000
+    depends_on:
+      api:
+        condition: service_healthy
+    logging: *default-logging
+
+  caddy:
+    build:
+      context: .
+      dockerfile: docker/caddy-duckdns.Dockerfile
+    init: true
+    restart: unless-stopped
+    ports:
+      - '443:443'
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN}
+    volumes:
+      - ./docker/Caddyfile.tk104:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
+    logging: *default-logging
+
+volumes:
+  pgdata:
+  redisdata:
+  caddy_data:
+  caddy_config:
