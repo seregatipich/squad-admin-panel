@@ -55,6 +55,7 @@ import matchesRoutes from './routes/matches.js';
 import meTokensRoutes from './routes/me-tokens.js';
 import messageTemplatesRoutes from './routes/message-templates.js';
 import permissionsRoutes from './routes/permissions.js';
+import playerMatchesRoutes from './routes/player-matches.js';
 import playerNotesRoutes from './routes/player-notes.js';
 import playerRoutes from './routes/players.js';
 import roleMembersRoutes from './routes/role-members.js';
@@ -160,6 +161,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(marksRoutes);
   await app.register(markTypesRoutes);
   await app.register(matchesRoutes);
+  await app.register(playerMatchesRoutes);
   await app.register(economyRoutes);
   await app.register(settingsEconomyRoutes);
   await app.register(clansRoutes);

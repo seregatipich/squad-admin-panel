@@ -9,6 +9,7 @@ import { PlayerMarks } from '@/components/PlayerMarks';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import { ChatHistorySection } from './ChatHistorySection';
 import { NotesSection } from './NotesSection';
+import { RecentMatchesSection } from './RecentMatchesSection';
 
 interface Player {
   id: string;
@@ -130,6 +131,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <PanelAccessSection playerId={playerId} canManage={canManageRoles} />
 
       <NotesSection playerId={playerId} me={me} />
+
+      <RecentMatchesSection playerId={playerId} />
 
       <ChatHistorySection playerId={playerId} />
 
