@@ -1,11 +1,19 @@
-import { playerDailyPresence, playerSessions, players, servers } from '@squad/db/schema';
-import { and, asc, eq, gt, gte, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { computePlayerPrimetime } from '@squad/db';
+import {
+  playerDailyPresence,
+  playerIpHistory,
+  playerSessions,
+  players,
+  servers,
+} from '@squad/db/schema';
+import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 const DAY_MS = 86_400_000;
 const WEEK_DAYS = 7;
+const PRIMETIME_WINDOW_DAYS = 30;
 const SESSION_WINDOW_CAP = 2000;
 const ONLINE_STATUS_CAP = 1000;
 const BONUS_FORMULA_LABEL = 'online + 2×boost';
@@ -216,6 +224,81 @@ const playerPresenceRoutes: FastifyPluginAsync = async (app) => {
           boost_seconds: row.boost,
           queue_seconds: row.queue,
         })),
+      };
+    },
+  );
+
+  fast.get(
+    '/api/v1/players/:playerId/primetime',
+    { schema: { params: playerIdParams }, config: { audit: false } },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+
+      const { playerId } = req.params;
+      const now = new Date();
+      const windowEndMs = now.getTime();
+      const windowStartMs = windowEndMs - PRIMETIME_WINDOW_DAYS * DAY_MS;
+      const windowStart = new Date(windowStartMs);
+      const windowEnd = new Date(windowEndMs);
+
+      const [geoRow] = await app.db
+        .select({ timezone: playerIpHistory.timezoneOffset })
+        .from(playerIpHistory)
+        .where(
+          and(eq(playerIpHistory.playerId, playerId), isNotNull(playerIpHistory.timezoneOffset)),
+        )
+        .orderBy(desc(playerIpHistory.lastSeenAt))
+        .limit(1);
+
+      const sessionRows = await app.db
+        .select({
+          connectedAt: playerSessions.connectedAt,
+          disconnectedAt: playerSessions.disconnectedAt,
+        })
+        .from(playerSessions)
+        .where(
+          and(
+            eq(playerSessions.playerId, playerId),
+            lt(playerSessions.connectedAt, windowEnd),
+            or(
+              isNull(playerSessions.disconnectedAt),
+              gt(playerSessions.disconnectedAt, windowStart),
+            ),
+          ),
+        )
+        .orderBy(asc(playerSessions.connectedAt))
+        .limit(SESSION_WINDOW_CAP);
+
+      const timezone = geoRow?.timezone ?? null;
+      const result = computePlayerPrimetime({
+        sessions: sessionRows,
+        timezone,
+        windowStartMs,
+        windowEndMs,
+        nowMs: windowEndMs,
+      });
+
+      return {
+        window: {
+          from: windowStart.toISOString().slice(0, 10),
+          to: windowEnd.toISOString().slice(0, 10),
+          days: PRIMETIME_WINDOW_DAYS,
+        },
+        timezone,
+        offset_minutes: result.offsetMinutes,
+        total_seconds: result.totalSeconds,
+        histogram: result.histogram,
+        rolling_average: result.rollingAverage.map((value) => Math.round(value)),
+        primetime: result.range
+          ? {
+              label: result.range.label,
+              start_minutes: result.range.startMinutes,
+              end_minutes: result.range.endMinutes,
+              start_hour: result.range.startHour,
+              end_hour: result.range.endHour,
+            }
+          : null,
       };
     },
   );
