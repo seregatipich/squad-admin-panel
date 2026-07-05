@@ -17,6 +17,17 @@ import { revokeAllForPlayer } from '../lib/sessions.js';
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const roleAssignBody = z.object({ role_id: z.string().uuid().nullable() });
 const listQuery = z.object({ q: z.string().min(1).max(64).optional() });
+const searchQuery = z.object({ q: z.string().trim().min(3).max(64) });
+
+interface PlayerSearchRow {
+  id: string;
+  steam_id64: string | null;
+  canonical_name: string;
+  eos_id: string | null;
+  last_seen_at: string | null;
+  clan_id: string | null;
+  clan_name: string | null;
+}
 
 interface CountryRow {
   countryCode: string | null;
@@ -86,6 +97,53 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
           first_seen_at: r.firstSeenAt,
           last_seen_at: r.lastSeenAt,
           total_time_played_seconds: Number(r.totalTimePlayedSeconds),
+        })),
+        total: rows.length,
+      };
+    },
+  );
+
+  fast.get(
+    '/api/v1/players/search',
+    { schema: { querystring: searchQuery }, config: { audit: false } },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      if (!req.user.permissions.panelAccess) {
+        reply.code(403);
+        return { error: 'forbidden' };
+      }
+      const q = req.query.q.trim();
+      const exactMatch = q.toLowerCase();
+      const nameMatch = normalizePlayerName(q);
+      const rows = (await app.db.execute(sql`
+        SELECT p.id, p.steam_id64::text AS steam_id64, p.canonical_name, p.eos_id,
+               p.last_seen_at::text AS last_seen_at,
+               cm.clan_id, c.name AS clan_name
+        FROM players p
+        LEFT JOIN clan_members cm ON cm.player_id = p.id
+        LEFT JOIN clans c ON c.id = cm.clan_id AND c.deleted_at IS NULL
+        WHERE p.canonical_name_normalized LIKE ${`%${nameMatch}%`}
+           OR p.steam_id64::text = ${exactMatch}
+           OR p.eos_id = ${exactMatch}
+           OR EXISTS (
+             SELECT 1 FROM player_name_history h
+             WHERE h.player_id = p.id AND h.name_normalized LIKE ${`%${nameMatch}%`}
+           )
+        ORDER BY p.last_seen_at DESC
+        LIMIT 25
+      `)) as unknown as PlayerSearchRow[];
+      return {
+        items: rows.map((row) => ({
+          id: row.id,
+          steam_id64: row.steam_id64,
+          canonical_name: row.canonical_name,
+          eos_id: row.eos_id,
+          last_seen_at: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : null,
+          clan_id: row.clan_id,
+          clan_name: row.clan_name,
         })),
         total: rows.length,
       };
