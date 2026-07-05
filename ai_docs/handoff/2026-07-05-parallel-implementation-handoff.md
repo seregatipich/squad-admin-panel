@@ -4,11 +4,16 @@ _Last updated: 2026-07-05. Author: automated parallel-batch run (session `c4872c
 
 ## 1. Executive status
 
-- **Shipped: 56 GitHub issues closed** across 9 parallel batches (~36 feature tasks + infra fixes). All on `master`.
-- **Remaining: 138 open issues** (110 `status:todo`, 26 `status:in-progress`, 2 `status:triage`).
-- **CI is GREEN on `master`** (run `28728618603`, HEAD `4139241`): `node` ✓, `go` ✓, `docker` ✓. It had been red since before this work began; every failing step was diagnosed and fixed this session (see §4).
-- **DB migrations** are at `0028_chatflags_and_votes.sql`. All hand-authored, journal-tracked, applied to the live `admin` DB and validated on throwaway DBs.
-- Working tree clean; `dev` and `master` are synced with `origin`.
+- **Shipped: 71 GitHub issues closed** (was 56; +15 this 2026-07-05 session across parallel waves A/B/C — see §9). All on `master`, CI green.
+- **DB migrations** are at `0031_alerts.sql`. Waves added `0029` (combat_events + feed indexes), `0030` (geoip cols/settings, roles.combat_view, player_stat_periods, match_players combat cols), `0031` (alert_rules/alert_events). All journal-tracked, `--> statement-breakpoint`-delimited, validated on fresh DBs + applied to live `admin`.
+- **CI is GREEN on `master`** each wave (latest run for HEAD `73dde65`: `node` ✓ `go` ✓ `docker` ✓).
+- Working tree clean; `dev` and `master` synced with `origin`.
+
+### Session 37f562f6 (2026-07-05) waves — see §9 for the full playbook
+- **Wave A** (6): COMBAT-2, VOTE-3, PNOTE-2, EVT-2, PRES-3, PLAYER-2.
+- **Wave B** (5): PLAYER-3, COMBAT-3, CLAN-7, LEAD-1, MATCH-3.
+- **Wave C** (5): LEAD-2, PRES-5, COMBAT-4, AUTO-3, CLAN-8.
+- (Wave D in flight at handoff write time: INT-2, CLAN-3, DOSSIER-1, LEAD-3.)
 
 ## 2. What shipped (by area)
 
@@ -86,3 +91,15 @@ Detailed recipe + gotchas live in the [parallel-ultracode-workflow memory]. Summ
 - Parallel pipeline recipe + gotchas: `parallel-ultracode-workflow` memory.
 - Commit/CI discipline: `commit-and-ci-gate` memory + project `CLAUDE.md`.
 - Operator log exploration: GitHub issue **#194**.
+
+## 9. Session 37f562f6 (2026-07-05) — parallel waves A/B/C + CI traps (READ before the next wave)
+
+Ran the Workflow pipeline (5-6 worktree agents/wave → serial integration → one migration → gate → docker rebuild → Playwright as Owner → promote → watch CI → close issues). 3 waves = 16 issues, all CI-green. The three CI blockers that cost the most time (fixed + now in the `parallel-ultracode-workflow` memory):
+
+1. **`biome check .` formatter error on a NEW spec file** — the whole-repo `biome check .` (CI) catches a `::error title=format` on any file that never got `biome check --write`, which a dir-scoped `--diagnostic-level=error` check misses. Always `biome check --write` every new file. Reproduce CI exactly with `pnpm exec biome check . --reporter=github | grep '::error'`.
+2. **worker-rcon `contract.test.ts` "exits 0 on SIGTERM" flake** — cold-CI startup can outrun the test's fixed pre-SIGTERM sleep so no handler is registered (→ killed, code -1). Fixed by (a) a shutdown watchdog in `apps/workers/rcon/src/index.ts` (force `exit(0)` after 3s) and (b) making the test WAIT for the heartbeat-readiness key before SIGTERM (timeout 35s).
+3. **THE BIG ONE — parallel `test:cov` shared-DB DDL race**: `pnpm test:cov` runs every package's vitest **in parallel** against the ONE CI Postgres. `packages/db/test/combat-events.test.ts` did `DROP TABLE combat_events CASCADE` on the shared `public` schema to shape-test it, which **races** the new `@squad/api` combat-events suite (reusePublicSchema) → deterministic `relation "combat_events" does not exist`. **Does NOT reproduce with a single package's `vitest run` (even `--coverage`, even on `postgres:16-alpine`)** — only the parallel multi-package run. Fix: scope destructive DDL to a dedicated schema (`CREATE SCHEMA x; SET search_path TO x, public; ... DROP SCHEMA x CASCADE`). Every wave brief now forbids destructive DDL on shared tables.
+
+**Migration format**: hand-authored migrations now use `--> statement-breakpoint` between statements (drizzle-canonical; the `25P01 "no transaction in progress"` warning is pre-existing/harmless). Assemble one `00NN` file/wave from agents' `customMigrationSql` + a journal entry (idx+1, `when` = prev+1000). The api harness (`test/integration/harness.ts`) replays migrations into isolated schemas for `reusePublicSchema:false` suites and strips `public.`; partitioned tables + `pg_trgm`/`gin_trgm_ops` replay fine.
+
+**Budget 3+ CI round-trips per wave** for these. The remaining ready-now backlog and the env-gated (bridge/RCON/SYNC) cluster are unchanged from §5.
