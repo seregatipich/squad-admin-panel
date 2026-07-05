@@ -40,6 +40,7 @@ import hostRoutes from '../../src/routes/host.js';
 import hostActionsRoutes from '../../src/routes/host-actions.js';
 import integrationsDiscordRoutes from '../../src/routes/integrations-discord.js';
 import issuesRoutes from '../../src/routes/issues.js';
+import leaderboardsRoutes from '../../src/routes/leaderboards.js';
 import logsRoutes from '../../src/routes/logs.js';
 import markTypesRoutes from '../../src/routes/mark-types.js';
 import marksRoutes from '../../src/routes/marks.js';
@@ -508,6 +509,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(matchesRoutes);
   await app.register(playerMatchesRoutes);
   await app.register(playerPresenceRoutes);
+  await app.register(leaderboardsRoutes);
   await app.register(economyRoutes);
   await app.register(settingsEconomyRoutes);
   await app.register(settingsChatFlagsRoutes);
