@@ -19,6 +19,7 @@ const GROUPS: NavGroup[] = [
     label: 'Управление',
     items: [
       { href: '/players', label: 'Игроки' },
+      { href: '/chat', label: 'Чат' },
       { href: '/banned-names', label: 'Забаненные ники' },
       { href: '/issues', label: 'Тикеты' },
       { href: '/settings/groups', label: 'Группы', permission: 'role:view' },
