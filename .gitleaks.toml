@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic fixtures live in test files and e2e helpers (fake tokens/keys/ids used to exercise parsing and redaction); they are not real secrets."
+paths = [
+  '''.*\.test\.ts$''',
+  '''.*\.spec\.ts$''',
+  '''(^|/)test/''',
+  '''(^|/)e2e/''',
+  '''\.env\.example$''',
+]
