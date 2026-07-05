@@ -126,7 +126,11 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
   }
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4">
+    // biome-ignore lint/correctness/useUniqueElementIds: stable anchor for /players/{id}#notes deep-links
+    <section
+      id="notes"
+      className="scroll-mt-6 rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4"
+    >
       <div className="flex items-center justify-between">
         <h2 className="text-xs uppercase tracking-widest text-neutral-400">
           Заметки

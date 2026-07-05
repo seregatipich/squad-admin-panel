@@ -54,6 +54,7 @@ import marksRoutes from './routes/marks.js';
 import matchesRoutes from './routes/matches.js';
 import meTokensRoutes from './routes/me-tokens.js';
 import messageTemplatesRoutes from './routes/message-templates.js';
+import notesFeedRoutes from './routes/notes-feed.js';
 import permissionsRoutes from './routes/permissions.js';
 import playerMatchesRoutes from './routes/player-matches.js';
 import playerNotesRoutes from './routes/player-notes.js';
@@ -173,6 +174,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(chatRoutes);
   await app.register(votesRoutes);
   await app.register(playerNotesRoutes);
+  await app.register(notesFeedRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(banSourcesRoutes);

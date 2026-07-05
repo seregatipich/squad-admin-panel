@@ -1,5 +1,14 @@
 # `api` — changelog
 
+## 2026-07-05 — PNOTE-2 global notes feed
+
+### Added
+
+- `GET /api/v1/notes` — cross-player audit feed of every admin note, newest-first, keyset-paginated (`cursor`, `limit`≤100). Gated by `panel_access` (auth required, no audit rows). Filters combine: `q` (body ILIKE, trigram-indexed), `player` (target nickname ILIKE across the current canonical name **and** `player_name_history`), `author` (author player id), `dateFrom`/`dateTo` (created-at range). `includeDeleted=true` is honored **only** for `can_edit_roles` viewers; for everyone else soft-deleted notes are filtered out in SQL (never serialized). Response carries `can_view_deleted` so the UI can gate the toggle. Each item exposes `target`, `author` (with `role_color`/`role_name`), `edited`, `deleted`, and `deleted_by`.
+- `GET /api/v1/notes/authors` — distinct note authors that hold a role, for the feed's author-filter select.
+- `GET /api/v1/notes/export?format=csv` — CSV of the current filtered selection (same filter + deleted-visibility rules as the list), `text/csv` attachment capped at 10k rows.
+- Indexes on `player_notes`: `player_notes_created_at_idx (created_at DESC, id DESC)` for the global keyset scan, `player_notes_author_id_idx`, and a `gin_trgm_ops` index `player_notes_body_trgm_idx` for body search. No new columns — the soft-delete `deleted_at`/`deleted_by` columns from PNOTE-1 are reused.
+
 ## 2026-07-05 — AN-1 dashboard analytics
 
 ### Added

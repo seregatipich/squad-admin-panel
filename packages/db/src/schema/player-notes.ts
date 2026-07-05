@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { index, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { players } from './players.js';
 
@@ -22,6 +23,9 @@ export const playerNotes = pgTable(
       table.playerId,
       table.createdAt,
     ),
+    createdAtIdx: index('player_notes_created_at_idx').on(table.createdAt.desc(), table.id.desc()),
+    authorIdx: index('player_notes_author_id_idx').on(table.authorId),
+    bodyTrgmIdx: index('player_notes_body_trgm_idx').using('gin', sql`${table.body} gin_trgm_ops`),
   }),
 );
 
