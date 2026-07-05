@@ -1,7 +1,7 @@
 import { type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
 import { v7 as uuidv7 } from 'uuid';
-import { MatchAssembler, type MatchCommand, parseNewGame, parseRoundTickets } from './match.js';
 import { type ParsedChat, parseChatFromLogLine } from './chat.js';
+import { MatchAssembler, type MatchCommand, parseNewGame, parseRoundTickets } from './match.js';
 import {
   BEACON_BIND,
   detectSquadFatal,
@@ -15,6 +15,13 @@ import {
   SERVER_EXIT_CODE,
 } from './patterns.js';
 import { type ParsedReport, parseReportFromLogLine } from './report.js';
+import {
+  parseVoteBallot,
+  parseVoteEnd,
+  parseVoteStart,
+  VoteAssembler,
+  type VoteRecordCommand,
+} from './vote.js';
 
 export interface ParseErrorReport {
   lineSample: string;
@@ -34,6 +41,7 @@ export interface IngestorCallbacks {
   onParseError?: (report: ParseErrorReport) => void;
   onSquadFatal?: (report: SquadFatalReport) => void;
   onChat?: (chat: ParsedChat) => void;
+  onVote?: (command: VoteRecordCommand) => void;
 }
 
 /** One instance per Squad server under observation. */
@@ -48,6 +56,8 @@ export class LogIngestor {
   private readonly onMatch?: (command: MatchCommand) => void;
   private readonly matchAssembler: MatchAssembler;
   private readonly onChat?: (chat: ParsedChat) => void;
+  private readonly onVote?: (command: VoteRecordCommand) => void;
+  private readonly voteAssembler: VoteAssembler;
 
   constructor(params: {
     serverId: string;
@@ -58,6 +68,7 @@ export class LogIngestor {
     onReport?: (report: ParsedReport) => void;
     onMatch?: (command: MatchCommand) => void;
     onChat?: (chat: ParsedChat) => void;
+    onVote?: (command: VoteRecordCommand) => void;
   }) {
     this.serverId = params.serverId;
     this.beaconPort = params.beaconPort;
@@ -68,6 +79,8 @@ export class LogIngestor {
     this.onMatch = params.onMatch;
     this.matchAssembler = new MatchAssembler(params.serverId);
     this.onChat = params.onChat;
+    this.onVote = params.onVote;
+    this.voteAssembler = new VoteAssembler(params.serverId);
   }
 
   ingest(line: string): EventEnvelope[] {
@@ -97,6 +110,7 @@ export class LogIngestor {
       const chat = parseChatFromLogLine(parsed);
       if (chat) this.onChat(chat);
     }
+    if (this.onVote) this.handleVoteLine(parsed);
     if (this.onReport) {
       const report = parseReportFromLogLine(parsed);
       if (report) {
@@ -121,7 +135,10 @@ export class LogIngestor {
 
     if (category === 'LogWorld') {
       const newGame = parseNewGame(message);
-      if (newGame) this.feedMatch(this.matchAssembler.onNewGame(newGame.layer, ts));
+      if (newGame) {
+        this.feedMatch(this.matchAssembler.onNewGame(newGame.layer, ts));
+        this.feedVote(this.voteAssembler.onServerDown(ts));
+      }
       return events;
     }
 
@@ -200,6 +217,7 @@ export class LogIngestor {
         if (type === 'server.crashed') {
           this.feedMatch(this.matchAssembler.onServerDown('server_crashed', ts));
         }
+        this.feedVote(this.voteAssembler.onServerDown(ts));
       }
       return events;
     }
@@ -229,6 +247,27 @@ export class LogIngestor {
   private feedMatch(commands: MatchCommand[]): void {
     if (!this.onMatch) return;
     for (const command of commands) this.onMatch(command);
+  }
+
+  private handleVoteLine(parsed: ReturnType<typeof parseLine>): void {
+    if (!parsed) return;
+    const start = parseVoteStart(parsed);
+    if (start) {
+      this.feedVote(this.voteAssembler.onVoteStart(start));
+      return;
+    }
+    const ballot = parseVoteBallot(parsed);
+    if (ballot) {
+      this.feedVote(this.voteAssembler.onVoteBallot(ballot));
+      return;
+    }
+    const end = parseVoteEnd(parsed);
+    if (end) this.feedVote(this.voteAssembler.onVoteEnd(end));
+  }
+
+  private feedVote(commands: VoteRecordCommand[]): void {
+    if (!this.onVote) return;
+    for (const command of commands) this.onVote(command);
   }
 
   private build(

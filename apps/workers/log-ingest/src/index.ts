@@ -15,6 +15,7 @@ import { LogIngestor } from './parser/ingest.js';
 import { publish } from './publish.js';
 import { handleReport } from './report/store.js';
 import { tailContainerLogs } from './tail.js';
+import { handleVote } from './vote/store.js';
 
 const requiredEnv = (name: string): string => {
   const v = process.env[name];
@@ -56,6 +57,7 @@ async function main() {
   const manager = new TailManager((serverId, beaconPort) => {
     log.info({ serverId, beaconPort }, 'attaching log tail');
     let matchChain: Promise<void> = Promise.resolve();
+    let voteChain: Promise<void> = Promise.resolve();
     const ingestor = new LogIngestor({
       serverId,
       beaconPort,
@@ -111,6 +113,12 @@ async function main() {
         handleChat(db, redis, { serverId, chat }, chatFlagDetector).catch((err) =>
           log.error({ err: (err as Error).message }, 'chat handling failed'),
         );
+      },
+      onVote: (command) => {
+        voteChain = voteChain
+          .then(() => handleVote(db, redis, command))
+          .then(() => undefined)
+          .catch((err) => log.error({ err: (err as Error).message }, 'vote handling failed'));
       },
     });
     const abort = tailContainerLogs({
