@@ -33,6 +33,7 @@ import banSourcesRoutes from '../../src/routes/ban-sources.js';
 import bannedNamesRoutes from '../../src/routes/banned-names.js';
 import chatRoutes from '../../src/routes/chat.js';
 import clansRoutes from '../../src/routes/clans.js';
+import combatEventsRoutes from '../../src/routes/combat-events.js';
 import depotRoutes from '../../src/routes/depot.js';
 import economyRoutes from '../../src/routes/economy.js';
 import eventsRoutes from '../../src/routes/events.js';
@@ -513,6 +514,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(settingsChatFlagsRoutes);
   await app.register(clansRoutes);
   await app.register(chatRoutes);
+  await app.register(combatEventsRoutes);
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);
   await app.register(eventsRoutes);
