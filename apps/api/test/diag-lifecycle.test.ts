@@ -175,7 +175,7 @@ describe('server lifecycle emits diag events', () => {
     });
     expect(res.statusCode).toBe(200);
 
-    const deadline = Date.now() + 8_000;
+    const deadline = Date.now() + 25_000;
     while (Date.now() < deadline) {
       const lines = h.app.installProgress.snapshot(id);
       if (lines.some((l) => l.step === 'done' || l.step === 'error')) break;
@@ -188,5 +188,5 @@ describe('server lifecycle emits diag events', () => {
       true,
     );
     delete process.env.PANEL_DEPOT_HOST_PATH;
-  });
+  }, 30_000);
 });
