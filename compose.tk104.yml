@@ -12,6 +12,11 @@ services:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: admin
+    # worker-rcon runs with network_mode: host and reaches postgres/redis via
+    # 127.0.0.1 from the host namespace, not the compose network — must be
+    # published to the host loopback for that worker to connect.
+    ports:
+      - '127.0.0.1:5432:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -25,6 +30,8 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     command: ['redis-server', '--save', '60', '1', '--appendonly', 'no']
+    ports:
+      - '127.0.0.1:6379:6379'
     volumes:
       - redisdata:/data
     healthcheck:
@@ -68,6 +75,22 @@ services:
       STEAM_WEB_API_KEY: ${STEAM_WEB_API_KEY:-}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-21600}
       SESSION_TOUCH_THROTTLE_SECONDS: ${SESSION_TOUCH_THROTTLE_SECONDS:-60}
+      BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
+      # Must match the bind-mount source used by install-host-bridge.sh AND the
+      # Environment= line in /etc/systemd/system/panel-host-bridge.service.d/install.conf.
+      PANEL_DEPOT_HOST_PATH: ${DATA_DIR}/depot
+      # Squad servers run with --network host on 127.0.0.1:{rcon_port} of the
+      # host; from inside this container 127.0.0.1 is the api container itself.
+      RCON_HOST_DEFAULT: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
+    # this MUST be `user: "0:<panel-gid>"`, never `group_add: [<panel-gid>]`.
+    # See docs/components/bridge/troubleshooting.md.
+    user: "0:${PANEL_GID:-987}"
+    volumes:
+      - /run/panel-host-bridge:/run/panel-host-bridge
+      - /run/squad-panel/rnsquadjs:/run/squad-panel/rnsquadjs:rw
     depends_on:
       postgres:
         condition: service_healthy
@@ -81,6 +104,168 @@ services:
       timeout: 3s
       retries: 3
       start_period: 30s
+    logging: *default-logging
+
+  worker-log-ingest:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      args:
+        WORKER: log-ingest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
+    user: "0:${PANEL_GID:-987}"
+    volumes:
+      - /run/panel-host-bridge:/run/panel-host-bridge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  worker-config-sync:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      args:
+        WORKER: config-sync
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      PANEL_BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
+    user: "0:${PANEL_GID:-987}"
+    volumes:
+      - /run/panel-host-bridge:/run/panel-host-bridge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  worker-rcon:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      args:
+        WORKER: rcon
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@127.0.0.1:5432/admin
+      REDIS_URL: redis://127.0.0.1:6379
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      RCON_HOST_DEFAULT: 127.0.0.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  worker-audit-archiver:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: audit-archiver } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  worker-event-partition:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: event-partition } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  worker-presence-daily:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: presence-daily } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  worker-leaderboard-aggregator:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: leaderboard-aggregator } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  worker-diag-flush:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: diag-flush } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      DIAG_FLUSH_BATCH_SIZE: ${DIAG_FLUSH_BATCH_SIZE:-100}
+      DIAG_JOURNALD_FORWARD: ${DIAG_JOURNALD_FORWARD:-true}
+      DIAG_JOURNALD_UNIT: ${DIAG_JOURNALD_UNIT:-panel-host-bridge}
+      DIAG_JOURNALD_SINCE: ${DIAG_JOURNALD_SINCE:-30s ago}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  worker-metrics-sampler:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      args:
+        WORKER: metrics-sampler
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://redis:6379
+      BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    user: "0:${PANEL_GID:-987}"
+    volumes:
+      - /run/panel-host-bridge:/run/panel-host-bridge
+    depends_on:
+      redis:
+        condition: service_healthy
     logging: *default-logging
 
   web:
@@ -118,6 +303,42 @@ services:
       web:
         condition: service_started
     logging: *default-logging
+
+  # The bridge launches one squad-server container per panel server (named
+  # `squad-{uuid}`), and a transient depot-init container for steamcmd
+  # `app_update 403240`. Neither runs as a long-lived compose service, but
+  # both images MUST exist locally with these exact tags. Declared under the
+  # `images` profile so `docker compose --profile images build` builds and
+  # tags them in one shot, while `docker compose up` skips them.
+  squad-server-image:
+    build:
+      context: ./docker
+      dockerfile: squad-server.Dockerfile
+    image: squad-server:latest
+    profiles: ['images']
+    command: ['/bin/true']
+    restart: 'no'
+
+  depot-init-image:
+    build:
+      context: ./docker
+      dockerfile: depot-init.Dockerfile
+    image: squad-panel/depot-init:latest
+    profiles: ['images']
+    command: ['/bin/true']
+    restart: 'no'
+
+  # The bridge launches one rnsquadjs sidecar per cutover server with
+  # `--pull never`, so the tag MUST already exist locally. Context is the repo
+  # root (not ./docker) because the Dockerfile COPYs `docker/rnsquadjs/...`.
+  rnsquadjs-image:
+    build:
+      context: .
+      dockerfile: docker/rnsquadjs.Dockerfile
+    image: squad-panel/rnsquadjs:latest
+    profiles: ['images']
+    command: ['/bin/true']
+    restart: 'no'
 
 volumes:
   pgdata:

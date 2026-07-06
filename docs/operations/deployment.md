@@ -12,6 +12,17 @@ Single-host deployment model. The entire panel stack runs via `docker compose up
 
 The `scripts/install-host-bridge.sh` script handles all one-time host setup. Run it before starting the stack.
 
+## tk104 production deployment
+
+`compose.tk104.yml` (deployed via `scripts/deploy-tk104.sh`, env file `.env.tk104`) is a
+standalone compose file for the tk104 host — it does not extend `docker-compose.yml`. It
+mirrors the same service topology (api/web/caddy + all workers + bridge socket mount on
+`api`/workers that need it), adapted to tk104's Caddy DNS-01 Caddyfile and named-volume
+storage instead of `${DATA_DIR}`-bind-mounted volumes for postgres/redis/caddy. Keep the
+two files in sync by hand when the bridge-facing env/volumes on a worker change in
+`docker-compose.yml`. `.env.tk104` additionally needs `PANEL_GID` and `DATA_DIR` set to
+match the host's `panel` group and the data tree created by `install-host-bridge.sh`.
+
 ## Container topology
 
 | Service | Image | Notes |
