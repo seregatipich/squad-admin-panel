@@ -8,6 +8,7 @@
 | `PANEL_PUBLIC_URL` | yes | — | all | Full public URL of the panel (e.g. `https://panel.example`). Used as `openid.return_to` / `openid.realm` base for Steam OpenID. | no |
 | `TLS_ISSUER` | yes | `internal` | all | `internal` (Caddy self-signed for dev) or `acme` (Let's Encrypt). | no |
 | `ACME_EMAIL` | only if `TLS_ISSUER=acme` | `admin@example.com` | all | Contact email used by Let's Encrypt. | no |
+| `DUCKDNS_TOKEN` | only for tk104 | — | caddy (tk104) | DuckDNS API token for DNS-01 TLS (`compose.tk104.yml` / `docker/Caddyfile.tk104`) when port 80 is not forwarded. | yes |
 | `POSTGRES_PASSWORD` | yes | — | all | Password for the `admin` Postgres role. Generate with `openssl rand -base64 32`. | yes |
 | `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64 AES-256-GCM key. Decrypts `server_credentials.*_encrypted`. **Losing it is unrecoverable.** | yes |
 | `SESSION_SECRET` | yes | — | all | Cookie-signing secret. Rotation invalidates existing sessions. | yes |
