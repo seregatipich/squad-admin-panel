@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Enforce master-only-from-dev
         env:
           EVENT: ${{ github.event_name }}
@@ -25,6 +27,16 @@ jobs:
             exit 1
           fi
           echo "branch model OK ($EVENT ${BASE:+base=$BASE }${HEAD:+head=$HEAD})"
+      - name: Audit master ancestry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: |
+          git fetch --no-tags origin dev
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/dev; then
+            echo "OK: master tip is contained in dev"
+          else
+            echo "::error::master received commit $GITHUB_SHA that is NOT reachable from dev — the branch model was bypassed (see AGENTS.md). Reconcile by merging origin/master into dev via a work branch, and investigate how the push happened."
+            exit 1
+          fi
       - name: Run git-guard test suite
         run: bash scripts/test-git-guard.sh
 
