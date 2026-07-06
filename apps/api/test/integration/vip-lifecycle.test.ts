@@ -143,6 +143,42 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(await syncEvents()).toHaveLength(1);
   });
 
+  it('assigns a signed VIP purchase by steam_id64 when producer does not know panel player_id', async () => {
+    const event = {
+      event_id: 'vip-purchase-by-steam-001',
+      event_type: 'vip.purchased',
+      steam_id64: '76561198000990001',
+      role_id: roleId,
+      tier: 'vip2',
+      purchase_id: 'purchase-by-steam-001',
+      expires_at: '2030-01-02T03:04:05.000Z',
+    };
+
+    const res = await postLifecycle(event);
+
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({
+      ok: true,
+      duplicate: false,
+      action: 'assigned',
+      enqueued: 1,
+    });
+    const [assigned] = await h.db
+      .select({
+        roleId: players.roleId,
+        roleExpiresAt: players.roleExpiresAt,
+        roleComment: players.roleComment,
+      })
+      .from(players)
+      .where(eq(players.id, playerId));
+    expect(assigned?.roleId).toBe(roleId);
+    expect(assigned?.roleExpiresAt?.toISOString()).toBe('2030-01-02T03:04:05.000Z');
+    expect(assigned?.roleComment).toContain('purchase-by-steam-001');
+    expect(await latestVipAudit()).toMatchObject({
+      targetId: playerId,
+    });
+  });
+
   it('revokes only the matching VIP role on refund and is idempotent on retry', async () => {
     const expiresAt = new Date('2030-05-06T07:08:09.000Z');
     await h.db
