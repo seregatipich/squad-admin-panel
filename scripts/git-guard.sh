@@ -439,8 +439,9 @@ doctor() {
   echo "git-guard doctor"
   local hooks_path
   hooks_path=$(git config core.hooksPath 2>/dev/null || true)
-  if [ -n "$hooks_path" ] && [ "$hooks_path" != ".git/hooks" ]; then
-    echo "  WARN core.hooksPath=$hooks_path shadows .git/hooks — lefthook hooks (pre-commit/pre-push guard) will NOT run in this clone"
+  if [ -n "$hooks_path" ] && [ "$hooks_path" != ".git/hooks" ] &&
+    ! grep -qs lefthook "$hooks_path/pre-commit" 2>/dev/null; then
+    echo "  WARN core.hooksPath=$hooks_path shadows .git/hooks and does not delegate to lefthook — the pre-commit/pre-push guard will NOT run in this clone"
     ok=0
   fi
   if git rev-parse -q --verify main >/dev/null 2>&1; then

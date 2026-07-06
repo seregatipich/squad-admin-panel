@@ -1,6 +1,8 @@
 pre-commit:
   parallel: true
   commands:
+    branch-guard:
+      run: bash scripts/git-guard.sh check-commit
     biome-check:
       glob: "*.{ts,tsx,js,jsx,json,css}"
       run: pnpm exec biome check --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
@@ -14,6 +16,10 @@ pre-commit:
 pre-push:
   parallel: false
   commands:
+    branch-guard:
+      priority: 1
+      use_stdin: true
+      run: bash scripts/git-guard.sh check-push origin origin
     typecheck:
       run: pnpm turbo run typecheck
     test:
