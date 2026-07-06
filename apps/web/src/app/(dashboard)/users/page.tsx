@@ -3,6 +3,7 @@ import type { RoleColor } from '@squad/shared-config/role-colors';
 import Link from 'next/link';
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
+import { buildRoleAssignPayload, formatRoleExpiryLabel } from '@/lib/role-expiry';
 
 interface UserRow {
   id: string;
@@ -10,6 +11,8 @@ interface UserRow {
   canonical_name: string;
   last_seen_at: string;
   role: { id: string; name: string; color: RoleColor; is_system_role: boolean };
+  role_expires_at: string | null;
+  role_comment: string | null;
 }
 interface RoleOption {
   id: string;
@@ -133,6 +136,7 @@ export default function UsersPage() {
               <th className="p-2 text-left">Игрок</th>
               <th className="p-2 text-left">SteamID64</th>
               <th className="p-2 text-left">Роль</th>
+              <th className="p-2 text-left">Срок</th>
               <th className="p-2 text-left">Last seen</th>
               {canManage ? <th className="w-32 p-2 text-right">Действие</th> : null}
             </tr>
@@ -140,7 +144,7 @@ export default function UsersPage() {
           <tbody>
             {users.length === 0 ? (
               <tr>
-                <td colSpan={canManage ? 5 : 4} className="p-3 text-neutral-500">
+                <td colSpan={canManage ? 6 : 5} className="p-3 text-neutral-500">
                   Нет пользователей по фильтру
                 </td>
               </tr>
@@ -158,6 +162,17 @@ export default function UsersPage() {
                     <RoleColorDot color={u.role.color} />
                     {u.role.name}
                   </span>
+                </td>
+                <td className="p-2 text-neutral-300">
+                  <div>{formatRoleExpiryLabel(u.role_expires_at)}</div>
+                  {u.role_comment ? (
+                    <div
+                      className="mt-1 max-w-56 truncate text-xs text-neutral-500"
+                      title={u.role_comment}
+                    >
+                      {u.role_comment}
+                    </div>
+                  ) : null}
                 </td>
                 <td className="p-2 text-neutral-500">
                   {new Date(u.last_seen_at).toLocaleString()}
@@ -198,11 +213,15 @@ function AssignModal({ onClose }: { onClose: () => void }) {
   const uid = useId();
   const playerInputId = `${uid}-player`;
   const roleSelectId = `${uid}-role`;
+  const expiresInputId = `${uid}-expires`;
+  const commentInputId = `${uid}-comment`;
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<PlayerHit[]>([]);
   const [picked, setPicked] = useState<PlayerHit | null>(null);
   const [roles, setRoles] = useState<RoleOption[] | null>(null);
   const [roleId, setRoleId] = useState('');
+  const [expiresAt, setExpiresAt] = useState('');
+  const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -245,7 +264,7 @@ function AssignModal({ onClose }: { onClose: () => void }) {
         method: 'PUT',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ role_id: roleId }),
+        body: JSON.stringify(buildRoleAssignPayload(roleId, expiresAt, comment)),
       });
       if (!r.ok) {
         const e = (await r.json().catch(() => ({}))) as { error?: string };
@@ -261,7 +280,7 @@ function AssignModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-md space-y-4 rounded border border-neutral-800 bg-neutral-950 p-4">
+      <div className="max-h-[90vh] w-full max-w-md space-y-4 overflow-auto rounded border border-neutral-800 bg-neutral-950 p-4">
         <h2 className="text-lg font-semibold">Назначить роль</h2>
         {err ? (
           <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
@@ -320,6 +339,31 @@ function AssignModal({ onClose }: { onClose: () => void }) {
               </option>
             ))}
           </select>
+        </div>
+        <div>
+          <label htmlFor={expiresInputId} className="text-xs uppercase text-neutral-400">
+            Срок действия
+          </label>
+          <input
+            id={expiresInputId}
+            type="datetime-local"
+            value={expiresAt}
+            onChange={(e) => setExpiresAt(e.target.value)}
+            className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-2 text-sm"
+          />
+        </div>
+        <div>
+          <label htmlFor={commentInputId} className="text-xs uppercase text-neutral-400">
+            Комментарий
+          </label>
+          <textarea
+            id={commentInputId}
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            maxLength={512}
+            rows={3}
+            className="mt-1 w-full resize-none rounded border border-neutral-800 bg-neutral-950 px-2 py-2 text-sm"
+          />
         </div>
         <div className="flex justify-end gap-2">
           <button

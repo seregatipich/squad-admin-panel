@@ -1,6 +1,6 @@
 import * as schema from '@squad/db/schema';
 import { players, rolePermissions, roles } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, sql as drizzleSql, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
@@ -77,8 +77,9 @@ beforeEach(async () => {
       })
       .onConflictDoUpdate({ target: players.steamId64, set: { roleId: null } })
       .returning({ id: players.id });
-    playerIds.set(sid, row!.id);
-    invalidatePermissionCache(row!.id);
+    if (!row) throw new Error('player fixture missing');
+    playerIds.set(sid, row.id);
+    invalidatePermissionCache(row.id);
   }
 });
 
@@ -241,7 +242,9 @@ describeIfDb('GET /api/v1/players — HTTP integration', () => {
   });
 
   afterEach(async () => {
-    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
+    if (h.seed.ownerSteamId64 && h.seed.ownerPlayerId) {
+      invalidatePermissionCache(h.seed.ownerPlayerId);
+    }
     await h.cleanup();
   });
 
@@ -302,7 +305,8 @@ describeIfDb('GET /api/v1/players — HTTP integration', () => {
       .update(players)
       .set({ roleId: null })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId!);
+    if (!h.seed.ownerPlayerId) throw new Error('owner player missing');
+    invalidatePermissionCache(h.seed.ownerPlayerId);
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/players', headers: { cookie } });
     expect(res.statusCode).toBe(403);
@@ -321,7 +325,9 @@ describeIfDb('PUT /api/v1/players/:playerId/role — HTTP integration', () => {
   });
 
   afterEach(async () => {
-    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
+    if (h.seed.ownerSteamId64 && h.seed.ownerPlayerId) {
+      invalidatePermissionCache(h.seed.ownerPlayerId);
+    }
     await h.cleanup();
   });
 
@@ -344,15 +350,71 @@ describeIfDb('PUT /api/v1/players/:playerId/role — HTTP integration', () => {
         canonicalNameNormalized: 'targetplayer',
       })
       .returning({ id: players.id });
+    if (!targetRow) throw new Error('target player missing');
 
     const res = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/players/${targetRow!.id}/role`,
+      url: `/api/v1/players/${targetRow.id}/role`,
       headers: { cookie },
       payload: { role_id: viewerRoleId },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true });
+  });
+
+  it('persists role expiry/comment and exposes them on GET role', async () => {
+    const cookie = await loginAsOwner(h);
+    const viewerRoleRows = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.name, 'Viewer'))
+      .limit(1);
+    const viewerRoleId = viewerRoleRows[0]?.id;
+    if (!viewerRoleId) throw new Error('viewer role missing');
+
+    const target = testSteamId(810004);
+    const [targetRow] = await h.db
+      .insert(players)
+      .values({
+        steamId64: target,
+        canonicalName: 'ExpiringVip',
+        canonicalNameNormalized: 'expiringvip',
+      })
+      .returning({ id: players.id });
+    if (!targetRow) throw new Error('target player missing');
+    const playerId = targetRow.id;
+    const expiresAt = '2026-08-01T12:00:00.000Z';
+    const comment = 'VIP до конца июльской кампании';
+
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/players/${playerId}/role`,
+      headers: { cookie },
+      payload: { role_id: viewerRoleId, expires_at: expiresAt, comment },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const persisted = (await h.db.execute(drizzleSql`
+      SELECT role_expires_at::text AS role_expires_at, role_comment
+      FROM players
+      WHERE id = ${playerId}::uuid
+    `)) as unknown as Array<{ role_expires_at: string | null; role_comment: string | null }>;
+    expect(new Date(persisted[0]?.role_expires_at ?? 0).toISOString()).toBe(expiresAt);
+    expect(persisted[0]?.role_comment).toBe(comment);
+
+    const getRes = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${playerId}/role`,
+      headers: { cookie },
+    });
+    expect(getRes.statusCode).toBe(200);
+    expect(getRes.json()).toMatchObject({
+      role: {
+        id: viewerRoleId,
+        role_expires_at: expiresAt,
+        role_comment: comment,
+      },
+    });
   });
 
   it('returns 404 when role_id does not exist', async () => {
@@ -366,9 +428,10 @@ describeIfDb('PUT /api/v1/players/:playerId/role — HTTP integration', () => {
         canonicalNameNormalized: 'norole',
       })
       .returning({ id: players.id });
+    if (!targetRow) throw new Error('target player missing');
     const res = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/players/${targetRow!.id}/role`,
+      url: `/api/v1/players/${targetRow.id}/role`,
       headers: { cookie },
       payload: { role_id: '019e0000-0000-7000-8000-000000000000' },
     });
@@ -384,9 +447,10 @@ describeIfDb('PUT /api/v1/players/:playerId/role — HTTP integration', () => {
       .limit(1);
     const ownerRoleId = ownerRoleRows[0]?.id;
     if (!ownerRoleId) throw new Error('owner role missing');
+    if (!h.seed.ownerPlayerId) throw new Error('owner player missing');
     const res = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/players/${h.seed.ownerPlayerId!}/role`,
+      url: `/api/v1/players/${h.seed.ownerPlayerId}/role`,
       headers: { cookie },
       payload: { role_id: null },
     });

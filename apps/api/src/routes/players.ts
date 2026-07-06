@@ -15,7 +15,11 @@ import { invalidatePermissionCache } from '../lib/rbac.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
-const roleAssignBody = z.object({ role_id: z.string().uuid().nullable() });
+const roleAssignBody = z.object({
+  role_id: z.string().uuid().nullable(),
+  expires_at: z.string().datetime({ offset: true }).nullable().optional(),
+  comment: z.string().trim().max(512).nullable().optional(),
+});
 const listQuery = z.object({ q: z.string().min(1).max(64).optional() });
 const searchQuery = z.object({ q: z.string().trim().min(3).max(64) });
 
@@ -241,10 +245,14 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         role_name: string | null;
         role_color: string | null;
         role_is_system: boolean | null;
+        role_expires_at: string | null;
+        role_comment: string | null;
       };
       const rows = await app.db.execute<RoleRow>(sql`
         SELECT r.id AS role_id, r.name AS role_name, r.color AS role_color,
-               r.is_system_role AS role_is_system
+               r.is_system_role AS role_is_system,
+               p.role_expires_at::text AS role_expires_at,
+               p.role_comment AS role_comment
         FROM players p LEFT JOIN roles r ON r.id = p.role_id
         WHERE p.id = ${id}
       `);
@@ -256,6 +264,8 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
           name: r.role_name,
           color: r.role_color,
           is_system_role: r.role_is_system,
+          role_expires_at: r.role_expires_at ? new Date(r.role_expires_at).toISOString() : null,
+          role_comment: r.role_comment,
         },
       };
     },
@@ -273,6 +283,14 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       const playerId = req.params.playerId;
       const newRoleId = req.body.role_id;
+      const roleExpiresAt = req.body.expires_at ? new Date(req.body.expires_at) : null;
+      const comment = req.body.comment?.trim() ?? null;
+      const roleComment = comment === '' ? null : comment;
+
+      if (roleExpiresAt && roleExpiresAt <= new Date()) {
+        reply.code(400);
+        return { error: 'role_expiry_must_be_future' };
+      }
 
       let newRolePanelAccess = false;
       if (newRoleId !== null) {
@@ -326,7 +344,14 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       }
 
       await app.db.transaction(async (tx) => {
-        await tx.update(players).set({ roleId: newRoleId }).where(eq(players.id, playerId));
+        await tx
+          .update(players)
+          .set({
+            roleId: newRoleId,
+            roleExpiresAt: newRoleId === null ? null : roleExpiresAt,
+            roleComment: newRoleId === null ? null : roleComment,
+          })
+          .where(eq(players.id, playerId));
         await publishAdminsCfgSyncForAllServers(tx, app.redis, {
           reason: newRoleId === null ? 'player.role.unassign' : 'player.role.assign',
           actor_player_id: req.user?.playerId ?? null,
@@ -381,7 +406,10 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         }
       }
       await app.db.transaction(async (tx) => {
-        await tx.update(players).set({ roleId: null }).where(eq(players.id, playerId));
+        await tx
+          .update(players)
+          .set({ roleId: null, roleExpiresAt: null, roleComment: null })
+          .where(eq(players.id, playerId));
         await publishAdminsCfgSyncForAllServers(tx, app.redis, {
           reason: 'player.role.unassign',
           actor_player_id: req.user?.playerId ?? null,

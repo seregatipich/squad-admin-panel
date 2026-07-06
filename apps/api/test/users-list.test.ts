@@ -1,6 +1,6 @@
 import * as schema from '@squad/db/schema';
 import { players, roles } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, sql as drizzleSql, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -123,7 +123,9 @@ describeIfDb('GET /api/v1/users — HTTP integration', () => {
   });
 
   afterEach(async () => {
-    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
+    if (h.seed.ownerSteamId64 && h.seed.ownerPlayerId) {
+      invalidatePermissionCache(h.seed.ownerPlayerId);
+    }
     await h.cleanup();
   });
 
@@ -146,13 +148,41 @@ describeIfDb('GET /api/v1/users — HTTP integration', () => {
     expect(owner?.role.name).toBe('Owner');
   });
 
+  it('returns role expiry/comment metadata for active role assignments', async () => {
+    const cookie = await loginAsOwner(h);
+    const ownerPlayerId = h.seed.ownerPlayerId;
+    if (!ownerPlayerId) throw new Error('owner player missing');
+    const expiresAt = '2026-08-02T18:30:00.000Z';
+    const comment = 'Срочная VIP-роль по заявке штаба';
+    await h.db.execute(drizzleSql`
+      UPDATE players
+      SET role_expires_at = ${expiresAt}::timestamptz,
+          role_comment = ${comment}
+      WHERE id = ${ownerPlayerId}::uuid
+    `);
+
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/users', headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{
+      steam_id64: string;
+      role_expires_at: string | null;
+      role_comment: string | null;
+    }>;
+    const owner = body.find((u) => u.steam_id64 === String(OWNER_STEAM));
+    expect(owner).toMatchObject({
+      role_expires_at: expiresAt,
+      role_comment: comment,
+    });
+  });
+
   it('returns 403 when player has no role (no permissions)', async () => {
     if (!h.seed.ownerSteamId64) throw new Error('owner missing');
     await h.db
       .update(players)
       .set({ roleId: null })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId!);
+    if (!h.seed.ownerPlayerId) throw new Error('owner player missing');
+    invalidatePermissionCache(h.seed.ownerPlayerId);
     const cookie = await loginAsOwner(h);
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/users', headers: { cookie } });
     expect(res.statusCode).toBe(403);
