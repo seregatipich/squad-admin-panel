@@ -1,237 +1,244 @@
 {
-	"version": "7",
-	"dialect": "postgresql",
-	"entries": [
-		{
-			"idx": 0,
-			"version": "7",
-			"when": 1745107200000,
-			"tag": "0000_init",
-			"breakpoints": true
-		},
-		{
-			"idx": 1,
-			"version": "7",
-			"when": 1745107260000,
-			"tag": "0001_seed_system_roles",
-			"breakpoints": true
-		},
-		{
-			"idx": 2,
-			"version": "7",
-			"when": 1745429700000,
-			"tag": "0002_server_runtime",
-			"breakpoints": true
-		},
-		{
-			"idx": 3,
-			"version": "7",
-			"when": 1745445600000,
-			"tag": "0003_config_versions",
-			"breakpoints": true
-		},
-		{
-			"idx": 4,
-			"version": "7",
-			"when": 1745532000000,
-			"tag": "0004_config_versions_cascade",
-			"breakpoints": true
-		},
-		{
-			"idx": 5,
-			"version": "7",
-			"when": 1745618400000,
-			"tag": "0005_backfill_config_role_perms",
-			"breakpoints": true
-		},
-		{
-			"idx": 6,
-			"version": "7",
-			"when": 1745704800000,
-			"tag": "0006_rcon_host_bridge_network",
-			"breakpoints": true
-		},
-		{
-			"idx": 7,
-			"version": "7",
-			"when": 1745791200000,
-			"tag": "0007_rcon_host_null_default",
-			"breakpoints": true
-		},
-		{
-			"idx": 8,
-			"version": "7",
-			"when": 1745877600000,
-			"tag": "0008_steam_only_auth",
-			"breakpoints": true
-		},
-		{
-			"idx": 9,
-			"version": "7",
-			"when": 1745964000000,
-			"tag": "0009_panel_rbac",
-			"breakpoints": true
-		},
-		{
-			"idx": 10,
-			"version": "7",
-			"when": 1745968800000,
-			"tag": "0010_drop_servers_org_id",
-			"breakpoints": true
-		},
-		{
-			"idx": 11,
-			"version": "7",
-			"when": 1745974800000,
-			"tag": "0011_servers_is_canary",
-			"breakpoints": true
-		},
-		{
-			"idx": 12,
-			"version": "7",
-			"when": 1745978400000,
-			"tag": "0012_host_manage_permission",
-			"breakpoints": true
-		},
-		{
-			"idx": 13,
-			"version": "7",
-			"when": 1745982000000,
-			"tag": "0013_servers_soft_delete",
-			"breakpoints": true
-		},
-		{
-			"idx": 14,
-			"version": "7",
-			"when": 1746000000000,
-			"tag": "0014_role_access_flags_and_squad_perms",
-			"breakpoints": true
-		},
-		{
-			"idx": 15,
-			"version": "7",
-			"when": 1746003600000,
-			"tag": "0015_reseed_roles_squad",
-			"breakpoints": true
-		},
-		{
-			"idx": 16,
-			"version": "7",
-			"when": 1746007200000,
-			"tag": "0016_drop_legacy_viewer",
-			"breakpoints": true
-		},
-		{
-			"idx": 17,
-			"version": "7",
-			"when": 1777395649000,
-			"tag": "0017_diagnostic_events",
-			"breakpoints": true
-		},
-		{
-			"idx": 18,
-			"version": "7",
-			"when": 1777482049000,
-			"tag": "0018_diagnostic_events_utc_invariant",
-			"breakpoints": true
-		},
-		{
-			"idx": 19,
-			"version": "7",
-			"when": 1778014596000,
-			"tag": "0019_license_id",
-			"breakpoints": true
-		},
-		{
-			"idx": 20,
-			"version": "7",
-			"when": 1781269247000,
-			"tag": "0020_uuid_player_id",
-			"breakpoints": true
-		},
-		{
-			"idx": 21,
-			"version": "7",
-			"when": 1781269248000,
-			"tag": "0021_wave5_batch1",
-			"breakpoints": true
-		},
-		{
-			"idx": 22,
-			"version": "7",
-			"when": 1781269249000,
-			"tag": "0022_wave5_batch2",
-			"breakpoints": true
-		},
-		{
-			"idx": 23,
-			"version": "7",
-			"when": 1781269250000,
-			"tag": "0023_clan_manage_flag",
-			"breakpoints": true
-		},
-		{
-			"idx": 24,
-			"version": "7",
-			"when": 1781269251000,
-			"tag": "0024_matches_and_sessions",
-			"breakpoints": true
-		},
-		{
-			"idx": 25,
-			"version": "7",
-			"when": 1781269252000,
-			"tag": "0025_presence_roster_chatlog",
-			"breakpoints": true
-		},
-		{
-			"idx": 26,
-			"version": "7",
-			"when": 1781269253000,
-			"tag": "0026_econ_bonus_ledger",
-			"breakpoints": true
-		},
-		{
-			"idx": 27,
-			"version": "7",
-			"when": 1781269254000,
-			"tag": "0027_econ_settings_and_flag",
-			"breakpoints": true
-		},
-		{
-			"idx": 28,
-			"version": "7",
-			"when": 1781269255000,
-			"tag": "0028_chatflags_and_votes",
-			"breakpoints": true
-		},
-		{
-			"idx": 29,
-			"version": "7",
-			"when": 1781269256000,
-			"tag": "0029_combat_events_and_feed_indexes",
-			"breakpoints": true
-		},
-		{
-			"idx": 30,
-			"version": "7",
-			"when": 1781269257000,
-			"tag": "0030_geoip_leaderboards_combat_api",
-			"breakpoints": true
-		},
-		{
-			"idx": 31,
-			"version": "7",
-			"when": 1781269258000,
-			"tag": "0031_alerts",
-			"breakpoints": true
-		},
-		{
-			"idx": 32,
-			"version": "7",
-			"when": 1781269259000,
-			"tag": "0032_geo_anomalies_and_vehicles",
-			"breakpoints": true
-		}
-	]
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1745107200000,
+      "tag": "0000_init",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1745107260000,
+      "tag": "0001_seed_system_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1745429700000,
+      "tag": "0002_server_runtime",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1745445600000,
+      "tag": "0003_config_versions",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1745532000000,
+      "tag": "0004_config_versions_cascade",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1745618400000,
+      "tag": "0005_backfill_config_role_perms",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1745704800000,
+      "tag": "0006_rcon_host_bridge_network",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1745791200000,
+      "tag": "0007_rcon_host_null_default",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1745877600000,
+      "tag": "0008_steam_only_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1745964000000,
+      "tag": "0009_panel_rbac",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1745968800000,
+      "tag": "0010_drop_servers_org_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1745974800000,
+      "tag": "0011_servers_is_canary",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1745978400000,
+      "tag": "0012_host_manage_permission",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1745982000000,
+      "tag": "0013_servers_soft_delete",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1746000000000,
+      "tag": "0014_role_access_flags_and_squad_perms",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1746003600000,
+      "tag": "0015_reseed_roles_squad",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1746007200000,
+      "tag": "0016_drop_legacy_viewer",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1777395649000,
+      "tag": "0017_diagnostic_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1777482049000,
+      "tag": "0018_diagnostic_events_utc_invariant",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1778014596000,
+      "tag": "0019_license_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1781269247000,
+      "tag": "0020_uuid_player_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1781269248000,
+      "tag": "0021_wave5_batch1",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1781269249000,
+      "tag": "0022_wave5_batch2",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1781269250000,
+      "tag": "0023_clan_manage_flag",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1781269251000,
+      "tag": "0024_matches_and_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1781269252000,
+      "tag": "0025_presence_roster_chatlog",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1781269253000,
+      "tag": "0026_econ_bonus_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1781269254000,
+      "tag": "0027_econ_settings_and_flag",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1781269255000,
+      "tag": "0028_chatflags_and_votes",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1781269256000,
+      "tag": "0029_combat_events_and_feed_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1781269257000,
+      "tag": "0030_geoip_leaderboards_combat_api",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1781269258000,
+      "tag": "0031_alerts",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1781269259000,
+      "tag": "0032_geo_anomalies_and_vehicles",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1783311722386,
+      "tag": "0033_role_assignment_expiry",
+      "breakpoints": true
+    }
+  ]
 }

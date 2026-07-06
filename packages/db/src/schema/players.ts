@@ -24,6 +24,8 @@ export const players = pgTable(
     battleEyeGuid: text('battle_eye_guid'),
     lastKnownIp: inet('last_known_ip'),
     roleId: uuid('role_id').references(() => roles.id, { onDelete: 'set null' }),
+    roleExpiresAt: timestamp('role_expires_at', { withTimezone: true, mode: 'date' }),
+    roleComment: text('role_comment'),
     firstSeenAt: timestamp('first_seen_at', { withTimezone: true, mode: 'date' })
       .defaultNow()
       .notNull(),
@@ -47,6 +49,9 @@ export const players = pgTable(
     ),
     lastSeenAtIdx: index('players_last_seen_at_idx').on(table.lastSeenAt),
     roleIdIdx: index('players_role_id_idx').on(table.roleId).where(sql`role_id IS NOT NULL`),
+    roleExpiresAtIdx: index('players_role_expires_at_idx')
+      .on(table.roleExpiresAt)
+      .where(sql`role_id IS NOT NULL AND role_expires_at IS NOT NULL`),
     bonusBalanceChk: check('players_bonus_balance_nonneg_chk', sql`bonus_balance >= 0`),
   }),
 );

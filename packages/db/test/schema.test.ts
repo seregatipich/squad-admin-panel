@@ -54,4 +54,12 @@ describe('schema surface', () => {
     expect(cols.assigneePlayerId.notNull).toBe(false);
     expect(cols.state.notNull).toBe(true);
   });
+
+  it('players role assignment stores optional expiry and operator comment', () => {
+    const cols = getTableColumns(schema.players);
+    expect(cols.roleExpiresAt).toBeDefined();
+    expect(cols.roleExpiresAt.notNull).toBe(false);
+    expect(cols.roleComment).toBeDefined();
+    expect(cols.roleComment.notNull).toBe(false);
+  });
 });

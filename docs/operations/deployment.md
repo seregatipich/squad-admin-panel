@@ -24,8 +24,10 @@ The `scripts/install-host-bridge.sh` script handles all one-time host setup. Run
 | `redis` | `redis:7-alpine` | Port 6379, bound to `127.0.0.1` only. Append-only persistence. |
 | `worker-log-ingest` | `docker/worker.Dockerfile` | Tails squad container logs via bridge, writes events to Redis Streams. |
 | `worker-rcon` | `docker/worker.Dockerfile` | `--network host`. RCON poller (ListPlayers every 30 s). |
+| `worker-config-sync` | `docker/worker.Dockerfile` | Consumes Admins.cfg sync events and writes managed role/group segments. |
 | `worker-audit-archiver` | `docker/worker.Dockerfile` | Cold-archives `audit_log` rows older than 90 days. |
 | `worker-event-partition` | `docker/worker.Dockerfile` | Monthly Postgres partition rotation. |
+| `worker-role-expirer` | `docker/worker.Dockerfile` | Clears expired player roles and enqueues Admins.cfg sync. |
 | `worker-metrics-sampler` | `docker/worker.Dockerfile` | Samples `host_metrics` via bridge every 15 s, writes to `host:metrics` stream. |
 | `backup` (optional) | `mazzolino/restic:latest` | Profile `backup`. Daily restic snapshot of postgres + redis volumes. |
 
@@ -106,7 +108,7 @@ sudo systemctl restart panel-host-bridge.service
 ```bash
 git pull
 pnpm install
-docker compose build api web worker-rcon worker-log-ingest worker-audit-archiver worker-event-partition worker-metrics-sampler
+docker compose build api web worker-rcon worker-log-ingest worker-config-sync worker-audit-archiver worker-event-partition worker-role-expirer worker-metrics-sampler
 docker compose up -d
 ```
 
