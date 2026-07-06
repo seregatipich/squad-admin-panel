@@ -52,6 +52,16 @@ The `node` job runs, in order: `pnpm turbo run typecheck` → `pnpm turbo run bu
 - **New modules and features must include integration tests** that exercise the module wired into the system end-to-end (API route → service → database, worker → queue, etc.), not only unit tests.
 - Never skip, disable, `.skip`, or weaken existing tests to get CI green. Fix the code or fix the test's legitimate expectation.
 
+## Definition of done
+
+A task — issue, fix, feature, or module — counts as **done** only when ALL of the following hold:
+
+1. The work is merged into `dev` and **pushed to `origin/dev`**.
+2. The change is **completely covered by tests** (regression tests for fixes, integration tests for modules — see Testing policy).
+3. **ALL tests are verified passing** — the full suite green on the `dev` CI run, not just the tests you added.
+
+Until every condition holds, the task is in progress: do not report it as complete, do not close the issue, and do not promote to `master`.
+
 ## Promotion `dev` → `master`
 
 - Promote only by merging `dev` into `master`; never cherry-pick or commit onto `master` directly.
