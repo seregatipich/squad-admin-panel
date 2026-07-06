@@ -10,7 +10,7 @@ ENV_FILE=".env.tk104"
 cd "$APP_DIR"
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  echo "fatal: $APP_DIR/$ENV_FILE is missing (copy .env.tk104.example and fill secrets)" >&2
+  echo "fatal: $APP_DIR/$ENV_FILE is missing (copy .env.example, fill the tk104 secrets incl. DUCKDNS_TOKEN)" >&2
   exit 1
 fi
 

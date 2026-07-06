@@ -45,6 +45,7 @@ reports/mutation/
 
 .playwright-mcp/
 .env.tk104
+.sentrux/
 
 # Playwright verification evidence artifacts
 apps/web/e2e-evidence/
