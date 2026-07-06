@@ -6,7 +6,7 @@ Meaningful architectural choices, recorded as we make them.
 
 ### Context
 
-The panel's RBAC was a 47-key fine-grained per-role permission matrix. In parallel, every Squad server has its own `Admins.cfg` file with 21 in-game permission keys (`startvote`, `kick`, `ban`, …) hand-edited by SSH. Operators with five or six servers had to keep those files in sync by hand on every group change. The Эпик 2 Phase 2 spec (`task.md` §2) called for: a single role concept covering both panel-side access *and* in-game `Admins.cfg`, an inline editor at `/settings/groups`, members listing per role, force-sync + drift detection, and a managed segment in `Admins.cfg` so co-existing tools (sqstat, manual edits) are preserved.
+The panel's RBAC was a 47-key fine-grained per-role permission matrix. In parallel, every Squad server has its own `Admins.cfg` file with 21 in-game permission keys (`startvote`, `kick`, `ban`, …) hand-edited by SSH. Operators with five or six servers had to keep those files in sync by hand on every group change. The Эпик 2 Phase 2 spec (`ai_docs/task.md` §2) called for: a single role concept covering both panel-side access *and* in-game `Admins.cfg`, an inline editor at `/settings/groups`, members listing per role, force-sync + drift detection, and a managed segment in `Admins.cfg` so co-existing tools (sqstat, manual edits) are preserved.
 
 ### Decision
 
