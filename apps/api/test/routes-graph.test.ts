@@ -20,6 +20,7 @@ vi.mock('@squad/db/schema', () => ({
   rolePermissions: { roleId: 'roleId' },
   roleSquadPermissions: { roleId: 'roleId' },
   panelMeta: { key: 'key' },
+  vipLifecycleEvents: { eventId: 'eventId' },
   playerIpHistory: {},
   playerNameHistory: {},
 }));
@@ -183,6 +184,7 @@ import authSteamRoutes from '../src/routes/auth-steam.js';
 import depotRoutes from '../src/routes/depot.js';
 import hostRoutes from '../src/routes/host.js';
 import hostActionsRoutes from '../src/routes/host-actions.js';
+import integrationsVipRoutes from '../src/routes/integrations-vip.js';
 import issuesRoutes from '../src/routes/issues.js';
 import liveRoutes from '../src/routes/live.js';
 import logsRoutes from '../src/routes/logs.js';
@@ -225,6 +227,10 @@ describe('routes import graph', () => {
 
   it('host exports a Fastify plugin', () => {
     expect(typeof hostRoutes).toBe('function');
+  });
+
+  it('integrations-vip exports a Fastify plugin', () => {
+    expect(typeof integrationsVipRoutes).toBe('function');
   });
 
   it('issues exports a Fastify plugin', () => {

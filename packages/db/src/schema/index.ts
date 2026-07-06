@@ -40,3 +40,4 @@ export * from './server-settings.js';
 export * from './servers.js';
 export * from './sessions.js';
 export * from './vehicle-catalog.js';
+export * from './vip-lifecycle-events.js';
