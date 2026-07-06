@@ -76,6 +76,8 @@ The rulesets live as code in [`.github/rulesets/`](../../.github/rulesets/) and 
 scripts/apply-rulesets.sh   # requires gh with admin access
 ```
 
+> **Plan gating (2026-07-06):** GitHub rejects rulesets and branch protection on this repository with HTTP 403 — for **private** repositories they require GitHub Pro/Team; public repositories get them free. Until the repo is made public or the plan upgraded, this layer is dormant (the JSON and applier are ready — rerun `scripts/apply-rulesets.sh` the moment it's unlocked). The active free-plan fallback is **detection**: the `branch-guard` CI job's "Audit master ancestry" step fails the `ci` run on any push to `master` whose SHA is not reachable from `dev`, so a bypass turns master's CI red immediately instead of passing silently.
+
 Emergency escape hatch: edit or disable the ruleset in GitHub → Settings → Rules → Rulesets (deliberately manual and audited).
 
 ## Diagnosing a clone

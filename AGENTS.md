@@ -69,7 +69,7 @@ Until every condition holds, the task is in progress: do not report it as comple
   git fetch origin
   git push origin origin/dev:master
   ```
-  The `protect-master` ruleset only accepts SHAs that already carry green `branch-guard`/`node`/`go`/`docker` checks — which only commits pushed to `dev` have. A merge commit created locally on `master` has no checks and is rejected by GitHub.
+  Only commits pushed to `dev` carry green `branch-guard`/`node`/`go`/`docker` checks; a merge commit created locally on `master` has none. The `branch-guard` CI job audits every `master` push and goes red if the SHA is not reachable from `dev` (and once the `protect-master` ruleset is active, GitHub rejects such pushes outright).
 - Promote only when the work on `dev` is complete: implemented, tested, documented, committed, pushed, and **`dev` CI is green**.
 - A non-docs push to `master` triggers the `deploy-tk104` workflow and **deploys to production**. Promote deliberately and watch both the `ci` and deploy runs to completion.
 
@@ -80,7 +80,7 @@ The branch model is **machine-enforced**, not just documented (details, setup, a
 - **Claude Code** — `.claude/settings.json` runs `scripts/git-guard-hook.sh` as a `PreToolUse` hook on every Bash call and denies violating git commands with the reason.
 - **Codex** — `.codex/rules/git-policy.rules` (execpolicy) forbids the violating commands and `.codex/hooks.json` runs the same guard hook. The project must be trusted once and the hook approved via `/hooks`.
 - **git hooks (lefthook)** — `branch-guard` runs `scripts/git-guard.sh` on pre-commit and pre-push.
-- **GitHub rulesets** (authoritative, binds every client including Codex cloud) — `main` cannot be created; `master`/`dev` cannot be force-pushed or deleted; `master` only accepts CI-green SHAs. Managed as code in `.github/rulesets/`, applied with `scripts/apply-rulesets.sh`.
+- **GitHub rulesets** (authoritative, binds every client including Codex cloud) — `main` cannot be created; `master`/`dev` cannot be force-pushed or deleted; `master` only accepts CI-green SHAs. Managed as code in `.github/rulesets/`, applied with `scripts/apply-rulesets.sh`. *Currently dormant: GitHub requires Pro/Team or a public repo for rulesets on this private repository.* Until then the `branch-guard` CI job audits every `master` push and fails the run if the SHA is not reachable from `dev`.
 
 If the guard denies a command, do not work around it — follow the workflow above. Run `bash scripts/git-guard.sh doctor` to check your clone's enforcement wiring.
 
