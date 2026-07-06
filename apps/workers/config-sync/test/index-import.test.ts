@@ -1,8 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+const SERVER_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+
+const mockLogger = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  debug: vi.fn(),
+  error: vi.fn(),
+}));
+
+let selectedServers: Array<{ id: string }> = [];
+
 const selectMock = vi.fn().mockReturnValue({
   from: vi.fn().mockReturnValue({
-    where: vi.fn().mockResolvedValue([]),
+    where: vi.fn().mockImplementation(() => Promise.resolve(selectedServers)),
   }),
 });
 
@@ -18,7 +29,9 @@ vi.mock('ioredis', () => ({
     on: vi.fn(),
     quit: vi.fn().mockReturnValue(Promise.resolve('OK')),
     xgroup: vi.fn().mockResolvedValue('OK'),
-    xreadgroup: vi.fn().mockResolvedValue(null),
+    xreadgroup: vi
+      .fn()
+      .mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve(null), 50))),
     xautoclaim: vi.fn().mockResolvedValue(['0-0', [], []]),
     xack: vi.fn().mockResolvedValue(1),
   })),
@@ -43,8 +56,7 @@ vi.mock('drizzle-orm', () => ({
 }));
 
 vi.mock('pino', () => {
-  const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() };
-  const pinoFn = vi.fn(() => logger);
+  const pinoFn = vi.fn(() => mockLogger);
   (pinoFn as unknown as Record<string, unknown>).multistream = vi.fn(() => ({}));
   return { default: pinoFn, multistream: vi.fn(() => ({})) };
 });
@@ -52,22 +64,27 @@ vi.mock('pino', () => {
 vi.mock('../src/syncer.js', () => ({
   syncServerAdminsCfg: vi
     .fn()
-    .mockResolvedValue({ state: 'up_to_date', groupsCount: 0, adminsCount: 0 }),
+    .mockResolvedValue({ state: 'in_sync', groupsCount: 0, adminsCount: 0 }),
 }));
 
 let exitSpy: ReturnType<typeof vi.spyOn>;
 
 beforeAll(() => {
+  selectedServers = [{ id: SERVER_ID }];
   process.env.DATABASE_URL = 'postgres://localhost/test';
   process.env.REDIS_URL = 'redis://localhost:6379/15';
   process.env.PANEL_BRIDGE_SOCKET = '/tmp/fake.sock';
+  process.env.ADMINS_CFG_DRIFT_INTERVAL_MS = '10';
   exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
 });
 
-afterAll(() => {
+afterAll(async () => {
+  process.emit('SIGTERM', 'SIGTERM');
+  await new Promise((r) => setTimeout(r, 20));
   exitSpy.mockRestore();
   process.removeAllListeners('SIGTERM');
   process.removeAllListeners('SIGINT');
+  delete process.env.ADMINS_CFG_DRIFT_INTERVAL_MS;
 });
 
 describe('config-sync index.ts', () => {
@@ -77,5 +94,24 @@ describe('config-sync index.ts', () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(syncServerAdminsCfg).toBeDefined();
     expect(typeof syncServerAdminsCfg).toBe('function');
+  });
+
+  it('logs passive drift as awaiting force-sync', async () => {
+    const { syncServerAdminsCfg } = await import('../src/syncer.js');
+    vi.mocked(syncServerAdminsCfg).mockResolvedValueOnce({
+      state: 'drift',
+      serverId: SERVER_ID,
+      expectedHash: 'expected',
+      actualHash: 'actual',
+      groupsCount: 0,
+      adminsCount: 0,
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { serverId: SERVER_ID, expected: 'expected', actual: 'actual' },
+      'admins.cfg drift detected — awaiting force-sync',
+    );
   });
 });
