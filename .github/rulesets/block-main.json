@@ -1,0 +1,13 @@
+{
+  "name": "block-main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/heads/main"],
+      "exclude": []
+    }
+  },
+  "rules": [{ "type": "creation" }, { "type": "update" }],
+  "bypass_actors": []
+}

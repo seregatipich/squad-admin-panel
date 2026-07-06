@@ -1,0 +1,92 @@
+# Agent enforcement harness
+
+The branch model in [`AGENTS.md`](../../AGENTS.md) — `master` = production fed only from `dev`, `dev` = integration fed only by work-branch merges, no `main` branch, tests + CI mandatory — is enforced mechanically, in depth, for every coding agent and human contributor. This document describes each layer, how to set it up, and its limits.
+
+## The shared guard
+
+[`scripts/git-guard.sh`](../../scripts/git-guard.sh) is the single source of truth. Every layer is a thin adapter around it. Exit code `0` allows, `2` denies with the reason on stderr.
+
+| Subcommand | Used by | What it does |
+| --- | --- | --- |
+| `check-command "<shell string>"` | Claude Code / Codex PreToolUse hooks | Parses a proposed shell command and denies branch-model violations before they run |
+| `check-commit` | lefthook `pre-commit` | Denies direct commits on `master`, `dev` (except mid-merge conflict resolution), or `main` |
+| `check-push` | lefthook `pre-push` | Reads the native pre-push refspec lines and denies pushes that violate the model |
+| `doctor` | humans | Reports enforcement wiring problems in the current clone (never blocks) |
+
+Blocked by `check-command`:
+
+- creating, checking out, renaming to, tracking, or pushing any `main` ref;
+- `git commit` while on `master`, or on `dev` outside merge-conflict resolution (`MERGE_HEAD` present);
+- `git merge <work-branch>` while on `master` (only `dev` may be merged there);
+- pushing a SHA to `master` that is **not reachable from `dev`** (`git merge-base --is-ancestor`) — the exact definition of "master only receives what went through dev";
+- creating work branches from `master`/`origin/master` (they must come from `dev`);
+- force-pushing or deleting `master`/`dev`, and `git push --all/--mirror`.
+
+Deliberately **not** blocked: `--no-verify`. The pre-push test gate is environment-dependent (DB/Redis/Linux-only bridge tests), and CI is the source of truth per `AGENTS.md`; the agent-layer hooks and GitHub rulesets still check every command and every push regardless.
+
+Test suite: [`scripts/test-git-guard.sh`](../../scripts/test-git-guard.sh) (runs in CI as part of the `branch-guard` job) builds throwaway repositories and asserts the allow/deny decision for 57 scenarios. Run it locally with `bash scripts/test-git-guard.sh`.
+
+## Layer 1 — Claude Code
+
+[`.claude/settings.json`](../../.claude/settings.json) registers [`scripts/git-guard-hook.sh`](../../scripts/git-guard-hook.sh) as a `PreToolUse` hook for the `Bash` tool. The hook receives the tool-call JSON on stdin, extracts `tool_input.command`, and delegates to `check-command`. A denial (exit 2) is fed back to the model with the reason, so the agent self-corrects onto the documented workflow.
+
+Committed project settings load automatically — no per-user setup.
+
+## Layer 2 — Codex
+
+Two repo-shipped mechanisms, both loaded only when the project is **trusted**:
+
+- [`.codex/rules/git-policy.rules`](../../.codex/rules/git-policy.rules) — execpolicy prefix rules marking the violating commands `forbidden`. Verify any change with:
+  ```bash
+  codex execpolicy check --rules .codex/rules/git-policy.rules -- git push origin master
+  ```
+- [`.codex/hooks.json`](../../.codex/hooks.json) — a `PreToolUse` hook running the same `scripts/git-guard-hook.sh` (Codex uses the same stdin shape and exit-2-denies contract as Claude Code).
+
+One-time per-user setup:
+
+1. Trust the project when Codex prompts (records `trust_level = "trusted"` for this path in `~/.codex/config.toml`).
+2. Review and approve the repo hook with the `/hooks` command in the Codex CLI.
+
+Known limits (upstream): `codex exec` (non-interactive) currently does not dispatch repo hooks ([openai/codex#26383](https://github.com/openai/codex/issues/26383)) — the rules layer and the GitHub rulesets still apply. Prefix rules match argv prefixes, so exotic refspec spellings can slip past them; the hook and the rulesets catch those.
+
+## Layer 3 — git hooks (lefthook)
+
+[`lefthook.yml`](../../lefthook.yml) runs `branch-guard` on `pre-commit` (`check-commit`) and first on `pre-push` (`check-push`). This binds humans and any tool that shells out to git with hooks enabled. Hooks install via the `prepare` script on `pnpm install`; if `core.hooksPath` is set globally it must delegate to lefthook (run `doctor` to check).
+
+## Layer 4 — GitHub rulesets (authoritative)
+
+Client-side layers can be bypassed by a client that doesn't load them (e.g. Codex cloud/web agents). The rulesets bind **every** client, with no bypass actors — including repository admins:
+
+| Ruleset | Target | Rules |
+| --- | --- | --- |
+| `block-main` | `refs/heads/main` | creation and update restricted — the branch cannot exist |
+| `protect-master` | `refs/heads/master` | no deletion, no force-push, and **required status checks** `branch-guard`, `node`, `go`, `docker` on the pushed SHA |
+| `protect-dev` | `refs/heads/dev` | no deletion, no force-push |
+
+Because a SHA can only carry those green checks by having been pushed to `dev` (the `ci` workflow runs on `dev` pushes, and `branch-guard` fails PRs targeting `master` from anything but `dev`), **the only way to update `master` is to fast-forward it to a CI-green `dev` tip**:
+
+```bash
+git fetch origin
+git push origin origin/dev:master
+```
+
+The rulesets live as code in [`.github/rulesets/`](../../.github/rulesets/) and are applied (create-or-update by name, idempotent) with:
+
+```bash
+scripts/apply-rulesets.sh   # requires gh with admin access
+```
+
+Emergency escape hatch: edit or disable the ruleset in GitHub → Settings → Rules → Rulesets (deliberately manual and audited).
+
+## Diagnosing a clone
+
+```bash
+bash scripts/git-guard.sh doctor
+```
+
+Warns when: `core.hooksPath` shadows lefthook without delegating to it, a `main` ref exists locally or on origin, `origin/master` has commits not on `origin/dev` (someone bypassed dev — back-merge to reconcile), or `jq` is missing (hook adapters fall back to `python3`).
+
+## Limits
+
+- `check-command` tokenizes shell strings heuristically; compound commands and env prefixes are handled, but exotic quoting can evade it. That layer exists for fast in-session feedback — the rulesets are the enforcement boundary.
+- Client-side layers only bind clients that load them (trusted project for Codex, project settings for Claude Code, installed hooks for git). New machines should run `doctor` once.
