@@ -31,6 +31,7 @@ import authRoutes from '../src/routes/auth.js';
 import steamRoutes from '../src/routes/auth-steam.js';
 import hostRoutes from '../src/routes/host.js';
 import hostActionsRoutes from '../src/routes/host-actions.js';
+import integrationsVipRoutes from '../src/routes/integrations-vip.js';
 import meTokensRoutes from '../src/routes/me-tokens.js';
 import permissionsRoutes from '../src/routes/permissions.js';
 import playerRoutes from '../src/routes/players.js';
@@ -98,6 +99,7 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   await app.register(usersRoutes);
   await app.register(playerRoutes);
   await app.register(adminsCfgRoutes);
+  await app.register(integrationsVipRoutes);
   await app.register(auditRoutes);
   await app.register(steamRoutes);
 
@@ -133,9 +135,12 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
     }
   });
 
-  it('mutating routes that claim audit: false are limited to auth callbacks and OAuth entry points', async () => {
+  it('mutating routes that claim audit: false are limited to auth callbacks and self-audited service endpoints', async () => {
     const routes = await collectRoutes();
-    const allowlist = new Set(['/api/v1/auth/steam/callback']);
+    const allowlist = new Set([
+      '/api/v1/auth/steam/callback',
+      '/api/v1/integrations/vip/lifecycle',
+    ]);
     const falsy = routes.filter(
       (r) =>
         MUTATING.has(r.method) && !r.url.startsWith(SWAGGER_PREFIX) && r.config.audit === false,

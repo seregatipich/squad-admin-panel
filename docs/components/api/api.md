@@ -27,6 +27,37 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 
 Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/totp/*`, `GET /api/v1/auth/discord/*`, `POST /api/v1/setup/{org,owner,finalize}`, `GET /api/v1/setup/check-env`, `POST /api/v1/setup/init`.
 
+## Service integrations
+
+### VIP lifecycle
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| POST | `/api/v1/integrations/vip/lifecycle` | Signed service endpoint for `vip-user-service` to assign, extend, expire or refund VIP panel roles. Disabled unless `VIP_LIFECYCLE_WEBHOOK_SECRET` is set. | HMAC only |
+
+Required headers:
+
+- `x-vip-timestamp`: ISO timestamp used in the signature payload.
+- `x-vip-signature`: `sha256=<hex>` HMAC-SHA256 of `<x-vip-timestamp>.<canonical-json-body>` using `VIP_LIFECYCLE_WEBHOOK_SECRET`.
+
+Body:
+
+```json
+{
+  "event_id": "purchase-123",
+  "event_type": "vip.purchased",
+  "player_id": "0190abcd-0000-7000-8000-000000000001",
+  "role_id": "0190abcd-0000-7000-8000-000000000002",
+  "tier": "vip2",
+  "purchase_id": "purchase-123",
+  "expires_at": "2030-01-02T03:04:05.000Z"
+}
+```
+
+`event_type` values: `vip.purchased`, `vip.extended`, `vip.expired`, `vip.refunded`. Purchase/extension events require a future `expires_at`; expiry/refund events revoke only when the current player role still matches `role_id`. `event_id` is stored in `vip_lifecycle_events` and makes retries idempotent: duplicate delivery returns `200 { ok: true, duplicate: true }` without another Admins.cfg sync. First application returns `202` with `action` (`assigned`, `revoked`, `ignored`) and `enqueued`.
+
+Ownership boundary: `vip-user-service` owns wallet ledger, purchase idempotency and economic rollback. This panel owns role membership, `role_expires_at` and Admins.cfg sync. Discord role sync is handled outside this API.
+
 ## RBAC reference
 
 ### Permissions
