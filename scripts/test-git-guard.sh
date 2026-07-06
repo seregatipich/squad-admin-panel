@@ -8,6 +8,9 @@
 
 set -u
 
+# Fixture repos must not trigger the developer's own git hooks.
+export LEFTHOOK=0
+
 GUARD=$(cd "$(dirname "$0")" && pwd)/git-guard.sh
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/git-guard-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
@@ -80,6 +83,20 @@ echo rogue >rogue && git add rogue && git_q commit -m "not via dev"
 git_q switch feature/x
 git remote add origin "$ORIGIN"
 git_q push origin master dev
+
+# The guard scopes check-command to the repository it is installed in
+# (located via its own path), so run the fixture against a copy installed
+# into the fixture repo — exactly how it ships in real checkouts.
+mkdir -p "$REPO/scripts"
+cp "$GUARD" "$REPO/scripts/git-guard.sh"
+GUARD="$REPO/scripts/git-guard.sh"
+
+# A second, foreign repository: the guard must not police it.
+OTHER="$TMP/other"
+git init -q -b master "$OTHER"
+git -C "$OTHER" config user.email guard-test@example.com
+git -C "$OTHER" config user.name "guard test"
+git -C "$OTHER" commit -q --allow-empty -m root
 
 DEV_SHA=$(git rev-parse dev)
 STRAY_SHA=$(git rev-parse stray)
@@ -158,6 +175,18 @@ assert allow "bare push on master at dev-reachable sha" -- check-command "git pu
 echo drift >>file && git add file && git_q commit -m "master drift"
 assert deny "bare push on master ahead of dev" -- check-command "git push"
 git_q reset --hard "$MASTER_SHA"
+git_q switch feature/x
+
+# --- check-command: scoped to this repository --------------------------------
+git_q switch master
+assert allow "commit in a foreign repo via cd" -- check-command "cd $OTHER && git commit -m x"
+assert allow "commit in a foreign repo via -C" -- check-command "git -C $OTHER commit -m x"
+assert allow "main branch in a foreign repo" -- check-command "git -C $OTHER checkout -b main"
+assert allow "commit after cd to a dynamic dir" -- check-command 'cd "$(mktemp -d)" && git commit -m x'
+assert deny "commit after cd within this repo" -- check-command "cd . && git commit -m x"
+git_q worktree add "$TMP/wt" dev
+assert deny "commit on dev in a worktree of this repo" -- check-command "cd $TMP/wt && git commit -m x"
+git_q worktree remove "$TMP/wt"
 git_q switch feature/x
 
 # --- check-commit (lefthook pre-commit) --------------------------------------

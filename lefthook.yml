@@ -15,11 +15,14 @@ pre-commit:
 
 pre-push:
   parallel: false
-  commands:
-    branch-guard:
-      priority: 1
+  scripts:
+    # Script, not command: commands skip when the current branch has no
+    # unpushed diff (e.g. during a dev→master promotion push).
+    "branch-guard":
+      runner: sh
       use_stdin: true
-      run: bash scripts/git-guard.sh check-push origin origin
+      priority: 1
+  commands:
     typecheck:
       run: pnpm turbo run typecheck
     test:

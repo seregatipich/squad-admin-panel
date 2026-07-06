@@ -51,7 +51,7 @@ Known limits (upstream): `codex exec` (non-interactive) currently does not dispa
 
 ## Layer 3 — git hooks (lefthook)
 
-[`lefthook.yml`](../../lefthook.yml) runs `branch-guard` on `pre-commit` (`check-commit`) and first on `pre-push` (`check-push`). This binds humans and any tool that shells out to git with hooks enabled. Hooks install via the `prepare` script on `pnpm install`; if `core.hooksPath` is set globally it must delegate to lefthook (run `doctor` to check).
+[`lefthook.yml`](../../lefthook.yml) runs `branch-guard` on `pre-commit` (`check-commit`, as a command) and on `pre-push` (`check-push`, as the script [`.lefthook/pre-push/branch-guard`](../../.lefthook/pre-push/branch-guard)). The pre-push guard is a lefthook *script* deliberately: lefthook skips *commands* whenever the current branch has no unpushed diff — which is exactly the state during a cross-ref push such as the dev→master promotion — while scripts always run and receive the refspec lines on stdin. This layer binds humans and any tool that shells out to git with hooks enabled. Hooks install via the `prepare` script on `pnpm install`; if `core.hooksPath` is set globally it must delegate to lefthook (run `doctor` to check).
 
 ## Layer 4 — GitHub rulesets (authoritative)
 
@@ -88,5 +88,6 @@ Warns when: `core.hooksPath` shadows lefthook without delegating to it, a `main`
 
 ## Limits
 
-- `check-command` tokenizes shell strings heuristically; compound commands and env prefixes are handled, but exotic quoting can evade it. That layer exists for fast in-session feedback — the rulesets are the enforcement boundary.
+- `check-command` polices **only this repository** (worktrees included, identified by the git common dir). Commands targeting other repos — scratch fixtures under `/tmp`, clones, `git -C <elsewhere>` — are allowed, as are segments following a `cd` to a dynamically computed directory.
+- `check-command` tokenizes shell strings heuristically; compound commands, `cd`/`git -C` targets, and env prefixes are handled, but exotic quoting can evade it. That layer exists for fast in-session feedback — the rulesets are the enforcement boundary.
 - Client-side layers only bind clients that load them (trusted project for Codex, project settings for Claude Code, installed hooks for git). New machines should run `doctor` once.

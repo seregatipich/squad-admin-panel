@@ -388,44 +388,75 @@ check_command() {
   *) exit 0 ;;
   esac
 
-  # Split compound commands into segments; analyze each git invocation.
-  local segment
-  echo "$cmd" | sed -E $'s/\\|\\||&&|;|\\|/\\\n/g' | while IFS= read -r segment; do
-    # Tokenize (unquoted heuristic) and strip env-var prefixes.
-    set -- $segment
-    while [ $# -gt 0 ]; do
-      case "$1" in
-      *=*) shift ;;
-      command | exec) shift ;;
-      *) break ;;
-      esac
-    done
-    [ $# -eq 0 ] && continue
-    [ "$1" = "git" ] || continue
-    shift
+  # The guard only polices THIS repository (worktrees included). Commands
+  # targeting other repos — scratch fixtures, clones under /tmp — are allowed.
+  local project_common
+  project_common=$(git -C "$(cd "$(dirname "$0")/.." && pwd)" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
 
-    # Consume git global flags; remember -C <dir> for repo-state checks.
-    GIT_DIR_ARG=""
-    while [ $# -gt 0 ]; do
-      case "$1" in
-      -C)
-        shift
-        [ $# -gt 0 ] && GIT_DIR_ARG=$1
-        shift
-        ;;
-      -c | --git-dir | --work-tree | --namespace)
-        shift
-        shift
-        ;;
-      --git-dir=* | --work-tree=* | -c*) shift ;;
-      -*) shift ;;
-      *) break ;;
-      esac
+  # Split compound commands into segments; analyze each git invocation.
+  local segment cd_dir=""
+  echo "$cmd" | sed -E $'s/\\|\\||&&|;|\\|/\\\n/g' | {
+    while IFS= read -r segment; do
+      # Tokenize (unquoted heuristic) and strip env-var prefixes.
+      set -- $segment
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        *=*) shift ;;
+        command | exec) shift ;;
+        *) break ;;
+        esac
+      done
+      [ $# -eq 0 ] && continue
+
+      # Track directory changes so later segments are checked against the
+      # repo they actually target. A dynamic target ($(...), $VAR) can't be
+      # resolved statically — treated as "not this repo".
+      if [ "$1" = "cd" ] || [ "$1" = "pushd" ]; then
+        if [ $# -ge 2 ]; then
+          case "$2" in
+          *'$'* | *'`'*) cd_dir="__unknown__" ;;
+          *) cd_dir=$2 ;;
+          esac
+        fi
+        continue
+      fi
+
+      [ "$1" = "git" ] || continue
+      shift
+
+      # Consume git global flags; remember -C <dir> for repo-state checks.
+      GIT_DIR_ARG=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -C)
+          shift
+          [ $# -gt 0 ] && GIT_DIR_ARG=$1
+          shift
+          ;;
+        -c | --git-dir | --work-tree | --namespace)
+          shift
+          shift
+          ;;
+        --git-dir=* | --work-tree=* | -c*) shift ;;
+        -*) shift ;;
+        *) break ;;
+        esac
+      done
+      [ $# -eq 0 ] && continue
+
+      [ -z "$GIT_DIR_ARG" ] && [ -n "$cd_dir" ] && GIT_DIR_ARG=$cd_dir
+      [ "$GIT_DIR_ARG" = "__unknown__" ] && continue
+      if [ -n "$project_common" ]; then
+        local target_common
+        target_common=$(g rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+        [ "$target_common" = "$project_common" ] || continue
+      fi
+
+      analyze_git "$@"
     done
-    [ $# -eq 0 ] && continue
-    analyze_git "$@"
-  done
-  # The while loop runs in a subshell; propagate its deny exit code.
+    exit 0
+  }
+  # The braced group runs in a subshell; propagate its deny exit code.
   local rc=$?
   [ $rc -ne 0 ] && exit $rc
   exit 0
