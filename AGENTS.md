@@ -43,7 +43,7 @@ gh run view <run-id> --json jobs --jq '.jobs[] | "\(.conclusion)\t\(.name)"'
 gh run view <run-id> --log-failed   # logs of the failing step
 ```
 
-The `node` job runs, in order: `pnpm turbo run typecheck` → `pnpm turbo run build` → `pnpm --filter @squad/db migrate` → panel-bridge tests → `pnpm exec biome check .` (whole repo) → `pnpm test:cov` → gitleaks. The step that most often breaks after a merge is `biome check .` — an `error`-severity diagnostic such as `assist/source/organizeImports` (commonly from union-merged imports) fails it; fix with `pnpm exec biome check --write <file>`. `noNonNullAssertion` is `warn` and does not fail CI. The `go` job covers `apps/bridge`; the `docker` job builds all images.
+The `node` job runs, in order: `pnpm turbo run typecheck` → `pnpm turbo run build` → `pnpm --filter @squad/db migrate` → panel-bridge tests → `pnpm exec biome check .` (whole repo) → `pnpm test:cov` → gitleaks. The step that most often breaks after a merge is `biome check .` — an `error`-severity diagnostic such as `assist/source/organizeImports` (commonly from union-merged imports) fails it; fix with `pnpm exec biome check --write <file>`. `noNonNullAssertion` is `warn` and does not fail CI. The `go` job covers `apps/bridge`; the `docker` job builds all images. The `branch-guard` job enforces the branch model: it fails any pull request targeting `master` from a head other than `dev`, and runs the git-guard test suite (`scripts/test-git-guard.sh`).
 
 ## Testing policy (MANDATORY)
 
@@ -64,9 +64,25 @@ Until every condition holds, the task is in progress: do not report it as comple
 
 ## Promotion `dev` → `master`
 
-- Promote only by merging `dev` into `master`; never cherry-pick or commit onto `master` directly.
+- Promote only by **fast-forwarding `master` to the dev tip** — never merge commits, cherry-picks, or direct commits onto `master`:
+  ```bash
+  git fetch origin
+  git push origin origin/dev:master
+  ```
+  The `protect-master` ruleset only accepts SHAs that already carry green `branch-guard`/`node`/`go`/`docker` checks — which only commits pushed to `dev` have. A merge commit created locally on `master` has no checks and is rejected by GitHub.
 - Promote only when the work on `dev` is complete: implemented, tested, documented, committed, pushed, and **`dev` CI is green**.
 - A non-docs push to `master` triggers the `deploy-tk104` workflow and **deploys to production**. Promote deliberately and watch both the `ci` and deploy runs to completion.
+
+## Enforcement harness
+
+The branch model is **machine-enforced**, not just documented (details, setup, and caveats: `docs/development/agent-harness.md`):
+
+- **Claude Code** — `.claude/settings.json` runs `scripts/git-guard-hook.sh` as a `PreToolUse` hook on every Bash call and denies violating git commands with the reason.
+- **Codex** — `.codex/rules/git-policy.rules` (execpolicy) forbids the violating commands and `.codex/hooks.json` runs the same guard hook. The project must be trusted once and the hook approved via `/hooks`.
+- **git hooks (lefthook)** — `branch-guard` runs `scripts/git-guard.sh` on pre-commit and pre-push.
+- **GitHub rulesets** (authoritative, binds every client including Codex cloud) — `main` cannot be created; `master`/`dev` cannot be force-pushed or deleted; `master` only accepts CI-green SHAs. Managed as code in `.github/rulesets/`, applied with `scripts/apply-rulesets.sh`.
+
+If the guard denies a command, do not work around it — follow the workflow above. Run `bash scripts/git-guard.sh doctor` to check your clone's enforcement wiring.
 
 ## Repository hygiene
 
