@@ -87,6 +87,22 @@ step_skip() {
 step_warn() { printf '  %b⚠%b %s\n' "${C_YELLOW}" "${C_RST}" "$1" >&2; }
 step_info() { printf '  %b·%b %s\n' "${C_DIM}" "${C_RST}" "$1"; }
 
+set_env_key() {
+  local key="$1"
+  local value="$2"
+  local file="${REPO}/.env"
+  local escaped
+
+  escaped=$(printf '%s' "$value" | sed 's/[&|]/\\&/g')
+  if grep -qE "^${key}=" "$file"; then
+    sed -i "s|^${key}=.*|${key}=${escaped}|" "$file"
+    step_ok "${key} updated"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$file"
+    step_ok "${key} appended"
+  fi
+}
+
 # Run a command with a spinner. Captures output to a log; shows last lines on failure.
 # Usage: spin_run "label" [--timeout=N] -- cmd args...
 spin_run() {
@@ -233,12 +249,9 @@ stage_begin ".env (secrets + config)"
 
 if [[ -f "${REPO}/.env" ]]; then
   step_skip "existing .env preserved" "won't rotate secrets"
-  if ! grep -q '^DATA_DIR=' "${REPO}/.env"; then
-    echo "DATA_DIR=${DATA_DIR}" >> "${REPO}/.env"
-    step_ok "DATA_DIR appended"
-  else
-    step_ok "DATA_DIR already set"
-  fi
+  PANEL_GID=$(getent group panel | cut -d: -f3)
+  set_env_key DATA_DIR "${DATA_DIR}"
+  set_env_key PANEL_GID "${PANEL_GID}"
 else
   APP_DOMAIN_DEFAULT="${APP_DOMAIN:-squad-panel.lan}"
   PG_PW=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
@@ -369,7 +382,7 @@ ${C_BOLD}${C_GREEN}▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀�
   ${C_BOLD}Logs${C_RST}      ${LOG_DIR}/
 
   ${C_DIM}Self-signed cert → click through browser warning once.${C_RST}
-  ${C_DIM}First visit lands on /setup: org → owner user → done.${C_RST}
+  ${C_DIM}First Owner login opens /setup: Steam → organization → done.${C_RST}
 
   ${C_BOLD}Useful${C_RST}
     ${C_DIM}docker compose ps${C_RST}                            stack state

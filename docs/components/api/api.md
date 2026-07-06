@@ -1,6 +1,6 @@
 # `api` — public surface
 
-Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server.ts) and split across files in [`apps/api/src/routes/`](../../../apps/api/src/routes/). Schemas are Zod via `fastify-type-provider-zod`. Interactive docs at `/api/v1/docs` when `NODE_ENV !== 'production'`.
+Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server.ts) and split across files in [`apps/api/src/routes/`](../../../apps/api/src/routes/). Schemas are Zod via `fastify-type-provider-zod`. Interactive docs are served at `/api/docs`.
 
 ## Conventions
 
@@ -26,6 +26,13 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 | DELETE | `/api/v1/me/tokens/:id` | Soft-revoke own token (sets `revoked_at`). Idempotent — second call returns `{ ok: true, already_revoked: true }`. 404 for foreign token. | session |
 
 Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/totp/*`, `GET /api/v1/auth/discord/*`, `POST /api/v1/setup/{org,owner,finalize}`, `GET /api/v1/setup/check-env`, `POST /api/v1/setup/init`.
+
+## First-time setup
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/setup/status` | Returns `{ setup_completed, first_owner_claimed }`. Used by `/setup` and the dashboard layout to decide whether the panel should collect organization metadata before entering the dashboard. | none |
+| POST | `/api/v1/setup/complete` | Owner-only finalization. Body: `{ organization_name }`. Sets `panel_meta.setup_completed=true` and persists the organization name. Returns 410 when setup is already complete, 401 without a session, and 403 when the session is not Owner. | Owner session |
 
 ## RBAC reference
 

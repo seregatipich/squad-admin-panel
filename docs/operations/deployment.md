@@ -10,7 +10,7 @@ Single-host deployment model. The entire panel stack runs via `docker compose up
 - ~50 GB free disk for the `squad-depot` volume.
 - `sudo` access on the host.
 
-The `scripts/install-host-bridge.sh` script handles all one-time host setup. Run it before starting the stack.
+The `scripts/install-host-bridge.sh` script handles all one-time host setup. Run it before starting the stack. If `.env` already exists, the installer synchronizes `DATA_DIR` and `PANEL_GID` so compose bind mounts and bridge peer checks match the host.
 
 ## Container topology
 
@@ -59,6 +59,17 @@ Caddy handles TLS automatically. Set `TLS_ISSUER` in `.env`:
 
 ## First deploy
 
+Preferred path:
+
+```bash
+git clone git@github.com:breaking-squad/squad-admin-panel.git
+cd squad-admin-panel
+
+sudo ./scripts/bootstrap.sh
+```
+
+Manual path:
+
 ```bash
 git clone git@github.com:breaking-squad/squad-admin-panel.git
 cd squad-admin-panel
@@ -69,14 +80,40 @@ cp .env.example .env
 # Save APP_ENCRYPTION_KEY offline — losing it makes RCON passwords unrecoverable.
 
 sudo ./scripts/install-host-bridge.sh
-# idempotent — creates panel group, systemd unit + socket, data tree, squad-depot volume
+# idempotent — creates panel group, systemd unit + socket, data tree, squad-depot volume,
+# and updates DATA_DIR + PANEL_GID in .env when the file exists.
 
 sudo usermod -aG panel "$USER" && newgrp panel
 
+docker compose config --quiet
 docker compose up -d --build
 ```
 
-`migrator` runs before `api` starts. When `api` becomes healthy, Caddy begins routing. Open `https://${APP_DOMAIN}/login` and sign in via Steam — the first login becomes Owner.
+`migrator` runs before `api` starts. When `api` becomes healthy, Caddy begins routing. Open `https://${APP_DOMAIN}/login` and sign in via Steam — the first login becomes Owner. The first Owner session is then redirected through `/setup` to save the organization name.
+
+## Staging deployment gate
+
+Use the same single-host model for dev/staging as production. A staging host is ready only after these checks pass:
+
+```bash
+docker compose config --quiet
+sg panel -c 'bash scripts/verify-bridge.sh'
+docker compose ps
+curl -sk https://${APP_DOMAIN}/health
+curl -sk https://${APP_DOMAIN}/ready
+curl -skI https://${APP_DOMAIN}/api/docs
+```
+
+Expected results:
+
+- `verify-bridge.sh` exits `0` and covers every bridge RPC method.
+- `/health` returns `{"status":"ok", ...}`.
+- `/ready` returns HTTP 200 with `status:"ok"` and `checks.postgres`, `checks.redis`, `checks.bridge` equal to `ok`.
+- `/api/docs` returns an HTTP 200/30x response from the API docs UI.
+- A fresh panel can complete the Steam first-Owner login and organization-name setup.
+- The dashboard loads and the bridge/worker health widgets do not report a persistent outage.
+
+Dokploy can be used to build or restart the compose stack after the host has been prepared, but it is not a complete deployment boundary for this project. The host bridge, `panel` group, systemd socket/service, data tree, and `squad-depot` bind volume must be installed and verified outside Dokploy first.
 
 ## Image rebuild flow
 
@@ -132,7 +169,8 @@ sudo systemctl restart panel-host-bridge.service
 ```bash
 sg panel -c 'bash scripts/verify-bridge.sh'   # smoke-test all 17 bridge RPC methods
 curl -sk https://${APP_DOMAIN}/health          # {"status":"ok"}
-curl -sk https://${APP_DOMAIN}/ready           # {"status":"ready","checks":{"postgres":"ok","redis":"ok","bridge":"ok"}}
+curl -sk https://${APP_DOMAIN}/ready           # {"status":"ok","checks":{"postgres":"ok","redis":"ok","bridge":"ok"}}
+curl -skI https://${APP_DOMAIN}/api/docs        # API docs UI responds
 ```
 
 The `/ready` endpoint returns 503 if any dependency is unhealthy.

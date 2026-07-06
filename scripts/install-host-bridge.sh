@@ -14,6 +14,21 @@ log()  { printf '\033[32m[install-host-bridge]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[install-host-bridge]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[31m[install-host-bridge]\033[0m %s\n' "$*" >&2; exit 1; }
 
+set_env_key() {
+  local key="$1"
+  local value="$2"
+  local file="${REPO_DIR}/.env"
+  local escaped
+
+  [[ -f "$file" ]] || return 0
+  escaped=$(printf '%s' "$value" | sed 's/[&|]/\\&/g')
+  if grep -qE "^${key}=" "$file"; then
+    sed -i "s|^${key}=.*|${key}=${escaped}|" "$file"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$file"
+  fi
+}
+
 # -------- 1. distro check --------------------------------------------------
 
 if ! grep -qE 'Ubuntu (22\.04|24\.04)|Debian GNU/Linux 1[2-9]' /etc/os-release; then
@@ -30,6 +45,7 @@ if ! getent group panel >/dev/null; then
   log "creating system group 'panel'"
   groupadd --system panel
 fi
+PANEL_GID=$(getent group panel | cut -d: -f3)
 
 if ! id -u squad >/dev/null 2>&1; then
   log "creating system user 'squad'"
@@ -122,6 +138,12 @@ elif [[ -e /var/lib/squad-panel ]]; then
 fi
 if [[ ! -L /var/lib/squad-panel ]]; then
   ln -sfn "${DATA_DIR}/servers" /var/lib/squad-panel
+fi
+
+set_env_key DATA_DIR "${DATA_DIR}"
+set_env_key PANEL_GID "${PANEL_GID}"
+if [[ -f "${REPO_DIR}/.env" ]]; then
+  log "synchronized .env DATA_DIR and PANEL_GID"
 fi
 
 # squad-depot is a Docker named volume backed by ${DATA_DIR}/depot so SteamCMD's

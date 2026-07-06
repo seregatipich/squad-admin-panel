@@ -16,17 +16,17 @@
 | `SESSION_TOUCH_THROTTLE_SECONDS` | no | `60` | all | Minimum interval between DB session-touch writes per session (Redis `SETNX session-touch:{id}`). | no |
 | `GLITCHTIP_DSN` | no | — | all | Sentry-compatible error reporting. | yes |
 | `LOG_LEVEL` | no | `info` | all | `pino` log level. | no |
-| `NODE_ENV` | no | `development` | all | `production` disables Swagger UI and pretty logs. | no |
+| `NODE_ENV` | no | `development` | all | `production` disables pretty logs. Swagger UI is still registered at `/api/docs`. | no |
 
 ## Listening port
 
-Inside the container the API binds `0.0.0.0:3001`. Caddy proxies `/api/*` and the WebSocket upgrade routes to that port over the internal compose network.
+Inside the container the API binds `0.0.0.0:3000`. Caddy proxies `/api/*` and the WebSocket upgrade routes to that port over the internal compose network.
 
 ## Plugin tunables
 
 These are not env-driven; change in code if needed.
 
-- `@fastify/rate-limit`: 300 req/min per `(IP, steamId64)`. Steam callback is IP-keyed.
+- `@fastify/rate-limit`: 1200 req/min per `(IP, playerId)`. Steam callback is IP-keyed before a user context exists.
 - Cookie session TTL: 6 h sliding (configurable via `SESSION_TTL_SECONDS`). Touch throttled to one DB write per 60 s (`SESSION_TOUCH_THROTTLE_SECONDS`).
 - `status-reconciler` poll interval: 4 s (`RECONCILE_INTERVAL_MS` in [`status-reconciler.ts`](../../../apps/api/src/plugins/status-reconciler.ts)). The first tick fires on `onReady`, then every 4 s. Lower means faster UI feedback, more `container_inspect` load.
 - `status-reconciler` per-tick budget: 12 s (`TICK_BUDGET_MS`). `Promise.allSettled` across all transient servers races against a timer of this length. Servers that don't finish before budget retry on the next interval. `last_tick_budget_exceeded` in the health endpoint flags when this kicked in.

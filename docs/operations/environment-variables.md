@@ -14,6 +14,8 @@
 | `DATABASE_URL` | yes | `postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin` | all | Defaults are fine inside compose. | yes |
 | `REDIS_URL` | yes | `redis://redis:6379` | all | Defaults are fine inside compose. | no |
 | `BRIDGE_SOCKET` | yes | `/run/panel-host-bridge/bridge.sock` | all | Path to the bridge unix socket inside containers. | no |
+| `PANEL_GID` | yes | `987` | compose / bridge clients | Primary GID used by bridge-consuming containers. Must equal the host `panel` group GID; `scripts/install-host-bridge.sh` and `scripts/bootstrap.sh` update it in `.env`. | no |
+| `DATA_DIR` | yes | `./data` | compose volumes / bridge | Host data tree used by bind-mounted volumes and `PANEL_DEPOT_HOST_PATH`. The host bridge installer provisions this tree and synchronizes `.env`. | no |
 | `STEAM_API_KEY` | no | — | api | Steam Web API key for persona/avatar enrichment. Get from https://steamcommunity.com/dev/apikey. Without it, player names fall back to `Player <last 4 of steam_id64>`. | yes |
 | `SESSION_TTL_SECONDS` | no | `21600` (6 h) | api | Sliding session lifetime in seconds. | no |
 | `SESSION_TOUCH_THROTTLE_SECONDS` | no | `60` | api | Minimum interval between DB session-touch writes per session (Redis `SETNX session-touch:{id}`). | no |
@@ -22,7 +24,7 @@
 | `RESTIC_REPOSITORY` | optional | — | all | Where the (post-P0) backup worker writes snapshots. | no |
 | `RESTIC_PASSWORD` | optional | — | all | Restic encryption passphrase. | yes |
 | `LOG_LEVEL` | no | `info` | api / workers | `pino` log level. | no |
-| `NODE_ENV` | no | `production` | api / web / workers | `production` disables Swagger UI and pretty logs. | no |
+| `NODE_ENV` | no | `production` | api / web / workers | `production` disables pretty logs. Swagger UI is registered at `/api/docs` for API smoke checks. | no |
 
 ## Production hardening
 

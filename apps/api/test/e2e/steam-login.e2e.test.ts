@@ -4,7 +4,7 @@
  * Cannot exercise the OpenID 2.0 verifier itself without a real Steam
  * account; instead this test verifies that AFTER a manual Steam login
  * (cookie supplied via PANEL_TEST_COOKIE env), the panel reports the
- * caller correctly and the setup wizard is properly locked.
+ * caller correctly and legacy setup surfaces stay closed.
  *
  * Setup:
  *   1. docker compose up -d
@@ -48,7 +48,7 @@ describe.skipIf(skip.skip)('steam-login e2e', () => {
     expect(sessions.some((s) => s.current)).toBe(true);
   });
 
-  it('legacy POST /api/v1/setup/init returns 404 (setup wizard removed in Эпик 2)', async () => {
+  it('legacy POST /api/v1/setup/init returns 404', async () => {
     const res = await api.fetch('/api/v1/setup/init', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

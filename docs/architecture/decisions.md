@@ -106,7 +106,7 @@ The panel had an RBAC schema that was never fully enforced: `player_role_assignm
 3. **Drop multi-tenancy** — `organizations`, `organization_members`, `role_server_scopes`, `audit_log.org_id` all removed in migration `0009_panel_rbac.sql`.
 4. **Drop clearance levels** — `roles.clearance_level` column and all `hasServerPermission` / clearance-max logic removed.
 5. **Five seeded roles in SQL** — Owner (system, `is_system_role = true`), Senior Admin, Admin, Moderator, Viewer — with full permission sets INSERTed in `0009`. No application-layer seeder.
-6. **First-login Owner trick** — `claimFirstOwner()` in `apps/api/src/lib/first-owner.ts` uses `panel_meta.first_owner_claimed` and a Postgres advisory lock to assign the Owner role to the first Steam login on a fresh panel. Replaces the setup wizard.
+6. **First-login Owner trick** — `claimFirstOwner()` in `apps/api/src/lib/first-owner.ts` uses `panel_meta.first_owner_claimed` and a Postgres advisory lock to assign the Owner role to the first Steam login on a fresh panel. The Owner claim no longer belongs to setup routes; the current `/setup` page only finalizes panel metadata after the Owner session exists.
 7. **16-color palette** — `roles.color` constrained by a DB CHECK to 16 Tailwind slug names mirrored in `ROLE_COLORS`. Unit test asserts TS constant ↔ SQL constraint sync.
 8. **Point-invalidated in-memory cache** — `loadUserPermissions` caches in Redis at `rbac:perms:{steam_id64}` with TTL 30 s. `invalidatePermissionCache` and `invalidatePermissionCacheForRole` clear entries immediately on role mutations; TTL is a safety-net only.
 

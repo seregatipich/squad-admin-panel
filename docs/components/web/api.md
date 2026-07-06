@@ -10,6 +10,7 @@ All pages live under `apps/web/src/app/`. The `(dashboard)` route group requires
 |---|---|---|
 | `/` | `app/page.tsx` | Reads `__Host-sid` cookie server-side; redirects to `/dashboard` when present, otherwise to `/login`. |
 | `/login` | `app/login/page.tsx` | Steam OpenID sign-in entry point. Redirects to `/dashboard` if already authenticated. Shows errors for `?error=auth_failed` and `?error=not_authorized`. |
+| `/setup` | `app/setup/page.tsx` | First-time panel finalization. Before the first Owner claim it shows the Steam login CTA; after the first Owner login it asks for the organization name and calls `POST /api/v1/setup/complete`. Completed panels redirect back to `/`. |
 | `/no-access` | `app/no-access/page.tsx` | Landing for authenticated Steam users who have no panel role. Shows optional `?steam_id64=` in the URL. |
 
 ### Dashboard pages
