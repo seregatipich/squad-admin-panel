@@ -15,15 +15,29 @@ const vipLifecycleEventTypeSchema = z.enum([
   'vip.refunded',
 ]);
 
-const vipLifecycleBody = z.object({
-  event_id: z.string().trim().min(1).max(160),
-  event_type: vipLifecycleEventTypeSchema,
-  player_id: z.string().uuid(),
-  role_id: z.string().uuid(),
-  tier: z.string().trim().min(1).max(64).nullable().optional(),
-  purchase_id: z.string().trim().min(1).max(160).nullable().optional(),
-  expires_at: z.string().datetime({ offset: true }).nullable().optional(),
-});
+const vipLifecycleBody = z
+  .object({
+    event_id: z.string().trim().min(1).max(160),
+    event_type: vipLifecycleEventTypeSchema,
+    player_id: z.string().uuid().optional(),
+    steam_id64: z
+      .string()
+      .regex(/^\d{17}$/)
+      .optional(),
+    role_id: z.string().uuid(),
+    tier: z.string().trim().min(1).max(64).nullable().optional(),
+    purchase_id: z.string().trim().min(1).max(160).nullable().optional(),
+    expires_at: z.string().datetime({ offset: true }).nullable().optional(),
+  })
+  .superRefine((body, ctx) => {
+    if (!body.player_id && !body.steam_id64) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['player_id'],
+        message: 'player_id or steam_id64 is required',
+      });
+    }
+  });
 
 type VipLifecycleBody = z.infer<typeof vipLifecycleBody>;
 type VipLifecycleAction = 'assigned' | 'revoked' | 'ignored';
@@ -40,6 +54,12 @@ function roleComment(body: VipLifecycleBody): string {
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function playerLookupCondition(body: VipLifecycleBody) {
+  if (body.player_id) return eq(players.id, body.player_id);
+  if (body.steam_id64) return eq(players.steamId64, BigInt(body.steam_id64));
+  throw new Error('player_id or steam_id64 is required');
 }
 
 const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
@@ -80,9 +100,9 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
       const now = new Date();
       const result = await app.db.transaction(async (tx) => {
         const [player] = await tx
-          .select({ roleId: players.roleId })
+          .select({ id: players.id, roleId: players.roleId })
           .from(players)
-          .where(eq(players.id, body.player_id))
+          .where(playerLookupCondition(body))
           .limit(1);
         if (!player) {
           return { error: 'player_not_found' as const };
@@ -116,7 +136,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
           .values({
             eventId: body.event_id,
             eventType: body.event_type,
-            playerId: body.player_id,
+            playerId: player.id,
             roleId: body.role_id,
             tier: body.tier ?? null,
             purchaseId: body.purchase_id ?? null,
@@ -140,7 +160,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
               roleComment: roleComment(body),
               updatedAt: now,
             })
-            .where(eq(players.id, body.player_id));
+            .where(eq(players.id, player.id));
         } else if (action === 'revoked') {
           await tx
             .update(players)
@@ -150,7 +170,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
               roleComment: null,
               updatedAt: now,
             })
-            .where(eq(players.id, body.player_id));
+            .where(eq(players.id, player.id));
         }
 
         const syncResult =
@@ -169,7 +189,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
           actorIp: req.ip ?? null,
           actionType: 'vip.lifecycle.apply',
           targetType: 'player',
-          targetId: body.player_id,
+          targetId: player.id,
           beforeSnapshot: {
             role_id: player.roleId,
           },
@@ -200,6 +220,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
           action,
           enqueued: syncResult.enqueued,
           rolePanelAccess: role.panelAccess,
+          playerId: player.id,
         };
       });
 
@@ -215,12 +236,12 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
         return { ok: true, duplicate: true };
       }
 
-      invalidatePermissionCache(body.player_id);
+      invalidatePermissionCache(result.playerId);
       if (
         result.action === 'revoked' ||
         (result.action === 'assigned' && !result.rolePanelAccess)
       ) {
-        await revokeAllForPlayer(app.db, app.redis, body.player_id);
+        await revokeAllForPlayer(app.db, app.redis, result.playerId);
       }
 
       reply.code(202);
