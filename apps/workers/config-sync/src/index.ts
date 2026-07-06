@@ -292,10 +292,10 @@ async function main() {
           forceWrite: false,
         });
         recordOutcome(serverId, result.state !== 'unreachable');
-        if (result.state === 'wrote') {
+        if (result.state === 'drift') {
           log.warn(
             { serverId, expected: result.expectedHash, actual: result.actualHash },
-            'drift corrected',
+            'admins.cfg drift detected — awaiting force-sync',
           );
         }
       } catch (err) {

@@ -146,7 +146,10 @@ describe('syncServerAdminsCfg', () => {
       reason: 'drift_check',
       actorPlayerId: null,
     });
-    expect(['drift', 'in_sync']).toContain(result.state);
+    const bridge = ctx.bridge as ReturnType<typeof makeBridge>;
+
+    expect(result.state).toBe('drift');
+    expect(bridge.fileAtomicWrite).not.toHaveBeenCalled();
   });
 
   it('writes on forceWrite=true even if hashes match', async () => {

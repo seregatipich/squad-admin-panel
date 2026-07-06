@@ -33,6 +33,13 @@ describe('PERMISSIONS registry', () => {
     }
   });
 
+  it('admin group permissions are production-active', () => {
+    const byKey = new Map(PERMISSIONS.map((p) => [p.key, p]));
+
+    expect(byKey.get('admin_group:view')?.unimplemented).toBeUndefined();
+    expect(byKey.get('admin_group:edit')?.unimplemented).toBeUndefined();
+  });
+
   it('PERMISSION_KEYS matches PERMISSIONS', () => {
     expect(PERMISSION_KEYS).toEqual(PERMISSIONS.map((p) => p.key));
   });

@@ -19,7 +19,7 @@ Current keys by category:
 | configs | `config:view`, `config:edit`, `config:rollback` |
 | players | `player:view`, `player:view_ips`, `player:view_notes`*, `player:edit_notes`*, `player:set_flags`* |
 | moderation | `mod:kick`*, `mod:warn`*, `mod:ban_temp`*, `mod:ban_perm`*, `mod:unban`* |
-| admin_groups | `admin_group:view`*, `admin_group:edit`* |
+| admin_groups | `admin_group:view`, `admin_group:edit` |
 | whitelist | `whitelist:view`*, `whitelist:edit`* |
 | host | `host:view`, `host:metrics` |
 | audit | `audit:view`, `audit:export`* |
@@ -32,7 +32,10 @@ Current keys by category:
 | triggers | `trigger:view`*, `trigger:edit`* |
 | scheduler | `scheduler:view`*, `scheduler:edit`* |
 
-_* = `unimplemented: true` — key is registered but no route enforces it yet._
+_* = `unimplemented: true` — key is registered but no route enforces it yet.
+`admin_group:view` и `admin_group:edit` являются production-active: ими защищены
+`/api/v1/admins-cfg/drift`, `/api/v1/admins-cfg/drift/all` и
+`/api/v1/admins-cfg/sync`._
 
 Routes refer to these as literal strings; the type system narrows them to `PermissionKey`.
 

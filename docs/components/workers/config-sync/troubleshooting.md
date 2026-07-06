@@ -101,7 +101,7 @@ redis-cli xinfo consumers events:admins-cfg-sync:<server_id> config-sync
 **Fix paths**:
 
 - If the live worker is healthy but PEL stays huge: the bridge is still failing. Check `docker compose logs worker-config-sync` for `admins.cfg sync_failed` audits and `unreachable` log lines, then fix the bridge.
-- If you want to drain the PEL manually: `redis-cli xack events:admins-cfg-sync:<server_id> config-sync <id>` will discard one entry. Use sparingly — the periodic drift sweep will re-converge the file from current DB state on the next 5-min tick.
+- If you want to drain the PEL manually: `redis-cli xack events:admins-cfg-sync:<server_id> config-sync <id>` will discard one entry. Use sparingly — the periodic drift sweep will only mark the server as `drift` if the managed segment differs; it will not rewrite the file until an active mutation or Force-sync event is processed.
 
 ### Reclaim sweep doesn't seem to fire
 
@@ -118,6 +118,6 @@ redis-cli xinfo consumers events:admins-cfg-sync:<server_id> config-sync
 ## Useful metrics / log lines
 
 - `admins.cfg sync` log line: per-event success/skip. Includes `state`, `groups`, `admins`, `reason`.
-- `drift corrected`: warn-level log emitted when the periodic sweep had to overwrite the file.
+- `admins.cfg drift detected — awaiting force-sync`: warn-level log emitted when the periodic sweep sees that the managed segment no longer matches the DB-derived hash.
 - `worker:heartbeat:config-sync`: liveness key.
 - `audit_log` rows with `action_type LIKE 'admins_cfg.%'`: full history.

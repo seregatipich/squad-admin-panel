@@ -95,13 +95,11 @@ export const PERMISSIONS = [
     key: 'admin_group:view',
     category: 'admin_groups',
     label: 'Видеть Admins.cfg',
-    unimplemented: true,
   },
   {
     key: 'admin_group:edit',
     category: 'admin_groups',
     label: 'Редактировать Admins.cfg',
-    unimplemented: true,
   },
   { key: 'whitelist:view', category: 'whitelist', label: 'Видеть whitelist', unimplemented: true },
   {
