@@ -159,6 +159,18 @@ describe('server lifecycle emits diag events', () => {
 
   it('POST /servers/:id/install emits server.install.{requested,done}', async () => {
     const id = await seedServer(h, { slug: 'diag-install', status: 'pending' });
+    const order: string[] = [];
+    h.app.diag.emit = async (ev) => {
+      order.push(`diag:${ev.kind}`);
+      captured.push(ev);
+    };
+    const publish = h.app.installProgress.publish.bind(h.app.installProgress);
+    h.app.installProgress.publish = (serverId, line) => {
+      if (serverId === id && (line.step === 'done' || line.step === 'error')) {
+        order.push(`progress:${line.step}`);
+      }
+      publish(serverId, line);
+    };
     // Seed depot files so seedConfigs succeeds
     const depotRoot = '/opt/panel-data/depot';
     process.env.PANEL_DEPOT_HOST_PATH = depotRoot;
@@ -187,6 +199,15 @@ describe('server lifecycle emits diag events', () => {
     expect(kinds.some((k) => k === 'server.install.done' || k === 'server.install.failed')).toBe(
       true,
     );
+    const terminalDiag = order.findIndex(
+      (event) => event === 'diag:server.install.done' || event === 'diag:server.install.failed',
+    );
+    const terminalProgress = order.findIndex(
+      (event) => event === 'progress:done' || event === 'progress:error',
+    );
+    expect(terminalDiag).toBeGreaterThanOrEqual(0);
+    expect(terminalProgress).toBeGreaterThanOrEqual(0);
+    expect(terminalDiag).toBeLessThan(terminalProgress);
     delete process.env.PANEL_DEPOT_HOST_PATH;
   }, 30_000);
 });
