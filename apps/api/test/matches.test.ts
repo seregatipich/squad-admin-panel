@@ -101,6 +101,11 @@ async function seedMatchPlayer(
     team?: 1 | 2 | null;
     squadName?: string | null;
     playSeconds?: number;
+    kills?: number | null;
+    deaths?: number | null;
+    teamkills?: number | null;
+    wounds?: number | null;
+    revives?: number | null;
   },
 ): Promise<void> {
   await db.insert(matchPlayers).values({
@@ -110,6 +115,11 @@ async function seedMatchPlayer(
     squadName: opts.squadName ?? null,
     playSeconds: opts.playSeconds ?? 600,
     joinedAt: new Date('2026-06-01T10:00:00.000Z'),
+    kills: opts.kills ?? null,
+    deaths: opts.deaths ?? null,
+    teamkills: opts.teamkills ?? null,
+    wounds: opts.wounds ?? null,
+    revives: opts.revives ?? null,
   });
 }
 
@@ -392,11 +402,21 @@ describeIfDb('matches API (MATCH-4)', () => {
 
   it('match card returns roster with current nickname + team aggregates (AC)', async () => {
     const srv = await seedServer(h.db, 'CardSrv');
+    const previousMatchId = await seedMatch(h.db, {
+      serverId: srv,
+      startedAt: new Date('2026-05-21T09:00:00.000Z'),
+      layer: 'PreviousLayer',
+    });
     const matchId = await seedMatch(h.db, {
       serverId: srv,
       startedAt: new Date('2026-05-21T10:00:00.000Z'),
       durationSeconds: 3600,
       winner: 'team1',
+    });
+    const nextMatchId = await seedMatch(h.db, {
+      serverId: srv,
+      startedAt: new Date('2026-05-21T11:00:00.000Z'),
+      layer: 'NextLayer',
     });
     const alice = await seedPlayer(h.db, { name: 'AliceRoster' });
     const bob = await seedPlayer(h.db, { name: 'BobRoster' });
@@ -407,6 +427,11 @@ describeIfDb('matches API (MATCH-4)', () => {
       team: 1,
       squadName: 'Alpha',
       playSeconds: 3000,
+      kills: 7,
+      deaths: 2,
+      teamkills: 1,
+      wounds: 4,
+      revives: 3,
     });
     await seedMatchPlayer(h.db, {
       matchId,
@@ -414,6 +439,11 @@ describeIfDb('matches API (MATCH-4)', () => {
       team: 1,
       squadName: 'Alpha',
       playSeconds: 1500,
+      kills: 0,
+      deaths: 1,
+      teamkills: 0,
+      wounds: 2,
+      revives: 0,
     });
     await seedMatchPlayer(h.db, {
       matchId,
@@ -439,23 +469,48 @@ describeIfDb('matches API (MATCH-4)', () => {
         squad_name: string | null;
         play_seconds: number;
         kills: number | null;
+        deaths: number | null;
+        teamkills: number | null;
+        wounds: number | null;
+        revives: number | null;
       }>;
       teams: {
-        team1: { players: number; play_seconds: number; kills: number };
-        team2: { players: number; play_seconds: number };
+        team1: {
+          players: number;
+          play_seconds: number;
+          kills: number | null;
+          deaths: number | null;
+          teamkills: number | null;
+          wounds: number | null;
+          revives: number | null;
+        };
+        team2: { players: number; play_seconds: number; kills: number | null };
       };
+      previous_match: { id: string; layer: string | null } | null;
+      next_match: { id: string; layer: string | null } | null;
     };
     expect(body.id).toBe(matchId);
     expect(body.roster.length).toBe(3);
     const aliceEntry = body.roster.find((r) => r.player_id === alice);
     expect(aliceEntry?.nickname).toBe('AliceRoster');
     expect(aliceEntry?.play_seconds).toBe(3000);
-    expect(aliceEntry?.kills).toBeNull();
+    expect(aliceEntry?.kills).toBe(7);
+    expect(aliceEntry?.deaths).toBe(2);
+    expect(aliceEntry?.teamkills).toBe(1);
+    expect(aliceEntry?.wounds).toBe(4);
+    expect(aliceEntry?.revives).toBe(3);
     expect(body.teams.team1.players).toBe(2);
     expect(body.teams.team1.play_seconds).toBe(4500);
-    expect(body.teams.team1.kills).toBe(0);
+    expect(body.teams.team1.kills).toBe(7);
+    expect(body.teams.team1.deaths).toBe(3);
+    expect(body.teams.team1.teamkills).toBe(1);
+    expect(body.teams.team1.wounds).toBe(6);
+    expect(body.teams.team1.revives).toBe(3);
     expect(body.teams.team2.players).toBe(1);
     expect(body.teams.team2.play_seconds).toBe(2400);
+    expect(body.teams.team2.kills).toBeNull();
+    expect(body.previous_match).toMatchObject({ id: previousMatchId, layer: 'PreviousLayer' });
+    expect(body.next_match).toMatchObject({ id: nextMatchId, layer: 'NextLayer' });
   });
 
   it('match card 404 for unknown id', async () => {

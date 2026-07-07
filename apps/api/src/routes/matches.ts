@@ -44,6 +44,7 @@ const idParam = z.object({ id: z.string().uuid() });
 type FilterInput = z.infer<typeof countQuery>;
 
 const STAT_KEYS = ['kills', 'deaths', 'teamkills', 'wounds', 'revives'] as const;
+type StatKey = (typeof STAT_KEYS)[number];
 
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
   if (!req.user) {
@@ -182,6 +183,27 @@ function serializeMatch(row: MatchListRow) {
     duration_seconds: row.durationSeconds,
     end_reason: row.endReason,
   };
+}
+
+function serializeAdjacentMatch(row: MatchListRow | undefined) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    layer: row.layer,
+    started_at: row.startedAt.toISOString(),
+  };
+}
+
+function sumNullableStat(rows: Array<Record<StatKey, number | null>>, key: StatKey): number | null {
+  let total = 0;
+  let hasValue = false;
+  for (const row of rows) {
+    const value = row[key];
+    if (value === null) continue;
+    total += value;
+    hasValue = true;
+  }
+  return hasValue ? total : null;
 }
 
 function csvCell(value: string | number | boolean | null): string {
@@ -363,20 +385,39 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
           team: matchPlayers.team,
           squadName: matchPlayers.squadName,
           playSeconds: matchPlayers.playSeconds,
+          kills: matchPlayers.kills,
+          deaths: matchPlayers.deaths,
+          teamkills: matchPlayers.teamkills,
+          wounds: matchPlayers.wounds,
+          revives: matchPlayers.revives,
         })
         .from(matchPlayers)
         .innerJoin(players, eq(players.id, matchPlayers.playerId))
         .where(eq(matchPlayers.matchId, match.id))
         .orderBy(asc(matchPlayers.team), desc(matchPlayers.playSeconds));
 
-      const nullStats = Object.fromEntries(STAT_KEYS.map((key) => [key, null]));
+      const [previousRows, nextRows] = await Promise.all([
+        listSelection()
+          .where(and(eq(matches.serverId, match.serverId), lt(matches.startedAt, match.startedAt)))
+          .orderBy(desc(matches.startedAt), desc(matches.id))
+          .limit(1),
+        listSelection()
+          .where(and(eq(matches.serverId, match.serverId), gt(matches.startedAt, match.startedAt)))
+          .orderBy(asc(matches.startedAt), asc(matches.id))
+          .limit(1),
+      ]);
+
       const roster = rosterRows.map((entry) => ({
         player_id: entry.playerId,
         nickname: entry.nickname,
         team: entry.team,
         squad_name: entry.squadName,
         play_seconds: entry.playSeconds,
-        ...nullStats,
+        kills: entry.kills,
+        deaths: entry.deaths,
+        teamkills: entry.teamkills,
+        wounds: entry.wounds,
+        revives: entry.revives,
       }));
 
       const teamAggregate = (team: 1 | 2) => {
@@ -384,7 +425,7 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
         return {
           players: members.length,
           play_seconds: members.reduce((sum, entry) => sum + entry.playSeconds, 0),
-          ...Object.fromEntries(STAT_KEYS.map((key) => [key, 0])),
+          ...Object.fromEntries(STAT_KEYS.map((key) => [key, sumNullableStat(members, key)])),
         };
       };
 
@@ -392,6 +433,8 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
         ...serializeMatch(match),
         roster,
         teams: { team1: teamAggregate(1), team2: teamAggregate(2) },
+        previous_match: serializeAdjacentMatch(previousRows[0]),
+        next_match: serializeAdjacentMatch(nextRows[0]),
       };
     },
   );

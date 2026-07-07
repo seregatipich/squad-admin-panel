@@ -9,6 +9,7 @@ import {
   buildCountApiQuery,
   buildExportUrl,
   buildListApiQuery,
+  buildMatchDetailHref,
   buildQueryString,
   DATE_PRESETS,
   formatDateTime,
@@ -193,11 +194,16 @@ export function MatchesBrowser() {
     );
   }, [fetchedServers, items]);
 
+  const currentListHref = useMemo(() => {
+    const query = searchParams.toString();
+    return query ? `${pathname}?${query}` : pathname;
+  }, [pathname, searchParams]);
+
   const openRow = useCallback(
     (id: string) => {
-      router.push(`/matches/${id}`);
+      router.push(buildMatchDetailHref(id, currentListHref));
     },
-    [router],
+    [currentListHref, router],
   );
 
   const exportUrl = useMemo(() => buildExportUrl(filters), [filters]);

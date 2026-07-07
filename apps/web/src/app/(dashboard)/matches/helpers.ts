@@ -26,20 +26,41 @@ export interface MatchListItem {
   end_reason: string | null;
 }
 
-export interface MatchRosterEntry {
+export interface MatchCombatStats {
+  kills: number | null;
+  deaths: number | null;
+  teamkills: number | null;
+  wounds: number | null;
+  revives: number | null;
+}
+
+export interface MatchRosterEntry extends MatchCombatStats {
   player_id: string;
   nickname: string;
-  team: number;
+  team: number | null;
   squad_name: string | null;
   play_seconds: number;
+}
+
+export interface MatchTeamAggregate extends MatchCombatStats {
+  players: number;
+  play_seconds: number;
+}
+
+export interface AdjacentMatch {
+  id: string;
+  layer: string | null;
+  started_at: string;
 }
 
 export interface MatchDetail extends MatchListItem {
   roster: MatchRosterEntry[];
   teams: {
-    team1: { players: number; play_seconds: number };
-    team2: { players: number; play_seconds: number };
+    team1: MatchTeamAggregate;
+    team2: MatchTeamAggregate;
   };
+  previous_match: AdjacentMatch | null;
+  next_match: AdjacentMatch | null;
 }
 
 export interface MatchListResponse {
@@ -250,6 +271,19 @@ export function buildExportUrl(filters: MatchFilters, now: Date = new Date()): s
   return `/api/v1/matches/export?${params.toString()}`;
 }
 
+export function safeMatchBackHref(value: string | string[] | null | undefined): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (!raw || raw.startsWith('//') || !raw.startsWith('/matches')) return '/matches';
+  if (raw === '/matches' || raw.startsWith('/matches?') || raw.startsWith('/matches/')) return raw;
+  return '/matches';
+}
+
+export function buildMatchDetailHref(matchId: string, backHref: string = '/matches'): string {
+  const safeBackHref = safeMatchBackHref(backHref);
+  const backQuery = safeBackHref === '/matches' ? '' : `?from=${encodeURIComponent(safeBackHref)}`;
+  return `/matches/${encodeURIComponent(matchId)}${backQuery}`;
+}
+
 export function nextSort(
   current: MatchFilters,
   column: SortField,
@@ -304,6 +338,18 @@ export function formatDuration(seconds: number | null): string {
   if (hours > 0) return `${hours}ч ${minutes}м`;
   if (minutes > 0) return `${minutes}м ${secs}с`;
   return `${secs}с`;
+}
+
+export function formatMatchStat(value: number | null | undefined): string {
+  return value === null || value === undefined ? '—' : String(value);
+}
+
+export function formatKillDeathStat(
+  kills: number | null | undefined,
+  deaths: number | null | undefined,
+): string {
+  if (kills == null && deaths == null) return '—';
+  return `${formatMatchStat(kills)}/${formatMatchStat(deaths)}`;
 }
 
 export function liveDurationSeconds(startedAt: string, now: Date = new Date()): number {

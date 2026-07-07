@@ -4,10 +4,13 @@ import {
   buildCountApiQuery,
   buildExportUrl,
   buildListApiQuery,
+  buildMatchDetailHref,
   buildQueryString,
   defaultFilters,
   formatDateTime,
   formatDuration,
+  formatKillDeathStat,
+  formatMatchStat,
   isOpenMatch,
   type MatchFilters,
   type MatchListItem,
@@ -15,6 +18,7 @@ import {
   nextSort,
   parseFilters,
   resolveDateRange,
+  safeMatchBackHref,
   serverOptionsFromMatches,
   shortServerName,
   teamPillTone,
@@ -215,6 +219,25 @@ describe('buildCountApiQuery and buildExportUrl', () => {
   });
 });
 
+describe('match detail links', () => {
+  it('preserves safe match list filters when opening a card', () => {
+    expect(buildMatchDetailHref('match-1', '/matches?player=p1&preset=week')).toBe(
+      '/matches/match-1?from=%2Fmatches%3Fplayer%3Dp1%26preset%3Dweek',
+    );
+  });
+
+  it('omits a redundant return parameter for the plain list', () => {
+    expect(buildMatchDetailHref('match-1', '/matches')).toBe('/matches/match-1');
+  });
+
+  it('rejects unsafe return targets', () => {
+    expect(safeMatchBackHref('https://example.com/matches')).toBe('/matches');
+    expect(safeMatchBackHref('//example.com/matches')).toBe('/matches');
+    expect(safeMatchBackHref('/players/p1')).toBe('/matches');
+    expect(safeMatchBackHref(['/matches?player=p1', '/players/p1'])).toBe('/matches?player=p1');
+  });
+});
+
 describe('nextSort', () => {
   it('toggles order when the same column is clicked', () => {
     expect(
@@ -254,6 +277,20 @@ describe('formatDuration', () => {
     expect(formatDuration(42)).toBe('42с');
     expect(formatDuration(150)).toBe('2м 30с');
     expect(formatDuration(3720)).toBe('1ч 2м');
+  });
+});
+
+describe('combat stat formatting', () => {
+  it('keeps absent combat data visibly absent', () => {
+    expect(formatMatchStat(null)).toBe('—');
+    expect(formatKillDeathStat(null, null)).toBe('—');
+  });
+
+  it('formats real zeroes and kill/death pairs', () => {
+    expect(formatMatchStat(0)).toBe('0');
+    expect(formatMatchStat(12)).toBe('12');
+    expect(formatKillDeathStat(8, 2)).toBe('8/2');
+    expect(formatKillDeathStat(0, 0)).toBe('0/0');
   });
 });
 
