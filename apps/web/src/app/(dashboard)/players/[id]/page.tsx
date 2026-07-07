@@ -16,6 +16,7 @@ import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
 import { GeoAnomaliesSection } from './GeoAnomaliesSection';
 import { NotesSection } from './NotesSection';
+import { PlayerTeamkillsSection } from './PlayerTeamkillsSection';
 import { PresenceSection } from './PresenceSection';
 import { RecentMatchesSection } from './RecentMatchesSection';
 import { VotesSection } from './VotesSection';
@@ -164,6 +165,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <NotesSection playerId={playerId} me={me} />
 
       <RecentMatchesSection playerId={playerId} />
+
+      <PlayerTeamkillsSection playerId={playerId} />
 
       <VotesSection playerId={playerId} />
 

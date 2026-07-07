@@ -63,6 +63,9 @@ export const combatEvents = pgTable(
     teamkillVictimIdx: index('combat_events_teamkill_victim_idx')
       .on(table.victimPlayerId, table.occurredAt.desc())
       .where(sql`is_teamkill`),
+    teamkillAttackerIdx: index('combat_events_teamkill_attacker_idx')
+      .on(table.attackerPlayerId, table.occurredAt.desc())
+      .where(sql`is_teamkill`),
     occurredAtBrinIdx: index('combat_events_occurred_at_brin_idx')
       .using('brin', table.occurredAt)
       .with({ pages_per_range: 32 }),

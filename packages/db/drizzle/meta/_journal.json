@@ -288,6 +288,13 @@
       "when": 1783398500000,
       "tag": "0040_presence_seed_seconds",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1783398600000,
+      "tag": "0041_teamkill_attacker_index",
+      "breakpoints": true
     }
   ]
 }
