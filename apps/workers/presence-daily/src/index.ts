@@ -1,6 +1,11 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { recentPresenceWindow, recomputeDailyPresence } from '@squad/db';
+import {
+  recentCoplayWindow,
+  recentPresenceWindow,
+  recomputeCoplayWindow,
+  recomputeDailyPresence,
+} from '@squad/db';
 import { createDiag, type Diag } from '@squad/diag';
 import { startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
@@ -44,6 +49,29 @@ export async function runPresenceDailyTick(deps: PresenceTickDeps): Promise<void
       severity: 'error',
       message: `recompute failed: ${message}`,
       payload: { ...window },
+    });
+  }
+
+  const coplayWindow = recentCoplayWindow(now);
+  try {
+    const rows = await recomputeCoplayWindow(sql, { ...coplayWindow, now });
+    log.info({ ...coplayWindow, rows }, 'coplay recompute ok');
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'coplay.run_ok',
+      severity: 'info',
+      message: `coplay recomputed ${coplayWindow.fromDay}..${coplayWindow.toDay}`,
+      payload: { ...coplayWindow, rows },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ err: message, ...coplayWindow }, 'coplay recompute failed');
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'coplay.run_failed',
+      severity: 'error',
+      message: `coplay recompute failed: ${message}`,
+      payload: { ...coplayWindow },
     });
   }
 }
