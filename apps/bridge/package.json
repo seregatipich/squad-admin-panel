@@ -7,7 +7,7 @@
     "test": "sh -c '[ \"$(go env GOOS)\" = linux ] && go test -race -count=1 ./... || echo \"[bridge] skipping go test: Linux-only syscalls, run on a Linux host or in CI\"'",
     "test:unit": "go test -race -count=1 ./internal/...",
     "lint": "go vet ./... && gofmt -l -s .",
-    "typecheck": "GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./...",
+    "typecheck": "GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -buildvcs=false -o /dev/null ./...",
     "clean": "rm -rf bin"
   }
 }
