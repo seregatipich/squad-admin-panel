@@ -25,6 +25,10 @@ function nextSteam(): bigint {
 const createdTierIds: string[] = [];
 const createdRoleIds: string[] = [];
 const createdPlayerIds: string[] = [];
+// Track each seeded player's steamId64 so cleanup/mutations can be scoped by
+// steamId64 (unique per player) — the test-isolation guard only recognizes
+// player mutations filtered by steamId64, not by uuid.
+const playerSteams = new Map<string, bigint>();
 
 async function seedRole(
   db: DatabaseClient,
@@ -49,16 +53,18 @@ async function seedPlayer(
   roleExpiresAt: Date | null = null,
 ): Promise<string> {
   const id = uuidv7();
+  const sid = nextSteam();
   const name = `VipTierUser-${id.slice(0, 8)}`;
   await db.insert(players).values({
     id,
-    steamId64: nextSteam(),
+    steamId64: sid,
     canonicalName: name,
     canonicalNameNormalized: name.toLowerCase(),
     roleId,
     roleExpiresAt,
   });
   createdPlayerIds.push(id);
+  playerSteams.set(id, sid);
   return id;
 }
 
@@ -94,7 +100,10 @@ describeIfDb('vip-tiers API (VIPSUB-3)', () => {
       await h.db.delete(vipTiers).where(eq(vipTiers.id, id));
     }
     for (const id of createdPlayerIds) {
-      await h.db.delete(players).where(eq(players.id, id));
+      const sid = playerSteams.get(id);
+      if (sid !== undefined) {
+        await h.db.delete(players).where(eq(players.steamId64, sid));
+      }
     }
     for (const id of createdRoleIds) {
       await h.db.delete(roles).where(eq(roles.id, id));
@@ -239,8 +248,10 @@ describeIfDb('vip-tiers API (VIPSUB-3)', () => {
     expect(blocked.statusCode).toBe(409);
     expect(blocked.json()).toMatchObject({ error: 'vip_tier_has_active_assignments' });
 
-    // Clear the assignment; deletion is now permitted.
-    await h.db.update(players).set({ roleId: null }).where(eq(players.id, holder));
+    // Clear the assignment; deletion is now permitted. Scope by steamId64 (the
+    // test-isolation guard only recognizes player mutations filtered that way).
+    const sid = playerSteams.get(holder) as bigint;
+    await h.db.update(players).set({ roleId: null }).where(eq(players.steamId64, sid));
 
     const ok = await h.app.inject({
       method: 'DELETE',
