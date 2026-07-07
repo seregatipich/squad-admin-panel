@@ -16,7 +16,7 @@ const describeIfDb = DATABASE_URL ? describe : describe.skip;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const COMBAT_SQL = readFileSync(path.resolve(__dirname, '../sql/combat-events.sql'), 'utf-8');
 const DOSSIER_MIGRATION = readFileSync(
-  path.resolve(__dirname, '../drizzle/0037_dossier_weapon_vehicle_stats.sql'),
+  path.resolve(__dirname, '../drizzle/0038_dossier_weapon_vehicle_stats.sql'),
   'utf-8',
 );
 
