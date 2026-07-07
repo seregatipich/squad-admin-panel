@@ -18,17 +18,48 @@ Written by `PerServerSupervisor.writeStatus()` after every state transition and 
   "last_poll_at": "<ISO-8601>",
   "tickrate_rt": 49.5,
   "current_map": "CAF_Goose_Bay_AAS_v1",
+  "next_level": "Fallujah",
   "next_layer": "Fallujah_RAAS_v1",
   "game_mode": "AAS",
+  "squad_count": 12,
   "backoffMs": 2000,
   "reason": "reconnect-backoff"
 }
 ```
 
-Fields `player_count`, `last_poll_at`, `tickrate_rt`, `current_map`, `next_layer`, `game_mode` are present only when `state = "connected"`.
+Fields `player_count`, `last_poll_at`, `tickrate_rt`, `current_map`, `next_level`, `next_layer`, `game_mode`, and `squad_count` are present only when `state = "connected"`.
 Fields `backoffMs` and `reason` are present only when `state = "connecting"`.
 
 The API returns `{ state: "not_polled" }` when the key is absent. The UI renders `"— (сервер не запущен)"`.
+
+## Redis key: `rcon:squads:{serverId}`
+
+Written after every successful poll.
+
+**TTL:** 90 s.
+
+**Value shape:**
+
+```json
+{
+  "server_id": "<uuid>",
+  "polled_at": "<ISO-8601>",
+  "squads": [
+    {
+      "team_id": 1,
+      "team_name": "United States Army",
+      "squad_id": 2,
+      "name": "INF",
+      "size": 9,
+      "locked": false,
+      "creator_name": "Alpha",
+      "creator_eos_id": "abcdef0123456789abcdef0123456789",
+      "creator_steam_id64": "76561198012345678",
+      "is_command_squad": false
+    }
+  ]
+}
+```
 
 ## Redis stream: `events:server:{serverId}`
 
@@ -52,7 +83,7 @@ Emitted when the TCP connection drops or the supervisor stops.
 
 ### `rcon.players_polled`
 
-Emitted after every successful `ListPlayers` + `ShowServerInfo` cycle.
+Emitted after every successful poll cycle.
 
 ```json
 {

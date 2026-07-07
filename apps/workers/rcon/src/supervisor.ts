@@ -7,7 +7,9 @@ import { v7 as uuidv7 } from 'uuid';
 import { queryA2S } from './a2s.js';
 import { RconClient } from './client.js';
 import { parseListPlayers } from './parse-list-players.js';
+import { parseListSquads, type RconSquad } from './parse-list-squads.js';
 import { parseServerInfo } from './parse-server-info.js';
+import { parseShowNextMap } from './parse-show-next-map.js';
 import { upsertPlayers } from './persist.js';
 import { buildRoster, type RosterEntry } from './roster.js';
 
@@ -177,6 +179,20 @@ class PerServerSupervisor {
     }
   }
 
+  private async writeSquads(squads: RconSquad[], polledAt: string): Promise<void> {
+    const key = `rcon:squads:${this.target.serverId}`;
+    try {
+      await this.opts.redis.set(
+        key,
+        JSON.stringify({ server_id: this.target.serverId, polled_at: polledAt, squads }),
+        'EX',
+        90,
+      );
+    } catch {
+      // squad cache is telemetry; it must not derail player identity polling
+    }
+  }
+
   private async connectLoop(): Promise<void> {
     while (!this.stopped) {
       let lastDisconnectReason: string | undefined;
@@ -304,21 +320,27 @@ class PerServerSupervisor {
       try {
         const start = Date.now();
         const rawPlayers = await this.client.exec('ListPlayers');
+        const rawSquads = await this.client.exec('ListSquads');
         const rawInfo = await this.client.exec('ShowServerInfo').catch(() => '');
+        const rawNextMap = await this.client.exec('ShowNextMap').catch(() => '');
         const players = parseListPlayers(rawPlayers);
+        const squads = parseListSquads(rawSquads);
         const info = rawInfo ? parseServerInfo(rawInfo) : null;
+        const nextMap = rawNextMap ? parseShowNextMap(rawNextMap) : null;
         await upsertPlayers(this.opts.db, players, this.opts.geoLookup ?? null);
         this.consecutivePollFails = 0;
         const polledAt = new Date().toISOString();
         const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
         this.rosterFirstSeen = firstSeen;
         await this.writeRoster(entries, polledAt);
+        await this.writeSquads(squads, polledAt);
         const pollMs = Date.now() - start;
         this.opts.log.info(
           {
             serverId: this.target.serverId,
             ms: pollMs,
             n: players.length,
+            squads: squads.length,
           },
           'poll listplayers',
         );
@@ -342,8 +364,10 @@ class PerServerSupervisor {
           last_poll_at: new Date().toISOString(),
           tickrate_rt: info?.tickrate ?? undefined,
           current_map: info?.map_name ?? undefined,
-          next_layer: info?.next_layer ?? undefined,
+          next_level: nextMap?.level ?? undefined,
+          next_layer: nextMap?.layer ?? info?.next_layer ?? undefined,
           game_mode: info?.game_mode ?? undefined,
+          squad_count: squads.length,
         });
 
         if (typeof info?.tickrate === 'number') {

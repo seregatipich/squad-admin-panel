@@ -34,10 +34,12 @@ Each `PerServerSupervisor` runs an infinite `connectLoop`:
 ## Poll cycle (every 30 s)
 
 1. `exec('ListPlayers')` → `parseListPlayers()` → `upsertPlayers()`.
-2. `exec('ShowServerInfo')` → `parseServerInfo()`.
-3. Emit `rcon.players_polled` envelope to `events:server:{id}`.
-4. Write `rcon:status:{id}` = `{ state: "connected", player_count, last_poll_at, tickrate_rt, ... }`.
-5. On 3 consecutive poll failures: close client, trigger reconnect loop.
+2. `exec('ListSquads')` → `parseListSquads()` → write `rcon:squads:{id}`.
+3. `exec('ShowServerInfo')` → `parseServerInfo()`.
+4. `exec('ShowNextMap')` → `parseShowNextMap()`.
+5. Emit `rcon.players_polled` envelope to `events:server:{id}`.
+6. Write `rcon:status:{id}` = `{ state: "connected", player_count, squad_count, last_poll_at, tickrate_rt, next_layer, ... }`.
+7. On 3 consecutive poll failures: close client, trigger reconnect loop.
 
 ## Keepalive (every 90 s via RconClient)
 

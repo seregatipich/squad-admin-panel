@@ -2,14 +2,15 @@
 
 ## Purpose
 
-Maintains authenticated Valve-RCON connections to every Squad server whose DB status is `starting` or `running`. Polls player and server-info data on a fixed interval, persists results to Postgres, and publishes events and status keys to Redis.
+Maintains authenticated Valve-RCON connections to every Squad server whose DB status is `starting` or `running`. Polls player, squad, map, and server-info data on a fixed interval, persists player results to Postgres, and publishes events and status keys to Redis.
 
 ## Responsibilities
 
 - Reconcile the set of RCON targets against live DB rows every 15 s.
 - Open TCP connections and authenticate using the Squad two-packet AUTH quirk.
-- Poll `ListPlayers` every 30 s and `ShowServerInfo` every 90 s (keepalive).
+- Poll `ListPlayers`, `ListSquads`, `ShowServerInfo`, and `ShowNextMap` every 30 s.
 - Write `rcon:status:{serverId}` Redis key (TTL 300 s) after every poll.
+- Write `rcon:squads:{serverId}` Redis key (TTL 90 s) after every successful poll.
 - Publish `rcon.connected`, `rcon.disconnected`, `rcon.players_polled` envelopes to `events:server:{serverId}`.
 - Emit `rcon.connected` / `rcon.auth_failed` / `rcon.disconnected` / `rcon.reconnect_attempt` / `rcon.targets.changed` diag events to the `diag:queue` Redis Stream via `@squad/diag`.
 - Upsert `players` and `player_name_history` rows in Postgres.
@@ -31,11 +32,15 @@ apps/workers/rcon/
     client.ts         — RconClient (TCP + multi-packet framing)
     protocol.ts       — Valve RCON encoder/decoder, RconPacketStream
     parse-list-players.ts
+    parse-list-squads.ts
     parse-server-info.ts
+    parse-show-next-map.ts
     persist.ts        — upsertPlayers (players + player_name_history)
   test/
     parse-list-players.test.ts
+    parse-list-squads.test.ts
     parse-server-info.test.ts
+    parse-show-next-map.test.ts
     protocol.test.ts
     supervisor.test.ts
     supervisor-diag.test.ts

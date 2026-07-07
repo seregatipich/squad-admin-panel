@@ -1,5 +1,25 @@
 # Changelog — worker-rcon
 
+## 2026-07-07 — RCON-1 command coverage
+
+### Added
+
+- `ListSquads` parser with team context, lock state, size, creator IDs, and command-squad detection.
+- `ShowNextMap` parser with explicit `To be voted` handling.
+- `rcon:squads:{serverId}` Redis cache written after successful poll cycles.
+- Unit coverage for `ListSquads`, `ShowNextMap`, UTF-8 `ListPlayers` nicknames, RCON command serialization, and the supervisor poll command set.
+
+### Changed
+
+- `RconClient.exec()` now serializes commands through a FIFO queue so multi-packet responses cannot interleave.
+- The 30 s poll cycle now runs `ListPlayers`, `ListSquads`, `ShowServerInfo`, and `ShowNextMap`.
+- `rcon:status:{serverId}` can include `next_level`, `next_layer` from `ShowNextMap`, and `squad_count`.
+
+### Migration notes
+
+- No DB migration. Existing `rcon:status:{serverId}` consumers remain compatible because the new fields are additive.
+- `rcon:squads:{serverId}` is a new Redis-only cache with a 90 s TTL.
+
 ## 2026-04-28 — Diagnostic-bundle Phase A2: diag emits
 
 ### Added

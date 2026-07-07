@@ -47,6 +47,7 @@ Joined with `servers` to satisfy the inner join; no columns currently consumed b
 | Key | TTL | Description |
 |---|---|---|
 | `rcon:status:{serverId}` | 300 s | RCON connection state + poll results |
+| `rcon:squads:{serverId}` | 90 s | Latest `ListSquads` snapshot grouped with team context |
 | `worker:heartbeat:rcon` | 30 s | Liveness heartbeat |
 | `events:server:{serverId}` | stream (MAXLEN ~10000) | Published events |
 
