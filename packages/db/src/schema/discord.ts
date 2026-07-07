@@ -1,4 +1,13 @@
-import { boolean, customType, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  customType,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { servers } from './servers.js';
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
@@ -53,6 +62,19 @@ export const discordWebhooks = pgTable('discord_webhooks', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
 });
+
+export const discordMessageTemplates = pgTable('discord_message_templates', {
+  id: uuid('id').primaryKey().defaultRandom().notNull(),
+  eventType: text('event_type').notNull().unique(),
+  locale: text('locale').notNull().default('en'),
+  template: jsonb('template').notNull(),
+  isDefault: boolean('is_default').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
+});
+
+export type DiscordMessageTemplateRow = typeof discordMessageTemplates.$inferSelect;
+export type NewDiscordMessageTemplate = typeof discordMessageTemplates.$inferInsert;
 
 export type DiscordIntegrationRow = typeof discordIntegration.$inferSelect;
 export type NewDiscordIntegration = typeof discordIntegration.$inferInsert;

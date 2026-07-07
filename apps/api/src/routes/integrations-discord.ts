@@ -1,10 +1,18 @@
 import {
   DISCORD_INTEGRATION_SINGLETON_ID,
+  type DiscordMessageTemplateRow,
   type DiscordWebhookRow,
   discordIntegration,
+  discordMessageTemplates,
   discordWebhooks,
   isDiscordEventType,
 } from '@squad/db/schema';
+import {
+  DISCORD_TEMPLATE_LOCALES,
+  type DiscordEmbedTemplate,
+  defaultDiscordTemplate,
+  renderDiscordTemplate,
+} from '@squad/shared-config';
 import { asc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -52,6 +60,42 @@ const updateWebhookBody = z.object({
 });
 
 const idParam = z.object({ id: z.string().uuid() });
+
+const eventTypeParam = z.object({ eventType: eventTypeSchema });
+
+const embedFieldSchema = z.object({
+  name: z.string().max(256),
+  value: z.string().max(1024),
+  inline: z.boolean(),
+});
+
+const embedTemplateSchema = z.object({
+  title: z.string().max(256),
+  url: z.string().trim().max(2048).nullable().optional(),
+  description: z.string().max(4096),
+  color: z.number().int().min(0).max(0xffffff),
+  fields: z.array(embedFieldSchema).max(25),
+});
+
+const putTemplateBody = z.object({
+  template: embedTemplateSchema,
+  locale: z.enum(DISCORD_TEMPLATE_LOCALES).optional(),
+});
+
+const previewBody = z.object({
+  template: embedTemplateSchema,
+  context: z.record(z.string(), z.string()).default({}),
+});
+
+function templateView(row: DiscordMessageTemplateRow) {
+  return {
+    event_type: row.eventType,
+    locale: row.locale,
+    template: row.template as DiscordEmbedTemplate,
+    is_default: row.isDefault,
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
 
 interface IntegrationRowLike {
   guildId: string | null;
@@ -350,6 +394,157 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
         statusCode: 200,
       });
       return { ok: true };
+    },
+  );
+
+  fast.get(
+    '/api/v1/integrations/discord/templates',
+    { config: { permissions: [INTEGRATION_PERMISSION], audit: false } },
+    async (req, reply) => {
+      if (isForbidden(req, reply)) return;
+      const rows = await app.db
+        .select()
+        .from(discordMessageTemplates)
+        .orderBy(asc(discordMessageTemplates.eventType));
+      return rows.map(templateView);
+    },
+  );
+
+  fast.get(
+    '/api/v1/integrations/discord/templates/:eventType',
+    {
+      schema: { params: eventTypeParam },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+    },
+    async (req, reply) => {
+      if (isForbidden(req, reply)) return;
+      const [row] = await app.db
+        .select()
+        .from(discordMessageTemplates)
+        .where(eq(discordMessageTemplates.eventType, req.params.eventType))
+        .limit(1);
+      if (!row) {
+        reply.code(404);
+        return { error: 'template_not_found' };
+      }
+      return templateView(row);
+    },
+  );
+
+  fast.put(
+    '/api/v1/integrations/discord/templates/:eventType',
+    {
+      schema: { params: eventTypeParam, body: putTemplateBody },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+    },
+    async (req, reply) => {
+      if (isForbidden(req, reply)) return;
+      const [existing] = await app.db
+        .select()
+        .from(discordMessageTemplates)
+        .where(eq(discordMessageTemplates.eventType, req.params.eventType))
+        .limit(1);
+      if (!existing) {
+        reply.code(404);
+        return { error: 'template_not_found' };
+      }
+      const before = templateView(existing);
+      const now = new Date();
+      await app.db
+        .update(discordMessageTemplates)
+        .set({
+          template: req.body.template,
+          locale: req.body.locale ?? existing.locale,
+          isDefault: false,
+          updatedAt: now,
+        })
+        .where(eq(discordMessageTemplates.eventType, req.params.eventType));
+      const [updated] = await app.db
+        .select()
+        .from(discordMessageTemplates)
+        .where(eq(discordMessageTemplates.eventType, req.params.eventType))
+        .limit(1);
+      const after = updated ? templateView(updated) : null;
+      await writeAuditEntry(app.db, {
+        actor: auditActor(req),
+        actorIp: req.ip ?? null,
+        actionType: 'integration.discord.template.update',
+        targetType: 'discord_message_template',
+        targetId: req.params.eventType,
+        before,
+        after,
+        context: auditContext(req),
+        statusCode: 200,
+      });
+      return after;
+    },
+  );
+
+  fast.post(
+    '/api/v1/integrations/discord/templates/:eventType/reset',
+    {
+      schema: { params: eventTypeParam },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+    },
+    async (req, reply) => {
+      if (isForbidden(req, reply)) return;
+      const fallback = defaultDiscordTemplate(req.params.eventType);
+      if (!fallback) {
+        reply.code(404);
+        return { error: 'template_not_found' };
+      }
+      const [existing] = await app.db
+        .select()
+        .from(discordMessageTemplates)
+        .where(eq(discordMessageTemplates.eventType, req.params.eventType))
+        .limit(1);
+      const before = existing ? templateView(existing) : null;
+      const now = new Date();
+      await app.db
+        .update(discordMessageTemplates)
+        .set({
+          template: fallback.template,
+          locale: fallback.locale,
+          isDefault: true,
+          updatedAt: now,
+        })
+        .where(eq(discordMessageTemplates.eventType, req.params.eventType));
+      const [updated] = await app.db
+        .select()
+        .from(discordMessageTemplates)
+        .where(eq(discordMessageTemplates.eventType, req.params.eventType))
+        .limit(1);
+      const after = updated ? templateView(updated) : null;
+      await writeAuditEntry(app.db, {
+        actor: auditActor(req),
+        actorIp: req.ip ?? null,
+        actionType: 'integration.discord.template.reset',
+        targetType: 'discord_message_template',
+        targetId: req.params.eventType,
+        before,
+        after,
+        context: auditContext(req),
+        statusCode: 200,
+      });
+      return after;
+    },
+  );
+
+  fast.post(
+    '/api/v1/integrations/discord/templates/:eventType/preview',
+    {
+      schema: { params: eventTypeParam, body: previewBody },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+    },
+    async (req, reply) => {
+      if (isForbidden(req, reply)) return;
+      const missing: string[] = [];
+      const embed = renderDiscordTemplate(req.body.template, req.body.context, {
+        onMissingPlaceholder: (placeholder) => {
+          if (!missing.includes(placeholder)) missing.push(placeholder);
+        },
+      });
+      return { event_type: req.params.eventType, embed, missing_placeholders: missing };
     },
   );
 };
