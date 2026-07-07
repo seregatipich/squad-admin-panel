@@ -42,6 +42,13 @@ export interface MatchRosterEntry extends MatchCombatStats {
   play_seconds: number;
 }
 
+export type MatchRosterSortField = 'player' | 'squad' | 'time' | 'kd' | 'tk' | 'wounds' | 'revives';
+
+export interface MatchRosterSort {
+  field: MatchRosterSortField;
+  order: OrderDir;
+}
+
 export interface MatchTeamAggregate extends MatchCombatStats {
   players: number;
   play_seconds: number;
@@ -476,6 +483,73 @@ export function formatKillDeathStat(
 ): string {
   if (kills == null && deaths == null) return '—';
   return `${formatMatchStat(kills)}/${formatMatchStat(deaths)}`;
+}
+
+function compareTextValue(
+  left: string | null | undefined,
+  right: string | null | undefined,
+  order: OrderDir,
+): number {
+  const leftValue = left?.trim() ?? '';
+  const rightValue = right?.trim() ?? '';
+  const leftMissing = leftValue.length === 0;
+  const rightMissing = rightValue.length === 0;
+  if (leftMissing && rightMissing) return 0;
+  if (leftMissing) return 1;
+  if (rightMissing) return -1;
+  const result = leftValue.localeCompare(rightValue, 'ru', { numeric: true, sensitivity: 'base' });
+  return order === 'asc' ? result : -result;
+}
+
+function compareNullableNumber(
+  left: number | null | undefined,
+  right: number | null | undefined,
+  order: OrderDir,
+): number {
+  const leftMissing = left === null || left === undefined;
+  const rightMissing = right === null || right === undefined;
+  if (leftMissing && rightMissing) return 0;
+  if (leftMissing) return 1;
+  if (rightMissing) return -1;
+  const result = left - right;
+  return order === 'asc' ? result : -result;
+}
+
+function compareRosterFallback(left: MatchRosterEntry, right: MatchRosterEntry): number {
+  return (
+    compareTextValue(left.nickname, right.nickname, 'asc') ||
+    left.player_id.localeCompare(right.player_id)
+  );
+}
+
+export function sortMatchRosterEntries(
+  entries: readonly MatchRosterEntry[],
+  sort: MatchRosterSort | null,
+): MatchRosterEntry[] {
+  const sorted = [...entries];
+  if (!sort) return sorted;
+
+  return sorted.sort((left, right) => {
+    let result = 0;
+    if (sort.field === 'player')
+      result = compareTextValue(left.nickname, right.nickname, sort.order);
+    if (sort.field === 'squad')
+      result = compareTextValue(left.squad_name, right.squad_name, sort.order);
+    if (sort.field === 'time')
+      result = compareNullableNumber(left.play_seconds, right.play_seconds, sort.order);
+    if (sort.field === 'kd') {
+      result =
+        compareNullableNumber(left.kills, right.kills, sort.order) ||
+        compareNullableNumber(left.deaths, right.deaths, sort.order);
+    }
+    if (sort.field === 'tk')
+      result = compareNullableNumber(left.teamkills, right.teamkills, sort.order);
+    if (sort.field === 'wounds')
+      result = compareNullableNumber(left.wounds, right.wounds, sort.order);
+    if (sort.field === 'revives')
+      result = compareNullableNumber(left.revives, right.revives, sort.order);
+    return result || compareRosterFallback(left, right);
+  });
 }
 
 export function formatMatchTimelineOffset(occurredAt: string, startedAt: string): string {

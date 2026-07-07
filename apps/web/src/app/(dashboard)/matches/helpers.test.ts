@@ -27,6 +27,7 @@ import {
   serverOptionsFromMatches,
   shortServerName,
   shouldDelayMatchScrollRestore,
+  sortMatchRosterEntries,
   teamPillTone,
   winnerLabel,
 } from './helpers';
@@ -374,6 +375,78 @@ describe('combat stat formatting', () => {
     expect(formatMatchStat(12)).toBe('12');
     expect(formatKillDeathStat(8, 2)).toBe('8/2');
     expect(formatKillDeathStat(0, 0)).toBe('0/0');
+  });
+});
+
+describe('match roster sorting', () => {
+  const entries = [
+    {
+      player_id: 'p1',
+      nickname: 'Bravo',
+      team: 1,
+      squad_name: 'Squad B',
+      play_seconds: 600,
+      kills: 4,
+      deaths: 1,
+      teamkills: null,
+      wounds: 2,
+      revives: 0,
+    },
+    {
+      player_id: 'p2',
+      nickname: 'Alpha',
+      team: 1,
+      squad_name: 'Squad A',
+      play_seconds: 1200,
+      kills: 7,
+      deaths: 2,
+      teamkills: 1,
+      wounds: null,
+      revives: 3,
+    },
+    {
+      player_id: 'p3',
+      nickname: 'Charlie',
+      team: 1,
+      squad_name: null,
+      play_seconds: 900,
+      kills: null,
+      deaths: null,
+      teamkills: 0,
+      wounds: 5,
+      revives: null,
+    },
+  ];
+
+  it('sorts text roster columns ascending with empty values last', () => {
+    expect(
+      sortMatchRosterEntries(entries, { field: 'player', order: 'asc' }).map(
+        (entry) => entry.player_id,
+      ),
+    ).toEqual(['p2', 'p1', 'p3']);
+    expect(
+      sortMatchRosterEntries(entries, { field: 'squad', order: 'asc' }).map(
+        (entry) => entry.player_id,
+      ),
+    ).toEqual(['p2', 'p1', 'p3']);
+  });
+
+  it('sorts combat roster columns with unknown values last', () => {
+    expect(
+      sortMatchRosterEntries(entries, { field: 'kd', order: 'desc' }).map(
+        (entry) => entry.player_id,
+      ),
+    ).toEqual(['p2', 'p1', 'p3']);
+    expect(
+      sortMatchRosterEntries(entries, { field: 'wounds', order: 'desc' }).map(
+        (entry) => entry.player_id,
+      ),
+    ).toEqual(['p3', 'p1', 'p2']);
+    expect(
+      sortMatchRosterEntries(entries, { field: 'tk', order: 'asc' }).map(
+        (entry) => entry.player_id,
+      ),
+    ).toEqual(['p3', 'p2', 'p1']);
   });
 });
 

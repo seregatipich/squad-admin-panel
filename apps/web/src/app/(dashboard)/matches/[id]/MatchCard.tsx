@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   buildMatchCombatLogHref,
   buildMatchDetailHref,
@@ -14,10 +14,13 @@ import {
   liveDurationSeconds,
   type MatchDetail,
   type MatchRosterEntry,
+  type MatchRosterSort,
+  type MatchRosterSortField,
   type MatchTeamAggregate,
   type MatchTimelineEvent,
   PILL_CLASSES,
   safeMatchBackHref,
+  sortMatchRosterEntries,
   teamPillTone,
   winnerLabel,
 } from '../helpers';
@@ -245,6 +248,12 @@ function RosterColumn({
   entries: MatchRosterEntry[];
   summary: MatchTeamAggregate;
 }) {
+  const [sort, setSort] = useState<MatchRosterSort | null>(null);
+  const sortedEntries = useMemo(() => sortMatchRosterEntries(entries, sort), [entries, sort]);
+  const applySort = (field: MatchRosterSortField) => {
+    setSort((current) => nextRosterSort(current, field));
+  };
+
   return (
     <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
       <h2 className="mb-3 text-xs uppercase tracking-widest text-neutral-400">
@@ -264,17 +273,61 @@ function RosterColumn({
           <table className="w-full min-w-[560px] border-collapse text-sm">
             <thead className="text-left text-[11px] uppercase tracking-widest text-neutral-600">
               <tr>
-                <th className="py-2 pr-3 font-medium">Игрок</th>
-                <th className="px-2 py-2 font-medium">Отряд</th>
-                <th className="px-2 py-2 text-right font-medium">Время</th>
-                <th className="px-2 py-2 text-right font-medium">K/D</th>
-                <th className="px-2 py-2 text-right font-medium">TK</th>
-                <th className="px-2 py-2 text-right font-medium">Ран.</th>
-                <th className="py-2 pl-2 text-right font-medium">Под.</th>
+                <th className="py-2 pr-3 font-medium">
+                  <RosterSortHeader field="player" label="Игрок" sort={sort} onSort={applySort} />
+                </th>
+                <th className="px-2 py-2 font-medium">
+                  <RosterSortHeader field="squad" label="Отряд" sort={sort} onSort={applySort} />
+                </th>
+                <th className="px-2 py-2 text-right font-medium">
+                  <RosterSortHeader
+                    field="time"
+                    label="Время"
+                    sort={sort}
+                    onSort={applySort}
+                    align="right"
+                  />
+                </th>
+                <th className="px-2 py-2 text-right font-medium">
+                  <RosterSortHeader
+                    field="kd"
+                    label="K/D"
+                    sort={sort}
+                    onSort={applySort}
+                    align="right"
+                  />
+                </th>
+                <th className="px-2 py-2 text-right font-medium">
+                  <RosterSortHeader
+                    field="tk"
+                    label="TK"
+                    sort={sort}
+                    onSort={applySort}
+                    align="right"
+                  />
+                </th>
+                <th className="px-2 py-2 text-right font-medium">
+                  <RosterSortHeader
+                    field="wounds"
+                    label="Ран."
+                    sort={sort}
+                    onSort={applySort}
+                    align="right"
+                  />
+                </th>
+                <th className="py-2 pl-2 text-right font-medium">
+                  <RosterSortHeader
+                    field="revives"
+                    label="Под."
+                    sort={sort}
+                    onSort={applySort}
+                    align="right"
+                  />
+                </th>
               </tr>
             </thead>
             <tbody>
-              {entries.map((entry) => (
+              {sortedEntries.map((entry) => (
                 <tr key={entry.player_id} className="border-t border-neutral-900">
                   <td className="max-w-[180px] py-2 pr-3">
                     <Link
@@ -309,6 +362,45 @@ function RosterColumn({
         </div>
       )}
     </section>
+  );
+}
+
+function nextRosterSort(
+  current: MatchRosterSort | null,
+  field: MatchRosterSortField,
+): MatchRosterSort {
+  if (current?.field === field) {
+    return { field, order: current.order === 'desc' ? 'asc' : 'desc' };
+  }
+  return { field, order: field === 'player' || field === 'squad' ? 'asc' : 'desc' };
+}
+
+function RosterSortHeader({
+  field,
+  label,
+  sort,
+  onSort,
+  align = 'left',
+}: {
+  field: MatchRosterSortField;
+  label: string;
+  sort: MatchRosterSort | null;
+  onSort: (field: MatchRosterSortField) => void;
+  align?: 'left' | 'right';
+}) {
+  const active = sort?.field === field;
+  const arrow = active ? (sort.order === 'desc' ? '↓' : '↑') : '';
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(field)}
+      className={`inline-flex min-w-0 items-center gap-1 border-0 bg-transparent p-0 text-inherit hover:text-neutral-300 ${
+        active ? 'text-neutral-200' : ''
+      } ${align === 'right' ? 'justify-end' : ''}`}
+    >
+      <span>{label}</span>
+      <span className="w-2 text-[10px]">{arrow}</span>
+    </button>
   );
 }
 
