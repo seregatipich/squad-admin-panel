@@ -34,8 +34,8 @@ function* decodePackets(
 
 /**
  * Fire-and-forget RCON command. Opens a fresh TCP socket, sends AUTH,
- * executes one command, closes. Used by the panel API for graceful-stop
- * broadcast/endmatch; the polling RCON client lives in worker-rcon.
+ * executes one command, closes. Used by the panel API as a direct fallback
+ * when worker-rcon is not connected yet.
  */
 export async function rconSendOnce(opts: {
   host: string;

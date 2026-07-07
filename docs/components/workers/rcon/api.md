@@ -61,6 +61,53 @@ Written after every successful poll.
 }
 ```
 
+## Redis stream: `rcon:commands:{serverId}`
+
+Consumed by `RconCommandQueue` only while the per-server supervisor has an authenticated RCON session. The API writes P0 operator commands here first and uses direct TCP RCON only when the worker is not connected or the stream write fails before the command is accepted.
+
+**Consumer group:** `worker-rcon:commands:v1`.
+
+**Entry shape:** field `request` with JSON:
+
+```json
+{
+  "request_id": "<uuid-or-request-id>",
+  "command": "AdminBroadcast" | "AdminEndMatch" | "AdminReloadServerConfig",
+  "args": ["Server is shutting down in 15 seconds"],
+  "actor_player_id": "76561198012345678",
+  "enqueued_at": "<ISO-8601>"
+}
+```
+
+Validation is intentionally narrow:
+
+- `AdminBroadcast` requires exactly one non-empty message argument, max 300 chars, with no CR/LF/NUL control characters.
+- `AdminEndMatch` accepts no args.
+- `AdminReloadServerConfig` accepts no args.
+- Other RCON commands are rejected and acknowledged with an error result.
+
+## Redis key: `rcon:command-result:{requestId}`
+
+Written by `RconCommandQueue` after a queued operator command finishes or is rejected.
+
+**TTL:** 120 s.
+
+**Value shape:**
+
+```json
+{
+  "ok": true,
+  "server_id": "<uuid>",
+  "request_id": "<uuid-or-request-id>",
+  "command": "AdminBroadcast",
+  "response": "Broadcast sent",
+  "completed_at": "<ISO-8601>",
+  "duration_ms": 42
+}
+```
+
+Failed results use `ok: false` and `error` instead of `response`.
+
 ## Redis stream: `events:server:{serverId}`
 
 Three event types are published by this worker. All entries use field name `envelope` containing JSON-encoded `EventEnvelope`.
@@ -121,6 +168,6 @@ The worker emits structured `DiagEvent`s via `@squad/diag` (`createDiag({ redis,
 | `rcon.reconnect_attempt` | `warn` | yes | Before each backoff sleep that precedes a reconnect | `host`, `port`, `backoffMs` |
 | `rcon.targets.changed` | `info` | no | Net delta in the polling set during `RconSupervisor.reconcile()` (no emit when the set is unchanged) | `added: string[]`, `removed: string[]`, `total: number` |
 
-`rcon.command.timeout` is intentionally **not** emitted by this worker. Worker-rcon only runs auto-poll commands (`ListPlayers` every 30 s, `ShowServerInfo` keepalive every 90 s) — emitting on those would generate persistent noise. Manual RCON commands (`AdminBroadcast`, `AdminEndMatch`, `AdminKick`, …) are issued directly by the API via `apps/api/src/lib/rcon-send.ts` and never travel through this worker, so the manual-command timeout signal lives on the API side.
+Manual command timeouts are surfaced to the API through `rcon:command-result:{requestId}`. Polling commands (`ListPlayers`, `ListSquads`, `ShowServerInfo`, `ShowNextMap`) still avoid noisy per-command diag emits.
 
 The `events:server:{serverId}` stream still carries the existing `rcon.connected` / `rcon.disconnected` envelope events for the live-bus fan-out — those are unchanged and orthogonal to the new `diag:queue` emits documented above.

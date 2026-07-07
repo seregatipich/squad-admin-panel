@@ -27,6 +27,9 @@ function makeRedis() {
     set: vi.fn().mockResolvedValue('OK'),
     publish: vi.fn().mockResolvedValue(0),
     xadd: vi.fn().mockResolvedValue('0-0'),
+    xgroup: vi.fn().mockResolvedValue('OK'),
+    xreadgroup: vi.fn().mockResolvedValue(null),
+    xack: vi.fn().mockResolvedValue(1),
   } as never;
 }
 
@@ -187,6 +190,85 @@ describe('RconSupervisor polling', () => {
         next_layer: 'Fallujah_RAAS_v1',
         squad_count: 1,
       });
+    } finally {
+      await supervisor.stop();
+      await closeServer(server);
+    }
+  }, 5000);
+});
+
+describe('RconSupervisor command queue', () => {
+  it('executes queued operator commands over the connected worker RCON session', async () => {
+    const { server, port, commands } = await makePollingRconServer();
+    const redis = makeRedis() as unknown as {
+      set: ReturnType<typeof vi.fn>;
+      publish: ReturnType<typeof vi.fn>;
+      xadd: ReturnType<typeof vi.fn>;
+      xgroup: ReturnType<typeof vi.fn>;
+      xreadgroup: ReturnType<typeof vi.fn>;
+      xack: ReturnType<typeof vi.fn>;
+    };
+    redis.xreadgroup
+      .mockResolvedValueOnce([
+        [
+          'rcon:commands:srv-command',
+          [
+            [
+              '1700-0',
+              [
+                'request',
+                JSON.stringify({
+                  request_id: 'req-command',
+                  command: 'AdminBroadcast',
+                  args: ['Queue smoke'],
+                  enqueued_at: '2026-07-07T12:00:00.000Z',
+                }),
+              ],
+            ],
+          ],
+        ],
+      ])
+      .mockResolvedValue(null);
+    const supervisor = new RconSupervisor({
+      db: makeDb(),
+      redis: redis as never,
+      log: makeLogger(),
+      pollIntervalMs: 10_000,
+    });
+    const liveTarget: Target = {
+      ...target,
+      serverId: 'srv-command',
+      port,
+      queryPort: port + 1000,
+    };
+
+    try {
+      await supervisor.reconcile([liveTarget]);
+
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline && !commands.includes('AdminBroadcast Queue smoke')) {
+        await sleep(25);
+      }
+
+      expect(commands).toContain('AdminBroadcast Queue smoke');
+      expect(redis.xgroup).toHaveBeenCalledWith(
+        'CREATE',
+        'rcon:commands:srv-command',
+        'worker-rcon:commands:v1',
+        '0',
+        'MKSTREAM',
+      );
+      expect(redis.set).toHaveBeenCalledWith(
+        'rcon:command-result:req-command',
+        expect.stringContaining('"ok":true'),
+        'EX',
+        120,
+      );
+      expect(redis.xack).toHaveBeenCalledWith(
+        'rcon:commands:srv-command',
+        'worker-rcon:commands:v1',
+        '1700-0',
+      );
     } finally {
       await supervisor.stop();
       await closeServer(server);

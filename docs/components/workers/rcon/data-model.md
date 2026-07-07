@@ -48,8 +48,22 @@ Joined with `servers` to satisfy the inner join; no columns currently consumed b
 |---|---|---|
 | `rcon:status:{serverId}` | 300 s | RCON connection state + poll results |
 | `rcon:squads:{serverId}` | 90 s | Latest `ListSquads` snapshot grouped with team context |
+| `rcon:command-result:{requestId}` | 120 s | Result of a queued P0 operator command |
 | `worker:heartbeat:rcon` | 30 s | Liveness heartbeat |
 | `events:server:{serverId}` | stream (MAXLEN ~10000) | Published events |
+| `rcon:commands:{serverId}` | stream (MAXLEN ~500 by API producer) | P0 operator commands consumed by worker-rcon |
+
+## Redis stream entries read
+
+### `rcon:commands:{serverId}`
+
+Worker-rcon owns consumer group `worker-rcon:commands:v1`.
+
+| Field | Type | Notes |
+|---|---|---|
+| `request` | JSON | `request_id`, `command`, optional `args`, optional `actor_player_id`, optional `enqueued_at` |
+
+Allowed `command` values: `AdminBroadcast`, `AdminEndMatch`, `AdminReloadServerConfig`.
 
 ## Credential blob schema
 

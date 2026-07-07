@@ -1,0 +1,231 @@
+import { setTimeout as sleep } from 'node:timers/promises';
+import {
+  RCON_COMMAND_GROUP,
+  type RconCommandRequest,
+  type RconCommandResult,
+  type RconOperatorCommandName,
+  rconCommandRequestSchema,
+  rconCommandResultKey,
+  rconCommandResultSchema,
+  rconCommandStream,
+  rconOperatorCommandNameSchema,
+} from '@squad/shared-types';
+import type Redis from 'ioredis';
+import type { Logger } from 'pino';
+
+const RESULT_TTL_SECONDS = 120;
+const DEFAULT_BLOCK_MS = 500;
+const DEFAULT_COUNT = 10;
+const BROADCAST_MAX_CHARS = 300;
+
+type StreamReadResult = Array<[string, Array<[string, string[]]>]> | null;
+
+export interface RconCommandQueueOptions {
+  redis: Redis;
+  log: Logger;
+  serverId: string;
+  execute: (command: string) => Promise<string>;
+  blockMs?: number;
+  count?: number;
+  consumerName?: string;
+  resultTtlSeconds?: number;
+}
+
+export function buildOperatorCommand(input: unknown): string {
+  const parsed = rconCommandRequestSchema.safeParse(input);
+  if (!parsed.success) {
+    throw new Error(`unsupported or invalid rcon operator command: ${parsed.error.message}`);
+  }
+  const request = parsed.data;
+  switch (request.command) {
+    case 'AdminBroadcast':
+      return `AdminBroadcast ${validateBroadcastText(request.args)}`;
+    case 'AdminEndMatch':
+      ensureNoArgs(request);
+      return 'AdminEndMatch';
+    case 'AdminReloadServerConfig':
+      ensureNoArgs(request);
+      return 'AdminReloadServerConfig';
+  }
+}
+
+export class RconCommandQueue {
+  private readonly stream: string;
+  private readonly blockMs: number;
+  private readonly count: number;
+  private readonly consumerName: string;
+  private readonly resultTtlSeconds: number;
+  private running = false;
+  private loopPromise?: Promise<void>;
+
+  constructor(private readonly opts: RconCommandQueueOptions) {
+    this.stream = rconCommandStream(opts.serverId);
+    this.blockMs = opts.blockMs ?? DEFAULT_BLOCK_MS;
+    this.count = opts.count ?? DEFAULT_COUNT;
+    this.consumerName =
+      opts.consumerName ?? `worker-rcon-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+    this.resultTtlSeconds = opts.resultTtlSeconds ?? RESULT_TTL_SECONDS;
+  }
+
+  async ensureGroup(): Promise<void> {
+    try {
+      await this.opts.redis.xgroup('CREATE', this.stream, RCON_COMMAND_GROUP, '0', 'MKSTREAM');
+    } catch (err) {
+      if ((err as Error).message?.includes('BUSYGROUP')) return;
+      throw err;
+    }
+  }
+
+  async start(): Promise<void> {
+    if (this.running) return;
+    await this.ensureGroup();
+    this.running = true;
+    this.loopPromise = this.loop();
+  }
+
+  async stop(): Promise<void> {
+    this.running = false;
+    await this.loopPromise?.catch(() => undefined);
+    this.loopPromise = undefined;
+  }
+
+  async processOnce(): Promise<number> {
+    const result = (await this.opts.redis.xreadgroup(
+      'GROUP',
+      RCON_COMMAND_GROUP,
+      this.consumerName,
+      'COUNT',
+      String(this.count),
+      'BLOCK',
+      String(this.blockMs),
+      'STREAMS',
+      this.stream,
+      '>',
+    )) as StreamReadResult;
+    if (!result) return 0;
+
+    let processed = 0;
+    for (const [streamName, entries] of result) {
+      for (const [streamId, kv] of entries) {
+        await this.processEntry(streamName, streamId, kv);
+        processed++;
+      }
+    }
+    return processed;
+  }
+
+  private async loop(): Promise<void> {
+    while (this.running) {
+      try {
+        const processed = await this.processOnce();
+        if (processed === 0) await sleep(25);
+      } catch (err) {
+        this.opts.log.warn(
+          { err: (err as Error).message, serverId: this.opts.serverId },
+          'rcon command queue read failed',
+        );
+        await sleep(1000);
+      }
+    }
+  }
+
+  private async processEntry(streamName: string, streamId: string, kv: string[]): Promise<void> {
+    const raw = getField(kv, 'request');
+    if (!raw) {
+      await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
+      return;
+    }
+
+    let request: unknown;
+    try {
+      request = JSON.parse(raw);
+    } catch (err) {
+      this.opts.log.warn(
+        { err: (err as Error).message, streamId, serverId: this.opts.serverId },
+        'malformed rcon command request',
+      );
+      await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
+      return;
+    }
+
+    const startedAt = Date.now();
+    const requestId = requestIdOf(request);
+    const commandName = commandNameOf(request);
+    try {
+      const command = buildOperatorCommand(request);
+      const response = await this.opts.execute(command);
+      if (requestId) {
+        await this.writeResult({
+          ok: true,
+          server_id: this.opts.serverId,
+          request_id: requestId,
+          ...(commandName ? { command: commandName } : {}),
+          response,
+          completed_at: new Date().toISOString(),
+          duration_ms: Date.now() - startedAt,
+        });
+      }
+      await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
+    } catch (err) {
+      if (requestId) {
+        await this.writeResult({
+          ok: false,
+          server_id: this.opts.serverId,
+          request_id: requestId,
+          ...(commandName ? { command: commandName } : {}),
+          error: (err as Error).message,
+          completed_at: new Date().toISOString(),
+          duration_ms: Date.now() - startedAt,
+        });
+      }
+      await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
+    }
+  }
+
+  private async writeResult(result: RconCommandResult): Promise<void> {
+    const payload = JSON.stringify(rconCommandResultSchema.parse(result));
+    await this.opts.redis.set(
+      rconCommandResultKey(result.request_id),
+      payload,
+      'EX',
+      this.resultTtlSeconds,
+    );
+  }
+}
+
+function validateBroadcastText(args: string[]): string {
+  if (args.length !== 1) throw new Error('AdminBroadcast expects exactly one message argument');
+  const message = args[0]?.trim();
+  if (!message) throw new Error('AdminBroadcast message is required');
+  if (message.length > BROADCAST_MAX_CHARS) {
+    throw new Error(`AdminBroadcast message exceeds ${BROADCAST_MAX_CHARS} characters`);
+  }
+  if (/[\r\n\0]/u.test(message)) throw new Error('unsafe AdminBroadcast message');
+  return message;
+}
+
+function ensureNoArgs(request: RconCommandRequest): void {
+  if (request.args.length > 0) throw new Error(`${request.command} does not accept arguments`);
+}
+
+function getField(kv: string[], name: string): string | null {
+  const idx = kv.indexOf(name);
+  if (idx < 0 || idx + 1 >= kv.length) return null;
+  return kv[idx + 1] ?? null;
+}
+
+function requestIdOf(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const requestId = value.request_id;
+  return typeof requestId === 'string' && requestId.length > 0 ? requestId : null;
+}
+
+function commandNameOf(value: unknown): RconOperatorCommandName | null {
+  if (!isRecord(value)) return null;
+  const parsed = rconOperatorCommandNameSchema.safeParse(value.command);
+  return parsed.success ? parsed.data : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}

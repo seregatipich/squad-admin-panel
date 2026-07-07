@@ -6,6 +6,7 @@ import type { Logger } from 'pino';
 import { v7 as uuidv7 } from 'uuid';
 import { queryA2S } from './a2s.js';
 import { RconClient } from './client.js';
+import { RconCommandQueue } from './commands.js';
 import { parseListPlayers } from './parse-list-players.js';
 import { parseListSquads, type RconSquad } from './parse-list-squads.js';
 import { parseServerInfo } from './parse-server-info.js';
@@ -97,6 +98,7 @@ class PerServerSupervisor {
   private consecutiveA2SFails = 0;
   private consecutiveLowTick = 0;
   private rosterFirstSeen = new Map<string, string>();
+  private commandQueue?: RconCommandQueue;
 
   constructor(
     private readonly target: Target,
@@ -117,6 +119,7 @@ class PerServerSupervisor {
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.pollTimer) clearInterval(this.pollTimer);
+    await this.stopCommandQueue();
     await this.client?.close();
     this.client = undefined;
   }
@@ -233,6 +236,7 @@ class PerServerSupervisor {
           payload: { host: this.target.host, port: this.target.port },
         });
         await this.writeStatus('connected');
+        await this.startCommandQueue();
         this.schedulePoll();
         await Promise.race([
           disconnected,
@@ -273,6 +277,7 @@ class PerServerSupervisor {
         lastDisconnectReason = msg;
       } finally {
         if (this.pollTimer) clearInterval(this.pollTimer);
+        await this.stopCommandQueue();
         await this.client?.close().catch(() => undefined);
         this.client = undefined;
         await this.emitEvent('rcon.disconnected', {});
@@ -311,6 +316,38 @@ class PerServerSupervisor {
         await this.writeStatus('disconnected', { reason: 'supervisor-stopped' });
       }
     }
+  }
+
+  private async startCommandQueue(): Promise<void> {
+    if (this.commandQueue || !this.client) return;
+    const queue = new RconCommandQueue({
+      redis: this.opts.redis,
+      log: this.opts.log.child({
+        serverId: this.target.serverId,
+        component: 'rcon-command-queue',
+      }),
+      serverId: this.target.serverId,
+      execute: async (command) => {
+        if (!this.client) throw new Error('rcon not connected');
+        return await this.client.exec(command);
+      },
+    });
+    try {
+      await queue.start();
+      this.commandQueue = queue;
+    } catch (err) {
+      this.opts.log.warn(
+        { err: (err as Error).message, serverId: this.target.serverId },
+        'rcon command queue unavailable',
+      );
+      await queue.stop().catch(() => undefined);
+    }
+  }
+
+  private async stopCommandQueue(): Promise<void> {
+    const queue = this.commandQueue;
+    this.commandQueue = undefined;
+    await queue?.stop();
   }
 
   private schedulePoll(): void {

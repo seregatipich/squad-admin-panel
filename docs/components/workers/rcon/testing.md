@@ -68,6 +68,18 @@ Unit tests for `RconSupervisor` reconcile lifecycle.
 | Removes stopped target on reconcile | `size()` decrements when target removed from reconcile list |
 | Does not re-add existing target on repeated reconcile | Idempotent reconcile does not double-count targets |
 | Polls `ListSquads` and `ShowNextMap` and writes the squad cache | Real TCP fixture verifies the full poll command set |
+| Executes queued operator commands over the connected worker RCON session | Real TCP fixture verifies `rcon:commands:{id}` consumption, result write, and `XACK` |
+
+### `commands.test.ts`
+
+Unit tests for the Redis Stream command queue.
+
+| Test | What it verifies |
+|---|---|
+| Builds only whitelisted operator commands | `AdminBroadcast`, `AdminEndMatch`, `AdminReloadServerConfig` are accepted |
+| Rejects unsupported commands and unsafe broadcast text | Arbitrary RCON and CR/LF/NUL broadcast payloads are blocked |
+| Creates the consumer group from stream id `0` | Already-accepted commands are not skipped on first worker startup |
+| Stores success and failure results and acknowledges stream entries | API callers receive a result through `rcon:command-result:{requestId}` |
 
 ### `supervisor-diag.test.ts`
 
@@ -94,6 +106,7 @@ Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
 
 - `client.ts` is unit-tested with an in-process TCP fixture for command serialization; `supervisor-diag.test.ts` also exercises it indirectly for connect/auth-fail paths.
 - `persist.ts` has no isolated test; covered indirectly by e2e tests that verify player rows appear after a poll cycle.
+- Redis pending-message reclaim for the command queue is not implemented in this slice. Commands are consumed and acknowledged in normal flow; a process crash after `XREADGROUP` and before `XACK` would require a later reclaim slice.
 - `rcon.disconnected` and `rcon.reconnect_attempt` diag emits are not asserted in unit tests because the connect loop's backoff sleep makes their timing brittle in fake-timer mode; the e2e suite exercises them end-to-end during graceful-stop.
 
 ## Test data
