@@ -1,7 +1,14 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { playerNameHistory, playerStatPeriods, players, roles, servers } from '@squad/db/schema';
+import {
+  economySettings,
+  playerNameHistory,
+  playerStatPeriods,
+  players,
+  roles,
+  servers,
+} from '@squad/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -48,6 +55,8 @@ interface LeaderboardRow {
     deaths: number;
     kd: number;
     matches_played: number;
+    boost_seconds?: number;
+    bonus_points?: number;
   };
 }
 
@@ -57,6 +66,7 @@ interface LeaderboardBody {
   period_start: string;
   server_id: string | null;
   available: boolean;
+  economy_enabled?: boolean;
   total_rows: number;
   total_pages: number;
   rows: LeaderboardRow[];
@@ -371,5 +381,88 @@ describeIfDb('GET /api/v1/leaderboards', () => {
     expect(serialized).not.toContain('from ');
     expect(serialized).not.toContain('player_stat_periods');
     expect(serialized).not.toContain('date/time');
+  });
+});
+
+describeIfDb('economy leaderboard gating (LEAD-4)', () => {
+  const ECON_PERIOD = '2026-08-01';
+
+  async function setEconomyEnabled(enabled: boolean) {
+    await h.db
+      .update(economySettings)
+      .set({ economyEnabled: enabled })
+      .where(eq(economySettings.id, 1));
+    const keys = await h.redis.keys('leaderboard:*');
+    if (keys.length > 0) await h.redis.del(...keys);
+  }
+
+  beforeAll(async () => {
+    await h.db.insert(playerStatPeriods).values([
+      {
+        playerId: alpha,
+        serverId: null,
+        periodType: 'day',
+        periodStart: ECON_PERIOD,
+        onlineSeconds: 3600,
+        boostSeconds: 200,
+        bonusPoints: 1000,
+      },
+      {
+        playerId: bravo,
+        serverId: null,
+        periodType: 'day',
+        periodStart: ECON_PERIOD,
+        onlineSeconds: 1800,
+        boostSeconds: 400,
+        bonusPoints: 500,
+      },
+    ]);
+  });
+
+  afterAll(async () => {
+    await setEconomyEnabled(false);
+  });
+
+  it('hides the bonus metric entirely when economy is disabled', async () => {
+    await setEconomyEnabled(false);
+    const res = await fetchLeaderboard(`?metric=bonus&period=day&period_start=${ECON_PERIOD}`);
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as LeaderboardBody;
+    expect(body.available).toBe(false);
+    expect(body.economy_enabled).toBe(false);
+    expect(body.rows).toEqual([]);
+    expect(body.total_rows).toBe(0);
+  });
+
+  it('omits bonus/boost from secondary on other metrics when economy is disabled', async () => {
+    await setEconomyEnabled(false);
+    const res = await fetchLeaderboard(`?metric=online&period=day&period_start=${ECON_PERIOD}`);
+    const body = res.json() as LeaderboardBody;
+    expect(body.economy_enabled).toBe(false);
+    const row = body.rows.find((r) => r.player_id === alpha);
+    expect(row?.secondary).not.toHaveProperty('bonus_points');
+    expect(row?.secondary).not.toHaveProperty('boost_seconds');
+  });
+
+  it('ranks by bonus and exposes bonus/boost secondary when economy is enabled', async () => {
+    await setEconomyEnabled(true);
+    const res = await fetchLeaderboard(`?metric=bonus&period=day&period_start=${ECON_PERIOD}`);
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as LeaderboardBody;
+    expect(body.available).toBe(true);
+    expect(body.economy_enabled).toBe(true);
+    expect(body.rows.map((r) => r.player_id)).toEqual([alpha, bravo]);
+    expect(body.rows[0]?.metric_value).toBe(1000);
+    expect(body.rows[0]?.secondary.bonus_points).toBe(1000);
+    expect(body.rows[0]?.secondary.boost_seconds).toBe(200);
+  });
+
+  it('ranks by boost seconds when economy is enabled', async () => {
+    await setEconomyEnabled(true);
+    const res = await fetchLeaderboard(`?metric=boost&period=day&period_start=${ECON_PERIOD}`);
+    const body = res.json() as LeaderboardBody;
+    expect(body.available).toBe(true);
+    expect(body.rows.map((r) => r.player_id)).toEqual([bravo, alpha]);
+    expect(body.rows[0]?.metric_value).toBe(400);
   });
 });

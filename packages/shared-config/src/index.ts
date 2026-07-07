@@ -3,6 +3,7 @@ export * from './bridge-methods.js';
 export * from './chat-flag-rules.js';
 export * from './diag.js';
 export * from './discord-redaction.js';
+export * from './discord-template.js';
 export * from './heartbeat.js';
 export * from './log-stream.js';
 export * from './log-stream-sink.js';

@@ -1,6 +1,15 @@
 export const PER_PAGE = 30;
 
-export type Metric = 'online' | 'seeding' | 'kills' | 'deaths' | 'kd' | 'revives' | 'teamkills';
+export type Metric =
+  | 'online'
+  | 'seeding'
+  | 'kills'
+  | 'deaths'
+  | 'kd'
+  | 'revives'
+  | 'teamkills'
+  | 'bonus'
+  | 'boost';
 export type Period = 'day' | 'week' | 'month' | 'season' | 'alltime';
 export type OrderDir = 'asc' | 'desc';
 
@@ -28,6 +37,8 @@ export interface LeaderboardRow {
     deaths: number;
     kd: number;
     matches_played: number;
+    boost_seconds?: number;
+    bonus_points?: number;
   };
 }
 
@@ -38,6 +49,7 @@ export interface LeaderboardBody {
   server_id: string | null;
   available: boolean;
   combat_available: boolean;
+  economy_enabled?: boolean;
   total_rows: number;
   total_pages: number;
   rows: LeaderboardRow[];
@@ -57,7 +69,9 @@ export type ColumnKey =
   | 'deaths'
   | 'kd'
   | 'revives'
-  | 'seeding';
+  | 'seeding'
+  | 'bonus'
+  | 'boost';
 
 export interface ColumnDef {
   key: ColumnKey;
@@ -65,6 +79,7 @@ export interface ColumnDef {
   tooltip: string;
   metric: Metric | null;
   combat: boolean;
+  economy: boolean;
   align: 'left' | 'right';
 }
 
@@ -75,6 +90,7 @@ export const COLUMNS: ColumnDef[] = [
     tooltip: 'Место в общем рейтинге',
     metric: null,
     combat: false,
+    economy: false,
     align: 'right',
   },
   {
@@ -83,6 +99,7 @@ export const COLUMNS: ColumnDef[] = [
     tooltip: 'Никнейм игрока',
     metric: null,
     combat: false,
+    economy: false,
     align: 'left',
   },
   {
@@ -91,6 +108,7 @@ export const COLUMNS: ColumnDef[] = [
     tooltip: 'Суммарное время в игре',
     metric: 'online',
     combat: false,
+    economy: false,
     align: 'right',
   },
   {
@@ -99,6 +117,7 @@ export const COLUMNS: ColumnDef[] = [
     tooltip: 'Количество убийств',
     metric: 'kills',
     combat: true,
+    economy: false,
     align: 'right',
   },
   {
@@ -107,6 +126,7 @@ export const COLUMNS: ColumnDef[] = [
     tooltip: 'Количество смертей',
     metric: 'deaths',
     combat: true,
+    economy: false,
     align: 'right',
   },
   {
@@ -115,6 +135,7 @@ export const COLUMNS: ColumnDef[] = [
     tooltip: 'Отношение убийств к смертям',
     metric: 'kd',
     combat: true,
+    economy: false,
     align: 'right',
   },
   {
@@ -123,6 +144,7 @@ export const COLUMNS: ColumnDef[] = [
     tooltip: 'Поднятия союзников',
     metric: 'revives',
     combat: true,
+    economy: false,
     align: 'right',
   },
   {
@@ -131,6 +153,25 @@ export const COLUMNS: ColumnDef[] = [
     tooltip: 'Время на прогреве сервера',
     metric: 'seeding',
     combat: false,
+    economy: false,
+    align: 'right',
+  },
+  {
+    key: 'bonus',
+    label: 'Бонусы',
+    tooltip: 'Начисленные бонусы (онлайн + буст по коэффициентам экономики)',
+    metric: 'bonus',
+    combat: false,
+    economy: true,
+    align: 'right',
+  },
+  {
+    key: 'boost',
+    label: 'Буст',
+    tooltip: 'Время в режиме буста',
+    metric: 'boost',
+    combat: false,
+    economy: true,
     align: 'right',
   },
 ];
@@ -151,6 +192,8 @@ const METRIC_VALUES = new Set<Metric>([
   'kd',
   'revives',
   'teamkills',
+  'bonus',
+  'boost',
 ]);
 const PERIOD_VALUES = new Set<Period>(['day', 'week', 'month', 'season', 'alltime']);
 
@@ -314,9 +357,12 @@ export function nextSort(
   return { metric, order: 'desc', page: 1 };
 }
 
-export function visibleColumns(combatAvailable: boolean): ColumnDef[] {
-  if (combatAvailable) return COLUMNS;
-  return COLUMNS.filter((column) => !column.combat);
+export function visibleColumns(combatAvailable: boolean, economyAvailable = false): ColumnDef[] {
+  return COLUMNS.filter((column) => {
+    if (column.combat && !combatAvailable) return false;
+    if (column.economy && !economyAvailable) return false;
+    return true;
+  });
 }
 
 const MEDALS: Record<number, string> = { 1: '🥇', 2: '🥈', 3: '🥉' };
@@ -349,7 +395,8 @@ export function formatDuration(seconds: number): string {
 }
 
 export function formatMetricValue(metric: Metric, value: number): string {
-  if (metric === 'online' || metric === 'seeding') return formatDuration(value);
+  if (metric === 'online' || metric === 'seeding' || metric === 'boost')
+    return formatDuration(value);
   if (metric === 'kd') return value.toFixed(2);
   return numberFmt.format(value);
 }

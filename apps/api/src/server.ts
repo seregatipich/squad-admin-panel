@@ -62,6 +62,8 @@ import meTokensRoutes from './routes/me-tokens.js';
 import messageTemplatesRoutes from './routes/message-templates.js';
 import notesFeedRoutes from './routes/notes-feed.js';
 import permissionsRoutes from './routes/permissions.js';
+import playerCoplayRoutes from './routes/player-coplay.js';
+import playerDossierStatsRoutes from './routes/player-dossier-stats.js';
 import playerGeoAnomaliesRoutes from './routes/player-geo-anomalies.js';
 import playerMatchesRoutes from './routes/player-matches.js';
 import playerNotesRoutes from './routes/player-notes.js';
@@ -85,6 +87,7 @@ import settingsEconomyRoutes from './routes/settings-economy.js';
 import setupRoutes from './routes/setup.js';
 import usersRoutes from './routes/users.js';
 import vehicleCatalogRoutes from './routes/vehicle-catalog.js';
+import vipTiersRoutes from './routes/vip-tiers.js';
 import voteAnalyticsRoutes from './routes/vote-analytics.js';
 import votesRoutes from './routes/votes.js';
 
@@ -176,6 +179,8 @@ export async function buildServer(config: AppConfig) {
   await app.register(matchesRoutes);
   await app.register(playerMatchesRoutes);
   await app.register(playerPresenceRoutes);
+  await app.register(playerCoplayRoutes);
+  await app.register(playerDossierStatsRoutes);
   await app.register(playerGeoAnomaliesRoutes);
   await app.register(leaderboardsRoutes);
   await app.register(economyRoutes);
@@ -185,6 +190,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(chatRoutes);
   await app.register(combatEventsRoutes);
   await app.register(vehicleCatalogRoutes);
+  await app.register(vipTiersRoutes);
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);
   await app.register(eventsRoutes);

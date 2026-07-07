@@ -53,6 +53,8 @@ import meTokensRoutes from '../../src/routes/me-tokens.js';
 import messageTemplatesRoutes from '../../src/routes/message-templates.js';
 import notesFeedRoutes from '../../src/routes/notes-feed.js';
 import permissionsRoutes from '../../src/routes/permissions.js';
+import playerCoplayRoutes from '../../src/routes/player-coplay.js';
+import playerDossierStatsRoutes from '../../src/routes/player-dossier-stats.js';
 import playerGeoAnomaliesRoutes from '../../src/routes/player-geo-anomalies.js';
 import playerMatchesRoutes from '../../src/routes/player-matches.js';
 import playerNotesRoutes from '../../src/routes/player-notes.js';
@@ -74,6 +76,7 @@ import settingsChatFlagsRoutes from '../../src/routes/settings-chat-flags.js';
 import settingsEconomyRoutes from '../../src/routes/settings-economy.js';
 import usersRoutes from '../../src/routes/users.js';
 import vehicleCatalogRoutes from '../../src/routes/vehicle-catalog.js';
+import vipTiersRoutes from '../../src/routes/vip-tiers.js';
 import voteAnalyticsRoutes from '../../src/routes/vote-analytics.js';
 import votesRoutes from '../../src/routes/votes.js';
 
@@ -515,6 +518,8 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(matchesRoutes);
   await app.register(playerMatchesRoutes);
   await app.register(playerPresenceRoutes);
+  await app.register(playerCoplayRoutes);
+  await app.register(playerDossierStatsRoutes);
   await app.register(playerGeoAnomaliesRoutes);
   await app.register(leaderboardsRoutes);
   await app.register(economyRoutes);
@@ -524,6 +529,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(chatRoutes);
   await app.register(combatEventsRoutes);
   await app.register(vehicleCatalogRoutes);
+  await app.register(vipTiersRoutes);
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);
   await app.register(eventsRoutes);

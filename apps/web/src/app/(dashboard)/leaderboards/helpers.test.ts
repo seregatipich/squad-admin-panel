@@ -204,6 +204,30 @@ describe('combat column visibility', () => {
   });
 });
 
+describe('economy column visibility (LEAD-4)', () => {
+  it('hides bonus and boost columns when economy is disabled', () => {
+    const keys = visibleColumns(true, false).map((column) => column.key);
+    expect(keys).not.toContain('bonus');
+    expect(keys).not.toContain('boost');
+  });
+
+  it('shows bonus and boost columns when economy is enabled', () => {
+    const keys = visibleColumns(true, true).map((column) => column.key);
+    expect(keys).toContain('bonus');
+    expect(keys).toContain('boost');
+  });
+
+  it('defaults to hiding economy columns when the flag is omitted', () => {
+    const keys = visibleColumns(false).map((column) => column.key);
+    expect(keys).toEqual(['rank', 'player', 'online', 'seeding']);
+  });
+
+  it('formats boost as a duration and bonus as a count', () => {
+    expect(normalizeSpaces(formatMetricValue('boost', 3600))).toBe('1ч 0м');
+    expect(normalizeSpaces(formatMetricValue('bonus', 12345))).toBe('12 345');
+  });
+});
+
 describe('medal rendering', () => {
   it('awards medals to the top three ranks only', () => {
     expect(medalFor(1)).toBe('🥇');

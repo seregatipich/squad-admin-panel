@@ -33,6 +33,21 @@ These rules are mandatory for every contributor and every coding agent (Claude C
 5. **The push to `dev` triggers the `ci` workflow on GitHub. All checks must pass.** Watch the run and fix forward until green (see CI gate). Work is not done while `dev` CI is red.
 6. Delete the merged work branch.
 
+## Local test setup (read before running any DB-backed test)
+
+The local stack runs in Docker (`postgres`, `redis`, `api`, `web`). Getting an isolated, migrated test database right is the #1 time-sink for agents; the facts:
+
+- **The Postgres password is NOT `admin`.** It is the `POSTGRES_PASSWORD` token in `.env`. From the host, Postgres is at **`127.0.0.1:5432`** (the `.env` `DATABASE_URL` uses the docker-internal host `postgres`, which does not resolve on the host).
+- **Two env vars, one DB.** Workers and `@squad/db migrate` read `DATABASE_URL`; the API integration harness (`reusePublicSchema`) reads **`TEST_DATABASE_URL`**. Point BOTH at your isolated DB or tests silently hit the shared `admin` database (every mutating route then 500s).
+- **Just run the helper** — it does all of the above (real password, `127.0.0.1`, create + migrate, exports both vars):
+  ```bash
+  eval "$(bash scripts/new-test-db.sh <slug>)"   # sets DATABASE_URL and TEST_DATABASE_URL
+  pnpm --filter @squad/api exec vitest run test/<your>.test.ts   # run only your files, not test:cov
+  ```
+- **Adding an API route?** Register it in **BOTH** `apps/api/src/server.ts` **and** `apps/api/test/integration/harness.ts` — they keep parallel registration lists, so a route missing from the harness 404s in integration tests.
+- **API tests that mutate `players`/`roles`/`panel_meta`** must scope the mutation by `steamId64` (a unique/test-range value), never a bare `uuid` — the parallel `test:cov` shares one DB and `apps/api/test/test-isolation.regression.test.ts` fails any unguarded `delete(players)` / `update(players).roleId` / …. A single-file `vitest run <your.test.ts>` does NOT run that guard, so before pushing also run `pnpm --filter @squad/api exec vitest run test/test-isolation.regression.test.ts`.
+- **Local `git push` may need `--no-verify`.** The pre-push hook runs affected tests only when `DATABASE_URL` is set and skips them otherwise (CI is the source of truth); the Go bridge build still cannot run on macOS, so `--no-verify` is expected and allowed for local feature-branch pushes.
+
 ## CI gate
 
 Local green is not proof — **CI is the source of truth**. After every push to `dev` (and to `master`), fetch the run result and iterate until every check passes:
@@ -77,6 +92,16 @@ Until every condition holds, the task is in progress: do not report it as comple
 8. **Evidence in the report** — every claim is backed by fresh command output (test counts, CI run IDs, actual responses). A claim without evidence is unverified; "should work" is not done.
 
 If any angle cannot be satisfied, the task stays in progress and the blocker must be reported — never report around it.
+
+### Parallel-wave handoff (feature-branch terminal state)
+
+When many tasks run in parallel (one work branch each) and an **orchestrator integrates them serially**, a task agent's terminal state is a *pushed feature branch*, not a dev merge — so the default `scripts/verify-done.sh` (which requires `dev == origin/dev` + a green dev-CI run) does **not** apply. For that flow, **done = implemented + tested + committed + pushed feature branch**, verified with:
+
+```bash
+bash scripts/verify-done.sh --feature      # clean tree, on a work branch, pushed, branched off dev
+```
+
+The judgment angles above (requirements walked, tests actually run and load-bearing, diff self-review, docs) still apply in full. The orchestrator then merges the branch into `dev` and runs the default `scripts/verify-done.sh` before promotion.
 
 ## Promotion `dev` → `master`
 

@@ -26,4 +26,13 @@ pre-push:
     typecheck:
       run: pnpm turbo run typecheck
     test:
-      run: pnpm turbo run test
+      # CI is the source of truth for the full suite (issue #202). Locally, only run
+      # tests when a database is available, and only for packages affected since
+      # origin/dev — so a clean checkout or a docs/scripts-only push is not blocked by
+      # DB-gated integration suites. Push with --no-verify to skip this entirely.
+      run: |
+        if [ -z "${DATABASE_URL:-}" ]; then
+          echo "pre-push: DATABASE_URL unset — skipping DB-backed tests (CI is the source of truth)."
+          exit 0
+        fi
+        pnpm turbo run test --filter='...[origin/dev]'

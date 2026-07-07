@@ -246,6 +246,48 @@
       "when": 1783311900000,
       "tag": "0034_vip_lifecycle_events",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1783312000000,
+      "tag": "0035_vip_tiers",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1783312100000,
+      "tag": "0036_player_coplay",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1783312200000,
+      "tag": "0037_discord_message_templates",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1783398300000,
+      "tag": "0038_dossier_weapon_vehicle_stats",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1783398400000,
+      "tag": "0039_leaderboard_bonus_boost",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1783398500000,
+      "tag": "0040_presence_seed_seconds",
+      "breakpoints": true
     }
   ]
 }
