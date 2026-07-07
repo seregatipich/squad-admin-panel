@@ -11,6 +11,7 @@ import {
   buildListApiQuery,
   buildMatchDetailHref,
   buildQueryString,
+  clearMatchListScroll,
   DATE_PRESETS,
   formatDateTime,
   formatDuration,
@@ -19,16 +20,20 @@ import {
   type MatchFilters,
   type MatchListItem,
   type MatchListResponse,
+  type MatchListScrollSnapshot,
   mergeMatchPage,
   nextSort,
   PAGE_LIMIT,
   PILL_CLASSES,
   parseFilters,
+  readMatchListScroll,
   type ServerOption,
   SORT_COLUMNS,
   type SortField,
+  saveMatchListScroll,
   serverOptionsFromMatches,
   shortServerName,
+  shouldDelayMatchScrollRestore,
   teamPillTone,
   winnerLabel,
 } from './helpers';
@@ -42,6 +47,10 @@ export function MatchesBrowser() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const filters = useMemo(() => parseFilters(searchParams), [searchParams]);
+  const currentListHref = useMemo(() => {
+    const query = searchParams.toString();
+    return query ? `${pathname}?${query}` : pathname;
+  }, [pathname, searchParams]);
 
   const [items, setItems] = useState<MatchListItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -53,6 +62,25 @@ export function MatchesBrowser() {
   const [fetchedServers, setFetchedServers] = useState<ServerOption[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [now, setNow] = useState<Date>(() => new Date());
+  const scrollRestoreRef = useRef<MatchListScrollSnapshot | null>(null);
+  const scrollRestoreFrameRef = useRef<number | null>(null);
+  const scrollRestoreLoadAttemptsRef = useRef(0);
+  const restoredScrollHrefRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    scrollRestoreRef.current = readMatchListScroll(window.sessionStorage, currentListHref);
+    restoredScrollHrefRef.current = null;
+    scrollRestoreLoadAttemptsRef.current = 0;
+  }, [currentListHref]);
+
+  useEffect(
+    () => () => {
+      if (scrollRestoreFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollRestoreFrameRef.current);
+      }
+    },
+    [],
+  );
 
   const navigate = useCallback(
     (partial: Partial<MatchFilters>) => {
@@ -166,6 +194,43 @@ export function MatchesBrowser() {
     return () => observer.disconnect();
   }, [loadMore, nextCursor]);
 
+  useEffect(() => {
+    if (loading) return;
+    const snapshot = scrollRestoreRef.current;
+    if (!snapshot || snapshot.href !== currentListHref) return;
+    if (restoredScrollHrefRef.current === currentListHref) return;
+
+    const scrollHeight = Math.max(
+      document.documentElement.scrollHeight,
+      document.body?.scrollHeight ?? 0,
+    );
+    if (
+      shouldDelayMatchScrollRestore(
+        snapshot.scrollY,
+        window.innerHeight,
+        scrollHeight,
+        nextCursor !== null,
+      ) &&
+      !loadingMore &&
+      scrollRestoreLoadAttemptsRef.current < 20
+    ) {
+      scrollRestoreLoadAttemptsRef.current += 1;
+      void loadMore();
+      return;
+    }
+
+    if (scrollRestoreFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollRestoreFrameRef.current);
+    }
+    scrollRestoreFrameRef.current = window.requestAnimationFrame(() => {
+      window.scrollTo(0, snapshot.scrollY);
+      clearMatchListScroll(window.sessionStorage, currentListHref);
+      scrollRestoreRef.current = null;
+      restoredScrollHrefRef.current = currentListHref;
+      scrollRestoreFrameRef.current = null;
+    });
+  }, [currentListHref, loadMore, loading, loadingMore, nextCursor]);
+
   const refreshHead = useCallback(() => {
     if (filters.sort !== 'started_at' || filters.order !== 'desc') return;
     fetch(`/api/v1/matches?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
@@ -194,13 +259,9 @@ export function MatchesBrowser() {
     );
   }, [fetchedServers, items]);
 
-  const currentListHref = useMemo(() => {
-    const query = searchParams.toString();
-    return query ? `${pathname}?${query}` : pathname;
-  }, [pathname, searchParams]);
-
   const openRow = useCallback(
     (id: string) => {
+      saveMatchListScroll(window.sessionStorage, currentListHref, window.scrollY, id);
       router.push(buildMatchDetailHref(id, currentListHref));
     },
     [currentListHref, router],

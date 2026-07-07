@@ -89,6 +89,13 @@ export interface MatchListResponse {
   limit: number;
 }
 
+export interface MatchListScrollSnapshot {
+  href: string;
+  matchId: string;
+  savedAt: number;
+  scrollY: number;
+}
+
 export interface ServerOption {
   id: string;
   display_name: string | null;
@@ -296,6 +303,94 @@ export function safeMatchBackHref(value: string | string[] | null | undefined): 
   if (!raw || raw.startsWith('//') || !raw.startsWith('/matches')) return '/matches';
   if (raw === '/matches' || raw.startsWith('/matches?') || raw.startsWith('/matches/')) return raw;
   return '/matches';
+}
+
+const MATCH_LIST_SCROLL_KEY_PREFIX = 'squad:matches:list-scroll:';
+const MATCH_LIST_SCROLL_TTL_MS = 30 * 60 * 1000;
+const MATCH_LIST_SCROLL_RESTORE_MARGIN_PX = 96;
+
+function matchListScrollKey(href: string): string {
+  return `${MATCH_LIST_SCROLL_KEY_PREFIX}${encodeURIComponent(href)}`;
+}
+
+export function saveMatchListScroll(
+  storage: Storage,
+  href: string,
+  scrollY: number,
+  matchId: string,
+  now = Date.now(),
+): boolean {
+  const safeHref = safeMatchBackHref(href);
+  if (safeHref !== href || !matchId || !Number.isFinite(scrollY) || scrollY < 0) return false;
+
+  try {
+    storage.setItem(
+      matchListScrollKey(href),
+      JSON.stringify({
+        href,
+        matchId,
+        savedAt: now,
+        scrollY: Math.round(scrollY),
+      } satisfies MatchListScrollSnapshot),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function readMatchListScroll(
+  storage: Storage,
+  href: string,
+  now = Date.now(),
+): MatchListScrollSnapshot | null {
+  try {
+    const raw = storage.getItem(matchListScrollKey(href));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<MatchListScrollSnapshot>;
+    const parsedHref = parsed.href;
+    const parsedMatchId = parsed.matchId;
+    const parsedSavedAt = parsed.savedAt;
+    const parsedScrollY = parsed.scrollY;
+    const valid =
+      parsedHref === href &&
+      typeof parsedMatchId === 'string' &&
+      parsedMatchId.length > 0 &&
+      typeof parsedSavedAt === 'number' &&
+      Number.isFinite(parsedSavedAt) &&
+      typeof parsedScrollY === 'number' &&
+      Number.isFinite(parsedScrollY) &&
+      parsedScrollY >= 0;
+    if (!valid || now - parsedSavedAt > MATCH_LIST_SCROLL_TTL_MS) {
+      storage.removeItem(matchListScrollKey(href));
+      return null;
+    }
+    return {
+      href: parsedHref,
+      matchId: parsedMatchId,
+      savedAt: parsedSavedAt,
+      scrollY: parsedScrollY,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function clearMatchListScroll(storage: Storage, href: string): void {
+  try {
+    storage.removeItem(matchListScrollKey(href));
+  } catch {}
+}
+
+export function shouldDelayMatchScrollRestore(
+  targetScrollY: number,
+  viewportHeight: number,
+  scrollHeight: number,
+  hasNextCursor: boolean,
+): boolean {
+  if (!hasNextCursor) return false;
+  const maxVisibleScrollY = Math.max(0, scrollHeight - viewportHeight);
+  return targetScrollY > maxVisibleScrollY + MATCH_LIST_SCROLL_RESTORE_MARGIN_PX;
 }
 
 export function buildMatchDetailHref(matchId: string, backHref: string = '/matches'): string {

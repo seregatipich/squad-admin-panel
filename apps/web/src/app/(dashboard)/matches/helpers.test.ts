@@ -7,6 +7,7 @@ import {
   buildMatchCombatLogHref,
   buildMatchDetailHref,
   buildQueryString,
+  clearMatchListScroll,
   defaultFilters,
   formatDateTime,
   formatDuration,
@@ -19,13 +20,44 @@ import {
   mergeMatchPage,
   nextSort,
   parseFilters,
+  readMatchListScroll,
   resolveDateRange,
   safeMatchBackHref,
+  saveMatchListScroll,
   serverOptionsFromMatches,
   shortServerName,
+  shouldDelayMatchScrollRestore,
   teamPillTone,
   winnerLabel,
 } from './helpers';
+
+class MemoryStorage implements Storage {
+  private entries = new Map<string, string>();
+
+  get length() {
+    return this.entries.size;
+  }
+
+  clear() {
+    this.entries.clear();
+  }
+
+  getItem(key: string) {
+    return this.entries.get(key) ?? null;
+  }
+
+  key(index: number) {
+    return Array.from(this.entries.keys())[index] ?? null;
+  }
+
+  removeItem(key: string) {
+    this.entries.delete(key);
+  }
+
+  setItem(key: string, value: string) {
+    this.entries.set(key, value);
+  }
+}
 
 function params(query: string): URLSearchParams {
   return new URLSearchParams(query);
@@ -249,6 +281,43 @@ describe('match combat-log links', () => {
         ended_at: '2026-07-05T00:15:00.000Z',
       }),
     ).toBe('/combat-log?server=srv-1&preset=custom&from=2026-07-04&to=2026-07-05');
+  });
+});
+
+describe('match list scroll restore', () => {
+  it('stores and reads scroll position for the exact list href', () => {
+    const storage = new MemoryStorage();
+    expect(saveMatchListScroll(storage, '/matches?preset=week', 1240, 'match-1', 1000)).toBe(true);
+
+    expect(readMatchListScroll(storage, '/matches?preset=week', 2000)).toEqual({
+      href: '/matches?preset=week',
+      matchId: 'match-1',
+      savedAt: 1000,
+      scrollY: 1240,
+    });
+    expect(readMatchListScroll(storage, '/matches?preset=month', 2000)).toBeNull();
+  });
+
+  it('drops invalid or expired scroll positions', () => {
+    const storage = new MemoryStorage();
+    expect(saveMatchListScroll(storage, '/matches', -10, 'match-1', 1000)).toBe(false);
+    expect(readMatchListScroll(storage, '/matches', 1000)).toBeNull();
+
+    expect(saveMatchListScroll(storage, '/matches', 480, 'match-1', 1000)).toBe(true);
+    expect(readMatchListScroll(storage, '/matches', 1000 + 31 * 60 * 1000)).toBeNull();
+  });
+
+  it('clears saved scroll positions', () => {
+    const storage = new MemoryStorage();
+    saveMatchListScroll(storage, '/matches', 320, 'match-1', 1000);
+    clearMatchListScroll(storage, '/matches');
+    expect(readMatchListScroll(storage, '/matches', 1000)).toBeNull();
+  });
+
+  it('delays restore while the saved position is below the currently loaded page', () => {
+    expect(shouldDelayMatchScrollRestore(2500, 900, 1600, true)).toBe(true);
+    expect(shouldDelayMatchScrollRestore(600, 900, 1600, true)).toBe(false);
+    expect(shouldDelayMatchScrollRestore(2500, 900, 1600, false)).toBe(false);
   });
 });
 
