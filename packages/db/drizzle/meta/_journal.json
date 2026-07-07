@@ -253,6 +253,13 @@
       "when": 1783312000000,
       "tag": "0035_vip_tiers",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1783312100000,
+      "tag": "0036_player_coplay",
+      "breakpoints": true
     }
   ]
 }
