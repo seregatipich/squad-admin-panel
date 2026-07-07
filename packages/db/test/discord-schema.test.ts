@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DISCORD_EVENT_TYPES,
   discordIntegration,
+  discordMessageTemplates,
   discordWebhooks,
   isDiscordEventType,
 } from '../src/schema/discord.js';
@@ -39,5 +40,15 @@ describe('discord schema', () => {
   it('adds the can_manage_integrations panel flag to roles', () => {
     const cols = getTableColumns(roles);
     expect(cols.canManageIntegrations.notNull).toBe(true);
+  });
+
+  it('discord_message_templates keys the editable jsonb embed by event type', () => {
+    expect(getTableName(discordMessageTemplates)).toBe('discord_message_templates');
+    const cols = getTableColumns(discordMessageTemplates);
+    expect(cols.eventType.notNull).toBe(true);
+    expect(cols.eventType.isUnique).toBe(true);
+    expect(cols.template.notNull).toBe(true);
+    expect(cols.locale.notNull).toBe(true);
+    expect(cols.isDefault.notNull).toBe(true);
   });
 });
