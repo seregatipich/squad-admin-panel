@@ -7,6 +7,11 @@ import { use, useCallback, useEffect, useState } from 'react';
 
 import { PlayerMarks } from '@/components/PlayerMarks';
 import { RoleColorDot } from '@/components/RoleColorDot';
+import {
+  buildRoleAssignPayload,
+  formatRoleExpiryLabel,
+  toDatetimeLocalValue,
+} from '@/lib/role-expiry';
 import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
 import { GeoAnomaliesSection } from './GeoAnomaliesSection';
@@ -67,6 +72,8 @@ interface SingleRole {
   name: string;
   color: RoleColor;
   is_system_role: boolean;
+  role_expires_at: string | null;
+  role_comment: string | null;
 }
 
 interface Me {
@@ -212,6 +219,8 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
   const [editing, setEditing] = useState(false);
   const [allRoles, setAllRoles] = useState<SingleRole[]>([]);
   const [picked, setPicked] = useState('');
+  const [expiresAt, setExpiresAt] = useState('');
+  const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
@@ -234,6 +243,12 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
     void reload();
   }, [reload]);
 
+  useEffect(() => {
+    if (!editing) return;
+    setExpiresAt(toDatetimeLocalValue(current?.role_expires_at));
+    setComment(current?.role_comment ?? '');
+  }, [editing, current?.role_expires_at, current?.role_comment]);
+
   // 2.6.4 — dropdown excludes Owner and the player's current role; the
   // backend also rejects Owner assignment with 403 owner_assignment_forbidden.
   const assignableRoles = allRoles.filter(
@@ -254,7 +269,7 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
               method: 'PUT',
               credentials: 'include',
               headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ role_id: roleId }),
+              body: JSON.stringify(buildRoleAssignPayload(roleId, expiresAt, comment)),
             });
       if (r.status === 409) {
         setMsg({
@@ -295,14 +310,20 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
       {!editing ? (
         <div className="flex items-center gap-3 text-sm">
           {current ? (
-            <span className="inline-flex items-center gap-2">
-              <RoleColorDot color={current.color} />
-              <span className="font-medium">{current.name}</span>
-              {current.is_system_role && current.name === 'Owner' ? (
-                <span className="rounded bg-red-950 px-2 py-0.5 text-[10px] uppercase text-red-300">
-                  system
-                </span>
-              ) : null}
+            <span className="min-w-0">
+              <span className="inline-flex items-center gap-2">
+                <RoleColorDot color={current.color} />
+                <span className="font-medium">{current.name}</span>
+                {current.is_system_role && current.name === 'Owner' ? (
+                  <span className="rounded bg-red-950 px-2 py-0.5 text-[10px] uppercase text-red-300">
+                    system
+                  </span>
+                ) : null}
+              </span>
+              <span className="mt-1 block text-xs text-neutral-500">
+                {formatRoleExpiryLabel(current.role_expires_at)}
+                {current.role_comment ? ` · ${current.role_comment}` : ''}
+              </span>
             </span>
           ) : (
             <span className="text-neutral-500">—</span>
@@ -337,38 +358,56 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
           )}
         </div>
       ) : (
-        <div className="flex gap-2">
-          <select
-            value={picked}
-            onChange={(e) => setPicked(e.target.value)}
-            className="flex-1 rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-          >
-            <option value="">— выберите —</option>
-            {assignableRoles.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => picked && save(picked)}
-            disabled={!picked || busy}
-            className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500 disabled:opacity-40"
-          >
-            Сохранить
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setEditing(false);
-              setPicked('');
-            }}
-            disabled={busy}
-            className="rounded border border-neutral-800 px-4 py-2 text-sm hover:border-neutral-600"
-          >
-            Отмена
-          </button>
+        <div className="space-y-2">
+          <div className="grid gap-2 md:grid-cols-[1fr_220px]">
+            <select
+              value={picked}
+              onChange={(e) => setPicked(e.target.value)}
+              className="rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
+            >
+              <option value="">— выберите —</option>
+              {assignableRoles.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+            <input
+              type="datetime-local"
+              value={expiresAt}
+              onChange={(e) => setExpiresAt(e.target.value)}
+              className="rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
+            />
+          </div>
+          <textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            maxLength={512}
+            rows={2}
+            className="w-full resize-none rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
+            placeholder="Комментарий"
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => picked && save(picked)}
+              disabled={!picked || busy}
+              className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500 disabled:opacity-40"
+            >
+              Сохранить
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(false);
+                setPicked('');
+              }}
+              disabled={busy}
+              className="rounded border border-neutral-800 px-4 py-2 text-sm hover:border-neutral-600"
+            >
+              Отмена
+            </button>
+          </div>
         </div>
       )}
     </section>

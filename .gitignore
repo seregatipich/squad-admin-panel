@@ -45,6 +45,12 @@ reports/mutation/
 
 .playwright-mcp/
 .env.tk104
+.sentrux/
 
 # Playwright verification evidence artifacts
 apps/web/e2e-evidence/
+
+# Agent enforcement harness: only committed config is source; runtime state
+# (session locks, worktrees, done/blocked markers, local overrides) is not.
+.claude/*
+!.claude/settings.json

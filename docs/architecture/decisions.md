@@ -6,7 +6,7 @@ Meaningful architectural choices, recorded as we make them.
 
 ### Context
 
-The panel's RBAC was a 47-key fine-grained per-role permission matrix. In parallel, every Squad server has its own `Admins.cfg` file with 21 in-game permission keys (`startvote`, `kick`, `ban`, …) hand-edited by SSH. Operators with five or six servers had to keep those files in sync by hand on every group change. The Эпик 2 Phase 2 spec (`task.md` §2) called for: a single role concept covering both panel-side access *and* in-game `Admins.cfg`, an inline editor at `/settings/groups`, members listing per role, force-sync + drift detection, and a managed segment in `Admins.cfg` so co-existing tools (sqstat, manual edits) are preserved.
+The panel's RBAC was a 47-key fine-grained per-role permission matrix. In parallel, every Squad server has its own `Admins.cfg` file with 21 in-game permission keys (`startvote`, `kick`, `ban`, …) hand-edited by SSH. Operators with five or six servers had to keep those files in sync by hand on every group change. The Эпик 2 Phase 2 spec (`ai_docs/task.md` §2) called for: a single role concept covering both panel-side access *and* in-game `Admins.cfg`, an inline editor at `/settings/groups`, members listing per role, force-sync + drift detection, and a managed segment in `Admins.cfg` so co-existing tools (sqstat, manual edits) are preserved.
 
 ### Decision
 
@@ -18,7 +18,7 @@ The panel's RBAC was a 47-key fine-grained per-role permission matrix. In parall
 
 4. **Marker-fenced managed segment.** The worker only writes between `//SQUAD-PANEL BEGIN` and `//SQUAD-PANEL END`. Bytes outside the markers — including other tools' fenced sections like `//SQSTAT DELIMETER` — are preserved verbatim. CRLF inside the segment, untouched line endings outside.
 
-5. **Drift detection is a periodic sweep.** Every 5 min the worker re-reads each server's file, hashes the managed segment, and compares against the DB-derived hash. On mismatch it auto-rewrites (DB is the source of truth, manual edits inside the markers don't survive). It also pushes status (`in_sync` / `unreachable` / etc.) to `admins-cfg:status:<server_id>` so the UI banner on `/servers/<id>` can offer the operator a Force-sync button when needed.
+5. **Drift detection is a periodic sweep.** Every 5 min the worker re-reads each server's file, hashes the managed segment, and compares against the DB-derived hash. On mismatch it publishes `state='drift'` and does **not** silently overwrite the file; the operator either copies the intended change into the panel UI or clicks Force-sync to restore the DB-derived segment. Event-driven mutations and explicit force-sync still write through immediately. The worker also pushes status (`in_sync` / `drift` / `unreachable` / etc.) to `admins-cfg:status:<server_id>` so the UI banner on `/servers/<id>` can offer the operator a Force-sync button when needed.
 
 6. **No new bridge RPC.** The Go bridge already allows `file_read` and `file_atomic_write` on `/var/lib/squad-panel/configs/{uuid}/ServerConfig/*.cfg`. The whole feature ships without touching the bridge surface or its allowlist.
 
@@ -26,7 +26,7 @@ The panel's RBAC was a 47-key fine-grained per-role permission matrix. In parall
 
 - **Single role concept** — operators thought of "Admin" as one entity; splitting it into "panel role" and "in-game role" was the friction the spec set out to remove.
 - **Async sync via Redis Streams** — keeps the API mutation path fast and decouples the file write from the request lifecycle. Stream's at-least-once delivery + sha256 idempotency means a redelivered message never corrupts the file.
-- **Markers + drift sweep** — co-exists with sqstat / manual ops without us writing a parser for `Admins.cfg`. Force-sync from UI is the escape hatch when the spec's "оператор паникует и правит руками" scenario occurs.
+- **Markers + drift sweep** — co-exists with sqstat / manual ops without us writing a parser for `Admins.cfg`. Passive sweeps surface manual edits instead of erasing them; Force-sync from UI is the escape hatch when the spec's "оператор паникует и правит руками" scenario occurs.
 - **Derived panel permissions** — keeps every existing route's `permissions: ['server:install']` guard valid. Nothing in the route layer had to change.
 
 ### Consequences

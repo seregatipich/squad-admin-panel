@@ -13,8 +13,10 @@ Heartbeat keys are aggregated by the API at `/api/v1/health/workers`.
 |---|---|---|
 | [rcon](./rcon/README.md) | Valve-RCON supervisor — ListPlayers polling, ShowServerInfo keepalive, publishes `rcon:status:{id}` | [`apps/workers/rcon/`](../../../apps/workers/rcon/) |
 | [log-ingest](./log-ingest/README.md) | Tails `docker logs -f squad-{uuid}` via bridge, parses Squad log lines, emits events to Redis Streams | [`apps/workers/log-ingest/`](../../../apps/workers/log-ingest/) |
+| [config-sync](./config-sync/README.md) | Consumes Admins.cfg sync events and writes managed role/group segments through the bridge | [`apps/workers/config-sync/`](../../../apps/workers/config-sync/) |
 | [audit-archiver](./audit-archiver/README.md) | Cold-archives `audit_log` rows older than 90 days (P1 stub, heartbeat only in P0) | [`apps/workers/audit-archiver/`](../../../apps/workers/audit-archiver/) |
 | [event-partition](./event-partition/README.md) | Monthly Postgres partition rotation for the `events` table | [`apps/workers/event-partition/`](../../../apps/workers/event-partition/) |
+| [role-expirer](./role-expirer/README.md) | Clears expired player roles, revokes sessions, audits the change, and enqueues Admins.cfg sync | [`apps/workers/role-expirer/`](../../../apps/workers/role-expirer/) |
 | [metrics-sampler](./metrics-sampler/README.md) | Polls `bridge.host_metrics` every 15 s, writes packed 8-int tuple to `host:metrics` Redis Stream | [`apps/workers/metrics-sampler/`](../../../apps/workers/metrics-sampler/) |
 | [worker-diag-flush](./worker-diag-flush/README.md) | Reads `diag:queue` Redis Stream via `XREADGROUP`, batches inserts into `diagnostic_events` Postgres table | [`apps/workers/diag-flush/`](../../../apps/workers/diag-flush/) |
 
@@ -24,7 +26,6 @@ Heartbeat keys are aggregated by the API at `/api/v1/health/workers`.
 |---|---|---|
 | [automation](./automation/README.md) | User-defined rules ("on event X, do Y") | [`apps/workers/automation/`](../../../apps/workers/automation/) |
 | [backup](./backup/README.md) | restic-based DB + config snapshots | [`apps/workers/backup/`](../../../apps/workers/backup/) |
-| [config-sync](./config-sync/README.md) | Push-to-Git for config history | [`apps/workers/config-sync/`](../../../apps/workers/config-sync/) |
 | [discord](./discord/README.md) | Webhook + bot relay | [`apps/workers/discord/`](../../../apps/workers/discord/) |
 | [scheduler](./scheduler/README.md) | Cron-style server restarts, layer rotations | [`apps/workers/scheduler/`](../../../apps/workers/scheduler/) |
 | [stats](./stats/README.md) | Player-stats projector for the future stats UI | [`apps/workers/stats/`](../../../apps/workers/stats/) |

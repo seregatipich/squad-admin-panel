@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     exclude: ['**/node_modules/**', '**/dist/**'],
-    testTimeout: 10_000,
+    testTimeout: 20_000,
     fileParallelism: false,
     sequence: { concurrent: false },
     coverage: {

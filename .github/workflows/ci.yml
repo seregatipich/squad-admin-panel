@@ -1,11 +1,47 @@
 name: ci
 on:
   push:
-    branches: [master, main]
+    branches: [master, dev]
   pull_request:
-    branches: [master, main]
+    branches: [master, dev]
 
 jobs:
+  # Enforces the branch model (see AGENTS.md): pull requests may only target
+  # master from dev. On push events the job always succeeds so the dev tip SHA
+  # carries a passing branch-guard check — required by the protect-master
+  # ruleset for the fast-forward promotion push (.github/rulesets/).
+  branch-guard:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Enforce master-only-from-dev
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          if [ "$EVENT" = "pull_request" ] && [ "$BASE" = "master" ] && [ "$HEAD" != "dev" ]; then
+            echo "::error::Pull requests must not target master from '$HEAD'. master only receives promotions from dev (git push origin origin/dev:master). Retarget this PR to dev."
+            exit 1
+          fi
+          echo "branch model OK ($EVENT ${BASE:+base=$BASE }${HEAD:+head=$HEAD})"
+      - name: Audit master ancestry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: |
+          git fetch --no-tags origin dev
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/dev; then
+            echo "OK: master tip is contained in dev"
+          else
+            echo "::error::master received commit $GITHUB_SHA that is NOT reachable from dev — the branch model was bypassed (see AGENTS.md). Reconcile by merging origin/master into dev via a work branch, and investigate how the push happened."
+            exit 1
+          fi
+      - name: Run git-guard test suite
+        run: bash scripts/test-git-guard.sh
+      - name: Run verify-done test suite
+        run: bash scripts/test-verify-done.sh
+
   node:
     runs-on: ubuntu-24.04
     services:

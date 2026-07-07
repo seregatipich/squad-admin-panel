@@ -40,6 +40,7 @@ async function collectProtectedRoutes(): Promise<RouteSpec[]> {
   const { default: playerRoutes } = await import('../../src/routes/players.js');
   const { default: auditRoutes } = await import('../../src/routes/audit.js');
   const { default: logsRoutes } = await import('../../src/routes/logs.js');
+  const { default: adminsCfgRoutes } = await import('../../src/routes/admins-cfg.js');
 
   const app = Fastify({ logger: false });
   app.setValidatorCompiler(validatorCompiler);
@@ -81,6 +82,7 @@ async function collectProtectedRoutes(): Promise<RouteSpec[]> {
   await app.register(playerRoutes);
   await app.register(auditRoutes);
   await app.register(logsRoutes);
+  await app.register(adminsCfgRoutes);
 
   await app.ready();
   await app.close();
@@ -100,6 +102,30 @@ function canonicalUrl(url: string): string {
 const ALL_PERM_KEYS = PERMISSIONS.map((p) => p.key) as PermissionKey[];
 
 const protectedRoutes = await collectProtectedRoutes();
+
+describe('permission matrix coverage', () => {
+  it('includes Admins.cfg drift and force-sync routes', () => {
+    expect(protectedRoutes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: 'GET',
+          url: '/api/v1/admins-cfg/drift',
+          required: ['admin_group:view'],
+        }),
+        expect.objectContaining({
+          method: 'GET',
+          url: '/api/v1/admins-cfg/drift/all',
+          required: ['admin_group:view'],
+        }),
+        expect.objectContaining({
+          method: 'POST',
+          url: '/api/v1/admins-cfg/sync',
+          required: ['admin_group:edit'],
+        }),
+      ]),
+    );
+  });
+});
 
 let h: IntegrationHarness;
 let sql: ReturnType<typeof postgres>;
@@ -142,7 +168,8 @@ async function createUserWithPerms(key: string, perms: string[]): Promise<void> 
       })
       .onConflictDoUpdate({ target: players.steamId64, set: { roleId } })
       .returning({ id: players.id });
-    playerId = upserted!.id;
+    if (!upserted) throw new Error('failed to upsert matrix-test player');
+    playerId = upserted.id;
   });
 
   playerIds.set(key, playerId);
@@ -166,56 +193,56 @@ async function inject(
   return h.app.inject({ method, url, headers: { cookie } });
 }
 
-beforeAll(async () => {
-  h = await buildIntegrationApp({
-    seedOwner: { steamId64: OWNER_STEAM },
-    bridge: makeFakeBridge(),
+describe('permission matrix', () => {
+  beforeAll(async () => {
+    h = await buildIntegrationApp({
+      seedOwner: { steamId64: OWNER_STEAM },
+      bridge: makeFakeBridge(),
+    });
+
+    sql = postgres(h.url, { max: 10, onnotice: () => undefined });
+    db = drizzle(sql, { schema }) as unknown as ReturnType<typeof drizzle<typeof schema>>;
+
+    const uniqueRequiredSets = new Set(
+      protectedRoutes.map((r) => r.required.slice().sort().join(',')),
+    );
+
+    const tasks: Array<[string, string[]]> = [
+      ['noPerms', []],
+      ...ALL_PERM_KEYS.map((perm): [string, string[]] => [perm, [perm]]),
+      ...[...uniqueRequiredSets].map((setKey): [string, string[]] => [
+        `full:${setKey}`,
+        setKey.split(',').filter(Boolean),
+      ]),
+    ];
+
+    await Promise.all(tasks.map(([key, perms]) => createUserWithPerms(key, perms)));
   });
 
-  sql = postgres(h.url, { max: 10, onnotice: () => undefined });
-  db = drizzle(sql, { schema }) as unknown as ReturnType<typeof drizzle<typeof schema>>;
+  afterAll(async () => {
+    for (const id of createdRoleIds) {
+      await db
+        .delete(rolePermissions)
+        .where(eq(rolePermissions.roleId, id))
+        .catch(() => undefined);
+      await db
+        .delete(roles)
+        .where(eq(roles.id, id))
+        .catch(() => undefined);
+    }
+    for (const [key, steamId] of userKeys.entries()) {
+      await db
+        .update(players)
+        .set({ roleId: null })
+        .where(eq(players.steamId64, steamId))
+        .catch(() => undefined);
+      const pid = playerIds.get(key);
+      if (pid) invalidatePermissionCache(pid);
+    }
+    await sql.end({ timeout: 5 }).catch(() => undefined);
+    await h.cleanup();
+  }, 60_000);
 
-  const uniqueRequiredSets = new Set(
-    protectedRoutes.map((r) => r.required.slice().sort().join(',')),
-  );
-
-  const tasks: Array<[string, string[]]> = [
-    ['noPerms', []],
-    ...ALL_PERM_KEYS.map((perm): [string, string[]] => [perm, [perm]]),
-    ...[...uniqueRequiredSets].map((setKey): [string, string[]] => [
-      `full:${setKey}`,
-      setKey.split(',').filter(Boolean),
-    ]),
-  ];
-
-  await Promise.all(tasks.map(([key, perms]) => createUserWithPerms(key, perms)));
-});
-
-afterAll(async () => {
-  for (const id of createdRoleIds) {
-    await db
-      .delete(rolePermissions)
-      .where(eq(rolePermissions.roleId, id))
-      .catch(() => undefined);
-    await db
-      .delete(roles)
-      .where(eq(roles.id, id))
-      .catch(() => undefined);
-  }
-  for (const [key, steamId] of userKeys.entries()) {
-    await db
-      .update(players)
-      .set({ roleId: null })
-      .where(eq(players.steamId64, steamId))
-      .catch(() => undefined);
-    const pid = playerIds.get(key);
-    if (pid) invalidatePermissionCache(pid);
-  }
-  await sql.end({ timeout: 5 }).catch(() => undefined);
-  await h.cleanup();
-}, 60_000);
-
-describe('permission matrix', () => {
   for (const route of protectedRoutes) {
     const { method, url, required } = route;
     const targetUrl = canonicalUrl(url);

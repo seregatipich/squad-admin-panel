@@ -44,7 +44,7 @@ Spawns `dist/index.js` with a real Redis (DB 14) and a real Postgres test DB; ve
 Cross-component coverage that the API publishes the right events:
 
 - `apps/api/test/integration/roles-and-access.test.ts > admins-cfg sync stream is published on role mutations` — asserts `XLEN events:admins-cfg-sync:<server_id> ≥ 1` after `POST /api/v1/roles`.
-- The API permission-matrix tests guard that `/api/v1/admins-cfg/drift` requires `admin_group:view` and `/api/v1/admins-cfg/sync` requires `admin_group:edit`.
+- The API permission-matrix tests guard that `/api/v1/admins-cfg/drift` and `/api/v1/admins-cfg/drift/all` require `admin_group:view`, while `/api/v1/admins-cfg/sync` requires `admin_group:edit`.
 
 ## What is explicitly NOT covered yet
 

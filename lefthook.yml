@@ -1,6 +1,8 @@
 pre-commit:
   parallel: true
   commands:
+    branch-guard:
+      run: bash scripts/git-guard.sh check-commit
     biome-check:
       glob: "*.{ts,tsx,js,jsx,json,css}"
       run: pnpm exec biome check --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
@@ -13,6 +15,13 @@ pre-commit:
 
 pre-push:
   parallel: false
+  scripts:
+    # Script, not command: commands skip when the current branch has no
+    # unpushed diff (e.g. during a dev→master promotion push).
+    "branch-guard":
+      runner: sh
+      use_stdin: true
+      priority: 1
   commands:
     typecheck:
       run: pnpm turbo run typecheck

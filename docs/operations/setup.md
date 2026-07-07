@@ -87,7 +87,7 @@ curl -skI https://${APP_DOMAIN}/api/docs       # API docs UI responds
 
 ```bash
 git pull
-docker compose build api web worker-rcon worker-log-ingest worker-audit-archiver worker-event-partition worker-metrics-sampler
+docker compose build api web worker-rcon worker-log-ingest worker-config-sync worker-audit-archiver worker-event-partition worker-role-expirer worker-metrics-sampler
 docker compose up -d
 DATABASE_URL=postgres://admin:$PASS@127.0.0.1:5432/admin pnpm db:migrate
 ```

@@ -27,13 +27,17 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
         role_name: string;
         role_color: string;
         role_is_system: boolean;
+        role_expires_at: string | null;
+        role_comment: string | null;
       };
       const q = req.query.q?.toLowerCase().trim();
       const roleId = req.query.role_id;
       const rows = await app.db.execute<UserRow>(sql`
         SELECT p.id, p.steam_id64::text AS steam_id64, p.canonical_name, p.last_seen_at,
                r.id AS role_id, r.name AS role_name, r.color AS role_color,
-               r.is_system_role AS role_is_system
+               r.is_system_role AS role_is_system,
+               p.role_expires_at::text AS role_expires_at,
+               p.role_comment AS role_comment
         FROM players p
         JOIN roles r ON r.id = p.role_id
         WHERE p.role_id IS NOT NULL
@@ -58,6 +62,8 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
         },
         assigned_at: null,
         assigned_by: null,
+        role_expires_at: r.role_expires_at ? new Date(r.role_expires_at).toISOString() : null,
+        role_comment: r.role_comment,
       }));
     },
   );

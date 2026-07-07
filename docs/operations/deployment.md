@@ -12,6 +12,17 @@ Single-host deployment model. The entire panel stack runs via `docker compose up
 
 The `scripts/install-host-bridge.sh` script handles all one-time host setup. Run it before starting the stack. If `.env` already exists, the installer synchronizes `DATA_DIR` and `PANEL_GID` so compose bind mounts and bridge peer checks match the host.
 
+## tk104 production deployment
+
+`compose.tk104.yml` (deployed via `scripts/deploy-tk104.sh`, env file `.env.tk104`) is a
+standalone compose file for the tk104 host — it does not extend `docker-compose.yml`. It
+mirrors the same service topology (api/web/caddy + all workers + bridge socket mount on
+`api`/workers that need it), adapted to tk104's Caddy DNS-01 Caddyfile and named-volume
+storage instead of `${DATA_DIR}`-bind-mounted volumes for postgres/redis/caddy. Keep the
+two files in sync by hand when the bridge-facing env/volumes on a worker change in
+`docker-compose.yml`. `.env.tk104` additionally needs `PANEL_GID` and `DATA_DIR` set to
+match the host's `panel` group and the data tree created by `install-host-bridge.sh`.
+
 ## Container topology
 
 | Service | Image | Notes |
@@ -24,8 +35,10 @@ The `scripts/install-host-bridge.sh` script handles all one-time host setup. Run
 | `redis` | `redis:7-alpine` | Port 6379, bound to `127.0.0.1` only. Append-only persistence. |
 | `worker-log-ingest` | `docker/worker.Dockerfile` | Tails squad container logs via bridge, writes events to Redis Streams. |
 | `worker-rcon` | `docker/worker.Dockerfile` | `--network host`. RCON poller (ListPlayers every 30 s). |
+| `worker-config-sync` | `docker/worker.Dockerfile` | Consumes Admins.cfg sync events and writes managed role/group segments. |
 | `worker-audit-archiver` | `docker/worker.Dockerfile` | Cold-archives `audit_log` rows older than 90 days. |
 | `worker-event-partition` | `docker/worker.Dockerfile` | Monthly Postgres partition rotation. |
+| `worker-role-expirer` | `docker/worker.Dockerfile` | Clears expired player roles and enqueues Admins.cfg sync. |
 | `worker-metrics-sampler` | `docker/worker.Dockerfile` | Samples `host_metrics` via bridge every 15 s, writes to `host:metrics` stream. |
 | `backup` (optional) | `mazzolino/restic:latest` | Profile `backup`. Daily restic snapshot of postgres + redis volumes. |
 
@@ -143,7 +156,7 @@ sudo systemctl restart panel-host-bridge.service
 ```bash
 git pull
 pnpm install
-docker compose build api web worker-rcon worker-log-ingest worker-audit-archiver worker-event-partition worker-metrics-sampler
+docker compose build api web worker-rcon worker-log-ingest worker-config-sync worker-audit-archiver worker-event-partition worker-role-expirer worker-metrics-sampler
 docker compose up -d
 ```
 
