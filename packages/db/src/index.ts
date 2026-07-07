@@ -1,4 +1,5 @@
 export * from './client.js';
+export * from './coplay/aggregate.js';
 export * from './geoip/index.js';
 export * from './leaderboard/aggregate.js';
 export * from './presence/daily.js';
