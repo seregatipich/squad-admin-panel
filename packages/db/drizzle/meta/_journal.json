@@ -274,6 +274,13 @@
       "when": 1783398300000,
       "tag": "0038_dossier_weapon_vehicle_stats",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1783398400000,
+      "tag": "0039_leaderboard_bonus_boost",
+      "breakpoints": true
     }
   ]
 }

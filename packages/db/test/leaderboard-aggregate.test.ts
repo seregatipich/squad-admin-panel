@@ -26,12 +26,21 @@ async function seedPresence(
   serverId: string,
   day: string,
   onlineSeconds: number,
+  boostSeconds = 0,
 ) {
   await sql`
-    INSERT INTO player_daily_presence (player_id, server_id, day, online_seconds)
-    VALUES (${playerId}, ${serverId}, ${day}::date, ${onlineSeconds})
+    INSERT INTO player_daily_presence (player_id, server_id, day, online_seconds, boost_seconds)
+    VALUES (${playerId}, ${serverId}, ${day}::date, ${onlineSeconds}, ${boostSeconds})
     ON CONFLICT (player_id, day, server_id)
-    DO UPDATE SET online_seconds = EXCLUDED.online_seconds
+    DO UPDATE SET online_seconds = EXCLUDED.online_seconds, boost_seconds = EXCLUDED.boost_seconds
+  `;
+}
+
+async function setEconomyCoefficients(kOnline: number, kBoost: number) {
+  await sql`
+    INSERT INTO economy_settings (id, k_online, k_boost)
+    VALUES (1, ${kOnline}, ${kBoost})
+    ON CONFLICT (id) DO UPDATE SET k_online = EXCLUDED.k_online, k_boost = EXCLUDED.k_boost
   `;
 }
 
@@ -62,10 +71,13 @@ async function statRows(periodType: string, periodStart: string) {
       revives: number;
       kd_ratio: number;
       matches_played: number;
+      boost_seconds: number;
+      bonus_points: number;
     }[]
   >`
     SELECT player_id, server_id, online_seconds, seeding_seconds, kills, deaths,
-           teamkills, revives, kd_ratio::float8 AS kd_ratio, matches_played
+           teamkills, revives, kd_ratio::float8 AS kd_ratio, matches_played,
+           boost_seconds, bonus_points::float8 AS bonus_points
     FROM player_stat_periods
     WHERE period_type = ${periodType} AND period_start = ${periodStart}::date
     ORDER BY player_id, server_id NULLS LAST
@@ -103,6 +115,7 @@ async function resetOwnData() {
   await sql`DELETE FROM matches WHERE server_id = ANY(${[SERVER_1, SERVER_2]})`;
   await sql`DELETE FROM player_daily_presence WHERE server_id = ANY(${[SERVER_1, SERVER_2]})`;
   await sql`DELETE FROM players WHERE canonical_name LIKE 'lbbulk%'`;
+  await setEconomyCoefficients(1, 2);
 }
 
 afterAll(async () => {
@@ -227,6 +240,51 @@ describeIfDb('matches_played and combat availability', () => {
     expect(alphaServer1?.teamkills).toBe(0);
     expect(alphaServer1?.revives).toBe(0);
     expect(bravoServer1?.online_seconds).toBe(0);
+  });
+});
+
+describeIfDb('bonus/boost accrual (LEAD-4)', () => {
+  it('materialises boost_seconds and accrues bonus_points from economy coefficients', async () => {
+    await setEconomyCoefficients(1, 2);
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 3600, 600);
+    await seedPresence(PLAYER_A, SERVER_2, '2026-07-05', 1800, 300);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+
+    const rows = await statRows('day', '2026-07-05');
+    const server1 = rows.find((r) => r.server_id === SERVER_1 && r.player_id === PLAYER_A);
+    const server2 = rows.find((r) => r.server_id === SERVER_2 && r.player_id === PLAYER_A);
+    const rollup = rows.find((r) => r.server_id === null && r.player_id === PLAYER_A);
+
+    expect(server1?.boost_seconds).toBe(600);
+    // bonus = k_online * online + k_boost * boost = 1*3600 + 2*600
+    expect(server1?.bonus_points).toBe(4800);
+    expect(server2?.bonus_points).toBe(1800 + 2 * 300);
+
+    // rollup sums both servers for boost and bonus.
+    expect(rollup?.boost_seconds).toBe(900);
+    expect(rollup?.bonus_points).toBe(4800 + 2400);
+  });
+
+  it('applies changed coefficients only when a period is recomputed (frozen otherwise)', async () => {
+    await setEconomyCoefficients(1, 2);
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 1000, 100);
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+
+    const before = await statRows('day', '2026-07-05');
+    const beforeRow = before.find((r) => r.server_id === SERVER_1);
+    expect(beforeRow?.bonus_points).toBe(1000 + 2 * 100);
+
+    // Owner raises the boost multiplier. Until the period is recomputed, the stored
+    // bonus stays frozen — closed periods are never re-passed to the aggregator.
+    await setEconomyCoefficients(1, 10);
+    const frozen = await statRows('day', '2026-07-05');
+    expect(frozen.find((r) => r.server_id === SERVER_1)?.bonus_points).toBe(1200);
+
+    // Recomputing the (still open) period applies the new coefficient to future accruals.
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+    const after = await statRows('day', '2026-07-05');
+    expect(after.find((r) => r.server_id === SERVER_1)?.bonus_points).toBe(1000 + 10 * 100);
   });
 });
 

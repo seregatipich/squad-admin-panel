@@ -115,7 +115,11 @@ export function LeaderboardsBrowser() {
   }, [filters]);
 
   const combatAvailable = data?.combat_available ?? false;
-  const columns = useMemo(() => visibleColumns(combatAvailable), [combatAvailable]);
+  const economyAvailable = data?.economy_enabled ?? false;
+  const columns = useMemo(
+    () => visibleColumns(combatAvailable, economyAvailable),
+    [combatAvailable, economyAvailable],
+  );
   const rows = data?.rows ?? [];
   const totalRows = data?.total_rows ?? 0;
   const totalPages = Math.max(1, data?.total_pages ?? 1);
@@ -460,6 +464,10 @@ function metricValue(row: LeaderboardRow, metric: Metric): number {
       return row.secondary.deaths;
     case 'kd':
       return row.secondary.kd;
+    case 'bonus':
+      return row.secondary.bonus_points ?? row.metric_value;
+    case 'boost':
+      return row.secondary.boost_seconds ?? row.metric_value;
     default:
       return row.metric_value;
   }
