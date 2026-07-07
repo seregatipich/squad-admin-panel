@@ -33,6 +33,23 @@ assert() {
   fi
 }
 
+# assert_feature <expected: pass|fail> <description>  (runs verify-done --feature in $REPO)
+assert_feature() {
+  local expected=$1 desc=$2 out rc got
+  out=$(cd "$REPO" && "$REPO/scripts/verify-done.sh" --feature 2>&1)
+  rc=$?
+  got=pass
+  [ $rc -ne 0 ] && got=fail
+  if [ "$got" = "$expected" ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: $desc"
+    echo "      expected=$expected got=$got (rc=$rc)"
+    printf '%s\n' "$out" | sed 's/^/      | /'
+  fi
+}
+
 # --- gh stub: canned `gh run list --json ...` output, mode via GH_STUB_MODE --
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/gh" <<'EOF'
@@ -93,6 +110,30 @@ GH_STUB_MODE=green GH_STUB_SHA=$(git rev-parse origin/dev) assert fail "doctor w
 git branch -qD main
 
 GH_STUB_MODE=green assert pass "back to a fully done state"
+
+# --- --feature (parallel-wave handoff) mode --------------------------------
+# On dev, --feature must FAIL (dev is not a work branch).
+assert_feature fail "feature mode rejects being on dev"
+
+# On a pushed feature branch with a clean tree, --feature must PASS (no CI needed).
+git switch -qc feature/wave-task
+echo work >feat.txt && git add feat.txt && git commit -q -m "wave work"
+git push -q origin feature/wave-task
+assert_feature pass "feature branch implemented, committed, pushed"
+
+# Uncommitted changes -> FAIL.
+echo more >>feat.txt
+assert_feature fail "feature branch with a dirty working tree"
+git checkout -q -- feat.txt
+
+# Local commits not pushed -> FAIL.
+echo more >>feat.txt && git add feat.txt && git commit -q -m "unpushed wave work"
+assert_feature fail "feature branch ahead of its origin (unpushed)"
+git push -q origin feature/wave-task
+assert_feature pass "feature branch pushed again -> ready"
+
+git switch -q dev
+git branch -qD feature/wave-task
 
 echo
 echo "verify-done tests: $PASS passed, $FAIL failed"
