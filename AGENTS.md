@@ -59,8 +59,24 @@ A task — issue, fix, feature, or module — counts as **done** only when ALL o
 1. The work is merged into `dev` and **pushed to `origin/dev`**.
 2. The change is **completely covered by tests** (regression tests for fixes, integration tests for modules — see Testing policy).
 3. **ALL tests are verified passing** — the full suite green on the `dev` CI run, not just the tests you added.
+4. The **Completion verification** checklist below has been executed at completion time — `scripts/verify-done.sh` exits 0 and every judgment angle is backed by evidence.
 
 Until every condition holds, the task is in progress: do not report it as complete, do not close the issue, and do not promote to `master`.
+
+## Completion verification (MANDATORY)
+
+"Looks right" is not done. Before reporting any task complete, verify it from every angle, at completion time (not from stale mid-task results):
+
+1. **Requirements** — re-read the original task/issue and walk it point by point: every requested behavior exists and is tested; nothing was silently narrowed, reinterpreted, or dropped. If scope changed, say so explicitly instead of claiming done.
+2. **Tests prove the change** — for a fix, confirm the regression test actually fails without the fix (revert/stash, watch it fail, restore); for a feature, confirm the integration tests exercise the real wiring, not mocks of it.
+3. **Runtime behavior** — exercise the change for real, not only through tests: call the API route, run the worker, load the page. Capture actual output as evidence.
+4. **Full local gate** — `pnpm turbo run typecheck`, `pnpm exec biome check .`, and the affected packages' tests pass (see Workflow step 3).
+5. **Diff self-review** — read `git diff origin/dev...HEAD` end to end before merging: no debug leftovers, no unrelated or generated files, no scope creep, no secrets.
+6. **Docs & config** — README/runbooks/`.env.example`/migration notes updated wherever behavior, setup, or operations changed.
+7. **Mechanical state** — run `bash scripts/verify-done.sh`: it must exit 0. It proves the working tree is clean, `dev` is pushed, the branch model is intact (`git-guard doctor`), and the `ci` workflow is green **for the current dev tip** — a green run on an older SHA does not count.
+8. **Evidence in the report** — every claim is backed by fresh command output (test counts, CI run IDs, actual responses). A claim without evidence is unverified; "should work" is not done.
+
+If any angle cannot be satisfied, the task stays in progress and the blocker must be reported — never report around it.
 
 ## Promotion `dev` → `master`
 
