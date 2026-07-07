@@ -260,6 +260,13 @@
       "when": 1783312100000,
       "tag": "0036_player_coplay",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1783398300000,
+      "tag": "0037_dossier_weapon_vehicle_stats",
+      "breakpoints": true
     }
   ]
 }
