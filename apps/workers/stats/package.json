@@ -12,9 +12,12 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
+    "@squad/db": "workspace:*",
+    "@squad/diag": "workspace:*",
     "@squad/shared-config": "workspace:*",
     "ioredis": "^5.4.1",
-    "pino": "^9.5.0"
+    "pino": "^9.5.0",
+    "postgres": "^3.4.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
