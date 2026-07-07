@@ -45,6 +45,7 @@ The local stack runs in Docker (`postgres`, `redis`, `api`, `web`). Getting an i
   pnpm --filter @squad/api exec vitest run test/<your>.test.ts   # run only your files, not test:cov
   ```
 - **Adding an API route?** Register it in **BOTH** `apps/api/src/server.ts` **and** `apps/api/test/integration/harness.ts` — they keep parallel registration lists, so a route missing from the harness 404s in integration tests.
+- **API tests that mutate `players`/`roles`/`panel_meta`** must scope the mutation by `steamId64` (a unique/test-range value), never a bare `uuid` — the parallel `test:cov` shares one DB and `apps/api/test/test-isolation.regression.test.ts` fails any unguarded `delete(players)` / `update(players).roleId` / …. A single-file `vitest run <your.test.ts>` does NOT run that guard, so before pushing also run `pnpm --filter @squad/api exec vitest run test/test-isolation.regression.test.ts`.
 - **Local `git push` may need `--no-verify`.** The pre-push hook runs affected tests only when `DATABASE_URL` is set and skips them otherwise (CI is the source of truth); the Go bridge build still cannot run on macOS, so `--no-verify` is expected and allowed for local feature-branch pushes.
 
 ## CI gate
