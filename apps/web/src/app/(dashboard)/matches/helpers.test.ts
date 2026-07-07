@@ -4,6 +4,7 @@ import {
   buildCountApiQuery,
   buildExportUrl,
   buildListApiQuery,
+  buildMatchCombatLogHref,
   buildMatchDetailHref,
   buildQueryString,
   defaultFilters,
@@ -11,6 +12,7 @@ import {
   formatDuration,
   formatKillDeathStat,
   formatMatchStat,
+  formatMatchTimelineOffset,
   isOpenMatch,
   type MatchFilters,
   type MatchListItem,
@@ -238,6 +240,18 @@ describe('match detail links', () => {
   });
 });
 
+describe('match combat-log links', () => {
+  it('links a match card to the combat log filtered by server and match day range', () => {
+    expect(
+      buildMatchCombatLogHref({
+        server_id: 'srv-1',
+        started_at: '2026-07-04T22:30:00.000Z',
+        ended_at: '2026-07-05T00:15:00.000Z',
+      }),
+    ).toBe('/combat-log?server=srv-1&preset=custom&from=2026-07-04&to=2026-07-05');
+  });
+});
+
 describe('nextSort', () => {
   it('toggles order when the same column is clicked', () => {
     expect(
@@ -291,6 +305,24 @@ describe('combat stat formatting', () => {
     expect(formatMatchStat(12)).toBe('12');
     expect(formatKillDeathStat(8, 2)).toBe('8/2');
     expect(formatKillDeathStat(0, 0)).toBe('0/0');
+  });
+});
+
+describe('match timeline formatting', () => {
+  it('formats event offsets from match start', () => {
+    expect(formatMatchTimelineOffset('2026-07-04T10:02:30.000Z', '2026-07-04T10:00:00.000Z')).toBe(
+      '+2м 30с',
+    );
+    expect(formatMatchTimelineOffset('2026-07-04T11:05:00.000Z', '2026-07-04T10:00:00.000Z')).toBe(
+      '+1ч 5м',
+    );
+  });
+
+  it('handles invalid event offsets', () => {
+    expect(formatMatchTimelineOffset('bad', '2026-07-04T10:00:00.000Z')).toBe('—');
+    expect(formatMatchTimelineOffset('2026-07-04T09:59:00.000Z', '2026-07-04T10:00:00.000Z')).toBe(
+      '—',
+    );
   });
 });
 

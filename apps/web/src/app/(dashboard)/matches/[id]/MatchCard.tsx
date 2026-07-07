@@ -3,16 +3,19 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import {
+  buildMatchCombatLogHref,
   buildMatchDetailHref,
   formatDateTime,
   formatDuration,
   formatKillDeathStat,
   formatMatchStat,
+  formatMatchTimelineOffset,
   isOpenMatch,
   liveDurationSeconds,
   type MatchDetail,
   type MatchRosterEntry,
   type MatchTeamAggregate,
+  type MatchTimelineEvent,
   PILL_CLASSES,
   safeMatchBackHref,
   teamPillTone,
@@ -162,6 +165,12 @@ export function MatchCard({
           summary={match.teams.team2}
         />
       </div>
+
+      <MatchTimeline
+        events={match.combat_events}
+        startedAt={match.started_at}
+        combatLogHref={buildMatchCombatLogHref(match)}
+      />
     </div>
   );
 }
@@ -310,4 +319,89 @@ function StatBlock({ label, value }: { label: string; value: string }) {
       <div className="mt-0.5 truncate font-mono text-neutral-200">{value}</div>
     </div>
   );
+}
+
+export function MatchTimeline({
+  events,
+  startedAt,
+  combatLogHref,
+}: {
+  events: MatchTimelineEvent[] | null;
+  startedAt: string;
+  combatLogHref: string;
+}) {
+  return (
+    <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Боевые события</h2>
+        <Link href={combatLogHref} className="text-sm text-sky-400 hover:text-sky-300">
+          Открыть боевой лог
+        </Link>
+      </div>
+      {events === null ? (
+        <p className="text-sm text-neutral-600">Нет доступа к боевым событиям.</p>
+      ) : events.length === 0 ? (
+        <p className="text-sm text-neutral-600">Боевые события не найдены.</p>
+      ) : (
+        <ol className="space-y-2">
+          {events.map((event) => (
+            <li
+              key={event.id}
+              className={`rounded border px-3 py-2 text-sm ${
+                event.is_teamkill
+                  ? 'border-red-900 bg-red-950/30'
+                  : 'border-neutral-900 bg-neutral-900/40'
+              }`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-xs text-neutral-500">
+                  {formatMatchTimelineOffset(event.occurred_at, startedAt)}
+                </span>
+                <span
+                  className={`rounded px-2 py-0.5 text-xs ${
+                    event.is_teamkill
+                      ? 'bg-red-900 text-red-200'
+                      : event.event_type === 'revive'
+                        ? 'bg-emerald-900 text-emerald-200'
+                        : event.event_type === 'wound'
+                          ? 'bg-orange-900 text-orange-200'
+                          : 'bg-neutral-800 text-neutral-200'
+                  }`}
+                >
+                  {event.is_teamkill ? 'Тимкилл' : timelineEventLabel(event.event_type)}
+                </span>
+                <TimelinePlayer player={event.attacker} />
+                <span className="text-neutral-600">→</span>
+                <TimelinePlayer player={event.victim} />
+              </div>
+              {event.weapon || event.attacker_vehicle || event.victim_vehicle ? (
+                <div className="mt-1 truncate text-xs text-neutral-500">
+                  {[event.weapon, event.attacker_vehicle, event.victim_vehicle]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </div>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function TimelinePlayer({ player }: { player: MatchTimelineEvent['attacker'] }) {
+  if (!player) return <span className="text-neutral-500">—</span>;
+  return (
+    <Link href={`/players/${player.player_id}`} className="text-sky-400 hover:text-sky-300">
+      {player.current_name ?? player.player_id.slice(0, 8)}
+    </Link>
+  );
+}
+
+function timelineEventLabel(eventType: string): string {
+  if (eventType === 'death') return 'Убийство';
+  if (eventType === 'wound') return 'Ранение';
+  if (eventType === 'revive') return 'Поднятие';
+  if (eventType === 'vehicle_destroyed') return 'Техника';
+  return eventType;
 }

@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { matches, matchPlayers, players, roles, servers } from '@squad/db/schema';
+import { combatEvents, matches, matchPlayers, players, roles, servers } from '@squad/db/schema';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
@@ -120,6 +120,29 @@ async function seedMatchPlayer(
     teamkills: opts.teamkills ?? null,
     wounds: opts.wounds ?? null,
     revives: opts.revives ?? null,
+  });
+}
+
+async function seedCombatEvent(
+  db: DatabaseClient,
+  opts: {
+    serverId: string;
+    occurredAt: Date;
+    eventType?: 'death' | 'wound' | 'revive';
+    attackerPlayerId?: string | null;
+    victimPlayerId?: string | null;
+    weapon?: string | null;
+    isTeamkill?: boolean;
+  },
+): Promise<void> {
+  await db.insert(combatEvents).values({
+    serverId: opts.serverId,
+    occurredAt: opts.occurredAt,
+    eventType: opts.eventType ?? 'death',
+    attackerPlayerId: opts.attackerPlayerId ?? null,
+    victimPlayerId: opts.victimPlayerId ?? null,
+    weapon: opts.weapon ?? null,
+    isTeamkill: opts.isTeamkill ?? false,
   });
 }
 
@@ -452,6 +475,21 @@ describeIfDb('matches API (MATCH-4)', () => {
       squadName: 'Bravo',
       playSeconds: 2400,
     });
+    await seedCombatEvent(h.db, {
+      serverId: srv,
+      occurredAt: new Date('2026-05-21T10:10:00.000Z'),
+      attackerPlayerId: alice,
+      victimPlayerId: carol,
+      weapon: 'BP_AK74',
+      isTeamkill: true,
+    });
+    await seedCombatEvent(h.db, {
+      serverId: srv,
+      occurredAt: new Date('2026-05-21T09:59:59.000Z'),
+      attackerPlayerId: carol,
+      victimPlayerId: alice,
+      weapon: 'OutsideWindow',
+    });
 
     const res = await h.app.inject({
       method: 'GET',
@@ -488,6 +526,14 @@ describeIfDb('matches API (MATCH-4)', () => {
       };
       previous_match: { id: string; layer: string | null } | null;
       next_match: { id: string; layer: string | null } | null;
+      combat_events: Array<{
+        event_type: string;
+        occurred_at: string;
+        weapon: string | null;
+        is_teamkill: boolean;
+        attacker: { player_id: string; current_name: string | null } | null;
+        victim: { player_id: string; current_name: string | null } | null;
+      }> | null;
     };
     expect(body.id).toBe(matchId);
     expect(body.roster.length).toBe(3);
@@ -511,6 +557,16 @@ describeIfDb('matches API (MATCH-4)', () => {
     expect(body.teams.team2.kills).toBeNull();
     expect(body.previous_match).toMatchObject({ id: previousMatchId, layer: 'PreviousLayer' });
     expect(body.next_match).toMatchObject({ id: nextMatchId, layer: 'NextLayer' });
+    expect(body.combat_events).not.toBeNull();
+    expect(body.combat_events?.length).toBe(1);
+    expect(body.combat_events?.[0]).toMatchObject({
+      event_type: 'death',
+      occurred_at: '2026-05-21T10:10:00.000Z',
+      weapon: 'BP_AK74',
+      is_teamkill: true,
+      attacker: { player_id: alice, current_name: 'AliceRoster' },
+      victim: { player_id: carol, current_name: 'CarolRoster' },
+    });
   });
 
   it('match card 404 for unknown id', async () => {

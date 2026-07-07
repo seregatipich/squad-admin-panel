@@ -1,5 +1,6 @@
-import { matches, matchPlayers, players, servers } from '@squad/db/schema';
+import { combatEvents, matches, matchPlayers, players, servers } from '@squad/db/schema';
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, type SQL, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -8,6 +9,8 @@ const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 100;
 const EXPORT_MAX = 10_000;
 const LAYER_MAX = 200;
+const MATCH_TIMELINE_LIMIT = 30;
+const MATCH_TIMELINE_TYPES = ['death', 'wound', 'revive', 'vehicle_destroyed'] as const;
 
 const sortFieldSchema = z.enum(['started_at', 'duration_seconds', 'layer']);
 const orderSchema = z.enum(['asc', 'desc']);
@@ -194,6 +197,38 @@ function serializeAdjacentMatch(row: MatchListRow | undefined) {
   };
 }
 
+interface MatchTimelineRow {
+  id: bigint;
+  eventType: string;
+  occurredAt: Date;
+  weapon: string | null;
+  damage: string | null;
+  attackerKit: string | null;
+  victimVehicle: string | null;
+  attackerVehicle: string | null;
+  isTeamkill: boolean;
+  attackerId: string | null;
+  attackerName: string | null;
+  victimId: string | null;
+  victimName: string | null;
+}
+
+function serializeTimelineEvent(row: MatchTimelineRow) {
+  return {
+    id: Number(row.id),
+    event_type: row.eventType,
+    occurred_at: row.occurredAt.toISOString(),
+    weapon: row.weapon,
+    damage: row.damage,
+    attacker_kit: row.attackerKit,
+    victim_vehicle: row.victimVehicle,
+    attacker_vehicle: row.attackerVehicle,
+    is_teamkill: row.isTeamkill,
+    attacker: row.attackerId ? { player_id: row.attackerId, current_name: row.attackerName } : null,
+    victim: row.victimId ? { player_id: row.victimId, current_name: row.victimName } : null,
+  };
+}
+
 function sumNullableStat(rows: Array<Record<StatKey, number | null>>, key: StatKey): number | null {
   let total = 0;
   let hasValue = false;
@@ -256,6 +291,8 @@ function csvRow(row: MatchListRow): string {
 
 const matchesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
+  const combatAttacker = alias(players, 'match_combat_attacker');
+  const combatVictim = alias(players, 'match_combat_victim');
 
   function listSelection() {
     return app.db
@@ -377,6 +414,7 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'match_not_found' };
       }
+      const canViewCombat = req.user?.permissions.combatView === true;
 
       const rosterRows = await app.db
         .select({
@@ -407,6 +445,38 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
           .limit(1),
       ]);
 
+      const timelineRows = canViewCombat
+        ? await app.db
+            .select({
+              id: combatEvents.id,
+              eventType: combatEvents.eventType,
+              occurredAt: combatEvents.occurredAt,
+              weapon: combatEvents.weapon,
+              damage: combatEvents.damage,
+              attackerKit: combatEvents.attackerKit,
+              victimVehicle: combatEvents.victimVehicle,
+              attackerVehicle: combatEvents.attackerVehicle,
+              isTeamkill: combatEvents.isTeamkill,
+              attackerId: combatEvents.attackerPlayerId,
+              attackerName: combatAttacker.canonicalName,
+              victimId: combatEvents.victimPlayerId,
+              victimName: combatVictim.canonicalName,
+            })
+            .from(combatEvents)
+            .leftJoin(combatAttacker, eq(combatAttacker.id, combatEvents.attackerPlayerId))
+            .leftJoin(combatVictim, eq(combatVictim.id, combatEvents.victimPlayerId))
+            .where(
+              and(
+                eq(combatEvents.serverId, match.serverId),
+                inArray(combatEvents.eventType, [...MATCH_TIMELINE_TYPES]),
+                gte(combatEvents.occurredAt, match.startedAt),
+                lte(combatEvents.occurredAt, match.endedAt ?? new Date()),
+              ),
+            )
+            .orderBy(desc(combatEvents.occurredAt), desc(combatEvents.id))
+            .limit(MATCH_TIMELINE_LIMIT)
+        : null;
+
       const roster = rosterRows.map((entry) => ({
         player_id: entry.playerId,
         nickname: entry.nickname,
@@ -435,6 +505,7 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
         teams: { team1: teamAggregate(1), team2: teamAggregate(2) },
         previous_match: serializeAdjacentMatch(previousRows[0]),
         next_match: serializeAdjacentMatch(nextRows[0]),
+        combat_events: timelineRows ? timelineRows.map(serializeTimelineEvent) : null,
       };
     },
   );

@@ -47,6 +47,25 @@ export interface MatchTeamAggregate extends MatchCombatStats {
   play_seconds: number;
 }
 
+export interface MatchTimelinePlayer {
+  player_id: string;
+  current_name: string | null;
+}
+
+export interface MatchTimelineEvent {
+  id: number;
+  event_type: string;
+  occurred_at: string;
+  weapon: string | null;
+  damage: string | null;
+  attacker_kit: string | null;
+  victim_vehicle: string | null;
+  attacker_vehicle: string | null;
+  is_teamkill: boolean;
+  attacker: MatchTimelinePlayer | null;
+  victim: MatchTimelinePlayer | null;
+}
+
 export interface AdjacentMatch {
   id: string;
   layer: string | null;
@@ -61,6 +80,7 @@ export interface MatchDetail extends MatchListItem {
   };
   previous_match: AdjacentMatch | null;
   next_match: AdjacentMatch | null;
+  combat_events: MatchTimelineEvent[] | null;
 }
 
 export interface MatchListResponse {
@@ -284,6 +304,17 @@ export function buildMatchDetailHref(matchId: string, backHref: string = '/match
   return `/matches/${encodeURIComponent(matchId)}${backQuery}`;
 }
 
+export function buildMatchCombatLogHref(
+  match: Pick<MatchListItem, 'server_id' | 'started_at' | 'ended_at'>,
+): string {
+  const params = new URLSearchParams();
+  params.set('server', match.server_id);
+  params.set('preset', 'custom');
+  params.set('from', match.started_at.slice(0, 10));
+  params.set('to', (match.ended_at ?? match.started_at).slice(0, 10));
+  return `/combat-log?${params.toString()}`;
+}
+
 export function nextSort(
   current: MatchFilters,
   column: SortField,
@@ -350,6 +381,13 @@ export function formatKillDeathStat(
 ): string {
   if (kills == null && deaths == null) return '—';
   return `${formatMatchStat(kills)}/${formatMatchStat(deaths)}`;
+}
+
+export function formatMatchTimelineOffset(occurredAt: string, startedAt: string): string {
+  const occurred = new Date(occurredAt).getTime();
+  const started = new Date(startedAt).getTime();
+  if (Number.isNaN(occurred) || Number.isNaN(started) || occurred < started) return '—';
+  return `+${formatDuration(Math.floor((occurred - started) / 1000))}`;
 }
 
 export function liveDurationSeconds(startedAt: string, now: Date = new Date()): number {
