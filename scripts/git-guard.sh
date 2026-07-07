@@ -203,25 +203,37 @@ analyze_checkout_switch() {
 }
 
 analyze_branch() {
-  local args="" arg deleting=""
+  local args="" arg deleting="" moving="" listing=""
   while [ $# -gt 0 ]; do
     arg=$1
     case "$arg" in
     -d | -D | --delete) deleting=1 ;;
+    # rename/copy: the destination positional is a NEW branch name — enforce it.
+    -m | -M | --move | -c | -C | --copy) moving=1 ;;
+    # read-only query/list flags: `git branch` names a branch as a pattern or
+    # filter argument, not as a branch to create (e.g. `git branch --list main`).
+    -l | --list | -a | --all | -r | --remotes | --contains | --no-contains | \
+      --merged | --no-merged | --points-at | --show-current | -v | -vv | \
+      --verbose | --column | --no-column | --format | --format=* | --sort=* | \
+      --edit-description)
+      listing=1
+      ;;
     --) ;;
     -*) ;;
     *) args="$args $arg" ;;
     esac
     shift
   done
+  # Deletion and read-only list/query forms never create or rename a branch.
   [ -n "$deleting" ] && return 0
+  { [ -n "$listing" ] && [ -z "$moving" ]; } && return 0
   local a
   for a in $args; do
     is_main_ref "$a" && deny "creating or renaming to a branch named 'main' — it must never exist"
   done
   # `git branch <new> master` — creating a branch off master.
   set -- $args
-  if [ $# -ge 2 ]; then
+  if [ -z "$moving" ] && [ $# -ge 2 ]; then
     case "$2" in
     master | origin/master) deny "creating '$1' from master — work branches are created from dev" ;;
     esac
