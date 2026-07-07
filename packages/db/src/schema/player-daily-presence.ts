@@ -16,6 +16,7 @@ export const playerDailyPresence = pgTable(
     onlineSeconds: integer('online_seconds').notNull().default(0),
     boostSeconds: integer('boost_seconds').notNull().default(0),
     queueSeconds: integer('queue_seconds').notNull().default(0),
+    seedSeconds: integer('seed_seconds').notNull().default(0),
     sessionCount: integer('session_count').notNull().default(0),
   },
   (table) => ({
@@ -23,7 +24,7 @@ export const playerDailyPresence = pgTable(
     dayIdx: index('player_daily_presence_day_idx').on(table.day),
     secondsChk: check(
       'player_daily_presence_seconds_chk',
-      sql`online_seconds >= 0 AND boost_seconds >= 0 AND queue_seconds >= 0 AND session_count >= 0`,
+      sql`online_seconds >= 0 AND boost_seconds >= 0 AND queue_seconds >= 0 AND seed_seconds >= 0 AND session_count >= 0`,
     ),
   }),
 );

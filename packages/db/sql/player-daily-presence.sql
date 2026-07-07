@@ -16,12 +16,16 @@ CREATE TABLE IF NOT EXISTS player_daily_presence (
   online_seconds integer NOT NULL DEFAULT 0,
   boost_seconds  integer NOT NULL DEFAULT 0,
   queue_seconds  integer NOT NULL DEFAULT 0,
+  seed_seconds   integer NOT NULL DEFAULT 0,
   session_count  integer NOT NULL DEFAULT 0,
   CONSTRAINT player_daily_presence_pkey PRIMARY KEY (player_id, day, server_id),
   CONSTRAINT player_daily_presence_seconds_chk
     CHECK (online_seconds >= 0 AND boost_seconds >= 0
-      AND queue_seconds >= 0 AND session_count >= 0)
+      AND queue_seconds >= 0 AND seed_seconds >= 0 AND session_count >= 0)
 );
+-- Additive column for pre-existing tables (ECON-2, #162).
+ALTER TABLE player_daily_presence
+  ADD COLUMN IF NOT EXISTS seed_seconds integer NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS player_daily_presence_day_idx
   ON player_daily_presence (day);

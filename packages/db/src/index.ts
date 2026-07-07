@@ -1,6 +1,7 @@
 export * from './client.js';
 export * from './coplay/aggregate.js';
 export * from './dossier/aggregate.js';
+export * from './economy/accrual.js';
 export * from './geoip/index.js';
 export * from './leaderboard/aggregate.js';
 export * from './presence/daily.js';
