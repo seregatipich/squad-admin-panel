@@ -159,9 +159,15 @@ export async function recomputeLeaderboardPeriod(
     `;
 
     const inserted = await tx`
-      WITH presence_agg AS (
+      WITH settings AS (
+        SELECT
+          COALESCE((SELECT k_online FROM economy_settings WHERE id = 1), 1) AS k_online,
+          COALESCE((SELECT k_boost FROM economy_settings WHERE id = 1), 2) AS k_boost
+      ),
+      presence_agg AS (
         SELECT player_id, server_id,
-               COALESCE(SUM(online_seconds), 0)::int AS online_seconds
+               COALESCE(SUM(online_seconds), 0)::int AS online_seconds,
+               COALESCE(SUM(boost_seconds), 0)::int AS boost_seconds
         FROM player_daily_presence
         ${presenceFilter}
         GROUP BY player_id, server_id
@@ -179,18 +185,20 @@ export async function recomputeLeaderboardPeriod(
           COALESCE(p.player_id, mm.player_id) AS player_id,
           COALESCE(p.server_id, mm.server_id) AS server_id,
           COALESCE(p.online_seconds, 0) AS online_seconds,
+          COALESCE(p.boost_seconds, 0) AS boost_seconds,
           COALESCE(mm.matches_played, 0) AS matches_played
         FROM presence_agg p
         FULL OUTER JOIN matches_agg mm
           ON p.player_id = mm.player_id AND p.server_id = mm.server_id
       ),
       per_server AS (
-        SELECT player_id, server_id, online_seconds, matches_played
+        SELECT player_id, server_id, online_seconds, boost_seconds, matches_played
         FROM combined
       ),
       rollup AS (
         SELECT player_id, NULL::uuid AS server_id,
                SUM(online_seconds)::int AS online_seconds,
+               SUM(boost_seconds)::int AS boost_seconds,
                SUM(matches_played)::int AS matches_played
         FROM combined
         GROUP BY player_id
@@ -202,21 +210,25 @@ export async function recomputeLeaderboardPeriod(
       )
       INSERT INTO player_stat_periods
         (player_id, server_id, period_type, period_start,
-         online_seconds, seeding_seconds, kills, deaths, teamkills, revives, kd_ratio, matches_played)
+         online_seconds, seeding_seconds, kills, deaths, teamkills, revives, kd_ratio,
+         matches_played, boost_seconds, bonus_points)
       SELECT
-        player_id,
-        server_id,
+        all_rows.player_id,
+        all_rows.server_id,
         ${periodType},
         ${periodStart}::date,
-        online_seconds,
+        all_rows.online_seconds,
         0,
         0,
         0,
         0,
         0,
         0,
-        matches_played
-      FROM all_rows
+        all_rows.matches_played,
+        all_rows.boost_seconds,
+        (settings.k_online * all_rows.online_seconds
+          + settings.k_boost * all_rows.boost_seconds)::numeric
+      FROM all_rows CROSS JOIN settings
       RETURNING player_id
     `;
 

@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS player_stat_periods (
   revives         integer NOT NULL DEFAULT 0,
   kd_ratio        numeric NOT NULL DEFAULT 0,
   matches_played  integer NOT NULL DEFAULT 0,
+  boost_seconds   integer NOT NULL DEFAULT 0,
+  bonus_points    numeric NOT NULL DEFAULT 0,
   CONSTRAINT player_stat_periods_identity
     UNIQUE NULLS NOT DISTINCT (player_id, server_id, period_type, period_start),
   CONSTRAINT player_stat_periods_period_type_chk
@@ -27,7 +29,9 @@ CREATE TABLE IF NOT EXISTS player_stat_periods (
   CONSTRAINT player_stat_periods_metrics_chk
     CHECK (online_seconds >= 0 AND seeding_seconds >= 0 AND kills >= 0
       AND deaths >= 0 AND teamkills >= 0 AND revives >= 0
-      AND matches_played >= 0 AND kd_ratio >= 0)
+      AND matches_played >= 0 AND kd_ratio >= 0),
+  CONSTRAINT player_stat_periods_economy_chk
+    CHECK (boost_seconds >= 0 AND bonus_points >= 0)
 );
 
 CREATE INDEX IF NOT EXISTS player_stat_periods_online_idx
@@ -46,3 +50,7 @@ CREATE INDEX IF NOT EXISTS player_stat_periods_kd_idx
   ON player_stat_periods (period_type, period_start, server_id, kd_ratio DESC);
 CREATE INDEX IF NOT EXISTS player_stat_periods_matches_idx
   ON player_stat_periods (period_type, period_start, server_id, matches_played DESC);
+CREATE INDEX IF NOT EXISTS player_stat_periods_boost_idx
+  ON player_stat_periods (period_type, period_start, server_id, boost_seconds DESC);
+CREATE INDEX IF NOT EXISTS player_stat_periods_bonus_idx
+  ON player_stat_periods (period_type, period_start, server_id, bonus_points DESC);

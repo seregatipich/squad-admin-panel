@@ -1,5 +1,11 @@
 import type { StatPeriodType } from '@squad/db';
-import { ALLTIME_PERIOD_START, periodStartFor, playerStatPeriods, players } from '@squad/db';
+import {
+  ALLTIME_PERIOD_START,
+  economySettings,
+  periodStartFor,
+  playerStatPeriods,
+  players,
+} from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
 import { and, asc, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -15,11 +21,14 @@ const METRIC_COLUMNS = {
   revives: playerStatPeriods.revives,
   kd: playerStatPeriods.kdRatio,
   matches: playerStatPeriods.matchesPlayed,
+  bonus: playerStatPeriods.bonusPoints,
+  boost: playerStatPeriods.boostSeconds,
 } as const;
 
 type Metric = keyof typeof METRIC_COLUMNS;
 
 const COMBAT_METRICS = new Set<Metric>(['kills', 'deaths', 'teamkills', 'revives', 'kd']);
+const ECONOMY_METRICS = new Set<Metric>(['bonus', 'boost']);
 const COMBAT_STATS_AVAILABLE = false;
 const CACHE_PREFIX = 'leaderboard:';
 const CACHE_TTL_SECONDS = 60;
@@ -28,7 +37,18 @@ const SEARCH_RATE_LIMIT_PER_MINUTE = 60;
 const SEARCH_RATE_LIMIT_PREFIX = 'leaderboard:search-rl:';
 
 const leaderboardsQuery = z.object({
-  metric: z.enum(['online', 'seeding', 'kills', 'deaths', 'teamkills', 'revives', 'kd', 'matches']),
+  metric: z.enum([
+    'online',
+    'seeding',
+    'kills',
+    'deaths',
+    'teamkills',
+    'revives',
+    'kd',
+    'matches',
+    'bonus',
+    'boost',
+  ]),
   period: z.enum(['day', 'week', 'month', 'season', 'alltime']).default('alltime'),
   period_start: z
     .string()
@@ -107,6 +127,27 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
         return { error: { code: 'invalid_period', message: 'period_start is required' } };
       }
 
+      const [economyRow] = await app.db
+        .select({ enabled: economySettings.economyEnabled })
+        .from(economySettings)
+        .limit(1);
+      const economyEnabled = economyRow?.enabled ?? false;
+
+      if (ECONOMY_METRICS.has(metric) && !economyEnabled) {
+        return reply.send({
+          metric,
+          period,
+          period_start: periodStart,
+          server_id: server_id === 'all' ? null : server_id,
+          available: false,
+          combat_available: COMBAT_STATS_AVAILABLE,
+          economy_enabled: false,
+          total_rows: 0,
+          total_pages: 1,
+          rows: [],
+        });
+      }
+
       if (search) {
         const rateKey = `${SEARCH_RATE_LIMIT_PREFIX}${req.ip}:${req.user?.playerId ?? ''}`;
         const hits = await app.redis.incr(rateKey).catch(() => 0);
@@ -136,7 +177,7 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
         searchFilter,
       );
 
-      const cacheKey = `${CACHE_PREFIX}${metric}:${period}:${periodStart}:${server_id}:${order}:${search ?? ''}:${limit}:${offset}`;
+      const cacheKey = `${CACHE_PREFIX}${metric}:${period}:${periodStart}:${server_id}:${order}:${search ?? ''}:${limit}:${offset}:econ${economyEnabled ? 1 : 0}`;
       const cached = await app.redis.get(cacheKey).catch(() => null);
       if (cached) {
         reply.header('x-cache', 'hit');
@@ -156,6 +197,8 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
         deaths: number;
         kdRatio: number;
         matchesPlayed: number;
+        boostSeconds: number;
+        bonusPoints: number;
       }>;
       let total: number;
       try {
@@ -172,6 +215,8 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
             deaths: playerStatPeriods.deaths,
             kdRatio: playerStatPeriods.kdRatio,
             matchesPlayed: playerStatPeriods.matchesPlayed,
+            boostSeconds: playerStatPeriods.boostSeconds,
+            bonusPoints: playerStatPeriods.bonusPoints,
           })
           .from(playerStatPeriods)
           .innerJoin(players, eq(players.id, playerStatPeriods.playerId))
@@ -203,6 +248,7 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
         server_id: server_id === 'all' ? null : server_id,
         available: !COMBAT_METRICS.has(metric),
         combat_available: COMBAT_STATS_AVAILABLE,
+        economy_enabled: economyEnabled,
         total_rows: total,
         total_pages: Math.max(1, Math.ceil(total / limit)),
         rows: rows.map((row, index) => ({
@@ -219,6 +265,12 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
             deaths: row.deaths,
             kd: Number(row.kdRatio),
             matches_played: row.matchesPlayed,
+            ...(economyEnabled
+              ? {
+                  boost_seconds: row.boostSeconds,
+                  bonus_points: Number(row.bonusPoints),
+                }
+              : {}),
           },
         })),
       };

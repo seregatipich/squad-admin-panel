@@ -33,6 +33,8 @@ export const playerStatPeriods = pgTable(
     revives: integer('revives').notNull().default(0),
     kdRatio: numeric('kd_ratio', { mode: 'number' }).notNull().default(0),
     matchesPlayed: integer('matches_played').notNull().default(0),
+    boostSeconds: integer('boost_seconds').notNull().default(0),
+    bonusPoints: numeric('bonus_points', { mode: 'number' }).notNull().default(0),
   },
   (table) => ({
     identity: unique('player_stat_periods_identity')
@@ -86,6 +88,18 @@ export const playerStatPeriods = pgTable(
       table.serverId,
       table.matchesPlayed.desc(),
     ),
+    boostIdx: index('player_stat_periods_boost_idx').on(
+      table.periodType,
+      table.periodStart,
+      table.serverId,
+      table.boostSeconds.desc(),
+    ),
+    bonusIdx: index('player_stat_periods_bonus_idx').on(
+      table.periodType,
+      table.periodStart,
+      table.serverId,
+      table.bonusPoints.desc(),
+    ),
     periodTypeChk: check(
       'player_stat_periods_period_type_chk',
       sql`period_type IN ('day','week','month','season','alltime')`,
@@ -93,6 +107,10 @@ export const playerStatPeriods = pgTable(
     metricsChk: check(
       'player_stat_periods_metrics_chk',
       sql`online_seconds >= 0 AND seeding_seconds >= 0 AND kills >= 0 AND deaths >= 0 AND teamkills >= 0 AND revives >= 0 AND matches_played >= 0 AND kd_ratio >= 0`,
+    ),
+    economyChk: check(
+      'player_stat_periods_economy_chk',
+      sql`boost_seconds >= 0 AND bonus_points >= 0`,
     ),
   }),
 );
