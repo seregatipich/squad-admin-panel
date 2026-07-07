@@ -88,7 +88,9 @@ export function eventTypeMeta(eventType: string): EventTypeMeta {
 export interface CombatFilters {
   facet: CombatFacet;
   attackerQuery: string;
+  attackerPlayerId: string;
   victimQuery: string;
+  victimPlayerId: string;
   weapon: string;
   serverIds: string[];
   preset: DatePreset;
@@ -128,7 +130,9 @@ export function defaultFilters(): CombatFilters {
   return {
     facet: 'kills',
     attackerQuery: '',
+    attackerPlayerId: '',
     victimQuery: '',
+    victimPlayerId: '',
     weapon: '',
     serverIds: [],
     preset: 'all',
@@ -143,7 +147,9 @@ export function parseFilters(params: ParamsLike): CombatFilters {
   return {
     facet: isFacet(facetRaw) ? facetRaw : 'kills',
     attackerQuery: params.get('attacker')?.trim() ?? '',
+    attackerPlayerId: params.get('attackerPlayerId')?.trim() ?? '',
     victimQuery: params.get('victim')?.trim() ?? '',
+    victimPlayerId: params.get('victimPlayerId')?.trim() ?? '',
     weapon: params.get('weapon')?.trim() ?? '',
     serverIds: params.getAll('server').filter((id) => id.length > 0),
     preset: isPreset(presetRaw) ? presetRaw : 'all',
@@ -156,7 +162,9 @@ export function buildQueryString(filters: CombatFilters): string {
   const params = new URLSearchParams();
   if (filters.facet !== 'kills') params.set('facet', filters.facet);
   if (filters.attackerQuery) params.set('attacker', filters.attackerQuery);
+  if (filters.attackerPlayerId) params.set('attackerPlayerId', filters.attackerPlayerId);
   if (filters.victimQuery) params.set('victim', filters.victimQuery);
+  if (filters.victimPlayerId) params.set('victimPlayerId', filters.victimPlayerId);
   if (filters.weapon) params.set('weapon', filters.weapon);
   for (const serverId of filters.serverIds) params.append('server', serverId);
   if (filters.preset !== 'all') params.set('preset', filters.preset);
@@ -170,7 +178,9 @@ export function buildQueryString(filters: CombatFilters): string {
 export function hasActiveFilters(filters: CombatFilters): boolean {
   return (
     Boolean(filters.attackerQuery) ||
+    Boolean(filters.attackerPlayerId) ||
     Boolean(filters.victimQuery) ||
+    Boolean(filters.victimPlayerId) ||
     Boolean(filters.weapon) ||
     filters.serverIds.length > 0 ||
     filters.preset !== 'all'
@@ -267,8 +277,16 @@ function appendFilterParams(
     for (const id of filters.serverIds) params.append('serverId', id);
   }
 
-  if (filters.attackerQuery) params.set('attackerName', filters.attackerQuery);
-  if (filters.victimQuery) params.set('victimName', filters.victimQuery);
+  if (filters.attackerPlayerId) {
+    params.set('attackerPlayerId', filters.attackerPlayerId);
+  } else if (filters.attackerQuery) {
+    params.set('attackerName', filters.attackerQuery);
+  }
+  if (filters.victimPlayerId) {
+    params.set('victimPlayerId', filters.victimPlayerId);
+  } else if (filters.victimQuery) {
+    params.set('victimName', filters.victimQuery);
+  }
   if (filters.weapon) params.set('weapon', filters.weapon);
 
   const range = resolveDateRange(filters, now);

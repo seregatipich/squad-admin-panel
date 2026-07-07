@@ -123,7 +123,7 @@ jobs:
           $(go env GOPATH)/bin/govulncheck ./...
       - name: build static binary
         run: |
-          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/panel-host-bridge ./cmd/panel-host-bridge
+          CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o bin/panel-host-bridge ./cmd/panel-host-bridge
           file bin/panel-host-bridge
           ls -la bin/
 
