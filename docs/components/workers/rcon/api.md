@@ -108,6 +108,8 @@ Written by `RconCommandQueue` after a queued operator command finishes or is rej
 
 Failed results use `ok: false` and `error` instead of `response`.
 
+Pending entries are reclaimed with `XAUTOCLAIM` after 60 s idle. Before replaying a claimed entry, the worker checks this result key; if it already exists, the worker only acknowledges the stream entry.
+
 ## Redis stream: `events:server:{serverId}`
 
 Three event types are published by this worker. All entries use field name `envelope` containing JSON-encoded `EventEnvelope`.

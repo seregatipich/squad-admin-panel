@@ -9,6 +9,7 @@
 - `rcon:squads:{serverId}` Redis cache written after successful poll cycles.
 - `rcon:commands:{serverId}` Redis Stream consumer for P0 operator commands: `AdminBroadcast`, `AdminEndMatch`, `AdminReloadServerConfig`.
 - `rcon:command-result:{requestId}` Redis result key for queued operator commands.
+- `XAUTOCLAIM` replay for pending operator commands idle longer than 60 s, with a result-key guard before replay.
 - Shared RCON command queue contract in `@squad/shared-types`.
 - Unit coverage for `ListSquads`, `ShowNextMap`, UTF-8 `ListPlayers` nicknames, RCON command serialization, and the supervisor poll command set.
 - Unit coverage for command validation, command queue success/failure result writes, API worker-first enqueue flow, and supervisor execution over a live RCON fixture.
@@ -19,6 +20,7 @@
 - The 30 s poll cycle now runs `ListPlayers`, `ListSquads`, `ShowServerInfo`, and `ShowNextMap`.
 - `rcon:status:{serverId}` can include `next_level`, `next_layer` from `ShowNextMap`, and `squad_count`.
 - API graceful stop and config reload now try worker-rcon first when `rcon:status:{serverId}.state = "connected"`. Direct one-shot TCP RCON remains the fallback only when the worker is not connected or the command was not accepted into the stream.
+- Queued operator commands are at-least-once around the real RCON side effect. Reclaim prevents lost pending messages; a crash after result write but before `XACK` is deduped through the result key.
 
 ### Migration notes
 

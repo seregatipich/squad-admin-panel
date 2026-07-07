@@ -54,8 +54,11 @@ The API writes P0 operator commands to `rcon:commands:{id}`. The worker consumes
 4. The command executes through `RconClient.exec()`, so it shares the same FIFO serialization as polling and keepalive commands.
 5. The worker writes `rcon:command-result:{request_id}` with TTL 120 s and then `XACK`s the stream entry.
 6. If validation or RCON execution fails, the worker writes `ok:false` result and still `XACK`s. Malformed entries without a `request_id` are only acknowledged.
+7. Every 30 s the active consumer runs `XAUTOCLAIM` for entries idle longer than 60 s and replays them through the same validation/execution path. Before replay it checks `rcon:command-result:{request_id}`; if a result already exists, it only `XACK`s the claimed entry and does not execute RCON again.
 
 If the API has already accepted a command into the stream and then times out waiting for the result, it does not retry through direct RCON. This avoids double side effects for `AdminEndMatch` and config reload.
+
+The queue is at-least-once around the real RCON side effect: if the worker process dies after Squad accepts the command but before the worker writes the result key, a reclaimed entry may execute again. The result-key guard covers the safer crash window after result write but before `XACK`.
 
 ## Keepalive (every 90 s via RconClient)
 
@@ -78,5 +81,6 @@ If the API has already accepted a command into the stream and then times out wai
 | `exec()` timeout (10 s) | `consecutivePollFails++`; after 3 → reconnect |
 | Redis `XADD` failure | Log warn, continue |
 | Command stream read failure | Log warn, retry while the RCON session remains connected |
+| Claimed pending command has an existing result key | `XACK` without another RCON execution |
 | DB query failure in reconcile | Log error, skip this cycle |
 | Credential decrypt failure | Log error, skip this server |

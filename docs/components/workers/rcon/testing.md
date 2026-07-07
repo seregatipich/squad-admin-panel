@@ -80,6 +80,8 @@ Unit tests for the Redis Stream command queue.
 | Rejects unsupported commands and unsafe broadcast text | Arbitrary RCON and CR/LF/NUL broadcast payloads are blocked |
 | Creates the consumer group from stream id `0` | Already-accepted commands are not skipped on first worker startup |
 | Stores success and failure results and acknowledges stream entries | API callers receive a result through `rcon:command-result:{requestId}` |
+| Reclaims idle pending entries through `XAUTOCLAIM` | Commands delivered to a dead consumer are replayed by the active consumer |
+| Skips execution when a claimed entry already has a result key | Crash after result write but before `XACK` does not duplicate the RCON side effect |
 
 ### `supervisor-diag.test.ts`
 
@@ -106,7 +108,7 @@ Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
 
 - `client.ts` is unit-tested with an in-process TCP fixture for command serialization; `supervisor-diag.test.ts` also exercises it indirectly for connect/auth-fail paths.
 - `persist.ts` has no isolated test; covered indirectly by e2e tests that verify player rows appear after a poll cycle.
-- Redis pending-message reclaim for the command queue is not implemented in this slice. Commands are consumed and acknowledged in normal flow; a process crash after `XREADGROUP` and before `XACK` would require a later reclaim slice.
+- The command queue is at-least-once for the actual RCON side effect. A crash after RCON execution but before result write can still replay after reclaim; a crash after result write but before `XACK` is covered by the result-key guard.
 - `rcon.disconnected` and `rcon.reconnect_attempt` diag emits are not asserted in unit tests because the connect loop's backoff sleep makes their timing brittle in fake-timer mode; the e2e suite exercises them end-to-end during graceful-stop.
 
 ## Test data

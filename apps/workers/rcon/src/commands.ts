@@ -17,6 +17,8 @@ const RESULT_TTL_SECONDS = 120;
 const DEFAULT_BLOCK_MS = 500;
 const DEFAULT_COUNT = 10;
 const BROADCAST_MAX_CHARS = 300;
+const DEFAULT_RECLAIM_MIN_IDLE_MS = 60_000;
+const DEFAULT_RECLAIM_INTERVAL_MS = 30_000;
 
 type StreamReadResult = Array<[string, Array<[string, string[]]>]> | null;
 
@@ -29,6 +31,8 @@ export interface RconCommandQueueOptions {
   count?: number;
   consumerName?: string;
   resultTtlSeconds?: number;
+  reclaimMinIdleMs?: number;
+  reclaimIntervalMs?: number;
 }
 
 export function buildOperatorCommand(input: unknown): string {
@@ -55,8 +59,11 @@ export class RconCommandQueue {
   private readonly count: number;
   private readonly consumerName: string;
   private readonly resultTtlSeconds: number;
+  private readonly reclaimMinIdleMs: number;
+  private readonly reclaimIntervalMs: number;
   private running = false;
   private loopPromise?: Promise<void>;
+  private nextReclaimAt = 0;
 
   constructor(private readonly opts: RconCommandQueueOptions) {
     this.stream = rconCommandStream(opts.serverId);
@@ -65,6 +72,8 @@ export class RconCommandQueue {
     this.consumerName =
       opts.consumerName ?? `worker-rcon-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
     this.resultTtlSeconds = opts.resultTtlSeconds ?? RESULT_TTL_SECONDS;
+    this.reclaimMinIdleMs = opts.reclaimMinIdleMs ?? DEFAULT_RECLAIM_MIN_IDLE_MS;
+    this.reclaimIntervalMs = opts.reclaimIntervalMs ?? DEFAULT_RECLAIM_INTERVAL_MS;
   }
 
   async ensureGroup(): Promise<void> {
@@ -114,10 +123,33 @@ export class RconCommandQueue {
     return processed;
   }
 
+  async reclaimPendingOnce(): Promise<number> {
+    const result = (await this.opts.redis.xautoclaim(
+      this.stream,
+      RCON_COMMAND_GROUP,
+      this.consumerName,
+      this.reclaimMinIdleMs,
+      '0-0',
+      'COUNT',
+      String(this.count),
+    )) as [string, Array<[string, string[]]>, string[]];
+    const entries = result?.[1] ?? [];
+    let processed = 0;
+    for (const [streamId, kv] of entries) {
+      await this.processEntry(this.stream, streamId, kv);
+      processed++;
+    }
+    return processed;
+  }
+
   private async loop(): Promise<void> {
     while (this.running) {
       try {
         const processed = await this.processOnce();
+        if (Date.now() >= this.nextReclaimAt) {
+          await this.reclaimPendingOnce();
+          this.nextReclaimAt = Date.now() + this.reclaimIntervalMs;
+        }
         if (processed === 0) await sleep(25);
       } catch (err) {
         this.opts.log.warn(
@@ -151,6 +183,10 @@ export class RconCommandQueue {
     const startedAt = Date.now();
     const requestId = requestIdOf(request);
     const commandName = commandNameOf(request);
+    if (requestId && (await this.resultExists(requestId))) {
+      await this.opts.redis.xack(streamName, RCON_COMMAND_GROUP, streamId);
+      return;
+    }
     try {
       const command = buildOperatorCommand(request);
       const response = await this.opts.execute(command);
@@ -190,6 +226,14 @@ export class RconCommandQueue {
       'EX',
       this.resultTtlSeconds,
     );
+  }
+
+  private async resultExists(requestId: string): Promise<boolean> {
+    try {
+      return (await this.opts.redis.get(rconCommandResultKey(requestId))) !== null;
+    } catch {
+      return false;
+    }
   }
 }
 

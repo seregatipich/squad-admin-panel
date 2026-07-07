@@ -29,6 +29,8 @@ function makeRedis() {
     xadd: vi.fn().mockResolvedValue('0-0'),
     xgroup: vi.fn().mockResolvedValue('OK'),
     xreadgroup: vi.fn().mockResolvedValue(null),
+    xautoclaim: vi.fn().mockResolvedValue(['0-0', [], []]),
+    get: vi.fn().mockResolvedValue(null),
     xack: vi.fn().mockResolvedValue(1),
   } as never;
 }
@@ -206,6 +208,8 @@ describe('RconSupervisor command queue', () => {
       xadd: ReturnType<typeof vi.fn>;
       xgroup: ReturnType<typeof vi.fn>;
       xreadgroup: ReturnType<typeof vi.fn>;
+      xautoclaim: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
       xack: ReturnType<typeof vi.fn>;
     };
     redis.xreadgroup

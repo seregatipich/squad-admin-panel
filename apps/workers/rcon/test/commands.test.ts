@@ -23,17 +23,25 @@ function makeLogger() {
   } as never;
 }
 
-function makeRedis(entries: Array<[string, string[]]> | null) {
+function makeRedis(
+  entries: Array<[string, string[]]> | null,
+  claimedEntries: Array<[string, string[]]> = [],
+  existingResults: Record<string, string> = {},
+) {
   return {
     xgroup: vi.fn().mockResolvedValue('OK'),
     xreadgroup: vi
       .fn()
       .mockResolvedValueOnce(entries ? [[rconCommandStream('srv-1'), entries]] : null),
+    xautoclaim: vi.fn().mockResolvedValue(['0-0', claimedEntries, []]),
+    get: vi.fn((key: string) => Promise.resolve(existingResults[key] ?? null)),
     set: vi.fn().mockResolvedValue('OK'),
     xack: vi.fn().mockResolvedValue(1),
   } as unknown as Redis & {
     xgroup: ReturnType<typeof vi.fn>;
     xreadgroup: ReturnType<typeof vi.fn>;
+    xautoclaim: ReturnType<typeof vi.fn>;
+    get: ReturnType<typeof vi.fn>;
     set: ReturnType<typeof vi.fn>;
     xack: ReturnType<typeof vi.fn>;
   };
@@ -186,6 +194,95 @@ describe('RconCommandQueue', () => {
       rconCommandStream('srv-1'),
       RCON_COMMAND_GROUP,
       '1700-2',
+    );
+  });
+
+  it('reclaims idle pending entries and processes them through the same executor', async () => {
+    const redis = makeRedis(null, [
+      [
+        '1700-9',
+        [
+          'request',
+          JSON.stringify(commandRequest({ request_id: 'req-claim', args: ['Reclaimed'] })),
+        ],
+      ],
+    ]);
+    const execute = vi.fn().mockResolvedValue('Broadcast sent');
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      consumerName: 'consumer-b',
+      reclaimMinIdleMs: 60_000,
+    });
+
+    const processed = await queue.reclaimPendingOnce();
+
+    expect(processed).toBe(1);
+    expect(redis.xautoclaim).toHaveBeenCalledWith(
+      rconCommandStream('srv-1'),
+      RCON_COMMAND_GROUP,
+      'consumer-b',
+      60_000,
+      '0-0',
+      'COUNT',
+      '10',
+    );
+    expect(execute).toHaveBeenCalledWith('AdminBroadcast Reclaimed');
+    expect(redis.set).toHaveBeenCalledWith(
+      rconCommandResultKey('req-claim'),
+      expect.stringContaining('"ok":true'),
+      'EX',
+      120,
+    );
+    expect(redis.xack).toHaveBeenCalledWith(
+      rconCommandStream('srv-1'),
+      RCON_COMMAND_GROUP,
+      '1700-9',
+    );
+  });
+
+  it('acknowledges claimed entries without executing again when the result already exists', async () => {
+    const existingResult = JSON.stringify({
+      ok: true,
+      server_id: 'srv-1',
+      request_id: 'req-done',
+      command: 'AdminEndMatch',
+      response: '',
+      completed_at: '2026-07-07T12:00:01.000Z',
+      duration_ms: 12,
+    });
+    const redis = makeRedis(
+      null,
+      [
+        [
+          '1700-10',
+          [
+            'request',
+            JSON.stringify(commandRequest({ request_id: 'req-done', command: 'AdminEndMatch' })),
+          ],
+        ],
+      ],
+      { [rconCommandResultKey('req-done')]: existingResult },
+    );
+    const execute = vi.fn();
+    const queue = new RconCommandQueue({
+      redis,
+      log: makeLogger(),
+      serverId: 'srv-1',
+      execute,
+      consumerName: 'consumer-b',
+    });
+
+    await expect(queue.reclaimPendingOnce()).resolves.toBe(1);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(redis.set).not.toHaveBeenCalled();
+    expect(redis.xack).toHaveBeenCalledWith(
+      rconCommandStream('srv-1'),
+      RCON_COMMAND_GROUP,
+      '1700-10',
     );
   });
 });
