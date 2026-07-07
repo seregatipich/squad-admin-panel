@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/panel-host-bridge ./cmd/panel-host-bridge",
+    "build": "GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o bin/panel-host-bridge ./cmd/panel-host-bridge",
     "test": "sh -c '[ \"$(go env GOOS)\" = linux ] && go test -race -count=1 ./... || echo \"[bridge] skipping go test: Linux-only syscalls, run on a Linux host or in CI\"'",
     "test:unit": "go test -race -count=1 ./internal/...",
     "lint": "go vet ./... && gofmt -l -s .",
