@@ -55,7 +55,7 @@ sudo ./scripts/rebuild.sh
            ┌──────┘  └──────┐           │
       ┌────▼────┐     ┌────▼────┐  ┌───▼────┐
       │Postgres │     │  Redis  │  │ Bridge │  Go daemon (root)
-      │  16     │     │   7     │  │  Unix  │  17 RPC methods
+      │  16     │     │   7     │  │  Unix  │  25 RPC methods
       └─────────┘     └─────────┘  │ socket │
                                    └───┬────┘
                                        │

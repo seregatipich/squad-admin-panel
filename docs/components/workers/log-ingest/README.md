@@ -11,10 +11,11 @@ Tails `docker logs -f squad-{uuid}` for every running Squad container via the ho
 - Parse each stdout line with `LogIngestor` (category dispatch + regex matching).
 - Publish events to `events:server:{serverId}` with client-side best-effort dedup.
 - Publish `worker:heartbeat:log-ingest` every 5 s.
+- Ask the host bridge to sweep expired rotated `SquadGame*.log` files once on startup and then hourly.
 
 ## What it does not do
 
-- Does not read log files directly from the filesystem — only Docker stdout.
+- Does not mount or scan the saved tree directly; raw-log retention is delegated to a dedicated bridge RPC.
 - Does not write to Postgres.
 - Does not send RCON commands.
 - Does not process stderr lines from the container.
@@ -27,6 +28,7 @@ apps/workers/log-ingest/
     index.ts                  — entry point, reconcile loop, shutdown
     manager.ts                — TailManager (aborters map + tails.changed diag)
     tail.ts                   — tailContainerLogs (bridge → line buffer)
+    retention.ts              — hourly bridge-backed raw log retention sweep
     publish.ts                — Redis XADD with dedup key
     parser/
       patterns.ts             — log line prefix parser + regex patterns
@@ -36,12 +38,13 @@ apps/workers/log-ingest/
     patterns.test.ts
     ingest.test.ts
     manager.test.ts
+    retention.test.ts
     contract.test.ts
 ```
 
 ## Dependencies
 
-- `@squad/bridge-client` — `containerLogsFollow` RPC
+- `@squad/bridge-client` — `containerLogsFollow` and `squadLogRetentionSweep` RPCs
 - `@squad/db` — `servers`, `serverSettings` tables (status + beaconPort)
 - `@squad/diag` — `createDiag` factory; emits to `diag:queue`
 - `@squad/shared-config` — `startHeartbeat`, `redisSinkStream`

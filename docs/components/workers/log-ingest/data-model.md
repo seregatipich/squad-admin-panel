@@ -20,6 +20,15 @@ The beacon port is used to identify the `server.ready` event — Squad binds man
 | `dedup:log-ingest:v1:{event_id}` | 86 400 s | Best-effort publish dedup |
 | `worker:heartbeat:log-ingest` | 30 s | Liveness heartbeat |
 
+## Diagnostic events written
+
+Emitted through `@squad/diag` to `diag:queue`.
+
+| Kind | Severity | Payload |
+|---|---|---|
+| `log.retention.sweep` | `info` when `error_count = 0`, otherwise `warn` | `{ retention_days, cutoff, servers_scanned, log_dirs_scanned, files_scanned, deleted_count, deleted_bytes, error_count, errors }` |
+| `log.retention.sweep_failed` | `error` | `{ error }` |
+
 ## Log line format
 
 Squad `SquadGame.log` lines follow this pattern:

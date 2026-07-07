@@ -88,6 +88,11 @@ type Dispatcher struct {
 	// panelRoot overrides the panel data root (production default
 	// /var/lib/squad-panel) for panel_disk_usage. Tests inject a t.TempDir.
 	panelRoot string
+	// panelSavedRoot overrides the saved root for squad log retention tests.
+	// Production uses validate.PanelSavedRoot and never accepts it from RPC params.
+	panelSavedRoot string
+	// nowFn overrides the clock for retention tests.
+	nowFn func() time.Time
 	// duFn measures bytes used at a path. Tests stub it; production uses du -sb.
 	duFn func(path string) (int64, error)
 	// statfsFn samples the filesystem at a path. Tests stub it; production uses syscall.Statfs.
@@ -159,6 +164,8 @@ func (d *Dispatcher) Handle(
 		return d.dockerPrune(ctx, req, onStream)
 	case "panel_disk_usage":
 		return d.panelDiskUsage(req)
+	case "squad_log_retention_sweep":
+		return d.squadLogRetentionSweep(req)
 	case "host_agent_restart":
 		return d.hostAgentRestart(req)
 	}
@@ -430,6 +437,140 @@ func readImmediateDirs(root string) ([]string, error) {
 		out = append(out, e.Name())
 	}
 	return out, nil
+}
+
+const (
+	squadLogRetentionDays       = 10
+	squadLogRetentionErrorLimit = 20
+)
+
+type squadLogRetentionSweepError struct {
+	ServerID string `json:"server_id,omitempty"`
+	File     string `json:"file,omitempty"`
+	Error    string `json:"error"`
+}
+
+type squadLogRetentionSweepResult struct {
+	RetentionDays  int                           `json:"retention_days"`
+	Cutoff         string                        `json:"cutoff"`
+	ServersScanned int                           `json:"servers_scanned"`
+	LogDirsScanned int                           `json:"log_dirs_scanned"`
+	FilesScanned   int                           `json:"files_scanned"`
+	DeletedCount   int                           `json:"deleted_count"`
+	DeletedBytes   int64                         `json:"deleted_bytes"`
+	ErrorCount     int                           `json:"error_count"`
+	Errors         []squadLogRetentionSweepError `json:"errors"`
+}
+
+func (d *Dispatcher) squadLogRetentionSweep(req *rpc.Request) rpc.Response {
+	if !emptyJSONParams(req.Params) {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, "squad_log_retention_sweep does not accept params")
+	}
+
+	savedRoot := d.panelSavedRoot
+	if savedRoot == "" {
+		savedRoot = validate.PanelSavedRoot
+	}
+	now := time.Now().UTC()
+	if d.nowFn != nil {
+		now = d.nowFn().UTC()
+	}
+
+	result := runSquadLogRetentionSweep(savedRoot, now, squadLogRetentionDays)
+	body, _ := json.Marshal(result)
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+func emptyJSONParams(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("{}"))
+}
+
+func runSquadLogRetentionSweep(savedRoot string, now time.Time, retentionDays int) squadLogRetentionSweepResult {
+	retention := time.Duration(retentionDays) * 24 * time.Hour
+	cutoff := now.Add(-retention)
+	result := squadLogRetentionSweepResult{
+		RetentionDays: retentionDays,
+		Cutoff:        cutoff.Format(time.RFC3339),
+		Errors:        []squadLogRetentionSweepError{},
+	}
+
+	serverEntries, err := os.ReadDir(savedRoot)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return result
+		}
+		result.addRetentionError("", "", fmt.Errorf("read saved root failed: %w", err))
+		return result
+	}
+
+	for _, serverEntry := range serverEntries {
+		if !serverEntry.IsDir() || validate.ServerUUID(serverEntry.Name()) != nil {
+			continue
+		}
+		serverID := serverEntry.Name()
+		result.ServersScanned++
+		logsDir := filepath.Join(savedRoot, serverID, "SquadGame", "Saved", "Logs")
+		logEntries, err := os.ReadDir(logsDir)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			result.addRetentionError(serverID, "", fmt.Errorf("read logs dir failed: %w", err))
+			continue
+		}
+		result.LogDirsScanned++
+
+		for _, logEntry := range logEntries {
+			info, err := logEntry.Info()
+			if err != nil {
+				result.addRetentionError(serverID, logEntry.Name(), fmt.Errorf("stat log file failed: %w", err))
+				continue
+			}
+			if !info.Mode().IsRegular() {
+				continue
+			}
+			result.FilesScanned++
+			if !isRotatedSquadGameLog(logEntry.Name()) {
+				continue
+			}
+			if !info.ModTime().Add(retention).Before(now) {
+				continue
+			}
+			if err := os.Remove(filepath.Join(logsDir, logEntry.Name())); err != nil {
+				result.addRetentionError(serverID, logEntry.Name(), fmt.Errorf("delete log file failed: %w", err))
+				continue
+			}
+			result.DeletedCount++
+			result.DeletedBytes += info.Size()
+		}
+	}
+
+	return result
+}
+
+func isRotatedSquadGameLog(name string) bool {
+	return name != "SquadGame.log" && strings.HasPrefix(name, "SquadGame") && strings.HasSuffix(name, ".log")
+}
+
+func (r *squadLogRetentionSweepResult) addRetentionError(serverID string, file string, err error) {
+	r.ErrorCount++
+	if len(r.Errors) >= squadLogRetentionErrorLimit {
+		return
+	}
+	r.Errors = append(r.Errors, squadLogRetentionSweepError{
+		ServerID: serverID,
+		File:     file,
+		Error:    retentionErrorMessage(err),
+	})
+}
+
+func retentionErrorMessage(err error) string {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err.Error()
+	}
+	return err.Error()
 }
 
 // Accept: any config file under /var/lib/squad-panel/configs/{uuid}/ServerConfig/,

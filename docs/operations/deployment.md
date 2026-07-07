@@ -143,7 +143,7 @@ sudo systemctl restart panel-host-bridge.service
 ## Verifying a deployment
 
 ```bash
-sg panel -c 'bash scripts/verify-bridge.sh'   # smoke-test all 17 bridge RPC methods
+sg panel -c 'bash scripts/verify-bridge.sh'   # bridge RPC smoke test
 curl -sk https://${APP_DOMAIN}/health          # {"status":"ok"}
 curl -sk https://${APP_DOMAIN}/ready           # {"status":"ready","checks":{"postgres":"ok","redis":"ok","bridge":"ok"}}
 ```

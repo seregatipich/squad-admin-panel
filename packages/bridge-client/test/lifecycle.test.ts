@@ -367,6 +367,54 @@ describe('panel_disk_usage', () => {
   });
 });
 
+describe('squad_log_retention_sweep', () => {
+  it('squadLogRetentionSweep sends method without caller params and returns sweep counters', async () => {
+    let receivedMethod: string | undefined;
+    let receivedParams: unknown = 'not-captured';
+    server.on('connection', (conn) => {
+      conn.once('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as {
+          id: string;
+          method: string;
+          params?: unknown;
+        };
+        receivedMethod = req.method;
+        receivedParams = req.params;
+        sendFrame(conn, {
+          id: req.id,
+          ok: true,
+          result: {
+            retention_days: 10,
+            cutoff: '2026-06-27T12:00:00Z',
+            servers_scanned: 2,
+            log_dirs_scanned: 2,
+            files_scanned: 8,
+            deleted_count: 3,
+            deleted_bytes: 4096,
+            error_count: 0,
+            errors: [],
+          },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    try {
+      const result = await client.squadLogRetentionSweep();
+      expect(receivedMethod).toBe('squad_log_retention_sweep');
+      expect(receivedParams).toBeUndefined();
+      expect(result.retention_days).toBe(10);
+      expect(result.deleted_count).toBe(3);
+      expect(result.deleted_bytes).toBe(4096);
+      expect(result.error_count).toBe(0);
+      expect(result.errors).toEqual([]);
+    } finally {
+      await client.close();
+    }
+  });
+});
+
 describe('file_read_tail', () => {
   it('fileReadTail sends method=file_read_tail and round-trips the response shape', async () => {
     let receivedMethod: string | undefined;
