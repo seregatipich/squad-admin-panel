@@ -80,6 +80,16 @@ scripts/apply-rulesets.sh   # requires gh with admin access
 
 Emergency escape hatch: edit or disable the ruleset in GitHub → Settings → Rules → Rulesets (deliberately manual and audited).
 
+## Completion verification
+
+The harness also enforces *how tasks end*: AGENTS.md's **Completion verification** checklist (part of the definition of done) requires agents to verify a finished task from every angle — requirements coverage, tests that provably exercise the change, real runtime evidence, a full local gate, a diff self-review, docs, and mechanical state. The mechanical angles are automated:
+
+```bash
+bash scripts/verify-done.sh   # exit 0 required before reporting done
+```
+
+It proves the working tree is clean, `dev` is checked out and pushed, `git-guard doctor` is clean, and — via `gh` — that the `ci` workflow is green **for the current `origin/dev` SHA specifically**, rejecting the classic failure mode of pointing at a green run for an older commit. Test suite: [`scripts/test-verify-done.sh`](../../scripts/test-verify-done.sh) (runs in CI's `branch-guard` job with a stubbed `gh`).
+
 ## Diagnosing a clone
 
 ```bash
