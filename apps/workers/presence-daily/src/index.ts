@@ -1,6 +1,8 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
+  accrueDailyBonuses,
+  daysInWindow,
   recentCoplayWindow,
   recentPresenceWindow,
   recomputeCoplayWindow,
@@ -24,6 +26,46 @@ export interface PresenceTickDeps {
   sql: postgres.Sql;
   diag: Diag;
   now?: Date;
+}
+
+export async function runEconomyAccrual(deps: PresenceTickDeps): Promise<void> {
+  const { sql, diag } = deps;
+  const now = deps.now ?? new Date();
+  const window = recentPresenceWindow(now);
+  try {
+    let players = 0;
+    let transactions = 0;
+    let balanceDelta = 0;
+    let economyEnabled = false;
+    for (const day of daysInWindow(window.fromDay, window.toDay)) {
+      const result = await accrueDailyBonuses(sql, { day, now });
+      economyEnabled = economyEnabled || result.economyEnabled;
+      players += result.playersAccrued;
+      transactions += result.transactionsWritten;
+      balanceDelta += result.balanceDelta;
+    }
+    log.info(
+      { ...window, economyEnabled, players, transactions, balanceDelta },
+      'economy accrual ok',
+    );
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'economy_accrual.run_ok',
+      severity: 'info',
+      message: `accrued ${window.fromDay}..${window.toDay}`,
+      payload: { ...window, economyEnabled, players, transactions, balanceDelta },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ err: message, ...window }, 'economy accrual failed');
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'economy_accrual.run_failed',
+      severity: 'error',
+      message: `accrual failed: ${message}`,
+      payload: { ...window },
+    });
+  }
 }
 
 export async function runPresenceDailyTick(deps: PresenceTickDeps): Promise<void> {
@@ -74,6 +116,8 @@ export async function runPresenceDailyTick(deps: PresenceTickDeps): Promise<void
       payload: { ...coplayWindow },
     });
   }
+
+  await runEconomyAccrual({ sql, diag, now });
 }
 
 async function main() {
