@@ -32,10 +32,15 @@ jobs:
         run: cd "$HOME/apps/squad-admin-panel" && bash scripts/deploy-tk104.sh
 
       - name: Local health check (through Caddy on 443)
+        # Hit the local Caddy on 127.0.0.1 but with the real SNI/Host — this Caddy
+        # serves TLS only for tk104.duckdns.org (DNS-01 cert), so a bare
+        # https://localhost request fails the handshake (curl exit 35). --resolve
+        # keeps the request local (no hairpin NAT) while presenting the right name.
         run: |
-          for _ in $(seq 1 10); do
-            code=$(curl -sk -o /dev/null -w '%{http_code}' https://localhost/health --max-time 10 || echo 000)
-            echo "https://localhost/health -> $code"
+          for _ in $(seq 1 15); do
+            code=$(curl -sk --resolve tk104.duckdns.org:443:127.0.0.1 \
+              -o /dev/null -w '%{http_code}' https://tk104.duckdns.org/health --max-time 10 || echo 000)
+            echo "local https://tk104.duckdns.org/health (127.0.0.1) -> $code"
             [ "$code" = "200" ] && exit 0
             sleep 6
           done
