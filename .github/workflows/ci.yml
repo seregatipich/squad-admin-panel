@@ -76,9 +76,20 @@ jobs:
       POSTGRES_PASSWORD: test_password
     steps:
       - name: Resolve service ports
+        # Export BOTH pairs: workers + @squad/db migrate read DATABASE_URL/REDIS_URL,
+        # while the API integration harness reads TEST_DATABASE_URL/TEST_REDIS_URL
+        # (see AGENTS.md). Without the TEST_* pair the harness falls back to
+        # 127.0.0.1:5432/6379 — which on the tk104 host is the *production* stack,
+        # not the (dynamic-port) service containers. The harness isolates on redis db 15.
         run: |
-          echo "DATABASE_URL=postgres://admin:test_password@localhost:${{ job.services.postgres.ports['5432'] }}/admin" >> "$GITHUB_ENV"
-          echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}" >> "$GITHUB_ENV"
+          PG="postgres://admin:test_password@localhost:${{ job.services.postgres.ports['5432'] }}/admin"
+          RD="redis://localhost:${{ job.services.redis.ports['6379'] }}"
+          {
+            echo "DATABASE_URL=$PG"
+            echo "TEST_DATABASE_URL=$PG"
+            echo "REDIS_URL=$RD"
+            echo "TEST_REDIS_URL=$RD/15"
+          } >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
