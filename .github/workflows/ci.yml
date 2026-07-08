@@ -4,6 +4,7 @@ on:
     branches: [master, dev]
   pull_request:
     branches: [master, dev]
+  workflow_dispatch:
 
 jobs:
   # Enforces the branch model (see AGENTS.md): pull requests may only target
@@ -11,7 +12,7 @@ jobs:
   # carries a passing branch-guard check — required by the protect-master
   # ruleset for the fast-forward promotion push (.github/rulesets/).
   branch-guard:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,8 +44,12 @@ jobs:
         run: bash scripts/test-verify-done.sh
 
   node:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     services:
+      # Dynamic host ports (Docker assigns a free one) — the self-hosted runner
+      # shares the tk104 host, whose fixed 5432/6379 are already bound by the
+      # production stack. The resolved ports are read back below via the
+      # job.services context. See AGENTS.md / docs for the runner setup.
       postgres:
         image: postgres:16-alpine
         env:
@@ -52,7 +57,7 @@ jobs:
           POSTGRES_PASSWORD: test_password
           POSTGRES_DB: admin
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U admin -d admin"
           --health-interval 10s
@@ -61,17 +66,19 @@ jobs:
       redis:
         image: redis:7-alpine
         ports:
-          - 6379:6379
+          - 6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
     env:
-      DATABASE_URL: postgres://admin:test_password@localhost:5432/admin
       POSTGRES_PASSWORD: test_password
-      REDIS_URL: redis://localhost:6379
     steps:
+      - name: Resolve service ports
+        run: |
+          echo "DATABASE_URL=postgres://admin:test_password@localhost:${{ job.services.postgres.ports['5432'] }}/admin" >> "$GITHUB_ENV"
+          echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -106,7 +113,7 @@ jobs:
           ./gitleaks detect --config .gitleaks.toml --no-banner --redact --exit-code 1
 
   go:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     defaults:
       run:
         working-directory: apps/bridge
@@ -128,7 +135,7 @@ jobs:
           ls -la bin/
 
   docker:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     needs: [node, go]
     steps:
       - uses: actions/checkout@v4
