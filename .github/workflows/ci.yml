@@ -114,23 +114,38 @@ jobs:
 
   go:
     runs-on: [self-hosted, linux, x64]
+    # Run inside a Go container, not directly on tk104: the bridge tests exercise
+    # real absolute paths under /var/lib/squad-panel (e.g. directory_delete) and
+    # assume those paths do NOT exist. On the production host they do — and running
+    # os.RemoveAll against the live data root would be unsafe. The container gives a
+    # clean filesystem (the same guarantee the old GitHub-hosted VM provided).
+    # --user 1000:1000 matches the runner user so no root-owned files are left in
+    # the shared _work dir (which would break later non-container jobs).
+    container:
+      image: golang:1.25.11-bookworm
+      options: --user 1000:1000
+    env:
+      HOME: /tmp/gohome
+      GOPATH: /tmp/gohome/go
+      GOCACHE: /tmp/gohome/.cache/go-build
+      GOFLAGS: -buildvcs=false
     defaults:
       run:
         working-directory: apps/bridge
     steps:
+      - name: Prepare writable Go dirs
+        run: mkdir -p "$GOPATH/bin" "$GOCACHE"
+        working-directory: /
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25.11'
       - run: go vet ./...
       - run: go test -race -count=1 ./...
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          $(go env GOPATH)/bin/govulncheck ./...
+          "$GOPATH/bin/govulncheck" ./...
       - name: build static binary
         run: |
-          CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o bin/panel-host-bridge ./cmd/panel-host-bridge
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/panel-host-bridge ./cmd/panel-host-bridge
           file bin/panel-host-bridge
           ls -la bin/
 
