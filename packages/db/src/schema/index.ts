@@ -23,6 +23,7 @@ export * from './layers.js';
 export * from './marks.js';
 export * from './match-players.js';
 export * from './matches.js';
+export * from './media-files.js';
 export * from './message-templates.js';
 export * from './panel-meta.js';
 export * from './player-api-tokens.js';

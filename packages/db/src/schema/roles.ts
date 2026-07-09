@@ -16,6 +16,7 @@ export const roles = pgTable(
     canManageIntegrations: boolean('can_manage_integrations').notNull().default(false),
     canManageClans: boolean('can_manage_clans').notNull().default(false),
     canManageEconomy: boolean('can_manage_economy').notNull().default(false),
+    canManageMedia: boolean('can_manage_media').notNull().default(false),
     combatView: boolean('combat_view').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
