@@ -118,4 +118,19 @@ describe('ListPlayers parser', () => {
     expect(parsed[0]?.name).toBe('[TAG] Nick | Alt');
     expect(parsed[0]?.role).toBe('USA_SL_01');
   });
+
+  it('keeps Cyrillic and emoji nicknames from real server-style output', () => {
+    const raw = [
+      '----- Active Players -----',
+      'ID: 12 | Online IDs: EOS: abcdef0123456789abcdef0123456789 steam: 76561198123456789 | Name: [BSS] Пеланкин 🛠️ | Team ID: 1 | Squad ID: 5 | Is Leader: False | Role: RGF_Medic_01',
+      'ID: 13 | Online IDs: EOS: 0123456789abcdef0123456789abcdef steam: 76561198987654321 | Name: КУНГФУ ПАДЛА | Team ID: 2 | Squad ID: N/A | Is Leader: False | Role: IMF_Rifleman_01',
+      '----- Recently Disconnected Players [Max of 15] -----',
+    ].join('\n');
+
+    const parsed = parseListPlayers(raw);
+
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0]?.name).toBe('[BSS] Пеланкин 🛠️');
+    expect(parsed[1]?.name).toBe('КУНГФУ ПАДЛА');
+  });
 });

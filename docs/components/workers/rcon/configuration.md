@@ -20,6 +20,9 @@
 | Connect timeout | 5 000 ms | `RconClient.connect` |
 | Auth timeout | 5 000 ms | `RconClient.authenticate` |
 | Command timeout | 10 000 ms | `RconClient.exec` |
+| Command queue result TTL | 120 s | `RconCommandQueue` |
+| Command queue pending reclaim idle | 60 000 ms | `RconCommandQueue` |
+| Command queue pending reclaim interval | 30 000 ms | `RconCommandQueue` |
 | Initial reconnect backoff | 1 000 ms | `PerServerSupervisor` |
 | Max reconnect backoff | 60 000 ms | `PerServerSupervisor` |
 | `rcon:status` TTL | 300 s | `PerServerSupervisor.writeStatus` |

@@ -36,11 +36,13 @@ export class RconClient {
   private readonly pending = new Map<number, PendingCommand>();
   private keepaliveTimer?: NodeJS.Timeout;
   private closed = false;
+  private execQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly opts: RconClientOptions) {}
 
   async connect(): Promise<void> {
     if (this.socket) return;
+    this.closed = false;
     await new Promise<void>((resolve, reject) => {
       const sock = createConnection({ host: this.opts.host, port: this.opts.port });
       const timeout = setTimeout(() => {
@@ -75,6 +77,16 @@ export class RconClient {
   }
 
   async exec(command: string): Promise<string> {
+    const run = this.execQueue.then(() => this.execNow(command));
+    this.execQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await run;
+  }
+
+  private async execNow(command: string): Promise<string> {
+    if (this.closed) throw new Error('rcon closed');
     if (!this.socket) throw new Error('rcon not connected');
     const id = ++this.nextId;
     const probeId = ++this.nextId;

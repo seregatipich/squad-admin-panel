@@ -1,5 +1,33 @@
 # Changelog — worker-rcon
 
+## 2026-07-07 — RCON-1 command coverage
+
+### Added
+
+- `ListSquads` parser with team context, lock state, size, creator IDs, and command-squad detection.
+- `ShowNextMap` parser with explicit `To be voted` handling.
+- `rcon:squads:{serverId}` Redis cache written after successful poll cycles.
+- `rcon:commands:{serverId}` Redis Stream consumer for P0 operator commands: `AdminBroadcast`, `AdminEndMatch`, `AdminReloadServerConfig`.
+- `rcon:command-result:{requestId}` Redis result key for queued operator commands.
+- `XAUTOCLAIM` replay for pending operator commands idle longer than 60 s, with a result-key guard before replay.
+- Shared RCON command queue contract in `@squad/shared-types`.
+- Unit coverage for `ListSquads`, `ShowNextMap`, UTF-8 `ListPlayers` nicknames, RCON command serialization, and the supervisor poll command set.
+- Unit coverage for command validation, command queue success/failure result writes, API worker-first enqueue flow, and supervisor execution over a live RCON fixture.
+
+### Changed
+
+- `RconClient.exec()` now serializes commands through a FIFO queue so multi-packet responses cannot interleave.
+- The 30 s poll cycle now runs `ListPlayers`, `ListSquads`, `ShowServerInfo`, and `ShowNextMap`.
+- `rcon:status:{serverId}` can include `next_level`, `next_layer` from `ShowNextMap`, and `squad_count`.
+- API graceful stop and config reload now try worker-rcon first when `rcon:status:{serverId}.state = "connected"`. Direct one-shot TCP RCON remains the fallback only when the worker is not connected or the command was not accepted into the stream.
+- Queued operator commands are at-least-once around the real RCON side effect. Reclaim prevents lost pending messages; a crash after result write but before `XACK` is deduped through the result key.
+
+### Migration notes
+
+- No DB migration. Existing `rcon:status:{serverId}` consumers remain compatible because the new fields are additive.
+- `rcon:squads:{serverId}` is a new Redis-only cache with a 90 s TTL.
+- `rcon:commands:{serverId}` and `rcon:command-result:{requestId}` are Redis-only contracts. If the API has already accepted a command into the stream and then times out waiting for a result, it does not retry directly to avoid duplicate side effects.
+
 ## 2026-04-28 — Diagnostic-bundle Phase A2: diag emits
 
 ### Added

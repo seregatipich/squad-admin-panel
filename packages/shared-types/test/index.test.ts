@@ -26,4 +26,17 @@ describe('shared-types index re-exports', () => {
     expect(root.XAUTOCLAIM_TICK_MS).toBe(30_000);
     expect(root.DLQ_DELIVER_THRESHOLD).toBe(5);
   });
+
+  it('re-exports rcon command queue contract', () => {
+    expect(root.RCON_COMMAND_STREAM_PREFIX).toBe('rcon:commands:');
+    expect(root.RCON_COMMAND_GROUP).toBe('worker-rcon:commands:v1');
+    expect(root.RCON_COMMAND_RESULT_PREFIX).toBe('rcon:command-result:');
+    expect(root.rconCommandStream('srv-1')).toBe('rcon:commands:srv-1');
+    expect(root.rconCommandResultKey('req-1')).toBe('rcon:command-result:req-1');
+    expect(root.RCON_OPERATOR_COMMANDS).toEqual([
+      'AdminBroadcast',
+      'AdminEndMatch',
+      'AdminReloadServerConfig',
+    ]);
+  });
 });

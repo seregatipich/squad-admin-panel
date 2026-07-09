@@ -15,6 +15,7 @@ import { type BlameVersion, computeBlame } from '../lib/blame.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
 import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
+import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 
 const idParams = z.object({ id: z.string().uuid() });
 const nameParams = z.object({ id: z.string().uuid(), name: z.string().min(1).max(64) });
@@ -465,7 +466,13 @@ async function writeVersion(
 }
 
 export type ReloadOutcome =
-  | { applied: true; via: 'rcon'; command: string; response: string }
+  | {
+      applied: true;
+      via: 'rcon' | 'worker-rcon';
+      command: string;
+      response: string;
+      request_id?: string;
+    }
   | { applied: false; reason: 'not_running' | 'no_credentials' | 'rcon_failed'; detail?: string };
 
 /**
@@ -482,6 +489,28 @@ export async function reloadServerConfig(
   if (!row || (row.status !== 'running' && row.status !== 'starting')) {
     return { applied: false, reason: 'not_running', detail: row?.status ?? 'unknown' };
   }
+  const command = 'AdminReloadServerConfig';
+  const viaWorker = await sendRconCommandViaWorker(app.redis, {
+    serverId,
+    command,
+    timeoutMs: 4000,
+  });
+  if (viaWorker.attempted) {
+    if (viaWorker.ok) {
+      return {
+        applied: true,
+        via: 'worker-rcon',
+        command,
+        response: viaWorker.response,
+        request_id: viaWorker.requestId,
+      };
+    }
+    return {
+      applied: false,
+      reason: 'rcon_failed',
+      detail: viaWorker.detail ?? viaWorker.reason,
+    };
+  }
   const creds = await app.db.query.serverCredentials.findFirst({
     where: eq(serverCredentials.serverId, serverId),
   });
@@ -493,7 +522,6 @@ export async function reloadServerConfig(
       app.encryptionKey,
       deserialize(Buffer.from(creds.rconPasswordEncrypted as unknown as Buffer)),
     );
-    const command = 'AdminReloadServerConfig';
     const response = await rconSendOnce({
       host: resolveRconHost(creds.rconHost),
       port: creds.rconPort,
