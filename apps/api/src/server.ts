@@ -69,6 +69,7 @@ import playerMatchesRoutes from './routes/player-matches.js';
 import playerNotesRoutes from './routes/player-notes.js';
 import playerPresenceRoutes from './routes/player-presence.js';
 import playerRoutes from './routes/players.js';
+import reportsRoutes from './routes/reports.js';
 import roleMembersRoutes from './routes/role-members.js';
 import rolesRoutes from './routes/roles.js';
 import archiveRoutes from './routes/server-archive.js';
@@ -195,6 +196,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(vipTiersRoutes);
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);
+  await app.register(reportsRoutes);
   await app.register(eventsRoutes);
   await app.register(playerNotesRoutes);
   await app.register(notesFeedRoutes);
