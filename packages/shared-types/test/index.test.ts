@@ -27,6 +27,12 @@ describe('shared-types index re-exports', () => {
     expect(root.DLQ_DELIVER_THRESHOLD).toBe(5);
   });
 
+  it('re-exports plugin manifest schema and permission helpers', () => {
+    expect(root.PLUGIN_PERMISSIONS).toEqual(['events:read', 'events:payload']);
+    expect(typeof root.pluginManifest.safeParse).toBe('function');
+    expect(typeof root.hasPluginPermission).toBe('function');
+  });
+
   it('re-exports rcon command queue contract', () => {
     expect(root.RCON_COMMAND_STREAM_PREFIX).toBe('rcon:commands:');
     expect(root.RCON_COMMAND_GROUP).toBe('worker-rcon:commands:v1');

@@ -106,6 +106,55 @@ Returns `dedup:{group}:{eventId}`.
 
 ---
 
+## `plugins.ts`
+
+Contract for the automation worker's plugin/event-hook system (`INT-4`, see `apps/workers/automation`).
+
+### `PLUGIN_PERMISSIONS` / `PluginPermission`
+
+`['events:read', 'events:payload'] as const`. Enforced by the automation worker's dispatcher, not merely documented:
+
+| Permission | Effect if a plugin's manifest omits it |
+|---|---|
+| `events:read` | The plugin is never dispatched to at all. |
+| `events:payload` | The plugin is dispatched to, but `payload` is redacted to `null` in the envelope it receives. |
+
+### `pluginManifest` (Zod schema) / `PluginManifest`
+
+Strict schema for a plugin's manifest:
+
+```ts
+{
+  id: string;                        // lowercase kebab-case slug, regex-validated, 2-64 chars
+  name: string;                      // 1-128 chars
+  version: string;                   // 1-32 chars
+  subscribedEventKinds: EventType[]; // non-empty; each must be a value from EVENT_TYPES
+  requestedPermissions: PluginPermission[]; // subset of PLUGIN_PERMISSIONS
+}
+```
+
+```ts
+import { pluginManifest, type PluginManifest } from '@squad/shared-types';
+
+const manifest: PluginManifest = pluginManifest.parse(rawManifest);
+```
+
+### `hasPluginPermission(manifest, permission): boolean`
+
+Returns whether `manifest.requestedPermissions` includes `permission`.
+
+### `PluginHandler` (TS interface, not a Zod schema)
+
+```ts
+interface PluginHandler {
+  onEvent(envelope: EventEnvelope): void | Promise<void>;
+}
+```
+
+Invoked once per matching event by the automation worker's dispatcher, under a try/catch and a per-invocation timeout — implementations must not assume they run to completion.
+
+---
+
 ## `api.ts`
 
 Zod schemas for API request/response bodies. Import as `@squad/shared-types/api` or via the barrel.

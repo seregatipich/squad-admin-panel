@@ -251,6 +251,9 @@ importers:
       '@squad/shared-config':
         specifier: workspace:*
         version: link:../../../packages/shared-config
+      '@squad/shared-types':
+        specifier: workspace:*
+        version: link:../../../packages/shared-types
       ioredis:
         specifier: ^5.4.1
         version: 5.10.1

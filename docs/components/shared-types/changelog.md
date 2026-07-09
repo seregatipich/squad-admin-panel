@@ -1,5 +1,10 @@
 # `shared-types` — changelog
 
+## 2026-07-09
+
+### Added
+- `plugins.ts` (`INT-4`): `pluginManifest` Zod schema, `PLUGIN_PERMISSIONS`/`PluginPermission`, `PluginHandler` contract, `hasPluginPermission` helper — the plugin/event-hook contract hosted by `apps/workers/automation`.
+
 ## 2026-04-25
 
 ### Added

@@ -7,10 +7,12 @@ Single source of truth for cross-component contracts. Importable from anywhere i
 - The canonical `EventEnvelope` and per-`type` payload schemas (Redis Streams contract).
 - Auth-related DTOs (login request, session detail).
 - Server / install / config / RCON-status DTOs used by both API and web.
+- The plugin manifest/permission/handler contract for the automation worker's event-hook system (`INT-4`).
 
 ## Files
 
 - [`packages/shared-types/src/events.ts`](../../../packages/shared-types/src/events.ts) — `EventEnvelope`, `EVENT_TYPES`, per-type payload schemas.
+- [`packages/shared-types/src/plugins.ts`](../../../packages/shared-types/src/plugins.ts) — `pluginManifest`, `PLUGIN_PERMISSIONS`, `PluginHandler`, `hasPluginPermission`.
 - `packages/shared-types/src/auth.ts` — Steam OpenID session and player DTOs.
 - `packages/shared-types/src/servers.ts` — server DTOs, install WS frame schemas.
 - `packages/shared-types/src/configs.ts` — cfg list + version + diff response shapes.
