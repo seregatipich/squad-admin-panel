@@ -24,7 +24,8 @@ cp .env.example .env
 
 sudo ./scripts/install-host-bridge.sh
 # Idempotent. Creates the `panel` system group, installs the systemd unit + socket,
-# creates /var/lib/squad-panel/{configs,saved}, and ensures docker is present.
+# creates the data tree, provisions the squad-depot bind volume, and updates
+# DATA_DIR + PANEL_GID in .env when the file exists.
 
 sudo usermod -aG panel "$USER"
 newgrp panel
@@ -36,9 +37,11 @@ docker compose up -d --build
 
 ## First-time setup
 
-After `docker compose up -d`, the panel is ready immediately — there is no setup wizard. The 5 system roles (`Owner`, `Senior Admin`, `Admin`, `Viewer`, `Moderator`) are seeded by the DB migration.
+After `docker compose up -d`, the API, web, DB, Redis, workers, and bridge should be healthy before the first login. The 5 system roles (`Owner`, `Senior Admin`, `Admin`, `Viewer`, `Moderator`) are seeded by DB migrations.
 
-**First login becomes Owner.** Open `https://${APP_DOMAIN}/login` and click **"Войти через Steam"**. The first Steam OpenID callback that completes on a fresh panel automatically assigns the Owner role to that Steam account (`claimFirstOwner` in `apps/api/src/lib/first-owner.ts`). All subsequent logins skip the claim. There is no `/setup` wizard and no `/api/v1/setup/*` API.
+**First login becomes Owner.** Open `https://${APP_DOMAIN}/login` and click **"Войти через Steam"**. The first Steam OpenID callback that completes on a fresh panel automatically assigns the Owner role to that Steam account (`claimFirstOwner` in `apps/api/src/lib/first-owner.ts`). All subsequent logins skip the claim.
+
+After the Owner session is created, the dashboard layout checks `GET /api/v1/setup/status`. If `setup_completed=false`, the browser is redirected to `/setup`. Enter the organization/community name and submit; `POST /api/v1/setup/complete` stores it and marks setup complete. A completed panel redirects `/setup` back to `/`.
 
 ## Resetting first-owner (e.g., after rebuilding a test panel)
 
@@ -67,7 +70,8 @@ UPDATE players SET role_id = NULL WHERE steam_id64 = <old_steam_id64>;
 ```bash
 sg panel -c 'bash scripts/verify-bridge.sh'   # smoke-tests every bridge method
 curl -sk https://${APP_DOMAIN}/health         # {"status":"ok"}
-curl -sk https://${APP_DOMAIN}/ready          # {"status":"ready"}
+curl -sk https://${APP_DOMAIN}/ready          # {"status":"ok","checks":{...}}
+curl -skI https://${APP_DOMAIN}/api/docs       # API docs UI responds
 ```
 
 `scripts/verify-bridge.sh` exits non-zero on any unexpected response.

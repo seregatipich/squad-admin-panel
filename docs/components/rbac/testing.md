@@ -20,7 +20,6 @@ Each integration test uses `buildIntegrationApp` from [`apps/api/test/integratio
 | [`apps/api/test/player-role-assign.test.ts`](../../../apps/api/test/player-role-assign.test.ts) | PUT valid `role_id` assigns the role. PUT `null` removes it. PUT with a non-existent UUID returns 404. Owner-lockout: attempting to remove the last Owner returns 409. Cache invalidation: PUT role, then make a follow-up request — the new permission set is effective immediately without waiting for TTL. |
 | [`apps/api/test/users-list.test.ts`](../../../apps/api/test/users-list.test.ts) | `GET /api/v1/users` only returns players with `role_id NOT NULL`. Role join is correct. Response includes all expected fields. |
 | [`apps/api/test/first-owner.test.ts`](../../../apps/api/test/first-owner.test.ts) | `claimFirstOwner` assigns Owner on first call. A concurrent call (advisory-lock race) does not create a second Owner. After `first_owner_claimed = true`, subsequent calls are no-ops. |
-| [`apps/api/test/setup-removed.test.ts`](../../../apps/api/test/setup-removed.test.ts) | `GET /api/v1/setup/check-env` and `POST /api/v1/setup/init` both return 404 — regression guard confirming the wizard was removed. |
 | [`apps/api/test/permission-rename-coverage.test.ts`](../../../apps/api/test/permission-rename-coverage.test.ts) | Greps all TypeScript files under `apps/api/src/` for the old permission key names (`server:edit`, `server:config:write`, `server:config:history`, `role:manage`, `host:bridge_control`, etc.) and asserts zero matches. Fails the build if a rename was missed. |
 
 `apps/api/test/audit-coverage.test.ts` (existing) now includes the roles and users route modules. It continues to fail if any `POST`/`PUT`/`PATCH`/`DELETE` route is missing `config.audit`.
@@ -30,6 +29,7 @@ Each integration test uses `buildIntegrationApp` from [`apps/api/test/integratio
 | File | What it covers |
 |---|---|
 | [`apps/api/test/e2e/panel-rbac.e2e.test.ts`](../../../apps/api/test/e2e/panel-rbac.e2e.test.ts) | Full RBAC lifecycle against a live panel stack: create role → assign to secondary user → verify access (server:view works, audit:view denied) → modify role permissions → verify instant revocation (no TTL wait) → delete role → verify secondary has null role → verify cannot remove last Owner (409). |
+| [`apps/api/test/e2e/steam-login.e2e.test.ts`](../../../apps/api/test/e2e/steam-login.e2e.test.ts) | Live Steam-session smoke: supplied Owner cookie can read `/me` and sessions, legacy `POST /api/v1/setup/init` remains 404, and Steam login still redirects to Steam OpenID. |
 
 ## How to run
 
@@ -44,7 +44,6 @@ pnpm --filter @squad/api exec vitest run test/player-role-assign.test.ts
 pnpm --filter @squad/api exec vitest run test/users-list.test.ts
 pnpm --filter @squad/api exec vitest run test/permissions-list.test.ts
 pnpm --filter @squad/api exec vitest run test/first-owner.test.ts
-pnpm --filter @squad/api exec vitest run test/setup-removed.test.ts
 pnpm --filter @squad/api exec vitest run test/permission-rename-coverage.test.ts
 
 # All tiers (including the above) except e2e

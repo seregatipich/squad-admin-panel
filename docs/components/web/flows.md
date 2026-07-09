@@ -7,12 +7,13 @@
 3. Login page renders. Operator clicks "Войти через Steam".
 4. Browser follows `GET /api/v1/auth/steam/login` → Steam OpenID redirect.
 5. Steam callback hits `GET /api/v1/auth/steam/callback`.
-6. API detects the `players` table is empty (or no Owner role exists). The first authenticated Steam user is granted the Owner role automatically, the file `/var/lib/squad-panel/.first-owner-claimed` is written, and a session cookie is set.
-7. API redirects to `/dashboard`.
-8. Dashboard layout calls `requireSession()` → GET /api/v1/me succeeds → sidebar renders.
-9. Dashboard page starts polling its seven data sources every 4 s.
+6. API reads `panel_meta.first_owner_claimed`. If it is still false, the first authenticated Steam user is granted the Owner role, the informational sentinel file is written, and a session cookie is set.
+7. API redirects to `/`; root redirects the fresh session to `/dashboard`.
+8. Dashboard layout calls `GET /api/v1/setup/status`; if `setup_completed=false`, it redirects to `/setup`.
+9. `/setup` asks the Owner for the organization name and calls `POST /api/v1/setup/complete`.
+10. After setup completion the browser returns to `/dashboard`; the dashboard starts polling its data sources every 4 s.
 
-If the first-owner claim already happened and the user has no role, the API returns `not_authorized` and the browser is sent to `/login?error=not_authorized&steam_id64=<id>`. The login page renders the error message and the user is directed to contact an admin.
+If the first-owner claim already happened and the user has no role, the API redirects to `/no-access?steam_id64=<id>` and does not set a session cookie.
 
 ---
 

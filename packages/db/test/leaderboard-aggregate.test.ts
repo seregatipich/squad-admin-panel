@@ -290,32 +290,34 @@ describeIfDb('bonus/boost accrual (LEAD-4)', () => {
 
 describeIfDb('top-N query uses the metric index', () => {
   it('EXPLAIN of a top-100 online query hits the index without a seq scan', async () => {
-    await sql`
-      INSERT INTO players (id, canonical_name, canonical_name_normalized)
-      SELECT gen_random_uuid(), 'lbbulk' || g, 'lbbulk' || g
-      FROM generate_series(1, 3000) AS g
-    `;
-    await sql`
-      INSERT INTO player_stat_periods
-        (player_id, server_id, period_type, period_start, online_seconds)
-      SELECT p.id, ${SERVER_1}, 'day', '2026-07-05', (random() * 100000)::int
-      FROM players p
-      WHERE p.canonical_name LIKE 'lbbulk%'
-    `;
-    await sql`ANALYZE player_stat_periods`;
+    try {
+      await sql`
+        INSERT INTO players (id, canonical_name, canonical_name_normalized)
+        SELECT gen_random_uuid(), 'lbbulk' || g, 'lbbulk' || g
+        FROM generate_series(1, 3000) AS g
+      `;
+      await sql`
+        INSERT INTO player_stat_periods
+          (player_id, server_id, period_type, period_start, online_seconds)
+        SELECT p.id, ${SERVER_1}, 'day', '2026-07-05', (random() * 100000)::int
+        FROM players p
+        WHERE p.canonical_name LIKE 'lbbulk%'
+      `;
+      await sql`ANALYZE player_stat_periods`;
 
-    const plan = await sql<{ 'QUERY PLAN': string }[]>`
-      EXPLAIN SELECT player_id, online_seconds
-      FROM player_stat_periods
-      WHERE period_type = 'day' AND period_start = '2026-07-05' AND server_id = ${SERVER_1}
-      ORDER BY online_seconds DESC
-      LIMIT 100
-    `;
-    const planText = plan.map((line) => line['QUERY PLAN']).join('\n');
+      const plan = await sql<{ 'QUERY PLAN': string }[]>`
+        EXPLAIN SELECT player_id, online_seconds
+        FROM player_stat_periods
+        WHERE period_type = 'day' AND period_start = '2026-07-05' AND server_id = ${SERVER_1}
+        ORDER BY online_seconds DESC
+        LIMIT 100
+      `;
+      const planText = plan.map((line) => line['QUERY PLAN']).join('\n');
 
-    expect(planText).toMatch(/player_stat_periods_online_idx/);
-    expect(planText).not.toMatch(/Seq Scan on player_stat_periods/);
-
-    await sql`DELETE FROM players WHERE canonical_name LIKE 'lbbulk%'`;
-  });
+      expect(planText).toMatch(/player_stat_periods_online_idx/);
+      expect(planText).not.toMatch(/Seq Scan on player_stat_periods/);
+    } finally {
+      await sql`DELETE FROM players WHERE canonical_name LIKE 'lbbulk%'`;
+    }
+  }, 30_000);
 });
