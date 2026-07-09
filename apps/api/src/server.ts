@@ -52,6 +52,7 @@ import integrationsDiscordRoutes from './routes/integrations-discord.js';
 import integrationsGeoipRoutes from './routes/integrations-geoip.js';
 import integrationsVipRoutes from './routes/integrations-vip.js';
 import issuesRoutes from './routes/issues.js';
+import layersRoutes from './routes/layers.js';
 import leaderboardsRoutes from './routes/leaderboards.js';
 import liveRoutes from './routes/live.js';
 import logsRoutes from './routes/logs.js';
@@ -194,6 +195,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(combatEventsRoutes);
   await app.register(teamkillsRoutes);
   await app.register(vehicleCatalogRoutes);
+  await app.register(layersRoutes);
   await app.register(vipTiersRoutes);
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);

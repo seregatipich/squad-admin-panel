@@ -134,6 +134,48 @@ export const auditEntry = z
   .strict();
 export type AuditEntry = z.infer<typeof auditEntry>;
 
+export const layerTeamInfo = z
+  .object({
+    faction: z.string(),
+    unit: z.string().optional(),
+    tickets: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+export type LayerTeamInfo = z.infer<typeof layerTeamInfo>;
+
+export const layerTeams = z
+  .object({
+    team1: layerTeamInfo.optional(),
+    team2: layerTeamInfo.optional(),
+  })
+  .strict();
+export type LayerTeams = z.infer<typeof layerTeams>;
+
+export const layerRow = z
+  .object({
+    id: uuidString,
+    name: z.string(),
+    map: z.string(),
+    gamemode: z.string(),
+    version: z.string(),
+    is_seed: z.boolean(),
+    teams: layerTeams,
+    depot_version: z.string().nullable(),
+    deprecated: z.boolean(),
+    created_at: z.string().datetime(),
+  })
+  .strict();
+export type LayerRow = z.infer<typeof layerRow>;
+
+export const layerListQuery = z
+  .object({
+    map: z.string().trim().min(1).max(200).optional(),
+    gamemode: z.string().trim().min(1).max(64).optional(),
+    is_seed: z.enum(['true', 'false']).optional(),
+  })
+  .strict();
+export type LayerListQuery = z.infer<typeof layerListQuery>;
+
 export const paginated = <T extends z.ZodTypeAny>(item: T) =>
   z
     .object({
