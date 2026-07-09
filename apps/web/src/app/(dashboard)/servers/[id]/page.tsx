@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { A2SIndicator } from '@/components/A2SIndicator';
 import { AdminsCfgDriftBanner } from '@/components/AdminsCfgDriftBanner';
+import { BroadcastComposer } from '@/components/BroadcastComposer';
 import { CrashBadge } from '@/components/CrashBadge';
 import { ForceStopDialog } from '@/components/ForceStopDialog';
 import { LiveIndicator } from '@/components/LiveIndicator';
@@ -87,6 +88,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const { id } = use(params);
   const router = useRouter();
   const [data, setData] = useState<ServerResponse | null>(null);
+  const [canChat, setCanChat] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -131,6 +133,23 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
+        if (!res.ok || cancelled) return;
+        const me = (await res.json()) as { squad_permissions?: string[] };
+        if (!cancelled) setCanChat(me.squad_permissions?.includes('chat') ?? false);
+      } catch {
+        // permission fetch is best-effort; chat UI simply stays hidden
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const onLiveStatus = useCallback(
@@ -472,7 +491,9 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         )}
       </section>
 
-      <LivePlayers serverId={server.id} />
+      <BroadcastComposer serverId={server.id} canChat={canChat} />
+
+      <LivePlayers serverId={server.id} canChat={canChat} />
 
       <section className="flex flex-wrap items-center gap-2">
         <ActionButton

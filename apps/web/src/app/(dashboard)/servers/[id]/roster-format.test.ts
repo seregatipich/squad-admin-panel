@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatTimeOnServer,
+  groupRosterBySquad,
   type RosterPlayer,
   shortEos,
   sortRoster,
@@ -92,5 +93,42 @@ describe('sortRoster', () => {
     const original = roster.map((player) => player.name);
     sortRoster(roster);
     expect(roster.map((player) => player.name)).toEqual(original);
+  });
+});
+
+describe('groupRosterBySquad', () => {
+  it('groups by (team_id, squad_id) and identifies the squad leader', () => {
+    const roster = [
+      makePlayer({ name: 'Amy', team_id: 1, squad_id: 2, is_leader: true }),
+      makePlayer({ name: 'Bob', team_id: 1, squad_id: 2, is_leader: false }),
+      makePlayer({ name: 'Zed', team_id: 2, squad_id: 1, is_leader: false }),
+    ];
+    const groups = groupRosterBySquad(roster);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toMatchObject({ team_id: 1, squad_id: 2 });
+    expect(groups[0]?.players.map((p) => p.name)).toEqual(['Amy', 'Bob']);
+    expect(groups[0]?.leader?.name).toBe('Amy');
+    expect(groups[1]).toMatchObject({ team_id: 2, squad_id: 1, leader: null });
+  });
+
+  it('does not merge the same squad_id across different teams', () => {
+    const roster = [
+      makePlayer({ name: 'Amy', team_id: 1, squad_id: 1 }),
+      makePlayer({ name: 'Zed', team_id: 2, squad_id: 1 }),
+    ];
+    const groups = groupRosterBySquad(roster);
+    expect(groups).toHaveLength(2);
+    expect(groups.map((g) => g.players[0]?.name)).toEqual(['Amy', 'Zed']);
+  });
+
+  it('groups unassigned players (squad_id null) per team without a leader', () => {
+    const roster = [
+      makePlayer({ name: 'Solo', team_id: 1, squad_id: null, is_leader: false }),
+      makePlayer({ name: 'Loner', team_id: 1, squad_id: null, is_leader: false }),
+    ];
+    const groups = groupRosterBySquad(roster);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ team_id: 1, squad_id: null, leader: null });
+    expect(groups[0]?.players).toHaveLength(2);
   });
 });

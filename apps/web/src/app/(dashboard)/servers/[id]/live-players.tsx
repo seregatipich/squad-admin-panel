@@ -1,11 +1,14 @@
 'use client';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
+import { SquadMessageModal, type SquadMessageTarget } from '@/components/SquadMessageModal';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   formatTimeOnServer,
+  groupRosterBySquad,
   type RosterPlayer,
   type RosterResponse,
+  type SquadGroup,
   shortEos,
   sortRoster,
   squadLabel,
@@ -14,10 +17,18 @@ import {
 
 const ROSTER_POLL_MS = 30_000;
 
-export function LivePlayers({ serverId }: { serverId: string }) {
+export function LivePlayers({
+  serverId,
+  canChat = false,
+}: {
+  serverId: string;
+  /** Shows the per-squad "message" button. Hidden without the 'chat' squad permission. */
+  canChat?: boolean;
+}) {
   const [roster, setRoster] = useState<RosterResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [now, setNow] = useState<number>(() => Date.now());
+  const [squadTarget, setSquadTarget] = useState<SquadMessageTarget | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -60,6 +71,7 @@ export function LivePlayers({ serverId }: { serverId: string }) {
   useLiveSubscription('rcon.roster', onRoster);
 
   const players = roster ? sortRoster(roster.players) : [];
+  const groups = groupRosterBySquad(players);
 
   return (
     <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
@@ -98,14 +110,84 @@ export function LivePlayers({ serverId }: { serverId: string }) {
               </tr>
             </thead>
             <tbody>
-              {players.map((player) => (
-                <RosterRow key={player.eos_id} player={player} now={now} />
+              {groups.map((group) => (
+                <SquadGroupRows
+                  key={`${group.team_id}:${group.squad_id}`}
+                  group={group}
+                  now={now}
+                  serverId={serverId}
+                  canChat={canChat}
+                  onMessageSquad={setSquadTarget}
+                />
               ))}
             </tbody>
           </table>
         </div>
       ) : null}
+
+      <SquadMessageModal
+        target={squadTarget}
+        onOpenChange={(open) => !open && setSquadTarget(null)}
+      />
     </section>
+  );
+}
+
+function SquadGroupRows({
+  group,
+  now,
+  serverId,
+  canChat,
+  onMessageSquad,
+}: {
+  group: SquadGroup;
+  now: number;
+  serverId: string;
+  canChat: boolean;
+  onMessageSquad: (target: SquadMessageTarget) => void;
+}) {
+  const messageable = canChat && group.team_id != null && group.squad_id != null;
+  const label =
+    group.squad_id != null
+      ? `Команда ${teamLabel(group.team_id)} · Отряд ${squadLabel(group.squad_id)}`
+      : `Команда ${teamLabel(group.team_id)} · Без отряда`;
+
+  return (
+    <>
+      <tr className="border-t border-neutral-800 bg-neutral-900/60">
+        <th colSpan={6} className="py-1 pr-3 text-left text-[10px] font-medium text-neutral-400">
+          <div className="flex items-center justify-between">
+            <span>
+              {label} <span className="text-neutral-600">· {group.players.length}</span>
+            </span>
+            {messageable ? (
+              <button
+                type="button"
+                title={`Сообщение отряду: ${label}`}
+                aria-label={`Сообщение отряду: ${label}`}
+                onClick={() =>
+                  onMessageSquad({
+                    serverId,
+                    // biome-ignore lint/style/noNonNullAssertion: guarded by `messageable`
+                    teamId: group.team_id!,
+                    // biome-ignore lint/style/noNonNullAssertion: guarded by `messageable`
+                    squadId: group.squad_id!,
+                    label,
+                    leaderName: group.leader?.name ?? null,
+                  })
+                }
+                className="rounded px-1.5 py-0.5 text-sky-400 hover:bg-neutral-800 hover:text-sky-300"
+              >
+                ✉
+              </button>
+            ) : null}
+          </div>
+        </th>
+      </tr>
+      {group.players.map((player) => (
+        <RosterRow key={player.eos_id} player={player} now={now} />
+      ))}
+    </>
   );
 }
 

@@ -58,6 +58,14 @@ describe('buildOperatorCommand', () => {
     expect(
       buildOperatorCommand(commandRequest({ command: 'AdminReloadServerConfig', args: [] })),
     ).toBe('AdminReloadServerConfig');
+    expect(
+      buildOperatorCommand(
+        commandRequest({
+          command: 'AdminWarn',
+          args: ['76561198000000123', 'Please stop teamkilling'],
+        }),
+      ),
+    ).toBe('AdminWarn 76561198000000123 Please stop teamkilling');
   });
 
   it('rejects unsupported commands and unsafe broadcast text', () => {
@@ -67,6 +75,31 @@ describe('buildOperatorCommand', () => {
     expect(() =>
       buildOperatorCommand(commandRequest({ args: ['first line\nsecond line'] })),
     ).toThrow(/unsafe/i);
+  });
+
+  it('rejects AdminWarn with the wrong argument count', () => {
+    expect(() =>
+      buildOperatorCommand(commandRequest({ command: 'AdminWarn', args: ['target-only'] })),
+    ).toThrow(/exactly two arguments/i);
+    expect(() =>
+      buildOperatorCommand(
+        commandRequest({ command: 'AdminWarn', args: ['target', 'msg', 'extra'] }),
+      ),
+    ).toThrow(/exactly two arguments/i);
+  });
+
+  it('rejects AdminWarn with unsafe target or message text', () => {
+    expect(() =>
+      buildOperatorCommand(commandRequest({ command: 'AdminWarn', args: ['target\nid', 'hello'] })),
+    ).toThrow(/unsafe/i);
+    expect(() =>
+      buildOperatorCommand(
+        commandRequest({ command: 'AdminWarn', args: ['target', 'line one\nline two'] }),
+      ),
+    ).toThrow(/unsafe/i);
+    expect(() =>
+      buildOperatorCommand(commandRequest({ command: 'AdminWarn', args: ['', 'hello'] })),
+    ).toThrow(/is required/i);
   });
 });
 

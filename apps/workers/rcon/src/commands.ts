@@ -17,6 +17,7 @@ const RESULT_TTL_SECONDS = 120;
 const DEFAULT_BLOCK_MS = 500;
 const DEFAULT_COUNT = 10;
 const BROADCAST_MAX_CHARS = 300;
+const TARGET_MAX_CHARS = 64;
 const DEFAULT_RECLAIM_MIN_IDLE_MS = 60_000;
 const DEFAULT_RECLAIM_INTERVAL_MS = 30_000;
 
@@ -50,6 +51,8 @@ export function buildOperatorCommand(input: unknown): string {
     case 'AdminReloadServerConfig':
       ensureNoArgs(request);
       return 'AdminReloadServerConfig';
+    case 'AdminWarn':
+      return buildAdminWarnCommand(request.args);
   }
 }
 
@@ -239,13 +242,34 @@ export class RconCommandQueue {
 
 function validateBroadcastText(args: string[]): string {
   if (args.length !== 1) throw new Error('AdminBroadcast expects exactly one message argument');
-  const message = args[0]?.trim();
-  if (!message) throw new Error('AdminBroadcast message is required');
-  if (message.length > BROADCAST_MAX_CHARS) {
-    throw new Error(`AdminBroadcast message exceeds ${BROADCAST_MAX_CHARS} characters`);
+  return assertSafeSingleLineText(args[0], 'AdminBroadcast message', BROADCAST_MAX_CHARS);
+}
+
+/**
+ * Builds `AdminWarn <target> <message>`, reusing the same text-safety checks
+ * as AdminBroadcast (no CR/LF/NUL, length cap) for the warning message. The
+ * target is the player's EOS id, SteamID64, or in-game name — whatever the
+ * caller resolved from the live roster.
+ */
+function buildAdminWarnCommand(args: string[]): string {
+  if (args.length !== 2) {
+    throw new Error('AdminWarn expects exactly two arguments: target id and message');
   }
-  if (/[\r\n\0]/u.test(message)) throw new Error('unsafe AdminBroadcast message');
-  return message;
+  const target = assertSafeSingleLineText(args[0], 'AdminWarn target', TARGET_MAX_CHARS);
+  const message = assertSafeSingleLineText(args[1], 'AdminWarn message', BROADCAST_MAX_CHARS);
+  return `AdminWarn ${target} ${message}`;
+}
+
+function assertSafeSingleLineText(
+  value: string | undefined,
+  label: string,
+  maxChars: number,
+): string {
+  const text = value?.trim();
+  if (!text) throw new Error(`${label} is required`);
+  if (text.length > maxChars) throw new Error(`${label} exceeds ${maxChars} characters`);
+  if (/[\r\n\0]/u.test(text)) throw new Error(`unsafe ${label}`);
+  return text;
 }
 
 function ensureNoArgs(request: RconCommandRequest): void {
