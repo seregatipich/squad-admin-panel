@@ -28,7 +28,10 @@ for _ in $(seq 1 40); do
 done
 
 echo "==> Local health probe (through Caddy on 443)"
-curl -sk https://localhost/health -o /dev/null -w 'caddy->api /health: %{http_code}\n' --max-time 10 || true
+# Caddy serves TLS only for the tk104.duckdns.org SNI (DNS-01 cert), so probe
+# 127.0.0.1 with the real host name via --resolve instead of https://localhost.
+curl -sk --resolve tk104.duckdns.org:443:127.0.0.1 https://tk104.duckdns.org/health \
+  -o /dev/null -w 'caddy->api /health: %{http_code}\n' --max-time 10 || true
 
 echo "==> Container status"
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
