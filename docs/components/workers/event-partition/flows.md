@@ -5,13 +5,18 @@
 1. Read `DATABASE_URL` from environment; fatal-exit if missing.
 2. Connect to Postgres (`max: 1` connection pool).
 3. Connect to Redis if `REDIS_URL` is set.
-4. Call `tick()` immediately. `tick()` runs `ensurePartitions()` (events) and `ensureDiagPartitions(sql)` (diagnostic_events) sequentially.
-5. Start `setInterval(tick, 3_600_000)` (1 h).
+4. Call `runPartitionTick({ sql, diag })` immediately. It runs `ensureMonthlyPartitions(sql)` (events) and `ensureDiagPartitions(sql)` (diagnostic_events) concurrently via `Promise.allSettled`, then emits `event_partition.run_ok` / `event_partition.run_failed`.
+5. Start `setInterval(runPartitionTick, 3_600_000)` (1 h).
 6. Start heartbeat (`worker:heartbeat:event-partition`, every 5 s).
 
-## `ensurePartitions()` (current placeholder)
+## `ensureMonthlyPartitions(sql)` (active)
 
-Executes `SELECT 1` twice (current + next month slots). Logs `{ createdUpTo: 2 }`. No actual DDL in P0.
+Exported from `apps/workers/event-partition/src/index.ts`. Idempotent maintenance for the `events` partitioned table, mirroring `ensureDiagPartitions` below exactly:
+
+1. **Create buffer**: for the current month and next month, run `CREATE TABLE IF NOT EXISTS events_<YYYY_MM> PARTITION OF events FOR VALUES FROM ('<month-start>') TO ('<next-month-start>');`. Date math uses UTC (`Date.UTC`). One info log per call: `ensured events partition`.
+2. **Drop stale**: compute `cutoffName = 'events_<YYYY_MM>'` for `date_trunc('month', now()) - interval '24 months'`. Query `pg_inherits` joined to `pg_class` for child partitions of `events` whose `relname < cutoffName`. For each match, run `DROP TABLE IF EXISTS <partname>;`. One info log per drop: `dropped stale events partition`.
+
+Why current + next month only? The initial 6-month bootstrap in `packages/db/drizzle/0000_init.sql` already covers a wide look-ahead window; the hourly rotation only needs to keep rolling that window forward by one month at a time.
 
 ## `ensureDiagPartitions(sql)` (active)
 
@@ -27,13 +32,6 @@ Why `[-1, +2]`?
 - `+1` (tomorrow) — pre-created so the rollover at midnight UTC is seamless.
 - `+2` (day after tomorrow) — safety buffer if the worker crash-loops or misses a tick.
 
-## Planned Phase 1 `ensurePartitions()` (events table)
-
-1. Compute current month and next month as `YYYY_MM` strings.
-2. For each: `CREATE TABLE IF NOT EXISTS events_{YYYY_MM} PARTITION OF events FOR VALUES FROM (...) TO (...)`.
-3. On the 25th of the month, also pre-create the month after next.
-4. Detach partitions older than 12 months.
-
 ## Graceful shutdown (SIGTERM / SIGINT)
 
 Stop heartbeat → `clearInterval(interval)` → `sql.end({ timeout: 5 })` → `redis.quit()` → `process.exit(0)`.
@@ -42,7 +40,8 @@ Stop heartbeat → `clearInterval(interval)` → `sql.end({ timeout: 5 })` → `
 
 | Scenario | Behaviour |
 |---|---|
-| `tick()` DDL error | Log error; skip this cycle; retry on next interval tick |
+| `runPartitionTick()` DDL error | Logged, isolated to the failing rotation via `Promise.allSettled`, `event_partition.run_failed` emitted; the other rotation still completes; retry on next interval tick |
 | Postgres unavailable on start | Fatal exit (no connection = no meaningful work) |
 | Redis unavailable | Heartbeat silently skipped; worker continues |
 | `diagnostic_events` parent table missing | DDL fails for both create and drop branches; logs at `error`; partitions never get rotated until migration `0017_diagnostic_events.sql` has run |
+| `events` parent table missing | DDL fails for both create and drop branches in `ensureMonthlyPartitions`; logs at `error`; isolated from the diag rotation by `Promise.allSettled` |

@@ -19,6 +19,7 @@ import {
   PLAYER_DISCONNECT,
   PLAYER_EOS_CONNECTION,
   PLAYER_JOIN_SUCCEEDED,
+  PLAYER_REMOTE_ADDR,
   parseLine,
   RCON_ADMIN_COMMAND,
   SERVER_EXIT_CODE,
@@ -61,7 +62,8 @@ export interface IngestorCallbacks {
 export class LogIngestor {
   private readonly serverId: string;
   private readonly beaconPort: number;
-  private recentJoin: { name: string; ts: number } | null = null;
+  private recentJoin: { name: string; ts: number; ip: string | null } | null = null;
+  private recentIp: { ip: string; ts: number } | null = null;
   private readonly joinCorrelationWindowMs: number;
   private readonly onParseError?: (report: ParseErrorReport) => void;
   private readonly onSquadFatal?: (report: SquadFatalReport) => void;
@@ -179,9 +181,24 @@ export class LogIngestor {
         return events;
       }
 
+      const remoteAddr = PLAYER_REMOTE_ADDR.exec(message);
+      if (remoteAddr) {
+        this.recentIp = { ip: remoteAddr[1] as string, ts: Date.parse(ts) };
+        return events;
+      }
+
       const join = PLAYER_JOIN_SUCCEEDED.exec(message);
       if (join) {
-        this.recentJoin = { name: join[1] as string, ts: Date.parse(ts) };
+        const joinTs = Date.parse(ts);
+        let ip: string | null = null;
+        if (this.recentIp) {
+          const ipAge = joinTs - this.recentIp.ts;
+          if (ipAge >= 0 && ipAge < this.joinCorrelationWindowMs) {
+            ip = this.recentIp.ip;
+          }
+          this.recentIp = null;
+        }
+        this.recentJoin = { name: join[1] as string, ts: joinTs, ip };
         return events;
       }
 
@@ -253,7 +270,7 @@ export class LogIngestor {
               name: this.recentJoin.name,
               eos_id: eos[1],
               steam_id64: eos[2],
-              ip: null,
+              ip: this.recentJoin.ip,
             }),
           );
         }

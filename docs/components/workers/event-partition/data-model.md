@@ -6,9 +6,9 @@
 
 Declared in `packages/db/src/schema/events.ts`. Partitioned by `occurred_at` (range, monthly).
 
-Initial partitions bootstrapped by `packages/db/drizzle/0000_init.sql`.
+Initial 6 monthly partitions (current + 5 look-ahead months) are bootstrapped by `packages/db/drizzle/0000_init.sql`.
 
-This worker creates future partitions. In Phase 1 it will also detach and archive partitions older than 12 months.
+The worker keeps the current + next month partitions present (`ensureMonthlyPartitions`, hourly) and drops any partition entirely older than the 24-month retention window — a dropped partition's rows are gone, not archived elsewhere.
 
 #### Partition naming convention
 
@@ -17,6 +17,8 @@ events_YYYY_MM
 ```
 
 Example: `events_2026_04` covers `2026-04-01` to `2026-05-01`.
+
+The `relname` lexicographic ordering on `events_YYYY_MM` matches calendar ordering, which is why the drop query uses `WHERE p.relname < 'events_<YYYY_MM of 24 months ago>'`.
 
 ### `diagnostic_events` (partitioned table)
 

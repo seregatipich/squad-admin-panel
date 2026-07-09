@@ -6,20 +6,27 @@
 REDIS_URL=redis://127.0.0.1:6379/14 pnpm --filter @squad/worker-event-partition test
 ```
 
+`test/partition.test.ts` additionally needs `DATABASE_URL` pointed at an isolated, migrated database (it is skipped otherwise):
+
+```bash
+eval "$(bash scripts/new-test-db.sh <slug>)"
+pnpm --filter @squad/worker-event-partition exec vitest run test/partition.test.ts
+```
+
 ## Test files
 
 All tests live under `apps/workers/event-partition/test/`.
 
 ### `partition.test.ts`
 
-Unit tests for partition name computation.
+Integration tests for `ensureMonthlyPartitions(sql)` against a real, migrated database (`DATABASE_URL` gated via `describe.skip` when unset — see `scripts/new-test-db.sh`).
 
 | Test | What it verifies |
 |---|---|
-| Generates correct partition name for a given year/month | Zero-padded `events_YYYY_MM` format |
-| Computes next month partition rolling over December → January | Year boundary handled correctly |
-| Computes next month for a regular month | April → May |
-| Current and next partition names are distinct | No off-by-one error |
+| Creates the next-month events partition with correct UTC month bounds | Drops the next-month partition first, runs `ensureMonthlyPartitions`, asserts it exists again in `pg_inherits` with the correct `FOR VALUES FROM/TO` bounds (via `pg_get_expr`) |
+| Creates the current-month events partition if missing | Same, for the current month |
+| Drops a pre-seeded partition older than the 24-month retention window | Seeds a ~40-month-old partition, runs the function, asserts it is gone |
+| Keeps a pre-seeded partition that is within the 24-month retention window | Seeds a ~12-month-old partition, runs the function, asserts it survives |
 
 ### `diag-partition.test.ts`
 
@@ -43,10 +50,6 @@ Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
 
 ## Coverage gaps
 
-The partition DDL logic is a placeholder. Phase 1 tests should cover:
-
-- `CREATE TABLE IF NOT EXISTS` is idempotent when run on an existing partition.
-- The correct partition name is computed for end-of-month boundary dates (e.g., 31 January → February partition name).
-- On the 25th, the month-after-next partition is pre-created.
-- Partitions older than 12 months are detached, not dropped.
-- Graceful recovery when Postgres is temporarily unavailable (error logged, retry on next tick).
+- `CREATE TABLE IF NOT EXISTS` idempotency when the partition already exists is exercised implicitly (every test run hits an existing current-month partition from the bootstrap migration) but has no dedicated assertion.
+- End-of-month/year boundary partition naming (e.g. December → January rollover) is covered by construction (`Date.UTC` handles it) but not by a dedicated boundary test.
+- Graceful recovery when Postgres is temporarily unavailable is covered at the `runPartitionTick` level (`diag-lifecycle.test.ts`, mocked `sql`) but not against a real dropped connection.

@@ -14,9 +14,10 @@ const log = pino({
 const COMPONENT = 'worker-event-partition';
 
 /**
- * Hourly cron replacement for pg_partman's run_maintenance. Creates the
- * next month's events partition a week before it is needed so writes never
- * land without a partition.
+ * Hourly cron replacement for pg_partman's run_maintenance on the
+ * `diagnostic_events` table. Creates day partitions for yesterday through
+ * two days ahead so writes never land without a partition, and drops
+ * partitions older than 24 hours.
  */
 export async function ensureDiagPartitions(sql: postgres.Sql): Promise<void> {
   // Partition bounds are computed in UTC; production Postgres MUST run with `TimeZone = 'UTC'` or equivalent for correctness.
@@ -48,6 +49,55 @@ export async function ensureDiagPartitions(sql: postgres.Sql): Promise<void> {
   }
 }
 
+/** Months of history kept on the `events` table before a partition is dropped. */
+const EVENTS_RETENTION_MONTHS = 24;
+
+function monthPartitionName(date: Date): string {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  return `events_${year}_${month}`;
+}
+
+/**
+ * Hourly cron replacement for pg_partman's run_maintenance on the `events`
+ * table. Ensures the current + next month partitions exist (so writes never
+ * land without a partition) and drops partitions entirely older than the
+ * 24-month retention window. Mirrors ensureDiagPartitions() above exactly —
+ * no pg_partman.
+ */
+export async function ensureMonthlyPartitions(sql: postgres.Sql): Promise<void> {
+  // Partition bounds are computed in UTC; production Postgres MUST run with `TimeZone = 'UTC'` or equivalent for correctness.
+  const now = new Date();
+  for (const offset of [0, 1]) {
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offset, 1));
+    const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offset + 1, 1));
+    const partname = monthPartitionName(monthStart);
+    const from = monthStart.toISOString().slice(0, 10);
+    const to = monthEnd.toISOString().slice(0, 10);
+    await sql.unsafe(
+      `CREATE TABLE IF NOT EXISTS ${partname} PARTITION OF events FOR VALUES FROM ('${from}') TO ('${to}');`,
+    );
+    log.info({ partname }, 'ensured events partition');
+  }
+
+  const cutoff = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - EVENTS_RETENTION_MONTHS, 1),
+  );
+  const cutoffName = monthPartitionName(cutoff);
+  const stale = (await sql`
+    SELECT p.relname AS partname
+    FROM pg_inherits
+    JOIN pg_class p  ON p.oid = inhrelid
+    JOIN pg_class pp ON pp.oid = inhparent
+    WHERE pp.relname = 'events'
+      AND p.relname < ${cutoffName}
+  `) as unknown as { partname: string }[];
+  for (const { partname } of stale) {
+    await sql.unsafe(`DROP TABLE IF EXISTS ${partname};`);
+    log.info({ partname }, 'dropped stale events partition');
+  }
+}
+
 export interface PartitionTickDeps {
   sql: postgres.Sql;
   diag: Diag;
@@ -57,15 +107,10 @@ export async function runPartitionTick(deps: PartitionTickDeps): Promise<void> {
   const { sql, diag } = deps;
   const failures: string[] = [];
 
-  async function ensureMonthlyPartitions() {
-    const toCreate = 2; // current + next month (plus existing bootstraps from 0000_init.sql)
-    for (let i = 0; i < toCreate; i++) {
-      await sql`SELECT 1`; // placeholder — real logic in Phase 1 when pg_partman ships
-    }
-    log.info({ createdUpTo: toCreate }, 'partitions ensured');
-  }
-
-  const results = await Promise.allSettled([ensureMonthlyPartitions(), ensureDiagPartitions(sql)]);
+  const results = await Promise.allSettled([
+    ensureMonthlyPartitions(sql),
+    ensureDiagPartitions(sql),
+  ]);
   for (const r of results) {
     if (r.status === 'rejected') {
       const message = r.reason instanceof Error ? r.reason.message : String(r.reason);

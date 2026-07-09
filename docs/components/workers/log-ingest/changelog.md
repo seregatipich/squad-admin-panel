@@ -1,5 +1,12 @@
 # Changelog — worker-log-ingest
 
+## 2026-07-09
+
+### Added
+
+- `PLAYER_REMOTE_ADDR` pattern (`src/parser/patterns.ts`): matches `LogNet: AddClientConnection … RemoteAddr: <ip>:<port> … EOSNetDriver …`, the client IP captured at connection setup.
+- `LogIngestor` now correlates the `AddClientConnection` line with the following `Join succeeded` line (within the existing join correlation window) and carries the resolved IP through to the `player.connected` event's `ip` field, replacing the previous hardcoded `null`.
+
 ## 2026-07-07
 
 ### Added
