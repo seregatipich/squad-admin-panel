@@ -66,6 +66,7 @@ import playerNotesRoutes from '../../src/routes/player-notes.js';
 import playerPresenceRoutes from '../../src/routes/player-presence.js';
 import playerRoutes from '../../src/routes/players.js';
 import publicStatsRoutes from '../../src/routes/public-stats.js';
+import reportsRoutes from '../../src/routes/reports.js';
 import roleAssignmentsRoutes from '../../src/routes/role-assignments.js';
 import roleMembersRoutes from '../../src/routes/role-members.js';
 import rolesRoutes from '../../src/routes/roles.js';
@@ -553,6 +554,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(vipTiersRoutes);
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);
+  await app.register(reportsRoutes);
   await app.register(eventsRoutes);
   await app.register(playerNotesRoutes);
   await app.register(notesFeedRoutes);

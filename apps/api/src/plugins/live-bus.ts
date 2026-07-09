@@ -168,6 +168,16 @@ export type LiveEvent =
         started_at: string;
         ended_at: string;
       };
+    }
+  | {
+      type: 'report.created';
+      ts: string;
+      data: { report: ReportLiveView };
+    }
+  | {
+      type: 'report.updated';
+      ts: string;
+      data: { report: ReportLiveView };
     };
 
 export interface IssuePlayerRef {
@@ -204,6 +214,22 @@ export interface IssueCommentLiveView {
   author: IssuePlayerRef | null;
   body: string;
   created_at: string;
+}
+
+export interface ReportLiveView {
+  id: string;
+  server_id: string;
+  reporter_player_id: string | null;
+  target_player_id: string | null;
+  target_raw: string | null;
+  body: string;
+  source: 'ingame' | 'ui';
+  status: 'pending' | 'in_review' | 'resolved' | 'rejected';
+  handler_player_id: string | null;
+  resolution_note: string | null;
+  created_at: string;
+  claimed_at: string | null;
+  resolved_at: string | null;
 }
 
 export interface LiveBus {

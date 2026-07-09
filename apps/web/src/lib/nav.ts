@@ -11,6 +11,8 @@ export interface NavItem {
   href: string;
   label: string;
   permission?: string;
+  /** When set, renders a live count badge of reports awaiting moderation. */
+  showsPendingReports?: boolean;
 }
 
 /** A labeled group of {@link NavItem}s as rendered in the sidebar. */
@@ -41,6 +43,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/chat', label: 'Чат' },
       { href: '/notes', label: 'Заметки' },
       { href: '/banned-names', label: 'Забаненные ники' },
+      { href: '/reports', label: 'Жалобы', showsPendingReports: true },
       { href: '/issues', label: 'Тикеты' },
       { href: '/vips', label: 'VIP', permission: 'user:view' },
       { href: '/settings/groups', label: 'Группы', permission: 'role:view' },

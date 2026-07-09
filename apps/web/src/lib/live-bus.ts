@@ -104,7 +104,45 @@ export type LiveEvent =
       type: 'vote.ended';
       ts: string;
       data: VoteEndedData;
+    }
+  | {
+      type: 'report.created';
+      ts: string;
+      data: { report: ReportLiveView };
+    }
+  | {
+      type: 'report.updated';
+      ts: string;
+      data: { report: ReportLiveView };
     };
+
+export type ReportStatus = 'pending' | 'in_review' | 'resolved' | 'rejected';
+
+/** Reduced shape published over the live-bus WS for `report.created`/`report.updated`. */
+export interface ReportLiveView {
+  id: string;
+  server_id: string;
+  reporter_player_id: string | null;
+  target_player_id: string | null;
+  target_raw: string | null;
+  body: string;
+  source: 'ingame' | 'ui';
+  status: ReportStatus;
+  handler_player_id: string | null;
+  resolution_note: string | null;
+  created_at: string;
+  claimed_at: string | null;
+  resolved_at: string | null;
+}
+
+/** Full report view returned by GET /api/v1/reports (and /:id), with resolved names. */
+export interface ReportListItem extends ReportLiveView {
+  server_name: string | null;
+  server_slug: string | null;
+  reporter_name: string | null;
+  target_name: string | null;
+  handler_name: string | null;
+}
 
 export interface VoteEndedData {
   vote_id: string;
