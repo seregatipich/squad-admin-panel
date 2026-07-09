@@ -24,6 +24,7 @@ describe('rcon command contract', () => {
       'AdminBroadcast',
       'AdminEndMatch',
       'AdminReloadServerConfig',
+      'AdminWarn',
     ]);
     expect(
       rconCommandRequestSchema.safeParse({

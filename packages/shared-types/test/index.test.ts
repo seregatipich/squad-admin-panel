@@ -37,6 +37,7 @@ describe('shared-types index re-exports', () => {
       'AdminBroadcast',
       'AdminEndMatch',
       'AdminReloadServerConfig',
+      'AdminWarn',
     ]);
   });
 });
