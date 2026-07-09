@@ -44,6 +44,7 @@ import integrationsDiscordRoutes from '../../src/routes/integrations-discord.js'
 import integrationsGeoipRoutes from '../../src/routes/integrations-geoip.js';
 import integrationsVipRoutes from '../../src/routes/integrations-vip.js';
 import issuesRoutes from '../../src/routes/issues.js';
+import layersRoutes from '../../src/routes/layers.js';
 import leaderboardsRoutes from '../../src/routes/leaderboards.js';
 import logsRoutes from '../../src/routes/logs.js';
 import markTypesRoutes from '../../src/routes/mark-types.js';
@@ -531,6 +532,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(combatEventsRoutes);
   await app.register(teamkillsRoutes);
   await app.register(vehicleCatalogRoutes);
+  await app.register(layersRoutes);
   await app.register(vipTiersRoutes);
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);

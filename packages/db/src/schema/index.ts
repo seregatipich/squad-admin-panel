@@ -19,6 +19,7 @@ export * from './issue-comments.js';
 export * from './issue-label-links.js';
 export * from './issue-labels.js';
 export * from './issues.js';
+export * from './layers.js';
 export * from './marks.js';
 export * from './match-players.js';
 export * from './matches.js';
