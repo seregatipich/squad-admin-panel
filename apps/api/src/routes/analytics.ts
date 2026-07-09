@@ -1,12 +1,16 @@
 import { sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
-const DEFAULT_WINDOW_DAYS = 7;
-const MAX_WINDOW_DAYS = 92;
-const POPULAR_LIMIT_DEFAULT = 10;
-const POPULAR_LIMIT_MAX = 50;
+/** Default lookback window (in days) applied when a caller omits `from`. */
+export const DEFAULT_WINDOW_DAYS = 7;
+/** Hard cap (in days) on the `from`..`to` span any caller may request. */
+export const MAX_WINDOW_DAYS = 92;
+/** Default row cap for the popular-maps/popular-layers breakdowns. */
+export const POPULAR_LIMIT_DEFAULT = 10;
+/** Hard cap on the `limit` query parameter for popular-maps/popular-layers. */
+export const POPULAR_LIMIT_MAX = 50;
 const DAY_MS = 86_400_000;
 
 const dashboardQuery = z.object({
@@ -21,10 +25,8 @@ const peakEntrySchema = z.object({ hour: z.number().int(), peak_players: z.numbe
 const popularMapSchema = z.object({ map: z.string(), matches: z.number().int() });
 const popularLayerSchema = z.object({ layer: z.string(), matches: z.number().int() });
 
-const dashboardResponse = z.object({
-  server_id: z.string().uuid().nullable(),
-  from: z.string(),
-  to: z.string(),
+/** Zod schema for the aggregate block shared by every analytics surface (panel dashboard and the public stats portal). */
+export const analyticsAggregatesSchema = z.object({
   summary: z.object({
     total_matches: z.number().int(),
     total_online_hours: z.number(),
@@ -43,14 +45,29 @@ const dashboardResponse = z.object({
   popular_layers: z.array(popularLayerSchema),
 });
 
+/** Aggregate metrics (no server_id/window framing) computed by {@link computeAnalyticsAggregates}. */
+export type AnalyticsAggregates = z.infer<typeof analyticsAggregatesSchema>;
+
+const dashboardResponse = z.object({
+  server_id: z.string().uuid().nullable(),
+  from: z.string(),
+  to: z.string(),
+  ...analyticsAggregatesSchema.shape,
+});
+
 type DashboardPayload = z.infer<typeof dashboardResponse>;
 
-interface ResolvedWindow {
+export interface ResolvedWindow {
   from: Date;
   to: Date;
 }
 
-function resolveWindow(fromRaw?: string, toRaw?: string): ResolvedWindow {
+/**
+ * Resolves a `from`/`to` analytics window from optional ISO datetime strings,
+ * defaulting to the last {@link DEFAULT_WINDOW_DAYS} days and clamping the
+ * span to {@link MAX_WINDOW_DAYS}.
+ */
+export function resolveWindow(fromRaw?: string, toRaw?: string): ResolvedWindow {
   const to = toRaw ? new Date(toRaw) : new Date();
   const from = fromRaw ? new Date(fromRaw) : new Date(to.getTime() - DEFAULT_WINDOW_DAYS * DAY_MS);
   const span = to.getTime() - from.getTime();
@@ -73,9 +90,145 @@ function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string }
   return null;
 }
 
-function escapeCsvField(value: string): string {
+/** Escapes a value for embedding as a single CSV field (RFC 4180 quoting). */
+export function escapeCsvField(value: string): string {
   if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
   return value;
+}
+
+/**
+ * Computes the peak-by-hour, match-outcome, and popular-map/layer aggregates
+ * for a window, optionally scoped to a single server. Shared by the
+ * auth-gated `/api/v1/analytics/dashboard` route and the public,
+ * PII-free `/api/v1/public/stats` route.
+ */
+export async function computeAnalyticsAggregates(
+  app: FastifyInstance,
+  params: { serverId: string | null; fromIso: string; toIso: string; limit: number },
+): Promise<AnalyticsAggregates> {
+  const { serverId, fromIso, toIso, limit } = params;
+
+  const matchFilter = sql`m.started_at >= ${fromIso}::timestamptz
+        AND m.started_at < ${toIso}::timestamptz
+        AND (${serverId}::uuid IS NULL OR m.server_id = ${serverId}::uuid)`;
+
+  const summaryRows = await app.db.execute<{
+    total_matches: number;
+    avg_duration: number | null;
+  }>(sql`
+        SELECT count(*)::int AS total_matches,
+               avg(m.duration_seconds)::float8 AS avg_duration
+        FROM matches m
+        WHERE ${matchFilter}
+      `);
+  const summaryRow = (
+    summaryRows as unknown as Array<{ total_matches: number; avg_duration: number | null }>
+  )[0];
+
+  const presenceRows = await app.db.execute<{
+    online_seconds: number;
+    unique_players: number;
+  }>(sql`
+        SELECT COALESCE(sum(p.online_seconds), 0)::bigint AS online_seconds,
+               count(DISTINCT p.player_id)::int AS unique_players
+        FROM player_daily_presence p
+        WHERE p.day >= ${fromIso}::date
+          AND p.day <= ${toIso}::date
+          AND (${serverId}::uuid IS NULL OR p.server_id = ${serverId}::uuid)
+      `);
+  const presenceRow = (
+    presenceRows as unknown as Array<{
+      online_seconds: number | string;
+      unique_players: number;
+    }>
+  )[0];
+
+  const outcomeRows = await app.db.execute<{ winner: string | null; count: number }>(sql`
+        SELECT m.winner AS winner, count(*)::int AS count
+        FROM matches m
+        WHERE ${matchFilter}
+        GROUP BY m.winner
+      `);
+  const outcomes = { team1: 0, team2: 0, draw: 0, unknown: 0, total: 0 };
+  for (const row of outcomeRows as unknown as Array<{ winner: string | null; count: number }>) {
+    const count = Number(row.count);
+    outcomes.total += count;
+    if (row.winner === 'team1') outcomes.team1 += count;
+    else if (row.winner === 'team2') outcomes.team2 += count;
+    else if (row.winner === 'draw') outcomes.draw += count;
+    else outcomes.unknown += count;
+  }
+
+  const mapRows = await app.db.execute<{ map: string; matches: number }>(sql`
+        SELECT m.map AS map, count(*)::int AS matches
+        FROM matches m
+        WHERE ${matchFilter} AND m.map IS NOT NULL
+        GROUP BY m.map
+        ORDER BY matches DESC, m.map ASC
+        LIMIT ${limit}
+      `);
+
+  const layerRows = await app.db.execute<{ layer: string; matches: number }>(sql`
+        SELECT m.layer AS layer, count(*)::int AS matches
+        FROM matches m
+        WHERE ${matchFilter} AND m.layer IS NOT NULL
+        GROUP BY m.layer
+        ORDER BY matches DESC, m.layer ASC
+        LIMIT ${limit}
+      `);
+
+  const peakRows = await app.db.execute<{ hour: number; peak: number }>(sql`
+        WITH ticks AS (
+          SELECT gs AS wall
+          FROM generate_series(
+            date_trunc('hour', ${fromIso}::timestamptz AT TIME ZONE 'UTC'),
+            ${toIso}::timestamptz AT TIME ZONE 'UTC',
+            interval '1 hour'
+          ) AS gs
+        ),
+        samples AS (
+          SELECT extract(hour FROM t.wall)::int AS hour,
+                 (
+                   SELECT count(*)::int
+                   FROM player_sessions s
+                   WHERE s.connected_at <= (t.wall AT TIME ZONE 'UTC')
+                     AND (s.disconnected_at IS NULL OR s.disconnected_at > (t.wall AT TIME ZONE 'UTC'))
+                     AND (${serverId}::uuid IS NULL OR s.server_id = ${serverId}::uuid)
+                 ) AS concurrent
+          FROM ticks t
+        )
+        SELECT hour, max(concurrent)::int AS peak
+        FROM samples
+        GROUP BY hour
+      `);
+  const peakByHourMap = new Map<number, number>();
+  for (const row of peakRows as unknown as Array<{ hour: number; peak: number }>) {
+    peakByHourMap.set(Number(row.hour), Number(row.peak));
+  }
+  const peakByHour = Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    peak_players: peakByHourMap.get(hour) ?? 0,
+  }));
+
+  const onlineSeconds = Number(presenceRow?.online_seconds ?? 0);
+  return {
+    summary: {
+      total_matches: Number(summaryRow?.total_matches ?? 0),
+      total_online_hours: Math.round((onlineSeconds / 3600) * 100) / 100,
+      unique_players: Number(presenceRow?.unique_players ?? 0),
+      avg_match_duration_seconds:
+        summaryRow?.avg_duration == null ? null : Math.round(Number(summaryRow.avg_duration)),
+    },
+    peak_by_hour: peakByHour,
+    match_outcomes: outcomes,
+    popular_maps: (mapRows as unknown as Array<{ map: string; matches: number }>).map((row) => ({
+      map: row.map,
+      matches: Number(row.matches),
+    })),
+    popular_layers: (layerRows as unknown as Array<{ layer: string; matches: number }>).map(
+      (row) => ({ layer: row.layer, matches: Number(row.matches) }),
+    ),
+  };
 }
 
 function toCsv(payload: DashboardPayload): string {
@@ -121,128 +274,18 @@ const analyticsRoutes: FastifyPluginAsync = async (app) => {
       const toIso = to.toISOString();
       const limit = req.query.limit;
 
-      const matchFilter = sql`m.started_at >= ${fromIso}::timestamptz
-        AND m.started_at < ${toIso}::timestamptz
-        AND (${serverId}::uuid IS NULL OR m.server_id = ${serverId}::uuid)`;
+      const aggregates = await computeAnalyticsAggregates(app, {
+        serverId,
+        fromIso,
+        toIso,
+        limit,
+      });
 
-      const summaryRows = await app.db.execute<{
-        total_matches: number;
-        avg_duration: number | null;
-      }>(sql`
-        SELECT count(*)::int AS total_matches,
-               avg(m.duration_seconds)::float8 AS avg_duration
-        FROM matches m
-        WHERE ${matchFilter}
-      `);
-      const summaryRow = (
-        summaryRows as unknown as Array<{ total_matches: number; avg_duration: number | null }>
-      )[0];
-
-      const presenceRows = await app.db.execute<{
-        online_seconds: number;
-        unique_players: number;
-      }>(sql`
-        SELECT COALESCE(sum(p.online_seconds), 0)::bigint AS online_seconds,
-               count(DISTINCT p.player_id)::int AS unique_players
-        FROM player_daily_presence p
-        WHERE p.day >= ${fromIso}::date
-          AND p.day <= ${toIso}::date
-          AND (${serverId}::uuid IS NULL OR p.server_id = ${serverId}::uuid)
-      `);
-      const presenceRow = (
-        presenceRows as unknown as Array<{
-          online_seconds: number | string;
-          unique_players: number;
-        }>
-      )[0];
-
-      const outcomeRows = await app.db.execute<{ winner: string | null; count: number }>(sql`
-        SELECT m.winner AS winner, count(*)::int AS count
-        FROM matches m
-        WHERE ${matchFilter}
-        GROUP BY m.winner
-      `);
-      const outcomes = { team1: 0, team2: 0, draw: 0, unknown: 0, total: 0 };
-      for (const row of outcomeRows as unknown as Array<{ winner: string | null; count: number }>) {
-        const count = Number(row.count);
-        outcomes.total += count;
-        if (row.winner === 'team1') outcomes.team1 += count;
-        else if (row.winner === 'team2') outcomes.team2 += count;
-        else if (row.winner === 'draw') outcomes.draw += count;
-        else outcomes.unknown += count;
-      }
-
-      const mapRows = await app.db.execute<{ map: string; matches: number }>(sql`
-        SELECT m.map AS map, count(*)::int AS matches
-        FROM matches m
-        WHERE ${matchFilter} AND m.map IS NOT NULL
-        GROUP BY m.map
-        ORDER BY matches DESC, m.map ASC
-        LIMIT ${limit}
-      `);
-
-      const layerRows = await app.db.execute<{ layer: string; matches: number }>(sql`
-        SELECT m.layer AS layer, count(*)::int AS matches
-        FROM matches m
-        WHERE ${matchFilter} AND m.layer IS NOT NULL
-        GROUP BY m.layer
-        ORDER BY matches DESC, m.layer ASC
-        LIMIT ${limit}
-      `);
-
-      const peakRows = await app.db.execute<{ hour: number; peak: number }>(sql`
-        WITH ticks AS (
-          SELECT gs AS wall
-          FROM generate_series(
-            date_trunc('hour', ${fromIso}::timestamptz AT TIME ZONE 'UTC'),
-            ${toIso}::timestamptz AT TIME ZONE 'UTC',
-            interval '1 hour'
-          ) AS gs
-        ),
-        samples AS (
-          SELECT extract(hour FROM t.wall)::int AS hour,
-                 (
-                   SELECT count(*)::int
-                   FROM player_sessions s
-                   WHERE s.connected_at <= (t.wall AT TIME ZONE 'UTC')
-                     AND (s.disconnected_at IS NULL OR s.disconnected_at > (t.wall AT TIME ZONE 'UTC'))
-                     AND (${serverId}::uuid IS NULL OR s.server_id = ${serverId}::uuid)
-                 ) AS concurrent
-          FROM ticks t
-        )
-        SELECT hour, max(concurrent)::int AS peak
-        FROM samples
-        GROUP BY hour
-      `);
-      const peakByHourMap = new Map<number, number>();
-      for (const row of peakRows as unknown as Array<{ hour: number; peak: number }>) {
-        peakByHourMap.set(Number(row.hour), Number(row.peak));
-      }
-      const peakByHour = Array.from({ length: 24 }, (_, hour) => ({
-        hour,
-        peak_players: peakByHourMap.get(hour) ?? 0,
-      }));
-
-      const onlineSeconds = Number(presenceRow?.online_seconds ?? 0);
       const payload: DashboardPayload = {
         server_id: serverId,
         from: fromIso,
         to: toIso,
-        summary: {
-          total_matches: Number(summaryRow?.total_matches ?? 0),
-          total_online_hours: Math.round((onlineSeconds / 3600) * 100) / 100,
-          unique_players: Number(presenceRow?.unique_players ?? 0),
-          avg_match_duration_seconds:
-            summaryRow?.avg_duration == null ? null : Math.round(Number(summaryRow.avg_duration)),
-        },
-        peak_by_hour: peakByHour,
-        match_outcomes: outcomes,
-        popular_maps: (mapRows as unknown as Array<{ map: string; matches: number }>).map(
-          (row) => ({ map: row.map, matches: Number(row.matches) }),
-        ),
-        popular_layers: (layerRows as unknown as Array<{ layer: string; matches: number }>).map(
-          (row) => ({ layer: row.layer, matches: Number(row.matches) }),
-        ),
+        ...aggregates,
       };
 
       if (req.query.format === 'csv') {

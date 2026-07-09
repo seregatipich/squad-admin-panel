@@ -69,6 +69,7 @@ import playerMatchesRoutes from './routes/player-matches.js';
 import playerNotesRoutes from './routes/player-notes.js';
 import playerPresenceRoutes from './routes/player-presence.js';
 import playerRoutes from './routes/players.js';
+import publicStatsRoutes from './routes/public-stats.js';
 import roleMembersRoutes from './routes/role-members.js';
 import rolesRoutes from './routes/roles.js';
 import archiveRoutes from './routes/server-archive.js';
@@ -210,6 +211,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(integrationsGeoipRoutes);
   await app.register(liveRoutes);
   await app.register(analyticsRoutes);
+  await app.register(publicStatsRoutes);
   await app.register(steamRoutes);
   await app.register(setupRoutes);
   await app.register(integrationsVipRoutes);
