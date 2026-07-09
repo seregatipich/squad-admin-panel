@@ -11,7 +11,7 @@ import { parseListPlayers } from './parse-list-players.js';
 import { parseListSquads, type RconSquad } from './parse-list-squads.js';
 import { parseServerInfo } from './parse-server-info.js';
 import { parseShowNextMap } from './parse-show-next-map.js';
-import { upsertPlayers } from './persist.js';
+import { accruePlayerKitTime, upsertPlayers } from './persist.js';
 import { buildRoster, type RosterEntry } from './roster.js';
 
 export interface Target {
@@ -99,6 +99,11 @@ class PerServerSupervisor {
   private consecutiveLowTick = 0;
   private rosterFirstSeen = new Map<string, string>();
   private commandQueue?: RconCommandQueue;
+  // Timestamp of the previous successful ListPlayers poll on the *current*
+  // connection, used by accruePlayerKitTime to compute the elapsed interval.
+  // Reset to null on every (re)connect so a poll right after reconnecting
+  // never accrues kit time across the disconnected gap.
+  private lastKitAccrualAt: Date | null = null;
 
   constructor(
     private readonly target: Target,
@@ -228,6 +233,7 @@ class PerServerSupervisor {
           'connect: rcon authenticated',
         );
         this.backoffMs = this.opts.initialBackoffMs ?? 1000;
+        this.lastKitAccrualAt = null;
         await this.emitEvent('rcon.connected', {});
         await this.emitDiag({
           kind: 'rcon.connected',
@@ -365,8 +371,18 @@ class PerServerSupervisor {
         const info = rawInfo ? parseServerInfo(rawInfo) : null;
         const nextMap = rawNextMap ? parseShowNextMap(rawNextMap) : null;
         await upsertPlayers(this.opts.db, players, this.opts.geoLookup ?? null);
+        const pollAt = new Date();
+        await accruePlayerKitTime(
+          this.opts.db,
+          players,
+          this.lastKitAccrualAt,
+          pollAt,
+          this.target.serverId,
+          this.opts.pollIntervalMs ?? 30_000,
+        );
+        this.lastKitAccrualAt = pollAt;
         this.consecutivePollFails = 0;
-        const polledAt = new Date().toISOString();
+        const polledAt = pollAt.toISOString();
         const { entries, firstSeen } = buildRoster(players, this.rosterFirstSeen, polledAt);
         this.rosterFirstSeen = firstSeen;
         await this.writeRoster(entries, polledAt);
