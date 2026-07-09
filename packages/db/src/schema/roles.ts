@@ -9,6 +9,7 @@ export const roles = pgTable(
     color: text('color').notNull().default('neutral'),
     isSystemRole: boolean('is_system_role').notNull().default(false),
     panelAccess: boolean('panel_access').notNull().default(false),
+    canViewIps: boolean('can_view_ips').notNull().default(false),
     canAssignRoles: boolean('can_assign_roles').notNull().default(false),
     canEditRoles: boolean('can_edit_roles').notNull().default(false),
     canManageIssues: boolean('can_manage_issues').notNull().default(false),

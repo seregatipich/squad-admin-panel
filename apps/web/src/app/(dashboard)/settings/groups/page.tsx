@@ -20,6 +20,7 @@ interface RoleRow {
   description: string | null;
   is_system_role: boolean;
   panel_access: boolean;
+  can_view_ips: boolean;
   can_assign_roles: boolean;
   can_edit_roles: boolean;
   can_manage_ban_sources: boolean;
@@ -80,6 +81,7 @@ export default function GroupsPage() {
       if (patch.name !== undefined) body.name = patch.name;
       if (patch.color !== undefined) body.color = patch.color;
       if (patch.panel_access !== undefined) body.panel_access = patch.panel_access;
+      if (patch.can_view_ips !== undefined) body.can_view_ips = patch.can_view_ips;
       if (patch.can_assign_roles !== undefined) body.can_assign_roles = patch.can_assign_roles;
       if (patch.can_edit_roles !== undefined) body.can_edit_roles = patch.can_edit_roles;
       if (patch.can_manage_ban_sources !== undefined)
@@ -117,6 +119,7 @@ export default function GroupsPage() {
       color: '#737373',
       squad_permissions: [],
       panel_access: false,
+      can_view_ips: false,
       can_assign_roles: false,
       can_edit_roles: false,
       can_manage_ban_sources: false,
@@ -271,6 +274,7 @@ function RoleCard({
   const setFlag = (
     key:
       | 'panel_access'
+      | 'can_view_ips'
       | 'can_assign_roles'
       | 'can_edit_roles'
       | 'can_manage_ban_sources'
@@ -281,6 +285,7 @@ function RoleCard({
     if (!canEdit) return;
     const patch: Partial<RoleRow> = { [key]: value } as Partial<RoleRow>;
     if (key === 'panel_access' && !value) {
+      patch.can_view_ips = false;
       patch.can_assign_roles = false;
       patch.can_edit_roles = false;
       patch.can_manage_ban_sources = false;
@@ -389,6 +394,12 @@ function RoleCard({
           enabled={role.panel_access}
           disabled={!canEdit}
           onChange={(v) => setFlag('panel_access', v)}
+        />
+        <FlagSwitch
+          label="🌐 Видит историю IP"
+          enabled={role.can_view_ips}
+          disabled={!canEdit || !role.panel_access}
+          onChange={(v) => setFlag('can_view_ips', v)}
         />
         <FlagSwitch
           label="👥 Может выдавать роли"

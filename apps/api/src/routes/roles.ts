@@ -20,6 +20,7 @@ const createBody = z.object({
   description: z.string().max(256).optional(),
   squad_permissions: squadPermissionsArraySchema.default([]),
   panel_access: z.boolean().default(false),
+  can_view_ips: z.boolean().default(false),
   can_assign_roles: z.boolean().default(false),
   can_edit_roles: z.boolean().default(false),
   can_manage_issues: z.boolean().default(false),
@@ -35,6 +36,7 @@ const updateBody = z.object({
   description: z.string().max(256).nullable().optional(),
   squad_permissions: squadPermissionsArraySchema.optional(),
   panel_access: z.boolean().optional(),
+  can_view_ips: z.boolean().optional(),
   can_assign_roles: z.boolean().optional(),
   can_edit_roles: z.boolean().optional(),
   can_manage_issues: z.boolean().optional(),
@@ -53,6 +55,7 @@ interface RoleWithCount extends Record<string, unknown> {
   description: string | null;
   is_system_role: boolean;
   panel_access: boolean;
+  can_view_ips: boolean;
   can_assign_roles: boolean;
   can_edit_roles: boolean;
   can_manage_issues: boolean;
@@ -67,7 +70,7 @@ interface RoleWithCount extends Record<string, unknown> {
 async function listRolesWithCounts(db: DatabaseClient): Promise<RoleWithCount[]> {
   const rows = await db.execute<RoleWithCount>(sql`
     SELECT r.id, r.name, r.color, r.description, r.is_system_role,
-      r.panel_access, r.can_assign_roles, r.can_edit_roles, r.can_manage_issues,
+      r.panel_access, r.can_view_ips, r.can_assign_roles, r.can_edit_roles, r.can_manage_issues,
       r.can_manage_ban_sources, r.can_manage_integrations, r.can_manage_clans,
       r.can_manage_economy,
       COALESCE(
@@ -85,9 +88,13 @@ function ensureFlagDependency(body: {
   panel_access?: boolean;
   can_assign_roles?: boolean;
   can_edit_roles?: boolean;
+  can_view_ips?: boolean;
 }): string | null {
   if (body.panel_access === false && (body.can_assign_roles || body.can_edit_roles)) {
     return 'panel_access_required_for_role_management';
+  }
+  if (body.panel_access === false && body.can_view_ips) {
+    return 'panel_access_required_for_view_ips';
   }
   return null;
 }
@@ -135,6 +142,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
             description: req.body.description ?? null,
             isSystemRole: false,
             panelAccess: req.body.panel_access,
+            canViewIps: req.body.can_view_ips,
             canAssignRoles: req.body.can_assign_roles,
             canEditRoles: req.body.can_edit_roles,
             canManageIssues: req.body.can_manage_issues,
@@ -199,6 +207,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         panel_access: req.body.panel_access ?? roleRow.panelAccess,
         can_assign_roles: req.body.can_assign_roles ?? roleRow.canAssignRoles,
         can_edit_roles: req.body.can_edit_roles ?? roleRow.canEditRoles,
+        can_view_ips: req.body.can_view_ips ?? roleRow.canViewIps,
       };
       const dep = ensureFlagDependency(merged);
       if (dep) {
@@ -212,6 +221,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
           if (req.body.color !== undefined) updates.color = req.body.color;
           if (req.body.description !== undefined) updates.description = req.body.description;
           if (req.body.panel_access !== undefined) updates.panelAccess = req.body.panel_access;
+          if (req.body.can_view_ips !== undefined) updates.canViewIps = req.body.can_view_ips;
           if (req.body.can_assign_roles !== undefined)
             updates.canAssignRoles = req.body.can_assign_roles;
           if (req.body.can_edit_roles !== undefined) updates.canEditRoles = req.body.can_edit_roles;

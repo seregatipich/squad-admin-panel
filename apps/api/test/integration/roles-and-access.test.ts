@@ -1,4 +1,4 @@
-import { players, roleSquadPermissions, roles, servers } from '@squad/db/schema';
+import { playerIpHistory, players, roleSquadPermissions, roles, servers } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches, loadUserPermissions } from '../../src/lib/rbac.js';
@@ -10,6 +10,8 @@ const OWNER_STEAM = testSteamId(800001);
 const ALICE = testSteamId(800002); // becomes Admin
 const BOB = testSteamId(800003); // becomes Moderator
 const CARL = testSteamId(800004); // unassigned
+const DAVE = testSteamId(800005); // viewer of the can_view_ips-gated role
+const TARGET = testSteamId(800006); // player whose IP history is being viewed
 
 let h: IntegrationHarness;
 
@@ -37,7 +39,7 @@ beforeAll(async () => {
     bridge: makeFakeBridge(),
   });
 
-  for (const sid of [ALICE, BOB, CARL]) {
+  for (const sid of [ALICE, BOB, CARL, DAVE, TARGET]) {
     const stub = `Player${String(sid).slice(-4)}`;
     await h.db
       .insert(players)
@@ -48,10 +50,25 @@ beforeAll(async () => {
       })
       .onConflictDoNothing();
   }
+  const [targetRow] = await h.db
+    .select({ id: players.id })
+    .from(players)
+    .where(eq(players.steamId64, TARGET))
+    .limit(1);
+  await h.db
+    .insert(playerIpHistory)
+    .values({
+      // biome-ignore lint/style/noNonNullAssertion: seeded above in this same beforeAll
+      playerId: targetRow!.id,
+      ip: '203.0.113.42',
+      countryCode: 'FR',
+      countryName: 'France',
+    })
+    .onConflictDoNothing();
 }, 60_000);
 
 afterAll(async () => {
-  for (const sid of [ALICE, BOB, CARL]) {
+  for (const sid of [ALICE, BOB, CARL, DAVE, TARGET]) {
     // biome-ignore format: keep on one line so test-isolation regex picks up steamId64, sid filter
     await h.db.delete(players).where(eq(players.steamId64, sid)).catch(() => undefined);
   }
@@ -253,6 +270,137 @@ describeIfDb('flag dependency — panel_access=false ⇒ flags off', () => {
     expect((res.json() as { error: string }).error).toBe(
       'panel_access_required_for_role_management',
     );
+  });
+
+  it('rejects creating a role with panel_access=false but can_view_ips=true', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/roles',
+      headers: {
+        cookie: await loginAsSteam(OWNER_STEAM),
+        'content-type': 'application/json',
+      },
+      payload: JSON.stringify({
+        name: `dep-view-ips-${Date.now()}`,
+        color: '#123456',
+        squad_permissions: [],
+        panel_access: false,
+        can_view_ips: true,
+      }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toBe('panel_access_required_for_view_ips');
+  });
+});
+
+describeIfDb('ALT-8 (#126): can_view_ips role flag gating player:view_ips', () => {
+  let roleId: string;
+  let targetPlayerId: string;
+
+  beforeAll(async () => {
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/roles',
+      headers: {
+        cookie: await loginAsSteam(OWNER_STEAM),
+        'content-type': 'application/json',
+      },
+      payload: JSON.stringify({
+        name: `view-ips-role-${Date.now()}`,
+        color: '#654321',
+        squad_permissions: [],
+        panel_access: true,
+        can_view_ips: false,
+      }),
+    });
+    expect(created.statusCode).toBe(201);
+    roleId = (created.json() as { id: string }).id;
+
+    await h.db
+      .update(players)
+      .set({ roleId })
+      .where(eq(players.steamId64, testSteamId(800005))); // DAVE
+    invalidateAllPermissionCaches();
+
+    const [target] = await h.db
+      .select({ id: players.id })
+      .from(players)
+      .where(eq(players.steamId64, TARGET))
+      .limit(1);
+    // biome-ignore lint/style/noNonNullAssertion: seeded in the top-level beforeAll
+    targetPlayerId = target!.id;
+  });
+
+  afterAll(async () => {
+    const id = roleId;
+    await h.db.delete(roleSquadPermissions).where(eq(roleSquadPermissions.roleId, id));
+    await h.db.delete(roles).where(eq(roles.id, id));
+  });
+
+  it('panel_access=true + can_view_ips=false ⇒ player card hides ips', async () => {
+    const cookie = await loginAsSteam(DAVE);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetPlayerId}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ips: unknown[]; ips_visible: boolean };
+    expect(body.ips_visible).toBe(false);
+    expect(body.ips).toEqual([]);
+  });
+
+  it('toggling can_view_ips=true on the role invalidates the cache without re-login, and ips become visible', async () => {
+    const cookie = await loginAsSteam(DAVE);
+
+    const before = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetPlayerId}`,
+      headers: { cookie },
+    });
+    expect((before.json() as { ips_visible: boolean }).ips_visible).toBe(false);
+
+    const patched = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/roles/${roleId}`,
+      headers: {
+        cookie: await loginAsSteam(OWNER_STEAM),
+        'content-type': 'application/json',
+      },
+      payload: JSON.stringify({ can_view_ips: true }),
+    });
+    expect(patched.statusCode).toBe(200);
+    expect((patched.json() as { can_view_ips: boolean }).can_view_ips).toBe(true);
+
+    // Same DAVE cookie, no re-login: the role PUT invalidates the permission
+    // cache for every player carrying this role, so the very next request
+    // must reflect the new flag.
+    const after = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetPlayerId}`,
+      headers: { cookie },
+    });
+    expect(after.statusCode).toBe(200);
+    const body = after.json() as {
+      ips: Array<{ ip: string }>;
+      ips_visible: boolean;
+    };
+    expect(body.ips_visible).toBe(true);
+    expect(body.ips).toHaveLength(1);
+    expect(body.ips[0]?.ip).toBe('203.0.113.42');
+  });
+
+  it('Owner always sees ips regardless of the target viewer role', async () => {
+    const cookie = await loginAsSteam(OWNER_STEAM);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetPlayerId}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ips: unknown[]; ips_visible: boolean };
+    expect(body.ips_visible).toBe(true);
+    expect(body.ips).toHaveLength(1);
   });
 });
 
