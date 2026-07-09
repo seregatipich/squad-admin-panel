@@ -12,6 +12,7 @@ export interface Me {
   canonical_name: string;
   avatar_url: string | null;
   permissions: string[];
+  squad_permissions: string[];
 }
 
 export const getSession = cache(async (): Promise<Me | null> => {
