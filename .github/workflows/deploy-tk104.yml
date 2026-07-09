@@ -21,15 +21,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve app directory
+        # Do NOT trust $HOME — GitHub Actions can inject HOME=/home/runner into the
+        # job env even on a self-hosted runner. Resolve the runner user's real home
+        # from passwd so the deploy target is always ~seregatipich/apps/....
+        run: |
+          HOME_DIR="$(getent passwd "$(id -un)" | cut -d: -f6)"
+          echo "APP_DIR=${HOME_DIR}/apps/squad-admin-panel" >> "$GITHUB_ENV"
+
       - name: Sync repository into the app directory
         run: |
           rsync -az --delete \
             --exclude '.git' --exclude 'node_modules' --exclude '.next' \
             --exclude 'data' --exclude 'dist' --exclude '.env' --exclude '.env.*' \
-            ./ "$HOME/apps/squad-admin-panel/"
+            ./ "$APP_DIR/"
 
       - name: Build and restart the stack
-        run: cd "$HOME/apps/squad-admin-panel" && bash scripts/deploy-tk104.sh
+        # APP_DIR overrides the same-named default in scripts/deploy-tk104.sh, which
+        # otherwise falls back to $HOME and would hit the wrong path too.
+        run: cd "$APP_DIR" && APP_DIR="$APP_DIR" bash scripts/deploy-tk104.sh
 
       - name: Local health check (through Caddy on 443)
         # Hit the local Caddy on 127.0.0.1 but with the real SNI/Host — this Caddy
