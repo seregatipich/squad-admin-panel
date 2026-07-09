@@ -9,6 +9,7 @@ import { ChatFlagDetector } from './chat/flag-rules.js';
 import { handleChat } from './chat/store.js';
 import { handleCombat, handleVehicle } from './combat/store.js';
 import { dropCutoverServers } from './cutover.js';
+import { persistEventEnvelope } from './event-store.js';
 import { TailManager } from './manager.js';
 import { DEFAULT_SEED_ONLINE_THRESHOLD, handleMatchCommand } from './match/store.js';
 import { handleMatchClose } from './match-roster/store.js';
@@ -154,6 +155,9 @@ async function main() {
       onLine(line) {
         const events = ingestor.ingest(line);
         for (const e of events) {
+          persistEventEnvelope(db, e).catch((err) =>
+            log.error({ err: (err as Error).message, type: e.type }, 'event persist failed'),
+          );
           publish(redis, e).catch((err) =>
             log.error({ err: (err as Error).message, type: e.type }, 'publish failed'),
           );

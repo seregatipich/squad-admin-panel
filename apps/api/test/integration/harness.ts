@@ -74,6 +74,7 @@ import serverUpdateRoutes from '../../src/routes/server-update.js';
 import serverRoutes from '../../src/routes/servers.js';
 import settingsChatFlagsRoutes from '../../src/routes/settings-chat-flags.js';
 import settingsEconomyRoutes from '../../src/routes/settings-economy.js';
+import teamkillsRoutes from '../../src/routes/teamkills.js';
 import usersRoutes from '../../src/routes/users.js';
 import vehicleCatalogRoutes from '../../src/routes/vehicle-catalog.js';
 import vipTiersRoutes from '../../src/routes/vip-tiers.js';
@@ -528,6 +529,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(clansRoutes);
   await app.register(chatRoutes);
   await app.register(combatEventsRoutes);
+  await app.register(teamkillsRoutes);
   await app.register(vehicleCatalogRoutes);
   await app.register(vipTiersRoutes);
   await app.register(votesRoutes);

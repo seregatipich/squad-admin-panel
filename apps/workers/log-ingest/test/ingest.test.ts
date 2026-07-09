@@ -53,6 +53,16 @@ describe('LogIngestor – player connect/disconnect flow', () => {
     expect(events[0]?.type).toBe('rcon.connected');
   });
 
+  it('emits a stable event_id when the same log line is replayed', () => {
+    const line = '[2026.04.23-11.30.00:000][0]LogSquad: ADMIN COMMAND: ListPlayers from RCON';
+    const first = new LogIngestor({ serverId: SERVER_ID, beaconPort: 15000 }).ingest(line);
+    const replay = new LogIngestor({ serverId: SERVER_ID, beaconPort: 15000 }).ingest(line);
+
+    expect(first).toHaveLength(1);
+    expect(replay).toHaveLength(1);
+    expect(replay[0]?.event_id).toBe(first[0]?.event_id);
+  });
+
   it('returns empty array for unrecognised log lines', () => {
     const ing = new LogIngestor({ serverId: SERVER_ID, beaconPort: 15000 });
     const events = ing.ingest(

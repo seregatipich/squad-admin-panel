@@ -12,7 +12,7 @@ vi.mock('@squad/db', () => ({
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue([]),
-        innerJoin: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        innerJoin: vi.fn().mockResolvedValue([]),
       }),
     }),
   })),
@@ -40,6 +40,7 @@ vi.mock('@squad/bridge-client', () => ({
 vi.mock('@squad/shared-config', () => ({
   redisSinkStream: vi.fn(() => ({ write: vi.fn() })),
   startHeartbeat: vi.fn(() => vi.fn()),
+  filterCutoverServers: vi.fn(async (_redis: unknown, ids: string[]) => ({ legacy: ids })),
 }));
 vi.mock('@squad/diag', () => ({
   createDiag: vi.fn(() => ({ emit: vi.fn().mockResolvedValue(undefined) })),

@@ -4,22 +4,61 @@ import {
   buildCountApiQuery,
   buildExportUrl,
   buildListApiQuery,
+  buildMatchCombatLogHref,
+  buildMatchDetailHref,
   buildQueryString,
+  clearMatchListScroll,
   defaultFilters,
   formatDateTime,
   formatDuration,
+  formatKillDeathStat,
+  formatMatchStat,
+  formatMatchTimelineOffset,
   isOpenMatch,
   type MatchFilters,
   type MatchListItem,
   mergeMatchPage,
   nextSort,
   parseFilters,
+  readMatchListScroll,
   resolveDateRange,
+  safeMatchBackHref,
+  saveMatchListScroll,
   serverOptionsFromMatches,
   shortServerName,
+  shouldDelayMatchScrollRestore,
+  sortMatchRosterEntries,
   teamPillTone,
   winnerLabel,
 } from './helpers';
+
+class MemoryStorage implements Storage {
+  private entries = new Map<string, string>();
+
+  get length() {
+    return this.entries.size;
+  }
+
+  clear() {
+    this.entries.clear();
+  }
+
+  getItem(key: string) {
+    return this.entries.get(key) ?? null;
+  }
+
+  key(index: number) {
+    return Array.from(this.entries.keys())[index] ?? null;
+  }
+
+  removeItem(key: string) {
+    this.entries.delete(key);
+  }
+
+  setItem(key: string, value: string) {
+    this.entries.set(key, value);
+  }
+}
 
 function params(query: string): URLSearchParams {
   return new URLSearchParams(query);
@@ -215,6 +254,74 @@ describe('buildCountApiQuery and buildExportUrl', () => {
   });
 });
 
+describe('match detail links', () => {
+  it('preserves safe match list filters when opening a card', () => {
+    expect(buildMatchDetailHref('match-1', '/matches?player=p1&preset=week')).toBe(
+      '/matches/match-1?from=%2Fmatches%3Fplayer%3Dp1%26preset%3Dweek',
+    );
+  });
+
+  it('omits a redundant return parameter for the plain list', () => {
+    expect(buildMatchDetailHref('match-1', '/matches')).toBe('/matches/match-1');
+  });
+
+  it('rejects unsafe return targets', () => {
+    expect(safeMatchBackHref('https://example.com/matches')).toBe('/matches');
+    expect(safeMatchBackHref('//example.com/matches')).toBe('/matches');
+    expect(safeMatchBackHref('/players/p1')).toBe('/matches');
+    expect(safeMatchBackHref(['/matches?player=p1', '/players/p1'])).toBe('/matches?player=p1');
+  });
+});
+
+describe('match combat-log links', () => {
+  it('links a match card to the combat log filtered by server and match day range', () => {
+    expect(
+      buildMatchCombatLogHref({
+        server_id: 'srv-1',
+        started_at: '2026-07-04T22:30:00.000Z',
+        ended_at: '2026-07-05T00:15:00.000Z',
+      }),
+    ).toBe('/combat-log?server=srv-1&preset=custom&from=2026-07-04&to=2026-07-05');
+  });
+});
+
+describe('match list scroll restore', () => {
+  it('stores and reads scroll position for the exact list href', () => {
+    const storage = new MemoryStorage();
+    expect(saveMatchListScroll(storage, '/matches?preset=week', 1240, 'match-1', 1000)).toBe(true);
+
+    expect(readMatchListScroll(storage, '/matches?preset=week', 2000)).toEqual({
+      href: '/matches?preset=week',
+      matchId: 'match-1',
+      savedAt: 1000,
+      scrollY: 1240,
+    });
+    expect(readMatchListScroll(storage, '/matches?preset=month', 2000)).toBeNull();
+  });
+
+  it('drops invalid or expired scroll positions', () => {
+    const storage = new MemoryStorage();
+    expect(saveMatchListScroll(storage, '/matches', -10, 'match-1', 1000)).toBe(false);
+    expect(readMatchListScroll(storage, '/matches', 1000)).toBeNull();
+
+    expect(saveMatchListScroll(storage, '/matches', 480, 'match-1', 1000)).toBe(true);
+    expect(readMatchListScroll(storage, '/matches', 1000 + 31 * 60 * 1000)).toBeNull();
+  });
+
+  it('clears saved scroll positions', () => {
+    const storage = new MemoryStorage();
+    saveMatchListScroll(storage, '/matches', 320, 'match-1', 1000);
+    clearMatchListScroll(storage, '/matches');
+    expect(readMatchListScroll(storage, '/matches', 1000)).toBeNull();
+  });
+
+  it('delays restore while the saved position is below the currently loaded page', () => {
+    expect(shouldDelayMatchScrollRestore(2500, 900, 1600, true)).toBe(true);
+    expect(shouldDelayMatchScrollRestore(600, 900, 1600, true)).toBe(false);
+    expect(shouldDelayMatchScrollRestore(2500, 900, 1600, false)).toBe(false);
+  });
+});
+
 describe('nextSort', () => {
   it('toggles order when the same column is clicked', () => {
     expect(
@@ -254,6 +361,110 @@ describe('formatDuration', () => {
     expect(formatDuration(42)).toBe('42с');
     expect(formatDuration(150)).toBe('2м 30с');
     expect(formatDuration(3720)).toBe('1ч 2м');
+  });
+});
+
+describe('combat stat formatting', () => {
+  it('keeps absent combat data visibly absent', () => {
+    expect(formatMatchStat(null)).toBe('—');
+    expect(formatKillDeathStat(null, null)).toBe('—');
+  });
+
+  it('formats real zeroes and kill/death pairs', () => {
+    expect(formatMatchStat(0)).toBe('0');
+    expect(formatMatchStat(12)).toBe('12');
+    expect(formatKillDeathStat(8, 2)).toBe('8/2');
+    expect(formatKillDeathStat(0, 0)).toBe('0/0');
+  });
+});
+
+describe('match roster sorting', () => {
+  const entries = [
+    {
+      player_id: 'p1',
+      nickname: 'Bravo',
+      team: 1,
+      squad_name: 'Squad B',
+      play_seconds: 600,
+      kills: 4,
+      deaths: 1,
+      teamkills: null,
+      wounds: 2,
+      revives: 0,
+    },
+    {
+      player_id: 'p2',
+      nickname: 'Alpha',
+      team: 1,
+      squad_name: 'Squad A',
+      play_seconds: 1200,
+      kills: 7,
+      deaths: 2,
+      teamkills: 1,
+      wounds: null,
+      revives: 3,
+    },
+    {
+      player_id: 'p3',
+      nickname: 'Charlie',
+      team: 1,
+      squad_name: null,
+      play_seconds: 900,
+      kills: null,
+      deaths: null,
+      teamkills: 0,
+      wounds: 5,
+      revives: null,
+    },
+  ];
+
+  it('sorts text roster columns ascending with empty values last', () => {
+    expect(
+      sortMatchRosterEntries(entries, { field: 'player', order: 'asc' }).map(
+        (entry) => entry.player_id,
+      ),
+    ).toEqual(['p2', 'p1', 'p3']);
+    expect(
+      sortMatchRosterEntries(entries, { field: 'squad', order: 'asc' }).map(
+        (entry) => entry.player_id,
+      ),
+    ).toEqual(['p2', 'p1', 'p3']);
+  });
+
+  it('sorts combat roster columns with unknown values last', () => {
+    expect(
+      sortMatchRosterEntries(entries, { field: 'kd', order: 'desc' }).map(
+        (entry) => entry.player_id,
+      ),
+    ).toEqual(['p2', 'p1', 'p3']);
+    expect(
+      sortMatchRosterEntries(entries, { field: 'wounds', order: 'desc' }).map(
+        (entry) => entry.player_id,
+      ),
+    ).toEqual(['p3', 'p1', 'p2']);
+    expect(
+      sortMatchRosterEntries(entries, { field: 'tk', order: 'asc' }).map(
+        (entry) => entry.player_id,
+      ),
+    ).toEqual(['p3', 'p2', 'p1']);
+  });
+});
+
+describe('match timeline formatting', () => {
+  it('formats event offsets from match start', () => {
+    expect(formatMatchTimelineOffset('2026-07-04T10:02:30.000Z', '2026-07-04T10:00:00.000Z')).toBe(
+      '+2м 30с',
+    );
+    expect(formatMatchTimelineOffset('2026-07-04T11:05:00.000Z', '2026-07-04T10:00:00.000Z')).toBe(
+      '+1ч 5м',
+    );
+  });
+
+  it('handles invalid event offsets', () => {
+    expect(formatMatchTimelineOffset('bad', '2026-07-04T10:00:00.000Z')).toBe('—');
+    expect(formatMatchTimelineOffset('2026-07-04T09:59:00.000Z', '2026-07-04T10:00:00.000Z')).toBe(
+      '—',
+    );
   });
 });
 

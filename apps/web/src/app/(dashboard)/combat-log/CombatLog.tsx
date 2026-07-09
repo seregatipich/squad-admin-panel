@@ -486,13 +486,13 @@ function FilterPanel({
         label="Кто"
         placeholder="Ник атакующего"
         value={filters.attackerQuery}
-        onCommit={(value) => onChange({ attackerQuery: value })}
+        onCommit={(value) => onChange({ attackerQuery: value, attackerPlayerId: '' })}
       />
       <PlayerAutocomplete
         label="Кого"
         placeholder="Ник цели"
         value={filters.victimQuery}
-        onCommit={(value) => onChange({ victimQuery: value })}
+        onCommit={(value) => onChange({ victimQuery: value, victimPlayerId: '' })}
       />
       <WeaponInput value={filters.weapon} onCommit={(value) => onChange({ weapon: value })} />
 

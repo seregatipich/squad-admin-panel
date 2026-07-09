@@ -36,6 +36,7 @@ const GROUPS: NavGroup[] = [
   {
     label: 'Аудит',
     items: [
+      { href: '/moderation/teamkills', label: 'Тимкиллы' },
       { href: '/audit', label: 'Журнал действий' },
       { href: '/logs', label: 'Логи', permission: 'host:view' },
     ],
