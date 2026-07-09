@@ -14,12 +14,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Deploys OVER SSH from whatever self-hosted runner picks the job up (the org
-  # runner, since repo-level self-hosted runners are org-disabled) into tk104.
-  # tk104 is not itself a usable runner, so we cannot deploy locally — we rsync
-  # the checkout to the host and run scripts/deploy-tk104.sh there via SSH.
+  # Deploys OVER SSH from the org self-hosted runner into the production host
+  # (tk104.duckdns.org). The runner is a separate machine, so we rsync the
+  # checkout to the host and run scripts/deploy-tk104.sh there via SSH.
   deploy:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 

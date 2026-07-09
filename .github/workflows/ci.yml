@@ -12,7 +12,7 @@ jobs:
   # carries a passing branch-guard check — required by the protect-master
   # ruleset for the fast-forward promotion push (.github/rulesets/).
   branch-guard:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,12 +44,11 @@ jobs:
         run: bash scripts/test-verify-done.sh
 
   node:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: self-hosted
     services:
-      # Dynamic host ports (Docker assigns a free one) — the self-hosted runner
-      # shares the tk104 host, whose fixed 5432/6379 are already bound by the
-      # production stack. The resolved ports are read back below via the
-      # job.services context. See AGENTS.md / docs for the runner setup.
+      # Dynamic host ports (Docker assigns a free one) so the job never collides
+      # with anything already bound on the runner's host. The resolved ports are
+      # read back below via the job.services context.
       postgres:
         image: postgres:16-alpine
         env:
@@ -79,8 +78,8 @@ jobs:
         # Export BOTH pairs: workers + @squad/db migrate read DATABASE_URL/REDIS_URL,
         # while the API integration harness reads TEST_DATABASE_URL/TEST_REDIS_URL
         # (see AGENTS.md). Without the TEST_* pair the harness falls back to
-        # 127.0.0.1:5432/6379 — which on the tk104 host is the *production* stack,
-        # not the (dynamic-port) service containers. The harness isolates on redis db 15.
+        # 127.0.0.1:5432/6379 instead of the dynamic-port service containers. The
+        # harness isolates on redis db 15.
         run: |
           PG="postgres://admin:test_password@localhost:${{ job.services.postgres.ports['5432'] }}/admin"
           RD="redis://localhost:${{ job.services.redis.ports['6379'] }}"
@@ -124,12 +123,12 @@ jobs:
           ./gitleaks detect --config .gitleaks.toml --no-banner --redact --exit-code 1
 
   go:
-    runs-on: [self-hosted, linux, x64]
-    # Run inside a Go container, not directly on tk104: the bridge tests exercise
-    # real absolute paths under /var/lib/squad-panel (e.g. directory_delete) and
-    # assume those paths do NOT exist. On the production host they do — and running
-    # os.RemoveAll against the live data root would be unsafe. The container gives a
-    # clean filesystem (the same guarantee the old GitHub-hosted VM provided).
+    runs-on: self-hosted
+    # Run inside a Go container, not directly on the runner host: the bridge tests
+    # exercise real absolute paths under /var/lib/squad-panel (e.g. directory_delete)
+    # and assume those paths do NOT exist — running os.RemoveAll against a host that
+    # happened to have them would be unsafe. The container gives a clean filesystem
+    # (the same guarantee a GitHub-hosted VM provided).
     # --user 1000:1000 matches the runner user so no root-owned files are left in
     # the shared _work dir (which would break later non-container jobs).
     container:
@@ -162,7 +161,7 @@ jobs:
           ls -la bin/
 
   docker:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: self-hosted
     needs: [node, go]
     steps:
       - uses: actions/checkout@v4
