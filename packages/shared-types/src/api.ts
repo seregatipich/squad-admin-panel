@@ -73,7 +73,14 @@ export const serverCreateInput = z
     memory_max_mb: z.number().int().positive().nullable().optional(),
     io_weight: z.number().int().min(1).max(10_000).nullable().optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (d) => {
+      const ports = [d.game_port, d.query_port, d.beacon_port, d.rcon_port];
+      return new Set(ports).size === ports.length;
+    },
+    { message: 'game_port, query_port, beacon_port, and rcon_port must all be distinct' },
+  );
 export type ServerCreateInput = z.infer<typeof serverCreateInput>;
 
 export const serverRow = z

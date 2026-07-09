@@ -7,7 +7,7 @@ import {
   SERVER_IMAGE,
 } from '@squad/shared-config';
 import { serverCreateInput } from '@squad/shared-types';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, or } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -115,6 +115,38 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       const id = uuidv7();
       const body = req.body;
+
+      // --- cross-server port collision check (mirrors PUT /:id/settings) ---
+      const requestedPorts = [body.game_port, body.query_port, body.beacon_port, body.rcon_port];
+      const conflictRows = await app.db
+        .select({ serverId: serverSettings.serverId })
+        .from(serverSettings)
+        .innerJoin(servers, eq(serverSettings.serverId, servers.id))
+        .where(
+          and(
+            isNull(servers.deletedAt),
+            or(
+              ...requestedPorts.map((p) =>
+                or(
+                  eq(serverSettings.gamePort, p),
+                  eq(serverSettings.queryPort, p),
+                  eq(serverSettings.beaconPort, p),
+                  eq(serverSettings.rconPort, p),
+                ),
+              ),
+            ),
+          ),
+        )
+        .limit(1);
+
+      if (conflictRows.length > 0) {
+        reply.code(409);
+        return {
+          error: 'port_conflict',
+          message: 'One or more ports are already in use by another server.',
+        };
+      }
+
       await app.db.transaction(async (tx) => {
         await tx.insert(servers).values({
           id,
