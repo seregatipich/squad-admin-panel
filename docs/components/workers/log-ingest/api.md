@@ -28,7 +28,7 @@ All envelopes share the base shape:
 | `server.ready` | `LogNet: Created socket for bind address: 0.0.0.0:{beaconPort}` | `{ port: number }` |
 | `server.stopped` | `LogCore: RequestExit(... ReturnCode=143)` or `ReturnCode=0` | `{ exit_code: number }` |
 | `server.crashed` | `LogCore: RequestExit(... ReturnCode=<non-zero>)` | `{ exit_code: number }` |
-| `player.connected` | `LogNet: Join succeeded` correlated with `LogRedpointEOS: EOS Connection` within 2500 ms | `{ name, eos_id, steam_id64, ip: null }` |
+| `player.connected` | `LogNet: Join succeeded` correlated with `LogRedpointEOS: EOS Connection` within 2500 ms; `ip` is the client address from a correlated `LogNet: AddClientConnection … RemoteAddr:` line, or `null` if none correlated | `{ name, eos_id, steam_id64, ip }` |
 | `player.disconnected` | `LogNet: UChannel::Close … UniqueId: EOS:…\|STEAM:…` | `{ eos_id, steam_id64, reason: null }` |
 | `match.started` | `LogGameMode: Match State Changed from WaitingToStart to InProgress` | `{ from_state, to_state }` |
 | `match.ended` | `LogGameMode: Match State Changed from InProgress to WaitingPostMatch` | `{ from_state, to_state }` |

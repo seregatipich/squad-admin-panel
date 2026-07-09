@@ -79,12 +79,13 @@ For each line:
 
 ## Player-connect correlation
 
-Squad emits two separate log lines for a player join:
+Squad emits up to three separate log lines for a player join:
 
-1. `LogNet: Join succeeded: <name>` — sets `recentJoin = { name, ts }`.
-2. (within 2500 ms) `LogRedpointEOS: … EOS:<id> … Steam:<id>` — if `recentJoin` is set and the age is within the window, emit `player.connected` with name + IDs, then clear `recentJoin`.
+1. `LogNet: AddClientConnection: … RemoteAddr: <ip>:<port> … EOSNetDriver …` — sets `recentIp = { ip, ts }`. Only the EOS/IP driver variant carries a real dotted-quad address; the Steam driver variant puts the SteamID64 in the `RemoteAddr` slot instead and is ignored.
+2. `LogNet: Join succeeded: <name>` — if `recentIp` is set and its age is within the correlation window, its `ip` is attached; either way `recentIp` is cleared and `recentJoin = { name, ts, ip }` is set.
+3. (within 2500 ms of step 2) `LogRedpointEOS: … EOS:<id> … Steam:<id>` — if `recentJoin` is set and the age is within the window, emit `player.connected` with name + IDs + `recentJoin.ip`, then clear `recentJoin`.
 
-If the EOS line arrives more than 2500 ms after `Join succeeded`, the join is dropped. This is intentional to avoid spurious connections.
+If the EOS line arrives more than 2500 ms after `Join succeeded`, the join is dropped. This is intentional to avoid spurious connections. If no `AddClientConnection` line correlates before `Join succeeded`, `ip` is `null`.
 
 ## Graceful shutdown (SIGTERM / SIGINT)
 

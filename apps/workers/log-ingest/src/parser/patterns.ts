@@ -64,6 +64,18 @@ export const PLAYER_EOS_CONNECTION =
 export const PLAYER_DISCONNECT =
   /^UChannel::Close: .+UniqueId: (?:EOS:([a-f0-9]{32})\|STEAM:)?(\d{17})/;
 
+/**
+ * `LogNet: AddClientConnection: Added client connection: [UNetConnection]
+ * RemoteAddr: <ip>:<port>, Name: EOSIpNetConnection_..., Driver: GameNetDriver
+ * EOSNetDriver_..., ...` — fires when the client's network connection is
+ * established, shortly before `Join succeeded`. Only the EOS/IP driver
+ * variant carries a real dotted-quad address (the Steam driver variant
+ * puts the SteamID64 in the RemoteAddr slot instead), so anchoring on a
+ * dotted IPv4 address naturally excludes it.
+ */
+export const PLAYER_REMOTE_ADDR =
+  /^AddClientConnection: Added client connection: \[UNetConnection\] RemoteAddr: (\d{1,3}(?:\.\d{1,3}){3}):\d+/;
+
 // Benign noise filter; ingest drops these before ever looking for events.
 export const BENIGN_NOISE = [
   /LogStreaming: (?:Error|Warning): CreateExport: .+ (?:EngineFailedStartAudio|PropellerMistEffectsAudio|SQCenterOfMassWaterFX)/,
