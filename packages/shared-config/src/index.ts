@@ -13,4 +13,5 @@ export * from './player-name.js';
 export * from './rcon-host.js';
 export * from './rnsquadjs.js';
 export * from './role-colors.js';
+export * from './role-name.js';
 export * from './squad-permissions.js';

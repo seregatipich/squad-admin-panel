@@ -309,6 +309,13 @@
       "when": 1783398800000,
       "tag": "0043_media_storage",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1783398900000,
+      "tag": "0044_player_kit_time",
+      "breakpoints": true
     }
   ]
 }

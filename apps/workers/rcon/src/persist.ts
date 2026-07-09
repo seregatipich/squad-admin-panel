@@ -2,15 +2,19 @@ import {
   auditLog,
   type DatabaseClient,
   type GeoLookup,
+  playerKitTime,
   playerNameHistory,
   players,
   recordIpObservation,
   resolveGeo,
 } from '@squad/db';
-import { normalizePlayerName } from '@squad/shared-config';
+import { normalizePlayerName, normalizeRoleName } from '@squad/shared-config';
 import { eq, or, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { RconPlayer } from './parse-list-players.js';
+
+/** Default `ListPlayers` poll cadence (ms); mirrors `SupervisorOptions.pollIntervalMs` in supervisor.ts. */
+const DEFAULT_POLL_INTERVAL_MS = 30_000;
 
 async function writeSystemAudit(
   db: DatabaseClient,
@@ -128,5 +132,84 @@ export async function upsertPlayers(
         });
       }
     }
+  }
+}
+
+/**
+ * Accrue per-kit playtime (DOSSIER-3, issue #190) for the players online at
+ * this `ListPlayers` poll.
+ *
+ * The elapsed time since `prevPollAt` is attributed, per online player, to
+ * the kit they currently hold (their `role` field normalized via
+ * {@link normalizeRoleName}). Because the worker only observes role at poll
+ * granularity, a role change is only detected at the next poll — the
+ * accrued interval is an approximation bounded by the poll interval, which
+ * is what the DOSSIER-3 acceptance criteria expect. Players with no
+ * resolvable identity (should not normally happen once `upsertPlayers` has
+ * run for the same poll) or a role that does not normalize to a known kit
+ * (`null`/unrecognized role-string) accrue nothing.
+ *
+ * `prevPollAt` must be `null` on the first poll after a (re)connect — the
+ * caller has no known-good starting instant for that interval, so nothing is
+ * accrued and the interval is not fabricated. Intervals longer than
+ * `2 * pollIntervalMs` (e.g. a delayed poll after backpressure) are clamped
+ * to `pollIntervalMs` to avoid crediting downtime as playtime.
+ *
+ * @param db - Database client.
+ * @param onlinePlayers - Players parsed from the current `ListPlayers` response.
+ * @param prevPollAt - Timestamp of the previous successful poll for this
+ *   supervisor connection, or `null` if this is the first poll since (re)connect.
+ * @param nowPollAt - Timestamp of the current poll.
+ * @param serverId - The `servers.id` this poll was taken against.
+ * @param pollIntervalMs - The supervisor's configured poll interval, used to
+ *   clamp abnormally long gaps between polls. Defaults to 30s.
+ */
+export async function accruePlayerKitTime(
+  db: DatabaseClient,
+  onlinePlayers: RconPlayer[],
+  prevPollAt: Date | null,
+  nowPollAt: Date,
+  serverId: string,
+  pollIntervalMs: number = DEFAULT_POLL_INTERVAL_MS,
+): Promise<void> {
+  if (!prevPollAt) return;
+
+  const elapsedMs = nowPollAt.getTime() - prevPollAt.getTime();
+  if (elapsedMs <= 0) return;
+
+  const clampedMs = elapsedMs > 2 * pollIntervalMs ? pollIntervalMs : elapsedMs;
+  const deltaSeconds = Math.round(clampedMs / 1000);
+  if (deltaSeconds <= 0) return;
+
+  for (const p of onlinePlayers) {
+    const kit = normalizeRoleName(p.role);
+    if (!kit) continue;
+
+    const steamBigint = p.steam_id64 ? BigInt(p.steam_id64) : null;
+    const matchClause =
+      steamBigint === null
+        ? eq(players.eosId, p.eos_id)
+        : or(eq(players.eosId, p.eos_id), eq(players.steamId64, steamBigint));
+
+    const existing = await db.select({ id: players.id }).from(players).where(matchClause).limit(1);
+    const playerId = existing[0]?.id;
+    if (!playerId) continue;
+
+    await db
+      .insert(playerKitTime)
+      .values({
+        playerId,
+        kit,
+        serverId,
+        seconds: deltaSeconds,
+        lastPlayedAt: nowPollAt,
+      })
+      .onConflictDoUpdate({
+        target: [playerKitTime.playerId, playerKitTime.kit, playerKitTime.serverId],
+        set: {
+          seconds: sql`${playerKitTime.seconds} + ${deltaSeconds}`,
+          lastPlayedAt: nowPollAt,
+        },
+      });
   }
 }

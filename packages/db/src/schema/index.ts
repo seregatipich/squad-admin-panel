@@ -30,6 +30,7 @@ export * from './player-api-tokens.js';
 export * from './player-coplay.js';
 export * from './player-daily-presence.js';
 export * from './player-ip-history.js';
+export * from './player-kit-time.js';
 export * from './player-name-history.js';
 export * from './player-notes.js';
 export * from './player-reports.js';
