@@ -29,6 +29,7 @@ import {
   type PingResult,
   type ProcessInfoParams,
   type ProcessInfoResult,
+  type SquadLogRetentionSweepResult,
   type UfwRuleParams,
 } from './types.js';
 
@@ -243,6 +244,11 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
   panelDiskUsage = (opts: { force?: boolean } = {}) =>
     this.call<PanelDiskUsage>('panel_disk_usage', opts.force ? { force: true } : {}, {
       timeoutMs: 30_000,
+    });
+
+  squadLogRetentionSweep = () =>
+    this.call<SquadLogRetentionSweepResult>('squad_log_retention_sweep', undefined, {
+      timeoutMs: 60_000,
     });
 
   hostAgentRestart = () =>

@@ -6,9 +6,9 @@
 |---|---|---|
 | `api` | `apps/api` | HTTP REST + WebSocket. Auth, RBAC, route handlers, audit logging, status reconciliation, install orchestration. |
 | `web` | `apps/web` | Next.js 15 + React 19 dashboard. Server components for auth gates, client components for polling. UI is in Russian. |
-| `bridge` | `apps/bridge` | Go daemon, only privileged component. 17 whitelisted RPC methods. Composes `docker run` from structured params; never accepts raw flags. |
+| `bridge` | `apps/bridge` | Go daemon, only privileged component. 25 whitelisted RPC methods. Composes `docker run` from structured params; never accepts raw flags. |
 | `worker-rcon` | `apps/workers/rcon` | Connects to each running server's RCON port (`127.0.0.1:<rcon_port>`), polls `ListPlayers` every 30 s and `ShowServerInfo` every 90 s, publishes `rcon.players_polled` events to Redis. |
-| `worker-log-ingest` | `apps/workers/log-ingest` | Tails `docker logs -f squad-{uuid}` via the bridge, regex-parses `SquadGame.log` lines, emits `EventEnvelope` to `events:server:{id}`. |
+| `worker-log-ingest` | `apps/workers/log-ingest` | Tails `docker logs -f squad-{uuid}` via the bridge, regex-parses `SquadGame.log` lines, emits `EventEnvelope` to `events:server:{id}`, and asks the bridge to sweep expired rotated Squad logs. |
 | `worker-audit-archiver` | `apps/workers/audit-archiver` | Cold-archives `audit_log` rows older than 90 days. |
 | `worker-event-partition` | `apps/workers/event-partition` | Monthly partition rotation for the `events` table. |
 | `worker-metrics-sampler` | `apps/workers/metrics-sampler` | Polls `bridge.host_metrics` and writes packed samples into the `host:metrics` Redis Stream. Powers the dashboard's 24 h history chart. |

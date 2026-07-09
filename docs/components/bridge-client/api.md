@@ -44,7 +44,7 @@ Idempotent unary methods perform exactly **one** transparent retry when the firs
 |---|---|
 | `ping`, `hostInfo`, `hostMetrics`, `processInfo` | `fileWrite` (non-atomic) |
 | `fileRead`, `fileAtomicWrite` | `containerRun`, `containerStart`, `containerStop`, `containerRm` |
-| `directoryDelete`, `listPanelDirs`, `listSquadContainers`, `ufwRule` | `hostAgentRestart` |
+| `directoryDelete`, `listPanelDirs`, `listSquadContainers`, `ufwRule` | `hostAgentRestart`, `squadLogRetentionSweep` |
 | `containerInspect`, `containerStats` | streaming methods (`containerLogsFollow`, `depotUpdate`, `dockerPrune`) |
 
 Streaming methods are never retried — partial output would already have been delivered to the caller. State-changing container/host RPC's are not retried because we cannot safely tell whether the bridge processed the request before the socket dropped (e.g. `container_run` would risk creating a duplicate). Callers that need retry semantics for those should layer it themselves with appropriate idempotency guards.
@@ -288,6 +288,36 @@ const panelShareOfHost = usage.total_panel_bytes / usage.host_total_bytes;
 
 const fresh = await client.panelDiskUsage({ force: true });
 console.log(fresh.cache_age_seconds); // 0
+```
+
+---
+
+#### `squadLogRetentionSweep(): Promise<SquadLogRetentionSweepResult>`
+
+Asks the bridge to sweep expired rotated Squad logs under the host saved tree. No params are accepted or sent; the bridge owns the root, glob, and retention duration. Timeout: 60 s. This method is not auto-retried, so a lost response does not turn into misleading deletion counters.
+
+Deletion policy is enforced by the bridge:
+
+- scans only `/var/lib/squad-panel/saved/{uuid}/SquadGame/Saved/Logs/`;
+- deletes regular `SquadGame*.log` files only when `mtime + 10d < now`;
+- never deletes exact `SquadGame.log`;
+- continues after per-file errors and returns a bounded error summary.
+
+| Field | Type | Description |
+|---|---|---|
+| `retention_days` | `number` | Fixed at `10`. |
+| `cutoff` | `string` | ISO-8601 UTC cutoff used by the sweep. |
+| `servers_scanned` | `number` | Valid UUID saved directories inspected. |
+| `log_dirs_scanned` | `number` | Existing log directories read successfully. |
+| `files_scanned` | `number` | Regular files seen in scanned log dirs. |
+| `deleted_count` | `number` | Removed file count. |
+| `deleted_bytes` | `number` | Removed byte count. |
+| `error_count` | `number` | Total per-file/per-server errors. |
+| `errors` | `{ server_id?: string; file?: string; error: string }[]` | First 20 error summaries. |
+
+```ts
+const result = await client.squadLogRetentionSweep();
+console.log(result.deleted_count, result.deleted_bytes);
 ```
 
 ---
