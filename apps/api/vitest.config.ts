@@ -3,6 +3,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     exclude: ['**/node_modules/**', '**/dist/**', 'test/e2e/**'],
+    globalSetup: ['./test/integration/global-setup.ts'],
     testTimeout: 10_000,
     hookTimeout: 120_000,
     fileParallelism: false,

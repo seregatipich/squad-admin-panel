@@ -344,55 +344,138 @@ interface CreatedSchema {
   drop: () => Promise<void>;
 }
 
-export async function createIsolatedSchema(): Promise<CreatedSchema> {
-  const schema = `test_${randomBytes(6).toString('hex')}`;
+type SqlClient = ReturnType<typeof postgres>;
+
+function databaseUrl(name: string): string {
+  const url = new URL(HOST_DB_URL);
+  url.pathname = `/${name}`;
+  return url.toString();
+}
+
+let migrationStatementsCache: string[] | null = null;
+
+/**
+ * Reads every `.sql` file under `packages/db/drizzle/`, in lexical order, and
+ * flattens them into an ordered list of statements. The `.sql` files are split
+ * on the `--> statement-breakpoint` marker that drizzle-kit emits when a
+ * migration contains multiple top-level statements. Parsed once per process.
+ */
+function migrationStatements(): string[] {
+  if (migrationStatementsCache) return migrationStatementsCache;
+  const statements: string[] = [];
+  const files = readdirSync(MIGRATIONS_FOLDER)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+  for (const file of files) {
+    const contents = readFileSync(path.join(MIGRATIONS_FOLDER, file), 'utf-8').replace(
+      /\bpublic\./gi,
+      '',
+    );
+    for (const stmt of contents
+      .split(/-->\s*statement-breakpoint\s*/i)
+      .map((s) => s.trim())
+      .filter(Boolean)) {
+      statements.push(stmt);
+    }
+  }
+  migrationStatementsCache = statements;
+  return statements;
+}
+
+async function applyMigrations(sql: SqlClient): Promise<void> {
+  await sql.unsafe('SET client_min_messages = WARNING');
+  for (const stmt of migrationStatements()) {
+    await sql.unsafe(stmt);
+  }
+}
+
+let templateDatabase: Promise<string> | null = null;
+
+/**
+ * Builds a per-process template database migrated exactly once, then reused as
+ * the `TEMPLATE` source for every isolated test database. Replaying 40+
+ * migrations costs ~2.5s; cloning a template with `CREATE DATABASE … TEMPLATE`
+ * copies it at the storage layer in ~80ms, so per-test setup drops by an order
+ * of magnitude.
+ */
+function ensureTemplateDatabase(): Promise<string> {
+  if (!templateDatabase) templateDatabase = buildTemplateDatabase();
+  return templateDatabase;
+}
+
+async function buildTemplateDatabase(): Promise<string> {
+  const name = `sqtmpl_${process.pid}_${randomBytes(4).toString('hex')}`;
   const admin = postgres(HOST_DB_URL, { max: 1, onnotice: () => undefined });
-  await admin.unsafe(`CREATE SCHEMA "${schema}"`);
-  await admin.end();
-  const url = `${HOST_DB_URL}?search_path=${schema}%2Cpublic`;
-  return {
-    schema,
-    url,
-    async drop() {
-      const s = postgres(HOST_DB_URL, { max: 1, onnotice: () => undefined });
+  try {
+    await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+    await admin.unsafe(`CREATE DATABASE "${name}"`);
+  } finally {
+    await admin.end();
+  }
+  const sql = postgres(databaseUrl(name), { max: 1, onnotice: () => undefined });
+  try {
+    await applyMigrations(sql);
+  } finally {
+    await sql.end();
+  }
+  return name;
+}
+
+async function cloneTemplate(target: string, template: string): Promise<void> {
+  const admin = postgres(HOST_DB_URL, { max: 1, onnotice: () => undefined });
+  try {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 10; attempt++) {
       try {
-        await s.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+        await admin.unsafe(`CREATE DATABASE "${target}" TEMPLATE "${template}"`);
+        return;
+      } catch (error) {
+        lastError = error;
+        if ((error as { code?: string }).code !== '55006') throw error;
+        await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+      }
+    }
+    throw lastError;
+  } finally {
+    await admin.end();
+  }
+}
+
+/**
+ * Provisions a fully isolated, migrated database by cloning the per-process
+ * template. Kept named `createIsolatedSchema` for API compatibility; the
+ * returned `schema` field now holds the database name.
+ */
+export async function createIsolatedSchema(): Promise<CreatedSchema> {
+  const template = await ensureTemplateDatabase();
+  const name = `sqtest_${randomBytes(6).toString('hex')}`;
+  await cloneTemplate(name, template);
+  return {
+    schema: name,
+    url: databaseUrl(name),
+    async drop() {
+      const admin = postgres(HOST_DB_URL, { max: 1, onnotice: () => undefined });
+      try {
+        await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
       } finally {
-        await s.end();
+        await admin.end();
       }
     },
   };
 }
 
 /**
- * Runs all `.sql` files under `packages/db/drizzle/`, in lexical order, through
- * the given connection. Drizzle's own migrator tracks applied migrations in a
- * shared `drizzle` schema — for schema-per-test isolation we bypass it and
- * re-execute the DDL against the fresh schema directly.
- *
- * The `.sql` files are split on the `--> statement-breakpoint` marker that
- * drizzle-kit emits when a migration contains multiple top-level statements.
+ * Idempotent migration entry point. Databases produced by
+ * `createIsolatedSchema` are cloned from an already-migrated template, so this
+ * is a no-op for them; it only replays the DDL against a genuinely empty target.
  */
-export async function runMigrations(url: string) {
+export async function runMigrations(url: string): Promise<void> {
   const sql = postgres(url, { max: 1, onnotice: () => undefined });
   try {
-    await sql.unsafe('SET client_min_messages = WARNING');
-    const files = readdirSync(MIGRATIONS_FOLDER)
-      .filter((f) => f.endsWith('.sql'))
-      .sort();
-    for (const file of files) {
-      const contents = readFileSync(path.join(MIGRATIONS_FOLDER, file), 'utf-8').replace(
-        /\bpublic\./gi,
-        '',
-      );
-      const statements = contents
-        .split(/-->\s*statement-breakpoint\s*/i)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      for (const stmt of statements) {
-        await sql.unsafe(stmt);
-      }
-    }
+    const [row] = await sql<{ migrated: boolean }[]>`
+      SELECT to_regclass('players') IS NOT NULL AS migrated`;
+    if (row?.migrated) return;
+    await applyMigrations(sql);
   } finally {
     await sql.end();
   }
@@ -434,9 +517,6 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   const schemaInfo = opts.reusePublicSchema
     ? { schema: 'public', url: HOST_DB_URL, drop: async () => undefined }
     : await createIsolatedSchema();
-  if (!opts.reusePublicSchema) {
-    await runMigrations(schemaInfo.url);
-  }
 
   // Hand-build the drizzle client with a tighter connection pool so a
   // parallel-run test suite doesn't overwhelm the shared live Postgres.

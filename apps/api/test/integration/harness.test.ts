@@ -11,25 +11,25 @@ afterEach(async () => {
 });
 
 describe('integration harness', () => {
-  it('builds an app against a fresh schema + seeds an owner', async () => {
+  it('builds an app against a fresh database + seeds an owner', async () => {
     current = await buildIntegrationApp({
       seedOwner: { steamId64: 76561198000000001n },
     });
     expect(typeof current.seed.ownerSteamId64).toBe('bigint');
-    expect(current.schema).toMatch(/^test_[0-9a-f]{12}$/);
+    expect(current.schema).toMatch(/^sqtest_[0-9a-f]{12}$/);
     const meRes = await current.app.inject({ method: 'GET', url: '/api/v1/me' });
     expect([200, 401]).toContain(meRes.statusCode);
   }, 30_000);
 
-  it('cleanup drops the schema', async () => {
+  it('cleanup drops the database', async () => {
     const h = await buildIntegrationApp();
-    const schema = h.schema;
+    const database = h.schema;
     await h.cleanup();
     const { testDbUrl } = await import('./harness.js');
     const pg = (await import('postgres')).default(testDbUrl, { max: 1 });
     const rows = await pg<
-      { nspname: string }[]
-    >`select nspname from pg_namespace where nspname = ${schema}`;
+      { datname: string }[]
+    >`select datname from pg_database where datname = ${database}`;
     await pg.end();
     expect(rows).toHaveLength(0);
   }, 30_000);
