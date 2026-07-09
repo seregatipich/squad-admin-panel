@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { use, useCallback, useEffect, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import ClanStatsPanel from './ClanStatsPanel';
 import RosterPanel from './RosterPanel';
 
 interface ClanDetail {
@@ -315,6 +316,8 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
           ))}
         </div>
       </section>
+
+      <ClanStatsPanel clanId={clanId} />
 
       <RosterPanel clanId={clanId} />
 
