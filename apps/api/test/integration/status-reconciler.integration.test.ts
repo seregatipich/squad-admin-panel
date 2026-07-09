@@ -351,7 +351,15 @@ describe('reconciler — fail-safe behavior', () => {
       method: 'POST',
       url: '/api/v1/servers',
       headers: { cookie: slowCookie },
-      payload: { ...createBody, slug: 'reconciler-slow', display_name: 'Slow' },
+      payload: {
+        ...createBody,
+        slug: 'reconciler-slow',
+        display_name: 'Slow',
+        game_port: 7788,
+        query_port: 27166,
+        beacon_port: 15001,
+        rcon_port: 21115,
+      },
     });
     const slowId = slowResp.json<{ id: string }>().id;
 
