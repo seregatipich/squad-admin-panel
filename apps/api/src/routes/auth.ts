@@ -41,6 +41,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       canonical_name: req.user.canonicalName,
       avatar_url: req.user.avatarUrl,
       permissions: Array.from(req.user.permissions.permissions),
+      squad_permissions: Array.from(req.user.permissions.squadPermissions),
       can_manage_ban_sources: req.user.permissions.canManageBanSources,
       can_manage_clans: req.user.permissions.canManageClans,
       can_manage_issues: req.user.permissions.canManageIssues,
