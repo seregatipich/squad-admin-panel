@@ -30,7 +30,7 @@ These rules are mandatory for every contributor and every coding agent (Claude C
    git merge --no-ff feature/<slug>
    git push origin dev
    ```
-5. **The push to `dev` triggers the `ci` workflow on GitHub. All checks must pass.** Watch the run and fix forward until green (see CI gate). Work is not done while `dev` CI is red.
+5. **Before pushing, the local pre-push checklist must pass** (`scripts/pre-push-checklist.sh`, run automatically by the lefthook pre-push hook — see "Local test gate"). Cloud CI is disabled (the self-hosted runners are retired), so this local checklist is the gate: typecheck, biome, build, secret scan, and the affected test suite. Work is not done while the checklist is red.
 6. Delete the merged work branch.
 
 ## Local test setup (read before running any DB-backed test)
@@ -46,19 +46,23 @@ The local stack runs in Docker (`postgres`, `redis`, `api`, `web`). Getting an i
   ```
 - **Adding an API route?** Register it in **BOTH** `apps/api/src/server.ts` **and** `apps/api/test/integration/harness.ts` — they keep parallel registration lists, so a route missing from the harness 404s in integration tests.
 - **API tests that mutate `players`/`roles`/`panel_meta`** must scope the mutation by `steamId64` (a unique/test-range value), never a bare `uuid` — the parallel `test:cov` shares one DB and `apps/api/test/test-isolation.regression.test.ts` fails any unguarded `delete(players)` / `update(players).roleId` / …. A single-file `vitest run <your.test.ts>` does NOT run that guard, so before pushing also run `pnpm --filter @squad/api exec vitest run test/test-isolation.regression.test.ts`.
-- **Local `git push` may need `--no-verify`.** The pre-push hook runs affected tests only when `DATABASE_URL` is set and skips them otherwise (CI is the source of truth); the Go bridge build still cannot run on macOS, so `--no-verify` is expected and allowed for local feature-branch pushes.
+- **The pre-push checklist auto-provisions a test DB when it can.** If `DATABASE_URL` is unset but Docker and `.env` are present, `scripts/pre-push-checklist.sh` runs `scripts/new-test-db.sh` for you. If neither a DB nor Docker is available the checklist fails (it will not silently skip tests). The Go bridge build cannot run on macOS and Docker image builds are not run locally, so `--no-verify` remains available for genuine emergencies (and for pushing when only Go/Docker-scoped work is untestable locally).
 
-## CI gate
+## Local test gate
 
-Local green is not proof — **CI is the source of truth**. After every push to `dev` (and to `master`), fetch the run result and iterate until every check passes:
+**Cloud CI is disabled** — the self-hosted runners are retired, so the `ci` workflow no longer runs on push/PR (it is dispatch-only). The **local pre-push checklist is now the gate**: [`scripts/pre-push-checklist.sh`](scripts/pre-push-checklist.sh), run automatically by the lefthook `pre-push` hook. Any failed item blocks the push (bypass in an emergency with `git push --no-verify`).
 
-```bash
-gh run list --branch <branch> --workflow ci --limit 1 --json databaseId,conclusion
-gh run view <run-id> --json jobs --jq '.jobs[] | "\(.conclusion)\t\(.name)"'
-gh run view <run-id> --log-failed   # logs of the failing step
-```
+The checklist runs, in order:
 
-The `node` job runs, in order: `pnpm turbo run typecheck` → `pnpm turbo run build` → `pnpm --filter @squad/db migrate` → panel-bridge tests → `pnpm exec biome check .` (whole repo) → `pnpm test:cov` → gitleaks. The step that most often breaks after a merge is `biome check .` — an `error`-severity diagnostic such as `assist/source/organizeImports` (commonly from union-merged imports) fails it; fix with `pnpm exec biome check --write <file>`. `noNonNullAssertion` is `warn` and does not fail CI. The `go` job covers `apps/bridge`; the `docker` job builds all images. The `branch-guard` job enforces the branch model: it fails any pull request targeting `master` from a head other than `dev`, and runs the git-guard test suite (`scripts/test-git-guard.sh`).
+1. `pnpm turbo run typecheck`
+2. `pnpm exec biome check .` (whole repo) — the item that most often breaks after a merge; an `error`-severity diagnostic such as `assist/source/organizeImports` (commonly from union-merged imports) fails it, fix with `pnpm exec biome check --write <file>`. `noNonNullAssertion` is `warn` and does not fail it.
+3. `pnpm turbo run build` (skip with `SKIP_BUILD=1`)
+4. gitleaks secret scan (best-effort — only if `gitleaks` is installed)
+5. Tests — the packages affected since `origin/dev` (`pnpm turbo run test --filter='...[origin/dev]'`), or the full coverage suite with `FULL=1`. Auto-provisions an isolated migrated DB via `scripts/new-test-db.sh` when `DATABASE_URL` is unset.
+
+Run it by hand any time with `bash scripts/pre-push-checklist.sh`. **Not run locally:** the Go bridge (`apps/bridge` — cannot build on macOS; run `go vet ./... && go test -race ./...` there on Linux) and Docker image builds. The branch model is still enforced independently by the lefthook/`.claude` git-guard hooks (see "Enforcement harness"), not by CI.
+
+To re-enable cloud CI later (once a runner is provisioned), restore the `push`/`pull_request` triggers at the top of `.github/workflows/ci.yml`.
 
 ## Testing policy (MANDATORY)
 

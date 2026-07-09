@@ -1,9 +1,10 @@
 name: ci
+# Cloud CI is DISABLED — the self-hosted runners are retired/unreliable, so the
+# test gate has moved LOCAL: `scripts/pre-push-checklist.sh`, enforced by the
+# lefthook pre-push hook (see AGENTS.md → "Local test gate"). This workflow no
+# longer runs on push/PR; it is kept dispatch-only so it can be re-enabled by
+# restoring the push/pull_request triggers once a runner is provisioned again.
 on:
-  push:
-    branches: [master, dev]
-  pull_request:
-    branches: [master, dev]
   workflow_dispatch:
 
 jobs:

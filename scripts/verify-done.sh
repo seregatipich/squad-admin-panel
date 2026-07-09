@@ -10,11 +10,12 @@
 #   1. the working tree is clean (everything committed);
 #   2. you are on `dev` and it matches `origin/dev` (everything pushed);
 #   3. the branch model is intact (git-guard doctor reports no problems);
-#   4. the `ci` workflow is green on GitHub FOR THE CURRENT dev tip —
-#      a green run for an older SHA does not count.
+#   4. the local test gate is wired — `scripts/pre-push-checklist.sh` exists and
+#      the lefthook `pre-push` hook invokes it. Cloud CI is disabled, so this
+#      checklist (typecheck/biome/build/tests) is the gate, enforced on push.
 #
 # Exit 0 = all checks passed; exit 1 = at least one failed (task is NOT done).
-# Requires: git, gh (authenticated), jq.
+# Requires: git, jq.
 #
 # Used by every coding agent before reporting a task complete; see AGENTS.md
 # "Completion verification" and docs/development/agent-harness.md.
@@ -23,7 +24,7 @@ set -u
 
 # Mode selection:
 #   (default)          dev-integration mode — the finished-and-integrated state:
-#                      on dev, dev == origin/dev, dev CI green for THIS tip.
+#                      on dev, dev == origin/dev, local test gate wired.
 #   --feature [branch] parallel-wave handoff mode — a work branch is implemented,
 #                      tested, committed and pushed, ready for the orchestrator to
 #                      integrate. There is deliberately NO dev-CI check here: the
@@ -159,24 +160,20 @@ else
   pass "git-guard doctor clean"
 fi
 
-# --- 4. dev CI green for THIS tip ---------------------------------------------
-run=$(gh run list --branch dev --workflow ci --limit 15 \
-  --json headSha,status,conclusion,databaseId 2>/dev/null |
-  jq -r --arg sha "$dev_sha" '[.[] | select(.headSha == $sha)][0] // empty | "\(.status) \(.conclusion) \(.databaseId)"')
-if [ -z "$run" ]; then
-  fail "no ci run found for the current dev tip $dev_sha — push dev and watch the run (gh run watch)"
+# --- 4. local test gate wired (cloud CI disabled) ----------------------------
+# The self-hosted runners are retired, so the test gate is scripts/pre-push-
+# checklist.sh, enforced by the lefthook pre-push hook (it blocks pushes that
+# fail typecheck/biome/build/tests). Here we confirm that gate is in place; the
+# hook already ran it for the pushed dev tip (unless bypassed with --no-verify).
+script_dir=$(cd "$(dirname "$0")" && pwd)
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+if [ ! -x "$script_dir/pre-push-checklist.sh" ]; then
+  fail "local test gate missing — scripts/pre-push-checklist.sh not found or not executable"
+elif [ -n "$repo_root" ] && [ -f "$repo_root/lefthook.yml" ] && \
+     ! grep -q 'pre-push-checklist.sh' "$repo_root/lefthook.yml"; then
+  fail "local test gate not wired — lefthook.yml pre-push does not invoke pre-push-checklist.sh"
 else
-  status=${run%% *}
-  rest=${run#* }
-  conclusion=${rest%% *}
-  run_id=${rest#* }
-  if [ "$status" != "completed" ]; then
-    fail "ci run $run_id for $dev_sha is still $status — work is not done until it is green (gh run watch $run_id)"
-  elif [ "$conclusion" = "success" ]; then
-    pass "dev ci green at current tip (run $run_id)"
-  else
-    fail "ci run $run_id for $dev_sha concluded '$conclusion' — fix forward until green"
-  fi
+  pass "local test gate wired (pre-push checklist enforced at push; cloud CI disabled)"
 fi
 
 echo

@@ -23,16 +23,12 @@ pre-push:
       use_stdin: true
       priority: 1
   commands:
-    typecheck:
-      run: pnpm turbo run typecheck
-    test:
-      # CI is the source of truth for the full suite (issue #202). Locally, only run
-      # tests when a database is available, and only for packages affected since
-      # origin/dev — so a clean checkout or a docs/scripts-only push is not blocked by
-      # DB-gated integration suites. Push with --no-verify to skip this entirely.
-      run: |
-        if [ -z "${DATABASE_URL:-}" ]; then
-          echo "pre-push: DATABASE_URL unset — skipping DB-backed tests (CI is the source of truth)."
-          exit 0
-        fi
-        pnpm turbo run test --filter='...[origin/dev]'
+    checklist:
+      # Cloud CI is disabled — this local checklist is the test gate. Runs
+      # typecheck, biome, build, secret scan, and the affected test suite
+      # (auto-provisioning an isolated DB when possible). Any failure blocks the
+      # push. Skipped automatically on no-diff pushes (e.g. dev→master
+      # promotion). Bypass in an emergency with `git push --no-verify`.
+      # Knobs: FULL=1 (full coverage suite), SKIP_BUILD=1 (skip build step).
+      priority: 2
+      run: bash scripts/pre-push-checklist.sh
