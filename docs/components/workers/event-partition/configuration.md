@@ -18,5 +18,7 @@
 | Heartbeat TTL | 30 s | `HEARTBEAT_TTL_SECONDS` |
 | `diagnostic_events` retention | 24h (any partition older than yesterday is dropped) | `ensureDiagPartitions` in `index.ts` |
 | `diagnostic_events` create-buffer | `[-1, 0, +1, +2]` days from today | `ensureDiagPartitions` in `index.ts` |
+| `events` retention | 24 months (`EVENTS_RETENTION_MONTHS`) | `ensureMonthlyPartitions` in `index.ts` |
+| `events` create-buffer | current + next month | `ensureMonthlyPartitions` in `index.ts` |
 
-The `diagnostic_events` retention and buffer values are not currently exposed as env vars — change them in code if a tuning need arises.
+The `diagnostic_events` and `events` retention/buffer values are not currently exposed as env vars — change them in code if a tuning need arises.

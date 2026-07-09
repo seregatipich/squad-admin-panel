@@ -1,5 +1,12 @@
 # Changelog — worker-event-partition
 
+## 2026-07-09
+
+### Added
+
+- `ensureMonthlyPartitions(sql)` exported from `src/index.ts`: real hourly rotator for the `events` monthly partitions, replacing the `SELECT 1` stub. Mirrors `ensureDiagPartitions` exactly (no pg_partman): creates the current + next month `events_YYYY_MM` partitions (UTC month bounds) and drops any partition whose name sorts before `events_<YYYY_MM>` for `date_trunc('month', now()) - interval '24 months'` (24-month retention).
+- `partition.test.ts` rewritten from asserting on a locally reimplemented partition-name helper to exercising the real `ensureMonthlyPartitions` against an isolated, migrated database: next-month creation (with `pg_get_expr` bound verification), current-month creation, dropping a pre-seeded >24-month-old partition, and keeping a pre-seeded within-retention partition.
+
 ## 2026-04-29
 
 ### Added

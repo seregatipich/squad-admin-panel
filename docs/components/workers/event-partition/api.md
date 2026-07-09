@@ -43,14 +43,26 @@ const sql = postgres(process.env.DATABASE_URL!);
 await ensureDiagPartitions(sql);
 ```
 
-## Side effects on Postgres (events table — Phase 1 placeholder)
+### `ensureMonthlyPartitions(sql: postgres.Sql): Promise<void>`
 
-The worker issues DDL against the `events` partitioned table. In Phase 1 this will be:
+Idempotent rotator for the `events` monthly partitions. Mirrors `ensureDiagPartitions` exactly — no pg_partman.
 
-```sql
-CREATE TABLE IF NOT EXISTS events_YYYY_MM
-  PARTITION OF events
-  FOR VALUES FROM ('YYYY-MM-01') TO ('YYYY-MM+1-01');
+- **Input**: a `postgres-js` `Sql` instance (the worker passes its own `postgres(databaseUrl, { max: 1 })` connection).
+- **Output**: `Promise<void>`.
+- **Side effects on Postgres**:
+  - Issues two `CREATE TABLE IF NOT EXISTS events_YYYY_MM PARTITION OF events FOR VALUES FROM ('<month-start>') TO ('<next-month-start>');` statements for the current month and next month (UTC, computed via `Date.UTC`).
+  - Issues `DROP TABLE IF EXISTS events_YYYY_MM;` for every child of `events` whose `relname` sorts strictly before `events_<YYYY_MM>` for `date_trunc('month', now()) - interval '24 months'` (24-month retention).
+- **Side effects on logs**: one `info` line per CREATE (`ensured events partition`) and one per DROP (`dropped stale events partition`), each with a `partname` field.
+- **Errors**: any DDL error or query error propagates to the caller. The worker's hourly `runPartitionTick` logs and continues (see `event_partition.run_failed` above).
+
+Example call from a unit test:
+
+```ts
+import { ensureMonthlyPartitions } from '@squad/worker-event-partition';
+import postgres from 'postgres';
+
+const sql = postgres(process.env.DATABASE_URL!);
+await ensureMonthlyPartitions(sql);
 ```
 
-No data is returned to callers. The DDL is idempotent (`IF NOT EXISTS`).
+No data is returned to callers. The DDL is idempotent (`IF NOT EXISTS` / `IF EXISTS`).
