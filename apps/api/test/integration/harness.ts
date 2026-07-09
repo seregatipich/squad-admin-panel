@@ -65,6 +65,7 @@ import playerMatchesRoutes from '../../src/routes/player-matches.js';
 import playerNotesRoutes from '../../src/routes/player-notes.js';
 import playerPresenceRoutes from '../../src/routes/player-presence.js';
 import playerRoutes from '../../src/routes/players.js';
+import publicStatsRoutes from '../../src/routes/public-stats.js';
 import roleAssignmentsRoutes from '../../src/routes/role-assignments.js';
 import roleMembersRoutes from '../../src/routes/role-members.js';
 import rolesRoutes from '../../src/routes/roles.js';
@@ -561,6 +562,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(integrationsVipRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(analyticsRoutes);
+  await app.register(publicStatsRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(banSourcesRoutes);
   await app.register(alertRulesRoutes);
