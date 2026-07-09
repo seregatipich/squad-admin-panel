@@ -90,6 +90,7 @@ import serverRoutes from './routes/servers.js';
 import settingsChatFlagsRoutes from './routes/settings-chat-flags.js';
 import settingsEconomyRoutes from './routes/settings-economy.js';
 import setupRoutes from './routes/setup.js';
+import suspectsRoutes from './routes/suspects.js';
 import teamkillsRoutes from './routes/teamkills.js';
 import usersRoutes from './routes/users.js';
 import vehicleCatalogRoutes from './routes/vehicle-catalog.js';
@@ -184,6 +185,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(issuesRoutes);
   await app.register(marksRoutes);
   await app.register(markTypesRoutes);
+  await app.register(suspectsRoutes);
   await app.register(matchesRoutes);
   await app.register(playerMatchesRoutes);
   await app.register(playerPresenceRoutes);

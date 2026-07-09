@@ -31,6 +31,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Управление',
     items: [
       { href: '/players', label: 'Игроки' },
+      { href: '/suspects', label: 'Метки' },
       { href: '/leaderboards', label: 'Лидерборды' },
       { href: '/clans', label: 'Кланы' },
       { href: '/matches', label: 'Матчи' },

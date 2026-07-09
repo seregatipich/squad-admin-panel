@@ -80,6 +80,7 @@ import serverUpdateRoutes from '../../src/routes/server-update.js';
 import serverRoutes from '../../src/routes/servers.js';
 import settingsChatFlagsRoutes from '../../src/routes/settings-chat-flags.js';
 import settingsEconomyRoutes from '../../src/routes/settings-economy.js';
+import suspectsRoutes from '../../src/routes/suspects.js';
 import teamkillsRoutes from '../../src/routes/teamkills.js';
 import usersRoutes from '../../src/routes/users.js';
 import vehicleCatalogRoutes from '../../src/routes/vehicle-catalog.js';
@@ -527,6 +528,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(issuesRoutes);
   await app.register(marksRoutes);
   await app.register(markTypesRoutes);
+  await app.register(suspectsRoutes);
   await app.register(matchesRoutes);
   await app.register(playerMatchesRoutes);
   await app.register(playerPresenceRoutes);
