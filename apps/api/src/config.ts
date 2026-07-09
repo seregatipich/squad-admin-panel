@@ -22,6 +22,7 @@ const envSchema = z.object({
   GLITCHTIP_DSN: z.string().optional(),
   VIP_LIFECYCLE_WEBHOOK_SECRET: z.string().min(32).optional(),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+  MEDIA_STORAGE_DIR: z.string().default('./media'),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

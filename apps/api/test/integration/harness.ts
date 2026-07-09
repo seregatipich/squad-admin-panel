@@ -1,8 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cookie from '@fastify/cookie';
+import multipart from '@fastify/multipart';
 import websocket from '@fastify/websocket';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
@@ -14,6 +16,7 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import Redis from 'ioredis';
 import postgres from 'postgres';
 import diagPlugin from '../../src/lib/diag.js';
+import { MEDIA_MAX_UPLOAD_BYTES } from '../../src/lib/media-storage.js';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import auditPluginFactory from '../../src/plugins/audit.js';
@@ -50,6 +53,7 @@ import markTypesRoutes from '../../src/routes/mark-types.js';
 import marksRoutes from '../../src/routes/marks.js';
 import matchesRoutes from '../../src/routes/matches.js';
 import meTokensRoutes from '../../src/routes/me-tokens.js';
+import mediaRoutes from '../../src/routes/media.js';
 import messageTemplatesRoutes from '../../src/routes/message-templates.js';
 import notesFeedRoutes from '../../src/routes/notes-feed.js';
 import permissionsRoutes from '../../src/routes/permissions.js';
@@ -411,6 +415,7 @@ export interface IntegrationHarness {
   bridge: FakeBridge;
   url: string;
   schema: string;
+  mediaDir: string;
   cleanup: () => Promise<void>;
   seed: {
     ownerSteamId64?: bigint;
@@ -432,6 +437,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   const db = drizzlePostgres(sql, { schema }) as unknown as DatabaseClient;
   const redis = new Redis(HOST_REDIS_URL);
   const bridge = opts.bridge ?? makeFakeBridge();
+  const mediaDir = mkdtempSync(path.join(tmpdir(), 'squad-media-test-'));
 
   const app = Fastify({ logger: false });
   app.setValidatorCompiler(validatorCompiler);
@@ -451,6 +457,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     LOG_LEVEL: 'info',
     SESSION_TTL_SECONDS: 21600,
     SESSION_TOUCH_THROTTLE_SECONDS: 60,
+    MEDIA_STORAGE_DIR: mediaDir,
   });
   app.decorate('encryptionKey', Buffer.from(TEST_ENCRYPTION_KEY, 'base64'));
   app.decorate('db', db);
@@ -460,6 +467,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
 
   await app.register(cookie, { secret: TEST_SESSION_SECRET });
   await app.register(websocket);
+  await app.register(multipart, { limits: { fileSize: MEDIA_MAX_UPLOAD_BYTES, files: 1 } });
   await app.register(requestContextPlugin);
   await app.register(diagPlugin);
   await app.register(errorDiagPlugin);
@@ -524,6 +532,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(playerGeoAnomaliesRoutes);
   await app.register(leaderboardsRoutes);
   await app.register(economyRoutes);
+  await app.register(mediaRoutes);
   await app.register(settingsEconomyRoutes);
   await app.register(settingsChatFlagsRoutes);
   await app.register(clansRoutes);
@@ -588,12 +597,14 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     bridge,
     url: schemaInfo.url,
     schema: schemaInfo.schema,
+    mediaDir,
     seed,
     async cleanup() {
       await app.close().catch(() => undefined);
       await redis.quit().catch(() => undefined);
       await sql.end({ timeout: 5 }).catch(() => undefined);
       await schemaInfo.drop().catch(() => undefined);
+      rmSync(mediaDir, { recursive: true, force: true });
     },
   };
 }

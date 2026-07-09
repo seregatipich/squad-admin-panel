@@ -1,5 +1,6 @@
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
+import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
@@ -15,6 +16,7 @@ import type { AppConfig } from './config.js';
 import { loadEncryptionKey } from './lib/crypto.js';
 import diagPlugin from './lib/diag.js';
 import { buildLogger } from './lib/logger.js';
+import { MEDIA_MAX_UPLOAD_BYTES } from './lib/media-storage.js';
 import { createRconClient } from './lib/rcon.js';
 import auditPlugin from './plugins/audit.js';
 import authPlugin from './plugins/auth.js';
@@ -59,6 +61,7 @@ import markTypesRoutes from './routes/mark-types.js';
 import marksRoutes from './routes/marks.js';
 import matchesRoutes from './routes/matches.js';
 import meTokensRoutes from './routes/me-tokens.js';
+import mediaRoutes from './routes/media.js';
 import messageTemplatesRoutes from './routes/message-templates.js';
 import notesFeedRoutes from './routes/notes-feed.js';
 import permissionsRoutes from './routes/permissions.js';
@@ -132,6 +135,7 @@ export async function buildServer(config: AppConfig) {
   });
   await app.register(swaggerUi, { routePrefix: '/api/docs' });
   await app.register(websocket);
+  await app.register(multipart, { limits: { fileSize: MEDIA_MAX_UPLOAD_BYTES, files: 1 } });
 
   await app.register(requestContextPlugin);
   await app.register(databasePlugin, { config });
@@ -185,6 +189,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(playerGeoAnomaliesRoutes);
   await app.register(leaderboardsRoutes);
   await app.register(economyRoutes);
+  await app.register(mediaRoutes);
   await app.register(settingsEconomyRoutes);
   await app.register(settingsChatFlagsRoutes);
   await app.register(clansRoutes);
