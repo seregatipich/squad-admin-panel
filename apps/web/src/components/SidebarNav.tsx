@@ -7,7 +7,10 @@ import { LogoutButton } from '@/components/LogoutButton';
 type NavItem = { href: string; label: string; permission?: string };
 type NavGroup = { label?: string; items: NavItem[] };
 
-const GROUPS: NavGroup[] = [
+// Exported for tests: asserts the sidebar structure directly instead of
+// parsing rendered output (permission-gated items are hidden from the DOM
+// unless the caller has that permission).
+export const GROUPS: NavGroup[] = [
   {
     items: [{ href: '/dashboard', label: 'Дашборд' }],
   },
@@ -31,6 +34,7 @@ const GROUPS: NavGroup[] = [
       { href: '/issues', label: 'Тикеты' },
       { href: '/settings/groups', label: 'Группы', permission: 'role:view' },
       { href: '/users', label: 'Пользователи', permission: 'user:view' },
+      { href: '/vips', label: 'VIP', permission: 'user:view' },
     ],
   },
   {
