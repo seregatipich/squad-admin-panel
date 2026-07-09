@@ -81,6 +81,7 @@ import vehicleCatalogRoutes from '../../src/routes/vehicle-catalog.js';
 import vipTiersRoutes from '../../src/routes/vip-tiers.js';
 import voteAnalyticsRoutes from '../../src/routes/vote-analytics.js';
 import votesRoutes from '../../src/routes/votes.js';
+import whitelistRoutes from '../../src/routes/whitelist.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_FOLDER = path.resolve(__dirname, '../../../../packages/db/drizzle');
@@ -549,6 +550,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(bannedNamesRoutes);
   await app.register(banSourcesRoutes);
   await app.register(alertRulesRoutes);
+  await app.register(whitelistRoutes);
 
   // Test fixture: legacy "Viewer" role used by older permission-bound
   // tests (depot, host-actions, logs, rbac, ...). The production seed

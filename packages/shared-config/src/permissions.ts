@@ -101,12 +101,11 @@ export const PERMISSIONS = [
     category: 'admin_groups',
     label: 'Редактировать Admins.cfg',
   },
-  { key: 'whitelist:view', category: 'whitelist', label: 'Видеть whitelist', unimplemented: true },
+  { key: 'whitelist:view', category: 'whitelist', label: 'Видеть whitelist' },
   {
     key: 'whitelist:edit',
     category: 'whitelist',
     label: 'Управлять whitelist',
-    unimplemented: true,
   },
   { key: 'host:view', category: 'host', label: 'Dashboard host info' },
   { key: 'host:metrics', category: 'host', label: 'Метрики (CPU/RAM/Disk/Net + история)' },

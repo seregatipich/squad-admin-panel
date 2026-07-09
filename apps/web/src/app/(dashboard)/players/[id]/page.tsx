@@ -115,6 +115,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
   const { player, names, ips, locations, ips_visible, geo_configured } = data;
   const canManageRoles = me?.permissions.includes('user:manage_roles') ?? false;
+  const canEditWhitelist = me?.permissions.includes('whitelist:edit') ?? false;
 
   return (
     <div className="space-y-6">
@@ -126,6 +127,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       </div>
 
       <PlayerMarks playerId={playerId} />
+
+      <WhitelistQuickAction playerId={playerId} canEdit={canEditWhitelist} />
 
       <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
         <h2 className="text-xs uppercase tracking-widest text-neutral-400">Профиль</h2>
@@ -214,6 +217,107 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
         geoConfigured={geo_configured}
       />
     </div>
+  );
+}
+
+interface WhitelistSettings {
+  whitelist_role_id: string | null;
+  whitelist_role_name: string | null;
+}
+
+/**
+ * One-click "add to / remove from whitelist" action (WL-1, #65). Assigning or
+ * removing the whitelist role is idempotent server-side, so this component
+ * only needs to know the configured whitelist role and whether the current
+ * player already holds it.
+ */
+function WhitelistQuickAction({ playerId, canEdit }: { playerId: string; canEdit: boolean }) {
+  const [settings, setSettings] = useState<WhitelistSettings | null>(null);
+  const [current, setCurrent] = useState<SingleRole | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  const reload = useCallback(async () => {
+    const [settingsRes, roleRes] = await Promise.all([
+      fetch('/api/v1/whitelist/settings', { credentials: 'include', cache: 'no-store' }),
+      fetch(`/api/v1/players/${playerId}/role`, { credentials: 'include', cache: 'no-store' }),
+    ]);
+    if (settingsRes.ok) setSettings((await settingsRes.json()) as WhitelistSettings);
+    if (roleRes.ok) {
+      const body = (await roleRes.json()) as { role: SingleRole | null };
+      setCurrent(body.role);
+    }
+  }, [playerId]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  if (!settings?.whitelist_role_id) return null;
+
+  const isWhitelisted = current?.id === settings.whitelist_role_id;
+
+  async function toggle() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = isWhitelisted
+        ? await fetch(`/api/v1/whitelist/members/${playerId}`, {
+            method: 'DELETE',
+            credentials: 'include',
+          })
+        : await fetch('/api/v1/whitelist/members', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ player_id: playerId }),
+          });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await reload();
+      setMsg({ kind: 'ok', text: isWhitelisted ? 'Убран из whitelist.' : 'Добавлен в whitelist.' });
+    } catch (e) {
+      setMsg({ kind: 'err', text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Whitelist</h2>
+          <p className="mt-1 text-sm text-neutral-300">
+            {isWhitelisted ? 'Игрок в whitelist.' : 'Игрок не в whitelist.'}
+          </p>
+        </div>
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={toggle}
+            disabled={busy}
+            className={`rounded px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-40 ${
+              isWhitelisted
+                ? 'border border-red-900 text-red-300 hover:border-red-700'
+                : 'border border-sky-700 bg-sky-950 text-sky-200 hover:bg-sky-900'
+            }`}
+          >
+            {isWhitelisted ? 'Убрать из whitelist' : 'В whitelist'}
+          </button>
+        ) : null}
+      </div>
+      {msg ? (
+        <div
+          className={`rounded border p-2 text-xs ${
+            msg.kind === 'ok'
+              ? 'border-emerald-900 bg-emerald-950/50 text-emerald-200'
+              : 'border-red-900 bg-red-950 text-red-200'
+          }`}
+        >
+          {msg.text}
+        </div>
+      ) : null}
+    </section>
   );
 }
 

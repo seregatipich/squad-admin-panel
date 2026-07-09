@@ -50,6 +50,7 @@ const GROUPS: NavGroup[] = [
       { href: '/settings/chat-flags', label: 'Флаги чата', permission: 'role:edit' },
       { href: '/settings/alerts', label: 'Оповещения' },
       { href: '/settings/economy', label: 'Экономика' },
+      { href: '/settings/whitelist', label: 'Whitelist', permission: 'whitelist:view' },
       { href: '/settings/tokens', label: 'API-токены' },
       { href: '/settings/ban-sources', label: 'Источники банов' },
       {
