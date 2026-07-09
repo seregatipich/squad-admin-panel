@@ -1,5 +1,21 @@
 # `live-bus` — changelog
 
+## 2026-07-09 — COMBAT-6: combat.event reconnect buffer + per-event combat:view gate
+
+### Added
+
+- `apps/api/src/lib/combat-ring-buffer.ts` — `CombatRingBuffer`, mirroring `ChatRingBuffer`: bounded per-server ring (last 100) retaining only `combat.event` frames, with `tailFor(serverId)`/`tail()` for replay.
+- `apps/api/test/combat-ring-buffer.test.ts`, `apps/api/test/combat-live-replay.test.ts` — unit coverage for the buffer and an end-to-end `@fastify/websocket` + live-bus test covering live delivery, reconnect tail replay, and the `combat:view` gate.
+- Web: `combatEventToRow`/`prependLiveRow` in `apps/web/src/app/(dashboard)/combat-log/helpers.ts` and a `Live` toggle in `CombatLog.tsx` that prepends incoming `combat.event` rows scoped to the locked server.
+
+### Changed
+
+- `apps/api/src/routes/live.ts` — `/api/v1/ws/live` now instantiates a `CombatRingBuffer` alongside the existing `ChatRingBuffer` and replays its tail on connect, right after the chat tail. Connections whose `req.user.permissions.combatView` is falsy never receive `combat.event` frames, live or buffered.
+
+### Migration notes
+
+- No DB migration. Purely in-memory, per-API-replica buffering (like the chat buffer), so a reconnect to a different replica can still miss events published only to the replica it was previously connected to.
+
 ## 2026-04-26 — Bundle E: initial release
 
 ### Added
