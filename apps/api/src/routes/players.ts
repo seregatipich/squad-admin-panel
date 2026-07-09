@@ -175,9 +175,10 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         .where(eq(playerNameHistory.playerId, id))
         .orderBy(desc(playerNameHistory.lastSeenAt));
 
-      // P0 gate = panel_access (spec correction #3): every panel-access role
-      // sees IPs + precise location; legacy narrow roles (Viewer) do not.
-      const ipsVisible = req.user?.permissions.panelAccess ?? false;
+      // ALT-8 (#126): IP history requires the dedicated player:view_ips
+      // permission (gated by the role's can_view_ips flag), not just
+      // panel_access — panel_access alone no longer implies IP visibility.
+      const ipsVisible = req.user?.permissions.permissions.has('player:view_ips') ?? false;
 
       const ipRows = await app.db
         .select()

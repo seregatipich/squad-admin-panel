@@ -15,6 +15,7 @@ export interface PermissionContext {
   roleId: string | null;
   roleName: string | null;
   panelAccess: boolean;
+  canViewIps: boolean;
   canAssignRoles: boolean;
   canEditRoles: boolean;
   canManageIssues: boolean;
@@ -42,6 +43,9 @@ const PANEL_PERMS_GATED_BY_EDIT: ReadonlySet<PermissionKey> = new Set<Permission
 const PANEL_PERMS_GATED_BY_INTEGRATIONS: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'integration:manage',
 ]);
+const PANEL_PERMS_GATED_BY_VIEW_IPS: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'player:view_ips',
+]);
 const ALL_PANEL_PERMS: ReadonlySet<PermissionKey> = new Set<PermissionKey>(PERMISSION_KEYS);
 
 function derivePanelPermissions(
@@ -49,6 +53,7 @@ function derivePanelPermissions(
   canAssignRoles: boolean,
   canEditRoles: boolean,
   canManageIntegrations: boolean,
+  canViewIps: boolean,
   isOwner: boolean,
 ): Set<PermissionKey> {
   if (isOwner) return new Set(ALL_PANEL_PERMS);
@@ -58,6 +63,7 @@ function derivePanelPermissions(
     if (PANEL_PERMS_GATED_BY_ASSIGN.has(key) && !canAssignRoles) continue;
     if (PANEL_PERMS_GATED_BY_EDIT.has(key) && !canEditRoles) continue;
     if (PANEL_PERMS_GATED_BY_INTEGRATIONS.has(key) && !canManageIntegrations) continue;
+    if (PANEL_PERMS_GATED_BY_VIEW_IPS.has(key) && !canViewIps) continue;
     out.add(key);
   }
   return out;
@@ -68,6 +74,7 @@ interface RoleContextRow extends Record<string, unknown> {
   role_name: string | null;
   is_system_role: boolean | null;
   panel_access: boolean | null;
+  can_view_ips: boolean | null;
   can_assign_roles: boolean | null;
   can_edit_roles: boolean | null;
   can_manage_issues: boolean | null;
@@ -94,6 +101,7 @@ export async function loadUserPermissions(
       r.name AS role_name,
       r.is_system_role,
       r.panel_access,
+      r.can_view_ips,
       r.can_assign_roles,
       r.can_edit_roles,
       r.can_manage_issues,
@@ -123,6 +131,7 @@ export async function loadUserPermissions(
       roleId: null,
       roleName: null,
       panelAccess: false,
+      canViewIps: false,
       canAssignRoles: false,
       canEditRoles: false,
       canManageIssues: false,
@@ -141,6 +150,7 @@ export async function loadUserPermissions(
 
   const isOwner = row.role_name === 'Owner' && row.is_system_role === true;
   const panelAccess = isOwner ? true : (row.panel_access ?? false);
+  const canViewIps = isOwner ? true : (row.can_view_ips ?? false);
   const canAssignRoles = isOwner ? true : (row.can_assign_roles ?? false);
   const canEditRoles = isOwner ? true : (row.can_edit_roles ?? false);
   const canManageIssues = isOwner ? true : (row.can_manage_issues ?? false);
@@ -167,6 +177,7 @@ export async function loadUserPermissions(
     canAssignRoles,
     canEditRoles,
     canManageIntegrations,
+    canViewIps,
     isOwner,
   );
   for (const entry of explicit) {
@@ -179,6 +190,7 @@ export async function loadUserPermissions(
     roleId: row.role_id,
     roleName: row.role_name,
     panelAccess,
+    canViewIps,
     canAssignRoles,
     canEditRoles,
     canManageIssues,
