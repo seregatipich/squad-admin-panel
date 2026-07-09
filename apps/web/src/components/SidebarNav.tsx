@@ -3,68 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { LogoutButton } from '@/components/LogoutButton';
-
-type NavItem = { href: string; label: string; permission?: string };
-type NavGroup = { label?: string; items: NavItem[] };
-
-const GROUPS: NavGroup[] = [
-  {
-    items: [{ href: '/dashboard', label: 'Дашборд' }],
-  },
-  {
-    label: 'Серверы',
-    items: [{ href: '/servers/archive', label: 'Архив', permission: 'server:view' }],
-  },
-  {
-    label: 'Управление',
-    items: [
-      { href: '/players', label: 'Игроки' },
-      { href: '/leaderboards', label: 'Лидерборды' },
-      { href: '/clans', label: 'Кланы' },
-      { href: '/matches', label: 'Матчи' },
-      { href: '/events', label: 'События' },
-      { href: '/combat-log', label: 'Боевой лог' },
-      { href: '/votes', label: 'Голосования' },
-      { href: '/chat', label: 'Чат' },
-      { href: '/notes', label: 'Заметки' },
-      { href: '/banned-names', label: 'Забаненные ники' },
-      { href: '/issues', label: 'Тикеты' },
-      { href: '/settings/groups', label: 'Группы', permission: 'role:view' },
-      { href: '/users', label: 'Пользователи', permission: 'user:view' },
-    ],
-  },
-  {
-    label: 'Аудит',
-    items: [
-      { href: '/moderation/teamkills', label: 'Тимкиллы' },
-      { href: '/audit', label: 'Журнал действий' },
-      { href: '/logs', label: 'Логи', permission: 'host:view' },
-    ],
-  },
-  {
-    label: 'Настройки',
-    items: [
-      { href: '/settings/account', label: 'Аккаунт' },
-      { href: '/settings/message-templates', label: 'Шаблоны сообщений', permission: 'role:edit' },
-      { href: '/settings/mark-types', label: 'Типы меток', permission: 'role:edit' },
-      { href: '/settings/chat-flags', label: 'Флаги чата', permission: 'role:edit' },
-      { href: '/settings/alerts', label: 'Оповещения' },
-      { href: '/settings/economy', label: 'Экономика' },
-      { href: '/settings/tokens', label: 'API-токены' },
-      { href: '/settings/ban-sources', label: 'Источники банов' },
-      {
-        href: '/settings/integrations/discord',
-        label: 'Discord',
-        permission: 'integration:manage',
-      },
-      {
-        href: '/settings/integrations/geoip',
-        label: 'GeoIP (MaxMind)',
-        permission: 'integration:manage',
-      },
-    ],
-  },
-];
+import { NAV_GROUPS } from '@/lib/nav';
 
 function isItemActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
@@ -85,7 +24,7 @@ export function SidebarNav({
         Squad Admin Panel
       </div>
       <div className="flex-1 space-y-5">
-        {GROUPS.map((group, groupIndex) => {
+        {NAV_GROUPS.map((group, groupIndex) => {
           const visible = group.items.filter(
             (item) => !item.permission || permissions.includes(item.permission),
           );
