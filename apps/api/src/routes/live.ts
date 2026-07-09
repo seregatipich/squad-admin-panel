@@ -1,14 +1,20 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { ChatRingBuffer } from '../lib/chat-ring-buffer.js';
+import { CombatRingBuffer } from '../lib/combat-ring-buffer.js';
 
 const PING_INTERVAL_MS = 10_000;
 const PONG_TIMEOUT_MS = 30_000;
 const CHAT_BUFFER_PER_SERVER = 100;
+const COMBAT_BUFFER_PER_SERVER = 100;
 
 const liveRoutes: FastifyPluginAsync = async (app) => {
   const chatBuffer = new ChatRingBuffer(CHAT_BUFFER_PER_SERVER);
   const stopChatBuffer = app.liveBus.subscribe((event) => chatBuffer.push(event));
   app.addHook('onClose', async () => stopChatBuffer());
+
+  const combatBuffer = new CombatRingBuffer(COMBAT_BUFFER_PER_SERVER);
+  const stopCombatBuffer = app.liveBus.subscribe((event) => combatBuffer.push(event));
+  app.addHook('onClose', async () => stopCombatBuffer());
 
   app.get(
     '/api/v1/ws/live',
@@ -20,6 +26,7 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
       let lastPongAt = Date.now();
       let closed = false;
       const connectionPlayerId = req.user?.playerId ?? null;
+      const canViewCombat = req.user?.permissions.combatView ?? false;
 
       app.diag
         .emit({
@@ -58,10 +65,14 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
         if (event.type === 'session.revoked' && event.data.player_id !== connectionPlayerId) {
           return;
         }
+        if (event.type === 'combat.event' && !canViewCombat) return;
         safeSend(event);
       });
 
       for (const buffered of chatBuffer.tail()) safeSend(buffered);
+      if (canViewCombat) {
+        for (const buffered of combatBuffer.tail()) safeSend(buffered);
+      }
 
       socket.on('message', (raw) => {
         try {
