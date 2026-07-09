@@ -1,5 +1,5 @@
 import { type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
-import { v7 as uuidv7 } from 'uuid';
+import { v5 as uuidv5 } from 'uuid';
 import { type ParsedChat, parseChatFromLogLine } from './chat.js';
 import {
   type CombatIdentity,
@@ -31,6 +31,8 @@ import {
   VoteAssembler,
   type VoteRecordCommand,
 } from './vote.js';
+
+const LOG_EVENT_NAMESPACE = '5f4df020-f9ac-5e7d-a813-bec3e6eb3b42';
 
 export interface ParseErrorReport {
   lineSample: string;
@@ -338,8 +340,14 @@ export class LogIngestor {
     ts: string,
     payload: Record<string, unknown>,
   ): EventEnvelope {
+    const eventKey = stableStringify({
+      server_id: this.serverId,
+      type,
+      ts,
+      payload,
+    });
     return {
-      event_id: uuidv7(),
+      event_id: uuidv5(eventKey, LOG_EVENT_NAMESPACE),
       version: 1,
       type,
       server_id: this.serverId,
@@ -349,6 +357,19 @@ export class LogIngestor {
       payload,
     };
   }
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 export const streamFor = (serverId: string) => STREAM_NAME.eventsServer(serverId);

@@ -1,5 +1,17 @@
 # `bridge-client` — changelog
 
+## 2026-07-07
+
+### Added
+
+- `BridgeClient.squadLogRetentionSweep(): Promise<SquadLogRetentionSweepResult>` wraps the new `squad_log_retention_sweep` RPC without params. Timeout: 60 s.
+- `SquadLogRetentionSweepResult` and `SquadLogRetentionSweepError` exported from `packages/bridge-client/src/types.ts`.
+- Round-trip tests assert the method id, omitted params, and result counters.
+
+### Notes
+
+- The method is intentionally not transport-retried so a lost response cannot turn into misleading deletion counters. The worker retries naturally on the next hourly tick.
+
 ## 2026-04-28
 
 ### Added

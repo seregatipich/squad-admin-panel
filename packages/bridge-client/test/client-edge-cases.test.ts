@@ -479,6 +479,7 @@ describe('all wrapper methods dispatch the correct method id', () => {
     ['container_rm', (c) => c.containerRm({ name: 'squad-x' })],
     ['container_inspect', (c) => c.containerInspect({ name: 'squad-x' })],
     ['container_stats', (c) => c.containerStats({ name: 'squad-x' })],
+    ['squad_log_retention_sweep', (c) => c.squadLogRetentionSweep()],
     ['host_agent_restart', (c) => c.hostAgentRestart()],
   ];
 

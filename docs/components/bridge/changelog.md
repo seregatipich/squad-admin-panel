@@ -1,5 +1,18 @@
 # `bridge` — changelog
 
+## 2026-07-07 — `squad_log_retention_sweep` for raw Squad logs
+
+### Added
+
+- `squad_log_retention_sweep()` — dedicated bridge RPC for LOG-1 raw log retention. It accepts no params and scans only `/var/lib/squad-panel/saved/{uuid}/SquadGame/Saved/Logs/`.
+- Deletion policy: remove regular `SquadGame*.log` files when `mtime + 10d < now`; never remove exact `SquadGame.log`.
+- Response counters: `retention_days`, `cutoff`, `servers_scanned`, `log_dirs_scanned`, `files_scanned`, `deleted_count`, `deleted_bytes`, `error_count`, and bounded `errors[]`.
+- Go unit tests covering the live-file exemption, old rotated deletion, fresh rotated preservation, nonmatching preservation, and rejection of caller-controlled params.
+
+### Notes
+
+- This RPC avoids giving `worker-log-ingest` a direct RW mount of the saved tree. The privileged path, glob, and retention duration remain hard-coded inside the bridge.
+
 ## 2026-04-28 — Socket moved into stable runtime directory
 
 ### Changed

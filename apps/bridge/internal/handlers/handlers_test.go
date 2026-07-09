@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -165,6 +166,119 @@ func TestDirectoryDelete_InvalidJSONReturnsInvalidArgs(t *testing.T) {
 	}
 	if resp.Error == nil || resp.Error.Code != rpc.CodeInvalidArgs {
 		t.Fatalf("expected CodeInvalidArgs, got %+v", resp.Error)
+	}
+}
+
+func TestSquadLogRetentionSweep_DeletesOnlyExpiredRotatedLogs(t *testing.T) {
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	serverID := "019dbaa5-1234-7abc-8def-0123456789ab"
+	savedRoot := t.TempDir()
+	logsDir := filepath.Join(savedRoot, serverID, "SquadGame", "Saved", "Logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatalf("mkdir logs dir: %v", err)
+	}
+
+	expiredRotated := filepath.Join(logsDir, "SquadGame-2026.06.26-12.00.00.log")
+	liveLog := filepath.Join(logsDir, "SquadGame.log")
+	freshRotated := filepath.Join(logsDir, "SquadGame-2026.06.30-12.00.00.log")
+	nonMatching := filepath.Join(logsDir, "ChatGame-2026.06.26-12.00.00.log")
+	expiredBytes := writeRetentionTestFile(t, expiredRotated, "expired rotated\n", now.Add(-11*24*time.Hour))
+	writeRetentionTestFile(t, liveLog, "live old log\n", now.Add(-30*24*time.Hour))
+	writeRetentionTestFile(t, freshRotated, "fresh rotated\n", now.Add(-9*24*time.Hour))
+	writeRetentionTestFile(t, nonMatching, "other log\n", now.Add(-11*24*time.Hour))
+
+	d := &Dispatcher{
+		panelSavedRoot: savedRoot,
+		nowFn:          func() time.Time { return now },
+	}
+	resp := d.Handle(context.Background(), &rpc.Request{
+		ID:     "req-retention-1",
+		Method: "squad_log_retention_sweep",
+		Params: json.RawMessage(`{}`),
+	}, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected OK, got error: %+v", resp.Error)
+	}
+
+	var got struct {
+		RetentionDays  int    `json:"retention_days"`
+		DeletedCount   int    `json:"deleted_count"`
+		DeletedBytes   int64  `json:"deleted_bytes"`
+		ErrorCount     int    `json:"error_count"`
+		ServersScanned int    `json:"servers_scanned"`
+		Cutoff         string `json:"cutoff"`
+	}
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if got.RetentionDays != 10 {
+		t.Fatalf("retention_days = %d, want 10", got.RetentionDays)
+	}
+	if got.DeletedCount != 1 {
+		t.Fatalf("deleted_count = %d, want 1", got.DeletedCount)
+	}
+	if got.DeletedBytes != expiredBytes {
+		t.Fatalf("deleted_bytes = %d, want %d", got.DeletedBytes, expiredBytes)
+	}
+	if got.ErrorCount != 0 {
+		t.Fatalf("error_count = %d, want 0", got.ErrorCount)
+	}
+	if got.ServersScanned != 1 {
+		t.Fatalf("servers_scanned = %d, want 1", got.ServersScanned)
+	}
+	if got.Cutoff != now.Add(-10*24*time.Hour).Format(time.RFC3339) {
+		t.Fatalf("cutoff = %q, want %q", got.Cutoff, now.Add(-10*24*time.Hour).Format(time.RFC3339))
+	}
+
+	assertPathMissing(t, expiredRotated)
+	assertPathExists(t, liveLog)
+	assertPathExists(t, freshRotated)
+	assertPathExists(t, nonMatching)
+}
+
+func TestSquadLogRetentionSweep_RejectsCallerControlledPath(t *testing.T) {
+	d := &Dispatcher{
+		panelSavedRoot: t.TempDir(),
+		nowFn:          func() time.Time { return time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC) },
+	}
+	resp := d.Handle(context.Background(), &rpc.Request{
+		ID:     "req-retention-2",
+		Method: "squad_log_retention_sweep",
+		Params: json.RawMessage(`{"path":"/tmp/evil"}`),
+	}, func(rpc.StreamFrame) {})
+	if resp.OK {
+		t.Fatalf("expected error response, got success")
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeInvalidArgs {
+		t.Fatalf("expected CodeInvalidArgs, got %+v", resp.Error)
+	}
+	if strings.Contains(resp.Error.Message, "unknown method") {
+		t.Fatalf("method is not wired; got error %q", resp.Error.Message)
+	}
+}
+
+func writeRetentionTestFile(t *testing.T, path string, content string, mtime time.Time) int64 {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", filepath.Base(path), err)
+	}
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatalf("chtimes %s: %v", filepath.Base(path), err)
+	}
+	return int64(len(content))
+}
+
+func assertPathExists(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected %s to exist, got %v", filepath.Base(path), err)
+	}
+}
+
+func assertPathMissing(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("expected %s to be deleted, stat err=%v", filepath.Base(path), err)
 	}
 }
 

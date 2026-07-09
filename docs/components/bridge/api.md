@@ -25,7 +25,7 @@ Every frame (request, response, stream chunk) is:
 { "id": "req-uuid-v7", "ok": false, "code": "forbidden", "message": "image not in allowlist" }
 ```
 
-Streaming methods: `container_logs_follow`, `depot_update`. They interleave `stream:'stdout'` / `stream:'stderr'` chunks with the final response on the same connection.
+Streaming methods: `container_logs_follow`, `depot_update`, `docker_prune`. They interleave `stream:'stdout'` / `stream:'stderr'` chunks with the final response on the same connection.
 
 ## Authentication
 
@@ -44,7 +44,7 @@ For every new connection the bridge reads `SO_PEERCRED` and looks up the caller'
 
 ## Methods
 
-All 20 RPC methods from `BRIDGE_METHODS`. Request shapes match the Go handlers; the TS client mirrors them in [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts).
+All 25 RPC methods from `BRIDGE_METHODS`. Request shapes match the Go handlers; the TS client mirrors them in [`packages/bridge-client/src/client.ts`](../../../packages/bridge-client/src/client.ts).
 
 ### Liveness / host
 
@@ -246,6 +246,34 @@ Response shape:
 | `cache_age_seconds` | int | `0` on a fresh compute; `floor(seconds since computed_at)` on a cache hit. |
 
 Errors: returns `runtime_error` with a descriptive message when `du`, `statfs`, or `docker system df` fail. There is no `forbidden` path because no caller input feeds into a path or shell argument.
+
+#### `squad_log_retention_sweep()` → `SquadLogRetentionSweepResult`
+
+Deletes expired rotated Squad log files from the host saved tree. This method intentionally takes no params: callers cannot pass a path, glob, server id, or retention duration. The bridge scans only `/var/lib/squad-panel/saved/{uuid}/SquadGame/Saved/Logs/`.
+
+Deletion policy:
+
+- delete only regular files whose basename matches `SquadGame*.log`;
+- never delete exact `SquadGame.log`, even if its `mtime` is older than 10 days;
+- delete only when `mtime + 10d < now`;
+- skip non-UUID saved subdirectories and missing log directories;
+- continue on per-file/per-server errors and return a bounded error summary.
+
+Response shape:
+
+| Field | Type | Description |
+|---|---|---|
+| `retention_days` | int | Fixed at `10`. Not configurable in this slice. |
+| `cutoff` | string | RFC 3339 UTC cutoff timestamp (`now - 10d`). |
+| `servers_scanned` | int | Count of valid UUID saved directories inspected. |
+| `log_dirs_scanned` | int | Count of existing `SquadGame/Saved/Logs` directories read successfully. |
+| `files_scanned` | int | Count of regular files found in scanned log dirs. |
+| `deleted_count` | int | Count of files removed. |
+| `deleted_bytes` | int64 | Sum of removed file sizes before deletion. |
+| `error_count` | int | Total errors encountered while continuing the sweep. |
+| `errors` | array | First 20 error summaries: `{ server_id?, file?, error }`. |
+
+Errors: `invalid_args` if any params are supplied. OS-level per-file failures are captured in the response instead of failing the whole RPC.
 
 ### Self
 

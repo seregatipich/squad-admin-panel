@@ -12,7 +12,7 @@ vi.mock('@squad/db', () => ({
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue([]),
-        innerJoin: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        innerJoin: vi.fn().mockResolvedValue([]),
       }),
     }),
   })),
@@ -24,11 +24,23 @@ vi.mock('@squad/bridge-client', () => ({
     connect: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
     containerLogsFollow: vi.fn().mockResolvedValue({ stop: vi.fn() }),
+    squadLogRetentionSweep: vi.fn().mockResolvedValue({
+      retention_days: 10,
+      cutoff: '2026-06-27T12:00:00Z',
+      servers_scanned: 0,
+      log_dirs_scanned: 0,
+      files_scanned: 0,
+      deleted_count: 0,
+      deleted_bytes: 0,
+      error_count: 0,
+      errors: [],
+    }),
   })),
 }));
 vi.mock('@squad/shared-config', () => ({
   redisSinkStream: vi.fn(() => ({ write: vi.fn() })),
   startHeartbeat: vi.fn(() => vi.fn()),
+  filterCutoverServers: vi.fn(async (_redis: unknown, ids: string[]) => ({ legacy: ids })),
 }));
 vi.mock('@squad/diag', () => ({
   createDiag: vi.fn(() => ({ emit: vi.fn().mockResolvedValue(undefined) })),
