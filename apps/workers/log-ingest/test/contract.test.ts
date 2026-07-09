@@ -4,7 +4,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import Redis from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
 
-const TEST_REDIS_URL = 'redis://127.0.0.1:6379/14';
+const TEST_REDIS_URL =
+  process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? 'redis://127.0.0.1:6379/14';
 const DATABASE_URL =
   process.env.DATABASE_URL ??
   'postgres://admin:g3rlRkR6QTfGoN4svPLjEA7dCDbS553C@127.0.0.1:5432/admin';

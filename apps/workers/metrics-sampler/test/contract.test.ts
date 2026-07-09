@@ -4,7 +4,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import Redis from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
 
-const TEST_REDIS_URL = 'redis://127.0.0.1:6379/14';
+const TEST_REDIS_URL =
+  process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? 'redis://127.0.0.1:6379/14';
 const ENTRY = path.resolve(import.meta.dirname, '../dist/index.js');
 const WORKER = 'metrics-sampler';
 const HB_KEY = `worker:heartbeat:${WORKER}`;
