@@ -1,10 +1,12 @@
 # `api` — changelog
 
-## 2026-07-09 — Faster integration test setup
+## 2026-07-09 — Parallel API test suite
 
 ### Changed
 
-- The integration harness (`test/integration/harness.ts`) now provisions each isolated test database by cloning a per-process template migrated exactly once (`CREATE DATABASE … TEMPLATE`, ~80ms) instead of replaying all 42 migrations per test (~2.6s of DDL). `createIsolatedSchema()` returns a cloned database rather than a `search_path` schema; `runMigrations()` is idempotent. A `globalSetup` sweeps orphaned `sqtest_*`/`sqtmpl_*` databases. Test behavior and isolation guarantees are unchanged.
+- Isolated test databases are now cloned from a single migrated template (`CREATE DATABASE … TEMPLATE`, ~80ms) instead of replaying all 42 migrations per test (~2.6s of DDL). `global-setup.ts` builds the template once and shares it with workers via Vitest `inject`; the low-level provisioning lives in `test/integration/isolated-db.ts` (deliberately free of route imports so it never pollutes the module registry ahead of a test's `vi.mock`).
+- File parallelism is enabled (`pool: 'forks'`, `maxForks: 4`). Each worker gets its own cloned database and a dedicated Redis logical DB via `worker-setup.ts`, so parallel workers never share mutable Postgres or Redis state; tests within a file stay sequential. A `globalSetup` sweeps orphaned `sqtest_*`/`sqtmpl_*`/`sqworker_*` databases.
+- Net effect: the full API suite drops from ~1271s to ~142s (~9×) with identical test behavior and isolation guarantees.
 
 ## 2026-07-07 — RCON worker command queue
 

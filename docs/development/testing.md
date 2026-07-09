@@ -119,11 +119,11 @@ If you claim a bug is fixed or a feature is shipped, the corresponding test is i
 
 ## Test isolation
 
-Tests in `apps/api/test/*.test.ts` run against the **shared dev/staging Postgres DB** — not an ephemeral throwaway. That means mutations in one test run can corrupt real state. The following rules are non-negotiable for any test that touches the shared DB directly (i.e. not via the integration harness's isolated database, which clones a once-migrated template per test).
+Tests in `apps/api/test/*.test.ts` run against a **per-worker isolated Postgres database** — each Vitest worker clones a fresh database from a once-migrated template (`worker-setup.ts` overrides `DATABASE_URL`/`TEST_DATABASE_URL`), so a run never mutates the operator's real DB. Test files that share a worker still share that worker's clone, and `test-isolation.regression.test.ts` enforces the scoping rules below — so they remain non-negotiable for any test that mutates `players`/`roles`/`panel_meta` directly (i.e. not via the harness's per-test isolated database).
 
 ### Why it matters
 
-The DB is shared with the operator's running panel. A test that calls `update(players).set({ roleId: null })` without filtering to test-only steam IDs will silently strip the Owner role from a real admin player mid-run. This happened. It must never happen again.
+Per-worker cloning keeps the operator's panel DB safe from test mutations, but files that share a worker's clone can still corrupt each other: a test that calls `update(players).set({ roleId: null })` without filtering to test-only steam IDs strips the Owner role for every other test in that worker. Historically the suite ran directly against the operator DB and this stripped a real admin's Owner role mid-run — the scoping convention exists so that never recurs.
 
 ### The TEST_STEAM_BASE convention
 
