@@ -8,6 +8,7 @@ export const RCON_OPERATOR_COMMANDS = [
   'AdminBroadcast',
   'AdminEndMatch',
   'AdminReloadServerConfig',
+  'AdminWarn',
 ] as const;
 
 export const rconOperatorCommandNameSchema = z.enum(RCON_OPERATOR_COMMANDS);
