@@ -1,15 +1,18 @@
+import { bucketSessionsByLocalHour, computeKdRatio, computePrimetime } from '@squad/db';
 import type { ClanRow } from '@squad/db/schema';
 import {
   clanMembers,
   clans,
   matches,
   matchPlayers,
+  playerDailyPresence,
   playerSessions,
+  playerStatPeriods,
   players,
   servers,
 } from '@squad/db/schema';
 import { normalizePlayerName } from '@squad/shared-config';
-import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -182,6 +185,114 @@ function pgError(err: unknown): { code?: string; constraint?: string } {
 function auditActor(req: FastifyRequest) {
   if (!req.user) throw new Error('audit actor requires an authenticated user');
   return { kind: 'steam' as const, playerId: req.user.playerId, tokenId: req.apiTokenId ?? null };
+}
+
+const STATS_DAY_MS = 86_400_000;
+const STATS_DEFAULT_RANGE_DAYS = 30;
+const STATS_TOP_MEMBERS_LIMIT = 10;
+const STATS_SESSION_WINDOW_CAP = 5000;
+const dayStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+const statsQuery = z.object({
+  from: dayStringSchema.optional(),
+  to: dayStringSchema.optional(),
+});
+const statsExportQuery = z.object({
+  from: dayStringSchema.optional(),
+  to: dayStringSchema.optional(),
+  format: z.literal('csv').default('csv'),
+});
+
+function subtractDays(day: string, days: number): string {
+  const ms = Date.parse(`${day}T00:00:00.000Z`) - days * STATS_DAY_MS;
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/** Resolves the inclusive [fromDay, toDay] window for clan stats, defaulting to the trailing 30 days. */
+function resolveStatsWindow(
+  from: string | undefined,
+  to: string | undefined,
+): { fromDay: string; toDay: string } | null {
+  const toDay = to ?? new Date().toISOString().slice(0, 10);
+  const fromDay = from ?? subtractDays(toDay, STATS_DEFAULT_RANGE_DAYS - 1);
+  if (fromDay > toDay) return null;
+  return { fromDay, toDay };
+}
+
+interface ClanStatsChartPoint {
+  day: string;
+  online_seconds: number;
+  boost_seconds: number;
+}
+
+interface ClanStatsServerTotal {
+  server_id: string;
+  server_name: string | null;
+  server_slug: string | null;
+  online_seconds: number;
+}
+
+interface ClanStatsCombatMember {
+  player_id: string;
+  canonical_name: string;
+  kills: number;
+  deaths: number;
+  revives: number;
+  kd: number;
+}
+
+interface ClanStatsPayload {
+  clan_id: string;
+  from: string;
+  to: string;
+  roster_size: number;
+  chart: ClanStatsChartPoint[];
+  totals: {
+    online_seconds: number;
+    boost_seconds: number;
+    primary_server: ClanStatsServerTotal | null;
+  };
+  primetime: {
+    total_seconds: number;
+    histogram: number[];
+    rolling_average: number[];
+    range: {
+      label: string;
+      start_minutes: number;
+      end_minutes: number;
+      start_hour: number;
+      end_hour: number;
+    } | null;
+  };
+  combat: {
+    kills: number;
+    deaths: number;
+    revives: number;
+    kd: number;
+    top: ClanStatsCombatMember[];
+  };
+}
+
+function emptyClanStatsPayload(clanId: string, fromDay: string, toDay: string): ClanStatsPayload {
+  const chart: ClanStatsChartPoint[] = [];
+  for (let cursor = fromDay; cursor <= toDay; cursor = subtractDays(cursor, -1)) {
+    chart.push({ day: cursor, online_seconds: 0, boost_seconds: 0 });
+  }
+  return {
+    clan_id: clanId,
+    from: fromDay,
+    to: toDay,
+    roster_size: 0,
+    chart,
+    totals: { online_seconds: 0, boost_seconds: 0, primary_server: null },
+    primetime: {
+      total_seconds: 0,
+      histogram: new Array(24).fill(0),
+      rolling_average: new Array(24).fill(0),
+      range: null,
+    },
+    combat: { kills: 0, deaths: 0, revives: 0, kd: 0, top: [] },
+  };
 }
 
 const clansRoutes: FastifyPluginAsync = async (app) => {
@@ -514,6 +625,265 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         next_cursor: nextCursor,
         limit,
       };
+    },
+  );
+
+  /**
+   * Aggregates presence, primetime, and combat stats for a clan's current roster over
+   * an inclusive [fromDay, toDay] window. Returns a zeroed payload when the roster is empty.
+   */
+  async function computeClanStats(
+    clanId: string,
+    fromDay: string,
+    toDay: string,
+  ): Promise<ClanStatsPayload> {
+    const rosterRows = await app.db
+      .select({ playerId: clanMembers.playerId })
+      .from(clanMembers)
+      .where(eq(clanMembers.clanId, clanId));
+    const roster = rosterRows.map((row) => row.playerId);
+
+    if (roster.length === 0) {
+      return emptyClanStatsPayload(clanId, fromDay, toDay);
+    }
+
+    const presenceRows = await app.db
+      .select({
+        day: playerDailyPresence.day,
+        serverId: playerDailyPresence.serverId,
+        serverName: servers.displayName,
+        serverSlug: servers.slug,
+        online: sql<number>`COALESCE(SUM(${playerDailyPresence.onlineSeconds}), 0)::int`,
+        boost: sql<number>`COALESCE(SUM(${playerDailyPresence.boostSeconds}), 0)::int`,
+      })
+      .from(playerDailyPresence)
+      .leftJoin(servers, eq(servers.id, playerDailyPresence.serverId))
+      .where(
+        and(
+          inArray(playerDailyPresence.playerId, roster),
+          gte(playerDailyPresence.day, fromDay),
+          lte(playerDailyPresence.day, toDay),
+        ),
+      )
+      .groupBy(
+        playerDailyPresence.day,
+        playerDailyPresence.serverId,
+        servers.displayName,
+        servers.slug,
+      )
+      .orderBy(asc(playerDailyPresence.day));
+
+    const chartByDay = new Map<string, { online: number; boost: number }>();
+    for (let cursor = fromDay; cursor <= toDay; cursor = subtractDays(cursor, -1)) {
+      chartByDay.set(cursor, { online: 0, boost: 0 });
+    }
+    const serverTotals = new Map<string, ClanStatsServerTotal>();
+    let onlineTotal = 0;
+    let boostTotal = 0;
+    for (const row of presenceRows) {
+      const dayEntry = chartByDay.get(row.day);
+      if (dayEntry) {
+        dayEntry.online += row.online;
+        dayEntry.boost += row.boost;
+      }
+      onlineTotal += row.online;
+      boostTotal += row.boost;
+
+      const existingServer = serverTotals.get(row.serverId);
+      if (existingServer) {
+        existingServer.online_seconds += row.online;
+      } else {
+        serverTotals.set(row.serverId, {
+          server_id: row.serverId,
+          server_name: row.serverName,
+          server_slug: row.serverSlug,
+          online_seconds: row.online,
+        });
+      }
+    }
+    const chart: ClanStatsChartPoint[] = Array.from(chartByDay.entries()).map(([day, sums]) => ({
+      day,
+      online_seconds: sums.online,
+      boost_seconds: sums.boost,
+    }));
+    const primaryServer =
+      Array.from(serverTotals.values()).sort((a, b) => b.online_seconds - a.online_seconds)[0] ??
+      null;
+
+    const combatRows = await app.db
+      .select({
+        playerId: playerStatPeriods.playerId,
+        canonicalName: players.canonicalName,
+        kills: sql<number>`COALESCE(SUM(${playerStatPeriods.kills}), 0)::int`,
+        deaths: sql<number>`COALESCE(SUM(${playerStatPeriods.deaths}), 0)::int`,
+        revives: sql<number>`COALESCE(SUM(${playerStatPeriods.revives}), 0)::int`,
+      })
+      .from(playerStatPeriods)
+      .innerJoin(players, eq(players.id, playerStatPeriods.playerId))
+      .where(
+        and(
+          inArray(playerStatPeriods.playerId, roster),
+          eq(playerStatPeriods.periodType, 'day'),
+          isNull(playerStatPeriods.serverId),
+          gte(playerStatPeriods.periodStart, fromDay),
+          lte(playerStatPeriods.periodStart, toDay),
+        ),
+      )
+      .groupBy(playerStatPeriods.playerId, players.canonicalName);
+
+    let killsTotal = 0;
+    let deathsTotal = 0;
+    let revivesTotal = 0;
+    const combatMembers: ClanStatsCombatMember[] = combatRows.map((row) => {
+      killsTotal += row.kills;
+      deathsTotal += row.deaths;
+      revivesTotal += row.revives;
+      return {
+        player_id: row.playerId,
+        canonical_name: row.canonicalName,
+        kills: row.kills,
+        deaths: row.deaths,
+        revives: row.revives,
+        kd: computeKdRatio(row.kills, row.deaths),
+      };
+    });
+    combatMembers.sort((a, b) => b.kills - a.kills);
+    const top = combatMembers.slice(0, STATS_TOP_MEMBERS_LIMIT);
+
+    const windowStartMs = Date.parse(`${fromDay}T00:00:00.000Z`);
+    const windowEndMs = Date.parse(`${toDay}T00:00:00.000Z`) + STATS_DAY_MS;
+    const sessionRows = await app.db
+      .select({
+        connectedAt: playerSessions.connectedAt,
+        disconnectedAt: playerSessions.disconnectedAt,
+      })
+      .from(playerSessions)
+      .where(
+        and(
+          inArray(playerSessions.playerId, roster),
+          lt(playerSessions.connectedAt, new Date(windowEndMs)),
+          or(
+            isNull(playerSessions.disconnectedAt),
+            gt(playerSessions.disconnectedAt, new Date(windowStartMs)),
+          ),
+        ),
+      )
+      .orderBy(asc(playerSessions.connectedAt))
+      .limit(STATS_SESSION_WINDOW_CAP);
+
+    const histogram = bucketSessionsByLocalHour(
+      sessionRows,
+      0,
+      windowStartMs,
+      windowEndMs,
+      windowEndMs,
+    );
+    const primetimeResult = computePrimetime(histogram);
+
+    return {
+      clan_id: clanId,
+      from: fromDay,
+      to: toDay,
+      roster_size: roster.length,
+      chart,
+      totals: {
+        online_seconds: onlineTotal,
+        boost_seconds: boostTotal,
+        primary_server: primaryServer,
+      },
+      primetime: {
+        total_seconds: primetimeResult.totalSeconds,
+        histogram: primetimeResult.histogram,
+        rolling_average: primetimeResult.rollingAverage.map((value) => Math.round(value)),
+        range: primetimeResult.range
+          ? {
+              label: primetimeResult.range.label,
+              start_minutes: primetimeResult.range.startMinutes,
+              end_minutes: primetimeResult.range.endMinutes,
+              start_hour: primetimeResult.range.startHour,
+              end_hour: primetimeResult.range.endHour,
+            }
+          : null,
+      },
+      combat: {
+        kills: killsTotal,
+        deaths: deathsTotal,
+        revives: revivesTotal,
+        kd: computeKdRatio(killsTotal, deathsTotal),
+        top,
+      },
+    };
+  }
+
+  fast.get(
+    '/api/v1/clans/:id/stats',
+    { schema: { params: clanIdParams, querystring: statsQuery }, config: { audit: false } },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      if (!req.user.permissions.panelAccess) {
+        reply.code(403);
+        return { error: 'forbidden' };
+      }
+      const clan = await loadActiveClan(req.params.id);
+      if (!clan) {
+        reply.code(404);
+        return { error: 'clan_not_found' };
+      }
+      const window = resolveStatsWindow(req.query.from, req.query.to);
+      if (!window) {
+        reply.code(400);
+        return { error: 'invalid_range' };
+      }
+      return computeClanStats(clan.id, window.fromDay, window.toDay);
+    },
+  );
+
+  fast.get(
+    '/api/v1/clans/:id/stats/export',
+    { schema: { params: clanIdParams, querystring: statsExportQuery }, config: { audit: false } },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.header('content-type', 'application/json; charset=utf-8');
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      if (!req.user.permissions.panelAccess) {
+        reply.header('content-type', 'application/json; charset=utf-8');
+        reply.code(403);
+        return { error: 'forbidden' };
+      }
+      const clan = await loadActiveClan(req.params.id);
+      if (!clan) {
+        reply.header('content-type', 'application/json; charset=utf-8');
+        reply.code(404);
+        return { error: 'clan_not_found' };
+      }
+      const window = resolveStatsWindow(req.query.from, req.query.to);
+      if (!window) {
+        reply.header('content-type', 'application/json; charset=utf-8');
+        reply.code(400);
+        return { error: 'invalid_range' };
+      }
+      const stats = await computeClanStats(clan.id, window.fromDay, window.toDay);
+
+      const lines = [
+        'day,online_seconds,boost_seconds',
+        ...stats.chart.map(
+          (point) => `${point.day},${point.online_seconds},${point.boost_seconds}`,
+        ),
+      ];
+      const body = `${lines.join('\r\n')}\r\n`;
+      const stamp = new Date().toISOString().slice(0, 10);
+
+      reply.header('content-type', 'text/csv; charset=utf-8');
+      reply.header(
+        'content-disposition',
+        `attachment; filename="clan-${clan.id}-stats-${stamp}.csv"`,
+      );
+      return body;
     },
   );
 
