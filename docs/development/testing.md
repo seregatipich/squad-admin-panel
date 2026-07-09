@@ -119,7 +119,7 @@ If you claim a bug is fixed or a feature is shipped, the corresponding test is i
 
 ## Test isolation
 
-Tests in `apps/api/test/*.test.ts` run against the **shared dev/staging Postgres DB** — not an ephemeral throwaway. That means mutations in one test run can corrupt real state. The following rules are non-negotiable for any test that touches the shared DB directly (i.e. not via the integration harness's isolated schema).
+Tests in `apps/api/test/*.test.ts` run against the **shared dev/staging Postgres DB** — not an ephemeral throwaway. That means mutations in one test run can corrupt real state. The following rules are non-negotiable for any test that touches the shared DB directly (i.e. not via the integration harness's isolated database, which clones a once-migrated template per test).
 
 ### Why it matters
 

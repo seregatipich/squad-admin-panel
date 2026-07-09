@@ -1,5 +1,11 @@
 # `api` — changelog
 
+## 2026-07-09 — Faster integration test setup
+
+### Changed
+
+- The integration harness (`test/integration/harness.ts`) now provisions each isolated test database by cloning a per-process template migrated exactly once (`CREATE DATABASE … TEMPLATE`, ~80ms) instead of replaying all 42 migrations per test (~2.6s of DDL). `createIsolatedSchema()` returns a cloned database rather than a `search_path` schema; `runMigrations()` is idempotent. A `globalSetup` sweeps orphaned `sqtest_*`/`sqtmpl_*` databases. Test behavior and isolation guarantees are unchanged.
+
 ## 2026-07-07 — RCON worker command queue
 
 ### Changed
