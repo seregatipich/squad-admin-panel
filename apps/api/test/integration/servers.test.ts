@@ -151,6 +151,73 @@ describe('POST /api/v1/servers', () => {
     });
     expect([400, 422]).toContain(resp.statusCode);
   });
+
+  it('rejects a body with duplicate ports within the same server with 400/422', async () => {
+    const cookie = await login();
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: { ...createBody, slug: 'dup-ports-test', query_port: createBody.game_port },
+    });
+    expect([400, 422]).toContain(resp.statusCode);
+  });
+
+  it('rejects creating a server whose port collides with an existing server with 409 port_conflict', async () => {
+    const cookie = await login();
+    const first = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: { ...createBody, slug: 'port-collision-a' },
+    });
+    expect(first.statusCode).toBe(201);
+
+    const second = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: {
+        ...createBody,
+        slug: 'port-collision-b',
+        game_port: createBody.game_port,
+        query_port: 27166,
+        beacon_port: 15001,
+        rcon_port: 21115,
+      },
+    });
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toEqual({
+      error: 'port_conflict',
+      message: 'One or more ports are already in use by another server.',
+    });
+  });
+
+  it('creates a second server with distinct, non-colliding ports (control)', async () => {
+    const cookie = await login();
+    const first = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: { ...createBody, slug: 'no-collision-a' },
+    });
+    expect(first.statusCode).toBe(201);
+
+    const second = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: {
+        ...createBody,
+        slug: 'no-collision-b',
+        game_port: 7788,
+        query_port: 27166,
+        beacon_port: 15001,
+        rcon_port: 21115,
+      },
+    });
+    expect(second.statusCode).toBe(201);
+  });
 });
 
 describe('GET /api/v1/servers/:id', () => {
