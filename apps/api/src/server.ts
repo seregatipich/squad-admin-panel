@@ -99,6 +99,7 @@ import vehicleCatalogRoutes from './routes/vehicle-catalog.js';
 import vipTiersRoutes from './routes/vip-tiers.js';
 import voteAnalyticsRoutes from './routes/vote-analytics.js';
 import votesRoutes from './routes/votes.js';
+import whitelistRoutes from './routes/whitelist.js';
 
 // Side-effect import: augments the Fastify types with our plugin context.
 import './plugins/types.js';
@@ -226,6 +227,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(steamRoutes);
   await app.register(setupRoutes);
   await app.register(integrationsVipRoutes);
+  await app.register(whitelistRoutes);
 
   return app;
 }

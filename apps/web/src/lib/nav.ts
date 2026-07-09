@@ -63,6 +63,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/settings/mark-types', label: 'Типы меток', permission: 'role:edit' },
       { href: '/settings/chat-flags', label: 'Флаги чата', permission: 'role:edit' },
       { href: '/settings/alerts', label: 'Оповещения' },
+      { href: '/settings/whitelist', label: 'Whitelist', permission: 'whitelist:view' },
       { href: '/settings/economy', label: 'Экономика' },
       { href: '/settings/tokens', label: 'API-токены' },
       { href: '/settings/ban-sources', label: 'Источники банов' },

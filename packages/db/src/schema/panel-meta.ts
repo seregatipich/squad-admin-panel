@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { boolean, check, pgTable, smallint, text, timestamp } from 'drizzle-orm/pg-core';
+import { boolean, check, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { roles } from './roles.js';
 
 export const panelMeta = pgTable(
   'panel_meta',
@@ -9,6 +10,9 @@ export const panelMeta = pgTable(
     rolesSeeded: boolean('roles_seeded').notNull().default(false),
     setupCompleted: boolean('setup_completed').notNull().default(false),
     organizationName: text('organization_name').notNull().default(''),
+    whitelistRoleId: uuid('whitelist_role_id').references(() => roles.id, {
+      onDelete: 'set null',
+    }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
   (table) => ({
