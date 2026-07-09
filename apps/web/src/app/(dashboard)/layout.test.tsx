@@ -20,6 +20,9 @@ vi.mock('@/components/connection-banner', () => ({
 vi.mock('@/components/SidebarNav', () => ({
   SidebarNav: () => null,
 }));
+vi.mock('@/components/CommandPalette', () => ({
+  CommandPalette: () => null,
+}));
 
 import DashboardLayout from './layout';
 

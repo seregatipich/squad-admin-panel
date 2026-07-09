@@ -122,6 +122,22 @@ describe('apiFetch', () => {
     expect(result).toEqual(payload);
   });
 
+  it('uses a relative URL when running in a browser context', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({}),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+    vi.stubGlobal('window', {});
+
+    await apiFetch('/api/v1/players/search?q=abc');
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/v1/players/search?q=abc',
+      expect.objectContaining({ cache: 'no-store' }),
+    );
+  });
+
   it('sets content-type for body when not provided', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,

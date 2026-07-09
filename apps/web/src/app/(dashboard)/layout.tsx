@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import { CommandPalette } from '@/components/CommandPalette';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { SidebarNav } from '@/components/SidebarNav';
 import { apiFetch } from '@/lib/api';
@@ -23,6 +24,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <ConnectionBanner />
       <div className="flex flex-1">
         <SidebarNav permissions={me.permissions} displayName={me.canonical_name} />
+        <CommandPalette permissions={me.permissions} />
         <main className="flex-1 space-y-6 p-8">{children}</main>
       </div>
     </div>
