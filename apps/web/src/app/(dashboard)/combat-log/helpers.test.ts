@@ -119,7 +119,9 @@ describe('parseFilters / buildQueryString', () => {
     const filters: CombatFilters = {
       facet: 'damage',
       attackerQuery: 'Rambo',
+      attackerPlayerId: '',
       victimQuery: 'Target',
+      victimPlayerId: '',
       weapon: 'AK74',
       serverIds: ['srv-a', 'srv-b'],
       preset: '90days',
@@ -180,6 +182,22 @@ describe('buildListApiQuery', () => {
     expect(parsed.get('attackerName')).toBe('Rambo');
     expect(parsed.get('victimName')).toBe('Target');
     expect(parsed.get('weapon')).toBe('AK');
+  });
+
+  it('maps hidden player id filters to exact API filters for deep links', () => {
+    const qs = buildListApiQuery(
+      {
+        ...defaultFilters(),
+        facet: 'teamkills',
+        attackerPlayerId: '00000000-0000-0000-0000-000000000001',
+        victimPlayerId: '00000000-0000-0000-0000-000000000002',
+      },
+      { now },
+    );
+    const parsed = params(qs);
+    expect(parsed.get('teamkillsOnly')).toBe('true');
+    expect(parsed.get('attackerPlayerId')).toBe('00000000-0000-0000-0000-000000000001');
+    expect(parsed.get('victimPlayerId')).toBe('00000000-0000-0000-0000-000000000002');
   });
 
   it('locks the server when a lockedServerId is provided', () => {

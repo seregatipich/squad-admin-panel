@@ -4,9 +4,10 @@
 
 1. Read `DATABASE_URL`, `REDIS_URL` from environment; fatal-exit if missing.
 2. Create `BridgeClient` (socket path from `BRIDGE_SOCKET` or `/run/panel-host-bridge/bridge.sock`).
-3. Call `reconcile()` immediately.
-4. Start `setInterval(reconcile, 15_000)`.
-5. Start heartbeat (`worker:heartbeat:log-ingest`, every 5 s).
+3. Start raw log retention sweep: run once immediately, then every 1 hour via `bridge.squadLogRetentionSweep()`.
+4. Call `reconcile()` immediately.
+5. Start `setInterval(reconcile, 15_000)`.
+6. Start heartbeat (`worker:heartbeat:log-ingest`, every 5 s).
 
 ## Reconcile loop (every 15 s)
 
@@ -29,6 +30,32 @@
 6. On explicit abort (`return () => { aborted = true; ... }`): the trailing `onStopped({ reason: 'aborted' })` fires from the IIFE's terminating branch.
 
 The worker translates each `onStopped` into a `tail.stopped` diag emit carrying `{ container, reason, error? }`.
+
+## Raw log retention sweep (startup + hourly)
+
+`retention.ts` calls `bridge.squadLogRetentionSweep()` without params. The worker never receives a direct filesystem mount and never passes a path to the bridge.
+
+The bridge-side policy is fixed:
+
+1. Scan only `/var/lib/squad-panel/saved/{uuid}/SquadGame/Saved/Logs/`.
+2. Delete only regular files matching `SquadGame*.log`.
+3. Never delete exact `SquadGame.log`.
+4. Delete only when `mtime + 10d < now`.
+5. Continue after per-file/per-server errors and return counters.
+
+On success the worker logs `deleted_count`, `deleted_bytes`, `error_count`, `servers_scanned`, `log_dirs_scanned`, `files_scanned`, `retention_days`, and `cutoff`, then emits:
+
+```ts
+{
+  component: 'worker-log-ingest',
+  kind: 'log.retention.sweep',
+  severity: 'info' | 'warn',
+  message: 'log retention sweep completed: deleted=<n>, bytes=<n>, errors=<n>',
+  payload: { retention_days, cutoff, servers_scanned, log_dirs_scanned, files_scanned, deleted_count, deleted_bytes, error_count, errors }
+}
+```
+
+`severity` is `warn` when `error_count > 0`. If the bridge call itself fails, the worker logs the failure and emits `log.retention.sweep_failed` with severity `error`; it does not exit. The scheduler uses an in-flight guard, so a slow sweep is not overlapped by the next hourly tick.
 
 ## Event parsing and publishing
 
@@ -62,11 +89,12 @@ If the EOS line arrives more than 2500 ms after `Join succeeded`, the join is dr
 ## Graceful shutdown (SIGTERM / SIGINT)
 
 1. Stop heartbeat.
-2. Clear reconcile interval.
-3. Call all abort functions; clear `aborters` map.
-4. `redis.quit()`.
-5. `bridge.close()`.
-6. `process.exit(0)`.
+2. Stop the hourly raw log retention interval.
+3. Clear reconcile interval.
+4. Call all abort functions; clear `aborters` map.
+5. `redis.quit()`.
+6. `bridge.close()`.
+7. `process.exit(0)`.
 
 ## Error handling
 
@@ -75,5 +103,6 @@ If the EOS line arrives more than 2500 ms after `Join succeeded`, the join is dr
 | Bridge socket unavailable on start | `BridgeClient` queues the connection; reconnects automatically |
 | `containerLogsFollow` stream ends | Log warn; next reconcile reattaches |
 | `publish()` Redis error | Log error; event is lost (no retry) |
+| Raw log retention bridge failure | Log error, emit `log.retention.sweep_failed`, retry on next hourly tick |
 | Malformed log line | `parseLine` returns null; line is dropped silently |
 | DB query failure in reconcile | Log error; skip this cycle |

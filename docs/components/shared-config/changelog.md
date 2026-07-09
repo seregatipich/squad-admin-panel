@@ -1,5 +1,15 @@
 # `shared-config` — changelog
 
+## 2026-07-07
+
+### Added
+
+- `squad_log_retention_sweep` appended to `BRIDGE_METHODS` before `host_agent_restart`. Backs LOG-1 raw Squad log retention through the host bridge.
+
+### Changed
+
+- `BRIDGE_METHODS` length is now 25. `BridgeMethod` union is correspondingly wider.
+
 ## 2026-04-29
 
 ### Added

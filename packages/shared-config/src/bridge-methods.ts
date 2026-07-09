@@ -22,6 +22,7 @@ export const BRIDGE_METHODS = [
   'depot_update',
   'docker_prune',
   'panel_disk_usage',
+  'squad_log_retention_sweep',
   'host_agent_restart',
 ] as const;
 

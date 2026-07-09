@@ -32,6 +32,27 @@ Unit tests for the `ListPlayers` response parser.
 | Parses a single active player with all fields | `rcon_id`, `eos_id`, `steam_id64`, `name`, `team_id`, `squad_id`, `is_leader`, `role` |
 | Handles `Squad ID: N/A` | `squad_id` is `null` |
 | Ignores rows below the disconnected header | Recently-disconnected players are not returned |
+| Keeps Cyrillic and emoji nicknames from real server-style output | UTF-8 nicknames survive parsing unchanged |
+
+### `parse-list-squads.test.ts`
+
+Unit tests for the `ListSquads` response parser.
+
+| Test | What it verifies |
+|---|---|
+| Returns empty list for empty or malformed output | Non-squad output is ignored |
+| Parses squads with team context, lock state, size, and creator ids | Team header context is copied into every squad row |
+| Ignores squad rows before the first team header | Orphan rows do not leak a fake team |
+
+### `parse-show-next-map.test.ts`
+
+Unit tests for the `ShowNextMap` parser.
+
+| Test | What it verifies |
+|---|---|
+| Parses a concrete next layer | `level` and `layer` are extracted |
+| Returns null fields while the next layer is still a vote | `To be voted` does not masquerade as a layer |
+| Returns null for empty or unexpected output | RCON errors do not throw |
 
 ### `parse-server-info.test.ts`
 
@@ -46,6 +67,21 @@ Unit tests for `RconSupervisor` reconcile lifecycle.
 | Starts a per-server supervisor on reconcile | `size()` increments when a target is added |
 | Removes stopped target on reconcile | `size()` decrements when target removed from reconcile list |
 | Does not re-add existing target on repeated reconcile | Idempotent reconcile does not double-count targets |
+| Polls `ListSquads` and `ShowNextMap` and writes the squad cache | Real TCP fixture verifies the full poll command set |
+| Executes queued operator commands over the connected worker RCON session | Real TCP fixture verifies `rcon:commands:{id}` consumption, result write, and `XACK` |
+
+### `commands.test.ts`
+
+Unit tests for the Redis Stream command queue.
+
+| Test | What it verifies |
+|---|---|
+| Builds only whitelisted operator commands | `AdminBroadcast`, `AdminEndMatch`, `AdminReloadServerConfig` are accepted |
+| Rejects unsupported commands and unsafe broadcast text | Arbitrary RCON and CR/LF/NUL broadcast payloads are blocked |
+| Creates the consumer group from stream id `0` | Already-accepted commands are not skipped on first worker startup |
+| Stores success and failure results and acknowledges stream entries | API callers receive a result through `rcon:command-result:{requestId}` |
+| Reclaims idle pending entries through `XAUTOCLAIM` | Commands delivered to a dead consumer are replayed by the active consumer |
+| Skips execution when a claimed entry already has a result key | Crash after result write but before `XACK` does not duplicate the RCON side effect |
 
 ### `supervisor-diag.test.ts`
 
@@ -70,8 +106,9 @@ Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
 
 ## Coverage gaps
 
-- `client.ts` is not unit-tested (requires a real TCP server or a mock). The new `supervisor-diag.test.ts` exercises it indirectly via a `net.createServer()` fixture for the connect/auth-fail paths; the e2e suite in `apps/api/test/e2e/install-lifecycle.e2e.test.ts` exercises it through the full stack.
+- `client.ts` is unit-tested with an in-process TCP fixture for command serialization; `supervisor-diag.test.ts` also exercises it indirectly for connect/auth-fail paths.
 - `persist.ts` has no isolated test; covered indirectly by e2e tests that verify player rows appear after a poll cycle.
+- The command queue is at-least-once for the actual RCON side effect. A crash after RCON execution but before result write can still replay after reclaim; a crash after result write but before `XACK` is covered by the result-key guard.
 - `rcon.disconnected` and `rcon.reconnect_attempt` diag emits are not asserted in unit tests because the connect loop's backoff sleep makes their timing brittle in fake-timer mode; the e2e suite exercises them end-to-end during graceful-stop.
 
 ## Test data

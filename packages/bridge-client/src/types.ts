@@ -202,6 +202,24 @@ export interface HostAgentRestartResult {
   status: 'restarting';
 }
 
+export interface SquadLogRetentionSweepError {
+  server_id?: string;
+  file?: string;
+  error: string;
+}
+
+export interface SquadLogRetentionSweepResult {
+  retention_days: number;
+  cutoff: string;
+  servers_scanned: number;
+  log_dirs_scanned: number;
+  files_scanned: number;
+  deleted_count: number;
+  deleted_bytes: number;
+  error_count: number;
+  errors: SquadLogRetentionSweepError[];
+}
+
 export interface PanelDiskUsageDockerVolume {
   name: string;
   bytes: number;

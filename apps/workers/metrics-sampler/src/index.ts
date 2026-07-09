@@ -50,13 +50,24 @@ async function main(): Promise<void> {
 
   const stopSampler = runSampler({ bridge, redis, log });
 
+  let shuttingDown = false;
   const shutdown = async (sig: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     log.info({ sig }, 'shutdown');
+    // Watchdog: guarantee a clean exit even if graceful teardown stalls (e.g. the
+    // bridge close or a redis quit hangs). Mirrors worker-rcon's shutdown contract.
+    const forceExit = setTimeout(() => {
+      log.warn('graceful shutdown timed out; forcing exit');
+      process.exit(0);
+    }, 3000);
+    forceExit.unref();
     stopSampler();
-    await emitStopped(diag, sig);
+    await emitStopped(diag, sig).catch(() => undefined);
     stopHeartbeat();
     await redis.quit().catch(() => undefined);
-    await bridge.close();
+    await bridge.close().catch(() => undefined);
+    clearTimeout(forceExit);
     process.exit(0);
   };
   process.once('SIGTERM', shutdown);

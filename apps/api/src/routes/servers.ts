@@ -16,6 +16,7 @@ import { fireAutoPrune } from '../lib/auto-prune.js';
 import { decryptString, deserialize, encrypt, serialize } from '../lib/crypto.js';
 import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
+import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { relaunchSidecar, sidecarContainerName } from '../lib/rnsquadjs.js';
 import { softDeleteServer } from '../lib/server-delete.js';
 
@@ -466,14 +467,42 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             const broadcastT0 = Date.now();
             let broadcastOk = true;
             let broadcastResponse: string | undefined;
+            let broadcastVia: 'worker-rcon' | 'direct' = 'direct';
+            let broadcastRequestId: string | undefined;
             try {
-              const r = await rconSendOnce({
-                ...target,
-                command: 'AdminBroadcast Server is shutting down in 15 seconds',
-                connectTimeoutMs: 2000,
-                commandTimeoutMs: 3000,
+              const viaWorker = await sendRconCommandViaWorker(app.redis, {
+                serverId: s.id,
+                command: 'AdminBroadcast',
+                args: ['Server is shutting down in 15 seconds'],
+                actorPlayerId,
+                timeoutMs: 3000,
               });
-              broadcastResponse = typeof r === 'string' ? r : undefined;
+              if (viaWorker.attempted) {
+                broadcastVia = 'worker-rcon';
+                broadcastRequestId = viaWorker.requestId;
+                if (viaWorker.ok) {
+                  broadcastResponse = viaWorker.response;
+                } else {
+                  broadcastOk = false;
+                  broadcastResponse = viaWorker.detail ?? viaWorker.reason;
+                  req.log.warn(
+                    {
+                      reason: viaWorker.reason,
+                      detail: viaWorker.detail,
+                      requestId: viaWorker.requestId,
+                    },
+                    'AdminBroadcast worker-rcon failed; not retrying directly',
+                  );
+                }
+              } else {
+                const r = await rconSendOnce({
+                  ...target,
+                  command: 'AdminBroadcast Server is shutting down in 15 seconds',
+                  connectTimeoutMs: 2000,
+                  commandTimeoutMs: 3000,
+                });
+                broadcastResponse = typeof r === 'string' ? r : undefined;
+              }
             } catch (err) {
               broadcastOk = false;
               req.log.warn({ err: (err as Error).message }, 'AdminBroadcast failed; continuing');
@@ -488,6 +517,8 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
               message: broadcastOk ? 'AdminBroadcast sent' : 'AdminBroadcast failed',
               payload: {
                 ok: broadcastOk,
+                via: broadcastVia,
+                requestId: broadcastRequestId,
                 raw_response: broadcastResponse,
                 durationMs: Date.now() - broadcastT0,
               },
@@ -495,13 +526,41 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             await new Promise((resolve) => setTimeout(resolve, 15_000));
             const endMatchT0 = Date.now();
             let endMatchOk = true;
+            let endMatchVia: 'worker-rcon' | 'direct' = 'direct';
+            let endMatchRequestId: string | undefined;
+            let endMatchResponse: string | undefined;
             try {
-              await rconSendOnce({
-                ...target,
+              const viaWorker = await sendRconCommandViaWorker(app.redis, {
+                serverId: s.id,
                 command: 'AdminEndMatch',
-                connectTimeoutMs: 2000,
-                commandTimeoutMs: 3000,
+                actorPlayerId,
+                timeoutMs: 3000,
               });
+              if (viaWorker.attempted) {
+                endMatchVia = 'worker-rcon';
+                endMatchRequestId = viaWorker.requestId;
+                if (viaWorker.ok) {
+                  endMatchResponse = viaWorker.response;
+                } else {
+                  endMatchOk = false;
+                  endMatchResponse = viaWorker.detail ?? viaWorker.reason;
+                  req.log.warn(
+                    {
+                      reason: viaWorker.reason,
+                      detail: viaWorker.detail,
+                      requestId: viaWorker.requestId,
+                    },
+                    'AdminEndMatch worker-rcon failed; not retrying directly',
+                  );
+                }
+              } else {
+                await rconSendOnce({
+                  ...target,
+                  command: 'AdminEndMatch',
+                  connectTimeoutMs: 2000,
+                  commandTimeoutMs: 3000,
+                });
+              }
             } catch (err) {
               endMatchOk = false;
               req.log.warn({ err: (err as Error).message }, 'AdminEndMatch failed; continuing');
@@ -513,7 +572,13 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
               serverId: s.id,
               actorPlayerId,
               message: endMatchOk ? 'AdminEndMatch sent' : 'AdminEndMatch failed',
-              payload: { ok: endMatchOk, durationMs: Date.now() - endMatchT0 },
+              payload: {
+                ok: endMatchOk,
+                via: endMatchVia,
+                requestId: endMatchRequestId,
+                raw_response: endMatchResponse,
+                durationMs: Date.now() - endMatchT0,
+              },
             });
           } catch (err) {
             req.log.warn({ err: (err as Error).message }, 'graceful stop RCON phase skipped');

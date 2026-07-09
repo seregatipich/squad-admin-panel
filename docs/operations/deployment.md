@@ -23,6 +23,47 @@ two files in sync by hand when the bridge-facing env/volumes on a worker change 
 `docker-compose.yml`. `.env.tk104` additionally needs `PANEL_GID` and `DATA_DIR` set to
 match the host's `panel` group and the data tree created by `install-host-bridge.sh`.
 
+## CI/CD on self-hosted runners (tk104)
+
+Both GitHub Actions workflows (`ci`, `deploy-tk104`) run on **self-hosted runners
+installed on the tk104 host** — GitHub-hosted minutes are not used. Two runner
+instances are registered so the `ci` jobs (`branch-guard`, `node`, `go`, then the
+dependent `docker`) run with parallelism.
+
+- **Install location:** `~/actions-runner-1` and `~/actions-runner-2` on tk104,
+  each running as a systemd service
+  `actions.runner.breaking-squad-squad-admin-panel.tk104-runner-{1,2}.service`
+  (enabled, `User=seregatipich`, member of the `docker` group).
+- **Labels:** `self-hosted, linux, x64, tk104`. Workflows target
+  `runs-on: [self-hosted, linux, x64]`.
+- **Re-registering a runner** (token expired / re-provisioning): mint a short-lived
+  registration token and reconfigure —
+  ```bash
+  gh api -X POST repos/breaking-squad/squad-admin-panel/actions/runners/registration-token --jq .token
+  cd ~/actions-runner-1
+  ./config.sh --url https://github.com/breaking-squad/squad-admin-panel \
+      --token <TOKEN> --name tk104-runner-1 --labels tk104 --unattended --replace
+  ```
+  The v2.335.x tarball does not ship a root `svc.sh`; it is rendered from
+  `bin/systemd.svc.sh.template` (substituting the service name/description), then
+  `sudo ./svc.sh install seregatipich && sudo ./svc.sh start`.
+- **Service containers use dynamic host ports.** The `node` job's `postgres`/`redis`
+  service containers publish to Docker-assigned host ports (`ports: [5432]` /
+  `[6379]`) instead of fixed `5432:5432` — tk104's fixed 5432/6379 are already bound
+  by the production stack, and dynamic ports also avoid collisions between two
+  concurrent `ci` runs. A `Resolve service ports` step reads the assigned ports from
+  the `job.services.*.ports[...]` context into `DATABASE_URL`/`REDIS_URL`.
+- **Deploy runs locally.** `deploy-tk104.yml` runs on the tk104 runner itself: it
+  `rsync`s the checkout into `~/apps/squad-admin-panel/` (preserving `.env*`, `data`)
+  and runs `scripts/deploy-tk104.sh` directly — no SSH round-trip. Health is gated on
+  the local `https://localhost/health` probe; the external
+  `https://tk104.duckdns.org/health` probe is best-effort (hairpin NAT from inside
+  the LAN is not guaranteed). The former `TK104_SSH_KEY` secret is no longer used.
+- **Disk hygiene:** a weekly root cron (`/etc/cron.d/actions-runner-docker-prune`)
+  runs `docker builder prune -af --filter until=168h` + `docker image prune -f` so
+  re-tagged `:ci` build layers do not accumulate. Prune never touches images backing
+  running production containers.
+
 ## Container topology
 
 | Service | Image | Notes |
@@ -180,7 +221,7 @@ sudo systemctl restart panel-host-bridge.service
 ## Verifying a deployment
 
 ```bash
-sg panel -c 'bash scripts/verify-bridge.sh'   # smoke-test all 17 bridge RPC methods
+sg panel -c 'bash scripts/verify-bridge.sh'   # bridge RPC smoke test
 curl -sk https://${APP_DOMAIN}/health          # {"status":"ok"}
 curl -sk https://${APP_DOMAIN}/ready           # {"status":"ok","checks":{"postgres":"ok","redis":"ok","bridge":"ok"}}
 curl -skI https://${APP_DOMAIN}/api/docs        # API docs UI responds

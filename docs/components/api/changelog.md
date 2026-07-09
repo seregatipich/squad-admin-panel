@@ -1,5 +1,13 @@
 # `api` — changelog
 
+## 2026-07-07 — RCON worker command queue
+
+### Changed
+
+- `POST /api/v1/servers/:id/stop` sends `AdminBroadcast` and `AdminEndMatch` through `worker-rcon` when `rcon:status:{serverId}.state = "connected"`. Direct one-shot TCP RCON remains a fallback only when the command was not accepted into the worker stream.
+- `PUT /api/v1/servers/:id/configs/:name` uses the same worker-first path for `AdminReloadServerConfig`; the reload outcome can now report `via: "worker-rcon"` and `request_id`.
+- RCON stop diag payloads now include `via` and optional `requestId`, so ops can tell whether a command went through the worker queue or direct fallback.
+
 ## 2026-07-05 — PNOTE-2 global notes feed
 
 ### Added

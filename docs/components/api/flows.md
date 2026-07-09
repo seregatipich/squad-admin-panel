@@ -164,6 +164,11 @@ writeVersion():
     reloadServerConfig(app, serverId):
       if status NOT IN (running, starting):
         return { applied:false, reason:'not_running' }
+      try worker-rcon queue when rcon:status:{server_id}.state == 'connected':
+        if ok:
+          return { applied:true, via:'worker-rcon', command, response, request_id }
+        if accepted but failed/timed out:
+          return { applied:false, reason:'rcon_failed', detail }
       if no decryptable rcon credentials:
         return { applied:false, reason:'no_credentials' }
       try:
@@ -626,9 +631,11 @@ api emits server.stop.requested            ← payload.method='graceful'
   ├─ DB: UPDATE servers SET status='stopping'
   ├─ liveBus.publish({type: 'server.status', status: 'stopping'})
   ├─ if creds + settings:
-  │   ├─ rcon AdminBroadcast → api emits server.stop.broadcast (ok + raw_response)
+  │   ├─ worker-rcon AdminBroadcast, or direct RCON only before stream acceptance
+  │   │  → api emits server.stop.broadcast (ok + via + raw_response)
   │   ├─ sleep 15s
-  │   └─ rcon AdminEndMatch → api emits server.stop.end_match (ok)
+  │   └─ worker-rcon AdminEndMatch, or direct RCON only before stream acceptance
+  │      → api emits server.stop.end_match (ok + via)
   ├─ bridge.containerStop → api emits server.stop.container_stop (ok + durationMs)
   └─ api emits server.stop.done              ← payload.totalDurationMs
 ─────── on any throw above ───────

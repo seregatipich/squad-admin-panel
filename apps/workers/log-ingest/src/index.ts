@@ -9,12 +9,14 @@ import { ChatFlagDetector } from './chat/flag-rules.js';
 import { handleChat } from './chat/store.js';
 import { handleCombat, handleVehicle } from './combat/store.js';
 import { dropCutoverServers } from './cutover.js';
+import { persistEventEnvelope } from './event-store.js';
 import { TailManager } from './manager.js';
 import { DEFAULT_SEED_ONLINE_THRESHOLD, handleMatchCommand } from './match/store.js';
 import { handleMatchClose } from './match-roster/store.js';
 import { LogIngestor } from './parser/ingest.js';
 import { publish } from './publish.js';
 import { handleReport } from './report/store.js';
+import { scheduleLogRetentionSweep } from './retention.js';
 import { tailContainerLogs } from './tail.js';
 import { handleVote } from './vote/store.js';
 
@@ -49,6 +51,7 @@ async function main() {
   });
 
   const diag = createDiag({ redis, log });
+  const stopLogRetentionSweep = scheduleLogRetentionSweep({ bridge, diag, log });
 
   const seedThreshold =
     Number(process.env.MATCH_SEED_ONLINE_THRESHOLD) || DEFAULT_SEED_ONLINE_THRESHOLD;
@@ -152,6 +155,9 @@ async function main() {
       onLine(line) {
         const events = ingestor.ingest(line);
         for (const e of events) {
+          persistEventEnvelope(db, e).catch((err) =>
+            log.error({ err: (err as Error).message, type: e.type }, 'event persist failed'),
+          );
           publish(redis, e).catch((err) =>
             log.error({ err: (err as Error).message, type: e.type }, 'publish failed'),
           );
@@ -220,6 +226,7 @@ async function main() {
   const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
     stopHeartbeat();
+    stopLogRetentionSweep();
     clearInterval(interval);
     manager.stopAll();
     await redis.quit().catch(() => undefined);

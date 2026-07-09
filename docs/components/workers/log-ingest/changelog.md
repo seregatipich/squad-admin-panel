@@ -1,5 +1,18 @@
 # Changelog — worker-log-ingest
 
+## 2026-07-07
+
+### Added
+
+- `src/retention.ts`: bridge-backed raw Squad log retention sweep. Runs once on startup and then hourly.
+- `log.retention.sweep` diagnostic event with `deleted_count`, `deleted_bytes`, `error_count`, scan counters, retention days, cutoff, and bounded error summaries.
+- `log.retention.sweep_failed` diagnostic event for bridge-level failures. The worker logs the failure and retries on the next hourly tick instead of exiting.
+- `test/retention.test.ts`: covers successful counter logging/diag emit, bridge failure handling, and scheduler stop behaviour.
+
+### Changed
+
+- `index.ts` starts and stops the retention scheduler alongside heartbeat, reconcile, and active log tails.
+
 ## 2026-04-28
 
 ### Fixed

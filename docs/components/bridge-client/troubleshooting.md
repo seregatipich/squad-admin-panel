@@ -82,7 +82,7 @@ sudo journalctl -u panel-host-bridge --since 5min
 ```bash
 sudo systemctl status panel-host-bridge
 sudo journalctl -u panel-host-bridge -n 100
-sg panel -c 'bash scripts/verify-bridge.sh'   # RPC smoke test (all 17 methods)
+sg panel -c 'bash scripts/verify-bridge.sh'   # bridge RPC smoke test
 ls -la /run/panel-host-bridge/bridge.sock
 docker ps --filter name=squad-               # verify Squad containers
 ```

@@ -55,6 +55,16 @@ describe('renderDiscordTemplate', () => {
     expect(rendered.url).toBe('https://panel.example/players/018f-uuid');
   });
 
+  it('renders a null url as null without substitution', () => {
+    const rendered = renderDiscordTemplate({ ...banTemplate, url: null }, context);
+    expect(rendered.url).toBeNull();
+  });
+
+  it('renders an empty-string url as null', () => {
+    const rendered = renderDiscordTemplate({ ...banTemplate, url: '' }, context);
+    expect(rendered.url).toBeNull();
+  });
+
   it('neutralizes player-controlled markdown injection', () => {
     const rendered = renderDiscordTemplate(banTemplate, {
       ...context,

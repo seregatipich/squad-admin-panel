@@ -2,19 +2,21 @@
 
 ## Bridge method allowlist
 
-20 RPC method names in declaration order (from `BRIDGE_METHODS`):
+25 RPC method names in declaration order (from `BRIDGE_METHODS`):
 
 ```
 ping  host_info  host_metrics
 file_read  file_read_tail  file_write  file_atomic_write
-directory_delete
+directory_delete  list_panel_dirs  list_squad_containers
 ufw_rule  process_info
-container_run  container_start  container_stop  container_rm
+container_run  container_run_rnsquadjs
+container_start  container_stop  container_rm
 container_inspect  container_stats  container_logs_follow
-depot_update  panel_disk_usage  host_agent_restart
+depot_update  docker_prune  panel_disk_usage
+squad_log_retention_sweep  host_agent_restart
 ```
 
-Streaming methods (deliver `BridgeStreamFrame` before the final response): `container_logs_follow`, `depot_update`.
+Streaming methods (deliver `BridgeStreamFrame` before the final response): `container_logs_follow`, `depot_update`, `docker_prune`.
 
 ## Permissions registry
 

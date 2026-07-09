@@ -70,6 +70,17 @@ Unit tests for `TailManager.reconcile` — the part of the worker that owns the 
 | Optional diag is honoured | Manager constructed without diag does not throw on reconcile |
 | `stopAll` aborts every running tail and clears the set | All abort closures invoked, `manager.size()` returns 0 |
 
+### `retention.test.ts`
+
+Unit tests for raw Squad log retention orchestration.
+
+| Test | What it verifies |
+|---|---|
+| Calls the bridge sweep and emits counters | `squadLogRetentionSweep()` invoked once; pino log and `log.retention.sweep` diag carry deleted count/bytes, scan counters, retention days, and cutoff |
+| Bridge failure does not crash worker | Rejected bridge call is logged, emits `log.retention.sweep_failed`, and resolves without throwing |
+| Scheduler runs startup + hourly and stops | Immediate sweep on startup, repeat after `LOG_RETENTION_SWEEP_INTERVAL_MS`, no further calls after `stop()` |
+| Scheduler does not overlap sweeps | An hourly tick that fires while the previous sweep is still pending is skipped; the next tick after completion runs normally |
+
 ### `contract.test.ts`
 
 Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
@@ -81,7 +92,6 @@ Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
 
 ## Coverage gaps
 
-- `tail.ts` is not unit-tested (requires a mock `BridgeClient` returning a stream). Integration coverage comes from `apps/api/test/e2e/install-lifecycle.e2e.test.ts` which verifies `server.ready` and `player.connected` appear in the event stream after a live server boot. The `tail.started` / `tail.stopped` diag emits are wired in `index.ts` glue and exercised end-to-end during the install-lifecycle e2e run.
 - `publish.ts` dedup logic is untested in isolation.
 
 ## Test data
