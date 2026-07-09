@@ -22,6 +22,7 @@ export interface PermissionContext {
   canManageIntegrations: boolean;
   canManageClans: boolean;
   canManageEconomy: boolean;
+  canHandleReports: boolean;
   combatView: boolean;
   isOwner: boolean;
 }
@@ -73,6 +74,7 @@ interface RoleContextRow extends Record<string, unknown> {
   can_manage_integrations: boolean | null;
   can_manage_clans: boolean | null;
   can_manage_economy: boolean | null;
+  can_handle_reports: boolean | null;
   combat_view: boolean | null;
   squad_permissions: string[] | null;
 }
@@ -97,6 +99,7 @@ export async function loadUserPermissions(
       r.can_manage_integrations,
       r.can_manage_clans,
       r.can_manage_economy,
+      r.can_handle_reports,
       r.combat_view,
       COALESCE(
         (SELECT array_agg(rsp.squad_permission_key ORDER BY rsp.squad_permission_key)
@@ -124,6 +127,7 @@ export async function loadUserPermissions(
       canManageIntegrations: false,
       canManageClans: false,
       canManageEconomy: false,
+      canHandleReports: false,
       combatView: false,
       isOwner: false,
     };
@@ -140,6 +144,7 @@ export async function loadUserPermissions(
   const canManageIntegrations = isOwner ? true : (row.can_manage_integrations ?? false);
   const canManageClans = isOwner ? true : (row.can_manage_clans ?? false);
   const canManageEconomy = isOwner ? true : panelAccess && (row.can_manage_economy ?? false);
+  const canHandleReports = isOwner ? true : (row.can_handle_reports ?? false);
   const combatView = isOwner ? true : panelAccess && (row.combat_view ?? false);
   const squadPermissions = isOwner
     ? new Set<SquadPermissionKey>(SQUAD_PERMISSION_KEYS)
@@ -176,6 +181,7 @@ export async function loadUserPermissions(
     canManageIntegrations,
     canManageClans,
     canManageEconomy,
+    canHandleReports,
     combatView,
     isOwner,
   };
