@@ -7,14 +7,18 @@ import {
   COMBAT_FACETS,
   type CombatApiRow,
   type CombatFilters,
+  type CombatLiveEventData,
+  combatEventToRow,
   defaultFilters,
   eventTypeMeta,
   facetLabel,
   facetToApiParams,
   formatDamage,
   formatEventTime,
+  LIVE_CAP,
   parseFilters,
   playerHref,
+  prependLiveRow,
   resolveDateRange,
   showsDamageColumn,
   sortRowsByDamage,
@@ -300,5 +304,94 @@ describe('appendPage', () => {
     const existing = [makeRow({ id: 1 }), makeRow({ id: 2 })];
     const incoming = [makeRow({ id: 2 }), makeRow({ id: 3 })];
     expect(appendPage(existing, incoming).map((row) => row.id)).toEqual([1, 2, 3]);
+  });
+});
+
+function liveEvent(overrides: Partial<CombatLiveEventData> = {}): CombatLiveEventData {
+  return {
+    server_id: '00000000-0000-0000-0000-000000000001',
+    match_id: null,
+    kind: 'combat_death',
+    attacker_player_id: 'attacker-1',
+    victim_player_id: 'victim-1',
+    weapon: 'BP_AK74',
+    damage: 45.5,
+    is_teamkill: false,
+    is_suicide: false,
+    occurred_at: '2026-07-09T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('combatEventToRow', () => {
+  it('maps every combat.event kind to the matching REST event type', () => {
+    expect(combatEventToRow(liveEvent({ kind: 'combat_damage' })).eventType).toBe('damage');
+    expect(combatEventToRow(liveEvent({ kind: 'combat_wound' })).eventType).toBe('wound');
+    expect(combatEventToRow(liveEvent({ kind: 'combat_death' })).eventType).toBe('death');
+    expect(combatEventToRow(liveEvent({ kind: 'combat_revive' })).eventType).toBe('revive');
+  });
+
+  it('carries the teamkill flag through', () => {
+    expect(combatEventToRow(liveEvent({ is_teamkill: true })).isTeamkill).toBe(true);
+    expect(combatEventToRow(liveEvent({ is_teamkill: false })).isTeamkill).toBe(false);
+  });
+
+  it('always maps player names to null (unavailable on the live payload)', () => {
+    const row = combatEventToRow(liveEvent());
+    expect(row.attacker?.current_name).toBeNull();
+    expect(row.victim?.current_name).toBeNull();
+    expect(row.attacker?.player_id).toBe('attacker-1');
+    expect(row.victim?.player_id).toBe('victim-1');
+  });
+
+  it('maps a missing attacker or victim id to null instead of an empty ref', () => {
+    const row = combatEventToRow(liveEvent({ attacker_player_id: null, victim_player_id: null }));
+    expect(row.attacker).toBeNull();
+    expect(row.victim).toBeNull();
+  });
+
+  it('stringifies numeric damage and passes through null damage', () => {
+    expect(combatEventToRow(liveEvent({ damage: 100 })).damage).toBe('100');
+    expect(combatEventToRow(liveEvent({ damage: null })).damage).toBeNull();
+  });
+
+  it('produces a negative synthetic id that never collides with a real row id', () => {
+    const row = combatEventToRow(liveEvent());
+    expect(row.id).toBeLessThan(0);
+  });
+
+  it('is deterministic for the same payload and distinct for a different one', () => {
+    const first = combatEventToRow(liveEvent());
+    const second = combatEventToRow(liveEvent());
+    const third = combatEventToRow(liveEvent({ occurred_at: '2026-07-09T10:00:01.000Z' }));
+    expect(second.id).toBe(first.id);
+    expect(third.id).not.toBe(first.id);
+  });
+});
+
+describe('prependLiveRow', () => {
+  it('prepends the incoming row ahead of the current list', () => {
+    const current = [makeRow({ id: 1 })];
+    const next = prependLiveRow(current, makeRow({ id: 2 }));
+    expect(next.map((row) => row.id)).toEqual([2, 1]);
+  });
+
+  it('drops a duplicate by id instead of prepending it again', () => {
+    const current = [makeRow({ id: 1 }), makeRow({ id: 2 })];
+    const next = prependLiveRow(current, makeRow({ id: 2 }));
+    expect(next.map((row) => row.id)).toEqual([1, 2]);
+  });
+
+  it('caps the list length, dropping the oldest rows', () => {
+    let rows: CombatApiRow[] = [];
+    for (let i = 0; i < 5; i++) rows = prependLiveRow(rows, makeRow({ id: i }), 3);
+    expect(rows.map((row) => row.id)).toEqual([4, 3, 2]);
+  });
+
+  it('defaults to the LIVE_CAP constant when no cap is given', () => {
+    let rows: CombatApiRow[] = [];
+    for (let i = 0; i < LIVE_CAP + 5; i++) rows = prependLiveRow(rows, makeRow({ id: i }));
+    expect(rows).toHaveLength(LIVE_CAP);
+    expect(rows[0]?.id).toBe(LIVE_CAP + 4);
   });
 });

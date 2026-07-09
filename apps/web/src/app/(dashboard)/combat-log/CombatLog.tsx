@@ -3,6 +3,9 @@
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { LiveIndicator } from '@/components/LiveIndicator';
+import type { LiveEvent } from '@/lib/live-bus';
+import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   appendPage,
   buildExportApiQuery,
@@ -13,6 +16,7 @@ import {
   type CombatFilters,
   type CombatListResponse,
   type CombatPlayer,
+  combatEventToRow,
   DATE_PRESETS,
   defaultFilters,
   eventTypeMeta,
@@ -24,6 +28,7 @@ import {
   parseFilters,
   playerHref,
   playerLabel,
+  prependLiveRow,
   type SortDir,
   shortServerLabel,
   showsDamageColumn,
@@ -59,6 +64,8 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
   const [servers, setServers] = useState<ServerOption[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [damageSort, setDamageSort] = useState<SortDir>('desc');
+  const [liveEnabled, setLiveEnabled] = useState(false);
+  const [lastLiveAt, setLastLiveAt] = useState<Date | null>(null);
 
   const damageVisible = showsDamageColumn(filters.facet);
 
@@ -160,6 +167,17 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
     return () => observer.disconnect();
   }, [loadMore, nextCursor]);
 
+  const onCombat = useCallback(
+    (event: Extract<LiveEvent, { type: 'combat.event' }>) => {
+      if (!liveEnabled) return;
+      if (lockedServerId && event.data.server_id !== lockedServerId) return;
+      setRows((prev) => prependLiveRow(prev, combatEventToRow(event.data)));
+      setLastLiveAt(new Date());
+    },
+    [liveEnabled, lockedServerId],
+  );
+  useLiveSubscription('combat.event', onCombat);
+
   const displayRows = useMemo(
     () => (damageVisible ? sortRowsByDamage(rows, damageSort) : rows),
     [rows, damageVisible, damageSort],
@@ -185,6 +203,16 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {liveEnabled ? <LiveIndicator lastUpdate={lastLiveAt} label="событие" /> : null}
+          <label className="flex items-center gap-1.5 text-xs text-neutral-300">
+            <input
+              type="checkbox"
+              checked={liveEnabled}
+              onChange={(event) => setLiveEnabled(event.target.checked)}
+              className="h-3.5 w-3.5 accent-green-500"
+            />
+            Live
+          </label>
           <a
             href={exportHref}
             className="rounded border border-neutral-800 px-3 py-1.5 text-sm text-neutral-200 no-underline hover:border-neutral-600"

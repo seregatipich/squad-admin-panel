@@ -327,7 +327,7 @@ export interface CombatApiRow {
   isTeamkill: boolean;
   occurredAt: string;
   attacker: CombatPlayer | null;
-  victim: CombatPlayer;
+  victim: CombatPlayer | null;
 }
 
 export interface CombatListResponse {
@@ -386,4 +386,87 @@ export function appendPage(existing: CombatApiRow[], incoming: CombatApiRow[]): 
 
 export function shortServerLabel(serverNames: Map<string, string>, serverId: string): string {
   return serverNames.get(serverId) ?? `${serverId.slice(0, 8)}…`;
+}
+
+export const LIVE_CAP = 200;
+
+export type CombatLiveEventKind =
+  | 'combat_damage'
+  | 'combat_wound'
+  | 'combat_death'
+  | 'combat_revive';
+
+export interface CombatLiveEventData {
+  server_id: string;
+  match_id: string | null;
+  kind: CombatLiveEventKind;
+  attacker_player_id: string | null;
+  victim_player_id: string | null;
+  weapon: string | null;
+  damage: number | null;
+  is_teamkill: boolean;
+  is_suicide: boolean;
+  occurred_at: string;
+}
+
+const LIVE_KIND_TO_EVENT_TYPE: Record<CombatLiveEventKind, CombatEventType> = {
+  combat_damage: 'damage',
+  combat_wound: 'wound',
+  combat_death: 'death',
+  combat_revive: 'revive',
+};
+
+/**
+ * Deterministic negative id for a live combat.event frame: the live bus
+ * payload carries no `combat_events.id` (it is not resolved from the DB row),
+ * so we derive a stable one from the event's own fields. Negative so it never
+ * collides with a real (positive, bigserial) row id, and stable so the exact
+ * same frame delivered twice (e.g. a duplicate publish) dedupes to one row.
+ */
+function liveRowId(data: CombatLiveEventData): number {
+  const key = `${data.server_id}|${data.kind}|${data.occurred_at}|${data.attacker_player_id ?? ''}|${data.victim_player_id ?? ''}|${data.weapon ?? ''}`;
+  let hash = 5381;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 33 + key.charCodeAt(i)) | 0;
+  }
+  return -Math.abs(hash);
+}
+
+/**
+ * Maps a `combat.event` live-bus payload to the same row shape the
+ * `/api/v1/combat-events` REST endpoint returns, so live rows can be
+ * prepended onto the same table the paginated history renders (COMBAT-6).
+ * Player names are unavailable on the live payload (only ids), so they are
+ * always `null`; the caller resolves them lazily via the player link.
+ */
+export function combatEventToRow(data: CombatLiveEventData): CombatApiRow {
+  return {
+    id: liveRowId(data),
+    eventType: LIVE_KIND_TO_EVENT_TYPE[data.kind],
+    serverId: data.server_id,
+    matchId: null,
+    weapon: data.weapon,
+    damage: data.damage === null ? null : String(data.damage),
+    attackerKit: null,
+    isTeamkill: data.is_teamkill,
+    occurredAt: data.occurred_at,
+    attacker: data.attacker_player_id
+      ? { player_id: data.attacker_player_id, current_name: null }
+      : null,
+    victim: data.victim_player_id ? { player_id: data.victim_player_id, current_name: null } : null,
+  };
+}
+
+/**
+ * Prepends a live combat row to the currently rendered list, deduping by id
+ * and capping the list so an unattended Live view doesn't grow unbounded.
+ */
+export function prependLiveRow(
+  current: CombatApiRow[],
+  incoming: CombatApiRow,
+  cap: number = LIVE_CAP,
+): CombatApiRow[] {
+  if (current.some((row) => row.id === incoming.id)) return current;
+  const next = [incoming, ...current];
+  return next.length > cap ? next.slice(0, cap) : next;
 }
