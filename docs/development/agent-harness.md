@@ -80,6 +80,19 @@ scripts/apply-rulesets.sh   # requires gh with admin access
 
 Emergency escape hatch: edit or disable the ruleset in GitHub → Settings → Rules → Rulesets (deliberately manual and audited).
 
+## Self-hosted runner
+
+CI executes on a dedicated self-hosted GitHub Actions runner rather than GitHub-hosted VMs: a Multipass VM sized 2 vCPU / 4 GB RAM / 20 GB disk, with Docker and the runner agent installed inside. It's registered under the org's default runner group and labels (just `self-hosted` — no custom tags), visible to org admins at [github.com/organizations/breaking-squad/settings/actions/runners](https://github.com/organizations/breaking-squad/settings/actions/runners). All four jobs in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) target it via `runs-on: self-hosted`.
+
+Unlike GitHub-hosted runners, this VM is **not ephemeral**: it has no auto-refresh or periodic recreation yet, so anything a job leaves behind — Docker images, build cache, stray containers — persists indefinitely on the 20 GB disk instead of vanishing at the end of the run. Two things in the workflow compensate:
+
+- The `docker` job prunes dangling images, build cache, and stray containers after every run (`if: always()`), so a failed build doesn't leave the disk any fuller than a green one.
+- Every job sets a `timeout-minutes`, so one wedged job can't block the queue on the single shared runner indefinitely.
+
+The box is also small enough that test/build parallelism is deliberately capped rather than left at each tool's default: the `node` job sets the `VITEST_MAX_FORKS` and `PNPM_WORKSPACE_CONCURRENCY` env vars (read by [`apps/api/vitest.config.ts`](../../apps/api/vitest.config.ts) and root [`package.json`](../../package.json)'s `test:cov` script respectively) and passes `--concurrency=2` to `turbo`, so parallel work fits 2 vCPU / 4 GB instead of thrashing or getting OOM-killed.
+
+Not solved yet: the operator described the VM as cloud-init-based and may later add automatic environment cleanup and/or periodic VM recreation. The open design questions there — dynamic naming for the replacement VM, and gracefully draining/stopping the previous one before swapping — are unaddressed for now.
+
 ## Completion verification
 
 The harness also enforces *how tasks end*: AGENTS.md's **Completion verification** checklist (part of the definition of done) requires agents to verify a finished task from every angle — requirements coverage, tests that provably exercise the change, real runtime evidence, a full local gate, a diff self-review, docs, and mechanical state. The mechanical angles are automated:

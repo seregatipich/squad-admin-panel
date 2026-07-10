@@ -24,11 +24,12 @@ pre-push:
       priority: 1
   commands:
     checklist:
-      # Cloud CI is disabled — this local checklist is the test gate. Runs
-      # typecheck, biome, build, secret scan, and the affected test suite
-      # (auto-provisioning an isolated DB when possible). Any failure blocks the
-      # push. Skipped automatically on no-diff pushes (e.g. dev→master
-      # promotion). Bypass in an emergency with `git push --no-verify`.
+      # This is a fast local pre-check — the cloud `ci` workflow is the
+      # authoritative gate. Runs typecheck, biome, build, secret scan, and
+      # the affected test suite (auto-provisioning an isolated DB when
+      # possible). Any failure blocks the push. Skipped automatically on
+      # no-diff pushes (e.g. dev→master promotion). Bypass in an emergency
+      # with `git push --no-verify`.
       # Knobs: FULL=1 (full coverage suite), SKIP_BUILD=1 (skip build step).
       priority: 2
       run: bash scripts/pre-push-checklist.sh

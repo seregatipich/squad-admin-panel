@@ -1,8 +1,6 @@
-import { randomBytes } from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
 import websocket from '@fastify/websocket';
@@ -91,43 +89,13 @@ import vipTiersRoutes from '../../src/routes/vip-tiers.js';
 import voteAnalyticsRoutes from '../../src/routes/vote-analytics.js';
 import votesRoutes from '../../src/routes/votes.js';
 import whitelistRoutes from '../../src/routes/whitelist.js';
+import { createIsolatedSchema, hostDbUrl, hostRedisUrl } from './isolated-db.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_FOLDER = path.resolve(__dirname, '../../../../packages/db/drizzle');
-const REPO_ENV_FILE = path.resolve(__dirname, '../../../../.env');
+export { createIsolatedSchema };
+export { runMigrations, testDbUrl, testRedisUrl } from './isolated-db.js';
 
-function dotenvLookup(key: string): string | undefined {
-  if (process.env[key]) return process.env[key];
-  try {
-    const raw = readFileSync(REPO_ENV_FILE, 'utf-8');
-    for (const line of raw.split(/\r?\n/)) {
-      const m = line.match(/^([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$/i);
-      if (m && m[1] === key) return m[2]?.replace(/^"(.*)"$/, '$1');
-    }
-  } catch {
-    // .env missing is fine; caller must set env
-  }
-  return undefined;
-}
-
-const DB_PASSWORD =
-  dotenvLookup('POSTGRES_PASSWORD') ??
-  (() => {
-    const url = dotenvLookup('DATABASE_URL');
-    if (url) {
-      const m = url.match(/^postgres:\/\/[^:]+:([^@]+)@/);
-      if (m) return m[1];
-    }
-    return 'admin';
-  })();
-
-const HOST_DB_URL =
-  process.env.TEST_DATABASE_URL ?? `postgres://admin:${DB_PASSWORD}@127.0.0.1:5432/admin`;
-const HOST_REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/15';
 const TEST_ENCRYPTION_KEY = Buffer.alloc(32, 0x42).toString('base64');
 const TEST_SESSION_SECRET = 'a'.repeat(48);
-export const testDbUrl = HOST_DB_URL;
-export const testRedisUrl = HOST_REDIS_URL;
 
 // Fake implementations of every public method on `@squad/bridge-client`
 // BridgeClient; signatures must match so routes that accept `app.bridge` work.
@@ -338,66 +306,6 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
   return { ...base, ...overrides, files };
 }
 
-interface CreatedSchema {
-  schema: string;
-  url: string;
-  drop: () => Promise<void>;
-}
-
-export async function createIsolatedSchema(): Promise<CreatedSchema> {
-  const schema = `test_${randomBytes(6).toString('hex')}`;
-  const admin = postgres(HOST_DB_URL, { max: 1, onnotice: () => undefined });
-  await admin.unsafe(`CREATE SCHEMA "${schema}"`);
-  await admin.end();
-  const url = `${HOST_DB_URL}?search_path=${schema}%2Cpublic`;
-  return {
-    schema,
-    url,
-    async drop() {
-      const s = postgres(HOST_DB_URL, { max: 1, onnotice: () => undefined });
-      try {
-        await s.unsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
-      } finally {
-        await s.end();
-      }
-    },
-  };
-}
-
-/**
- * Runs all `.sql` files under `packages/db/drizzle/`, in lexical order, through
- * the given connection. Drizzle's own migrator tracks applied migrations in a
- * shared `drizzle` schema — for schema-per-test isolation we bypass it and
- * re-execute the DDL against the fresh schema directly.
- *
- * The `.sql` files are split on the `--> statement-breakpoint` marker that
- * drizzle-kit emits when a migration contains multiple top-level statements.
- */
-export async function runMigrations(url: string) {
-  const sql = postgres(url, { max: 1, onnotice: () => undefined });
-  try {
-    await sql.unsafe('SET client_min_messages = WARNING');
-    const files = readdirSync(MIGRATIONS_FOLDER)
-      .filter((f) => f.endsWith('.sql'))
-      .sort();
-    for (const file of files) {
-      const contents = readFileSync(path.join(MIGRATIONS_FOLDER, file), 'utf-8').replace(
-        /\bpublic\./gi,
-        '',
-      );
-      const statements = contents
-        .split(/-->\s*statement-breakpoint\s*/i)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      for (const stmt of statements) {
-        await sql.unsafe(stmt);
-      }
-    }
-  } finally {
-    await sql.end();
-  }
-}
-
 export interface BuildAppOptions {
   /** A fake bridge instance; defaults to `makeFakeBridge()`. */
   bridge?: FakeBridge;
@@ -432,17 +340,14 @@ export interface IntegrationHarness {
 
 export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<IntegrationHarness> {
   const schemaInfo = opts.reusePublicSchema
-    ? { schema: 'public', url: HOST_DB_URL, drop: async () => undefined }
+    ? { schema: 'public', url: hostDbUrl(), drop: async () => undefined }
     : await createIsolatedSchema();
-  if (!opts.reusePublicSchema) {
-    await runMigrations(schemaInfo.url);
-  }
 
   // Hand-build the drizzle client with a tighter connection pool so a
   // parallel-run test suite doesn't overwhelm the shared live Postgres.
   const sql = postgres(schemaInfo.url, { max: 2, onnotice: () => undefined });
   const db = drizzlePostgres(sql, { schema }) as unknown as DatabaseClient;
-  const redis = new Redis(HOST_REDIS_URL);
+  const redis = new Redis(hostRedisUrl());
   const bridge = opts.bridge ?? makeFakeBridge();
   const mediaDir = mkdtempSync(path.join(tmpdir(), 'squad-media-test-'));
 
@@ -455,7 +360,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     API_HOST: '127.0.0.1',
     API_PORT: 0,
     DATABASE_URL: schemaInfo.url,
-    REDIS_URL: HOST_REDIS_URL,
+    REDIS_URL: hostRedisUrl(),
     APP_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     SESSION_SECRET: TEST_SESSION_SECRET,
     BRIDGE_SOCKET: '/dev/null',

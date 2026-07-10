@@ -30,7 +30,7 @@ These rules are mandatory for every contributor and every coding agent (Claude C
    git merge --no-ff feature/<slug>
    git push origin dev
    ```
-5. **Before pushing, the local pre-push checklist must pass** (`scripts/pre-push-checklist.sh`, run automatically by the lefthook pre-push hook — see "Local test gate"). Cloud CI is disabled (the self-hosted runners are retired), so this local checklist is the gate: typecheck, biome, build, secret scan, and the affected test suite. Work is not done while the checklist is red.
+5. **Before pushing, the local pre-push checklist must pass** — `scripts/pre-push-checklist.sh` runs automatically via the lefthook pre-push hook as a fast local pre-check (see "CI gate"). The push to `dev` then triggers the `ci` workflow on the self-hosted runner; watch the run and fix forward until every check is green. Work is not done while `dev` CI is red.
 6. Delete the merged work branch.
 
 ## Local test setup (read before running any DB-backed test)
@@ -46,11 +46,23 @@ The local stack runs in Docker (`postgres`, `redis`, `api`, `web`). Getting an i
   ```
 - **Adding an API route?** Register it in **BOTH** `apps/api/src/server.ts` **and** `apps/api/test/integration/harness.ts` — they keep parallel registration lists, so a route missing from the harness 404s in integration tests.
 - **API tests that mutate `players`/`roles`/`panel_meta`** must scope the mutation by `steamId64` (a unique/test-range value), never a bare `uuid` — the parallel `test:cov` shares one DB and `apps/api/test/test-isolation.regression.test.ts` fails any unguarded `delete(players)` / `update(players).roleId` / …. A single-file `vitest run <your.test.ts>` does NOT run that guard, so before pushing also run `pnpm --filter @squad/api exec vitest run test/test-isolation.regression.test.ts`.
-- **The pre-push checklist auto-provisions a test DB when it can.** If `DATABASE_URL` is unset but Docker and `.env` are present, `scripts/pre-push-checklist.sh` runs `scripts/new-test-db.sh` for you. If neither a DB nor Docker is available the checklist fails (it will not silently skip tests). The Go bridge build cannot run on macOS and Docker image builds are not run locally, so `--no-verify` remains available for genuine emergencies (and for pushing when only Go/Docker-scoped work is untestable locally).
+- **The pre-push checklist auto-provisions a test DB when it can.** If `DATABASE_URL` is unset but Docker and `.env` are present, `scripts/pre-push-checklist.sh` runs `scripts/new-test-db.sh` for you; if neither a DB nor Docker is available the checklist fails rather than silently skipping tests. Even so, the checklist is a local pre-check, not the gate — **CI is the source of truth.** The Go bridge build cannot run on macOS and Docker image builds are not run locally, so `--no-verify` remains available for genuine emergencies (and for pushing when only Go/Docker-scoped work is untestable locally); CI will still catch anything skipped locally.
 
-## Local test gate
+## CI gate
 
-**Cloud CI is disabled** — the self-hosted runners are retired, so the `ci` workflow no longer runs on push/PR (it is dispatch-only). The **local pre-push checklist is now the gate**: [`scripts/pre-push-checklist.sh`](scripts/pre-push-checklist.sh), run automatically by the lefthook `pre-push` hook. Any failed item blocks the push (bypass in an emergency with `git push --no-verify`).
+Local green is not proof — **CI is the source of truth**. After every push to `dev` (and to `master`), fetch the run result and iterate until every check passes:
+
+```bash
+gh run list --branch <branch> --workflow ci --limit 1 --json databaseId,conclusion
+gh run view <run-id> --json jobs --jq '.jobs[] | "\(.conclusion)\t\(.name)"'
+gh run view <run-id> --log-failed   # logs of the failing step
+```
+
+The `ci` workflow runs on the org's self-hosted runner (a Multipass VM registered under the default `self-hosted` label) — see the "Self-hosted runner" section in `docs/development/agent-harness.md` for its setup and operating details.
+
+### Local pre-check
+
+The lefthook `pre-push` hook runs [`scripts/pre-push-checklist.sh`](scripts/pre-push-checklist.sh) automatically before every push, as a fast local pre-check ahead of the cloud run. Any failed item blocks the push (bypass in an emergency with `git push --no-verify`).
 
 The checklist runs, in order:
 
@@ -61,8 +73,6 @@ The checklist runs, in order:
 5. Tests — the packages affected since `origin/dev` (`pnpm turbo run test --filter='...[origin/dev]'`), or the full coverage suite with `FULL=1`. Auto-provisions an isolated migrated DB via `scripts/new-test-db.sh` when `DATABASE_URL` is unset.
 
 Run it by hand any time with `bash scripts/pre-push-checklist.sh`. **Not run locally:** the Go bridge (`apps/bridge` — cannot build on macOS; run `go vet ./... && go test -race ./...` there on Linux) and Docker image builds. The branch model is still enforced independently by the lefthook/`.claude` git-guard hooks (see "Enforcement harness"), not by CI.
-
-To re-enable cloud CI later (once a runner is provisioned), restore the `push`/`pull_request` triggers at the top of `.github/workflows/ci.yml`.
 
 ## Testing policy (MANDATORY)
 
