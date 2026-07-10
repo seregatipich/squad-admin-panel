@@ -1,6 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createRconClient } from '../../src/lib/rcon.js';
@@ -11,7 +10,10 @@ let socketPath: string;
 let server: Server | undefined;
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'rcon-'));
+  // Use /tmp directly, not os.tmpdir() -- macOS's default TMPDIR is a long
+  // /var/folders/... path that overflows the ~104-byte sockaddr_un limit
+  // once joined with the server-id/sock/rcon.sock segments below.
+  tmp = mkdtempSync(join('/tmp', 'rcon-'));
   socketPath = join(tmp, SERVER_ID, 'sock', 'rcon.sock');
   mkdirSync(join(tmp, SERVER_ID, 'sock'), { recursive: true });
 });
