@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # test-verify-done.sh — test suite for scripts/verify-done.sh.
 #
-# Builds a throwaway repo (with a file:// origin), wires the local test gate
-# (pre-push-checklist.sh + a lefthook.yml that invokes it), then asserts the
-# verifier's verdict for every mechanical completion state. Run:
-# `bash scripts/test-verify-done.sh`.
+# Builds a throwaway repo (with a file:// origin) and stubs `gh` via PATH to
+# emit canned CI-run JSON, then asserts the verifier's verdict for every
+# mechanical completion state. Run: `bash scripts/test-verify-done.sh`.
 
 set -u
 
@@ -17,7 +16,6 @@ trap 'rm -rf "$TMP"' EXIT
 PASS=0
 FAIL=0
 
-# assert <expected: pass|fail> <description>  (runs verify-done in $REPO)
 assert() {
   local expected=$1 desc=$2 out rc got
   out=$(cd "$REPO" && "$REPO/scripts/verify-done.sh" 2>&1)
@@ -34,7 +32,6 @@ assert() {
   fi
 }
 
-# assert_feature <expected: pass|fail> <description>  (runs verify-done --feature in $REPO)
 assert_feature() {
   local expected=$1 desc=$2 out rc got
   out=$(cd "$REPO" && "$REPO/scripts/verify-done.sh" --feature 2>&1)
@@ -51,7 +48,21 @@ assert_feature() {
   fi
 }
 
-# --- fixture: repo on dev, fully pushed to a file origin ---------------------
+# --- gh stub: canned `gh run list --json ...` output, mode via GH_STUB_MODE --
+mkdir -p "$TMP/bin"
+cat >"$TMP/bin/gh" <<'EOF'
+#!/bin/sh
+case "${GH_STUB_MODE:-green}" in
+green)   printf '[{"headSha":"%s","status":"completed","conclusion":"success","databaseId":111}]\n' "$GH_STUB_SHA" ;;
+red)     printf '[{"headSha":"%s","status":"completed","conclusion":"failure","databaseId":222}]\n' "$GH_STUB_SHA" ;;
+running) printf '[{"headSha":"%s","status":"in_progress","conclusion":null,"databaseId":333}]\n' "$GH_STUB_SHA" ;;
+stale)   printf '[{"headSha":"0000000000000000000000000000000000000000","status":"completed","conclusion":"success","databaseId":444}]\n' ;;
+empty)   printf '[]\n' ;;
+esac
+EOF
+chmod +x "$TMP/bin/gh"
+export PATH="$TMP/bin:$PATH"
+
 ORIGIN="$TMP/origin.git"
 REPO="$TMP/repo"
 git init -q --bare "$ORIGIN"
@@ -65,45 +76,36 @@ git remote add origin "$ORIGIN"
 git push -q origin master dev
 git switch -q dev
 mkdir -p scripts
-cp "$SRC/verify-done.sh" "$SRC/git-guard.sh" "$SRC/pre-push-checklist.sh" scripts/
-chmod +x scripts/pre-push-checklist.sh
-printf 'pre-push:\n  commands:\n    checklist:\n      run: bash scripts/pre-push-checklist.sh\n' >lefthook.yml
-git add scripts lefthook.yml && git commit -q -m "add verifier + local test gate" && git push -q origin dev
+cp "$SRC/verify-done.sh" "$SRC/git-guard.sh" scripts/
+git add scripts && git commit -q -m "add verifier" && git push -q origin dev
 
-# --- cases --------------------------------------------------------------------
-assert pass "clean tree, dev pushed, local test gate wired"
+export GH_STUB_SHA=$(git rev-parse origin/dev)
 
-# Local test gate missing -> FAIL (tree stays clean+pushed so check #4 is reached).
-git rm -q scripts/pre-push-checklist.sh && git commit -q -m "drop checklist" && git push -q origin dev
-assert fail "local test gate missing (checklist script absent)"
-cp "$SRC/pre-push-checklist.sh" scripts/ && chmod +x scripts/pre-push-checklist.sh
-git add scripts/pre-push-checklist.sh && git commit -q -m "restore checklist" && git push -q origin dev
+GH_STUB_MODE=green assert pass "clean tree, dev pushed, CI green at tip"
 
-# Gate present but not wired into lefthook -> FAIL.
-printf 'pre-push:\n  commands: {}\n' >lefthook.yml
-git add lefthook.yml && git commit -q -m "unwire checklist" && git push -q origin dev
-assert fail "local test gate not wired into lefthook pre-push"
-printf 'pre-push:\n  commands:\n    checklist:\n      run: bash scripts/pre-push-checklist.sh\n' >lefthook.yml
-git add lefthook.yml && git commit -q -m "rewire checklist" && git push -q origin dev
+GH_STUB_MODE=red assert fail "CI run concluded failure"
+GH_STUB_MODE=running assert fail "CI run still in progress"
+GH_STUB_MODE=stale assert fail "green CI run exists only for an older SHA"
+GH_STUB_MODE=empty assert fail "no CI run for the current tip"
 
 echo dirty >dirty.txt
-assert fail "uncommitted changes in the working tree"
+GH_STUB_MODE=green assert fail "uncommitted changes in the working tree"
 rm dirty.txt
 
 git switch -qc feature/wip
-assert fail "still on a work branch, not dev"
+GH_STUB_MODE=green assert fail "still on a work branch, not dev"
 git switch -q dev
 git branch -qD feature/wip
 
 echo two >>file && git add file && git commit -q -m "unpushed"
-assert fail "dev ahead of origin/dev (unpushed commit)"
+GH_STUB_MODE=green assert fail "dev ahead of origin/dev (unpushed commit)"
 git reset -q --hard origin/dev
 
 git branch -q main
-assert fail "doctor warning: a main branch exists"
+GH_STUB_MODE=green GH_STUB_SHA=$(git rev-parse origin/dev) assert fail "doctor warning: a main branch exists"
 git branch -qD main
 
-assert pass "back to a fully done state"
+GH_STUB_MODE=green assert pass "back to a fully done state"
 
 # --- --feature (parallel-wave handoff) mode --------------------------------
 # On dev, --feature must FAIL (dev is not a work branch).

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Local pre-push test checklist — the source of truth now that cloud CI is
-# disabled (self-hosted runners retired). Runs an ordered checklist of the same
-# gates the `ci` workflow used to run; ANY failed item blocks the push.
+# Local pre-push checklist — a fast local pre-check that runs the same gates
+# as the cloud `ci` workflow, so most problems surface immediately at push
+# time. The `ci` GitHub Actions workflow (on the org's self-hosted runner)
+# remains the authoritative/required gate; ANY failed item here blocks the
+# push.
 #
 # Wired in via lefthook (`pre-push` → command `checklist`). Because it is a
 # lefthook *command* (not a script) it is skipped when the current branch has no
