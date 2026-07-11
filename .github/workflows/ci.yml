@@ -117,6 +117,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Run solve-issues runner tests
+        run: pnpm run solve:issues:test
       - run: pnpm turbo run typecheck --concurrency=2
       - name: Build production artifacts
         run: pnpm turbo run build --concurrency=2
