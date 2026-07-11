@@ -26,11 +26,15 @@
     "bridge:test": "pnpm --filter @squad/bridge test",
     "clean": "turbo run clean && rm -rf node_modules .turbo",
     "verify:audit-chain": "tsx scripts/verify-audit-chain.ts",
+    "solve:issues": "tsx scripts/solve-issues-parallel.ts",
+    "solve:issues:test": "tsx --test scripts/solve-issues-parallel.test.ts",
     "prepare": "lefthook install || true"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.111.0",
     "@biomejs/biome": "2.2.0",
     "@fast-check/vitest": "^0.3.0",
+    "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^3.2.4",
     "lefthook": "^1.8.2",
     "tsx": "^4.19.2",
