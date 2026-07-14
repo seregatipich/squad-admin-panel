@@ -4,7 +4,9 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
+import { raiseAltBanAlert } from '../lib/alt-ban-alert.js';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
+import { loadBanAltWarning } from '../lib/ban-alt-warning.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { notifyReporter, type ReporterNotifyTemplate } from '../lib/report-notify.js';
 import { recomputeReporterStats } from '../lib/reporter-stats.js';
@@ -21,6 +23,7 @@ const actionBody = z.object({
   action_type: z.enum(['warn', 'kick', 'ban']),
   reason: z.string().trim().min(1).max(REASON_MAX),
   ban_length: z.string().trim().regex(BAN_LENGTH_PATTERN, 'invalid ban_length').optional(),
+  also_player_ids: z.array(z.string().uuid()).max(20).default([]),
 });
 
 const notifyBody = z.object({
@@ -208,16 +211,47 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'report_target_unresolved' };
       }
 
-      const identity = await resolveIdentity(report.targetPlayerId);
-      const target = identity?.eosId ?? identity?.steamId64 ?? null;
-      if (!target) {
+      const { action_type: actionType, reason, also_player_ids: alsoPlayerIds } = req.body;
+      let warning = null;
+      if (actionType === 'ban') {
+        try {
+          warning = await loadBanAltWarning(app, {
+            playerId: report.targetPlayerId,
+            canViewIps: req.user?.permissions.permissions.has('player:view_ips') ?? false,
+            cookie: req.headers.cookie,
+            authorization: req.headers.authorization,
+          });
+        } catch (error) {
+          req.log.warn({ error }, 'ALT-7 warning lookup failed; continuing with the ban');
+        }
+      }
+
+      if (alsoPlayerIds.length > 0 && !warning?.can_view_ips) {
+        reply.code(403);
+        return { error: 'alt_details_forbidden' };
+      }
+      const confirmedAltIds = new Set(warning?.confirmed.map((alt) => alt.player_id) ?? []);
+      if (alsoPlayerIds.some((id) => !confirmedAltIds.has(id))) {
+        reply.code(400);
+        return { error: 'invalid_alt_selection' };
+      }
+
+      const targetPlayerIds = [report.targetPlayerId, ...new Set(alsoPlayerIds)];
+      const targetIdentities = await Promise.all(targetPlayerIds.map(resolveIdentity));
+      const targetEntries = targetPlayerIds.map((playerId, index) => ({
+        playerId,
+        identity: targetIdentities[index],
+      }));
+      const primaryEntry = targetEntries[0];
+      const primaryIdentity = primaryEntry?.identity;
+      const target = primaryIdentity?.eosId ?? primaryIdentity?.steamId64 ?? null;
+      if (!primaryEntry || !target) {
         reply.code(400);
         return { error: 'target_identity_missing' };
       }
 
-      const { action_type: actionType, reason } = req.body;
       if (actionType !== 'ban') {
-        const online = identity && (await isOnline(report.serverId, identity));
+        const online = primaryIdentity && (await isOnline(report.serverId, primaryIdentity));
         if (!online) {
           reply.code(409);
           return { error: 'target_offline' };
@@ -227,27 +261,37 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
       const banLength = req.body.ban_length ?? '0';
       const command =
         actionType === 'warn' ? 'AdminWarn' : actionType === 'kick' ? 'AdminKick' : 'AdminBan';
-      const args = actionType === 'ban' ? [target, banLength, reason] : [target, reason];
 
       // biome-ignore lint/style/noNonNullAssertion: handlerGuard rejects unauthenticated requests
       const actorPlayerId = req.user!.playerId;
-      const viaWorker = await sendRconCommandViaWorker(app.redis, {
-        serverId: report.serverId,
-        command,
-        args,
-        actorPlayerId,
-      });
-
-      if (!viaWorker.attempted || !viaWorker.ok) {
-        reply.code(502);
-        return {
-          error: 'action_failed',
-          reason: viaWorker.attempted ? viaWorker.reason : viaWorker.reason,
-          detail: viaWorker.attempted ? viaWorker.detail : undefined,
-        };
+      for (const entry of targetEntries) {
+        const identity = entry.identity;
+        const entryTarget = identity?.eosId ?? identity?.steamId64 ?? null;
+        if (!entryTarget) {
+          reply.code(400);
+          return { error: 'alt_identity_missing', player_id: entry.playerId };
+        }
+        const viaWorker = await sendRconCommandViaWorker(app.redis, {
+          serverId: report.serverId,
+          command,
+          args: actionType === 'ban' ? [entryTarget, banLength, reason] : [entryTarget, reason],
+          actorPlayerId,
+        });
+        if (!viaWorker.attempted || !viaWorker.ok) {
+          reply.code(502);
+          return {
+            error: 'action_failed',
+            reason: viaWorker.reason,
+            detail: viaWorker.attempted ? viaWorker.detail : undefined,
+            player_id: entry.playerId,
+          };
+        }
       }
 
-      const context: Record<string, unknown> = { report_id: report.id };
+      const context: Record<string, unknown> = {
+        report_id: report.id,
+        ...(alsoPlayerIds.length > 0 ? { also_player_ids: alsoPlayerIds } : {}),
+      };
       if (actionType === 'ban') context.ban_length = banLength;
 
       const [inserted] = await app.db
@@ -262,6 +306,43 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
           reportId: report.id,
         })
         .returning({ id: moderationActions.id });
+
+      for (const playerId of alsoPlayerIds) {
+        await app.db.insert(moderationActions).values({
+          playerId,
+          serverId: report.serverId,
+          actionType,
+          authorPlayerId: actorPlayerId,
+          reason,
+          context: {
+            report_id: report.id,
+            ban_length: banLength,
+            related_action_id: inserted?.id ?? null,
+          },
+          reportId: report.id,
+        });
+
+        await writeAuditEntry(app.db, {
+          actor: auditActor(req),
+          actorIp: req.ip ?? null,
+          actionType: 'report.action',
+          targetType: 'player',
+          targetId: playerId,
+          after: {
+            action_type: actionType,
+            reason,
+            target_player_id: playerId,
+            related_action_id: inserted?.id ?? null,
+          },
+          context: {
+            requestId: req.id,
+            method: req.method,
+            url: req.url,
+            related_action_id: inserted?.id ?? null,
+          },
+          statusCode: reply.statusCode,
+        });
+      }
 
       // Linking a moderation action to the report changes its reporter's
       // "confirmed" count (REPORT-5, #115) — recompute their trust metrics.
@@ -278,7 +359,12 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
         actionType: 'report.action',
         targetType: 'report',
         targetId: report.id,
-        after: { action_type: actionType, reason, target_player_id: report.targetPlayerId },
+        after: {
+          action_type: actionType,
+          reason,
+          target_player_id: report.targetPlayerId,
+          also_player_ids: alsoPlayerIds,
+        },
         context: {
           requestId: req.id,
           method: req.method,
@@ -287,6 +373,21 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
         },
         statusCode: reply.statusCode,
       });
+
+      if (
+        actionType === 'ban' &&
+        warning &&
+        (warning.confirmed_count > 0 || warning.candidate_count > 0)
+      ) {
+        await raiseAltBanAlert(app.db, app.redis, {
+          target_player_id: report.targetPlayerId,
+          confirmed_alt_ids: warning.confirmed.map((alt) => alt.player_id),
+          candidate_ids: warning.candidates.map((candidate) => candidate.player_id),
+          trigger: 'admin_ban',
+        }).catch((error) => {
+          req.log.warn({ error }, 'AUTO-3 alt ban alert failed');
+        });
+      }
 
       const rows = (await app.db.execute(sql`
         SELECT ${ACTION_ROW_SELECT}
