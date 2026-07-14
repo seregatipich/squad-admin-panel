@@ -39,6 +39,7 @@ import combatEventsRoutes from '../../src/routes/combat-events.js';
 import depotRoutes from '../../src/routes/depot.js';
 import economyRoutes from '../../src/routes/economy.js';
 import eventsRoutes from '../../src/routes/events.js';
+import externalBansRoutes from '../../src/routes/external-bans.js';
 import hostRoutes from '../../src/routes/host.js';
 import hostActionsRoutes from '../../src/routes/host-actions.js';
 import integrationsDiscordRoutes from '../../src/routes/integrations-discord.js';
@@ -489,6 +490,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(publicStatsRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(banSourcesRoutes);
+  await app.register(externalBansRoutes);
   await app.register(alertRulesRoutes);
   await app.register(whitelistRoutes);
 

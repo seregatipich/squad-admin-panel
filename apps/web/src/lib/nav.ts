@@ -43,6 +43,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/chat', label: 'Чат' },
       { href: '/notes', label: 'Заметки' },
       { href: '/banned-names', label: 'Забаненные ники' },
+      { href: '/external-bans', label: 'Внешние баны' },
       { href: '/reports', label: 'Жалобы', showsPendingReports: true },
       { href: '/issues', label: 'Тикеты' },
       { href: '/vips', label: 'VIP', permission: 'user:view' },

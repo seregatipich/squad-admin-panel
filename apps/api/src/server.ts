@@ -48,6 +48,7 @@ import combatEventsRoutes from './routes/combat-events.js';
 import depotRoutes from './routes/depot.js';
 import economyRoutes from './routes/economy.js';
 import eventsRoutes from './routes/events.js';
+import externalBansRoutes from './routes/external-bans.js';
 import hostRoutes from './routes/host.js';
 import hostActionsRoutes from './routes/host-actions.js';
 import integrationsDiscordRoutes from './routes/integrations-discord.js';
@@ -234,6 +235,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(adminsCfgRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(banSourcesRoutes);
+  await app.register(externalBansRoutes);
   await app.register(alertRulesRoutes);
   await app.register(auditRoutes);
   await app.register(logsRoutes);
