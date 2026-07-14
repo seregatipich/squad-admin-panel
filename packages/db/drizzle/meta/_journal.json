@@ -344,6 +344,13 @@
       "when": 1783399300000,
       "tag": "0048_moderation_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1783399400000,
+      "tag": "0050_clan_guard_settings",
+      "breakpoints": true
     }
   ]
 }

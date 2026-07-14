@@ -81,6 +81,7 @@ import serverSettingsRoutes from '../../src/routes/server-settings.js';
 import serverUpdateRoutes from '../../src/routes/server-update.js';
 import serverRoutes from '../../src/routes/servers.js';
 import settingsChatFlagsRoutes from '../../src/routes/settings-chat-flags.js';
+import settingsClanGuardRoutes from '../../src/routes/settings-clan-guard.js';
 import settingsEconomyRoutes from '../../src/routes/settings-economy.js';
 import suspectsRoutes from '../../src/routes/suspects.js';
 import teamkillsRoutes from '../../src/routes/teamkills.js';
@@ -451,6 +452,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(mediaRoutes);
   await app.register(settingsEconomyRoutes);
   await app.register(settingsChatFlagsRoutes);
+  await app.register(settingsClanGuardRoutes);
   await app.register(clansRoutes);
   await app.register(chatRoutes);
   await app.register(combatEventsRoutes);
