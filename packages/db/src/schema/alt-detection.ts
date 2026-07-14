@@ -32,6 +32,16 @@ export const ALT_DETECTION_DEFAULT_WEIGHT_STEAMID_PROXIMITY = 10;
 export const ALT_DETECTION_DEFAULT_STEAMID_DELTA_THRESHOLD = 10_000;
 export const ALT_DETECTION_DEFAULT_MEDIUM_THRESHOLD = 50;
 export const ALT_DETECTION_DEFAULT_HIGH_THRESHOLD = 75;
+/**
+ * ALT-3 anti-signal (see `player_coplay`): a pair that regularly plays
+ * *simultaneously* on the same server looks more like friends than one
+ * person's alt/twink pair, so a large co-play overlap subtracts from the
+ * ALT-1 score. Stored as a positive weight and applied as a subtraction in
+ * {@link computeAltScore} — never store or read this as a negative number.
+ */
+export const ALT_DETECTION_DEFAULT_WEIGHT_COPLAY_OVERLAP = 30;
+/** Rolling-window `overlap_seconds` (see `player_coplay`) at/above which the coplay anti-signal fires. */
+export const ALT_DETECTION_DEFAULT_COPLAY_OVERLAP_THRESHOLD_SECONDS = 36_000;
 
 /**
  * IP/CIDR exclusion list for the ALT-1 candidate engine (VPN exits, CGNAT
@@ -84,6 +94,12 @@ export const altDetectionSettings = pgTable(
     highThreshold: integer('high_threshold')
       .notNull()
       .default(ALT_DETECTION_DEFAULT_HIGH_THRESHOLD),
+    weightCoplayOverlap: integer('weight_coplay_overlap')
+      .notNull()
+      .default(ALT_DETECTION_DEFAULT_WEIGHT_COPLAY_OVERLAP),
+    coplayOverlapThresholdSeconds: integer('coplay_overlap_threshold_seconds')
+      .notNull()
+      .default(ALT_DETECTION_DEFAULT_COPLAY_OVERLAP_THRESHOLD_SECONDS),
     updatedByPlayerId: uuid('updated_by_player_id').references(() => players.id, {
       onDelete: 'set null',
     }),

@@ -5,6 +5,7 @@ import {
   daysInWindow,
   recentCoplayWindow,
   recentPresenceWindow,
+  recomputeCoplayForAllSessions,
   recomputeCoplayWindow,
   recomputeDailyPresence,
 } from '@squad/db';
@@ -120,6 +121,41 @@ export async function runPresenceDailyTick(deps: PresenceTickDeps): Promise<void
   await runEconomyAccrual({ sql, diag, now });
 }
 
+/**
+ * Full rebuild of the co-play graph across every day with session data
+ * (ALT-3's "административная команда"). Not part of the regular hourly tick
+ * — invoked once at startup when `COPLAY_FULL_REBUILD=1` is set, e.g.:
+ * `docker compose run --rm -e COPLAY_FULL_REBUILD=1 worker-presence-daily`.
+ * Deletes and rewrites every `player_coplay` bucket inside one transaction,
+ * so it should be run one-shot, not by flipping the env var on the
+ * long-running service.
+ */
+export async function runCoplayFullRebuild(deps: PresenceTickDeps): Promise<void> {
+  const { sql, diag } = deps;
+  const now = deps.now ?? new Date();
+  try {
+    const rows = await recomputeCoplayForAllSessions(sql, now);
+    log.info({ rows }, 'coplay full rebuild ok');
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'coplay.full_rebuild_ok',
+      severity: 'info',
+      message: `coplay full rebuild wrote ${rows} rows`,
+      payload: { rows },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ err: message }, 'coplay full rebuild failed');
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'coplay.full_rebuild_failed',
+      severity: 'error',
+      message: `coplay full rebuild failed: ${message}`,
+      payload: {},
+    });
+  }
+}
+
 async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -149,6 +185,10 @@ async function main() {
     message: 'presence-daily started',
     payload: { pid: process.pid },
   });
+
+  if (process.env.COPLAY_FULL_REBUILD === '1') {
+    await runCoplayFullRebuild({ sql, diag });
+  }
 
   await runPresenceDailyTick({ sql, diag });
   const interval = setInterval(() => {

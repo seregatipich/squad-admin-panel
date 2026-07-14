@@ -1,4 +1,9 @@
-import { altDetectionSettings, players } from '@squad/db/schema';
+import { COPLAY_WINDOW_DAYS } from '@squad/db';
+import {
+  ALT_DETECTION_DEFAULT_COPLAY_OVERLAP_THRESHOLD_SECONDS,
+  altDetectionSettings,
+  players,
+} from '@squad/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -14,6 +19,7 @@ const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 100;
 /** Caps `matches[]` per candidate (smallest time-delta first) to bound response size for CGNAT-heavy targets. */
 const MATCHES_PER_CANDIDATE_CAP = 20;
+const DAY_MS = 86_400_000;
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const listQuery = z.object({
@@ -59,8 +65,12 @@ interface CandidateMatch {
  * also used, scored by a set of tunable heuristics on top of the raw
  * shared-IP signal (shared historical nicknames, a "young" account created
  * after the target's last ban, and SteamID64 proximity suggesting batch
- * registration). Gated on the fine `player:view_ips` permission — without it
- * the endpoint returns 403 and leaks no IPs or candidates at all.
+ * registration), minus the ALT-3 co-play anti-signal: a pair whose rolling
+ * `player_coplay.overlap_seconds` (see `@squad/db` `COPLAY_WINDOW_DAYS`) meets
+ * the configured threshold looks more like friends than an alt/twink pair, so
+ * it subtracts `weight_coplay_overlap` from the score. Gated on the fine
+ * `player:view_ips` permission — without it the endpoint returns 403 and
+ * leaks no IPs or candidates at all.
  *
  * Ban convention (no dedicated "ban" moderation_actions type exists yet):
  * `has_active_ban` is true when the candidate has either a non-reverted
@@ -107,6 +117,7 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
             weightSharedName: settingsRow.weightSharedName,
             weightYoungAccount: settingsRow.weightYoungAccount,
             weightSteamidProximity: settingsRow.weightSteamidProximity,
+            weightCoplayOverlap: settingsRow.weightCoplayOverlap,
           }
         : DEFAULT_ALT_SCORE_WEIGHTS;
       const steamidDeltaThreshold = BigInt(settingsRow?.steamidDeltaThreshold ?? 10_000);
@@ -114,6 +125,9 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
         mediumThreshold: settingsRow?.mediumThreshold ?? 50,
         highThreshold: settingsRow?.highThreshold ?? 75,
       };
+      const coplayOverlapThresholdSeconds =
+        settingsRow?.coplayOverlapThresholdSeconds ??
+        ALT_DETECTION_DEFAULT_COPLAY_OVERLAP_THRESHOLD_SECONDS;
 
       const matchRows = (await app.db.execute(sql`
         WITH matches AS (
@@ -183,6 +197,34 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
         nameRows.map((row) => [row.candidate_id, row.shared_names ?? []]),
       );
 
+      // ALT-3 anti-signal: sum each candidate's rolling-window overlap with the
+      // target from `player_coplay` (same COPLAY_WINDOW_DAYS window as the
+      // `/coplay` route, so the two endpoints never disagree on which pairs
+      // count as high-overlap). `player_coplay` stores one row per unordered
+      // pair with `player_a_id < player_b_id`, so both directions are queried.
+      const toDay = new Date().toISOString().slice(0, 10);
+      const fromDay = new Date(
+        Date.parse(`${toDay}T00:00:00.000Z`) - (COPLAY_WINDOW_DAYS - 1) * DAY_MS,
+      )
+        .toISOString()
+        .slice(0, 10);
+      const coplayRows = (await app.db.execute(sql`
+        SELECT
+          CASE WHEN pc.player_a_id = ${playerId} THEN pc.player_b_id ELSE pc.player_a_id END
+            AS candidate_id,
+          SUM(pc.overlap_seconds)::bigint AS overlap_seconds
+        FROM player_coplay pc
+        WHERE (
+          (pc.player_a_id = ${playerId} AND pc.player_b_id IN (${candidateIdList}))
+          OR (pc.player_b_id = ${playerId} AND pc.player_a_id IN (${candidateIdList}))
+        )
+          AND pc.window_start >= ${fromDay}::date
+        GROUP BY candidate_id
+      `)) as unknown as Array<{ candidate_id: string; overlap_seconds: string | number }>;
+      const coplayOverlapByCandidate = new Map(
+        coplayRows.map((row) => [row.candidate_id, Number(row.overlap_seconds)]),
+      );
+
       const [lastBanRow] = (await app.db.execute(sql`
         SELECT MAX(created_at) AS last_ban_at
         FROM moderation_actions
@@ -238,6 +280,8 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
               : candidateSteamId64 - target.steamId64) < steamidDeltaThreshold;
           const youngAccount =
             lastBanAt != null && info != null && new Date(info.created_at) > lastBanAt;
+          const coplayOverlapSeconds = coplayOverlapByCandidate.get(row.candidate_id) ?? 0;
+          const coplayOverlap = coplayOverlapSeconds >= coplayOverlapThresholdSeconds;
 
           const score = computeAltScore(
             {
@@ -245,6 +289,7 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
               sharedNameCount: sharedNames.length,
               youngAccount,
               steamidClose,
+              coplayOverlap,
             },
             weights,
           );
@@ -264,6 +309,11 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
               shared_names: { value: sharedNames, weight: weights.weightSharedName },
               young_account: { value: youngAccount, weight: weights.weightYoungAccount },
               steamid_proximity: { value: steamidClose, weight: weights.weightSteamidProximity },
+              coplay_overlap: {
+                value: coplayOverlapSeconds,
+                threshold_seconds: coplayOverlapThresholdSeconds,
+                weight: -weights.weightCoplayOverlap,
+              },
             },
             score,
             confidence,

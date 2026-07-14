@@ -5,6 +5,7 @@ const {
   recentPresenceWindow,
   recomputeCoplayWindow,
   recentCoplayWindow,
+  recomputeCoplayForAllSessions,
   accrueDailyBonuses,
   daysInWindow,
 } = vi.hoisted(() => ({
@@ -12,6 +13,7 @@ const {
   recentPresenceWindow: vi.fn(() => ({ fromDay: '2026-07-04', toDay: '2026-07-05' })),
   recomputeCoplayWindow: vi.fn(),
   recentCoplayWindow: vi.fn(() => ({ fromDay: '2026-07-04', toDay: '2026-07-05' })),
+  recomputeCoplayForAllSessions: vi.fn(),
   accrueDailyBonuses: vi.fn(),
   daysInWindow: vi.fn((from: string, to: string) => (from === to ? [from] : [from, to])),
 }));
@@ -21,6 +23,7 @@ vi.mock('@squad/db', () => ({
   recentPresenceWindow,
   recomputeCoplayWindow,
   recentCoplayWindow,
+  recomputeCoplayForAllSessions,
   accrueDailyBonuses,
   daysInWindow,
 }));
@@ -33,7 +36,7 @@ vi.mock('pino', () => {
   return { default: vi.fn(() => logger) };
 });
 
-import { runEconomyAccrual, runPresenceDailyTick } from '../src/index.js';
+import { runCoplayFullRebuild, runEconomyAccrual, runPresenceDailyTick } from '../src/index.js';
 
 const ACCRUAL_OK = {
   day: '2026-07-05',
@@ -50,6 +53,7 @@ describe('runPresenceDailyTick', () => {
     recomputeCoplayWindow.mockReset();
     recomputeCoplayWindow.mockResolvedValue(0);
     recentCoplayWindow.mockClear();
+    recomputeCoplayForAllSessions.mockReset();
     accrueDailyBonuses.mockReset();
     accrueDailyBonuses.mockResolvedValue(ACCRUAL_OK);
     daysInWindow.mockClear();
@@ -153,6 +157,43 @@ describe('runPresenceDailyTick', () => {
 
     expect(diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'economy_accrual.run_failed', severity: 'error' }),
+    );
+  });
+});
+
+describe('runCoplayFullRebuild', () => {
+  beforeEach(() => {
+    recomputeCoplayForAllSessions.mockReset();
+  });
+
+  it('calls the injected rebuild fn and emits coplay.full_rebuild_ok with the row count', async () => {
+    recomputeCoplayForAllSessions.mockResolvedValue(1234);
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+    const now = new Date('2026-07-05T02:00:00.000Z');
+    const sql = {} as never;
+
+    await runCoplayFullRebuild({ sql, diag, now });
+
+    expect(recomputeCoplayForAllSessions).toHaveBeenCalledWith(sql, now);
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'coplay.full_rebuild_ok',
+        severity: 'info',
+        payload: { rows: 1234 },
+      }),
+    );
+  });
+
+  it('emits coplay.full_rebuild_failed and does not throw when the rebuild fails', async () => {
+    recomputeCoplayForAllSessions.mockRejectedValue(new Error('rebuild boom'));
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+
+    await expect(
+      runCoplayFullRebuild({ sql: {} as never, diag, now: new Date('2026-07-05T02:00:00.000Z') }),
+    ).resolves.toBeUndefined();
+
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'coplay.full_rebuild_failed', severity: 'error' }),
     );
   });
 });

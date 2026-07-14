@@ -1,11 +1,14 @@
 import {
   altIgnoredIps,
   moderationActions,
+  playerCoplay,
   playerIpHistory,
   playerNameHistory,
   players,
+  servers,
 } from '@squad/db/schema';
 import { eq, sql } from 'drizzle-orm';
+import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
@@ -40,6 +43,34 @@ async function seedPlayer(
     })
     .returning({ id: players.id });
   return row.id;
+}
+
+async function seedServer(name: string): Promise<string> {
+  const [row] = await h.db
+    .insert(servers)
+    .values({ displayName: name, slug: `${name.toLowerCase()}-${uuidv7()}` })
+    .returning({ id: servers.id });
+  return row.id;
+}
+
+/** Insert a `player_coplay` bucket, normalising to the canonical player_a_id < player_b_id order. */
+async function seedCoplay(opts: {
+  p1: string;
+  p2: string;
+  serverId: string;
+  windowStart: string;
+  overlapSeconds: number;
+  sharedSessionCount?: number;
+}): Promise<void> {
+  const [a, b] = opts.p1 < opts.p2 ? [opts.p1, opts.p2] : [opts.p2, opts.p1];
+  await h.db.insert(playerCoplay).values({
+    playerAId: a,
+    playerBId: b,
+    serverId: opts.serverId,
+    windowStart: opts.windowStart,
+    overlapSeconds: opts.overlapSeconds,
+    sharedSessionCount: opts.sharedSessionCount ?? 1,
+  });
 }
 
 async function loginAsSteam(steamId64: bigint): Promise<string> {
@@ -407,5 +438,141 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
       expect(plan).toContain('player_ip_history_ip_idx');
       expect(plan).not.toContain('Seq Scan on player_ip_history');
     });
+  });
+});
+
+describe('GET /api/v1/players/:playerId/alt-candidates — ALT-3 co-play anti-signal', () => {
+  const TODAY = new Date().toISOString().slice(0, 10);
+  // Default alt_detection_settings.coplay_overlap_threshold_seconds = 36 000 (10h).
+  const OVER_THRESHOLD_SECONDS = 40_000;
+  const UNDER_THRESHOLD_SECONDS = 100;
+
+  it('lowers the score and confidence of a candidate with a large co-play overlap', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'PlayerA');
+    // Kept far from PLAYER_A (beyond the default steamid_proximity threshold, see the
+    // ignored-CIDR test above) so the score here reflects only shared-IP + coplay.
+    const idHighOverlap = await seedPlayer(PLAYER_A + 50_000n, 'HighOverlapCandidate');
+    const idNoOverlap = await seedPlayer(PLAYER_A + 60_000n, 'NoOverlapCandidate');
+    const server = await seedServer('AltCoplayServer');
+
+    // Both candidates share one IP with the target (identical IP-based score).
+    await h.db.insert(playerIpHistory).values([
+      { playerId: idA, ip: '203.0.113.10' },
+      { playerId: idHighOverlap, ip: '203.0.113.10' },
+      { playerId: idA, ip: '203.0.113.11' },
+      { playerId: idNoOverlap, ip: '203.0.113.11' },
+    ]);
+    // Only idHighOverlap has a large rolling-window co-play overlap with the target.
+    await seedCoplay({
+      p1: idA,
+      p2: idHighOverlap,
+      serverId: server,
+      windowStart: TODAY,
+      overlapSeconds: OVER_THRESHOLD_SECONDS,
+    });
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${idA}/alt-candidates`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      candidates: Array<{
+        player_id: string;
+        score: number;
+        confidence: string;
+        signals: {
+          coplay_overlap: { value: number; threshold_seconds: number; weight: number };
+        };
+      }>;
+    };
+    const withOverlap = body.candidates.find((c) => c.player_id === idHighOverlap);
+    const withoutOverlap = body.candidates.find((c) => c.player_id === idNoOverlap);
+    expect(withOverlap).toBeDefined();
+    expect(withoutOverlap).toBeDefined();
+
+    expect(withOverlap?.signals.coplay_overlap).toMatchObject({
+      value: OVER_THRESHOLD_SECONDS,
+      threshold_seconds: 36_000,
+      weight: -30,
+    });
+    // Shared IP alone (50) is 'medium'; the co-play anti-signal (-30) drags it to 20 -> 'low'.
+    expect(withoutOverlap?.score).toBe(50);
+    expect(withoutOverlap?.confidence).toBe('medium');
+    expect(withOverlap?.score).toBe(20);
+    expect(withOverlap?.confidence).toBe('low');
+    expect(withOverlap?.score).toBeLessThan(withoutOverlap?.score as number);
+  });
+
+  it('does not subtract the anti-signal when overlap is below the threshold', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'PlayerA');
+    const idB = await seedPlayer(PLAYER_A + 50_000n, 'PlayerB');
+    const server = await seedServer('AltCoplayBelowThreshold');
+    await h.db.insert(playerIpHistory).values([
+      { playerId: idA, ip: '203.0.113.10' },
+      { playerId: idB, ip: '203.0.113.10' },
+    ]);
+    await seedCoplay({
+      p1: idA,
+      p2: idB,
+      serverId: server,
+      windowStart: TODAY,
+      overlapSeconds: UNDER_THRESHOLD_SECONDS,
+    });
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${idA}/alt-candidates`,
+      headers: { cookie },
+    });
+    const body = res.json() as {
+      candidates: Array<{
+        player_id: string;
+        score: number;
+        signals: { coplay_overlap: { value: number } };
+      }>;
+    };
+    const candidate = body.candidates.find((c) => c.player_id === idB);
+    expect(candidate?.signals.coplay_overlap.value).toBe(UNDER_THRESHOLD_SECONDS);
+    // Only the shared-IP weight (50) contributes; the anti-signal did not fire.
+    expect(candidate?.score).toBe(50);
+  });
+
+  it('ignores co-play buckets outside the rolling window (>90 days old)', async () => {
+    const idA = await seedPlayer(PLAYER_A, 'PlayerA');
+    const idB = await seedPlayer(PLAYER_A + 50_000n, 'PlayerB');
+    const server = await seedServer('AltCoplayStale');
+    await h.db.insert(playerIpHistory).values([
+      { playerId: idA, ip: '203.0.113.10' },
+      { playerId: idB, ip: '203.0.113.10' },
+    ]);
+    const staleDay = new Date(Date.now() - 120 * 86_400_000).toISOString().slice(0, 10);
+    await seedCoplay({
+      p1: idA,
+      p2: idB,
+      serverId: server,
+      windowStart: staleDay,
+      overlapSeconds: OVER_THRESHOLD_SECONDS,
+    });
+
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${idA}/alt-candidates`,
+      headers: { cookie },
+    });
+    const body = res.json() as {
+      candidates: Array<{
+        player_id: string;
+        score: number;
+        signals: { coplay_overlap: { value: number } };
+      }>;
+    };
+    const candidate = body.candidates.find((c) => c.player_id === idB);
+    expect(candidate?.signals.coplay_overlap.value).toBe(0);
+    expect(candidate?.score).toBe(50);
   });
 });
