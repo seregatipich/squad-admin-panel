@@ -13,7 +13,7 @@ import {
 } from './harness.js';
 
 const OWNER_STEAM = testSteamId(820001);
-const LIMITED_VIEWER = testSteamId(820002);
+const TEST_PLAYER_LIMITED_VIEWER = testSteamId(820002);
 
 let h: IntegrationHarness;
 
@@ -32,7 +32,7 @@ async function loginAsRoleWithoutViewIps(): Promise<string> {
   const [row] = await h.db
     .insert(players)
     .values({
-      steamId64: LIMITED_VIEWER,
+      steamId64: TEST_PLAYER_LIMITED_VIEWER,
       canonicalName: 'LimitedViewer',
       canonicalNameNormalized: 'limitedviewer',
     })
@@ -52,7 +52,10 @@ async function loginAsRoleWithoutViewIps(): Promise<string> {
     }),
   });
   const roleId = (created.json() as { id: string }).id;
-  await h.db.update(players).set({ roleId }).where(eq(players.id, row.id));
+  await h.db
+    .update(players)
+    .set({ roleId })
+    .where(eq(players.steamId64, TEST_PLAYER_LIMITED_VIEWER));
   invalidateAllPermissionCaches();
 
   const { token } = await createSession(h.db, h.redis, {
