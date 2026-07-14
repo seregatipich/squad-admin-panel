@@ -1,7 +1,8 @@
-import type { ReportEvidenceItem, ReportStatus } from '@/lib/live-bus';
+import type { ReportEvidenceItem, ReportListItem, ReportStatus } from '@/lib/live-bus';
 
 export const PAGE_SIZE = 20;
 export const NOTE_MAX = 2000;
+export const REASON_MAX = 300;
 
 export interface ReportFilters {
   status: '' | ReportStatus;
@@ -113,4 +114,80 @@ export function isExternalLinkEvidence(item: ReportEvidenceItem): boolean {
 /** Display label for an evidence item: its title, or the original filename/URL as a fallback. */
 export function evidenceLabel(item: ReportEvidenceItem): string {
   return item.title ?? item.external_url ?? item.original_filename;
+}
+
+export type ReportActionType = 'warn' | 'kick' | 'ban';
+
+/** Button labels for the report-card enforcement actions (REPORT-3, #113). */
+export const ACTION_LABELS: Record<ReportActionType, string> = {
+  warn: 'Предупредить',
+  kick: 'Кикнуть',
+  ban: 'Забанить',
+};
+
+/** Labels for the "linked actions" list on the report card / moderation history. */
+export const ACTION_TYPE_LABELS: Record<string, string> = {
+  warn: 'Предупреждение',
+  kick: 'Кик',
+  ban: 'Бан',
+};
+
+export function actionTypeBadge(actionType: string): string {
+  return ACTION_TYPE_LABELS[actionType] ?? actionType;
+}
+
+export type ReporterNotifyTemplate = 'in_review' | 'resolved';
+
+export const NOTIFY_TEMPLATE_LABELS: Record<ReporterNotifyTemplate, string> = {
+  in_review: 'Репорт принят в работу',
+  resolved: 'Репорт рассмотрен',
+};
+
+const BAN_LENGTH_PATTERN = /^\d+[smhdwMy]?$/;
+
+/** Mirrors the API/RCON-worker ban-length syntax check (see AdminBan). */
+export function isValidBanLength(value: string): boolean {
+  return BAN_LENGTH_PATTERN.test(value.trim());
+}
+
+export interface ReportTargetGroup {
+  target_player_id: string;
+  target_name: string | null;
+  reports: ReportListItem[];
+}
+
+/**
+ * Splits a report list into groups sharing a resolved `target_player_id`
+ * (for "N жалоб на игрока X" pending-queue blocks with a mass-resolve
+ * action) plus the reports with no resolved target, which are never
+ * grouped and render as individual cards.
+ */
+export function groupPendingByTarget(items: ReportListItem[]): {
+  grouped: ReportTargetGroup[];
+  ungrouped: ReportListItem[];
+} {
+  const order: string[] = [];
+  const byTarget = new Map<string, ReportListItem[]>();
+  const ungrouped: ReportListItem[] = [];
+
+  for (const item of items) {
+    if (!item.target_player_id) {
+      ungrouped.push(item);
+      continue;
+    }
+    const existing = byTarget.get(item.target_player_id);
+    if (existing) {
+      existing.push(item);
+    } else {
+      byTarget.set(item.target_player_id, [item]);
+      order.push(item.target_player_id);
+    }
+  }
+
+  const grouped: ReportTargetGroup[] = order.map((targetId) => {
+    const reports = byTarget.get(targetId) ?? [];
+    return { target_player_id: targetId, target_name: reports[0]?.target_name ?? null, reports };
+  });
+
+  return { grouped, ungrouped };
 }

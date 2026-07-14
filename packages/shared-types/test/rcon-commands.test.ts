@@ -21,6 +21,7 @@ describe('rcon command contract', () => {
 
   it('allows only the whitelisted operator command names', () => {
     expect(RCON_OPERATOR_COMMANDS).toEqual([
+      'AdminBan',
       'AdminBroadcast',
       'AdminEndMatch',
       'AdminKick',
@@ -38,6 +39,13 @@ describe('rcon command contract', () => {
       rconCommandRequestSchema.safeParse({
         request_id: 'req-1',
         command: 'AdminBan',
+        args: ['76561198000000001', '0', 'Cheating'],
+      }).success,
+    ).toBe(true);
+    expect(
+      rconCommandRequestSchema.safeParse({
+        request_id: 'req-1',
+        command: 'AdminNuke',
         args: ['76561198000000001'],
       }).success,
     ).toBe(false);

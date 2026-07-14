@@ -16,6 +16,7 @@ interface ModerationActionApiRow {
   action_type: string;
   reason: string | null;
   context: unknown;
+  report_id: string | null;
   created_at: Date | string;
   reverted_at: Date | string | null;
   server_id: string | null;
@@ -67,6 +68,7 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
           ma.action_type,
           ma.reason,
           ma.context,
+          ma.report_id,
           ma.created_at,
           ma.reverted_at,
           ma.server_id,
@@ -88,6 +90,7 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
           action_type: row.action_type,
           reason: row.reason,
           context: row.context ?? {},
+          report_id: row.report_id,
           created_at: toIso(row.created_at),
           reverted_at: toIso(row.reverted_at),
           server: row.server_id ? { id: row.server_id, name: row.server_name } : null,

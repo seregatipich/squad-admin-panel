@@ -5,6 +5,7 @@ export const RCON_COMMAND_GROUP = 'worker-rcon:commands:v1';
 export const RCON_COMMAND_RESULT_PREFIX = 'rcon:command-result:';
 
 export const RCON_OPERATOR_COMMANDS = [
+  'AdminBan',
   'AdminBroadcast',
   'AdminEndMatch',
   'AdminKick',

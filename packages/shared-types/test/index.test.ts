@@ -40,6 +40,7 @@ describe('shared-types index re-exports', () => {
     expect(root.rconCommandStream('srv-1')).toBe('rcon:commands:srv-1');
     expect(root.rconCommandResultKey('req-1')).toBe('rcon:command-result:req-1');
     expect(root.RCON_OPERATOR_COMMANDS).toEqual([
+      'AdminBan',
       'AdminBroadcast',
       'AdminEndMatch',
       'AdminKick',

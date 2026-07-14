@@ -74,10 +74,26 @@ describe('buildOperatorCommand', () => {
         }),
       ),
     ).toBe('AdminKick 76561198000000123 Banned nickname');
+    expect(
+      buildOperatorCommand(
+        commandRequest({
+          command: 'AdminBan',
+          args: ['76561198000000123', '0', 'Cheating'],
+        }),
+      ),
+    ).toBe('AdminBan 76561198000000123 0 Cheating');
+    expect(
+      buildOperatorCommand(
+        commandRequest({
+          command: 'AdminBan',
+          args: ['76561198000000123', '3d', 'Toxic behavior'],
+        }),
+      ),
+    ).toBe('AdminBan 76561198000000123 3d Toxic behavior');
   });
 
   it('rejects unsupported commands and unsafe broadcast text', () => {
-    expect(() => buildOperatorCommand(commandRequest({ command: 'AdminBan' }))).toThrow(
+    expect(() => buildOperatorCommand(commandRequest({ command: 'AdminNuke' }))).toThrow(
       /unsupported/i,
     );
     expect(() =>
@@ -135,6 +151,53 @@ describe('buildOperatorCommand', () => {
     expect(() =>
       buildOperatorCommand(commandRequest({ command: 'AdminWarn', args: ['', 'hello'] })),
     ).toThrow(/is required/i);
+  });
+
+  it('rejects AdminBan with the wrong argument count', () => {
+    expect(() =>
+      buildOperatorCommand(
+        commandRequest({ command: 'AdminBan', args: ['76561198000000123', '0'] }),
+      ),
+    ).toThrow(/exactly three arguments/i);
+    expect(() =>
+      buildOperatorCommand(
+        commandRequest({
+          command: 'AdminBan',
+          args: ['76561198000000123', '0', 'reason', 'extra'],
+        }),
+      ),
+    ).toThrow(/exactly three arguments/i);
+  });
+
+  it('rejects AdminBan with an invalid ban length', () => {
+    expect(() =>
+      buildOperatorCommand(
+        commandRequest({ command: 'AdminBan', args: ['76561198000000123', 'abc', 'reason'] }),
+      ),
+    ).toThrow(/invalid AdminBan length/i);
+    expect(() =>
+      buildOperatorCommand(
+        commandRequest({ command: 'AdminBan', args: ['76561198000000123', '-1', 'reason'] }),
+      ),
+    ).toThrow(/invalid AdminBan length/i);
+    expect(() =>
+      buildOperatorCommand(
+        commandRequest({ command: 'AdminBan', args: ['76561198000000123', '1 d', 'reason'] }),
+      ),
+    ).toThrow(/invalid AdminBan length/i);
+  });
+
+  it('rejects AdminBan with unsafe target or reason text', () => {
+    expect(() =>
+      buildOperatorCommand(
+        commandRequest({ command: 'AdminBan', args: ['target\nid', '0', 'reason'] }),
+      ),
+    ).toThrow(/unsafe/i);
+    expect(() =>
+      buildOperatorCommand(
+        commandRequest({ command: 'AdminBan', args: ['target', '0', 'line one\nline two'] }),
+      ),
+    ).toThrow(/unsafe/i);
   });
 });
 
@@ -241,7 +304,7 @@ describe('RconCommandQueue', () => {
 
   it('rejects malformed operator commands with a result instead of executing them', async () => {
     const redis = makeRedis([
-      ['1700-2', ['request', JSON.stringify(commandRequest({ command: 'AdminBan' }))]],
+      ['1700-2', ['request', JSON.stringify(commandRequest({ command: 'AdminNuke' }))]],
     ]);
     const execute = vi.fn();
     const queue = new RconCommandQueue({
