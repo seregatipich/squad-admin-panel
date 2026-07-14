@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { notifyReporter, type ReporterNotifyTemplate } from '../lib/report-notify.js';
+import { recomputeReporterStats } from '../lib/reporter-stats.js';
 import { parseStoredRoster } from '../lib/roster.js';
 import type { ReportLiveView } from '../plugins/live-bus.js';
 
@@ -262,6 +263,15 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
         })
         .returning({ id: moderationActions.id });
 
+      // Linking a moderation action to the report changes its reporter's
+      // "confirmed" count (REPORT-5, #115) — recompute their trust metrics.
+      // Best-effort: a stats failure must never fail the enforcement action.
+      if (report.reporterPlayerId) {
+        await recomputeReporterStats(app.db, app.redis, report.reporterPlayerId).catch(
+          () => undefined,
+        );
+      }
+
       await writeAuditEntry(app.db, {
         actor: auditActor(req),
         actorIp: req.ip ?? null,
@@ -481,6 +491,15 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
             actorPlayerId: handlerPlayerId,
           }).catch(() => undefined);
         }
+      }
+
+      // Recompute reporter trust metrics once per distinct reporter among the
+      // bulk-resolved reports (REPORT-5, #115). Best-effort.
+      const distinctReporters = new Set(
+        updated.map((report) => report.reporterPlayerId).filter((id): id is string => id != null),
+      );
+      for (const reporterPlayerId of distinctReporters) {
+        await recomputeReporterStats(app.db, app.redis, reporterPlayerId).catch(() => undefined);
       }
 
       return { ok: true, resolved_ids: ids };

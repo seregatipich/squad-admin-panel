@@ -45,6 +45,7 @@ export * from './player-vehicle-stats.js';
 export * from './player-weapon-stats.js';
 export * from './players.js';
 export * from './report-evidence.js';
+export * from './reporter-stats.js';
 export * from './role-permissions.js';
 export * from './role-squad-permissions.js';
 export * from './roles.js';

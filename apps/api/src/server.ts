@@ -80,6 +80,7 @@ import playerPresenceRoutes from './routes/player-presence.js';
 import playerRoutes from './routes/players.js';
 import publicStatsRoutes from './routes/public-stats.js';
 import reportActionsRoutes from './routes/report-actions.js';
+import reportAnalyticsRoutes from './routes/report-analytics.js';
 import reportsRoutes from './routes/reports.js';
 import roleAssignmentsRoutes from './routes/role-assignments.js';
 import roleMembersRoutes from './routes/role-members.js';
@@ -233,6 +234,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(voteAnalyticsRoutes);
   await app.register(reportsRoutes);
   await app.register(reportActionsRoutes);
+  await app.register(reportAnalyticsRoutes);
   await app.register(eventsRoutes);
   await app.register(playerNotesRoutes);
   await app.register(notesFeedRoutes);

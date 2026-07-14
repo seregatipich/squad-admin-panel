@@ -10,10 +10,15 @@ import {
   groupPendingByTarget,
   isExternalLinkEvidence,
   isImageEvidence,
+  isRecidivist,
   isValidBanLength,
   isVideoEvidence,
   parseFilters,
   playerLabel,
+  RECIDIVIST_MIN_COUNT_90D,
+  REPORTER_SPAM_LABEL,
+  REPORTER_TRUSTED_LABEL,
+  recidivistBadgeLabel,
   totalPages,
 } from './helpers';
 
@@ -243,5 +248,29 @@ describe('groupPendingByTarget', () => {
     expect(ungrouped.map((r) => r.id)).toEqual(['r1']);
     expect(grouped).toHaveLength(1);
     expect(grouped[0]?.target_player_id).toBe('target-1');
+  });
+});
+
+describe('isRecidivist', () => {
+  it('is false below the threshold and true at/above it', () => {
+    expect(isRecidivist(RECIDIVIST_MIN_COUNT_90D - 1)).toBe(false);
+    expect(isRecidivist(RECIDIVIST_MIN_COUNT_90D)).toBe(true);
+    expect(isRecidivist(0)).toBe(false);
+  });
+});
+
+describe('recidivistBadgeLabel', () => {
+  it('applies correct Russian pluralization', () => {
+    expect(recidivistBadgeLabel(1)).toBe('1 жалоба за 90 дн');
+    expect(recidivistBadgeLabel(3)).toBe('3 жалобы за 90 дн');
+    expect(recidivistBadgeLabel(5)).toBe('5 жалоб за 90 дн');
+    expect(recidivistBadgeLabel(11)).toBe('11 жалоб за 90 дн');
+  });
+});
+
+describe('reporter trust badge constants', () => {
+  it('exposes the trusted/spam Russian labels', () => {
+    expect(REPORTER_TRUSTED_LABEL).toBe('Доверенный');
+    expect(REPORTER_SPAM_LABEL).toBe('Спам');
   });
 });
