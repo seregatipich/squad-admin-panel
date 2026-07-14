@@ -11,6 +11,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { players } from './players.js';
+import { roles } from './roles.js';
 
 export interface PrivilegeCost {
   days: number;
@@ -29,6 +30,12 @@ export const economySettings = pgTable(
     seedThreshold: integer('seed_threshold').notNull().default(40),
     economyEnabled: boolean('economy_enabled').notNull().default(false),
     privilegeCosts: jsonb('privilege_costs').notNull().default({}).$type<PrivilegeCostCatalog>(),
+    seedRewardThresholdHoursPerMonth: doublePrecision('seed_reward_threshold_hours_per_month')
+      .notNull()
+      .default(0),
+    seedRewardRoleId: uuid('seed_reward_role_id').references(() => roles.id, {
+      onDelete: 'set null',
+    }),
     updatedByPlayerId: uuid('updated_by_player_id').references(() => players.id, {
       onDelete: 'set null',
     }),
@@ -42,6 +49,10 @@ export const economySettings = pgTable(
     seedThresholdRange: check(
       'economy_settings_seed_threshold_range',
       sql`${table.seedThreshold} >= 0 AND ${table.seedThreshold} <= 100`,
+    ),
+    seedRewardThresholdRange: check(
+      'economy_settings_seed_reward_threshold_range',
+      sql`${table.seedRewardThresholdHoursPerMonth} >= 0 AND ${table.seedRewardThresholdHoursPerMonth} <= 720`,
     ),
   }),
 );

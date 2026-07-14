@@ -114,6 +114,8 @@ describeIfDb('GET /api/v1/settings/economy', () => {
     expect(body.seed_threshold).toBe(40);
     expect(body.economy_enabled).toBe(false);
     expect(body.privilege_costs).toEqual({});
+    expect(body.seed_reward_threshold_hours_per_month).toBe(0);
+    expect(body.seed_reward_role_id).toBeNull();
   });
 
   it('allows a panel viewer without can_manage_economy to read', async () => {
@@ -206,6 +208,60 @@ describeIfDb('PUT /api/v1/settings/economy', () => {
     expect(body.seed_threshold).toBe(60);
     expect(body.k_boost).toBe(4);
     expect(body.economy_enabled).toBe(true);
+  });
+
+  it('persists seed reward settings for a role without panel access', async () => {
+    const rewardRoleId = uuidv7();
+    await h.db.insert(roles).values({
+      id: rewardRoleId,
+      name: `SeedReward_${rewardRoleId}`,
+      color: '#8B5CF6',
+      panelAccess: false,
+    });
+
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/economy',
+      headers: { cookie: ownerCookie },
+      payload: {
+        seed_reward_threshold_hours_per_month: 12.5,
+        seed_reward_role_id: rewardRoleId,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      seed_reward_threshold_hours_per_month: 12.5,
+      seed_reward_role_id: rewardRoleId,
+    });
+    const [persisted] = await h.db
+      .select({
+        threshold: economySettings.seedRewardThresholdHoursPerMonth,
+        roleId: economySettings.seedRewardRoleId,
+      })
+      .from(economySettings)
+      .where(eq(economySettings.id, 1));
+    expect(persisted).toEqual({ threshold: 12.5, roleId: rewardRoleId });
+  });
+
+  it('rejects a seed reward role with panel access with 422', async () => {
+    const panelRoleId = uuidv7();
+    await h.db.insert(roles).values({
+      id: panelRoleId,
+      name: `SeedPanelReward_${panelRoleId}`,
+      color: '#EF4444',
+      panelAccess: true,
+    });
+
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/economy',
+      headers: { cookie: ownerCookie },
+      payload: { seed_reward_role_id: panelRoleId },
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ error: 'seed_reward_role_requires_no_panel_access' });
   });
 
   it('rejects a negative coefficient with 400', async () => {
