@@ -129,7 +129,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   const { player, clan, names, ips, locations, ips_visible, geo_configured } = data;
   const canManageRoles = me?.permissions.includes('user:manage_roles') ?? false;
   const canEditWhitelist = me?.permissions.includes('whitelist:edit') ?? false;
-  const canBanNicks = me?.squad_permissions?.includes('ban') ?? false;
+  const canBan = me?.squad_permissions?.includes('ban') ?? false;
   const canViewIps = me?.permissions.includes('player:view_ips') ?? false;
   const canAccessPanel = me?.permissions.includes('player:view') ?? false;
 
@@ -205,7 +205,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
       <ReportsSection playerId={playerId} />
 
-      <ExternalBansSection playerId={playerId} />
+      <ExternalBansSection playerId={playerId} canBan={canBan} />
 
       <VotesSection playerId={playerId} />
 
@@ -225,7 +225,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
                 <th className="text-left p-1">Виделся N раз</th>
                 <th className="text-left p-1">Первый раз</th>
                 <th className="text-left p-1">Последний раз</th>
-                {canBanNicks ? <th className="text-left p-1"></th> : null}
+                {canBan ? <th className="text-left p-1"></th> : null}
               </tr>
             </thead>
             <tbody>
@@ -239,7 +239,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
                   <td className="p-1 text-neutral-500">
                     {new Date(n.last_seen_at).toLocaleString()}
                   </td>
-                  {canBanNicks ? (
+                  {canBan ? (
                     <td className="p-1">
                       <button
                         type="button"

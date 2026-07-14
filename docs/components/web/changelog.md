@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-07-14 — CBAN-4 local-ban action
+
+### Added
+
+- The player card's external-ban section now shows «Забанить локально» for active records when the viewer has the Squad `ban` permission.
+- The confirmation form requires a server, prefills the source/reason, accepts Squad's ban-duration syntax, and reports the successful target server inline.
+
 ## 2026-07-05 — PNOTE-2 global notes feed
 
 ### Added

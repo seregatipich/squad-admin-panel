@@ -187,6 +187,8 @@ Errors:
 |---|---|---|---|
 | GET | `/api/v1/players` | Up to 200 most-recently-seen, ordered by `last_seen_at`. Optional `?q=` filter: `q` is normalized with `normalizePlayerName` (clan tags stripped) and matched as a substring against `canonical_name_normalized` and historic `player_name_history.name_normalized` (so a player is found by a past nickname without its clan tag), or exactly against `steam_id64::text` / `eos_id`. | `player:view` |
 | GET | `/api/v1/players/:steamId` | Full detail with name history; IP history is gated by `player:view_ips` (returned as empty array + `ips_visible:false` otherwise). | `player:view` |
+| GET | `/api/v1/players/:playerId/external-bans` | External-ban records grouped by source for the player card, including active/permanent status. | panel access |
+| POST | `/api/v1/players/:playerId/external-bans/:externalBanId/local-ban` | Sends `AdminBan` to the selected server for an active external-ban match. Body: `{ server_id, reason, ban_length }`. Writes moderation history, audit, and `moderation.ban`; rejects mismatched/inactive records and unavailable RCON without writing the ledger. | panel access + Squad `ban` |
 | GET | `/api/v1/players/:steamId/role` | Returns current role or `{role: null}`. Single-role model — each player has at most one panel role. | `user:view` |
 | PUT | `/api/v1/players/:steamId/role` | Assign or clear a role. Body: `{role_id: uuid \| null}`. 404 `role_not_found` if the role UUID doesn't exist. 409 `cannot_remove_last_owner` when the change would leave zero Owners. Invalidates the player's permission cache. Audit: `player.role.assign`. | `user:manage_roles` |
 

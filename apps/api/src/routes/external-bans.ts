@@ -1,10 +1,34 @@
-import { externalBanSources, externalBans, players } from '@squad/db/schema';
-import { desc, eq, or, type SQL, sql } from 'drizzle-orm';
+import {
+  events,
+  externalBanSources,
+  externalBans,
+  moderationActions,
+  players,
+  servers,
+} from '@squad/db/schema';
+import { type EventEnvelope, moderationActionPayload, STREAM_NAME } from '@squad/shared-types';
+import { and, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
+import { writeAuditEntry } from '../lib/audit.js';
+import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
+const localBanParams = z.object({
+  playerId: z.string().uuid(),
+  externalBanId: z.string().uuid(),
+});
+const localBanBody = z.object({
+  server_id: z.string().uuid(),
+  reason: z.string().trim().min(1).max(300),
+  ban_length: z
+    .string()
+    .trim()
+    .regex(/^\d+[smhdwMy]?$/, 'invalid ban_length')
+    .default('0'),
+});
 
 const registryQuery = z.object({
   q: z.string().trim().min(1).max(256).optional(),
@@ -22,6 +46,19 @@ function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string }
   if (!req.user.permissions.panelAccess) {
     reply.code(403);
     return { error: 'forbidden' };
+  }
+  return null;
+}
+
+function localBanGuard(
+  req: FastifyRequest,
+  reply: FastifyReply,
+): { error: string; required?: string } | null {
+  const denied = panelGuard(req, reply);
+  if (denied) return denied;
+  if (!req.user?.permissions.squadPermissions.has('ban')) {
+    reply.code(403);
+    return { error: 'forbidden', required: 'ban' };
   }
   return null;
 }
@@ -71,11 +108,13 @@ interface RegistryRow {
 }
 
 /**
- * CBAN-3: read-only aggregation surface over `external_bans` (CBAN-1/CBAN-2).
- * Two routes, both gated on `panel_access`:
+ * External-ban aggregation and enforcement surface over `external_bans`.
+ * CBAN-3 provides two reads gated on `panel_access`:
  *  - per-player aggregate for the "Внешние банлисты" player-card section
  *  - a registry-wide search/browse list for the `/external-bans` page
- * Neither route mutates data, so both opt out of the audit hook.
+ * CBAN-4 adds an explicit local-ban mutation for active player matches. That
+ * mutation additionally requires the Squad `ban` permission and records its
+ * own audit entry after successful RCON enforcement.
  */
 const externalBansRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -190,6 +229,190 @@ const externalBansRoutes: FastifyPluginAsync = async (app) => {
         sources,
         active_source_count: sources.filter((s) => s.active_count > 0).length,
         total: rows.length,
+      };
+    },
+  );
+
+  /**
+   * Converts one active external-ban match into an explicit local AdminBan.
+   * The moderator chooses the target server and can edit the prefilled reason
+   * in the player-card form; successful enforcement is recorded in the
+   * moderation ledger, audit log, and EVT-1 stream consumed by DISCORD-2.
+   */
+  fast.post(
+    '/api/v1/players/:playerId/external-bans/:externalBanId/local-ban',
+    { schema: { params: localBanParams, body: localBanBody }, config: { audit: false } },
+    async (req, reply) => {
+      const denied = localBanGuard(req, reply);
+      if (denied) return denied;
+
+      const [player] = await app.db
+        .select({
+          steamId64: players.steamId64,
+          eosId: players.eosId,
+          name: players.canonicalName,
+        })
+        .from(players)
+        .where(eq(players.id, req.params.playerId))
+        .limit(1);
+      if (!player) {
+        reply.code(404);
+        return { error: 'player_not_found' };
+      }
+
+      const [externalBan] = await app.db
+        .select({
+          id: externalBans.id,
+          sourceId: externalBans.sourceId,
+          sourceName: externalBanSources.name,
+          steamId64: externalBans.steamId64,
+          eosId: externalBans.eosId,
+          expiresAt: externalBans.expiresAt,
+          revokedAt: externalBans.revokedAt,
+        })
+        .from(externalBans)
+        .innerJoin(externalBanSources, eq(externalBanSources.id, externalBans.sourceId))
+        .where(eq(externalBans.id, req.params.externalBanId))
+        .limit(1);
+
+      const steamId64 = player.steamId64?.toString() ?? null;
+      const belongsToPlayer =
+        externalBan !== undefined &&
+        ((steamId64 !== null && externalBan.steamId64 === steamId64) ||
+          (player.eosId !== null && externalBan.eosId === player.eosId));
+      if (!externalBan || !belongsToPlayer) {
+        reply.code(404);
+        return { error: 'external_ban_not_found' };
+      }
+      if (!isActiveBan(externalBan.expiresAt, externalBan.revokedAt)) {
+        reply.code(409);
+        return { error: 'external_ban_inactive' };
+      }
+
+      const [server] = await app.db
+        .select({ id: servers.id, name: servers.displayName })
+        .from(servers)
+        .where(and(eq(servers.id, req.body.server_id), isNull(servers.deletedAt)))
+        .limit(1);
+      if (!server) {
+        reply.code(404);
+        return { error: 'server_not_found' };
+      }
+
+      const target = player.eosId ?? steamId64;
+      if (!target) {
+        reply.code(400);
+        return { error: 'target_identity_missing' };
+      }
+
+      // biome-ignore lint/style/noNonNullAssertion: localBanGuard rejects unauthenticated callers
+      const actorPlayerId = req.user!.playerId;
+      const outcome = await sendRconCommandViaWorker(app.redis, {
+        serverId: server.id,
+        command: 'AdminBan',
+        args: [target, req.body.ban_length, req.body.reason],
+        actorPlayerId,
+      });
+      if (!outcome.attempted || !outcome.ok) {
+        reply.code(502);
+        return {
+          error: 'action_failed',
+          reason: outcome.reason,
+          detail: outcome.attempted ? outcome.detail : undefined,
+        };
+      }
+
+      const [action] = await app.db
+        .insert(moderationActions)
+        .values({
+          playerId: req.params.playerId,
+          serverId: server.id,
+          actionType: 'ban',
+          authorPlayerId: actorPlayerId,
+          reason: req.body.reason,
+          context: {
+            ban_length: req.body.ban_length,
+            external_ban_id: externalBan.id,
+            source_id: externalBan.sourceId,
+            source_name: externalBan.sourceName,
+          },
+        })
+        .returning({ id: moderationActions.id, createdAt: moderationActions.createdAt });
+      if (!action) throw new Error('moderation action insert returned no row');
+
+      const payload = moderationActionPayload.parse({
+        moderation_action_id: action.id,
+        action_type: 'ban',
+        player_id: req.params.playerId,
+        steam_id64: steamId64,
+        eos_id: player.eosId,
+        name: player.name,
+        reason: req.body.reason,
+        duration: req.body.ban_length,
+        actor_name: req.user?.canonicalName,
+        report_id: null,
+      });
+      const envelope: EventEnvelope = {
+        event_id: uuidv7(),
+        version: 1,
+        type: 'moderation.ban',
+        server_id: server.id,
+        ts: new Date().toISOString(),
+        actor: { kind: 'user', id: actorPlayerId },
+        correlation_id: externalBan.id,
+        payload,
+      };
+      await app.db.insert(events).values({
+        eventId: envelope.event_id,
+        serverId: envelope.server_id,
+        occurredAt: new Date(envelope.ts),
+        kind: envelope.type,
+        version: envelope.version,
+        actorKind: envelope.actor?.kind ?? null,
+        actorId: envelope.actor?.id ?? null,
+        correlationId: envelope.correlation_id,
+        payload: envelope.payload,
+      });
+      await app.redis.xadd(
+        STREAM_NAME.eventsServer(server.id),
+        'MAXLEN',
+        '~',
+        '10000',
+        '*',
+        'envelope',
+        JSON.stringify(envelope),
+      );
+
+      await writeAuditEntry(app.db, {
+        actor: {
+          kind: 'steam',
+          playerId: actorPlayerId,
+          tokenId: req.apiTokenId ?? null,
+        },
+        actorIp: req.ip ?? null,
+        actionType: 'external_ban.local_ban',
+        targetType: 'player',
+        targetId: req.params.playerId,
+        after: {
+          action_type: 'ban',
+          reason: req.body.reason,
+          ban_length: req.body.ban_length,
+          server_id: server.id,
+          external_ban_id: externalBan.id,
+          source_id: externalBan.sourceId,
+        },
+        context: { requestId: req.id, method: req.method, url: req.url },
+        statusCode: reply.statusCode,
+      });
+
+      return {
+        id: action.id,
+        action_type: 'ban',
+        reason: req.body.reason,
+        duration: req.body.ban_length,
+        created_at: action.createdAt.toISOString(),
+        server: { id: server.id, name: server.name },
+        external_ban_id: externalBan.id,
       };
     },
   );

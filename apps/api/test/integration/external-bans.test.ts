@@ -1,16 +1,33 @@
-import { externalBanSources, externalBans, players, roles } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import {
+  events,
+  externalBanSources,
+  externalBans,
+  moderationActions,
+  players,
+  roles,
+  servers,
+} from '@squad/db/schema';
+import { eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
+import type { WorkerRconCommandOutcome } from '../../src/lib/rcon-worker-command.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
+  assertAuditRow,
   buildIntegrationApp,
   type IntegrationHarness,
   loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
+
+vi.mock('../../src/lib/rcon-worker-command.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/lib/rcon-worker-command.js')>()),
+  sendRconCommandViaWorker: vi.fn(),
+}));
+
+import { sendRconCommandViaWorker } from '../../src/lib/rcon-worker-command.js';
 
 const OWNER_STEAM = testSteamId(942001);
 const NO_ACCESS_STEAM = testSteamId(942002);
@@ -25,6 +42,8 @@ const EOS_OR_MATCH = 'eos-cban3-test-002';
 let h: IntegrationHarness;
 let ownerCookie: string;
 let noAccessCookie: string;
+let panelOnlyCookie: string;
+let serverId: string;
 
 let sourceTrustedId: string;
 let sourceNormalId: string;
@@ -87,17 +106,32 @@ async function createSourceRow(name: string, trustLevel: string): Promise<string
 
 async function createBanRow(
   overrides: Partial<typeof externalBans.$inferInsert> & { sourceId: string },
-): Promise<void> {
-  await h.db.insert(externalBans).values({
-    steamId64: null,
-    eosId: null,
-    nickname: 'TestCheater',
-    reason: 'aimbot',
-    adminName: 'ExternalAdmin',
-    issuedAt: new Date('2026-01-01T00:00:00Z'),
-    expiresAt: null,
-    ...overrides,
-  });
+): Promise<string> {
+  const [row] = await h.db
+    .insert(externalBans)
+    .values({
+      steamId64: null,
+      eosId: null,
+      nickname: 'TestCheater',
+      reason: 'aimbot',
+      adminName: 'ExternalAdmin',
+      issuedAt: new Date('2026-01-01T00:00:00Z'),
+      expiresAt: null,
+      ...overrides,
+    })
+    .returning({ id: externalBans.id });
+  if (!row) throw new Error('failed to seed external ban');
+  return row.id;
+}
+
+function okOutcome(): WorkerRconCommandOutcome {
+  return {
+    attempted: true,
+    ok: true,
+    requestId: 'cban4-local-ban',
+    response: 'ok',
+    via: 'worker-rcon',
+  } as WorkerRconCommandOutcome;
 }
 
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
@@ -197,6 +231,14 @@ beforeAll(async () => {
 
   ownerCookie = await loginAsOwner(h);
   noAccessCookie = await loginAsSteam(NO_ACCESS_STEAM, 'external-bans-no-access');
+  panelOnlyCookie = await loginAsSteam(BigInt(STEAM_ZERO), 'external-bans-panel-only');
+
+  serverId = uuidv7();
+  await h.db.insert(servers).values({
+    id: serverId,
+    displayName: 'CBAN-4 Local Ban Server',
+    slug: `cban4-local-ban-${serverId}`,
+  });
 }, 60_000);
 
 afterAll(async () => {
@@ -484,5 +526,172 @@ describeIfDb('GET /api/v1/external-bans (registry)', () => {
     const unknownRow = unknown.json().rows[0];
     expect(unknownRow.player_id).toBeNull();
     expect(unknownRow.panel_nickname).toBeNull();
+  });
+});
+
+describeIfDb('POST /api/v1/players/:playerId/external-bans/:externalBanId/local-ban', () => {
+  it('requires the Squad ban permission', async () => {
+    const playerId = await getPlayerId(BigInt(STEAM_TWO_SOURCES));
+    const externalBanId = await createBanRow({
+      sourceId: sourceTrustedId,
+      steamId64: STEAM_TWO_SOURCES,
+      issuedAt: new Date(),
+    });
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${playerId}/external-bans/${externalBanId}/local-ban`,
+      headers: { cookie: panelOnlyCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ server_id: serverId, reason: 'RuBans: aimbot', ban_length: '0' }),
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'forbidden', required: 'ban' });
+    expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
+  });
+
+  it('sends AdminBan and records moderation, audit, and event history', async () => {
+    vi.mocked(sendRconCommandViaWorker).mockReset();
+    vi.mocked(sendRconCommandViaWorker).mockResolvedValue(okOutcome());
+    const playerId = await getPlayerId(BigInt(STEAM_TWO_SOURCES));
+    const externalBanId = await createBanRow({
+      sourceId: sourceTrustedId,
+      steamId64: STEAM_TWO_SOURCES,
+      reason: 'wallhack',
+      issuedAt: new Date(Date.now() + 1),
+    });
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${playerId}/external-bans/${externalBanId}/local-ban`,
+      headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        server_id: serverId,
+        reason: 'CBAN3 Trusted: wallhack',
+        ban_length: '30d',
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      action_type: 'ban',
+      duration: '30d',
+      external_ban_id: externalBanId,
+      server: { id: serverId, name: 'CBAN-4 Local Ban Server' },
+    });
+    expect(sendRconCommandViaWorker).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        serverId,
+        command: 'AdminBan',
+        args: [STEAM_TWO_SOURCES, '30d', 'CBAN3 Trusted: wallhack'],
+      }),
+    );
+
+    const [ledger] = await h.db
+      .select()
+      .from(moderationActions)
+      .where(sql`${moderationActions.context}->>'external_ban_id' = ${externalBanId}`)
+      .limit(1);
+    expect(ledger).toMatchObject({
+      playerId,
+      serverId,
+      actionType: 'ban',
+      reason: 'CBAN3 Trusted: wallhack',
+    });
+    expect(ledger?.context).toMatchObject({
+      ban_length: '30d',
+      external_ban_id: externalBanId,
+      source_id: sourceTrustedId,
+    });
+
+    const [event] = await h.db
+      .select({ kind: events.kind, correlationId: events.correlationId, payload: events.payload })
+      .from(events)
+      .where(eq(events.correlationId, externalBanId))
+      .limit(1);
+    expect(event).toMatchObject({ kind: 'moderation.ban', correlationId: externalBanId });
+    expect(event?.payload).toMatchObject({
+      moderation_action_id: ledger?.id,
+      player_id: playerId,
+      duration: '30d',
+      report_id: null,
+    });
+    await assertAuditRow(h, {
+      action: 'external_ban.local_ban',
+      resource: 'player',
+      targetId: playerId,
+    });
+  });
+
+  it('rejects an inactive external ban before RCON execution', async () => {
+    vi.mocked(sendRconCommandViaWorker).mockReset();
+    const playerId = await getPlayerId(BigInt(STEAM_TWO_SOURCES));
+    const externalBanId = await createBanRow({
+      sourceId: sourceTrustedId,
+      steamId64: STEAM_TWO_SOURCES,
+      issuedAt: new Date(Date.now() + 2),
+      revokedAt: new Date(),
+    });
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${playerId}/external-bans/${externalBanId}/local-ban`,
+      headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ server_id: serverId, reason: 'revoked ban', ban_length: '0' }),
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('external_ban_inactive');
+    expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
+  });
+
+  it('does not accept an external-ban record belonging to another player', async () => {
+    vi.mocked(sendRconCommandViaWorker).mockReset();
+    const playerId = await getPlayerId(BigInt(STEAM_TWO_SOURCES));
+    const externalBanId = await createBanRow({
+      sourceId: sourceTrustedId,
+      steamId64: STEAM_HISTORY,
+      issuedAt: new Date(Date.now() + 4),
+    });
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${playerId}/external-bans/${externalBanId}/local-ban`,
+      headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ server_id: serverId, reason: 'wrong player', ban_length: '0' }),
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('external_ban_not_found');
+    expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
+  });
+
+  it('writes no moderation row when the RCON worker is unavailable', async () => {
+    vi.mocked(sendRconCommandViaWorker).mockReset();
+    vi.mocked(sendRconCommandViaWorker).mockResolvedValue({
+      attempted: false,
+      reason: 'worker_not_connected',
+    });
+    const playerId = await getPlayerId(BigInt(STEAM_TWO_SOURCES));
+    const externalBanId = await createBanRow({
+      sourceId: sourceNormalId,
+      steamId64: STEAM_TWO_SOURCES,
+      issuedAt: new Date(Date.now() + 3),
+    });
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${playerId}/external-bans/${externalBanId}/local-ban`,
+      headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ server_id: serverId, reason: 'external ban', ban_length: '0' }),
+    });
+
+    expect(res.statusCode).toBe(502);
+    const rows = await h.db
+      .select({ id: moderationActions.id })
+      .from(moderationActions)
+      .where(sql`${moderationActions.context}->>'external_ban_id' = ${externalBanId}`);
+    expect(rows).toHaveLength(0);
   });
 });

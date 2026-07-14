@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ExternalBansSection } from './ExternalBansSection';
@@ -93,5 +93,66 @@ describe('ExternalBansSection', () => {
 
     const { container } = render(<ExternalBansSection playerId="player-1" />);
     await waitFor(() => expect(container).toBeEmptyDOMElement());
+  });
+
+  it('opens a prefilled local-ban form for an active record and submits the selected server', async () => {
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/v1/players/player-1/external-bans') {
+        return Promise.resolve(new Response(JSON.stringify(TWO_SOURCES_RESPONSE), { status: 200 }));
+      }
+      if (url === '/api/v1/servers') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ items: [{ id: 'server-1', display_name: 'Alpha Server' }] }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (url === '/api/v1/players/player-1/external-bans/b1/local-ban') {
+        expect(init?.method).toBe('POST');
+        expect(JSON.parse(String(init?.body))).toEqual({
+          server_id: 'server-1',
+          reason: 'RuBans: aimbot',
+          ban_length: '0',
+        });
+        return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ExternalBansSection playerId="player-1" canBan />);
+    fireEvent.click(await screen.findByRole('button', { name: /Найден в 2 внешних банлистах/ }));
+    const localBanButton = screen.getAllByRole('button', { name: 'Забанить локально' })[0];
+    if (!localBanButton) throw new Error('local-ban button missing');
+    fireEvent.click(localBanButton);
+
+    expect(await screen.findByRole('dialog', { name: 'Забанить локально' })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: 'Alpha Server' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Причина')).toHaveValue('RuBans: aimbot');
+    expect(screen.getByLabelText(/Срок/)).toHaveValue('0');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Забанить' }));
+    expect(
+      await screen.findByText('Локальный бан отправлен на сервер «Alpha Server».'),
+    ).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/players/player-1/external-bans/b1/local-ban',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('does not expose local-ban actions without the Squad ban permission', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(new Response(JSON.stringify(TWO_SOURCES_RESPONSE), { status: 200 })),
+      ),
+    );
+
+    render(<ExternalBansSection playerId="player-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /Найден в 2 внешних банлистах/ }));
+    expect(screen.queryByRole('button', { name: 'Забанить локально' })).not.toBeInTheDocument();
   });
 });

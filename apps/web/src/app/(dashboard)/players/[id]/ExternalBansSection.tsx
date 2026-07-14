@@ -3,6 +3,10 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import {
+  ExternalBanLocalBanModal,
+  type ExternalBanLocalBanTarget,
+} from './ExternalBanLocalBanModal';
+import {
   banStatusBadge,
   formatDate,
   foundBadgeLabel,
@@ -16,15 +20,25 @@ import {
  * player is known to any external ban source, backed by
  * `GET /api/v1/players/:playerId/external-bans`. Collapsed by default with a
  * badge summarizing active sources; expands to a per-source breakdown with
- * trust-level and ban-status badges. Hidden entirely for viewers without
- * panel access, matching the other player-card sections.
+ * trust-level and ban-status badges. Moderators with the Squad `ban`
+ * permission can open CBAN-4's prefilled local-ban form for active records.
+ * The section is hidden entirely for viewers without panel access, matching
+ * the other player-card sections.
  */
-export function ExternalBansSection({ playerId }: { playerId: string }) {
+export function ExternalBansSection({
+  playerId,
+  canBan = false,
+}: {
+  playerId: string;
+  canBan?: boolean;
+}) {
   const [data, setData] = useState<PlayerExternalBansResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [localBanTarget, setLocalBanTarget] = useState<ExternalBanLocalBanTarget | null>(null);
+  const [localBanMessage, setLocalBanMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,6 +93,11 @@ export function ExternalBansSection({ playerId }: { playerId: string }) {
         <div className="text-sm text-neutral-500">Загрузка…</div>
       ) : !data ? null : (
         <>
+          {localBanMessage ? (
+            <div className="rounded border border-emerald-900 bg-emerald-950/50 p-2 text-xs text-emerald-200">
+              {localBanMessage}
+            </div>
+          ) : null}
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
@@ -151,6 +170,22 @@ export function ExternalBansSection({ playerId }: { playerId: string }) {
                           {ban.admin_name ? (
                             <p className="mt-0.5 text-neutral-500">Админ: {ban.admin_name}</p>
                           ) : null}
+                          {canBan && ban.is_active ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setLocalBanMessage(null);
+                                setLocalBanTarget({
+                                  id: ban.id,
+                                  sourceName: group.source.name,
+                                  reason: ban.reason,
+                                });
+                              }}
+                              className="mt-2 rounded border border-red-900 px-2 py-1 text-xs text-red-300 hover:border-red-700"
+                            >
+                              Забанить локально
+                            </button>
+                          ) : null}
                         </li>
                       );
                     })}
@@ -161,6 +196,16 @@ export function ExternalBansSection({ playerId }: { playerId: string }) {
           ) : null}
         </>
       )}
+
+      <ExternalBanLocalBanModal
+        playerId={playerId}
+        target={localBanTarget}
+        onClose={() => setLocalBanTarget(null)}
+        onBanned={(serverName) => {
+          setLocalBanTarget(null);
+          setLocalBanMessage(`Локальный бан отправлен на сервер «${serverName}».`);
+        }}
+      />
     </section>
   );
 }
