@@ -24,6 +24,8 @@ describe('external ban sources schema', () => {
     expect(cols.pollIntervalMinutes.default).toBe(60);
     expect(cols.enabled.default).toBe(true);
     expect(cols.importedCount.default).toBe(0);
+    expect(cols.onMatch.default).toBe('alert');
+    expect(cols.onMatch.notNull).toBe(true);
   });
 
   it('external_bans: steam_id64 and eos_id are nullable (no players FK), source_id NOT NULL', () => {

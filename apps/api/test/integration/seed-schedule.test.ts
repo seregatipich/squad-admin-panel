@@ -158,11 +158,18 @@ describe('POST /api/v1/servers/:id/seed-schedule', () => {
         starts_at: startsAt,
         seed_layer: SEED_LAYER_A,
         broadcast_text: 'Заходим сидить!',
+        notify_minutes_before: 15,
       },
     });
     expect(res.statusCode).toBe(201);
-    const body = res.json<{ id: string; seed_layer: string; recurrence: string | null }>();
+    const body = res.json<{
+      id: string;
+      seed_layer: string;
+      notify_minutes_before: number;
+      recurrence: string | null;
+    }>();
     expect(body.seed_layer).toBe(SEED_LAYER_A);
+    expect(body.notify_minutes_before).toBe(15);
     expect(body.recurrence).toBeNull();
 
     const listRes = await h.app.inject({

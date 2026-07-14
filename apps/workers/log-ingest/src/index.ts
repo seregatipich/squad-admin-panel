@@ -12,6 +12,8 @@ import { handleChat } from './chat/store.js';
 import { handleCombat, handleVehicle } from './combat/store.js';
 import { dropCutoverServers } from './cutover.js';
 import { persistEventEnvelope } from './event-store.js';
+import { ExternalBanCache } from './external-ban/cache.js';
+import { handleExternalBanConnect } from './external-ban/store.js';
 import { TailManager } from './manager.js';
 import { DEFAULT_SEED_ONLINE_THRESHOLD, handleMatchCommand } from './match/store.js';
 import { handleMatchClose } from './match-roster/store.js';
@@ -60,6 +62,7 @@ async function main() {
 
   const chatFlagDetector = new ChatFlagDetector(db);
   const bannedNameCache = new BannedNameRuleCache(db);
+  const externalBanCache = new ExternalBanCache(db, redis);
 
   const manager = new TailManager((serverId, beaconPort) => {
     log.info({ serverId, beaconPort }, 'attaching log tail');
@@ -167,6 +170,9 @@ async function main() {
           if (e.type === 'player.connected') {
             handleBannedNameConnect(db, redis, { serverId, event: e }, bannedNameCache).catch(
               (err) => log.error({ err: (err as Error).message }, 'banname handling failed'),
+            );
+            handleExternalBanConnect(db, redis, externalBanCache, { serverId, event: e }).catch(
+              (err) => log.error({ err: (err as Error).message }, 'external-ban handling failed'),
             );
           }
         }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   resolveDueOccurrence,
+  resolveNotificationOccurrence,
   runSeedScheduleTick,
   type SeedScheduleEntry,
   type SeedScheduleTickDeps,
@@ -13,6 +14,7 @@ function makeEntry(overrides: Partial<SeedScheduleEntry> = {}): SeedScheduleEntr
     startsAt: new Date('2026-07-11T10:00:00.000Z'),
     seedLayer: 'Sumari Seed v1',
     broadcastText: null,
+    notifyMinutesBefore: 0,
     recurrence: null,
     lastExecutedAt: null,
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
@@ -80,6 +82,17 @@ describe('resolveDueOccurrence', () => {
       lastExecutedAt: new Date('2026-07-11T10:00:00.000Z'),
     });
     expect(resolveDueOccurrence(entry, new Date('2026-07-11T10:30:00.000Z'))).toBeNull();
+  });
+
+  it('resolves a one-off occurrence inside its notification lead-time window', () => {
+    const entry = makeEntry({
+      startsAt: new Date('2026-07-11T10:00:00.000Z'),
+      notifyMinutesBefore: 30,
+    });
+    expect(resolveNotificationOccurrence(entry, new Date('2026-07-11T09:30:00.000Z'))).toEqual(
+      entry.startsAt,
+    );
+    expect(resolveNotificationOccurrence(entry, new Date('2026-07-11T09:29:00.000Z'))).toBeNull();
   });
 });
 
@@ -255,5 +268,24 @@ describe('runSeedScheduleTick', () => {
     expect(deps.diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'seed_schedule.rcon_failed', severity: 'error' }),
     );
+  });
+
+  it('notifies before the scheduled occurrence without executing RCON early', async () => {
+    const entry = makeEntry({
+      startsAt: new Date('2026-07-11T10:00:00.000Z'),
+      notifyMinutesBefore: 30,
+    });
+    const notifySeeders = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps({
+      now: new Date('2026-07-11T09:45:00.000Z'),
+      loadEnabledEntries: vi.fn().mockResolvedValue([entry]),
+      notifySeeders,
+    });
+
+    const result = await runSeedScheduleTick(deps);
+
+    expect(result).toEqual({ executed: 0, skippedDepotUpdate: 0 });
+    expect(notifySeeders).toHaveBeenCalledWith(entry, entry.startsAt);
+    expect(deps.sendRconCommand).not.toHaveBeenCalled();
   });
 });

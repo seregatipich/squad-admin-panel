@@ -41,7 +41,7 @@ function makeDeps(overrides: Partial<SyncSourceDeps> = {}): SyncSourceDeps {
 
 describe('syncSource', () => {
   it('on success: resets consecutiveFailures, updates the source row ok, and emits bansync.completed', async () => {
-    const deps = makeDeps();
+    const deps = makeDeps({ onSyncComplete: vi.fn().mockResolvedValue(undefined) });
     const report = await syncSource(deps, makeSource());
 
     expect(report.ok).toBe(true);
@@ -65,6 +65,7 @@ describe('syncSource', () => {
       }),
     );
     expect(deps.raiseFailureAlert).not.toHaveBeenCalled();
+    expect(deps.onSyncComplete).toHaveBeenCalledOnce();
   });
 
   it('on fetch error: records last_sync_status=error with the message, increments consecutiveFailures, emits bansync.failed', async () => {

@@ -28,6 +28,7 @@ const ENTRIES = [
     starts_at: new Date(OCCURRENCE_DAY.getTime() + 10 * 3_600_000).toISOString(), // day+2, 10:00 UTC
     seed_layer: 'Sumari Seed v1',
     broadcast_text: null,
+    notify_minutes_before: 0,
     recurrence: null,
     enabled: true,
     created_by: null,

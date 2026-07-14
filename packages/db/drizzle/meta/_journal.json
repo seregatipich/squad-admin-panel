@@ -435,6 +435,20 @@
       "when": 1783400600000,
       "tag": "0078_rotation_calendar",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1783400700000,
+      "tag": "0073_cban4_checkbans_on_join",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1783400800000,
+      "tag": "0077_seed4_notifications",
+      "breakpoints": true
     }
   ]
 }

@@ -29,6 +29,11 @@ describe('mapEventToDiscordType', () => {
     expect(mapEventToDiscordType('match.started')).toBe('map_changed');
   });
 
+  it('maps manual and automatic seed calls to seed_needed', () => {
+    expect(mapEventToDiscordType('seed.call_sent')).toBe('seed_needed');
+    expect(mapEventToDiscordType('server.seeding_started')).toBe('seed_needed');
+  });
+
   it('returns null for event types with no configured Discord notification', () => {
     expect(mapEventToDiscordType('player.connected')).toBeNull();
     expect(mapEventToDiscordType('rcon.connected')).toBeNull();
@@ -83,6 +88,26 @@ describe('buildTemplateContext', () => {
       panelBaseUrl: null,
     });
     expect(context.reason).toBe('oom');
+  });
+
+  it('reads a Steam join link from a seed-call payload', () => {
+    const context = buildTemplateContext({
+      envelope: envelope({
+        type: 'seed.call_sent',
+        payload: {
+          server_name: 'RU #1',
+          join_link: 'steam://connect/10.0.0.1:27015',
+          seed_layer: 'Sumari Seed v1',
+          scheduled_for: null,
+          source: 'manual',
+          message: 'Нужен сид',
+        },
+      }),
+      serverName: null,
+      panelBaseUrl: null,
+    });
+    expect(context.join_link).toBe('steam://connect/10.0.0.1:27015');
+    expect(context.map).toBe('Sumari Seed v1');
   });
 
   it('omits fields the payload does not carry', () => {

@@ -91,6 +91,7 @@ import serverMetricsRoutes from '../../src/routes/server-metrics.js';
 import serverRosterRoutes from '../../src/routes/server-roster.js';
 import serverRotationRoutes from '../../src/routes/server-rotation.js';
 import serverRotationCalendarRoutes from '../../src/routes/server-rotation-calendar.js';
+import serverSeedNotificationRoutes from '../../src/routes/server-seed-notifications.js';
 import serverSeedScheduleRoutes from '../../src/routes/server-seed-schedule.js';
 import serverSeedingRoutes from '../../src/routes/server-seeding.js';
 import serverSettingsRoutes from '../../src/routes/server-settings.js';
@@ -447,6 +448,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(serverRosterRoutes);
   await app.register(serverSeedingRoutes);
   await app.register(serverSeedScheduleRoutes);
+  await app.register(serverSeedNotificationRoutes);
   await app.register(serverSettingsRoutes);
   await app.register(serverUpdateRoutes);
   await app.register(archiveRoutes);

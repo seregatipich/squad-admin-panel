@@ -29,6 +29,7 @@ interface FormState {
   starts_at: string; // datetime-local value
   seed_layer: string;
   broadcast_text: string;
+  notify_minutes_before: string;
   recurrence: string;
 }
 
@@ -39,6 +40,7 @@ function emptyForm(startsAt: Date, defaultLayer: string): FormState {
     starts_at: toDatetimeLocalValue(startsAt),
     seed_layer: defaultLayer,
     broadcast_text: '',
+    notify_minutes_before: '0',
     recurrence: '',
   };
 }
@@ -76,6 +78,7 @@ export default function SeedCalendarPage({ params }: { params: Promise<{ id: str
   const startsAtId = useId();
   const layerId = useId();
   const broadcastId = useId();
+  const notifyMinutesId = useId();
   const recurrenceId = useId();
 
   const rangeTo = useMemo(() => {
@@ -150,6 +153,7 @@ export default function SeedCalendarPage({ params }: { params: Promise<{ id: str
       starts_at: toDatetimeLocalValue(new Date(entry.starts_at)),
       seed_layer: entry.seed_layer,
       broadcast_text: entry.broadcast_text ?? '',
+      notify_minutes_before: String(entry.notify_minutes_before),
       recurrence: entry.recurrence ?? '',
     });
     setModalOpen(true);
@@ -165,6 +169,7 @@ export default function SeedCalendarPage({ params }: { params: Promise<{ id: str
         starts_at: new Date(`${form.starts_at}:00.000Z`).toISOString(),
         seed_layer: form.seed_layer,
         broadcast_text: form.broadcast_text.trim() || null,
+        notify_minutes_before: Number(form.notify_minutes_before),
         recurrence: form.recurrence.trim() || null,
       };
       const url = editingId
@@ -446,6 +451,24 @@ export default function SeedCalendarPage({ params }: { params: Promise<{ id: str
                   value={form.broadcast_text}
                   maxLength={512}
                   onChange={(e) => setForm((f) => ({ ...f, broadcast_text: e.target.value }))}
+                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label htmlFor={notifyMinutesId} className="mb-1 block text-xs text-neutral-500">
+                  Уведомить за (минут)
+                </label>
+                <input
+                  id={notifyMinutesId}
+                  type="number"
+                  min={0}
+                  max={1440}
+                  step={1}
+                  value={form.notify_minutes_before}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, notify_minutes_before: e.target.value }))
+                  }
                   className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
                 />
               </div>

@@ -3,10 +3,12 @@ import {
   bannameMatchedPayload,
   EVENT_TYPES,
   eventEnvelope,
+  externalBanMatchedPayload,
   matchStateChangedPayload,
   playerConnectedPayload,
   playerDisconnectedPayload,
   rconPlayersPolledPayload,
+  seedCallSentPayload,
   seedingTransitionPayload,
   serverLifecyclePayload,
   validatePayload,
@@ -64,6 +66,52 @@ describe('player.connected payload schema', () => {
   it('allows eos_id=null (Steam-only join)', () => {
     const ok = { ...baseEnvelope.payload, eos_id: null };
     expect(playerConnectedPayload.safeParse(ok).success).toBe(true);
+  });
+});
+
+describe('externalban.matched payload schema', () => {
+  it('accepts a complete match payload and rejects unknown keys', () => {
+    const payload = {
+      player_id: '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c6',
+      source_id: '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c7',
+      external_ban_id: '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c8',
+      steam_id64: '76561198012345678',
+      eos_id: null,
+      name: 'PlayerOne',
+      source_name: 'Trusted list',
+      reason: 'reason',
+      action: 'kick',
+    };
+    expect(externalBanMatchedPayload.safeParse(payload).success).toBe(true);
+    expect(externalBanMatchedPayload.safeParse({ ...payload, extra: true }).success).toBe(false);
+  });
+});
+
+describe('seed.call_sent payload schema', () => {
+  it('accepts a manual call with a Steam join link', () => {
+    expect(
+      seedCallSentPayload.safeParse({
+        server_name: 'RU #1',
+        join_link: 'steam://connect/10.0.0.1:27015',
+        seed_layer: null,
+        scheduled_for: null,
+        source: 'manual',
+        message: 'Нужен сид',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a call without a valid join link', () => {
+    expect(
+      seedCallSentPayload.safeParse({
+        server_name: 'RU #1',
+        join_link: 'not-a-link',
+        seed_layer: null,
+        scheduled_for: null,
+        source: 'manual',
+        message: 'Нужен сид',
+      }).success,
+    ).toBe(false);
   });
 });
 

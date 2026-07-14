@@ -1,18 +1,22 @@
 import type { BridgeClient } from '@squad/bridge-client';
-import type { DatabaseClient } from '@squad/db';
+import { type DatabaseClient, events, notifySeedSubscribers } from '@squad/db';
 import {
   auditLog,
   rotationProfiles,
   rotationSchedule,
   seedSchedule,
+  serverSettings,
   servers,
 } from '@squad/db/schema';
 import {
+  type EventEnvelope,
   type RconOperatorCommandName,
   rconCommandRequestSchema,
   rconCommandStream,
+  STREAM_NAME,
+  seedCallSentPayload,
 } from '@squad/shared-types';
-import { eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import type {
@@ -34,6 +38,19 @@ import type {
 } from './seed-schedule-tick.js';
 
 const RCON_STREAM_MAXLEN = 500;
+const SEED_CALL_COOLDOWN_SECONDS = 2 * 60 * 60;
+
+function seedPublicHost(): string {
+  const panelUrl = process.env.PANEL_PUBLIC_URL;
+  if (panelUrl) {
+    try {
+      return new URL(panelUrl).hostname;
+    } catch {
+      // Fall through to the service's configured RCON host.
+    }
+  }
+  return process.env.RCON_HOST_DEFAULT ?? '127.0.0.1';
+}
 
 export async function loadEnabledSeedScheduleEntries(
   db: DatabaseClient,
@@ -45,6 +62,7 @@ export async function loadEnabledSeedScheduleEntries(
     startsAt: row.startsAt,
     seedLayer: row.seedLayer,
     broadcastText: row.broadcastText,
+    notifyMinutesBefore: row.notifyMinutesBefore,
     recurrence: row.recurrence,
     lastExecutedAt: row.lastExecutedAt,
     createdAt: row.createdAt,
@@ -236,15 +254,104 @@ export async function writeRotationProfileAuditEntry(
   });
 }
 
+/**
+ * Publishes the scheduled SEED-4 call once per cooldown window. The scheduler
+ * has no bridge dependency, so it uses the public panel host (the deployment
+ * host in the supported compose files) and the configured game port.
+ */
+export async function notifyScheduledSeeders(
+  db: DatabaseClient,
+  redis: Pick<Redis, 'set' | 'xadd' | 'publish'>,
+  entry: SeedScheduleEntry,
+  occurrence: Date,
+): Promise<void> {
+  const key = `seed:call:cooldown:${entry.serverId}`;
+  const claimed = await redis.set(
+    key,
+    occurrence.toISOString(),
+    'EX',
+    SEED_CALL_COOLDOWN_SECONDS,
+    'NX',
+  );
+  if (!claimed) return;
+
+  const [server, settings] = await Promise.all([
+    db.query.servers.findFirst({
+      where: and(eq(servers.id, entry.serverId), isNull(servers.deletedAt)),
+    }),
+    db.query.serverSettings.findFirst({ where: eq(serverSettings.serverId, entry.serverId) }),
+  ]);
+  if (!server || !settings) return;
+
+  const payload = seedCallSentPayload.parse({
+    server_name: server.displayName,
+    join_link: `steam://connect/${seedPublicHost()}:${settings.gamePort}`,
+    seed_layer: entry.seedLayer,
+    scheduled_for: occurrence.toISOString(),
+    source: 'schedule',
+    message: entry.broadcastText ?? 'Нужен сид',
+  });
+  const eventId = uuidv7();
+  const ts = new Date();
+  const envelope: EventEnvelope = {
+    event_id: eventId,
+    version: 1,
+    type: 'seed.call_sent',
+    server_id: entry.serverId,
+    ts: ts.toISOString(),
+    actor: { kind: 'system', id: null },
+    correlation_id: null,
+    payload,
+  };
+  await db.insert(events).values({
+    eventId,
+    serverId: entry.serverId,
+    occurredAt: ts,
+    kind: envelope.type,
+    version: envelope.version,
+    actorKind: 'system',
+    actorId: null,
+    correlationId: null,
+    payload,
+  });
+  await redis.xadd(
+    STREAM_NAME.eventsServer(entry.serverId),
+    'MAXLEN',
+    '~',
+    '10000',
+    '*',
+    'envelope',
+    JSON.stringify(envelope),
+  );
+  const notified = await notifySeedSubscribers(db, redis, {
+    serverId: entry.serverId,
+    eventKind: 'seed.call_sent',
+    payload,
+  });
+  await writeSeedScheduleAuditEntry(db, {
+    actor: { kind: 'system', label: 'seed-scheduler' },
+    actionType: 'seed.call_sent',
+    targetType: 'seed_schedule',
+    targetId: entry.id,
+    context: {
+      server_id: entry.serverId,
+      event_id: eventId,
+      occurrence: occurrence.toISOString(),
+      notified,
+    },
+  });
+}
+
 export function createSeedScheduleDeps(
   db: DatabaseClient,
-  redis: Pick<Redis, 'get' | 'xadd'>,
+  redis: Pick<Redis, 'get' | 'set' | 'xadd' | 'publish'>,
 ): Omit<SeedScheduleTickDeps, 'now' | 'diag'> {
   return {
     loadEnabledEntries: () => loadEnabledSeedScheduleEntries(db),
     isDepotUpdating: () => isDepotUpdating(redis),
     getSeedingLiveness: (serverId) => getSeedingLiveness(redis, serverId),
     sendRconCommand: (input) => sendRconCommand(redis, input),
+    notifySeeders: (entry, occurrence) => notifyScheduledSeeders(db, redis, entry, occurrence),
     setLastExecutedAt: (entryId, executedAt) => setLastExecutedAt(db, entryId, executedAt),
     writeAuditEntry: (entry) => writeSeedScheduleAuditEntry(db, entry),
   };

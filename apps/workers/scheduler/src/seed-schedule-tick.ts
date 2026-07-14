@@ -8,6 +8,8 @@ export interface SeedScheduleEntry {
   startsAt: Date;
   seedLayer: string;
   broadcastText: string | null;
+  /** Minutes before the scheduled occurrence when subscribers are notified. */
+  notifyMinutesBefore: number;
   /** 5-field cron expression, UTC. Null = one-off (fires once, at `startsAt`). */
   recurrence: string | null;
   lastExecutedAt: Date | null;
@@ -24,7 +26,10 @@ export interface SendRconCommandInput {
 
 export interface SeedScheduleAuditEntry {
   actor: { kind: 'system'; label: 'seed-scheduler' };
-  actionType: 'server.seed_schedule.execute' | 'server.seed_schedule.skip_depot_update';
+  actionType:
+    | 'server.seed_schedule.execute'
+    | 'server.seed_schedule.skip_depot_update'
+    | 'seed.call_sent';
   targetType: 'seed_schedule';
   targetId: string;
   context: Record<string, unknown>;
@@ -36,6 +41,8 @@ export interface SeedScheduleTickDeps {
   isDepotUpdating(): Promise<boolean>;
   getSeedingLiveness(serverId: string): Promise<SeedingLiveness>;
   sendRconCommand(input: SendRconCommandInput): Promise<void>;
+  /** Best-effort notification for a scheduled occurrence; must be idempotent. */
+  notifySeeders?(entry: SeedScheduleEntry, occurrence: Date): Promise<void>;
   setLastExecutedAt(entryId: string, executedAt: Date): Promise<void>;
   writeAuditEntry(entry: SeedScheduleAuditEntry): Promise<void>;
   diag: Pick<Diag, 'emit'>;
@@ -77,6 +84,16 @@ export function resolveDueOccurrence(entry: SeedScheduleEntry, now: Date): Date 
 }
 
 /**
+ * Resolves the occurrence whose notification lead-time window contains `now`.
+ * The runtime dependency uses a Redis cooldown to make repeated scheduler
+ * ticks idempotent while the same occurrence remains inside that window.
+ */
+export function resolveNotificationOccurrence(entry: SeedScheduleEntry, now: Date): Date | null {
+  if (entry.notifyMinutesBefore <= 0) return null;
+  return resolveDueOccurrence(entry, new Date(now.getTime() + entry.notifyMinutesBefore * 60_000));
+}
+
+/**
  * SEED-3 (#142): executes every due `seed_schedule` entry — one-off entries
  * fire once at `startsAt`, recurring entries fire on each cron occurrence —
  * via the worker-rcon command stream: `AdminChangeLayer` when the server's
@@ -104,6 +121,21 @@ export async function runSeedScheduleTick(
 
     for (const entry of entries) {
       const occurrence = resolveDueOccurrence(entry, now);
+      const notificationOccurrence = resolveNotificationOccurrence(entry, now);
+      if (notificationOccurrence && deps.notifySeeders) {
+        try {
+          await deps.notifySeeders(entry, notificationOccurrence);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await deps.diag.emit({
+            component: 'worker-scheduler',
+            kind: 'seed_schedule.notify_failed',
+            severity: 'error',
+            message: `seed_schedule ${entry.id} notification failed: ${message}`,
+            payload: { entry_id: entry.id, server_id: entry.serverId, err: message },
+          });
+        }
+      }
       if (!occurrence) continue;
 
       if (await deps.isDepotUpdating()) {

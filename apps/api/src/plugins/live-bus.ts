@@ -197,6 +197,28 @@ export type LiveEvent =
       type: 'server.map.changed';
       ts: string;
       data: { server_id: string; action: string; layer: string | null };
+    }
+  | {
+      type: 'externalban.matched';
+      ts: string;
+      data: {
+        server_id: string;
+        player_id: string | null;
+        source_id: string;
+        external_ban_id: string;
+        steam_id64: string;
+        eos_id: string | null;
+        name: string;
+        source_name: string;
+        reason: string | null;
+        action: 'none' | 'alert' | 'kick';
+        kick_enqueued?: boolean;
+      };
+    }
+  | {
+      type: 'alert.triggered';
+      ts: string;
+      data: Record<string, unknown>;
     };
 
 export interface IssuePlayerRef {

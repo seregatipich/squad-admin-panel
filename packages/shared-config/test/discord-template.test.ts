@@ -129,7 +129,7 @@ describe('renderDiscordTemplate', () => {
 });
 
 describe('DEFAULT_DISCORD_TEMPLATES', () => {
-  it('covers every one of the twelve event types exactly once', () => {
+  it('covers every Discord event type exactly once', () => {
     const eventTypes = DEFAULT_DISCORD_TEMPLATES.map((t) => t.eventType).sort();
     const expected = [...DISCORD_TEMPLATE_EVENT_TYPES].sort();
     expect(eventTypes).toEqual(expected);

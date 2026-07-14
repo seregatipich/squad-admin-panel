@@ -15,6 +15,7 @@ import type { SeedingSummary } from '../seeding-format';
 import { ChatPanel } from './ChatPanel';
 import { LivePlayers } from './live-players';
 import { MapWidget } from './map-widget';
+import { SeedCallButton } from './SeedCallButton';
 import { SeedingBadge } from './SeedingBadge';
 
 interface ServerRow {
@@ -95,6 +96,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const router = useRouter();
   const [data, setData] = useState<ServerResponse | null>(null);
   const [canChat, setCanChat] = useState(false);
+  const [canManageServer, setCanManageServer] = useState(false);
   const [canChangeMap, setCanChangeMap] = useState(false);
   const [canBan, setCanBan] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -152,6 +154,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         const me = (await res.json()) as { squad_permissions?: string[] };
         if (!cancelled) {
           setCanChat(me.squad_permissions?.includes('chat') ?? false);
+          setCanManageServer(me.squad_permissions?.includes('manageserver') ?? false);
           setCanChangeMap(me.squad_permissions?.includes('changemap') ?? false);
           setCanBan(me.squad_permissions?.includes('ban') ?? false);
         }
@@ -525,6 +528,8 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       <MapWidget serverId={server.id} canChangeMap={canChangeMap} />
 
       <BroadcastComposer serverId={server.id} canChat={canChat} />
+
+      <SeedCallButton serverId={server.id} canCall={canChat || canManageServer} />
 
       <LivePlayers serverId={server.id} canChat={canChat} canBan={canBan} />
 

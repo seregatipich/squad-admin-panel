@@ -1,4 +1,14 @@
-import { boolean, index, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { players } from './players.js';
 import { servers } from './servers.js';
 
@@ -30,6 +40,8 @@ export const seedSchedule = pgTable(
     startsAt: timestamp('starts_at', { withTimezone: true, mode: 'date' }).notNull(),
     seedLayer: text('seed_layer').notNull(),
     broadcastText: text('broadcast_text'),
+    /** Minutes before starts_at when SEED-4 should notify subscribers. */
+    notifyMinutesBefore: integer('notify_minutes_before').notNull().default(0),
     /** 5-field cron expression (minute hour day-of-month month day-of-week), UTC. Null = one-off. */
     recurrence: text('recurrence'),
     createdBy: uuid('created_by').references(() => players.id, { onDelete: 'set null' }),
@@ -40,6 +52,10 @@ export const seedSchedule = pgTable(
   },
   (table) => ({
     serverStartsIdx: index('seed_schedule_server_starts_idx').on(table.serverId, table.startsAt),
+    notifyMinutesChk: check(
+      'seed_schedule_notify_minutes_chk',
+      sql`${table.notifyMinutesBefore} BETWEEN 0 AND 1440`,
+    ),
   }),
 );
 

@@ -102,6 +102,10 @@ Ownership boundary: `vip-user-service` owns wallet ledger, purchase idempotency 
 | POST | `/api/v1/servers/:id/restart` | `container_stop` then `container_start`. | `server:restart` |
 | POST | `/api/v1/servers/:id/reconcile` | Forces a single-server reconciliation: calls `container_inspect` once, maps the docker state, updates `servers.status` if it changed, and emits `server.status` LiveEvent. Returns `{ inspected_state, inspected_running, previous_status, new_status, changed }`. 502 `bridge_unavailable` when the bridge throws — the next call can recover. 404 for unknown/soft-deleted servers. Audit `server.reconcile`. Use this when ops sees a server stuck in `starting`/`stopping`/`installing` longer than expected. | `server:view` |
 | GET | `/api/v1/servers/:id/events` | Recent envelopes from `events:server:{id}` (XREVRANGE, default 100). Used by the live-events UI. | `server:view` |
+| GET | `/api/v1/servers/:id/seed-call` | Returns the manual “need seeders” availability, cooldown seconds, and a `steam://connect/<host>:<game-port>` join link. | panel access |
+| POST | `/api/v1/servers/:id/seed-call` | Emits `seed.call_sent`, materializes AUTO-3 alerts for subscribed players, and fans out to DISCORD-2. Limited to once per server per two hours. Requires `chat` or `manageserver`. | session + `chat`/`manageserver` |
+| GET | `/api/v1/seed-subscriptions` | Lists the current player’s per-server `email`/`webpush` seed subscriptions. | panel access |
+| PUT | `/api/v1/servers/:id/seed-subscription` | Idempotently enables or disables one seed notification channel for the current player and server. | panel access |
 
 ## Server archive (soft-deleted servers)
 

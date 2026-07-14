@@ -1,6 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
-import Redis from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const TEST_REDIS_DB = process.env.TEST_REDIS_DB ?? '14';
@@ -10,12 +9,20 @@ export interface ContractOpts {
   name: string;
   entryPath: string;
   expectedHeartbeatKey: string;
+  /** Creates a Redis client from the worker package that owns the contract test. */
+  createRedis: (url: string) => RedisContractClient;
   envOverrides?: Record<string, string>;
+}
+
+interface RedisContractClient {
+  del(key: string): Promise<unknown>;
+  quit(): Promise<unknown>;
+  ttl(key: string): Promise<number>;
 }
 
 export function workerContract(opts: ContractOpts) {
   let child: ChildProcess | null = null;
-  let redis: Redis | null = null;
+  let redis: RedisContractClient | null = null;
 
   afterEach(async () => {
     if (child && !child.killed) {
@@ -33,7 +40,7 @@ export function workerContract(opts: ContractOpts) {
         env: { ...process.env, ...opts.envOverrides, REDIS_URL, NODE_ENV: 'test' },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
-      redis = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
+      redis = opts.createRedis(REDIS_URL);
 
       child.on('exit', (code) => {
         if (code !== null && code !== 0) {

@@ -32,6 +32,8 @@ export const EVENT_TYPES = [
   'performance.degraded',
 
   'banname.matched',
+  'externalban.matched',
+  'seed.call_sent',
   'bansync.completed',
   'bansync.failed',
   'server.seeding_started',
@@ -98,6 +100,36 @@ export const bannameMatchedPayload = z
   .strict();
 export type BannameMatchedPayload = z.infer<typeof bannameMatchedPayload>;
 
+export const externalBanMatchedPayload = z
+  .object({
+    player_id: z.string().uuid().nullable(),
+    source_id: z.string().uuid(),
+    external_ban_id: z.string().uuid(),
+    steam_id64: z.string().regex(/^\d{17}$/),
+    eos_id: z
+      .string()
+      .regex(/^[a-f0-9]{32}$/)
+      .nullable(),
+    name: z.string().min(1).max(128),
+    source_name: z.string().min(1).max(128),
+    reason: z.string().max(1024).nullable(),
+    action: z.enum(['none', 'alert', 'kick']),
+  })
+  .strict();
+export type ExternalBanMatchedPayload = z.infer<typeof externalBanMatchedPayload>;
+
+export const seedCallSentPayload = z
+  .object({
+    server_name: z.string().min(1).max(128),
+    join_link: z.string().url().max(512),
+    seed_layer: z.string().max(128).nullable(),
+    scheduled_for: z.string().datetime().nullable(),
+    source: z.enum(['manual', 'schedule']),
+    message: z.string().max(512),
+  })
+  .strict();
+export type SeedCallSentPayload = z.infer<typeof seedCallSentPayload>;
+
 export const rconPlayersPolledPayload = z
   .object({
     players: z.array(
@@ -153,6 +185,8 @@ export const seedingTransitionPayload = z
     live_at: z.number().int().positive(),
     hysteresis: z.number().int().nonnegative(),
     progress_pct: z.number().int().min(0).max(100),
+    server_name: z.string().min(1).max(128).optional(),
+    join_link: z.string().url().max(512).optional(),
   })
   .strict();
 export type SeedingTransitionPayload = z.infer<typeof seedingTransitionPayload>;
@@ -170,6 +204,8 @@ export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodTypeAny>> = {
   'server.stopped': serverLifecyclePayload,
   'server.crashed': serverLifecyclePayload,
   'banname.matched': bannameMatchedPayload,
+  'externalban.matched': externalBanMatchedPayload,
+  'seed.call_sent': seedCallSentPayload,
   'server.seeding_started': seedingTransitionPayload,
   'server.seeding_ended': seedingTransitionPayload,
 };

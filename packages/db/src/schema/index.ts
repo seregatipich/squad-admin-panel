@@ -52,6 +52,7 @@ export * from './role-squad-permissions.js';
 export * from './roles.js';
 export * from './rotation-schedule.js';
 export * from './seed-schedule.js';
+export * from './seed-subscriptions.js';
 export * from './server-credentials.js';
 export * from './server-settings.js';
 export * from './servers.js';
