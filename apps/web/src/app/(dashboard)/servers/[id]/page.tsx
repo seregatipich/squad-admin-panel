@@ -11,8 +11,10 @@ import { LiveIndicator } from '@/components/LiveIndicator';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { nextBackoffMs } from '@/lib/ws-backoff';
+import type { SeedingSummary } from '../seeding-format';
 import { ChatPanel } from './ChatPanel';
 import { LivePlayers } from './live-players';
+import { SeedingBadge } from './SeedingBadge';
 
 interface ServerRow {
   id: string;
@@ -33,6 +35,8 @@ interface ServerSettings {
   tickrate: number;
   multihome: string;
   install_path: string;
+  seed_live_at?: number;
+  seed_hysteresis?: number;
 }
 
 interface RconStatus {
@@ -80,6 +84,7 @@ interface ServerResponse {
   a2s_status?: A2sStatus | null;
   crash_loop?: boolean;
   crash_count?: number;
+  seeding?: SeedingSummary | null;
 }
 
 const POLL_INTERVAL_MS = 3000;
@@ -352,6 +357,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
             <StatusBadge status={server.status} />
             <A2SIndicator a2sStatus={data.a2s_status ?? null} serverStatus={server.status} />
             <CrashBadge crashLoop={data.crash_loop ?? false} crashCount={data.crash_count ?? 0} />
+            <SeedingBadge serverId={server.id} initial={data.seeding ?? null} />
           </div>
           <div className="flex items-center gap-3 text-xs text-neutral-500">
             <span className="font-mono">{server.id}</span>

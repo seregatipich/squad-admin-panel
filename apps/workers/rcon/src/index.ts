@@ -76,6 +76,8 @@ async function main() {
         port: serverCredentials.rconPort,
         queryPort: serverSettings.queryPort,
         tickrate: serverSettings.tickrate,
+        seedLiveAt: serverSettings.seedLiveAt,
+        seedHysteresis: serverSettings.seedHysteresis,
         blob: serverCredentials.rconPasswordEncrypted,
       })
       .from(servers)
@@ -94,6 +96,8 @@ async function main() {
           port: row.port,
           queryPort: row.queryPort,
           tickrate: row.tickrate ?? undefined,
+          seedLiveAt: row.seedLiveAt ?? undefined,
+          seedHysteresis: row.seedHysteresis ?? undefined,
           password: decrypt(key, blob),
         });
       } catch (err) {

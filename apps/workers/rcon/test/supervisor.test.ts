@@ -1,5 +1,6 @@
 import { type AddressInfo, createServer, type Server, type Socket } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { events } from '@squad/db';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   encodePacket,
@@ -192,6 +193,250 @@ describe('RconSupervisor polling', () => {
         next_layer: 'Fallujah_RAAS_v1',
         squad_count: 1,
       });
+    } finally {
+      await supervisor.stop();
+      await closeServer(server);
+    }
+  }, 5000);
+});
+
+/**
+ * Fake RCON server for seeding-transition tests: unlike
+ * `makePollingRconServer`, `ListPlayers` reflects a mutable player count
+ * (`state.playerCount`) so a test can drive the supervisor through a real
+ * live -> seeding crossing across multiple polls.
+ */
+function makeSeedingRconServer(state: {
+  playerCount: number;
+  mapName: string;
+}): Promise<{ server: Server; port: number }> {
+  return new Promise((resolve) => {
+    const server = createServer((sock: Socket) => {
+      const stream = new RconPacketStream();
+      const writePacket = (id: number, body: string, type = SERVERDATA_RESPONSE_VALUE) => {
+        if (!sock.destroyed) sock.write(encodePacket({ id, type, body }));
+      };
+
+      sock.on('error', () => undefined);
+      sock.on('data', (chunk) => {
+        for (const packet of stream.push(chunk)) {
+          if (packet.type === SERVERDATA_AUTH) {
+            writePacket(packet.id, '');
+            writePacket(packet.id, '', SERVERDATA_AUTH_RESPONSE);
+            continue;
+          }
+          if (packet.type !== SERVERDATA_EXECCOMMAND) continue;
+          if (packet.body === '') {
+            writePacket(packet.id, '');
+            continue;
+          }
+          if (packet.body === 'ListPlayers') {
+            const lines = ['----- Active Players -----'];
+            for (let i = 0; i < state.playerCount; i++) {
+              const steamId = `76561198${String(i).padStart(9, '0')}`;
+              lines.push(
+                `ID: ${i} | Online IDs: EOS: ${'a'.repeat(32)} steam: ${steamId} | Name: P${i} | Team ID: 1 | Squad ID: 1 | Is Leader: False | Role: Rifleman`,
+              );
+            }
+            lines.push('----- Recently Disconnected Players [Max of 15] -----');
+            writePacket(packet.id, lines.join('\n'));
+            continue;
+          }
+          if (packet.body === 'ListSquads') {
+            writePacket(packet.id, '');
+            continue;
+          }
+          if (packet.body === 'ShowServerInfo') {
+            writePacket(
+              packet.id,
+              JSON.stringify({
+                MapName_s: state.mapName,
+                GameMode_s: 'RAAS',
+                ServerTickRate: 49.7,
+              }),
+            );
+            continue;
+          }
+          if (packet.body === 'ShowNextMap') {
+            writePacket(packet.id, 'Next level is X, layer is X');
+            continue;
+          }
+          writePacket(packet.id, '');
+        }
+      });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address() as AddressInfo;
+      resolve({ server, port: addr.port });
+    });
+  });
+}
+
+/**
+ * Fake db supporting the full drizzle chains touched by a real (non-empty)
+ * `ListPlayers` poll: `upsertPlayers`/`accruePlayerKitTime` (persist.ts)
+ * additionally `select`/`insert`/`update` the `players`/`playerNameHistory`/
+ * `auditLog` tables every poll. `select(...).where(...).limit(1)` always
+ * resolves to `[]` (no matching row), which is sufficient here since these
+ * tests only care about the seeding-specific `events` insert — every other
+ * table's insert/update is a no-op success.
+ */
+function makeSeedingDb(insertedEvents: Array<Record<string, unknown>>) {
+  const resolvedChain = () => {
+    const chain = Promise.resolve(undefined) as Promise<undefined> & Record<string, unknown>;
+    chain.onConflictDoNothing = vi.fn(() => Promise.resolve(undefined));
+    chain.onConflictDoUpdate = vi.fn(() => Promise.resolve(undefined));
+    chain.returning = vi.fn(() => Promise.resolve([]));
+    return chain;
+  };
+
+  return {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn(async () => []),
+        })),
+      })),
+    })),
+    insert: vi.fn((table: unknown) => ({
+      values: vi.fn((v: Record<string, unknown>) => {
+        if (table === events) insertedEvents.push(v);
+        return resolvedChain();
+      }),
+    })),
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn(() => Promise.resolve(undefined)),
+      })),
+    })),
+  } as never;
+}
+
+describe('RconSupervisor seeding transitions', () => {
+  it('crossing the seed threshold emits exactly one started envelope + events insert + live-bus publish; a repeat poll at the same count emits no further transition but refreshes the state key; a progress-only change still publishes', async () => {
+    const state = { playerCount: 80, mapName: 'Gorodok_RAAS_v1' };
+    const { server, port } = await makeSeedingRconServer(state);
+    const redis = makeRedis() as unknown as {
+      set: ReturnType<typeof vi.fn>;
+      publish: ReturnType<typeof vi.fn>;
+      xadd: ReturnType<typeof vi.fn>;
+    };
+    const insertedEvents: Array<Record<string, unknown>> = [];
+    const db = makeSeedingDb(insertedEvents);
+    const supervisor = new RconSupervisor({
+      db,
+      redis: redis as never,
+      log: makeLogger(),
+      pollIntervalMs: 30,
+    });
+    const liveTarget: Target = {
+      ...target,
+      serverId: 'srv-seeding',
+      port,
+      queryPort: port + 1000,
+      seedLiveAt: 60,
+      seedHysteresis: 5,
+    };
+
+    const stateKey = 'seeding:state:srv-seeding';
+    const seedingEnvelopeTypes = () =>
+      redis.xadd.mock.calls
+        .map((call) => JSON.parse(call[call.length - 1] as string).type as string)
+        .filter((t) => t.startsWith('server.seeding'));
+
+    try {
+      await supervisor.reconcile([liveTarget]);
+
+      // First poll establishes the initial state at 80 players (>= liveAt):
+      // 'live', no transition, no events insert.
+      const deadline1 = Date.now() + 3000;
+      while (Date.now() < deadline1 && !redis.set.mock.calls.some((c) => c[0] === stateKey)) {
+        await sleep(15);
+      }
+      expect(insertedEvents).toHaveLength(0);
+
+      // Cross the threshold: 80 -> 40 (< liveAt - hysteresis = 55).
+      state.playerCount = 40;
+      const deadline2 = Date.now() + 3000;
+      while (Date.now() < deadline2 && insertedEvents.length === 0) {
+        await sleep(15);
+      }
+      expect(insertedEvents).toHaveLength(1);
+      expect(insertedEvents[0]).toMatchObject({
+        kind: 'server.seeding_started',
+        serverId: 'srv-seeding',
+      });
+      expect(seedingEnvelopeTypes()).toEqual(['server.seeding_started']);
+
+      // Repeat polls at the same count: no further transition, but the
+      // redis state key keeps refreshing every poll.
+      const setCallsBeforeRepeat = redis.set.mock.calls.filter((c) => c[0] === stateKey).length;
+      await sleep(90);
+      const setCallsAfterRepeat = redis.set.mock.calls.filter((c) => c[0] === stateKey).length;
+      expect(setCallsAfterRepeat).toBeGreaterThan(setCallsBeforeRepeat);
+      expect(insertedEvents).toHaveLength(1);
+
+      // Progress-only change (still seeding, no transition) still
+      // publishes a live-bus 'server.seeding' update.
+      const publishCallsBefore = redis.publish.mock.calls.length;
+      state.playerCount = 45;
+      const deadline3 = Date.now() + 3000;
+      const sawUpdatedProgress = () =>
+        redis.publish.mock.calls.some((call) => {
+          try {
+            const parsed = JSON.parse(call[1] as string) as {
+              type: string;
+              data: { current_players: number };
+            };
+            return parsed.type === 'server.seeding' && parsed.data.current_players === 45;
+          } catch {
+            return false;
+          }
+        });
+      while (Date.now() < deadline3 && !sawUpdatedProgress()) {
+        await sleep(15);
+      }
+      expect(sawUpdatedProgress()).toBe(true);
+      expect(redis.publish.mock.calls.length).toBeGreaterThan(publishCallsBefore);
+      expect(insertedEvents).toHaveLength(1);
+    } finally {
+      await supervisor.stop();
+      await closeServer(server);
+    }
+  }, 10_000);
+
+  it('a seed layer at high player count still emits seeding_started (acceptance criterion 2)', async () => {
+    const state = { playerCount: 100, mapName: 'Sumari_Seed_v1' };
+    const { server, port } = await makeSeedingRconServer(state);
+    const redis = makeRedis() as unknown as { xadd: ReturnType<typeof vi.fn> };
+    const insertedEvents: Array<Record<string, unknown>> = [];
+    const db = makeSeedingDb(insertedEvents);
+    const supervisor = new RconSupervisor({
+      db,
+      redis: redis as never,
+      log: makeLogger(),
+      pollIntervalMs: 30,
+    });
+    const liveTarget: Target = {
+      ...target,
+      serverId: 'srv-seed-layer',
+      port,
+      queryPort: port + 1000,
+      seedLiveAt: 60,
+      seedHysteresis: 5,
+    };
+
+    try {
+      await supervisor.reconcile([liveTarget]);
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline && insertedEvents.length === 0) {
+        await sleep(15);
+      }
+      expect(insertedEvents).toHaveLength(1);
+      expect(insertedEvents[0]).toMatchObject({ kind: 'server.seeding_started' });
+      const payload = insertedEvents[0]?.payload as { player_count: number; layer: string | null };
+      expect(payload.player_count).toBe(100);
+      expect(payload.layer).toBe('Sumari_Seed_v1');
     } finally {
       await supervisor.stop();
       await closeServer(server);

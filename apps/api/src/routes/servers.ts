@@ -10,6 +10,7 @@ import { serverCreateInput } from '@squad/shared-types';
 import { and, eq, isNull, or } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { fireAutoPrune } from '../lib/auto-prune.js';
@@ -24,6 +25,44 @@ const serverIdParams = z.object({ id: z.string().uuid() });
 
 function containerName(id: string) {
   return `squad-${id}`;
+}
+
+interface SeedingSummary {
+  state: 'seeding' | 'live';
+  current_players: number;
+  live_at: number;
+  progress_pct: number;
+  started_at: string | null;
+}
+
+/**
+ * Reads the `seeding:state:<serverId>` redis cache maintained by
+ * worker-rcon's seeding state machine (SEED-1, #140). Returns `null` when
+ * the server has no seeding state yet (worker never polled it, or the key
+ * expired) so callers can render "unknown" rather than a stale zero.
+ */
+async function readSeedingSummary(redis: Redis, serverId: string): Promise<SeedingSummary | null> {
+  const raw = await redis.get(`seeding:state:${serverId}`);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      state?: string;
+      current_players?: number;
+      live_at?: number;
+      progress_pct?: number;
+      started_at?: string | null;
+    };
+    if (parsed.state !== 'seeding' && parsed.state !== 'live') return null;
+    return {
+      state: parsed.state,
+      current_players: parsed.current_players ?? 0,
+      live_at: parsed.live_at ?? 0,
+      progress_pct: parsed.progress_pct ?? 0,
+      started_at: parsed.started_at ?? null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 const HOST_INFO_TTL_MS = 60_000;
@@ -89,6 +128,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             }
           }
           const a2sRaw = await app.redis.get(`a2s:status:${r.id}`);
+          const seeding = await readSeedingSummary(app.redis, r.id);
           return {
             ...r,
             rcon_state: rconState,
@@ -96,6 +136,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             last_poll_at: lastPollAt,
             a2s_status: a2sRaw ? (JSON.parse(a2sRaw) as unknown) : null,
             crash_loop: r.status === 'failed',
+            seeding,
           };
         }),
       );
@@ -268,6 +309,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       const crashRaw = await app.redis.zrevrange(`crashes:${row.id}`, 0, 9);
       const crash_history = crashRaw.map((c: string) => JSON.parse(c) as unknown);
       const crash_loop = row.status === 'failed';
+      const seeding = await readSeedingSummary(app.redis, row.id);
 
       return {
         server: {
@@ -295,6 +337,8 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
               tickrate: settingsRow.tickrate,
               multihome: settingsRow.multihome,
               extra_args: settingsRow.extraArgs,
+              seed_live_at: settingsRow.seedLiveAt,
+              seed_hysteresis: settingsRow.seedHysteresis,
             }
           : null,
         rcon_status,
@@ -303,6 +347,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         host,
         crash_history,
         crash_loop,
+        seeding,
       };
     },
   );

@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { formatSeedProgress, type SeedingSummary } from './seeding-format';
 
 interface Server {
   id: string;
@@ -15,6 +16,7 @@ interface Server {
   player_count: number | null;
   last_poll_at: string | null;
   tags?: string[];
+  seeding: SeedingSummary | null;
 }
 
 interface ServersResponse {
@@ -100,6 +102,40 @@ export default function ServersPage() {
     [],
   );
   useLiveSubscription('rcon.status', onRcon);
+
+  const onSeeding = useCallback(
+    (event: {
+      data: {
+        server_id: string;
+        state: 'seeding' | 'live';
+        current_players: number;
+        live_at: number;
+        progress_pct: number;
+        started_at: string | null;
+      };
+    }) => {
+      setData((prev) => {
+        if (!prev) return prev;
+        const idx = prev.items.findIndex((s) => s.id === event.data.server_id);
+        if (idx < 0) return prev;
+        const items = prev.items.slice();
+        items[idx] = {
+          ...items[idx],
+          seeding: {
+            state: event.data.state,
+            current_players: event.data.current_players,
+            live_at: event.data.live_at,
+            progress_pct: event.data.progress_pct,
+            started_at: event.data.started_at,
+          },
+        };
+        return { ...prev, items };
+      });
+      setLastUpdate(new Date());
+    },
+    [],
+  );
+  useLiveSubscription('server.seeding', onSeeding);
 
   const allTags = useMemo(() => {
     if (!data) return [];
@@ -228,6 +264,16 @@ export default function ServersPage() {
                   </td>
                   <td className="p-2 font-mono text-sm">
                     {row.player_count == null ? '—' : row.player_count}
+                    {row.seeding?.state === 'seeding' && (
+                      <div className="mt-1 flex items-center gap-1.5">
+                        <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-[10px] font-sans text-amber-400">
+                          Сидинг
+                        </span>
+                        <span className="text-[10px] font-sans text-neutral-500">
+                          {formatSeedProgress(row.seeding.current_players, row.seeding.live_at)}
+                        </span>
+                      </div>
+                    )}
                   </td>
                   <td className="p-2 text-xs">
                     <span

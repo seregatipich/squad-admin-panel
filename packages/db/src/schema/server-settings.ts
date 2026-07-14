@@ -22,6 +22,10 @@ export const serverSettings = pgTable('server_settings', {
   memoryHighMb: integer('memory_high_mb'),
   memoryMaxMb: integer('memory_max_mb'),
   ioWeight: integer('io_weight'),
+  /** Player count at which the server is considered "live" (out of seeding). See SEED-1 (#140). */
+  seedLiveAt: integer('seed_live_at').notNull().default(60),
+  /** Hysteresis band (players) around seedLiveAt to avoid flapping at the boundary. See SEED-1 (#140). */
+  seedHysteresis: integer('seed_hysteresis').notNull().default(5),
 });
 
 export type ServerSettingsRow = typeof serverSettings.$inferSelect;

@@ -6,6 +6,7 @@ import {
   playerConnectedPayload,
   playerDisconnectedPayload,
   rconPlayersPolledPayload,
+  seedingTransitionPayload,
   serverLifecyclePayload,
   validatePayload,
 } from '../src/events.js';
@@ -103,6 +104,18 @@ describe('validatePayload dispatcher', () => {
     }
   });
 
+  it('validates server.seeding_started / server.seeding_ended payloads', () => {
+    const seedingOk = {
+      player_count: 42,
+      layer: 'Sumari Seed v1',
+      live_at: 60,
+      hysteresis: 5,
+      progress_pct: 70,
+    };
+    expect(validatePayload('server.seeding_started', seedingOk).ok).toBe(true);
+    expect(validatePayload('server.seeding_ended', seedingOk).ok).toBe(true);
+  });
+
   it('handles every entry in PAYLOAD_SCHEMAS dispatch table', () => {
     const lifecycleOk = { pid: 1, reason: null, exit_code: null };
     const lifecycleTypes = [
@@ -133,6 +146,56 @@ describe('validatePayload dispatcher', () => {
         latency_ms: 1,
       }).ok,
     ).toBe(true);
+  });
+});
+
+describe('EVENT_TYPES contains the seeding transition types', () => {
+  it('includes server.seeding_started and server.seeding_ended', () => {
+    expect(EVENT_TYPES).toContain('server.seeding_started');
+    expect(EVENT_TYPES).toContain('server.seeding_ended');
+  });
+});
+
+describe('seedingTransitionPayload', () => {
+  const validPayload = {
+    player_count: 40,
+    layer: 'Sumari Seed v1',
+    live_at: 60,
+    hysteresis: 5,
+    progress_pct: 66,
+  };
+
+  it('accepts a well-formed payload', () => {
+    expect(seedingTransitionPayload.safeParse(validPayload).success).toBe(true);
+  });
+
+  it('accepts layer=null (unknown current layer)', () => {
+    expect(seedingTransitionPayload.safeParse({ ...validPayload, layer: null }).success).toBe(true);
+  });
+
+  it('rejects extra keys (strict)', () => {
+    expect(seedingTransitionPayload.safeParse({ ...validPayload, extra: 'nope' }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects progress_pct out of 0..100 range', () => {
+    expect(seedingTransitionPayload.safeParse({ ...validPayload, progress_pct: 101 }).success).toBe(
+      false,
+    );
+    expect(seedingTransitionPayload.safeParse({ ...validPayload, progress_pct: -1 }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects live_at = 0 (must be positive)', () => {
+    expect(seedingTransitionPayload.safeParse({ ...validPayload, live_at: 0 }).success).toBe(false);
+  });
+
+  it('rejects negative player_count', () => {
+    expect(seedingTransitionPayload.safeParse({ ...validPayload, player_count: -1 }).success).toBe(
+      false,
+    );
   });
 });
 
