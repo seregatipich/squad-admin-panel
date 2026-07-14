@@ -11,6 +11,11 @@ import {
   type TeamkillPlayerResponse,
 } from '../../moderation/teamkills/helpers';
 
+function formatModerationSubline(stats: TeamkillPlayerResponse['stats']): string {
+  const type = stats.last_moderation_type ?? '—';
+  return `Последнее: ${type} · ${formatTeamkillDate(stats.last_moderation_at)}`;
+}
+
 export function PlayerTeamkillsSection({ playerId }: { playerId: string }) {
   const [data, setData] = useState<TeamkillPlayerResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -72,12 +77,21 @@ export function PlayerTeamkillsSection({ playerId }: { playerId: string }) {
         <div className="py-6 text-center text-sm text-neutral-500">Загрузка…</div>
       ) : data ? (
         <>
-          <dl className="grid gap-2 sm:grid-cols-4">
+          <dl className="grid gap-2 sm:grid-cols-5">
             <Metric label="7 дней" value={data.stats.tk_7d} />
             <Metric label="30 дней" value={data.stats.tk_30d} />
             <Metric label="Всего" value={data.stats.tk_total} />
             <Metric label="Получал TK" value={data.stats.victim_of_tk_total} muted />
+            <Metric
+              label="Модерация"
+              value={data.stats.moderation_total}
+              muted={data.stats.moderation_total === 0}
+            />
           </dl>
+
+          {data.stats.moderation_total > 0 ? (
+            <div className="text-xs text-amber-300">{formatModerationSubline(data.stats)}</div>
+          ) : null}
 
           {data.recent.length === 0 ? (
             <div className="rounded border border-dashed border-neutral-800 py-8 text-center text-sm text-neutral-500">

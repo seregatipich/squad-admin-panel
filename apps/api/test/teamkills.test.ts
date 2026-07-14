@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { players, roles, servers } from '@squad/db/schema';
+import { moderationActions, players, roles, servers } from '@squad/db/schema';
 import { sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -84,6 +84,9 @@ interface TeamkillSummaryRow {
   tk_30d: number;
   victim_of_tk_total: number;
   last_tk_at: string;
+  moderation_total: number;
+  last_moderation_at: string | null;
+  last_moderation_type: string | null;
 }
 
 interface TeamkillSummaryResponse {
@@ -170,11 +173,33 @@ describeIfDb('teamkill moderation API (COMBAT-5)', () => {
         ('death', ${otherServerId}::uuid, 5002, ${charlie}::uuid, ${bravo}::uuid,
          'Other server', true, ${minutesAgo(10)}::timestamptz)
     `);
+
+    // Alpha has one active (non-reverted) warn and one reverted kick — only the
+    // active warn should count toward moderation_total / last_moderation_type.
+    await h.db.insert(moderationActions).values({
+      playerId: alpha,
+      actionType: 'warn',
+      authorSystemLabel: 'teamkills-test',
+      reason: 'excessive teamkills',
+      createdAt: new Date(Date.now() - 60 * 60_000),
+    });
+    await h.db.insert(moderationActions).values({
+      playerId: alpha,
+      actionType: 'kick',
+      authorSystemLabel: 'teamkills-test',
+      reason: 'reverted kick',
+      createdAt: new Date(Date.now() - 2 * 60 * 60_000),
+      revertedAt: new Date(),
+    });
+    // Charlie has zero moderation_actions — asserts the zero/null default path.
   });
 
   afterAll(async () => {
     await h.db.execute(
       sql`DELETE FROM combat_events WHERE server_id IN (${serverId}::uuid, ${otherServerId}::uuid)`,
+    );
+    await h.db.execute(
+      sql`DELETE FROM moderation_actions WHERE player_id IN (${alpha}::uuid, ${bravo}::uuid, ${charlie}::uuid)`,
     );
     await h.cleanup();
   });
@@ -197,7 +222,10 @@ describeIfDb('teamkill moderation API (COMBAT-5)', () => {
       tk_7d: 9,
       tk_30d: 10,
       victim_of_tk_total: 2,
+      moderation_total: 1,
+      last_moderation_type: 'warn',
     });
+    expect(new Date(body.rows[0].last_moderation_at as string).getTime()).not.toBeNaN();
     expect(body.rows[1]).toMatchObject({
       player_id: charlie,
       current_name: 'Charlie TK',
@@ -205,6 +233,9 @@ describeIfDb('teamkill moderation API (COMBAT-5)', () => {
       tk_7d: 2,
       tk_30d: 3,
       victim_of_tk_total: 0,
+      moderation_total: 0,
+      last_moderation_at: null,
+      last_moderation_type: null,
     });
   });
 
@@ -224,7 +255,10 @@ describeIfDb('teamkill moderation API (COMBAT-5)', () => {
       tk_7d: 9,
       tk_30d: 10,
       victim_of_tk_total: 2,
+      moderation_total: 1,
+      last_moderation_type: 'warn',
     });
+    expect(new Date(body.stats.last_moderation_at as string).getTime()).not.toBeNaN();
     expect(body.recent).toHaveLength(10);
     expect(body.recent[0]).toMatchObject({
       role: 'victim',
@@ -238,6 +272,26 @@ describeIfDb('teamkill moderation API (COMBAT-5)', () => {
         (event) => event.attacker?.player_id === alpha || event.victim?.player_id === alpha,
       ),
     ).toBe(true);
+  });
+
+  it('does not scope moderation counts by serverId — the filter only bounds combat_events', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${alpha}/teamkills?serverId=${otherServerId}`,
+      headers: { cookie: ownerCookie },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as TeamkillPlayerResponse;
+    // Alpha has zero TK events on otherServerId, but the warn (server-less)
+    // must still be reported.
+    expect(body.stats).toMatchObject({
+      tk_total: 0,
+      tk_7d: 0,
+      tk_30d: 0,
+      moderation_total: 1,
+      last_moderation_type: 'warn',
+    });
   });
 
   it('rejects viewers without combat:view', async () => {

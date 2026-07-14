@@ -34,6 +34,9 @@ type TeamkillStatsRow = Record<string, unknown> & {
   tk_30d: number | string | bigint | null;
   victim_of_tk_total: number | string | bigint | null;
   last_tk_at: Date | string | null;
+  moderation_total: number | string | bigint | null;
+  last_moderation_at: Date | string | null;
+  last_moderation_type: string | null;
 };
 
 type TeamkillEventRow = Record<string, unknown> & {
@@ -86,6 +89,9 @@ function normalizeStats(row: TeamkillStatsRow) {
     tk_30d: toNumber(row.tk_30d),
     victim_of_tk_total: toNumber(row.victim_of_tk_total),
     last_tk_at: toIso(row.last_tk_at),
+    moderation_total: toNumber(row.moderation_total),
+    last_moderation_at: toIso(row.last_moderation_at),
+    last_moderation_type: row.last_moderation_type,
   };
 }
 
@@ -149,6 +155,23 @@ async function loadSummaryRows(app: Parameters<FastifyPluginAsync>[0], query: Su
         AND ce.victim_player_id IS NOT NULL
         ${serverFilter(query.serverId)}
       GROUP BY ce.victim_player_id
+    ),
+    moderation AS (
+      SELECT
+        ma.player_id,
+        COUNT(*)::int AS moderation_total,
+        MAX(ma.created_at) AS last_moderation_at
+      FROM moderation_actions ma
+      WHERE ma.reverted_at IS NULL
+      GROUP BY ma.player_id
+    ),
+    latest_moderation AS (
+      SELECT DISTINCT ON (ma.player_id)
+        ma.player_id,
+        ma.action_type AS last_moderation_type
+      FROM moderation_actions ma
+      WHERE ma.reverted_at IS NULL
+      ORDER BY ma.player_id, ma.created_at DESC, ma.id DESC
     )
     SELECT
       o.player_id,
@@ -159,10 +182,15 @@ async function loadSummaryRows(app: Parameters<FastifyPluginAsync>[0], query: Su
       o.tk_7d,
       o.tk_30d,
       COALESCE(v.victim_of_tk_total, 0)::int AS victim_of_tk_total,
-      o.last_tk_at
+      o.last_tk_at,
+      COALESCE(m.moderation_total, 0)::int AS moderation_total,
+      m.last_moderation_at,
+      lm.last_moderation_type
     FROM offenders o
     INNER JOIN players p ON p.id = o.player_id
     LEFT JOIN victims v ON v.player_id = o.player_id
+    LEFT JOIN moderation m ON m.player_id = o.player_id
+    LEFT JOIN latest_moderation lm ON lm.player_id = o.player_id
     ORDER BY ${sortSql(query.sort)} ${orderSql(query.order)}, o.last_tk_at DESC, o.player_id ASC
     LIMIT ${query.limit}
   `);
@@ -184,7 +212,10 @@ async function loadPlayerStats(
       COALESCE(off.tk_7d, 0)::int AS tk_7d,
       COALESCE(off.tk_30d, 0)::int AS tk_30d,
       COALESCE(victim.victim_of_tk_total, 0)::int AS victim_of_tk_total,
-      off.last_tk_at
+      off.last_tk_at,
+      COALESCE(moderation.moderation_total, 0)::int AS moderation_total,
+      moderation.last_moderation_at,
+      latest_moderation.last_moderation_type
     FROM players p
     LEFT JOIN LATERAL (
       SELECT
@@ -204,6 +235,22 @@ async function loadPlayerStats(
         AND ce.victim_player_id = p.id
         ${serverFilter(query.serverId)}
     ) victim ON true
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*)::int AS moderation_total,
+        MAX(ma.created_at) AS last_moderation_at
+      FROM moderation_actions ma
+      WHERE ma.player_id = p.id
+        AND ma.reverted_at IS NULL
+    ) moderation ON true
+    LEFT JOIN LATERAL (
+      SELECT ma.action_type AS last_moderation_type
+      FROM moderation_actions ma
+      WHERE ma.player_id = p.id
+        AND ma.reverted_at IS NULL
+      ORDER BY ma.created_at DESC, ma.id DESC
+      LIMIT 1
+    ) latest_moderation ON true
     WHERE p.id = ${playerId}::uuid
     LIMIT 1
   `);

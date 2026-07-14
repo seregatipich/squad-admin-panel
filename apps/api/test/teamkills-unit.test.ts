@@ -36,6 +36,9 @@ describe('teamkillsRoutes', () => {
         tk_30d: '10',
         victim_of_tk_total: '2',
         last_tk_at: new Date('2026-07-07T18:30:00.000Z'),
+        moderation_total: 3n,
+        last_moderation_at: '2026-07-06T10:00:00.000Z',
+        last_moderation_type: 'warn',
       },
     ]);
     const app = buildApp({ execute });
@@ -60,8 +63,42 @@ describe('teamkillsRoutes', () => {
         tk_30d: 10,
         victim_of_tk_total: 2,
         last_tk_at: '2026-07-07T18:30:00.000Z',
+        moderation_total: 3,
+        last_moderation_at: '2026-07-06T10:00:00.000Z',
+        last_moderation_type: 'warn',
       },
     ]);
+  });
+
+  it('normalizes a zero-moderation offender to null moderation fields', async () => {
+    const execute = vi.fn().mockResolvedValue([
+      {
+        player_id: 'player-charlie',
+        current_name: 'Charlie TK',
+        steam_id64: null,
+        eos_id: 'eos-1',
+        tk_total: 3,
+        tk_7d: 2,
+        tk_30d: 3,
+        victim_of_tk_total: 0,
+        last_tk_at: new Date('2026-07-07T18:30:00.000Z'),
+        moderation_total: 0,
+        last_moderation_at: null,
+        last_moderation_type: null,
+      },
+    ]);
+    const app = buildApp({ execute });
+    await app.register(teamkillsRoutes);
+
+    const res = await app.inject({ method: 'GET', url: '/api/v1/moderation/teamkills' });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.rows[0]).toMatchObject({
+      moderation_total: 0,
+      last_moderation_at: null,
+      last_moderation_type: null,
+    });
   });
 
   it('uses the combat view permission for moderation routes', async () => {
