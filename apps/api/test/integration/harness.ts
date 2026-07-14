@@ -95,6 +95,7 @@ import settingsAltDetectionRoutes from '../../src/routes/settings-alt-detection.
 import settingsBanlistPublicationRoutes from '../../src/routes/settings-banlist-publication.js';
 import settingsChatFlagsRoutes from '../../src/routes/settings-chat-flags.js';
 import settingsClanGuardRoutes from '../../src/routes/settings-clan-guard.js';
+import settingsCoplayRoutes from '../../src/routes/settings-coplay.js';
 import settingsEconomyRoutes from '../../src/routes/settings-economy.js';
 import suspectsRoutes from '../../src/routes/suspects.js';
 import teamkillsRoutes from '../../src/routes/teamkills.js';
@@ -475,6 +476,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(settingsClanGuardRoutes);
   await app.register(settingsAltDetectionRoutes);
   await app.register(settingsBanlistPublicationRoutes);
+  await app.register(settingsCoplayRoutes);
   await app.register(clansRoutes);
   await app.register(chatRoutes);
   await app.register(combatEventsRoutes);

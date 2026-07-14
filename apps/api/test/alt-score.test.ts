@@ -5,7 +5,13 @@ describe('computeAltScore', () => {
   it('scores zero when no signal is triggered', () => {
     expect(
       computeAltScore(
-        { sharedIpCount: 0, sharedNameCount: 0, youngAccount: false, steamidClose: false },
+        {
+          sharedIpCount: 0,
+          sharedNameCount: 0,
+          youngAccount: false,
+          steamidClose: false,
+          coplayOverlap: false,
+        },
         DEFAULT_ALT_SCORE_WEIGHTS,
       ),
     ).toBe(0);
@@ -15,13 +21,25 @@ describe('computeAltScore', () => {
     const weights = DEFAULT_ALT_SCORE_WEIGHTS;
     expect(
       computeAltScore(
-        { sharedIpCount: 1, sharedNameCount: 0, youngAccount: false, steamidClose: false },
+        {
+          sharedIpCount: 1,
+          sharedNameCount: 0,
+          youngAccount: false,
+          steamidClose: false,
+          coplayOverlap: false,
+        },
         weights,
       ),
     ).toBe(weights.weightSharedIp);
     expect(
       computeAltScore(
-        { sharedIpCount: 7, sharedNameCount: 0, youngAccount: false, steamidClose: false },
+        {
+          sharedIpCount: 7,
+          sharedNameCount: 0,
+          youngAccount: false,
+          steamidClose: false,
+          coplayOverlap: false,
+        },
         weights,
       ),
     ).toBe(weights.weightSharedIp);
@@ -33,7 +51,13 @@ describe('computeAltScore', () => {
     // the IP signal must not add to the score.
     expect(
       computeAltScore(
-        { sharedIpCount: 0, sharedNameCount: 0, youngAccount: false, steamidClose: false },
+        {
+          sharedIpCount: 0,
+          sharedNameCount: 0,
+          youngAccount: false,
+          steamidClose: false,
+          coplayOverlap: false,
+        },
         DEFAULT_ALT_SCORE_WEIGHTS,
       ),
     ).toBe(0);
@@ -42,7 +66,13 @@ describe('computeAltScore', () => {
   it('sums every triggered signal', () => {
     const weights = DEFAULT_ALT_SCORE_WEIGHTS;
     const score = computeAltScore(
-      { sharedIpCount: 2, sharedNameCount: 3, youngAccount: true, steamidClose: true },
+      {
+        sharedIpCount: 2,
+        sharedNameCount: 3,
+        youngAccount: true,
+        steamidClose: true,
+        coplayOverlap: false,
+      },
       weights,
     );
     expect(score).toBe(
@@ -59,12 +89,111 @@ describe('computeAltScore', () => {
       weightSharedName: 1,
       weightYoungAccount: 0,
       weightSteamidProximity: 0,
+      weightCoplayOverlap: 0,
     };
     const score = computeAltScore(
-      { sharedIpCount: 1, sharedNameCount: 1, youngAccount: true, steamidClose: true },
+      {
+        sharedIpCount: 1,
+        sharedNameCount: 1,
+        youngAccount: true,
+        steamidClose: true,
+        coplayOverlap: false,
+      },
       customWeights,
     );
     expect(score).toBe(101);
+  });
+
+  it('subtracts the coplay-overlap weight when the anti-signal is triggered', () => {
+    const weights = DEFAULT_ALT_SCORE_WEIGHTS;
+    const score = computeAltScore(
+      {
+        sharedIpCount: 1,
+        sharedNameCount: 0,
+        youngAccount: false,
+        steamidClose: false,
+        coplayOverlap: true,
+      },
+      weights,
+    );
+    expect(score).toBe(weights.weightSharedIp - weights.weightCoplayOverlap);
+  });
+
+  it('does not subtract anything when coplayOverlap is false', () => {
+    const weights = DEFAULT_ALT_SCORE_WEIGHTS;
+    const withSignal = computeAltScore(
+      {
+        sharedIpCount: 1,
+        sharedNameCount: 0,
+        youngAccount: false,
+        steamidClose: false,
+        coplayOverlap: false,
+      },
+      weights,
+    );
+    expect(withSignal).toBe(weights.weightSharedIp);
+  });
+
+  it('does not subtract anything when weightCoplayOverlap is configured to 0', () => {
+    const weights = { ...DEFAULT_ALT_SCORE_WEIGHTS, weightCoplayOverlap: 0 };
+    const score = computeAltScore(
+      {
+        sharedIpCount: 1,
+        sharedNameCount: 0,
+        youngAccount: false,
+        steamidClose: false,
+        coplayOverlap: true,
+      },
+      weights,
+    );
+    expect(score).toBe(weights.weightSharedIp);
+  });
+
+  it('can push the score below the medium threshold, dropping confidence (AC in miniature)', () => {
+    const weights = DEFAULT_ALT_SCORE_WEIGHTS;
+    const thresholds = { mediumThreshold: 50, highThreshold: 75 };
+    // shared IP (50) alone would be exactly 'medium'.
+    const withoutCoplay = computeAltScore(
+      {
+        sharedIpCount: 1,
+        sharedNameCount: 0,
+        youngAccount: false,
+        steamidClose: false,
+        coplayOverlap: false,
+      },
+      weights,
+    );
+    expect(confidenceFor(withoutCoplay, thresholds)).toBe('medium');
+    // The coplay anti-signal (30) drags it below the medium threshold.
+    const withCoplay = computeAltScore(
+      {
+        sharedIpCount: 1,
+        sharedNameCount: 0,
+        youngAccount: false,
+        steamidClose: false,
+        coplayOverlap: true,
+      },
+      weights,
+    );
+    expect(withCoplay).toBeLessThan(withoutCoplay);
+    expect(confidenceFor(withCoplay, thresholds)).toBe('low');
+  });
+
+  it('returns "low" confidence for a negative total score', () => {
+    const weights = DEFAULT_ALT_SCORE_WEIGHTS;
+    const thresholds = { mediumThreshold: 50, highThreshold: 75 };
+    const score = computeAltScore(
+      {
+        sharedIpCount: 0,
+        sharedNameCount: 0,
+        youngAccount: false,
+        steamidClose: false,
+        coplayOverlap: true,
+      },
+      weights,
+    );
+    expect(score).toBeLessThan(0);
+    expect(confidenceFor(score, thresholds)).toBe('low');
   });
 });
 

@@ -19,15 +19,25 @@ const STEAMID_DELTA_MAX = 1_000_000_000;
 
 const idParam = z.object({ id: z.string().uuid() });
 
+/** Cap for `coplay_overlap_threshold_seconds`: 90 days (the co-play rolling window) in seconds. */
+const COPLAY_OVERLAP_THRESHOLD_MAX = 90 * 24 * 60 * 60;
+
 const putBody = z
   .object({
     weight_shared_ip: z.number().int().min(0).max(WEIGHT_MAX).optional(),
     weight_shared_name: z.number().int().min(0).max(WEIGHT_MAX).optional(),
     weight_young_account: z.number().int().min(0).max(WEIGHT_MAX).optional(),
     weight_steamid_proximity: z.number().int().min(0).max(WEIGHT_MAX).optional(),
+    weight_coplay_overlap: z.number().int().min(0).max(WEIGHT_MAX).optional(),
     steamid_delta_threshold: z.number().int().min(0).max(STEAMID_DELTA_MAX).optional(),
     medium_threshold: z.number().int().min(0).max(THRESHOLD_MAX).optional(),
     high_threshold: z.number().int().min(0).max(THRESHOLD_MAX).optional(),
+    coplay_overlap_threshold_seconds: z
+      .number()
+      .int()
+      .min(0)
+      .max(COPLAY_OVERLAP_THRESHOLD_MAX)
+      .optional(),
   })
   .refine((value) => Object.keys(value).length > 0, { message: 'empty_update' });
 
@@ -41,9 +51,11 @@ interface SettingsView {
   weight_shared_name: number;
   weight_young_account: number;
   weight_steamid_proximity: number;
+  weight_coplay_overlap: number;
   steamid_delta_threshold: number;
   medium_threshold: number;
   high_threshold: number;
+  coplay_overlap_threshold_seconds: number;
   updated_at: string | null;
   updated_by_player_id: string | null;
 }
@@ -64,9 +76,11 @@ function serializeSettings(row: AltDetectionSettingsRow | null): SettingsView {
       weight_shared_name: 25,
       weight_young_account: 15,
       weight_steamid_proximity: 10,
+      weight_coplay_overlap: 30,
       steamid_delta_threshold: 10_000,
       medium_threshold: 50,
       high_threshold: 75,
+      coplay_overlap_threshold_seconds: 36_000,
       updated_at: null,
       updated_by_player_id: null,
     };
@@ -76,9 +90,11 @@ function serializeSettings(row: AltDetectionSettingsRow | null): SettingsView {
     weight_shared_name: row.weightSharedName,
     weight_young_account: row.weightYoungAccount,
     weight_steamid_proximity: row.weightSteamidProximity,
+    weight_coplay_overlap: row.weightCoplayOverlap,
     steamid_delta_threshold: Number(row.steamidDeltaThreshold),
     medium_threshold: row.mediumThreshold,
     high_threshold: row.highThreshold,
+    coplay_overlap_threshold_seconds: row.coplayOverlapThresholdSeconds,
     updated_at: row.updatedAt.toISOString(),
     updated_by_player_id: row.updatedByPlayerId,
   };
@@ -172,10 +188,14 @@ const settingsAltDetectionRoutes: FastifyPluginAsync = async (app) => {
         updates.weightYoungAccount = body.weight_young_account;
       if (body.weight_steamid_proximity !== undefined)
         updates.weightSteamidProximity = body.weight_steamid_proximity;
+      if (body.weight_coplay_overlap !== undefined)
+        updates.weightCoplayOverlap = body.weight_coplay_overlap;
       if (body.steamid_delta_threshold !== undefined)
         updates.steamidDeltaThreshold = body.steamid_delta_threshold;
       if (body.medium_threshold !== undefined) updates.mediumThreshold = body.medium_threshold;
       if (body.high_threshold !== undefined) updates.highThreshold = body.high_threshold;
+      if (body.coplay_overlap_threshold_seconds !== undefined)
+        updates.coplayOverlapThresholdSeconds = body.coplay_overlap_threshold_seconds;
 
       await app.db
         .insert(altDetectionSettings)

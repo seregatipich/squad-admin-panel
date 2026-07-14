@@ -414,6 +414,13 @@
       "when": 1783400300000,
       "tag": "0065_banlist_publication",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1783400400000,
+      "tag": "0068_coplay_anti_signal",
+      "breakpoints": true
     }
   ]
 }

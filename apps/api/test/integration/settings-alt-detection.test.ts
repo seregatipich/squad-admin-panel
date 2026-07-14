@@ -92,6 +92,22 @@ describe('GET /api/v1/settings/alt-detection', () => {
     expect(body.ignored_ips).toEqual([]);
   });
 
+  it('includes the ALT-3 co-play anti-signal defaults', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/settings/alt-detection',
+      headers: { cookie },
+    });
+    const body = res.json() as {
+      settings: { weight_coplay_overlap: number; coplay_overlap_threshold_seconds: number };
+    };
+    expect(body.settings).toMatchObject({
+      weight_coplay_overlap: 30,
+      coplay_overlap_threshold_seconds: 36_000,
+    });
+  });
+
   it('rejects an unauthenticated request', async () => {
     const res = await h.app.inject({ method: 'GET', url: '/api/v1/settings/alt-detection' });
     expect(res.statusCode).toBe(401);
@@ -133,6 +149,59 @@ describe('PUT /api/v1/settings/alt-detection', () => {
       action: 'alt_detection.settings.update',
       resource: 'alt_detection_settings',
     });
+  });
+
+  it('round-trips weight_coplay_overlap and coplay_overlap_threshold_seconds', async () => {
+    const cookie = await loginAsOwner(h);
+    const put = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/alt-detection',
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        weight_coplay_overlap: 45,
+        coplay_overlap_threshold_seconds: 7_200,
+      }),
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json()).toMatchObject({
+      weight_coplay_overlap: 45,
+      coplay_overlap_threshold_seconds: 7_200,
+    });
+
+    const get = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/settings/alt-detection',
+      headers: { cookie },
+    });
+    const body = get.json() as {
+      settings: { weight_coplay_overlap: number; coplay_overlap_threshold_seconds: number };
+    };
+    expect(body.settings).toMatchObject({
+      weight_coplay_overlap: 45,
+      coplay_overlap_threshold_seconds: 7_200,
+    });
+  });
+
+  it('rejects a negative weight_coplay_overlap with 400', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/alt-detection',
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ weight_coplay_overlap: -1 }),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects a negative coplay_overlap_threshold_seconds with 400', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/settings/alt-detection',
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ coplay_overlap_threshold_seconds: -1 }),
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it('rejects medium_threshold above high_threshold with 400', async () => {
