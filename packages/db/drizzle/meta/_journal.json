@@ -407,6 +407,13 @@
       "when": 1783400200000,
       "tag": "0066_reporter_stats",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1783400300000,
+      "tag": "0065_banlist_publication",
+      "breakpoints": true
     }
   ]
 }

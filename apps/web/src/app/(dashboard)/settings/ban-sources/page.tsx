@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { PublicationSection } from './PublicationSection';
 
 interface BanSource {
   id: string;
@@ -451,6 +452,8 @@ export default function BanSourcesPage() {
           ))
         )}
       </div>
+
+      <PublicationSection />
     </div>
   );
 }

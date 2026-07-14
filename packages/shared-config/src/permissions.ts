@@ -92,6 +92,11 @@ export const PERMISSIONS = [
   },
   { key: 'mod:unban', category: 'moderation', label: 'Unban', unimplemented: true },
   {
+    key: 'banlist:read',
+    category: 'moderation',
+    label: 'Читать публикуемый банлист (федерация)',
+  },
+  {
     key: 'admin_group:view',
     category: 'admin_groups',
     label: 'Видеть Admins.cfg',
