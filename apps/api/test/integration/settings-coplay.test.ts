@@ -186,7 +186,11 @@ describe('PUT /api/v1/settings/coplay', () => {
 
     const [server] = await h.db
       .insert(servers)
-      .values({ displayName: 'CoplaySettingsServer', slug: `coplay-settings-${uuidv7()}` })
+      .values({
+        id: uuidv7(),
+        displayName: 'CoplaySettingsServer',
+        slug: `coplay-settings-${uuidv7()}`,
+      })
       .returning({ id: servers.id });
     const [alice] = await h.db
       .insert(players)
