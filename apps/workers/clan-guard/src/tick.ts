@@ -43,9 +43,11 @@ export interface RecordModerationActionInput {
   message: string;
 }
 
+/** Audit details shared by clan-tag warning and kick enforcement events. */
 export interface WriteClanGuardAuditInput {
   playerId: string;
   serverId: string;
+  phase: 'warn' | 'kick';
   clanId: string;
   message: string;
 }
@@ -186,6 +188,13 @@ export async function runClanGuardTick(deps: ClanGuardTickDeps): Promise<ClanGua
           matchedName: player.name,
           message,
         });
+        await deps.writeAuditEntry({
+          playerId: player.playerId,
+          serverId: player.serverId,
+          phase: 'warn',
+          clanId: impostor.clanId,
+          message,
+        });
         warned += 1;
         continue;
       }
@@ -223,6 +232,7 @@ export async function runClanGuardTick(deps: ClanGuardTickDeps): Promise<ClanGua
       await deps.writeAuditEntry({
         playerId: player.playerId,
         serverId: player.serverId,
+        phase: 'kick',
         clanId: impostor.clanId,
         message,
       });

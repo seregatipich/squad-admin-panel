@@ -118,6 +118,14 @@ describe('runClanGuardTick', () => {
     expect(deps.recordModerationAction).toHaveBeenCalledWith(
       expect.objectContaining({ phase: 'warn', clanId: 'clan-1', tag: '[TST]' }),
     );
+    expect(deps.writeAuditEntry).toHaveBeenCalledTimes(1);
+    expect(deps.writeAuditEntry).toHaveBeenCalledWith({
+      playerId: 'player-1',
+      serverId: 'server-1',
+      phase: 'warn',
+      clanId: 'clan-1',
+      message: 'Тег [TST] защищён кланом Test Clan. Смените ник.',
+    });
     expect(deps.sendRconCommand).not.toHaveBeenCalledWith(
       expect.objectContaining({ command: 'AdminKick' }),
     );
@@ -137,7 +145,7 @@ describe('runClanGuardTick', () => {
       expect.objectContaining({ phase: 'kick' }),
     );
     expect(deps.writeAuditEntry).toHaveBeenCalledWith(
-      expect.objectContaining({ playerId: 'player-1', clanId: 'clan-1' }),
+      expect.objectContaining({ playerId: 'player-1', clanId: 'clan-1', phase: 'kick' }),
     );
   });
 

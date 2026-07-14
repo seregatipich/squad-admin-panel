@@ -31,7 +31,10 @@ import type {
 const SINGLETON_ID = 1;
 const RCON_STREAM_MAXLEN = 500;
 const CLAN_TAG_PROTECTION_ACTION_TYPE = 'clan_tag_protection';
-const CLAN_GUARD_AUDIT_ACTION_TYPE = 'clan.tag_protection.kick';
+const CLAN_GUARD_AUDIT_ACTION_TYPES = {
+  warn: 'clan.tag_protection.warn',
+  kick: 'clan.tag_protection.kick',
+} as const;
 const CLAN_GUARD_SYSTEM_LABEL = 'clan-guard';
 
 export async function loadSettings(db: DatabaseClient): Promise<ClanGuardSettings> {
@@ -155,7 +158,7 @@ export async function writeClanGuardAuditEntry(
     actorTokenId: null,
     actorSystemLabel: CLAN_GUARD_SYSTEM_LABEL,
     actorIp: null,
-    actionType: CLAN_GUARD_AUDIT_ACTION_TYPE,
+    actionType: CLAN_GUARD_AUDIT_ACTION_TYPES[input.phase],
     targetType: 'player',
     targetId: input.playerId,
     beforeSnapshot: null,
