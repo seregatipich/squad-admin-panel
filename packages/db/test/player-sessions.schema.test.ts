@@ -56,7 +56,7 @@ describe('player_sessions schema', () => {
 
   it('pins the closed_reason and mode vocabularies', () => {
     expect(schema.CLOSED_REASONS).toEqual(['disconnect', 'server_crashed', 'kicked', 'banned']);
-    expect(schema.SESSION_MODES).toEqual(['online', 'boost', 'queue']);
+    expect(schema.SESSION_MODES).toEqual(['online', 'boost', 'queue', 'seed']);
   });
 });
 
