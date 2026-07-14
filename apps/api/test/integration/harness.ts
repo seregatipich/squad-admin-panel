@@ -79,6 +79,7 @@ import serverLogsRoutes from '../../src/routes/server-logs.js';
 import serverMessagingRoutes from '../../src/routes/server-messaging.js';
 import serverMetricsRoutes from '../../src/routes/server-metrics.js';
 import serverRosterRoutes from '../../src/routes/server-roster.js';
+import serverRotationRoutes from '../../src/routes/server-rotation.js';
 import serverSettingsRoutes from '../../src/routes/server-settings.js';
 import serverUpdateRoutes from '../../src/routes/server-update.js';
 import serverRoutes from '../../src/routes/servers.js';
@@ -438,6 +439,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(serverMessagingRoutes);
   await app.register(serverMetricsRoutes);
   await app.register(serverConfigRoutes);
+  await app.register(serverRotationRoutes);
   await app.register(depotRoutes);
   await app.register(playerRoutes);
   await app.register(issuesRoutes);
