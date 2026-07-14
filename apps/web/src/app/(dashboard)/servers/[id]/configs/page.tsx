@@ -1,7 +1,13 @@
 'use client';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+
+// ROT-2 (#145): LayerRotation.cfg's managed segment is edited on the
+// dedicated rotation page, not here — the marker string must stay in sync
+// with apps/api/src/lib/rotation-segment.ts.
+const MANAGED_SEGMENT_MARKER = '//SQUAD-PANEL BEGIN';
 
 const POLL_MS = 8000;
 
@@ -288,6 +294,8 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   }
 
   const selectedFile = files.find((f) => f.name === selected) ?? null;
+  const isManagedRotation =
+    selected === 'LayerRotation.cfg' && content.includes(MANAGED_SEGMENT_MARKER);
 
   return (
     <div className="space-y-4">
@@ -406,19 +414,36 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
               </div>
 
               {tab === 'editor' ? (
-                <EditorView
-                  content={content}
-                  onChange={(v) => {
-                    setContent(v);
-                    setDirty(v !== serverContent);
-                  }}
-                  commitMessage={commitMessage}
-                  setCommitMessage={setCommitMessage}
-                  dirty={dirty}
-                  saving={saving}
-                  onSave={save}
-                  onDiscard={discard}
-                />
+                <>
+                  {isManagedRotation ? (
+                    <div className="flex items-center justify-between gap-3 border-b border-sky-900 bg-sky-950/40 px-3 py-2 text-xs text-sky-200">
+                      <span>
+                        Managed-сегмент управляется панелью — редактируйте на странице{' '}
+                        <Link
+                          href={`/servers/${id}/rotation`}
+                          className="underline hover:text-sky-100"
+                        >
+                          «Ротация»
+                        </Link>
+                        .
+                      </span>
+                    </div>
+                  ) : null}
+                  <EditorView
+                    content={content}
+                    onChange={(v) => {
+                      setContent(v);
+                      setDirty(v !== serverContent);
+                    }}
+                    commitMessage={commitMessage}
+                    setCommitMessage={setCommitMessage}
+                    dirty={dirty}
+                    saving={saving}
+                    onSave={save}
+                    onDiscard={discard}
+                    readOnly={isManagedRotation}
+                  />
+                </>
               ) : null}
 
               {tab === 'history' ? (
@@ -473,6 +498,7 @@ function EditorView(props: {
   saving: boolean;
   onSave: () => void;
   onDiscard: () => void;
+  readOnly?: boolean;
 }) {
   return (
     <>
@@ -483,12 +509,13 @@ function EditorView(props: {
           onChange={(e) => props.setCommitMessage(e.target.value)}
           placeholder="Комментарий к изменению (опционально)"
           maxLength={500}
-          className="flex-1 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs"
+          disabled={props.readOnly}
+          className="flex-1 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs disabled:opacity-40"
         />
         <button
           type="button"
           onClick={props.onDiscard}
-          disabled={!props.dirty || props.saving}
+          disabled={props.readOnly || !props.dirty || props.saving}
           className="rounded px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-40"
         >
           Сбросить
@@ -496,7 +523,7 @@ function EditorView(props: {
         <button
           type="button"
           onClick={props.onSave}
-          disabled={!props.dirty || props.saving}
+          disabled={props.readOnly || !props.dirty || props.saving}
           className="rounded bg-sky-600 px-3 py-1 text-xs text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {props.saving ? 'Сохраняю…' : 'Сохранить'}
@@ -514,6 +541,7 @@ function EditorView(props: {
           wordWrap: 'on',
           renderWhitespace: 'boundary',
           scrollBeyondLastLine: false,
+          readOnly: props.readOnly ?? false,
         }}
       />
     </>

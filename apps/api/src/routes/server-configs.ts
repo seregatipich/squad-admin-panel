@@ -401,7 +401,15 @@ function inArrayOr<T>(col: Parameters<typeof inArray>[0], values: T[]) {
   return inArray(col, values as Parameters<typeof inArray>[1]);
 }
 
-async function writeVersion(
+/**
+ * Writes a new config version: dedups against the current tip by sha256
+ * (no-op if unchanged), otherwise persists via `bridge.fileAtomicWrite`,
+ * inserts a `config_versions` row, and best-effort pushes the change live
+ * via `AdminReloadServerConfig`. Exported for reuse by the rotation editor
+ * (ROT-2, #145), which writes `LayerRotation.cfg` through the same
+ * versioned-history pathway as the CFG-1 Monaco editor.
+ */
+export async function writeVersion(
   app: FastifyInstance,
   serverId: string,
   name: AllowedConfigFile,

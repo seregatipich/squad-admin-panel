@@ -88,6 +88,7 @@ import serverMessagingRoutes from './routes/server-messaging.js';
 import serverMetricsRoutes from './routes/server-metrics.js';
 import serverRnsquadjsRoutes from './routes/server-rnsquadjs.js';
 import serverRosterRoutes from './routes/server-roster.js';
+import serverRotationRoutes from './routes/server-rotation.js';
 import serverSettingsRoutes from './routes/server-settings.js';
 import serverUpdateRoutes from './routes/server-update.js';
 import serverRoutes from './routes/servers.js';
@@ -181,6 +182,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(serverMessagingRoutes);
   await app.register(serverMetricsRoutes);
   await app.register(serverConfigRoutes);
+  await app.register(serverRotationRoutes);
   await app.register(depotRoutes);
   await app.register(permissionsRoutes);
   await app.register(rolesRoutes);
