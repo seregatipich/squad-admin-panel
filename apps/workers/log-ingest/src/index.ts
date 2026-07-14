@@ -5,6 +5,7 @@ import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
+import { handleAltBanConnect } from './alt-ban/store.js';
 import { BannedNameRuleCache } from './banname/rules-cache.js';
 import { handleBannedNameEvent } from './banname/store.js';
 import { ChatFlagDetector } from './chat/flag-rules.js';
@@ -167,6 +168,11 @@ async function main() {
           publish(redis, e).catch((err) =>
             log.error({ err: (err as Error).message, type: e.type }, 'publish failed'),
           );
+          if (e.type === 'player.connected') {
+            handleAltBanConnect(db, redis, e).catch((err) =>
+              log.error({ err: (err as Error).message }, 'alt-ban handling failed'),
+            );
+          }
           if (e.type === 'player.connected' || e.type === 'player.name_changed') {
             handleBannedNameEvent(db, redis, { serverId, event: e }, bannedNameCache).catch((err) =>
               log.error({ err: (err as Error).message }, 'banname handling failed'),

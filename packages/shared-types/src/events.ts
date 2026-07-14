@@ -33,6 +33,7 @@ export const EVENT_TYPES = [
 
   'banname.matched',
   'externalban.matched',
+  'alt.ban_evasion_suspected',
   'seed.call_sent',
   'bansync.completed',
   'bansync.failed',
@@ -117,6 +118,19 @@ export const externalBanMatchedPayload = z
   })
   .strict();
 export type ExternalBanMatchedPayload = z.infer<typeof externalBanMatchedPayload>;
+
+/** Payload emitted when a confirmed alt of an actively banned player connects. */
+export const altBanEvasionSuspectedPayload = z
+  .object({
+    target_player_id: z.string().uuid(),
+    confirmed_alt_ids: z.array(z.string().uuid()).min(1),
+    candidate_ids: z.array(z.string().uuid()),
+    trigger: z.literal('player_connected'),
+    server_id: z.string().uuid().nullable(),
+    connection_event_id: z.string().uuid(),
+  })
+  .strict();
+export type AltBanEvasionSuspectedPayload = z.infer<typeof altBanEvasionSuspectedPayload>;
 
 export const seedCallSentPayload = z
   .object({
@@ -205,6 +219,7 @@ export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodTypeAny>> = {
   'server.crashed': serverLifecyclePayload,
   'banname.matched': bannameMatchedPayload,
   'externalban.matched': externalBanMatchedPayload,
+  'alt.ban_evasion_suspected': altBanEvasionSuspectedPayload,
   'seed.call_sent': seedCallSentPayload,
   'server.seeding_started': seedingTransitionPayload,
   'server.seeding_ended': seedingTransitionPayload,
