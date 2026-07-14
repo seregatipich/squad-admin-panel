@@ -10,7 +10,6 @@ import { normalizePlayerName } from '@squad/shared-config';
 import type { BannedNameAction, BannedNameMatchType } from '@squad/shared-config/banned-names';
 import {
   type EventEnvelope,
-  type PlayerConnectedPayload,
   rconCommandRequestSchema,
   rconCommandStream,
 } from '@squad/shared-types';
@@ -33,12 +32,16 @@ const ESCALATION_KICK_THRESHOLD = 3;
 const KICK_MESSAGE_MAX_CHARS = 280;
 const KICK_REASON_MAX_CHARS = 120;
 
-export interface HandleBannedNameConnectParams {
+/** Context needed to enforce banned-name rules for one player event. */
+export interface HandleBannedNameEventParams {
+  /** Server whose RCON stream and moderation ledger receive the action. */
   serverId: string;
+  /** A `player.connected` or `player.name_changed` event envelope. */
   event: EventEnvelope;
 }
 
-export type BannedNameConnectOutcome =
+/** Observable result of attempting banned-name enforcement for one player event. */
+export type BannedNameEventOutcome =
   | { outcome: 'ignored' }
   | { outcome: 'no_match' }
   | { outcome: 'cooldown'; ruleId: string }
@@ -52,6 +55,18 @@ export type BannedNameConnectOutcome =
       escalated: boolean;
       kickEnqueued: boolean;
     };
+
+/** @deprecated Use {@link HandleBannedNameEventParams} for both supported player events. */
+export type HandleBannedNameConnectParams = HandleBannedNameEventParams;
+
+/** @deprecated Use {@link BannedNameEventOutcome} for both supported player events. */
+export type BannedNameConnectOutcome = BannedNameEventOutcome;
+
+interface BannedNameEventPayload {
+  steam_id64: string;
+  eos_id: string | null;
+  name: string;
+}
 
 function sanitizeReasonText(reason: string | null): string {
   if (!reason) return '';
@@ -145,20 +160,28 @@ async function resolveOrCreatePlayer(
 }
 
 /**
- * BANNAME-2 enforcement: on `player.connected`, matches the joining nickname
- * against the cached active `banned_name_rules` and, on a hit, kicks (via
- * worker-rcon) or alerts, records the moderation ledger entry, and emits a
- * `banname.matched` event + live-bus frame. See the issue for the full
- * anti-loop cooldown/escalation contract.
+ * BANNAME-2 enforcement for `player.connected` and `player.name_changed`.
+ * Matches the event's current nickname against cached active rules and, on a
+ * hit, kicks (via worker-rcon) or alerts, records the moderation ledger entry,
+ * and emits a `banname.matched` event plus live-bus frame. Both event types use
+ * this single path so cooldown and escalation behavior cannot diverge.
+ *
+ * @param db - Database used for player resolution and enforcement records.
+ * @param redis - Redis client used for cooldowns, RCON commands, and live events.
+ * @param params - Server and player event to enforce.
+ * @param cache - Active banned-name rule cache.
+ * @returns The enforcement outcome, including the effective action on a match.
  */
-export async function handleBannedNameConnect(
+export async function handleBannedNameEvent(
   db: DatabaseClient,
   redis: Redis,
-  { serverId, event }: HandleBannedNameConnectParams,
+  { serverId, event }: HandleBannedNameEventParams,
   cache: BannedNameRuleCache,
-): Promise<BannedNameConnectOutcome> {
-  if (event.type !== 'player.connected') return { outcome: 'ignored' };
-  const payload = event.payload as PlayerConnectedPayload;
+): Promise<BannedNameEventOutcome> {
+  if (event.type !== 'player.connected' && event.type !== 'player.name_changed') {
+    return { outcome: 'ignored' };
+  }
+  const payload = event.payload as BannedNameEventPayload;
 
   const match = await cache.match(payload.name);
   if (!match) return { outcome: 'no_match' };
@@ -284,3 +307,6 @@ export async function handleBannedNameConnect(
     kickEnqueued,
   };
 }
+
+/** @deprecated Use {@link handleBannedNameEvent} for connect and name-change enforcement. */
+export const handleBannedNameConnect = handleBannedNameEvent;
