@@ -3,7 +3,17 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const TEST_REDIS_DB = process.env.TEST_REDIS_DB ?? '14';
-const REDIS_URL = `redis://127.0.0.1:6379/${TEST_REDIS_DB}`;
+// Use the CI/host-provided redis endpoint — the self-hosted CI runner maps redis
+// to a dynamic host port (not 6379), so hardcoding 127.0.0.1:6379 makes the
+// spawned worker's connection ECONNREFUSED whenever redis isn't on 6379 (the
+// #203 contract-test flake). Derive from TEST_REDIS_URL/REDIS_URL and isolate on
+// TEST_REDIS_DB; fall back to the local default for developer machines.
+const REDIS_BASE = (
+  process.env.TEST_REDIS_URL ??
+  process.env.REDIS_URL ??
+  'redis://127.0.0.1:6379'
+).replace(/\/\d+$/, '');
+const REDIS_URL = `${REDIS_BASE}/${TEST_REDIS_DB}`;
 
 export interface ContractOpts {
   name: string;

@@ -48,7 +48,7 @@ async function seedPlayer(
 async function seedServer(name: string): Promise<string> {
   const [row] = await h.db
     .insert(servers)
-    .values({ displayName: name, slug: `${name.toLowerCase()}-${uuidv7()}` })
+    .values({ id: uuidv7(), displayName: name, slug: `${name.toLowerCase()}-${uuidv7()}` })
     .returning({ id: servers.id });
   return row.id;
 }
