@@ -13,6 +13,7 @@ import { useLiveSubscription } from '@/lib/use-live-bus';
 import { nextBackoffMs } from '@/lib/ws-backoff';
 import { ChatPanel } from './ChatPanel';
 import { LivePlayers } from './live-players';
+import { MapWidget } from './map-widget';
 
 interface ServerRow {
   id: string;
@@ -89,6 +90,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const router = useRouter();
   const [data, setData] = useState<ServerResponse | null>(null);
   const [canChat, setCanChat] = useState(false);
+  const [canChangeMap, setCanChangeMap] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -142,7 +144,10 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
         if (!res.ok || cancelled) return;
         const me = (await res.json()) as { squad_permissions?: string[] };
-        if (!cancelled) setCanChat(me.squad_permissions?.includes('chat') ?? false);
+        if (!cancelled) {
+          setCanChat(me.squad_permissions?.includes('chat') ?? false);
+          setCanChangeMap(me.squad_permissions?.includes('changemap') ?? false);
+        }
       } catch {
         // permission fetch is best-effort; chat UI simply stays hidden
       }
@@ -490,6 +495,8 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           <div className="text-neutral-500 text-xs">нет настроек</div>
         )}
       </section>
+
+      <MapWidget serverId={server.id} canChangeMap={canChangeMap} />
 
       <BroadcastComposer serverId={server.id} canChat={canChat} />
 

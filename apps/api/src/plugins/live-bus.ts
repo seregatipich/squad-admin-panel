@@ -178,6 +178,11 @@ export type LiveEvent =
       type: 'report.updated';
       ts: string;
       data: { report: ReportLiveView };
+    }
+  | {
+      type: 'server.map.changed';
+      ts: string;
+      data: { server_id: string; action: string; layer: string | null };
     };
 
 export interface IssuePlayerRef {

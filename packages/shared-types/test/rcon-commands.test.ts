@@ -22,9 +22,11 @@ describe('rcon command contract', () => {
   it('allows only the whitelisted operator command names', () => {
     expect(RCON_OPERATOR_COMMANDS).toEqual([
       'AdminBroadcast',
+      'AdminChangeLayer',
       'AdminEndMatch',
       'AdminKick',
       'AdminReloadServerConfig',
+      'AdminSetNextLayer',
       'AdminWarn',
     ]);
     expect(
@@ -32,6 +34,20 @@ describe('rcon command contract', () => {
         request_id: 'req-1',
         command: 'AdminKick',
         args: ['76561198000000001', 'Banned nickname'],
+      }).success,
+    ).toBe(true);
+    expect(
+      rconCommandRequestSchema.safeParse({
+        request_id: 'req-1',
+        command: 'AdminChangeLayer',
+        args: ['Yehorivka RAAS v11'],
+      }).success,
+    ).toBe(true);
+    expect(
+      rconCommandRequestSchema.safeParse({
+        request_id: 'req-1',
+        command: 'AdminSetNextLayer',
+        args: ['Yehorivka RAAS v11'],
       }).success,
     ).toBe(true);
     expect(

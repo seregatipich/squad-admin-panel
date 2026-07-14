@@ -136,6 +136,69 @@ describe('buildOperatorCommand', () => {
       buildOperatorCommand(commandRequest({ command: 'AdminWarn', args: ['', 'hello'] })),
     ).toThrow(/is required/i);
   });
+
+  it.each(['AdminChangeLayer', 'AdminSetNextLayer'] as const)(
+    '%s passes a valid layer name through verbatim, including spaces and apostrophes',
+    (command) => {
+      expect(buildOperatorCommand(commandRequest({ command, args: ['Yehorivka RAAS v11'] }))).toBe(
+        `${command} Yehorivka RAAS v11`,
+      );
+      expect(buildOperatorCommand(commandRequest({ command, args: ["Fool's Road AAS v1"] }))).toBe(
+        `${command} Fool's Road AAS v1`,
+      );
+    },
+  );
+
+  it.each(['AdminChangeLayer', 'AdminSetNextLayer'] as const)(
+    '%s rejects zero or multiple arguments',
+    (command) => {
+      expect(() => buildOperatorCommand(commandRequest({ command, args: [] }))).toThrow(
+        /exactly one layer argument/i,
+      );
+      expect(() =>
+        buildOperatorCommand(commandRequest({ command, args: ['Yehorivka RAAS v11', 'extra'] })),
+      ).toThrow(/exactly one layer argument/i);
+    },
+  );
+
+  it.each(['AdminChangeLayer', 'AdminSetNextLayer'] as const)(
+    '%s rejects an empty layer name',
+    (command) => {
+      expect(() => buildOperatorCommand(commandRequest({ command, args: [''] }))).toThrow(
+        /is required/i,
+      );
+      expect(() => buildOperatorCommand(commandRequest({ command, args: ['   '] }))).toThrow(
+        /is required/i,
+      );
+    },
+  );
+
+  it.each(['AdminChangeLayer', 'AdminSetNextLayer'] as const)(
+    '%s rejects CR/LF/NUL and command-injection-style layer names',
+    (command) => {
+      expect(() =>
+        buildOperatorCommand(commandRequest({ command, args: ['Yehorivka\nAdminBroadcast x'] })),
+      ).toThrow(/unsafe/i);
+      expect(() =>
+        buildOperatorCommand(commandRequest({ command, args: ['Yehorivka\rRAAS'] })),
+      ).toThrow(/unsafe/i);
+      expect(() =>
+        buildOperatorCommand(commandRequest({ command, args: ['Yehorivka\0RAAS'] })),
+      ).toThrow(/unsafe/i);
+      expect(() =>
+        buildOperatorCommand(commandRequest({ command, args: ['x; AdminBroadcast y'] })),
+      ).toThrow(/unsafe/i);
+    },
+  );
+
+  it.each(['AdminChangeLayer', 'AdminSetNextLayer'] as const)(
+    '%s rejects a layer name over 128 characters',
+    (command) => {
+      expect(() =>
+        buildOperatorCommand(commandRequest({ command, args: ['A'.repeat(129)] })),
+      ).toThrow(/exceeds 128 characters/i);
+    },
+  );
 });
 
 describe('RconCommandQueue', () => {

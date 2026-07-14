@@ -6,9 +6,11 @@ export const RCON_COMMAND_RESULT_PREFIX = 'rcon:command-result:';
 
 export const RCON_OPERATOR_COMMANDS = [
   'AdminBroadcast',
+  'AdminChangeLayer',
   'AdminEndMatch',
   'AdminKick',
   'AdminReloadServerConfig',
+  'AdminSetNextLayer',
   'AdminWarn',
 ] as const;
 
