@@ -6,6 +6,7 @@ import {
   notifySeedSubscribers,
   serverSettings,
   servers,
+  splitOpenSessionsAtSeedingTransition,
 } from '@squad/db';
 import type { Diag } from '@squad/diag';
 import { CONSUMER_GROUP, type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
@@ -346,6 +347,15 @@ class PerServerSupervisor {
       correlation_id: null,
       payload: eventPayload,
     };
+    try {
+      await splitOpenSessionsAtSeedingTransition(this.opts.db, {
+        serverId: this.target.serverId,
+        occurredAt: ts,
+        kind: type,
+      });
+    } catch (err) {
+      this.opts.log.warn({ err: (err as Error).message, type }, 'seeding session split failed');
+    }
     try {
       await this.opts.redis.xadd(
         STREAM_NAME.eventsServer(this.target.serverId),

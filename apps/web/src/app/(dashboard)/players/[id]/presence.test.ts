@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bonusValueSeconds,
   buildWeekGrid,
+  cellBackground,
   cellFillFraction,
   dayRowLabel,
   dominantMode,
@@ -45,15 +46,23 @@ describe('weekStartMsForEndDay', () => {
 
 describe('dominantMode', () => {
   it('returns null for an empty cell', () => {
-    expect(dominantMode({ online_seconds: 0, boost_seconds: 0, queue_seconds: 0 })).toBeNull();
+    expect(
+      dominantMode({ online_seconds: 0, boost_seconds: 0, queue_seconds: 0, seed_seconds: 0 }),
+    ).toBeNull();
   });
   it('prefers boost on ties, then queue, then online', () => {
-    expect(dominantMode({ online_seconds: 60, boost_seconds: 60, queue_seconds: 0 })).toBe('boost');
-    expect(dominantMode({ online_seconds: 60, boost_seconds: 0, queue_seconds: 60 })).toBe('queue');
-    expect(dominantMode({ online_seconds: 60, boost_seconds: 0, queue_seconds: 0 })).toBe('online');
-    expect(dominantMode({ online_seconds: 10, boost_seconds: 100, queue_seconds: 50 })).toBe(
-      'boost',
-    );
+    expect(
+      dominantMode({ online_seconds: 60, boost_seconds: 60, queue_seconds: 0, seed_seconds: 0 }),
+    ).toBe('boost');
+    expect(
+      dominantMode({ online_seconds: 60, boost_seconds: 0, queue_seconds: 60, seed_seconds: 0 }),
+    ).toBe('queue');
+    expect(
+      dominantMode({ online_seconds: 60, boost_seconds: 0, queue_seconds: 0, seed_seconds: 0 }),
+    ).toBe('online');
+    expect(
+      dominantMode({ online_seconds: 10, boost_seconds: 100, queue_seconds: 50, seed_seconds: 0 }),
+    ).toBe('boost');
   });
 });
 
@@ -83,6 +92,15 @@ describe('buildWeekGrid', () => {
     expect(cell.total_seconds).toBe(3600);
     expect(cell.mode).toBe('boost');
     expect(cellFillFraction(cell)).toBe(1);
+  });
+
+  it('renders a seed session with the dedicated seed mode and color', () => {
+    const grid = buildWeekGrid([session({ mode: 'seed' })], WEEK_START, nowMs);
+    const cell = grid.cells[0]?.[10];
+    if (!cell) throw new Error('expected a cell at day 0 hour 10');
+    expect(cell.seed_seconds).toBe(3600);
+    expect(cell.mode).toBe('seed');
+    expect(cellBackground(cell)).toMatch(/^#[0-9a-f]{8}$/i);
   });
 
   it('splits a session that spans an hour boundary across two cells', () => {

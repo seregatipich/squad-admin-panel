@@ -291,6 +291,9 @@ function makeSeedingDb(insertedEvents: Array<Record<string, unknown>>) {
   };
 
   return {
+    transaction: vi.fn(async (callback: (tx: { execute: ReturnType<typeof vi.fn> }) => unknown) =>
+      callback({ execute: vi.fn(async () => [{ changed_count: 0 }]) }),
+    ),
     select: vi.fn(() => ({
       from: vi.fn(() => ({
         where: vi.fn(() => ({
@@ -366,6 +369,7 @@ describe('RconSupervisor seeding transitions', () => {
         kind: 'server.seeding_started',
         serverId: 'srv-seeding',
       });
+      expect(db.transaction).toHaveBeenCalledTimes(1);
       expect(seedingEnvelopeTypes()).toEqual(['server.seeding_started']);
 
       // Repeat polls at the same count: no further transition, but the

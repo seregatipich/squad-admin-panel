@@ -67,6 +67,7 @@ Both GitHub Actions workflows (`ci`, `deploy-tk104`) run on **self-hosted runner
 | `worker-audit-archiver` | `docker/worker.Dockerfile` | Cold-archives `audit_log` rows older than 90 days. |
 | `worker-event-partition` | `docker/worker.Dockerfile` | Monthly Postgres partition rotation. |
 | `worker-role-expirer` | `docker/worker.Dockerfile` | Clears expired player roles and enqueues Admins.cfg sync. |
+| `worker-seed-reward` | `docker/worker.Dockerfile` | Grants or revokes the configured seed reward role from rolling 30-day presence. |
 | `worker-metrics-sampler` | `docker/worker.Dockerfile` | Samples `host_metrics` via bridge every 15 s, writes to `host:metrics` stream. |
 | `backup` (optional) | `mazzolino/restic:latest` | Profile `backup`. Daily restic snapshot of postgres + redis volumes. |
 
@@ -184,7 +185,7 @@ sudo systemctl restart panel-host-bridge.service
 ```bash
 git pull
 pnpm install
-docker compose build api web worker-rcon worker-log-ingest worker-config-sync worker-audit-archiver worker-event-partition worker-role-expirer worker-metrics-sampler
+docker compose build api web worker-rcon worker-log-ingest worker-config-sync worker-audit-archiver worker-event-partition worker-role-expirer worker-seed-reward worker-metrics-sampler
 docker compose up -d
 ```
 

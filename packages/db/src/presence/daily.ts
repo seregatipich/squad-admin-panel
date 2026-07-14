@@ -50,6 +50,7 @@ export interface DailyBucket {
   onlineSeconds: number;
   boostSeconds: number;
   queueSeconds: number;
+  seedSeconds: number;
   sessionCount: number;
 }
 
@@ -65,12 +66,14 @@ export function aggregateSessionsByDay(sessions: SessionInput[]): DailyBucket[] 
           onlineSeconds: 0,
           boostSeconds: 0,
           queueSeconds: 0,
+          seedSeconds: 0,
           sessionCount: 0,
         };
         byDay.set(segment.day, bucket);
       }
       if (mode === 'boost') bucket.boostSeconds += segment.seconds;
       else if (mode === 'queue') bucket.queueSeconds += segment.seconds;
+      else if (mode === 'seed') bucket.seedSeconds += segment.seconds;
       else bucket.onlineSeconds += segment.seconds;
       bucket.sessionCount += 1;
     }
@@ -89,6 +92,7 @@ export async function recomputeDailyPresence(
   input: RecomputeDailyPresenceInput,
 ): Promise<number> {
   const now = input.now ?? new Date();
+  const nowIso = now.toISOString();
   const fromDayNumber = dayNumberFromKey(input.fromDay);
   const toDayNumber = dayNumberFromKey(input.toDay);
   if (toDayNumber < fromDayNumber) return 0;
@@ -104,7 +108,7 @@ export async function recomputeDailyPresence(
 
     const inserted = await tx`
       INSERT INTO player_daily_presence
-        (player_id, server_id, day, online_seconds, boost_seconds, queue_seconds, session_count)
+        (player_id, server_id, day, online_seconds, boost_seconds, queue_seconds, seed_seconds, session_count)
       SELECT
         seg.player_id,
         seg.server_id,
@@ -112,6 +116,7 @@ export async function recomputeDailyPresence(
         COALESCE(SUM(seg.seconds) FILTER (WHERE seg.mode = 'online'), 0)::int,
         COALESCE(SUM(seg.seconds) FILTER (WHERE seg.mode = 'boost'), 0)::int,
         COALESCE(SUM(seg.seconds) FILTER (WHERE seg.mode = 'queue'), 0)::int,
+        COALESCE(SUM(seg.seconds) FILTER (WHERE seg.mode = 'seed'), 0)::int,
         COUNT(DISTINCT seg.session_id)::int
       FROM (
         SELECT
@@ -123,7 +128,7 @@ export async function recomputeDailyPresence(
           (
             FLOOR(
               LEAST(
-                EXTRACT(EPOCH FROM COALESCE(ps.disconnected_at, ${now}::timestamptz)),
+                EXTRACT(EPOCH FROM COALESCE(ps.disconnected_at, ${nowIso}::timestamptz)),
                 (gd.day_number + 1) * ${DAY_SECONDS}
               ) - EXTRACT(EPOCH FROM ps.connected_at)
             )
@@ -137,10 +142,10 @@ export async function recomputeDailyPresence(
         FROM player_sessions ps
         CROSS JOIN LATERAL generate_series(
           FLOOR(EXTRACT(EPOCH FROM ps.connected_at) / ${DAY_SECONDS})::bigint,
-          FLOOR(EXTRACT(EPOCH FROM COALESCE(ps.disconnected_at, ${now}::timestamptz)) / ${DAY_SECONDS})::bigint
+          FLOOR(EXTRACT(EPOCH FROM COALESCE(ps.disconnected_at, ${nowIso}::timestamptz)) / ${DAY_SECONDS})::bigint
         ) AS gd(day_number)
         WHERE ps.connected_at < to_timestamp(${windowEndEpoch})
-          AND COALESCE(ps.disconnected_at, ${now}::timestamptz) > to_timestamp(${windowStartEpoch})
+          AND COALESCE(ps.disconnected_at, ${nowIso}::timestamptz) > to_timestamp(${windowStartEpoch})
           AND gd.day_number BETWEEN ${fromDayNumber} AND ${toDayNumber}
       ) seg
       WHERE seg.seconds > 0
@@ -160,7 +165,7 @@ export async function recomputeDailyPresence(
         SELECT DISTINCT ps.player_id
         FROM player_sessions ps
         WHERE ps.connected_at < to_timestamp(${windowEndEpoch})
-          AND COALESCE(ps.disconnected_at, ${now}::timestamptz) > to_timestamp(${windowStartEpoch})
+          AND COALESCE(ps.disconnected_at, ${nowIso}::timestamptz) > to_timestamp(${windowStartEpoch})
       )
     `;
 
@@ -172,9 +177,10 @@ export async function recomputeDailyPresenceForAllSessions(
   sql: postgres.Sql,
   now: Date = new Date(),
 ): Promise<number> {
+  const nowIso = now.toISOString();
   const [range] = await sql<{ min_at: Date | null; max_at: Date | null }[]>`
     SELECT MIN(connected_at) AS min_at,
-           MAX(COALESCE(disconnected_at, ${now}::timestamptz)) AS max_at
+           MAX(COALESCE(disconnected_at, ${nowIso}::timestamptz)) AS max_at
     FROM player_sessions
   `;
   if (!range?.min_at || !range?.max_at) return 0;

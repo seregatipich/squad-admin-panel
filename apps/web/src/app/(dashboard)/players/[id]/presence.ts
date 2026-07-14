@@ -1,4 +1,4 @@
-export type SessionMode = 'online' | 'boost' | 'queue';
+export type SessionMode = 'online' | 'boost' | 'queue' | 'seed';
 
 export interface PresenceSession {
   id: string;
@@ -44,12 +44,14 @@ export const MODE_LABELS: Record<SessionMode, string> = {
   online: 'Онлайн',
   boost: 'Буст',
   queue: 'Очередь',
+  seed: 'Сид',
 };
 
 export const MODE_HEX: Record<SessionMode, string> = {
   online: '#10b981',
   boost: '#f59e0b',
   queue: '#38bdf8',
+  seed: '#a855f7',
 };
 
 export function bonusValueSeconds(totals: PresenceTotals): number {
@@ -71,6 +73,7 @@ export interface WeekCell {
   online_seconds: number;
   boost_seconds: number;
   queue_seconds: number;
+  seed_seconds: number;
   total_seconds: number;
   mode: SessionMode | null;
 }
@@ -87,6 +90,7 @@ function emptyCell(dayIndex: number, hour: number): WeekCell {
     online_seconds: 0,
     boost_seconds: 0,
     queue_seconds: 0,
+    seed_seconds: 0,
     total_seconds: 0,
     mode: null,
   };
@@ -95,17 +99,20 @@ function emptyCell(dayIndex: number, hour: number): WeekCell {
 function addSeconds(cell: WeekCell, mode: SessionMode, seconds: number): void {
   if (mode === 'boost') cell.boost_seconds += seconds;
   else if (mode === 'queue') cell.queue_seconds += seconds;
+  else if (mode === 'seed') cell.seed_seconds += seconds;
   else cell.online_seconds += seconds;
   cell.total_seconds += seconds;
 }
 
 export function dominantMode(
-  cell: Pick<WeekCell, 'online_seconds' | 'boost_seconds' | 'queue_seconds'>,
+  cell: Pick<WeekCell, 'online_seconds' | 'boost_seconds' | 'queue_seconds' | 'seed_seconds'>,
 ): SessionMode | null {
   const online = cell.online_seconds;
   const boost = cell.boost_seconds;
   const queue = cell.queue_seconds;
-  if (online + boost + queue === 0) return null;
+  const seed = cell.seed_seconds;
+  if (online + boost + queue + seed === 0) return null;
+  if (seed > 0 && seed >= online && seed >= boost && seed >= queue) return 'seed';
   if (boost > 0 && boost >= online && boost >= queue) return 'boost';
   if (queue > 0 && queue >= online) return 'queue';
   return 'online';

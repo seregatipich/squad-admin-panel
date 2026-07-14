@@ -23,7 +23,7 @@ import {
 type Tab = 'calendar' | 'servers';
 
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
-const MODE_ORDER: SessionMode[] = ['online', 'boost', 'queue'];
+const MODE_ORDER: SessionMode[] = ['online', 'boost', 'queue', 'seed'];
 
 export function PresenceSection({ playerId }: { playerId: string }) {
   const [data, setData] = useState<PresenceResponse | null>(null);

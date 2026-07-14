@@ -229,6 +229,22 @@ services:
         condition: service_completed_successfully
     logging: *default-logging
 
+  worker-seed-reward:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: seed-reward } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      SEED_REWARD_INTERVAL_MS: ${SEED_REWARD_INTERVAL_MS:-86400000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
   worker-clan-guard:
     build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-guard } }
     restart: unless-stopped
