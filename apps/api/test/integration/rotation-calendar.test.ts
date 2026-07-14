@@ -71,7 +71,10 @@ async function asRoleWithoutChangeMap(): Promise<string> {
     color: 'blue',
     panelAccess: true,
   });
-  await h.db.update(players).set({ roleId }).where(eq(players.steamId64, OWNER_STEAM_ID));
+  await h.db
+    .update(players)
+    .set({ roleId })
+    .where(eq(players.steamId64, testSteamId(147000 + (process.pid % 100000))));
   invalidatePermissionCache(h.seed.ownerPlayerId as string);
   return loginAsOwner(h);
 }
