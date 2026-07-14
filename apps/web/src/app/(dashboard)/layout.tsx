@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { CommandPalette } from '@/components/CommandPalette';
 import { ConnectionBanner } from '@/components/connection-banner';
+import { SeedNotificationToast } from '@/components/SeedNotificationToast';
 import { SidebarNav } from '@/components/SidebarNav';
 import { apiFetch } from '@/lib/api';
 import { requireSession } from '@/lib/dal';
@@ -22,6 +23,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div className="flex min-h-screen flex-col">
       <ConnectionBanner />
+      <SeedNotificationToast />
       <div className="flex flex-1">
         <SidebarNav permissions={me.permissions} displayName={me.canonical_name} />
         <CommandPalette permissions={me.permissions} />
