@@ -7,6 +7,7 @@ export const RCON_COMMAND_RESULT_PREFIX = 'rcon:command-result:';
 export const RCON_OPERATOR_COMMANDS = [
   'AdminBroadcast',
   'AdminEndMatch',
+  'AdminKick',
   'AdminReloadServerConfig',
   'AdminWarn',
 ] as const;
