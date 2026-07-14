@@ -1,6 +1,10 @@
+// @vitest-environment jsdom
+import '@testing-library/jest-dom/vitest';
+import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/link', () => ({
   default: ({ href, children }: { href: string; children: ReactNode }) => (
@@ -301,5 +305,106 @@ describe('RosterPanel', () => {
     const html = renderToStaticMarkup(<RosterPanel clanId="clan-1" />);
     expect(html).toContain('Ростер');
     expect(html).toContain('В клане пока нет участников.');
+  });
+});
+
+describe('RosterPanel (rendered)', () => {
+  const leaderMember = member({ player_id: 'p-leader', has_priority: false });
+
+  function mockFetch(opts: { priorityOk: boolean }) {
+    let hasPriority = false;
+    return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/v1/me') {
+        return Promise.resolve(
+          new Response(JSON.stringify({ player_id: 'p-leader', can_manage_clans: true }), {
+            status: 200,
+          }),
+        );
+      }
+      if (url.startsWith('/api/v1/clans/clan-1/members') && (!init || init.method === undefined)) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              clan_id: 'clan-1',
+              items: [{ ...leaderMember, has_priority: hasPriority }],
+              total: 1,
+              page: 1,
+              limit: 25,
+              priority_count: hasPriority ? 1 : 0,
+              max_priority_slots: 5,
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (url.endsWith('/priority') && init?.method === 'PUT') {
+        if (!opts.priorityOk) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'priority_expired' }), { status: 409 }),
+          );
+        }
+        hasPriority = true;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              player_id: 'p-leader',
+              has_priority: true,
+              priority_count: 1,
+              max_priority_slots: 5,
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url} ${init?.method ?? 'GET'}`));
+    });
+  }
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('renders a CSV export link pointing at the roster export endpoint', async () => {
+    vi.stubGlobal('fetch', mockFetch({ priorityOk: true }));
+    render(<RosterPanel clanId="clan-1" />);
+    const link = await screen.findByRole('link', { name: 'Экспорт CSV' });
+    expect(link).toHaveAttribute('href', '/api/v1/clans/clan-1/roster/export?format=csv');
+  });
+
+  it('locks the priority checkbox for 3s after a successful toggle, then re-enables it', async () => {
+    vi.stubGlobal('fetch', mockFetch({ priorityOk: true }));
+    const user = userEvent.setup();
+    render(<RosterPanel clanId="clan-1" />);
+
+    const checkbox = await screen.findByRole('checkbox', { name: 'Приоритет в очереди' });
+    expect(checkbox).not.toBeDisabled();
+
+    await user.click(checkbox);
+    await screen.findByRole('checkbox', { name: 'Приоритет в очереди', checked: true });
+    expect(screen.getByRole('checkbox', { name: 'Приоритет в очереди' })).toBeDisabled();
+
+    await screen.findByRole(
+      'checkbox',
+      { name: 'Приоритет в очереди' },
+      { timeout: 4000, interval: 100 },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 3100));
+    expect(screen.getByRole('checkbox', { name: 'Приоритет в очереди' })).not.toBeDisabled();
+  }, 10_000);
+
+  it('reverts the checkbox and shows an error banner when the toggle fails', async () => {
+    vi.stubGlobal('fetch', mockFetch({ priorityOk: false }));
+    const user = userEvent.setup();
+    render(<RosterPanel clanId="clan-1" />);
+
+    const checkbox = await screen.findByRole('checkbox', { name: 'Приоритет в очереди' });
+    await user.click(checkbox);
+
+    expect(await screen.findByText('Срок приоритета клана истёк')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Приоритет в очереди' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Приоритет в очереди' })).not.toBeDisabled();
   });
 });

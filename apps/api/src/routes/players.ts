@@ -1,4 +1,6 @@
 import {
+  clanMembers,
+  clans,
   geoipSettings,
   playerIpHistory,
   playerNameHistory,
@@ -6,7 +8,7 @@ import {
   roles,
 } from '@squad/db/schema';
 import { normalizePlayerName } from '@squad/shared-config';
-import { and, desc, eq, or, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -194,6 +196,18 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
 
       const locations = dedupeCountries(ipRows);
 
+      const [clanMembership] = await app.db
+        .select({
+          clanId: clans.id,
+          clanName: clans.name,
+          clanTags: clans.tags,
+          memberRole: clanMembers.memberRole,
+        })
+        .from(clanMembers)
+        .innerJoin(clans, and(eq(clans.id, clanMembers.clanId), isNull(clans.deletedAt)))
+        .where(eq(clanMembers.playerId, id))
+        .limit(1);
+
       return {
         player: {
           id: row.id,
@@ -204,6 +218,14 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
           last_seen_at: row.lastSeenAt,
           total_time_played_seconds: Number(row.totalTimePlayedSeconds),
         },
+        clan: clanMembership
+          ? {
+              id: clanMembership.clanId,
+              name: clanMembership.clanName,
+              tags: clanMembership.clanTags,
+              member_role: clanMembership.memberRole,
+            }
+          : null,
         names: names.map((n) => ({
           name: n.name,
           name_normalized: n.nameNormalized,

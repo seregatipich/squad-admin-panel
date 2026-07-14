@@ -63,13 +63,43 @@ interface CountryLocation {
   last_seen_at: string;
 }
 
+interface PlayerClan {
+  id: string;
+  name: string;
+  tags: string[];
+  member_role: string;
+}
+
 interface PlayerResponse {
   player: Player;
+  clan: PlayerClan | null;
   names: NameHistory[];
   ips: IpHistory[];
   locations: CountryLocation[];
   ips_visible: boolean;
   geo_configured: boolean;
+}
+
+const CLAN_ROLE_LABELS: Record<string, string> = {
+  leader: 'Глава',
+  deputy: 'Зам',
+  member: 'Участник',
+};
+
+/** Clan widget for the player header (PLAYER-4): links to the clan, hidden when the player isn't a member. */
+export function ClanWidget({ clan }: { clan: PlayerClan | null }) {
+  if (!clan) return null;
+  return (
+    <Link
+      href={`/clans/${clan.id}`}
+      className="flex items-center gap-1.5 rounded bg-neutral-800 px-2 py-1 text-xs text-sky-400 hover:bg-neutral-700"
+    >
+      <span>{clan.name}</span>
+      <span className="text-neutral-400">
+        {CLAN_ROLE_LABELS[clan.member_role] ?? clan.member_role}
+      </span>
+    </Link>
+  );
 }
 
 interface SingleRole {
@@ -117,17 +147,18 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   }
   if (!data) return <div className="text-neutral-500">Загрузка…</div>;
 
-  const { player, names, ips, locations, ips_visible, geo_configured } = data;
+  const { player, clan, names, ips, locations, ips_visible, geo_configured } = data;
   const canManageRoles = me?.permissions.includes('user:manage_roles') ?? false;
   const canEditWhitelist = me?.permissions.includes('whitelist:edit') ?? false;
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <Link href="/players" className="text-sky-400 hover:text-sky-300 text-xs font-mono">
           ← игроки
         </Link>
         <h1 className="text-2xl font-semibold">{player.canonical_name}</h1>
+        <ClanWidget clan={clan} />
       </div>
 
       <PlayerMarks playerId={playerId} />

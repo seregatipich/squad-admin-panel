@@ -75,6 +75,7 @@ export const ROLE_LABELS: Record<string, string> = {
 const PAGE_LIMIT = 25;
 const SEARCH_DEBOUNCE_MS = 300;
 const SEARCH_MIN_CHARS = 3;
+const PRIORITY_LOCK_MS = 3000;
 
 export type SortField = 'name' | 'role' | 'priority' | 'joined_at' | 'last_seen' | 'online';
 
@@ -134,6 +135,30 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
   const [page, setPage] = useState(1);
   const [busyPlayerId, setBusyPlayerId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [lockedPlayerIds, setLockedPlayerIds] = useState<Set<string>>(new Set());
+  const lockTimeoutsRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
+  useEffect(() => {
+    const timeouts = lockTimeoutsRef.current;
+    return () => {
+      for (const timeout of timeouts.values()) clearTimeout(timeout);
+    };
+  }, []);
+
+  const lockRow = useCallback((playerId: string) => {
+    setLockedPlayerIds((prev) => new Set(prev).add(playerId));
+    const existing = lockTimeoutsRef.current.get(playerId);
+    if (existing) clearTimeout(existing);
+    const timeout = setTimeout(() => {
+      setLockedPlayerIds((prev) => {
+        const next = new Set(prev);
+        next.delete(playerId);
+        return next;
+      });
+      lockTimeoutsRef.current.delete(playerId);
+    }, PRIORITY_LOCK_MS);
+    lockTimeoutsRef.current.set(playerId, timeout);
+  }, []);
 
   const loadMe = useCallback(async () => {
     try {
@@ -247,8 +272,8 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
   );
 
   const togglePriority = useCallback(
-    (member: RosterMember, enabled: boolean) =>
-      mutate(
+    async (member: RosterMember, enabled: boolean) => {
+      const ok = await mutate(
         member.player_id,
         () =>
           fetch(`/api/v1/clans/${clanId}/members/${member.player_id}/priority`, {
@@ -258,8 +283,12 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
             body: JSON.stringify({ enabled }),
           }),
         priorityErrorMessage,
-      ),
-    [clanId, mutate],
+      );
+      // Mirrors SQSTAT: briefly lock the row after a successful toggle so
+      // rapid re-clicks can't race the pool-limit check on the server.
+      if (ok) lockRow(member.player_id);
+    },
+    [clanId, mutate, lockRow],
   );
 
   const addMember = useCallback(
@@ -291,15 +320,23 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
             </span>
           ) : null}
         </div>
-        {caps.canAdd ? (
-          <button
-            type="button"
-            onClick={() => setAddOpen(true)}
-            className="rounded bg-sky-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-600"
+        <div className="flex items-center gap-2">
+          <a
+            href={`/api/v1/clans/${clanId}/roster/export?format=csv`}
+            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-800"
           >
-            Добавить участника
-          </button>
-        ) : null}
+            Экспорт CSV
+          </a>
+          {caps.canAdd ? (
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              className="rounded bg-sky-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-600"
+            >
+              Добавить участника
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {err ? (
@@ -361,6 +398,7 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
                 member={member}
                 caps={caps}
                 busy={busyPlayerId === member.player_id}
+                locked={lockedPlayerIds.has(member.player_id)}
                 onChangeRole={changeRole}
                 onRemove={removeMember}
                 onTransfer={transferLeadership}
@@ -416,6 +454,7 @@ export function RosterRow({
   member,
   caps,
   busy,
+  locked = false,
   onChangeRole,
   onRemove,
   onTransfer,
@@ -424,6 +463,8 @@ export function RosterRow({
   member: RosterMember;
   caps: Capabilities;
   busy: boolean;
+  /** True for `PRIORITY_LOCK_MS` after a successful toggle, to stop a rapid re-click racing the server's pool-limit check. */
+  locked?: boolean;
   onChangeRole: (playerId: string, role: string) => void;
   onRemove: (member: RosterMember) => void;
   onTransfer: (member: RosterMember) => void;
@@ -477,10 +518,11 @@ export function RosterRow({
           <input
             type="checkbox"
             checked={member.has_priority}
-            disabled={busy}
+            disabled={busy || locked}
             onChange={(e) => onTogglePriority(member, e.target.checked)}
             className="h-4 w-4 accent-sky-500 disabled:opacity-50"
             aria-label="Приоритет в очереди"
+            title={locked ? 'Подождите несколько секунд перед следующим изменением' : undefined}
           />
         ) : (
           <span className="text-neutral-400">{member.has_priority ? 'да' : '—'}</span>
