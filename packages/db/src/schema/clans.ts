@@ -23,6 +23,14 @@ export const clans = pgTable(
     description: text('description'),
     maxPrioritySlots: integer('max_priority_slots').notNull().default(10),
     priorityExpiresAt: timestamp('priority_expires_at', { withTimezone: true, mode: 'date' }),
+    /**
+     * Restart-safe bookkeeping flag for the clan-priority-expirer worker:
+     * set true once a `priorityExpiresAt` crossing has been detected and an
+     * active admins-cfg sync has been published for it. Reset to false by
+     * `PATCH /clans/:id/expire` whenever the deadline is cleared or moved
+     * into the future, so priorities re-materialize without manual action.
+     */
+    priorityExpiryProcessed: boolean('priority_expiry_processed').notNull().default(false),
     isTagProtected: boolean('is_tag_protected').notNull().default(false),
     isPublic: boolean('is_public').notNull().default(false),
     primaryServerId: uuid('primary_server_id').references(() => servers.id, {

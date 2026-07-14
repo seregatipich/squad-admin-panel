@@ -372,6 +372,13 @@
       "when": 1783399700000,
       "tag": "0053_moderation_action_report_link",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1783399800000,
+      "tag": "0049_clan_priority_expiry",
+      "breakpoints": true
     }
   ]
 }

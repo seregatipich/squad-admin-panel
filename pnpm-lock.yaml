@@ -394,6 +394,43 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@22.19.17)(jiti@2.6.1)(jsdom@29.1.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
 
+  apps/workers/clan-priority-expirer:
+    dependencies:
+      '@squad/db':
+        specifier: workspace:*
+        version: link:../../../packages/db
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../../packages/diag
+      '@squad/shared-config':
+        specifier: workspace:*
+        version: link:../../../packages/shared-config
+      drizzle-orm:
+        specifier: ^0.45.0
+        version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
+      ioredis:
+        specifier: ^5.4.1
+        version: 5.10.1
+      pino:
+        specifier: ^9.5.0
+        version: 9.14.0
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.9
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.1
+        version: 22.19.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/node@22.19.17)(jiti@2.6.1)(jsdom@29.1.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
+
   apps/workers/config-sync:
     dependencies:
       '@squad/bridge-client':
