@@ -53,6 +53,26 @@ interface CandidateMatch {
   ignored: boolean;
 }
 
+interface LinkRow {
+  id: string;
+  player_a_id: string;
+  player_b_id: string;
+  link_type: string;
+  status: string;
+  note: string | null;
+  updated_at: Date | string;
+  decided_by_name: string | null;
+}
+
+interface CandidateLink {
+  id: string;
+  link_type: string;
+  status: string;
+  note: string | null;
+  decided_by_name: string | null;
+  decided_at: string;
+}
+
 /**
  * ALT-1 candidate engine. Serves the shared-IP-based "possible alt accounts"
  * list for a player: everyone who has ever logged in from an IP the target
@@ -69,6 +89,14 @@ interface CandidateMatch {
  * `external_bans` row that isn't revoked and isn't expired; `has_permanent_ban`
  * narrows that further to rows with no expiry (`context->>'expires_at'` /
  * `external_bans.expires_at` both absent).
+ *
+ * ALT-2 (issue #120) annotation: each candidate also carries `link`, the
+ * durable admin verdict for that pair from `player_links` (`{id, link_type,
+ * status, note, decided_by_name, decided_at}` or `null` if undecided).
+ * Rejected pairs are deliberately NOT filtered out here — the full ALT-1
+ * output always includes them, marked, so a caller can tell "no candidate"
+ * apart from "considered and rejected". Filtering rejected pairs out of a
+ * "possible alts" view is the web layer's job (ALT-6).
  */
 const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -192,6 +220,37 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
       `)) as unknown as Array<{ last_ban_at: Date | string | null }>;
       const lastBanAt = lastBanRow?.last_ban_at ? new Date(lastBanRow.last_ban_at) : null;
 
+      const linkRows = (await app.db.execute(sql`
+        SELECT
+          pl.id,
+          pl.player_a_id,
+          pl.player_b_id,
+          pl.link_type,
+          pl.status,
+          pl.note,
+          pl.updated_at,
+          creator.canonical_name AS decided_by_name
+        FROM player_links pl
+        LEFT JOIN players creator ON creator.id = pl.created_by
+        WHERE pl.player_a_id = ${playerId} OR pl.player_b_id = ${playerId}
+      `)) as unknown as LinkRow[];
+      const linkByCandidate = new Map<string, CandidateLink>(
+        linkRows.map((row) => {
+          const counterpartId = row.player_a_id === playerId ? row.player_b_id : row.player_a_id;
+          return [
+            counterpartId,
+            {
+              id: row.id,
+              link_type: row.link_type,
+              status: row.status,
+              note: row.note,
+              decided_by_name: row.decided_by_name,
+              decided_at: new Date(row.updated_at).toISOString(),
+            },
+          ];
+        }),
+      );
+
       const infoRows = (await app.db.execute(sql`
         SELECT
           p.id AS candidate_id,
@@ -271,6 +330,7 @@ const playerAltCandidatesRoutes: FastifyPluginAsync = async (app) => {
             has_permanent_ban: Boolean(
               info?.has_permanent_mod_ban || info?.has_permanent_external_ban,
             ),
+            link: linkByCandidate.get(row.candidate_id) ?? null,
           };
         })
         .sort((a, b) => b.score - a.score || a.player_id.localeCompare(b.player_id));

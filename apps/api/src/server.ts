@@ -71,6 +71,7 @@ import playerAltCandidatesRoutes from './routes/player-alt-candidates.js';
 import playerCoplayRoutes from './routes/player-coplay.js';
 import playerDossierStatsRoutes from './routes/player-dossier-stats.js';
 import playerGeoAnomaliesRoutes from './routes/player-geo-anomalies.js';
+import playerLinksRoutes from './routes/player-links.js';
 import playerMatchesRoutes from './routes/player-matches.js';
 import playerNotesRoutes from './routes/player-notes.js';
 import playerPresenceRoutes from './routes/player-presence.js';
@@ -207,6 +208,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(playerPresenceRoutes);
   await app.register(playerCoplayRoutes);
   await app.register(playerAltCandidatesRoutes);
+  await app.register(playerLinksRoutes);
   await app.register(moderationActionsRoutes);
   await app.register(playerDossierStatsRoutes);
   await app.register(playerGeoAnomaliesRoutes);

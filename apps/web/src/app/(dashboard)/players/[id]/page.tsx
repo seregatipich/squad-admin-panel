@@ -12,6 +12,7 @@ import {
   formatRoleExpiryLabel,
   toDatetimeLocalValue,
 } from '@/lib/role-expiry';
+import { AltLinksSection } from './AltLinksSection';
 import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
 import { GeoAnomaliesSection } from './GeoAnomaliesSection';
@@ -222,6 +223,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
         ipsVisible={ips_visible}
         geoConfigured={geo_configured}
       />
+
+      <AltLinksSection playerId={playerId} />
     </div>
   );
 }

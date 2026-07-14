@@ -61,6 +61,7 @@ import playerAltCandidatesRoutes from '../../src/routes/player-alt-candidates.js
 import playerCoplayRoutes from '../../src/routes/player-coplay.js';
 import playerDossierStatsRoutes from '../../src/routes/player-dossier-stats.js';
 import playerGeoAnomaliesRoutes from '../../src/routes/player-geo-anomalies.js';
+import playerLinksRoutes from '../../src/routes/player-links.js';
 import playerMatchesRoutes from '../../src/routes/player-matches.js';
 import playerNotesRoutes from '../../src/routes/player-notes.js';
 import playerPresenceRoutes from '../../src/routes/player-presence.js';
@@ -455,6 +456,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(playerPresenceRoutes);
   await app.register(playerCoplayRoutes);
   await app.register(playerAltCandidatesRoutes);
+  await app.register(playerLinksRoutes);
   await app.register(playerDossierStatsRoutes);
   await app.register(playerGeoAnomaliesRoutes);
   await app.register(leaderboardsRoutes);
