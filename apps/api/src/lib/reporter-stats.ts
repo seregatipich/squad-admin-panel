@@ -1,11 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import {
-  alertEvents,
-  alertRules,
-  moderationActions,
-  playerReports,
-  reporterStats,
-} from '@squad/db/schema';
+import { alertEvents, alertRules, playerReports, reporterStats } from '@squad/db/schema';
 import { and, eq, gte, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
@@ -125,12 +119,17 @@ export async function recomputeReporterStats(
       total: sql<number>`count(*)::int`,
       resolved: sql<number>`count(*) FILTER (WHERE ${playerReports.status} = 'resolved')::int`,
       rejected: sql<number>`count(*) FILTER (WHERE ${playerReports.status} = 'rejected')::int`,
+      // The correlated column MUST stay fully qualified as `player_reports.id`:
+      // drizzle renders `${playerReports.id}` as the bare `"id"` (single-table
+      // FROM drops the qualifier), which then binds to `moderation_actions.id`
+      // inside this subquery (inner scope wins) instead of the outer report,
+      // silently making the EXISTS always false. `status` has no such clash.
       confirmed: sql<number>`count(*) FILTER (
         WHERE ${playerReports.status} = 'resolved'
           AND EXISTS (
-            SELECT 1 FROM ${moderationActions}
-            WHERE ${moderationActions.reportId} = ${playerReports.id}
-              AND ${moderationActions.revertedAt} IS NULL
+            SELECT 1 FROM moderation_actions ma
+            WHERE ma.report_id = player_reports.id
+              AND ma.reverted_at IS NULL
           )
       )::int`,
     })
