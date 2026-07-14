@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { check, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { playerReports } from './player-reports.js';
 import { players } from './players.js';
 import { servers } from './servers.js';
 
@@ -13,8 +14,12 @@ import { servers } from './servers.js';
  * ({@link authorSystemLabel}, e.g. `banname-worker`); the check constraint
  * guarantees at least one is present. Reversible actions (e.g. a name-ban that
  * was later lifted) are marked with {@link revertedAt}/{@link revertedBy}
- * rather than deleted, preserving history. Free-form details (rule_id,
- * source_id, external_ban_id, report_id, …) live in {@link context}.
+ * rather than deleted, preserving history. {@link reportId} links an action
+ * taken from a report's card (REPORT-3, #113) back to the `player_reports`
+ * row it enforced, so the report card can display its own linked actions and
+ * the player card can cross-reference them; it is nullable since most
+ * actions are not report-driven. Other free-form details (rule_id,
+ * source_id, external_ban_id, ban_length, …) still live in {@link context}.
  */
 export const moderationActions = pgTable(
   'moderation_actions',
@@ -29,6 +34,7 @@ export const moderationActions = pgTable(
     authorSystemLabel: text('author_system_label'),
     reason: text('reason'),
     context: jsonb('context').notNull().default({}),
+    reportId: uuid('report_id').references(() => playerReports.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
     revertedAt: timestamp('reverted_at', { withTimezone: true, mode: 'date' }),
     revertedBy: uuid('reverted_by').references(() => players.id, { onDelete: 'set null' }),
@@ -46,6 +52,7 @@ export const moderationActions = pgTable(
       table.serverId,
       table.createdAt,
     ),
+    reportIdx: index('moderation_actions_report_idx').on(table.reportId),
     authorPresentCheck: check(
       'moderation_actions_author_present',
       sql`author_player_id IS NOT NULL OR author_system_label IS NOT NULL`,

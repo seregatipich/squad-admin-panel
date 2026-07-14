@@ -19,6 +19,7 @@ import { NotesSection } from './NotesSection';
 import { PlayerTeamkillsSection } from './PlayerTeamkillsSection';
 import { PresenceSection } from './PresenceSection';
 import { RecentMatchesSection } from './RecentMatchesSection';
+import { ReportsSection } from './ReportsSection';
 import { VotesSection } from './VotesSection';
 
 interface Player {
@@ -170,6 +171,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <RecentMatchesSection playerId={playerId} />
 
       <PlayerTeamkillsSection playerId={playerId} />
+
+      <ReportsSection playerId={playerId} />
 
       <VotesSection playerId={playerId} />
 

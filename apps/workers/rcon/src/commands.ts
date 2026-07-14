@@ -20,6 +20,9 @@ const BROADCAST_MAX_CHARS = 300;
 const TARGET_MAX_CHARS = 64;
 const DEFAULT_RECLAIM_MIN_IDLE_MS = 60_000;
 const DEFAULT_RECLAIM_INTERVAL_MS = 30_000;
+// Squad RCON ban-length syntax: a bare integer (days) or an integer with a
+// unit suffix (seconds/minutes/hours/days/weeks/months/years); '0' = permanent.
+const BAN_LENGTH_PATTERN = /^\d+[smhdwMy]?$/;
 
 type StreamReadResult = Array<[string, Array<[string, string[]]>]> | null;
 
@@ -55,6 +58,8 @@ export function buildOperatorCommand(input: unknown): string {
       return buildAdminWarnCommand(request.args);
     case 'AdminKick':
       return buildAdminKickCommand(request.args);
+    case 'AdminBan':
+      return buildAdminBanCommand(request.args);
   }
 }
 
@@ -276,6 +281,33 @@ function buildAdminKickCommand(args: string[]): string {
   const target = assertSafeSingleLineText(args[0], 'AdminKick target', TARGET_MAX_CHARS);
   const reason = assertSafeSingleLineText(args[1], 'AdminKick reason', BROADCAST_MAX_CHARS);
   return `AdminKick ${target} ${reason}`;
+}
+
+/**
+ * Builds `AdminBan <target> <banLength> <reason>`. The target and reason use
+ * the same text-safety checks as AdminKick/AdminWarn; `banLength` is Squad's
+ * RCON ban-duration syntax — a bare number of days, or a number followed by a
+ * unit (`s`/`m`/`h`/`d`/`w`/`M`/`y`) — with `0` meaning a permanent ban.
+ * Report-card bans (REPORT-3, #113) default to `0` unless the moderator picks
+ * a shorter duration.
+ */
+function buildAdminBanCommand(args: string[]): string {
+  if (args.length !== 3) {
+    throw new Error('AdminBan expects exactly three arguments: target id, ban length and reason');
+  }
+  const target = assertSafeSingleLineText(args[0], 'AdminBan target', TARGET_MAX_CHARS);
+  const banLength = assertValidBanLength(args[1]);
+  const reason = assertSafeSingleLineText(args[2], 'AdminBan reason', BROADCAST_MAX_CHARS);
+  return `AdminBan ${target} ${banLength} ${reason}`;
+}
+
+function assertValidBanLength(value: string | undefined): string {
+  const text = value?.trim();
+  if (!text) throw new Error('AdminBan length is required');
+  if (!BAN_LENGTH_PATTERN.test(text)) {
+    throw new Error(`invalid AdminBan length: ${text}`);
+  }
+  return text;
 }
 
 function assertSafeSingleLineText(

@@ -5,6 +5,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
+import { notifyReporter } from '../lib/report-notify.js';
 import type { ReportLiveView } from '../plugins/live-bus.js';
 
 const PAGE_SIZE_DEFAULT = 20;
@@ -279,6 +280,31 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
       }
       const after = serializeReport(updated);
 
+      // Best-effort reporter notification on claim/resolve/reject (REPORT-3,
+      // #113 P2). Never blocks or fails the PATCH — notify errors are only
+      // recorded in the audit context.
+      let notified = false;
+      const statusChanged = updates.status !== undefined;
+      const notifyTemplate: 'in_review' | 'resolved' | null =
+        updates.status === 'in_review'
+          ? 'in_review'
+          : updates.status === 'resolved' || updates.status === 'rejected'
+            ? 'resolved'
+            : null;
+      if (statusChanged && notifyTemplate && updated.reporterPlayerId) {
+        try {
+          const outcome = await notifyReporter(app.db, app.redis, {
+            serverId: updated.serverId,
+            reporterPlayerId: updated.reporterPlayerId,
+            template: notifyTemplate,
+            actorPlayerId: req.user.playerId,
+          });
+          notified = outcome.notified;
+        } catch {
+          notified = false;
+        }
+      }
+
       await writeAuditEntry(app.db, {
         actor: auditActor(req),
         actorIp: req.ip ?? null,
@@ -287,7 +313,7 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
         targetId: existing.id,
         before,
         after,
-        context: { requestId: req.id, method: req.method, url: req.url },
+        context: { requestId: req.id, method: req.method, url: req.url, notified },
         statusCode: reply.statusCode,
       });
       app.liveBus.publish({
