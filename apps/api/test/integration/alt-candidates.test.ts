@@ -128,7 +128,10 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
 
   it('excludes a shared IP covered by an ignored CIDR from the score, but keeps the pair visible', async () => {
     const idA = await seedPlayer(PLAYER_A, 'PlayerA');
-    const idB = await seedPlayer(PLAYER_B, 'PlayerB');
+    // SteamID64 kept far from PLAYER_A (beyond the default steamid_proximity threshold) so
+    // that signal stays off and the score in this test reflects only the ignored-IP behavior
+    // under test — using PLAYER_B here would spuriously add its weight (both are 1 apart).
+    const idB = await seedPlayer(PLAYER_A + 50_000n, 'PlayerB');
     await h.db.insert(playerIpHistory).values([
       { playerId: idA, ip: '203.0.113.10' },
       { playerId: idB, ip: '203.0.113.10' },
@@ -163,7 +166,9 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
 
   it('raises the score and lists a shared historical nickname', async () => {
     const idA = await seedPlayer(PLAYER_A, 'PlayerA');
-    const idB = await seedPlayer(PLAYER_B, 'PlayerB');
+    // See the ignored-CIDR test above: kept far from PLAYER_A so steamid_proximity doesn't
+    // add an extra, untested-for signal to the score asserted below.
+    const idB = await seedPlayer(PLAYER_A + 50_000n, 'PlayerB');
     await h.db.insert(playerIpHistory).values([
       { playerId: idA, ip: '203.0.113.10' },
       { playerId: idB, ip: '203.0.113.10' },
