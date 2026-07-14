@@ -13,7 +13,7 @@ import {
   formatRoleExpiryLabel,
   toDatetimeLocalValue,
 } from '@/lib/role-expiry';
-import { AltLinksSection } from './AltLinksSection';
+import { AltsSection } from './AltsSection';
 import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
 import { ClanWidget, type PlayerClan } from './ClanWidget';
@@ -22,6 +22,7 @@ import { GeoAnomaliesSection } from './GeoAnomaliesSection';
 import { NickBanSection } from './NickBanSection';
 import { NotesSection } from './NotesSection';
 import { PlayerTeamkillsSection } from './PlayerTeamkillsSection';
+import { PlaysWithSection } from './PlaysWithSection';
 import { PresenceSection } from './PresenceSection';
 import { RecentMatchesSection } from './RecentMatchesSection';
 import { ReportPlayerSection } from './ReportPlayerSection';
@@ -129,6 +130,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   const canManageRoles = me?.permissions.includes('user:manage_roles') ?? false;
   const canEditWhitelist = me?.permissions.includes('whitelist:edit') ?? false;
   const canBanNicks = me?.squad_permissions?.includes('ban') ?? false;
+  const canViewIps = me?.permissions.includes('player:view_ips') ?? false;
+  const canAccessPanel = me?.permissions.includes('player:view') ?? false;
 
   return (
     <div className="space-y-6">
@@ -262,7 +265,9 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
         geoConfigured={geo_configured}
       />
 
-      <AltLinksSection playerId={playerId} />
+      {canViewIps ? <AltsSection playerId={playerId} /> : null}
+
+      {canAccessPanel ? <PlaysWithSection playerId={playerId} /> : null}
 
       <BannedNameRuleModal
         open={banTarget !== null}

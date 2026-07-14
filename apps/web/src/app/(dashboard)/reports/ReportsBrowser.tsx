@@ -67,6 +67,24 @@ interface LinkedModerationAction {
     | { kind: 'system'; label: string | null };
 }
 
+interface BanAltWarningItem {
+  player_id: string;
+  name: string;
+  link_type?: string;
+  status?: string;
+  confidence?: 'high';
+  online: boolean;
+  has_active_ban: boolean;
+}
+
+interface BanAltWarning {
+  can_view_ips: boolean;
+  confirmed_count: number;
+  candidate_count: number;
+  confirmed: BanAltWarningItem[];
+  candidates: BanAltWarningItem[];
+}
+
 function upsertReport(list: ReportListItem[], incoming: ReportListItem): ReportListItem[] {
   const index = list.findIndex((report) => report.id === incoming.id);
   if (index === -1) return list;
@@ -400,6 +418,10 @@ function ReportCard({
   const [banLength, setBanLength] = useState('0');
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [banAltWarning, setBanAltWarning] = useState<BanAltWarning | null>(null);
+  const [banAltWarningLoading, setBanAltWarningLoading] = useState(false);
+  const [banAltWarningError, setBanAltWarningError] = useState<string | null>(null);
+  const [selectedAltIds, setSelectedAltIds] = useState<string[]>([]);
 
   const [actionsOpen, setActionsOpen] = useState(false);
   const [actions, setActions] = useState<LinkedModerationAction[] | null>(null);
@@ -446,6 +468,31 @@ function ReportCard({
     setActionReason(report.body.slice(0, REASON_MAX));
     setBanLength('0');
     setActionError(null);
+    setBanAltWarning(null);
+    setBanAltWarningError(null);
+    setSelectedAltIds([]);
+    if (type === 'ban' && report.target_player_id) void loadBanAltWarning(report.target_player_id);
+  }
+
+  async function loadBanAltWarning(targetPlayerId: string) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 2000);
+    setBanAltWarningLoading(true);
+    setBanAltWarningError(null);
+    try {
+      const response = await fetch(`/api/v1/players/${targetPlayerId}/ban-alt-warning`, {
+        credentials: 'include',
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setBanAltWarning((await response.json()) as BanAltWarning);
+    } catch (error) {
+      if (!controller.signal.aborted) setBanAltWarningError((error as Error).message);
+    } finally {
+      window.clearTimeout(timeout);
+      setBanAltWarningLoading(false);
+    }
   }
 
   const loadActions = useCallback(async () => {
@@ -486,7 +533,10 @@ function ReportCard({
     setActionError(null);
     try {
       const body: Record<string, unknown> = { action_type: actionModal, reason: trimmedReason };
-      if (actionModal === 'ban') body.ban_length = banLength.trim() || '0';
+      if (actionModal === 'ban') {
+        body.ban_length = banLength.trim() || '0';
+        if (selectedAltIds.length > 0) body.also_player_ids = selectedAltIds;
+      }
       const res = await fetch(`/api/v1/reports/${report.id}/actions`, {
         method: 'POST',
         credentials: 'include',
@@ -764,21 +814,36 @@ function ReportCard({
                 />
               </div>
               {actionModal === 'ban' ? (
-                <div>
-                  <label
-                    htmlFor={`action-ban-length-${report.id}`}
-                    className="mb-1 block text-xs text-neutral-500"
-                  >
-                    Срок бана (0 = навсегда, напр. 3d, 12h)
-                  </label>
-                  <input
-                    id={`action-ban-length-${report.id}`}
-                    type="text"
-                    value={banLength}
-                    onChange={(e) => setBanLength(e.target.value)}
-                    className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm font-mono focus:border-neutral-600 focus:outline-none"
+                <>
+                  <div>
+                    <label
+                      htmlFor={`action-ban-length-${report.id}`}
+                      className="mb-1 block text-xs text-neutral-500"
+                    >
+                      Срок бана (0 = навсегда, напр. 3d, 12h)
+                    </label>
+                    <input
+                      id={`action-ban-length-${report.id}`}
+                      type="text"
+                      value={banLength}
+                      onChange={(e) => setBanLength(e.target.value)}
+                      className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm font-mono focus:border-neutral-600 focus:outline-none"
+                    />
+                  </div>
+                  <BanAltWarningBlock
+                    warning={banAltWarning}
+                    loading={banAltWarningLoading}
+                    error={banAltWarningError}
+                    selectedAltIds={selectedAltIds}
+                    onToggleAlt={(playerId) =>
+                      setSelectedAltIds((current) =>
+                        current.includes(playerId)
+                          ? current.filter((id) => id !== playerId)
+                          : [...current, playerId],
+                      )
+                    }
                   />
-                </div>
+                </>
               ) : null}
               {actionError ? <p className="text-xs text-red-400">{actionError}</p> : null}
               <div className="flex justify-end gap-2">
@@ -801,6 +866,77 @@ function ReportCard({
               </div>
             </div>
           </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function BanAltWarningBlock({
+  warning,
+  loading,
+  error,
+  selectedAltIds,
+  onToggleAlt,
+}: {
+  warning: BanAltWarning | null;
+  loading: boolean;
+  error: string | null;
+  selectedAltIds: string[];
+  onToggleAlt: (playerId: string) => void;
+}) {
+  if (loading) return <p className="text-xs text-neutral-500">Проверка связанных аккаунтов…</p>;
+  if (error) {
+    return (
+      <p className="rounded border border-amber-900/60 bg-amber-950/20 p-2 text-xs text-amber-200">
+        Проверка альтов недоступна ({error}). Бан можно продолжить.
+      </p>
+    );
+  }
+  if (!warning) return null;
+  if (!warning.can_view_ips) {
+    return warning.confirmed_count > 0 ? (
+      <p className="rounded border border-amber-900/60 bg-amber-950/20 p-2 text-xs text-amber-200">
+        У игрока есть {warning.confirmed_count} подтверждённых связанных аккаунтов.
+      </p>
+    ) : null;
+  }
+  if (warning.confirmed.length === 0 && warning.candidates.length === 0) return null;
+
+  return (
+    <div className="rounded border border-amber-900/60 bg-amber-950/20 p-3 text-xs text-amber-100 space-y-2">
+      <h3 className="font-medium text-amber-200">У игрока есть связанные аккаунты</h3>
+      {warning.confirmed.length > 0 ? (
+        <div className="space-y-1">
+          <p className="text-amber-300">Подтверждённые связи</p>
+          {warning.confirmed.map((alt) => (
+            <label key={alt.player_id} className="flex items-center gap-2 text-neutral-200">
+              <input
+                type="checkbox"
+                checked={selectedAltIds.includes(alt.player_id)}
+                onChange={() => onToggleAlt(alt.player_id)}
+              />
+              <span>{alt.name}</span>
+              <span className="text-neutral-500">({alt.link_type ?? 'alt'})</span>
+              {alt.online ? <span className="text-emerald-300">онлайн</span> : null}
+              {alt.has_active_ban ? <span className="text-red-300">активный бан</span> : null}
+              <span className="text-neutral-500">— забанить также</span>
+            </label>
+          ))}
+        </div>
+      ) : null}
+      {warning.candidates.length > 0 ? (
+        <div className="space-y-1">
+          <p className="text-amber-300">Кандидаты с высокой уверенностью</p>
+          {warning.candidates.map((candidate) => (
+            <p key={candidate.player_id} className="text-neutral-300">
+              {candidate.name} <span className="text-neutral-500">(уверенность: высокая)</span>
+              {candidate.online ? <span className="ml-2 text-emerald-300">онлайн</span> : null}
+              {candidate.has_active_ban ? (
+                <span className="ml-2 text-red-300">активный бан</span>
+              ) : null}
+            </p>
+          ))}
         </div>
       ) : null}
     </div>
