@@ -1,6 +1,9 @@
+// @vitest-environment jsdom
+import '@testing-library/jest-dom/vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '@/lib/live-bus';
 
 vi.mock('next/link', () => ({
@@ -71,5 +74,31 @@ describe('ChatMessageList render', () => {
   it('renders the empty state when there are no messages', () => {
     const html = renderToStaticMarkup(<ChatMessageList messages={[]} />);
     expect(html).toContain('Сообщения появятся');
+  });
+
+  it('does not render a «Забанить ник» button without canBan', () => {
+    const html = renderToStaticMarkup(<ChatMessageList messages={seed()} />);
+    expect(html).not.toContain('Забанить ник');
+  });
+});
+
+describe('ChatMessageList — BANNAME-3 ban button gating + prefill', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('shows a «Забанить ник» button per row when canBan=true, prefilling the modal with the author name', () => {
+    render(<ChatMessageList messages={seed()} canBan />);
+    const buttons = screen.getAllByRole('button', { name: /забанить ник/i });
+    expect(buttons).toHaveLength(3);
+
+    fireEvent.click(buttons[0]);
+    const patternInput = screen.getByLabelText(/паттерн/i) as HTMLInputElement;
+    expect(patternInput.value).toBe('Alpha');
+  });
+
+  it('hides the «Забанить ник» button when canBan=false', () => {
+    render(<ChatMessageList messages={seed()} canBan={false} />);
+    expect(screen.queryByRole('button', { name: /забанить ник/i })).not.toBeInTheDocument();
   });
 });

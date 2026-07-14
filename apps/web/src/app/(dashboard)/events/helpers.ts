@@ -47,6 +47,8 @@ export interface EventFilters {
   servers: string[];
   kinds: string[];
   playerQuery: string;
+  /** Filters events whose payload carries this `rule_id` (BANNAME-3 «Срабатывания» link). */
+  ruleId: string;
   preset: DatePreset;
   from: string;
   to: string;
@@ -114,6 +116,7 @@ export function defaultFilters(): EventFilters {
     servers: [],
     kinds: [],
     playerQuery: '',
+    ruleId: '',
     preset: 'all',
     from: '',
     to: '',
@@ -126,6 +129,7 @@ export function parseFilters(params: ParamsLike): EventFilters {
     servers: splitCsv(params.get('servers')),
     kinds: splitCsv(params.get('kinds')),
     playerQuery: params.get('q')?.trim() ?? '',
+    ruleId: params.get('rule')?.trim() ?? '',
     preset: isPreset(params.get('preset')) ? (params.get('preset') as DatePreset) : 'all',
     from: params.get('from')?.trim() ?? '',
     to: params.get('to')?.trim() ?? '',
@@ -138,6 +142,7 @@ export function buildQueryString(filters: EventFilters): string {
   if (filters.servers.length > 0) params.set('servers', filters.servers.join(','));
   if (filters.kinds.length > 0) params.set('kinds', filters.kinds.join(','));
   if (filters.playerQuery) params.set('q', filters.playerQuery);
+  if (filters.ruleId) params.set('rule', filters.ruleId);
   if (filters.preset !== 'all') params.set('preset', filters.preset);
   if (filters.preset === 'custom') {
     if (filters.from) params.set('from', filters.from);
@@ -219,6 +224,7 @@ function appendFilterParams(
   }
   for (const kind of filters.kinds) params.append('kind', kind);
   if (filters.playerQuery) params.set('playerQuery', filters.playerQuery);
+  if (filters.ruleId) params.set('ruleId', filters.ruleId);
   const range = resolveDateRange(filters, now);
   if (range.dateFrom) params.set('dateFrom', range.dateFrom.toISOString());
   if (range.dateTo) params.set('dateTo', range.dateTo.toISOString());

@@ -373,3 +373,130 @@ describe('RBAC — squad-permission "ban" gate', () => {
     expect(body.pattern).toBe('ban-holder');
   });
 });
+
+describe('GET /api/v1/banned-names/check — BANNAME-3 nick badge check', () => {
+  it('401 without a session', async () => {
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/banned-names/check?nick=x' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('matched:false with can_mutate=true for owner when no rule matches', async () => {
+    const cookie = await loginAsOwner(h);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/banned-names/check?nick=CleanNick',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { matched: boolean; rule: unknown; can_mutate: boolean };
+    expect(body.matched).toBe(false);
+    expect(body.rule).toBeNull();
+    expect(body.can_mutate).toBe(true);
+  });
+
+  it('matches an exact rule case-insensitively', async () => {
+    const cookie = await loginAsOwner(h);
+    const created = await createRule(cookie, { pattern: 'AdolfHitler', match_type: 'exact' });
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/banned-names/check?nick=adolfhitler',
+      headers: { cookie },
+    });
+    const body = res.json() as { matched: boolean; rule: { id: string; match_type: string } };
+    expect(body.matched).toBe(true);
+    expect(body.rule.id).toBe(created.body.id);
+    expect(body.rule.match_type).toBe('exact');
+  });
+
+  it('matches a substring rule', async () => {
+    const cookie = await loginAsOwner(h);
+    await createRule(cookie, { pattern: 'isis', match_type: 'substring' });
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/banned-names/check?nick=xX_ISIS_Xx',
+      headers: { cookie },
+    });
+    const body = res.json() as { matched: boolean; rule: { match_type: string } };
+    expect(body.matched).toBe(true);
+    expect(body.rule.match_type).toBe('substring');
+  });
+
+  it('matches a regex rule case-insensitively (parity with worker enforcement)', async () => {
+    const cookie = await loginAsOwner(h);
+    await createRule(cookie, { pattern: '^admin', match_type: 'regex' });
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/banned-names/check?nick=ADMIN_Bob',
+      headers: { cookie },
+    });
+    const body = res.json() as { matched: boolean; rule: { match_type: string } };
+    expect(body.matched).toBe(true);
+    expect(body.rule.match_type).toBe('regex');
+  });
+
+  it('applies tier precedence: an exact rule wins over a substring rule on the same nick', async () => {
+    const cookie = await loginAsOwner(h);
+    await createRule(cookie, { pattern: 'bad', match_type: 'substring' });
+    const exactRule = await createRule(cookie, { pattern: 'BadPlayer', match_type: 'exact' });
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/banned-names/check?nick=BadPlayer',
+      headers: { cookie },
+    });
+    const body = res.json() as { matched: boolean; rule: { id: string } };
+    expect(body.matched).toBe(true);
+    expect(body.rule.id).toBe(exactRule.body.id);
+  });
+
+  it('ignores an inactive rule', async () => {
+    const cookie = await loginAsOwner(h);
+    await createRule(cookie, { pattern: 'Deactivated', match_type: 'exact', is_active: false });
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/banned-names/check?nick=Deactivated',
+      headers: { cookie },
+    });
+    const body = res.json() as { matched: boolean };
+    expect(body.matched).toBe(false);
+  });
+
+  it('can_mutate is false for a role without the ban squad-permission', async () => {
+    const viewerCookie = await asViewer();
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/banned-names/check?nick=whatever',
+      headers: { cookie: viewerCookie },
+    });
+    const body = res.json() as { can_mutate: boolean };
+    expect(body.can_mutate).toBe(false);
+  });
+
+  it('badge lifecycle: create -> matched:true -> deactivate via PATCH -> matched:false, audited', async () => {
+    const cookie = await loginAsOwner(h);
+    const created = await createRule(cookie, { pattern: 'LifecycleNick', match_type: 'exact' });
+    const ruleId = created.body.id as string;
+
+    const before = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/banned-names/check?nick=LifecycleNick',
+      headers: { cookie },
+    });
+    expect((before.json() as { matched: boolean }).matched).toBe(true);
+
+    const patch = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/banned-names/${ruleId}`,
+      headers: { cookie },
+      payload: { is_active: false },
+    });
+    expect(patch.statusCode).toBe(200);
+    await assertAuditRow(h, { action: 'banned_name.update', targetId: ruleId });
+
+    const after = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/banned-names/check?nick=LifecycleNick',
+      headers: { cookie },
+    });
+    expect((after.json() as { matched: boolean }).matched).toBe(false);
+  });
+});

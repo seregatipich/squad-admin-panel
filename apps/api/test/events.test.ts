@@ -421,4 +421,63 @@ describeIfDb('events API (EVT-2)', () => {
     expect(lines[1]).toContain(withComma);
     expect(body).toContain('"Comma, Man"');
   });
+
+  describe('ruleId filter (BANNAME-3 — «Срабатывания» per banned-name rule)', () => {
+    it('list/count/export only return events whose payload.rule_id matches (AC)', async () => {
+      const server = await seedServer(h.db, 'EvtRuleFilterSrv');
+      const ruleA = uuidv7();
+      const ruleB = uuidv7();
+      const matchA = await seedEvent(h.db, {
+        serverId: server,
+        occurredAt: at(200),
+        kind: 'banname.matched',
+        payload: { player_id: uuidv7(), rule_id: ruleA, nickname: 'BadNickA', action: 'kick' },
+      });
+      await seedEvent(h.db, {
+        serverId: server,
+        occurredAt: at(201),
+        kind: 'banname.matched',
+        payload: { player_id: uuidv7(), rule_id: ruleB, nickname: 'BadNickB', action: 'kick' },
+      });
+      await seedEvent(h.db, {
+        serverId: server,
+        occurredAt: at(202),
+        kind: 'player.connected',
+        payload: { name: 'Someone', steam_id64: '76561198000001111' },
+      });
+
+      const list = await listEvents(`?serverId=${server}&ruleId=${ruleA}`);
+      expect(list.items.map((event) => event.event_id)).toEqual([matchA]);
+
+      const combinedWithKind = await listEvents(
+        `?serverId=${server}&kind=banname.matched&ruleId=${ruleA}`,
+      );
+      expect(combinedWithKind.items.map((event) => event.event_id)).toEqual([matchA]);
+
+      const countRes = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/events/count?serverId=${server}&ruleId=${ruleA}`,
+        headers: { cookie },
+      });
+      expect((countRes.json() as { total: number }).total).toBe(1);
+
+      const exportRes = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/events/export?serverId=${server}&ruleId=${ruleA}`,
+        headers: { cookie },
+      });
+      expect(exportRes.statusCode).toBe(200);
+      const exportLines = exportRes.body.trim().split('\r\n');
+      expect(exportLines).toHaveLength(2);
+      expect(exportLines[1]).toContain(matchA);
+    });
+
+    it('rejects unauthenticated access with 401', async () => {
+      const res = await h.app.inject({
+        method: 'GET',
+        url: `/api/v1/events?ruleId=${uuidv7()}`,
+      });
+      expect(res.statusCode).toBe(401);
+    });
+  });
 });

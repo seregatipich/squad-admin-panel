@@ -16,6 +16,7 @@ const filterShape = {
   kind: z.union([kindSchema, z.array(kindSchema)]).optional(),
   playerId: z.string().uuid().optional(),
   playerQuery: z.string().trim().min(1).max(128).optional(),
+  ruleId: z.string().uuid().optional(),
   dateFrom: z.coerce.date().optional(),
   dateTo: z.coerce.date().optional(),
 };
@@ -212,6 +213,13 @@ const eventsRoutes: FastifyPluginAsync = async (app) => {
       const playerIds = await resolvePlayerIds(query.playerQuery);
       if (playerIds.length === 0) return { clauses, empty: true };
       clauses.push(inArray(events.actorId, playerIds));
+    }
+
+    // BANNAME-3: lets /banned-names link a rule's row to «its» events (e.g.
+    // banname.matched hits), filtering on the rule_id carried in the event
+    // payload rather than a dedicated column.
+    if (query.ruleId) {
+      clauses.push(sql`${events.payload}->>'rule_id' = ${query.ruleId}`);
     }
 
     return { clauses, empty: false };

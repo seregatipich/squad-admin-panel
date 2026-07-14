@@ -5,6 +5,7 @@ import type { RoleColor } from '@squad/shared-config/role-colors';
 import Link from 'next/link';
 import { use, useCallback, useEffect, useState } from 'react';
 
+import { BannedNameRuleModal } from '@/components/BannedNameRuleModal';
 import { PlayerMarks } from '@/components/PlayerMarks';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import {
@@ -18,6 +19,7 @@ import { ChatHistorySection } from './ChatHistorySection';
 import { ClanWidget, type PlayerClan } from './ClanWidget';
 import { ExternalBansSection } from './ExternalBansSection';
 import { GeoAnomaliesSection } from './GeoAnomaliesSection';
+import { NickBanSection } from './NickBanSection';
 import { NotesSection } from './NotesSection';
 import { PlayerTeamkillsSection } from './PlayerTeamkillsSection';
 import { PresenceSection } from './PresenceSection';
@@ -87,6 +89,7 @@ interface SingleRole {
 interface Me {
   player_id: string;
   permissions: string[];
+  squad_permissions?: string[];
 }
 
 export default function PlayerDetail({ params }: { params: Promise<{ id: string }> }) {
@@ -94,6 +97,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   const [data, setData] = useState<PlayerResponse | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [banTarget, setBanTarget] = useState<string | null>(null);
+  const [nickBanRefreshKey, setNickBanRefreshKey] = useState(0);
 
   useEffect(() => {
     fetch(`/api/v1/players/${playerId}`, { credentials: 'include', cache: 'no-store' })
@@ -123,6 +128,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   const { player, clan, names, ips, locations, ips_visible, geo_configured } = data;
   const canManageRoles = me?.permissions.includes('user:manage_roles') ?? false;
   const canEditWhitelist = me?.permissions.includes('whitelist:edit') ?? false;
+  const canBanNicks = me?.squad_permissions?.includes('ban') ?? false;
 
   return (
     <div className="space-y-6">
@@ -133,6 +139,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
         <h1 className="text-2xl font-semibold">{player.canonical_name}</h1>
         <ClanWidget clan={clan} />
       </div>
+
+      <NickBanSection nick={player.canonical_name} refreshKey={nickBanRefreshKey} />
 
       <PlayerMarks playerId={playerId} />
 
@@ -214,6 +222,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
                 <th className="text-left p-1">Виделся N раз</th>
                 <th className="text-left p-1">Первый раз</th>
                 <th className="text-left p-1">Последний раз</th>
+                {canBanNicks ? <th className="text-left p-1"></th> : null}
               </tr>
             </thead>
             <tbody>
@@ -227,6 +236,17 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
                   <td className="p-1 text-neutral-500">
                     {new Date(n.last_seen_at).toLocaleString()}
                   </td>
+                  {canBanNicks ? (
+                    <td className="p-1">
+                      <button
+                        type="button"
+                        onClick={() => setBanTarget(n.name)}
+                        className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-400 hover:border-red-700"
+                      >
+                        Забанить ник
+                      </button>
+                    </td>
+                  ) : null}
                 </tr>
               ))}
             </tbody>
@@ -243,6 +263,16 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       />
 
       <AltLinksSection playerId={playerId} />
+
+      <BannedNameRuleModal
+        open={banTarget !== null}
+        initial={{ pattern: banTarget ?? '', match_type: 'exact' }}
+        onClose={() => setBanTarget(null)}
+        onSaved={() => {
+          setBanTarget(null);
+          setNickBanRefreshKey((key) => key + 1);
+        }}
+      />
     </div>
   );
 }

@@ -3,6 +3,8 @@ import {
   BANNED_NAME_ACTIONS,
   BANNED_NAME_MATCH_TYPES,
   BANNED_NAME_PATTERN_MAX,
+  type BannedNameRuleForMatch,
+  findBannedNameRuleMatch,
   isBannedNameAction,
   isBannedNameMatchType,
   matchBannedName,
@@ -76,7 +78,87 @@ describe('matchBannedName', () => {
     expect(matchBannedName('^\\[ADMIN\\]', 'regex', 'Bob')).toBe(false);
   });
 
+  it('matches regex case-insensitively (parity with the log-ingest worker matcher)', () => {
+    expect(matchBannedName('BadWord', 'regex', 'thisisabadwordhere')).toBe(true);
+    expect(matchBannedName('^admin', 'regex', 'ADMIN_Bob')).toBe(true);
+  });
+
   it('returns false for an invalid regex instead of throwing', () => {
     expect(matchBannedName('(unterminated', 'regex', 'anything')).toBe(false);
+  });
+});
+
+describe('findBannedNameRuleMatch', () => {
+  function rule(
+    overrides: Partial<BannedNameRuleForMatch> & { id: string },
+  ): BannedNameRuleForMatch {
+    return {
+      pattern: 'x',
+      match_type: 'exact',
+      action: 'kick',
+      reason: null,
+      ...overrides,
+    };
+  }
+
+  it('returns null when no rule matches', () => {
+    const rules = [rule({ id: '1', pattern: 'nope' })];
+    expect(findBannedNameRuleMatch(rules, 'SomePlayer')).toBeNull();
+  });
+
+  it('prefers exact over substring over regex tiers', () => {
+    const rules = [
+      rule({ id: 'regex-rule', pattern: 'Bad', match_type: 'regex' }),
+      rule({ id: 'substring-rule', pattern: 'Bad', match_type: 'substring' }),
+      rule({ id: 'exact-rule', pattern: 'BadPlayer', match_type: 'exact' }),
+    ];
+    expect(findBannedNameRuleMatch(rules, 'BadPlayer')?.id).toBe('exact-rule');
+  });
+
+  it('falls back to substring when no exact rule matches, then regex', () => {
+    const rules = [
+      rule({ id: 'regex-rule', pattern: 'Bad\\d+', match_type: 'regex' }),
+      rule({ id: 'substring-rule', pattern: 'Bad', match_type: 'substring' }),
+    ];
+    expect(findBannedNameRuleMatch(rules, 'xBadx')?.id).toBe('substring-rule');
+    expect(findBannedNameRuleMatch(rules.slice(0, 1), 'Bad42')?.id).toBe('regex-rule');
+  });
+
+  it('within a tier, the first rule in input order wins (created_at, id order from the caller)', () => {
+    const rules = [
+      rule({ id: 'first', pattern: 'admin', match_type: 'substring' }),
+      rule({ id: 'second', pattern: 'admin', match_type: 'substring' }),
+    ];
+    expect(findBannedNameRuleMatch(rules, 'the-admin-guy')?.id).toBe('first');
+  });
+
+  it('is case-insensitive across all three match types', () => {
+    expect(
+      findBannedNameRuleMatch(
+        [rule({ id: '1', pattern: 'Cheater', match_type: 'exact' })],
+        'cheater',
+      )?.id,
+    ).toBe('1');
+    expect(
+      findBannedNameRuleMatch(
+        [rule({ id: '1', pattern: 'Hack', match_type: 'substring' })],
+        'proHACKer',
+      )?.id,
+    ).toBe('1');
+    expect(
+      findBannedNameRuleMatch(
+        [rule({ id: '1', pattern: '^admin', match_type: 'regex' })],
+        'ADMIN_Bob',
+      )?.id,
+    ).toBe('1');
+  });
+
+  it('skips an invalid regex rule without throwing, falling through to the next rule', () => {
+    const rules = [
+      rule({ id: 'broken', pattern: '(unterminated', match_type: 'regex' }),
+      rule({ id: 'fallback', pattern: 'anything', match_type: 'substring' }),
+    ];
+    expect(() => findBannedNameRuleMatch(rules, 'anything goes')).not.toThrow();
+    expect(findBannedNameRuleMatch(rules, 'anything goes')?.id).toBe('fallback');
   });
 });

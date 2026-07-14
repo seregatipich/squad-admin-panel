@@ -96,6 +96,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const [data, setData] = useState<ServerResponse | null>(null);
   const [canChat, setCanChat] = useState(false);
   const [canChangeMap, setCanChangeMap] = useState(false);
+  const [canBan, setCanBan] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -152,6 +153,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         if (!cancelled) {
           setCanChat(me.squad_permissions?.includes('chat') ?? false);
           setCanChangeMap(me.squad_permissions?.includes('changemap') ?? false);
+          setCanBan(me.squad_permissions?.includes('ban') ?? false);
         }
       } catch {
         // permission fetch is best-effort; chat UI simply stays hidden
@@ -512,7 +514,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
 
       <BroadcastComposer serverId={server.id} canChat={canChat} />
 
-      <LivePlayers serverId={server.id} canChat={canChat} />
+      <LivePlayers serverId={server.id} canChat={canChat} canBan={canBan} />
 
       <section className="flex flex-wrap items-center gap-2">
         <ActionButton
@@ -614,7 +616,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       </section>
 
       <section>
-        <ChatPanel serverId={id} />
+        <ChatPanel serverId={id} canBan={canBan} />
       </section>
 
       <ForceStopDialog

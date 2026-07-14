@@ -1,11 +1,19 @@
 'use client';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { BanNickButton } from '@/components/BannedNameRuleModal';
 import type { ChatMessage, LiveEvent } from '@/lib/live-bus';
 import { useLiveBusState, useLiveSubscription } from '@/lib/use-live-bus';
 import { appendChatMessage, channelMeta, formatChatTime, playerHref } from './chat-log';
 
-export function ChatPanel({ serverId }: { serverId: string }) {
+export function ChatPanel({
+  serverId,
+  canBan = false,
+}: {
+  serverId: string;
+  /** Shows a «Забанить ник» button per message author. Hidden without the 'ban' squad permission. */
+  canBan?: boolean;
+}) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const state = useLiveBusState();
   const listRef = useRef<HTMLDivElement>(null);
@@ -43,13 +51,19 @@ export function ChatPanel({ serverId }: { serverId: string }) {
         </span>
       </header>
       <div ref={listRef} className="max-h-96 overflow-y-auto px-4 py-3">
-        <ChatMessageList messages={messages} />
+        <ChatMessageList messages={messages} canBan={canBan} />
       </div>
     </section>
   );
 }
 
-export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
+export function ChatMessageList({
+  messages,
+  canBan = false,
+}: {
+  messages: ChatMessage[];
+  canBan?: boolean;
+}) {
   if (messages.length === 0) {
     return (
       <div className="py-8 text-center text-sm text-neutral-500">
@@ -60,13 +74,13 @@ export function ChatMessageList({ messages }: { messages: ChatMessage[] }) {
   return (
     <ul className="space-y-1.5">
       {messages.map((message) => (
-        <ChatRow key={message.id} message={message} />
+        <ChatRow key={message.id} message={message} canBan={canBan} />
       ))}
     </ul>
   );
 }
 
-function ChatRow({ message }: { message: ChatMessage }) {
+function ChatRow({ message, canBan }: { message: ChatMessage; canBan: boolean }) {
   const meta = channelMeta(message.channel);
   const href = playerHref(message);
   return (
@@ -88,6 +102,11 @@ function ChatRow({ message }: { message: ChatMessage }) {
         <span className="shrink-0 font-medium text-neutral-300">{message.player_name}</span>
       )}
       <span className="break-words text-neutral-200">{message.message}</span>
+      <BanNickButton
+        nick={message.player_name}
+        canBan={canBan}
+        className="ml-auto shrink-0 rounded border border-red-900 px-1.5 py-0.5 text-[10px] text-red-400 hover:border-red-700"
+      />
     </li>
   );
 }

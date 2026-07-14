@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
+import { BanNickButton } from '@/components/BannedNameRuleModal';
 import { SquadMessageModal, type SquadMessageTarget } from '@/components/SquadMessageModal';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
@@ -20,10 +21,13 @@ const ROSTER_POLL_MS = 30_000;
 export function LivePlayers({
   serverId,
   canChat = false,
+  canBan = false,
 }: {
   serverId: string;
   /** Shows the per-squad "message" button. Hidden without the 'chat' squad permission. */
   canChat?: boolean;
+  /** Shows the per-player «Забанить ник» button. Hidden without the 'ban' squad permission. */
+  canBan?: boolean;
 }) {
   const [roster, setRoster] = useState<RosterResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -107,6 +111,7 @@ export function LivePlayers({
                 <th className="py-1.5 pr-3 font-medium">Команда</th>
                 <th className="py-1.5 pr-3 font-medium">Отряд</th>
                 <th className="py-1.5 pr-3 font-medium">На сервере</th>
+                {canBan ? <th className="py-1.5 pr-3 font-medium"></th> : null}
               </tr>
             </thead>
             <tbody>
@@ -117,6 +122,7 @@ export function LivePlayers({
                   now={now}
                   serverId={serverId}
                   canChat={canChat}
+                  canBan={canBan}
                   onMessageSquad={setSquadTarget}
                 />
               ))}
@@ -138,12 +144,14 @@ function SquadGroupRows({
   now,
   serverId,
   canChat,
+  canBan,
   onMessageSquad,
 }: {
   group: SquadGroup;
   now: number;
   serverId: string;
   canChat: boolean;
+  canBan: boolean;
   onMessageSquad: (target: SquadMessageTarget) => void;
 }) {
   const messageable = canChat && group.team_id != null && group.squad_id != null;
@@ -151,11 +159,15 @@ function SquadGroupRows({
     group.squad_id != null
       ? `Команда ${teamLabel(group.team_id)} · Отряд ${squadLabel(group.squad_id)}`
       : `Команда ${teamLabel(group.team_id)} · Без отряда`;
+  const colSpan = canBan ? 7 : 6;
 
   return (
     <>
       <tr className="border-t border-neutral-800 bg-neutral-900/60">
-        <th colSpan={6} className="py-1 pr-3 text-left text-[10px] font-medium text-neutral-400">
+        <th
+          colSpan={colSpan}
+          className="py-1 pr-3 text-left text-[10px] font-medium text-neutral-400"
+        >
           <div className="flex items-center justify-between">
             <span>
               {label} <span className="text-neutral-600">· {group.players.length}</span>
@@ -185,13 +197,21 @@ function SquadGroupRows({
         </th>
       </tr>
       {group.players.map((player) => (
-        <RosterRow key={player.eos_id} player={player} now={now} />
+        <RosterRow key={player.eos_id} player={player} now={now} canBan={canBan} />
       ))}
     </>
   );
 }
 
-function RosterRow({ player, now }: { player: RosterPlayer; now: number }) {
+function RosterRow({
+  player,
+  now,
+  canBan,
+}: {
+  player: RosterPlayer;
+  now: number;
+  canBan: boolean;
+}) {
   return (
     <tr className="border-t border-neutral-900 hover:bg-neutral-900/40">
       <td className="py-1.5 pr-3">
@@ -219,6 +239,15 @@ function RosterRow({ player, now }: { player: RosterPlayer; now: number }) {
       <td className="py-1.5 pr-3 font-mono text-neutral-400">
         {formatTimeOnServer(player.first_seen_at, now)}
       </td>
+      {canBan ? (
+        <td className="py-1.5 pr-3">
+          <BanNickButton
+            nick={player.name}
+            canBan={canBan}
+            className="rounded border border-red-900 px-1.5 py-0.5 text-[10px] text-red-400 hover:border-red-700"
+          />
+        </td>
+      ) : null}
     </tr>
   );
 }
