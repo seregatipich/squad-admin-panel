@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
 import { BannedNameRuleCache } from './banname/rules-cache.js';
-import { handleBannedNameConnect } from './banname/store.js';
+import { handleBannedNameEvent } from './banname/store.js';
 import { ChatFlagDetector } from './chat/flag-rules.js';
 import { handleChat } from './chat/store.js';
 import { handleCombat, handleVehicle } from './combat/store.js';
@@ -167,10 +167,12 @@ async function main() {
           publish(redis, e).catch((err) =>
             log.error({ err: (err as Error).message, type: e.type }, 'publish failed'),
           );
-          if (e.type === 'player.connected') {
-            handleBannedNameConnect(db, redis, { serverId, event: e }, bannedNameCache).catch(
-              (err) => log.error({ err: (err as Error).message }, 'banname handling failed'),
+          if (e.type === 'player.connected' || e.type === 'player.name_changed') {
+            handleBannedNameEvent(db, redis, { serverId, event: e }, bannedNameCache).catch((err) =>
+              log.error({ err: (err as Error).message }, 'banname handling failed'),
             );
+          }
+          if (e.type === 'player.connected') {
             handleExternalBanConnect(db, redis, externalBanCache, { serverId, event: e }).catch(
               (err) => log.error({ err: (err as Error).message }, 'external-ban handling failed'),
             );

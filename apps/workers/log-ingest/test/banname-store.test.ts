@@ -13,7 +13,7 @@ import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BannedNameRuleCache } from '../src/banname/rules-cache.js';
-import { buildBannedNameKickMessage, handleBannedNameConnect } from '../src/banname/store.js';
+import { buildBannedNameKickMessage, handleBannedNameEvent } from '../src/banname/store.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('DATABASE_URL must point at the banname104 test database');
@@ -23,6 +23,7 @@ const db = createDatabaseClient(DATABASE_URL);
 const SERVER_ID = uuidv7();
 const KICK_RULE_ID = uuidv7();
 const ALERT_RULE_ID = uuidv7();
+const RENAME_RULE_ID = uuidv7();
 
 function makeRedis() {
   const store = new Map<string, string>();
@@ -70,8 +71,22 @@ function connectEvent(
   };
 }
 
+function nameChangedEvent(
+  overrides: { name?: string; eosId?: string | null; steamId64?: string } = {},
+): EventEnvelope {
+  return {
+    ...connectEvent(overrides),
+    type: 'player.name_changed',
+    payload: {
+      name: overrides.name ?? 'X',
+      eos_id: overrides.eosId === undefined ? 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3' : overrides.eosId,
+      steam_id64: overrides.steamId64 ?? '76561198990000004',
+    },
+  };
+}
+
 /**
- * `handleBannedNameConnect` also XADDs the `banname.matched` event onto the
+ * `handleBannedNameEvent` also XADDs the `banname.matched` event onto the
  * server's event stream (via publish.ts); these helpers isolate assertions
  * to the RCON command stream specifically, ignoring that unrelated XADD.
  */
@@ -79,7 +94,7 @@ function rconXaddCalls(redis: ReturnType<typeof makeRedis>): unknown[][] {
   return redis.xadd.mock.calls.filter((call) => call[0] === `rcon:commands:${SERVER_ID}`);
 }
 
-const TEST_PLAYER_NAMES_NORMALIZED = ['procheaterone', 'suspectplayer'];
+const TEST_PLAYER_NAMES_NORMALIZED = ['procheaterone', 'suspectplayer', 'x'];
 
 async function cleanupPlayers(): Promise<void> {
   // audit_log is append-only (DB trigger denies deletes); the player.created
@@ -115,6 +130,14 @@ beforeEach(async () => {
       reason: 'подозрительный ник',
       isActive: true,
     },
+    {
+      id: RENAME_RULE_ID,
+      pattern: 'X',
+      matchType: 'exact',
+      action: 'kick',
+      reason: 'запрещённый ник после смены',
+      isActive: true,
+    },
   ]);
 });
 
@@ -124,6 +147,7 @@ afterEach(async () => {
   await cleanupPlayers();
   await db.delete(bannedNameRules).where(eq(bannedNameRules.id, KICK_RULE_ID));
   await db.delete(bannedNameRules).where(eq(bannedNameRules.id, ALERT_RULE_ID));
+  await db.delete(bannedNameRules).where(eq(bannedNameRules.id, RENAME_RULE_ID));
 });
 
 afterAll(async () => {
@@ -150,8 +174,8 @@ describe('buildBannedNameKickMessage', () => {
   });
 });
 
-describe('handleBannedNameConnect', () => {
-  it('is a no-op for events that are not player.connected', async () => {
+describe('handleBannedNameEvent', () => {
+  it('is a no-op for events other than player.connected or player.name_changed', async () => {
     const redis = makeRedis();
     const cache = new BannedNameRuleCache(db, 0);
     const event: EventEnvelope = {
@@ -164,7 +188,7 @@ describe('handleBannedNameConnect', () => {
       correlation_id: null,
       payload: { steam_id64: '76561198990000001', eos_id: null, reason: null },
     };
-    const result = await handleBannedNameConnect(db, redis, { serverId: SERVER_ID, event }, cache);
+    const result = await handleBannedNameEvent(db, redis, { serverId: SERVER_ID, event }, cache);
     expect(result).toEqual({ outcome: 'ignored' });
     expect(redis.set).not.toHaveBeenCalled();
   });
@@ -172,7 +196,7 @@ describe('handleBannedNameConnect', () => {
   it('returns no_match for a nickname matching no active rule', async () => {
     const redis = makeRedis();
     const cache = new BannedNameRuleCache(db, 0);
-    const result = await handleBannedNameConnect(
+    const result = await handleBannedNameEvent(
       db,
       redis,
       { serverId: SERVER_ID, event: connectEvent({ name: 'TotallyFineName' }) },
@@ -181,10 +205,76 @@ describe('handleBannedNameConnect', () => {
     expect(result).toEqual({ outcome: 'no_match' });
   });
 
+  it('rechecks a clean player when player.name_changed matches an enabled rule', async () => {
+    const redis = makeRedis();
+    const cache = new BannedNameRuleCache(db, 0);
+    const identity = {
+      eosId: 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+      steamId64: '76561198990000004',
+    };
+
+    const cleanConnect = await handleBannedNameEvent(
+      db,
+      redis,
+      { serverId: SERVER_ID, event: connectEvent({ ...identity, name: 'Clean' }) },
+      cache,
+    );
+    expect(cleanConnect).toEqual({ outcome: 'no_match' });
+    expect(rconXaddCalls(redis)).toHaveLength(0);
+
+    const renamed = await handleBannedNameEvent(
+      db,
+      redis,
+      { serverId: SERVER_ID, event: nameChangedEvent({ ...identity, name: 'X' }) },
+      cache,
+    );
+
+    expect(renamed).toMatchObject({
+      outcome: 'handled',
+      ruleId: RENAME_RULE_ID,
+      effectiveAction: 'kick',
+      kickEnqueued: true,
+    });
+    const rconCalls = rconXaddCalls(redis);
+    expect(rconCalls).toHaveLength(1);
+    const requestJson = rconCalls[0][rconCalls[0].length - 1] as string;
+    const request = rconCommandRequestSchema.parse(JSON.parse(requestJson));
+    expect(request.command).toBe('AdminKick');
+    expect(request.args[0]).toBe(identity.eosId);
+    expect(request.args[1]).toContain('запрещённый ник после смены');
+
+    const [rule] = await db
+      .select()
+      .from(bannedNameRules)
+      .where(eq(bannedNameRules.id, RENAME_RULE_ID));
+    expect(rule.hitCount).toBe(1);
+    expect(rule.lastHitAt).not.toBeNull();
+
+    if (renamed.outcome !== 'handled') throw new Error('expected handled outcome');
+    const actions = await db
+      .select()
+      .from(moderationActions)
+      .where(eq(moderationActions.playerId, renamed.playerId as string));
+    expect(actions).toHaveLength(1);
+    expect(actions[0].context).toMatchObject({ rule_id: RENAME_RULE_ID, nickname: 'X' });
+
+    const matchedEvents = await db
+      .select()
+      .from(events)
+      .where(and(eq(events.serverId, SERVER_ID), eq(events.kind, 'banname.matched')));
+    expect(matchedEvents).toHaveLength(1);
+    expect(matchedEvents[0].payload).toMatchObject({
+      player_id: renamed.playerId,
+      rule_id: RENAME_RULE_ID,
+      nickname: 'X',
+      action: 'kick',
+    });
+  });
+
   it('enqueues an AdminKick for a kick rule, targeting eos_id', async () => {
     const redis = makeRedis();
     const cache = new BannedNameRuleCache(db, 0);
-    const result = await handleBannedNameConnect(
+    const result = await handleBannedNameEvent(
       db,
       redis,
       { serverId: SERVER_ID, event: connectEvent() },
@@ -205,7 +295,7 @@ describe('handleBannedNameConnect', () => {
   it('falls back to steam_id64 as the kick target when eos_id is absent', async () => {
     const redis = makeRedis();
     const cache = new BannedNameRuleCache(db, 0);
-    await handleBannedNameConnect(
+    await handleBannedNameEvent(
       db,
       redis,
       {
@@ -224,7 +314,7 @@ describe('handleBannedNameConnect', () => {
   it('records a name_kick moderation action authored by the system', async () => {
     const redis = makeRedis();
     const cache = new BannedNameRuleCache(db, 0);
-    const result = await handleBannedNameConnect(
+    const result = await handleBannedNameEvent(
       db,
       redis,
       { serverId: SERVER_ID, event: connectEvent() },
@@ -249,7 +339,7 @@ describe('handleBannedNameConnect', () => {
   it('creates a new player row when no identity match exists yet', async () => {
     const redis = makeRedis();
     const cache = new BannedNameRuleCache(db, 0);
-    const result = await handleBannedNameConnect(
+    const result = await handleBannedNameEvent(
       db,
       redis,
       { serverId: SERVER_ID, event: connectEvent() },
@@ -270,7 +360,7 @@ describe('handleBannedNameConnect', () => {
   it('increments hit_count and sets last_hit_at only on the matched rule', async () => {
     const redis = makeRedis();
     const cache = new BannedNameRuleCache(db, 0);
-    await handleBannedNameConnect(db, redis, { serverId: SERVER_ID, event: connectEvent() }, cache);
+    await handleBannedNameEvent(db, redis, { serverId: SERVER_ID, event: connectEvent() }, cache);
 
     const kickRule = await db
       .select()
@@ -290,7 +380,7 @@ describe('handleBannedNameConnect', () => {
   it('persists and publishes a banname.matched event envelope', async () => {
     const redis = makeRedis();
     const cache = new BannedNameRuleCache(db, 0);
-    const result = await handleBannedNameConnect(
+    const result = await handleBannedNameEvent(
       db,
       redis,
       { serverId: SERVER_ID, event: connectEvent() },
@@ -321,7 +411,7 @@ describe('handleBannedNameConnect', () => {
   it('does not kick, but alerts, records, and publishes for an alert rule', async () => {
     const redis = makeRedis();
     const cache = new BannedNameRuleCache(db, 0);
-    const result = await handleBannedNameConnect(
+    const result = await handleBannedNameEvent(
       db,
       redis,
       {
@@ -354,7 +444,7 @@ describe('handleBannedNameConnect', () => {
   it('cooldown: a second connect within 60s for the same identity+rule is a no-op', async () => {
     const redis = makeRedis();
     const cache = new BannedNameRuleCache(db, 0);
-    const first = await handleBannedNameConnect(
+    const first = await handleBannedNameEvent(
       db,
       redis,
       { serverId: SERVER_ID, event: connectEvent() },
@@ -363,7 +453,7 @@ describe('handleBannedNameConnect', () => {
     expect(first.outcome).toBe('handled');
 
     redis.xadd.mockClear();
-    const second = await handleBannedNameConnect(
+    const second = await handleBannedNameEvent(
       db,
       redis,
       { serverId: SERVER_ID, event: connectEvent() },
@@ -386,7 +476,7 @@ describe('handleBannedNameConnect', () => {
     const steamId64 = '76561198990000099';
     const results = [];
     for (let i = 0; i < 4; i++) {
-      const result = await handleBannedNameConnect(
+      const result = await handleBannedNameEvent(
         db,
         redis,
         { serverId: SERVER_ID, event: connectEvent({ eosId, steamId64 }) },
@@ -416,7 +506,7 @@ describe('handleBannedNameConnect', () => {
     const redis = makeRedis();
     redis.xadd.mockRejectedValueOnce(new Error('worker-rcon unreachable'));
     const cache = new BannedNameRuleCache(db, 0);
-    const result = await handleBannedNameConnect(
+    const result = await handleBannedNameEvent(
       db,
       redis,
       { serverId: SERVER_ID, event: connectEvent() },
