@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fp from 'fastify-plugin';
 
@@ -268,6 +269,14 @@ export default fp(async (app) => {
   const emitter = new EventEmitter();
   emitter.setMaxListeners(1024);
 
+  // Identifies events this instance already delivered to local subscribers
+  // via `localEmit`, so the Redis round-trip echo of our own publish (this
+  // instance is both publisher and subscriber of LIVE_BUS_CHANNEL) can be
+  // recognized and skipped instead of delivering every local publish twice.
+  // Events tagged with another instance's id (or untagged, e.g. published
+  // directly by a worker) are still emitted for cross-process fan-out.
+  const instanceId = randomUUID();
+
   const localEmit = (event: LiveEvent) => emitter.emit('event', event);
 
   let subscriber: ReturnType<typeof app.redis.duplicate> | null = null;
@@ -280,8 +289,9 @@ export default fp(async (app) => {
     subscriber.on('message', (channel: string, raw: string) => {
       if (channel === LIVE_BUS_CHANNEL) {
         try {
-          const evt = JSON.parse(raw) as LiveEvent;
-          emitter.emit('event', evt);
+          const { _origin, ...evt } = JSON.parse(raw) as LiveEvent & { _origin?: string };
+          if (_origin === instanceId) return;
+          emitter.emit('event', evt as LiveEvent);
         } catch (err) {
           app.log.warn(
             { err: (err as Error).message, raw: raw.slice(0, 200) },
@@ -323,7 +333,8 @@ export default fp(async (app) => {
     publish(event) {
       localEmit(event);
       if (typeof app.redis?.publish === 'function') {
-        app.redis.publish(LIVE_BUS_CHANNEL, JSON.stringify(event)).catch((err: Error) => {
+        const wire = { ...event, _origin: instanceId };
+        app.redis.publish(LIVE_BUS_CHANNEL, JSON.stringify(wire)).catch((err: Error) => {
           app.log.warn({ err: err.message }, 'live-bus: redis publish failed');
         });
       }
