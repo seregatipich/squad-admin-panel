@@ -92,6 +92,7 @@ import serverSettingsRoutes from './routes/server-settings.js';
 import serverUpdateRoutes from './routes/server-update.js';
 import serverRoutes from './routes/servers.js';
 import settingsChatFlagsRoutes from './routes/settings-chat-flags.js';
+import settingsClanGuardRoutes from './routes/settings-clan-guard.js';
 import settingsEconomyRoutes from './routes/settings-economy.js';
 import setupRoutes from './routes/setup.js';
 import suspectsRoutes from './routes/suspects.js';
@@ -204,6 +205,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(mediaRoutes);
   await app.register(settingsEconomyRoutes);
   await app.register(settingsChatFlagsRoutes);
+  await app.register(settingsClanGuardRoutes);
   await app.register(clansRoutes);
   await app.register(chatRoutes);
   await app.register(combatEventsRoutes);

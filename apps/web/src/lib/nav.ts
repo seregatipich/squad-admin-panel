@@ -68,6 +68,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/settings/alerts', label: 'Оповещения' },
       { href: '/settings/whitelist', label: 'Whitelist', permission: 'whitelist:view' },
       { href: '/settings/economy', label: 'Экономика' },
+      { href: '/settings/clan-guard', label: 'Защита клан-тегов' },
       { href: '/settings/tokens', label: 'API-токены' },
       { href: '/settings/ban-sources', label: 'Источники банов' },
       {

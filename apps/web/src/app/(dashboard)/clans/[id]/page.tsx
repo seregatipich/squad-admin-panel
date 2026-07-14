@@ -5,12 +5,14 @@ import { use, useCallback, useEffect, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import ClanStatsPanel from './ClanStatsPanel';
 import RosterPanel from './RosterPanel';
+import TagProtectionCard from './TagProtectionCard';
 
 interface ClanDetail {
   id: string;
   name: string;
   tags: string[];
   description: string | null;
+  is_tag_protected: boolean;
 }
 
 interface OnlineMember {
@@ -318,6 +320,8 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
       </section>
 
       <ClanStatsPanel clanId={clanId} />
+
+      {clan ? <TagProtectionCard clanId={clanId} initialProtected={clan.is_tag_protected} /> : null}
 
       <RosterPanel clanId={clanId} />
 
