@@ -11,6 +11,11 @@ const EXPORT_MAX = 10_000;
 const LAYER_MAX = 200;
 const MATCH_TIMELINE_LIMIT = 30;
 const MATCH_TIMELINE_TYPES = ['death', 'wound', 'revive', 'vehicle_destroyed'] as const;
+// Squad server logs commonly emit a player's disconnect a few seconds before the
+// round-end log line even for players who stayed the whole match; this tolerance
+// absorbs that end-of-round jitter so those players are not misclassified as
+// "left early".
+const LEFT_EARLY_TOLERANCE_MS = 60_000;
 
 const sortFieldSchema = z.enum(['started_at', 'duration_seconds', 'layer']);
 const orderSchema = z.enum(['asc', 'desc']);
@@ -195,6 +200,22 @@ function serializeAdjacentMatch(row: MatchListRow | undefined) {
     layer: row.layer,
     started_at: row.startedAt.toISOString(),
   };
+}
+
+/**
+ * Determines whether a roster entry left the match before it ended.
+ *
+ * A player who never disconnected (`leftAt === null`) is never flagged.
+ * A player who left an open match (`endedAt === null`) is always flagged,
+ * since any disconnect before the match has ended is an early departure.
+ * Otherwise a player is flagged only if they left more than
+ * {@link LEFT_EARLY_TOLERANCE_MS} before the match ended, to absorb the
+ * disconnect/round-end log jitter that affects players who stayed the whole match.
+ */
+function isLeftEarly(leftAt: Date | null, endedAt: Date | null): boolean {
+  if (leftAt === null) return false;
+  if (endedAt === null) return true;
+  return endedAt.getTime() - leftAt.getTime() > LEFT_EARLY_TOLERANCE_MS;
 }
 
 interface MatchTimelineRow {
@@ -423,6 +444,7 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
           team: matchPlayers.team,
           squadName: matchPlayers.squadName,
           playSeconds: matchPlayers.playSeconds,
+          leftAt: matchPlayers.leftAt,
           kills: matchPlayers.kills,
           deaths: matchPlayers.deaths,
           teamkills: matchPlayers.teamkills,
@@ -483,6 +505,8 @@ const matchesRoutes: FastifyPluginAsync = async (app) => {
         team: entry.team,
         squad_name: entry.squadName,
         play_seconds: entry.playSeconds,
+        left_at: entry.leftAt ? entry.leftAt.toISOString() : null,
+        left_early: isLeftEarly(entry.leftAt, match.endedAt),
         kills: entry.kills,
         deaths: entry.deaths,
         teamkills: entry.teamkills,

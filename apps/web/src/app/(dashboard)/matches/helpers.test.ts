@@ -14,6 +14,7 @@ import {
   formatKillDeathStat,
   formatMatchStat,
   formatMatchTimelineOffset,
+  isDimmedRosterEntry,
   isOpenMatch,
   type MatchFilters,
   type MatchListItem,
@@ -22,6 +23,7 @@ import {
   parseFilters,
   readMatchListScroll,
   resolveDateRange,
+  rosterRowClass,
   safeMatchBackHref,
   saveMatchListScroll,
   serverOptionsFromMatches,
@@ -386,6 +388,8 @@ describe('match roster sorting', () => {
       team: 1,
       squad_name: 'Squad B',
       play_seconds: 600,
+      left_at: null,
+      left_early: false,
       kills: 4,
       deaths: 1,
       teamkills: null,
@@ -398,6 +402,8 @@ describe('match roster sorting', () => {
       team: 1,
       squad_name: 'Squad A',
       play_seconds: 1200,
+      left_at: null,
+      left_early: false,
       kills: 7,
       deaths: 2,
       teamkills: 1,
@@ -410,6 +416,8 @@ describe('match roster sorting', () => {
       team: 1,
       squad_name: null,
       play_seconds: 900,
+      left_at: '2026-05-21T10:30:00.000Z',
+      left_early: true,
       kills: null,
       deaths: null,
       teamkills: 0,
@@ -447,6 +455,18 @@ describe('match roster sorting', () => {
         (entry) => entry.player_id,
       ),
     ).toEqual(['p3', 'p2', 'p1']);
+  });
+});
+
+describe('roster left-early dimming', () => {
+  it('flags only entries that left before the match ended', () => {
+    expect(isDimmedRosterEntry({ left_early: true })).toBe(true);
+    expect(isDimmedRosterEntry({ left_early: false })).toBe(false);
+  });
+
+  it('returns a dimmed row class only for left_early entries', () => {
+    expect(rosterRowClass({ left_early: true })).toContain('opacity-50');
+    expect(rosterRowClass({ left_early: false })).not.toContain('opacity-50');
   });
 });
 
