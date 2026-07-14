@@ -7,8 +7,9 @@
  * sandbox session per issue, each with this repository mounted and checked
  * out on `dev`. Every session implements the issue on its own
  * `feature/issue-<n>-<slug>` branch, runs the local gate, and pushes the
- * branch — the "parallel-wave handoff" terminal state from AGENTS.md. An
- * orchestrator (you) then merges the pushed branches into `dev` serially.
+ * branch and posts reviewable handoff evidence on the issue — the
+ * "parallel-wave handoff" terminal state from AGENTS.md. An orchestrator
+ * (you) then merges the pushed branches into `dev` serially.
  *
  * Usage:
  *   pnpm solve:issues -- 207 203 194              # explicit issue numbers
@@ -235,8 +236,9 @@ First read AGENTS.md at the repository root — its rules are mandatory. Then:
 4. Run the local gate: \`pnpm turbo run typecheck\`, \`pnpm exec biome check .\`, and the affected packages' tests. If a check cannot run in this sandbox (e.g. Docker-backed suites), say exactly what was skipped and why — never fake or weaken it.
 5. Commit with a conventional message that references #${issue.number}, then push the branch: \`git push -u origin ${branch}\`.
 6. Do NOT merge into \`dev\`, do NOT push \`dev\` or \`master\`, and do NOT open pull requests. Your terminal state is the pushed feature branch (AGENTS.md "Parallel-wave handoff"); verify it with \`bash scripts/verify-done.sh --feature\`.
+7. Post a \`Feature-branch handoff evidence — not yet 100% complete\` comment on issue #${issue.number}, exactly as required by AGENTS.md. It must contain the branch and commit SHA, point-by-point requirement coverage, exact test and gate commands with results, real runtime/functionality verification and the tools used, verification provenance, and all skips or limitations. State explicitly that final completion is pending merge to \`dev\`, full \`dev\` CI, and the integrating agent's completion verification. Re-read the published comment to verify it is visible, and retain its URL.
 
-End with a final report: the branch name, what changed and why, test commands run with their results, and anything you had to skip.`;
+End with a final report: the branch name, what changed and why, test commands run with their results, anything you had to skip, and the verified GitHub handoff-evidence comment URL.`;
 }
 
 /**
@@ -312,7 +314,7 @@ function fetchIssuesByLabel(repo: string, label: string, limit: number): IssueIn
 }
 
 /** System prompt for the solver agent resource (created once, reused). */
-const AGENT_SYSTEM_PROMPT = `You are an autonomous software engineer solving one GitHub issue per session in the squad-admin-panel repository (TypeScript pnpm/turbo monorepo with a Go bridge). The repository's AGENTS.md is the authoritative rulebook: branch model (work branches off dev, never touch master, never create main), mandatory tests for every change, the local gate (typecheck, biome check, affected tests), and conventional commits. Work autonomously until the issue is solved and the work branch is pushed; be explicit about anything you could not verify in the sandbox.`;
+const AGENT_SYSTEM_PROMPT = `You are an autonomous software engineer solving one GitHub issue per session in the squad-admin-panel repository (TypeScript pnpm/turbo monorepo with a Go bridge). The repository's AGENTS.md is the authoritative rulebook: branch model (work branches off dev, never touch master, never create main), mandatory tests for every change, the local gate (typecheck, biome check, affected tests), conventional commits, and a visible GitHub issue comment containing complete feature-branch handoff evidence. Work autonomously until the issue is solved, the work branch is pushed, and the issue comment is published and verified; be explicit about anything you could not verify in the sandbox.`;
 
 async function ensureAgent(client: Anthropic, model: string): Promise<string> {
   for await (const agent of client.beta.agents.list()) {
