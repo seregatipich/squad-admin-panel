@@ -4,8 +4,6 @@ import {
   playerIpHistory,
   playerNameHistory,
   players,
-  roleSquadPermissions,
-  roles,
 } from '@squad/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -23,7 +21,7 @@ const OWNER_STEAM = testSteamId(810001);
 const PLAYER_A = testSteamId(810002);
 const PLAYER_B = testSteamId(810003);
 const PLAYER_C = testSteamId(810004); // unrelated, different IP
-const LIMITED_VIEWER = testSteamId(810005); // role without can_view_ips
+const TEST_PLAYER_LIMITED_VIEWER = testSteamId(810005); // role without can_view_ips
 
 let h: IntegrationHarness;
 
@@ -356,7 +354,7 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
       { playerId: idA, ip: '203.0.113.10' },
       { playerId: idB, ip: '203.0.113.10' },
     ]);
-    await seedPlayer(LIMITED_VIEWER, 'LimitedViewer');
+    await seedPlayer(TEST_PLAYER_LIMITED_VIEWER, 'LimitedViewer');
 
     const ownerCookie = await loginAsOwner(h);
     const created = await h.app.inject({
@@ -373,10 +371,13 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     });
     expect(created.statusCode).toBe(201);
     const roleId = (created.json() as { id: string }).id;
-    await h.db.update(players).set({ roleId }).where(eq(players.steamId64, LIMITED_VIEWER));
+    await h.db
+      .update(players)
+      .set({ roleId })
+      .where(eq(players.steamId64, TEST_PLAYER_LIMITED_VIEWER));
     invalidateAllPermissionCaches();
 
-    const cookie = await loginAsSteam(LIMITED_VIEWER);
+    const cookie = await loginAsSteam(TEST_PLAYER_LIMITED_VIEWER);
     const res = await h.app.inject({
       method: 'GET',
       url: `/api/v1/players/${idA}/alt-candidates`,
@@ -385,9 +386,6 @@ describe('GET /api/v1/players/:playerId/alt-candidates', () => {
     expect(res.statusCode).toBe(403);
     const body = res.json() as Record<string, unknown>;
     expect(body.candidates).toBeUndefined();
-
-    await h.db.delete(roleSquadPermissions).where(eq(roleSquadPermissions.roleId, roleId));
-    await h.db.delete(roles).where(eq(roles.id, roleId));
   });
 
   it('uses the player_ip_history(ip) index rather than a sequential scan', async () => {
