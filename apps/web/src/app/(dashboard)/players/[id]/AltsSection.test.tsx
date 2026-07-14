@@ -86,4 +86,72 @@ describe('AltsSection', () => {
     fireEvent.click(screen.getByText('Возможные альты'));
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
+
+  it('renders elapsed-time edge cases and rejected candidates after expanding the list', async () => {
+    const rejected = {
+      ...candidate('Rejected-1', 20),
+      link: {
+        id: 'decision-1',
+        link_type: 'unrelated' as const,
+        status: 'rejected' as const,
+        note: null,
+        decided_by_name: null,
+        decided_at: '2026-07-02T00:00:00.000Z',
+      },
+    };
+    const noName = {
+      ...candidate('NoName-1', 40),
+      current_name: null,
+      min_time_delta_seconds: null,
+    };
+    const longElapsed = { ...candidate('Long-1', 60), min_time_delta_seconds: 3600 };
+    const shortElapsed = { ...candidate('Short-1', 70), min_time_delta_seconds: 10 };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              String(input).includes('/links')
+                ? {
+                    links: [
+                      ...LINKS.links,
+                      { ...LINKS.links[0], id: 'link-2', other_player: null },
+                    ],
+                  }
+                : { candidates: [noName, longElapsed, shortElapsed, rejected], total: 4 },
+            ),
+          ),
+        ),
+      ),
+    );
+    render(<AltsSection playerId="player-1" />);
+    fireEvent.click(screen.getByText('Возможные альты'));
+    expect(await screen.findByRole('link', { name: '—' })).toHaveAttribute(
+      'href',
+      '/players/NoName-1',
+    );
+    expect(screen.getByText(/Δ: 10 с/)).toBeInTheDocument();
+    expect(screen.getByText(/Δ: 1 ч 0 мин/)).toBeInTheDocument();
+    expect(screen.getByText('Все кандидаты →')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Все кандидаты →'));
+    expect(await screen.findByText(/Отклонено админом неизвестным админом/)).toBeInTheDocument();
+    expect(screen.getByText('Свернуть список')).toBeInTheDocument();
+  });
+
+  it('shows a load error when an ALT endpoint fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          new Response(JSON.stringify({ error: 'down' }), {
+            status: String(input).includes('/links') ? 503 : 200,
+          }),
+        ),
+      ),
+    );
+    render(<AltsSection playerId="player-1" />);
+    fireEvent.click(screen.getByText('Возможные альты'));
+    expect(await screen.findByText('Ошибка: HTTP 503')).toBeInTheDocument();
+  });
 });

@@ -17,6 +17,50 @@ import { ReportsBrowser } from './ReportsBrowser';
 const TARGET_ID = 'b1e2c3d4-0000-0000-0000-000000000001';
 const ALT_ID = 'b1e2c3d4-0000-0000-0000-000000000002';
 
+const WARNING_REPORT = {
+  id: 'report-warning',
+  server_id: 'server-1',
+  reporter_player_id: 'reporter-1',
+  target_player_id: TARGET_ID,
+  target_raw: null,
+  body: 'Suspicious activity',
+  source: 'ui' as const,
+  status: 'pending' as const,
+  handler_player_id: null,
+  resolution_note: null,
+  created_at: '2026-07-01T00:00:00.000Z',
+  claimed_at: null,
+  resolved_at: null,
+  server_name: 'Test server',
+  server_slug: 'test-server',
+  reporter_name: 'Reporter',
+  target_name: 'Target',
+  handler_name: null,
+  evidence: [],
+  evidence_count: 0,
+  reporter_trusted: false,
+  reporter_spam_flagged: false,
+  target_report_count_90d: 0,
+};
+
+function stubWarningFetch(warning: object, status = 200) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/v1/me')
+        return Promise.resolve(new Response(JSON.stringify({ can_handle_reports: true })));
+      if (url.startsWith('/api/v1/reports?')) {
+        return Promise.resolve(new Response(JSON.stringify({ items: [WARNING_REPORT], total: 1 })));
+      }
+      if (url === `/api/v1/players/${TARGET_ID}/ban-alt-warning`) {
+        return Promise.resolve(new Response(JSON.stringify(warning), { status }));
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    }),
+  );
+}
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -77,6 +121,12 @@ describe('ReportsBrowser ALT-7 ban warning', () => {
                     online: false,
                     has_active_ban: true,
                   },
+                  {
+                    player_id: 'confirmed-alt-2',
+                    name: 'Online confirmed alt',
+                    online: true,
+                    has_active_ban: false,
+                  },
                 ],
                 candidates: [],
               }),
@@ -109,5 +159,66 @@ describe('ReportsBrowser ALT-7 ban warning', () => {
         also_player_ids: [ALT_ID],
       });
     });
+  });
+
+  it('shows the permission-safe warning when IP details are unavailable', async () => {
+    stubWarningFetch({
+      can_view_ips: false,
+      confirmed_count: 2,
+      candidate_count: 0,
+      confirmed: [],
+      candidates: [],
+    });
+    render(<ReportsBrowser />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Забанить' }));
+    expect(
+      await screen.findByText('У игрока есть 2 подтверждённых связанных аккаунтов.'),
+    ).toBeInTheDocument();
+  });
+
+  it('renders high-confidence candidates and warning request errors', async () => {
+    stubWarningFetch({
+      can_view_ips: true,
+      confirmed_count: 0,
+      candidate_count: 1,
+      confirmed: [],
+      candidates: [
+        {
+          player_id: ALT_ID,
+          name: 'Candidate alt',
+          online: true,
+          has_active_ban: true,
+        },
+        {
+          player_id: 'candidate-alt-2',
+          name: 'Offline candidate',
+          online: false,
+          has_active_ban: false,
+        },
+      ],
+    });
+    render(<ReportsBrowser />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Забанить' }));
+    expect(await screen.findByText('Кандидаты с высокой уверенностью')).toBeInTheDocument();
+    expect(screen.getByText('Candidate alt')).toBeInTheDocument();
+    expect(screen.getByText('онлайн')).toBeInTheDocument();
+    expect(screen.getByText('активный бан')).toBeInTheDocument();
+
+    cleanup();
+    stubWarningFetch(
+      {
+        can_view_ips: true,
+        confirmed_count: 0,
+        candidate_count: 0,
+        confirmed: [],
+        candidates: [],
+      },
+      503,
+    );
+    render(<ReportsBrowser />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Забанить' }));
+    expect(
+      await screen.findByText('Проверка альтов недоступна (HTTP 503). Бан можно продолжить.'),
+    ).toBeInTheDocument();
   });
 });
