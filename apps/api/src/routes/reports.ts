@@ -1,4 +1,11 @@
-import { mediaFiles, playerReports, players, reportEvidence, servers } from '@squad/db/schema';
+import {
+  mediaFiles,
+  playerReports,
+  players,
+  reportEvidence,
+  reporterStats,
+  servers,
+} from '@squad/db/schema';
 import { and, desc, eq, gte, ilike, inArray, isNull, lte, type SQL, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -7,6 +14,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import { notifyReporter } from '../lib/report-notify.js';
+import { recomputeReporterStats } from '../lib/reporter-stats.js';
 import type { ReportLiveView } from '../plugins/live-bus.js';
 
 const PAGE_SIZE_DEFAULT = 20;
@@ -15,6 +23,7 @@ const BODY_MAX = 200;
 const RESOLUTION_NOTE_MAX = 2000;
 const REPORT_BODY_MAX = 2000;
 const EVIDENCE_MAX = 10;
+const TARGET_RECIDIVIST_WINDOW_DAYS = 90;
 
 const statusEnum = z.enum(['pending', 'in_review', 'resolved', 'rejected']);
 
@@ -102,6 +111,9 @@ interface ReportRow {
   createdAt: Date;
   claimedAt: Date | null;
   resolvedAt: Date | null;
+  reporterTrusted: boolean;
+  reporterSpamFlagged: boolean;
+  targetReportCount90d: number;
 }
 
 function serializeReport(row: ReportRow, evidence: EvidenceItem[] = []) {
@@ -126,6 +138,9 @@ function serializeReport(row: ReportRow, evidence: EvidenceItem[] = []) {
     resolved_at: row.resolvedAt ? row.resolvedAt.toISOString() : null,
     evidence,
     evidence_count: evidence.length,
+    reporter_trusted: row.reporterTrusted,
+    reporter_spam_flagged: row.reporterSpamFlagged,
+    target_report_count_90d: row.targetReportCount90d,
   };
 }
 
@@ -180,12 +195,20 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
         createdAt: playerReports.createdAt,
         claimedAt: playerReports.claimedAt,
         resolvedAt: playerReports.resolvedAt,
+        reporterTrusted: sql<boolean>`coalesce(${reporterStats.trusted}, false)`,
+        reporterSpamFlagged: sql<boolean>`(${reporterStats.spamFlaggedAt} IS NOT NULL)`,
+        targetReportCount90d: sql<number>`(
+          SELECT count(*)::int FROM ${playerReports} AS pr90
+          WHERE pr90.target_player_id = ${playerReports.targetPlayerId}
+            AND pr90.created_at >= now() - make_interval(days => ${TARGET_RECIDIVIST_WINDOW_DAYS})
+        )`,
       })
       .from(playerReports)
       .leftJoin(servers, eq(servers.id, playerReports.serverId))
       .leftJoin(reporter, eq(reporter.id, playerReports.reporterPlayerId))
       .leftJoin(target, eq(target.id, playerReports.targetPlayerId))
-      .leftJoin(handler, eq(handler.id, playerReports.handlerPlayerId));
+      .leftJoin(handler, eq(handler.id, playerReports.handlerPlayerId))
+      .leftJoin(reporterStats, eq(reporterStats.playerId, playerReports.reporterPlayerId));
   }
 
   function buildFilters(query: z.infer<typeof listQuery>): SQL[] {
@@ -432,6 +455,19 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
         await app.db.update(playerReports).set(updates).where(eq(playerReports.id, existing.id));
       }
 
+      // Recompute the reporter's trust metrics on ANY status change (resolve,
+      // reject, or a re-open back to pending/in_review) so accuracy/trusted/
+      // spam_flagged stay in sync (REPORT-5, #115). Best-effort: a stats
+      // failure must never fail the moderation PATCH.
+      let recomputeFailed = false;
+      if (updates.status !== undefined && existing.reporterPlayerId) {
+        try {
+          await recomputeReporterStats(app.db, app.redis, existing.reporterPlayerId);
+        } catch {
+          recomputeFailed = true;
+        }
+      }
+
       const updated = await loadReport(existing.id);
       if (!updated) {
         reply.code(500);
@@ -472,7 +508,13 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
         targetId: existing.id,
         before,
         after,
-        context: { requestId: req.id, method: req.method, url: req.url, notified },
+        context: {
+          requestId: req.id,
+          method: req.method,
+          url: req.url,
+          notified,
+          recompute_failed: recomputeFailed,
+        },
         statusCode: reply.statusCode,
       });
       app.liveBus.publish({

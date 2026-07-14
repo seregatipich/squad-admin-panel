@@ -173,6 +173,15 @@ export interface ReportListItem extends ReportLiveView {
   handler_name: string | null;
   evidence: ReportEvidenceItem[];
   evidence_count: number;
+  /**
+   * Reporter trust / target-recidivism badges (REPORT-5, #115). Optional
+   * because `report.updated` live-bus events only carry the reduced
+   * {@link ReportLiveView} shape — ReportsBrowser merges those on top of the
+   * already-loaded row, so these fields fall back to the prior value.
+   */
+  reporter_trusted?: boolean;
+  reporter_spam_flagged?: boolean;
+  target_report_count_90d?: number;
 }
 
 export interface VoteEndedData {

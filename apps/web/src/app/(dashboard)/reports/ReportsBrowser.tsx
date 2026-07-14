@@ -22,6 +22,7 @@ import {
   groupPendingByTarget,
   isExternalLinkEvidence,
   isImageEvidence,
+  isRecidivist,
   isValidBanLength,
   isVideoEvidence,
   NOTE_MAX,
@@ -29,14 +30,21 @@ import {
   parseFilters,
   playerLabel,
   REASON_MAX,
+  REPORTER_SPAM_BADGE_CLASS,
+  REPORTER_SPAM_LABEL,
+  REPORTER_TRUSTED_BADGE_CLASS,
+  REPORTER_TRUSTED_LABEL,
   type ReportActionType,
   type ReporterNotifyTemplate,
   type ReportTargetGroup,
+  recidivistBadgeLabel,
   STATUS_BADGE_CLASSES,
   STATUS_FILTERS,
   STATUS_LABELS,
+  TARGET_RECIDIVIST_BADGE_CLASS,
   totalPages,
 } from './helpers';
+import { ReportsAnalytics } from './ReportsAnalytics';
 
 interface ReportListResponse {
   items: ReportListItem[];
@@ -79,6 +87,7 @@ export function ReportsBrowser() {
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [canHandle, setCanHandle] = useState(false);
+  const [view, setView] = useState<'queue' | 'analytics'>('queue');
 
   const navigate = useCallback(
     (partial: Partial<{ status: '' | ReportStatus; page: number }>) => {
@@ -157,98 +166,137 @@ export function ReportsBrowser() {
   const renderedGroupTargets = new Set<string>();
 
   return (
-    <div className="space-y-6 max-w-4xl">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Жалобы</h1>
-        <LiveIndicator lastUpdate={lastUpdate} />
-      </div>
-
-      <p className="text-sm text-neutral-400">
-        Очередь модерации жалоб игроков, отправленных из игры или через панель.
-      </p>
-
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          Ошибка: {error}
-        </div>
-      ) : null}
-
-      <div className="flex gap-1">
-        {STATUS_FILTERS.map((filter) => (
-          <button
-            key={filter.value || 'all'}
-            type="button"
-            onClick={() => navigate({ status: filter.value })}
-            className={`rounded px-2 py-0.5 text-xs ${
-              filters.status === filter.value
-                ? 'bg-neutral-800 text-neutral-100'
-                : 'text-neutral-400 hover:text-neutral-200'
-            }`}
-          >
-            {filter.label}
-          </button>
-        ))}
-      </div>
-
-      {loading ? (
-        <div className="py-8 text-center text-sm text-neutral-500">Загрузка…</div>
-      ) : reports.length === 0 ? (
-        <div className="rounded border border-dashed border-neutral-800 py-12 text-center text-sm text-neutral-500">
-          Жалоб не найдено.
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {reports.map((report) => {
-            if (
-              showGroups &&
-              report.target_player_id &&
-              groupedTargetIds.has(report.target_player_id)
-            ) {
-              if (renderedGroupTargets.has(report.target_player_id)) return null;
-              renderedGroupTargets.add(report.target_player_id);
-              const group = multiGroups.find((g) => g.target_player_id === report.target_player_id);
-              if (!group) return null;
-              return (
-                <ReportGroupBlock
-                  key={group.target_player_id}
-                  group={group}
-                  canHandle={canHandle}
-                  onSaved={load}
-                />
-              );
-            }
-            return (
-              <ReportCard key={report.id} report={report} canHandle={canHandle} onSaved={load} />
-            );
-          })}
-        </div>
-      )}
-
-      {!loading && reports.length > 0 ? (
-        <div className="flex items-center justify-between text-xs text-neutral-400">
-          <span>
-            Страница {filters.page} из {pages} ({total})
-          </span>
-          <div className="flex gap-2">
+    <div className="space-y-6">
+      <div className="flex max-w-4xl items-center justify-between gap-3">
+        <div className="flex items-baseline gap-4">
+          <h1 className="text-2xl font-semibold">Жалобы</h1>
+          <div className="flex gap-1">
             <button
               type="button"
-              disabled={filters.page <= 1}
-              onClick={() => navigate({ page: filters.page - 1 })}
-              className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-40"
+              onClick={() => setView('queue')}
+              className={`rounded px-2 py-0.5 text-xs ${
+                view === 'queue'
+                  ? 'bg-neutral-800 text-neutral-100'
+                  : 'text-neutral-400 hover:text-neutral-200'
+              }`}
             >
-              Назад
+              Очередь
             </button>
             <button
               type="button"
-              disabled={filters.page >= pages}
-              onClick={() => navigate({ page: filters.page + 1 })}
-              className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-40"
+              onClick={() => setView('analytics')}
+              className={`rounded px-2 py-0.5 text-xs ${
+                view === 'analytics'
+                  ? 'bg-neutral-800 text-neutral-100'
+                  : 'text-neutral-400 hover:text-neutral-200'
+              }`}
             >
-              Вперёд
+              Аналитика
             </button>
           </div>
         </div>
-      ) : null}
+        <LiveIndicator lastUpdate={lastUpdate} />
+      </div>
+
+      {view === 'analytics' ? <ReportsAnalytics /> : null}
+
+      {view !== 'queue' ? null : (
+        <div className="max-w-4xl space-y-6">
+          <p className="text-sm text-neutral-400">
+            Очередь модерации жалоб игроков, отправленных из игры или через панель.
+          </p>
+
+          {error ? (
+            <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
+              Ошибка: {error}
+            </div>
+          ) : null}
+
+          <div className="flex gap-1">
+            {STATUS_FILTERS.map((filter) => (
+              <button
+                key={filter.value || 'all'}
+                type="button"
+                onClick={() => navigate({ status: filter.value })}
+                className={`rounded px-2 py-0.5 text-xs ${
+                  filters.status === filter.value
+                    ? 'bg-neutral-800 text-neutral-100'
+                    : 'text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+
+          {loading ? (
+            <div className="py-8 text-center text-sm text-neutral-500">Загрузка…</div>
+          ) : reports.length === 0 ? (
+            <div className="rounded border border-dashed border-neutral-800 py-12 text-center text-sm text-neutral-500">
+              Жалоб не найдено.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {reports.map((report) => {
+                if (
+                  showGroups &&
+                  report.target_player_id &&
+                  groupedTargetIds.has(report.target_player_id)
+                ) {
+                  if (renderedGroupTargets.has(report.target_player_id)) return null;
+                  renderedGroupTargets.add(report.target_player_id);
+                  const group = multiGroups.find(
+                    (g) => g.target_player_id === report.target_player_id,
+                  );
+                  if (!group) return null;
+                  return (
+                    <ReportGroupBlock
+                      key={group.target_player_id}
+                      group={group}
+                      canHandle={canHandle}
+                      onSaved={load}
+                    />
+                  );
+                }
+                return (
+                  <ReportCard
+                    key={report.id}
+                    report={report}
+                    canHandle={canHandle}
+                    onSaved={load}
+                  />
+                );
+              })}
+            </div>
+          )}
+
+          {!loading && reports.length > 0 ? (
+            <div className="flex items-center justify-between text-xs text-neutral-400">
+              <span>
+                Страница {filters.page} из {pages} ({total})
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={filters.page <= 1}
+                  onClick={() => navigate({ page: filters.page - 1 })}
+                  className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-40"
+                >
+                  Назад
+                </button>
+                <button
+                  type="button"
+                  disabled={filters.page >= pages}
+                  onClick={() => navigate({ page: filters.page + 1 })}
+                  className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-40"
+                >
+                  Вперёд
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }
@@ -508,14 +556,29 @@ function ReportCard({
         </div>
       </div>
 
-      <div className="text-sm">
+      <div className="flex flex-wrap items-center gap-1.5 text-sm">
         <PlayerRef id={report.reporter_player_id} name={report.reporter_name} />
+        {report.reporter_trusted ? (
+          <span className={`rounded px-1.5 py-0.5 text-[10px] ${REPORTER_TRUSTED_BADGE_CLASS}`}>
+            {REPORTER_TRUSTED_LABEL}
+          </span>
+        ) : null}
+        {report.reporter_spam_flagged ? (
+          <span className={`rounded px-1.5 py-0.5 text-[10px] ${REPORTER_SPAM_BADGE_CLASS}`}>
+            {REPORTER_SPAM_LABEL}
+          </span>
+        ) : null}
         <span className="mx-1 text-neutral-600">→</span>
         <PlayerRef
           id={report.target_player_id}
           name={report.target_name}
           fallbackRaw={report.target_raw}
         />
+        {isRecidivist(report.target_report_count_90d ?? 0) ? (
+          <span className={`rounded px-1.5 py-0.5 text-[10px] ${TARGET_RECIDIVIST_BADGE_CLASS}`}>
+            {recidivistBadgeLabel(report.target_report_count_90d ?? 0)}
+          </span>
+        ) : null}
       </div>
 
       <p className="whitespace-pre-wrap text-sm text-neutral-300">{report.body}</p>

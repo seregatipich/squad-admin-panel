@@ -150,6 +150,38 @@ export function isValidBanLength(value: string): boolean {
   return BAN_LENGTH_PATTERN.test(value.trim());
 }
 
+/** Minimum target report count (90d window) to render the recidivist badge (REPORT-5, #115). */
+export const RECIDIVIST_MIN_COUNT_90D = 3;
+
+/** True once a target has accumulated enough reports in the 90-day window to flag as a recidivist. */
+export function isRecidivist(count: number): boolean {
+  return count >= RECIDIVIST_MIN_COUNT_90D;
+}
+
+export const REPORTER_TRUSTED_LABEL = 'Доверенный';
+export const REPORTER_TRUSTED_BADGE_CLASS =
+  'bg-emerald-950/50 text-emerald-300 border border-emerald-900';
+
+export const REPORTER_SPAM_LABEL = 'Спам';
+export const REPORTER_SPAM_BADGE_CLASS = 'bg-red-950/50 text-red-300 border border-red-900';
+
+export const TARGET_RECIDIVIST_BADGE_CLASS =
+  'bg-amber-950/50 text-amber-300 border border-amber-900';
+
+/** Badge label for the target-recidivism count, e.g. "3 жалобы за 90 дн". */
+export function recidivistBadgeLabel(count: number): string {
+  return `${count} ${reportsWord(count)} за 90 дн`;
+}
+
+/** Russian plural form for "report(s)" (жалоба/жалобы/жалоб) by count. */
+function reportsWord(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'жалоба';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'жалобы';
+  return 'жалоб';
+}
+
 export interface ReportTargetGroup {
   target_player_id: string;
   target_name: string | null;
