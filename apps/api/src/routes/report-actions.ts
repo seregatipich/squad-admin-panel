@@ -1,4 +1,10 @@
-import { moderationActions, playerReports, players } from '@squad/db/schema';
+import { events, moderationActions, playerReports, players } from '@squad/db/schema';
+import {
+  type EventEnvelope,
+  type EventType,
+  moderationActionPayload,
+  STREAM_NAME,
+} from '@squad/shared-types';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -35,6 +41,14 @@ const bulkResolveBody = z.object({
   status: z.enum(['resolved', 'rejected']),
   resolution_note: z.string().trim().min(1).max(RESOLUTION_NOTE_MAX),
 });
+
+type ReportModerationActionType = z.infer<typeof actionBody>['action_type'];
+
+const MODERATION_EVENT_TYPES: Record<ReportModerationActionType, EventType> = {
+  ban: 'moderation.ban',
+  kick: 'moderation.kick',
+  warn: 'moderation.warn',
+};
 
 interface ModerationActionApiRow {
   id: string;
@@ -86,6 +100,74 @@ const ACTION_ROW_SELECT = sql`
   ap.canonical_name AS author_name,
   ma.author_system_label
 `;
+
+interface PlayerIdentity {
+  eosId: string | null;
+  steamId64: string | null;
+  name: string;
+}
+
+/** Persists and publishes the EVT-1 envelope consumed by discord-notify. */
+async function publishModerationEvent(
+  app: Parameters<FastifyPluginAsync>[0],
+  params: {
+    actionId: string;
+    actionType: ReportModerationActionType;
+    actorPlayerId: string;
+    actorName: string;
+    playerId: string;
+    player: PlayerIdentity;
+    serverId: string;
+    reportId: string;
+    reason: string;
+    duration: string | null;
+  },
+): Promise<EventEnvelope> {
+  const payload = moderationActionPayload.parse({
+    moderation_action_id: params.actionId,
+    action_type: params.actionType,
+    player_id: params.playerId,
+    steam_id64: params.player.steamId64,
+    eos_id: params.player.eosId,
+    name: params.player.name,
+    reason: params.reason,
+    duration: params.duration,
+    actor_name: params.actorName,
+    report_id: params.reportId,
+  });
+  const envelope: EventEnvelope = {
+    event_id: uuidv7(),
+    version: 1,
+    type: MODERATION_EVENT_TYPES[params.actionType],
+    server_id: params.serverId,
+    ts: new Date().toISOString(),
+    actor: { kind: 'user', id: params.actorPlayerId },
+    correlation_id: params.reportId,
+    payload,
+  };
+
+  await app.db.insert(events).values({
+    eventId: envelope.event_id,
+    serverId: envelope.server_id,
+    occurredAt: new Date(envelope.ts),
+    kind: envelope.type,
+    version: envelope.version,
+    actorKind: envelope.actor?.kind ?? null,
+    actorId: envelope.actor?.id ?? null,
+    correlationId: envelope.correlation_id,
+    payload: envelope.payload,
+  });
+  await app.redis.xadd(
+    STREAM_NAME.eventsServer(params.serverId),
+    'MAXLEN',
+    '~',
+    '10000',
+    '*',
+    'envelope',
+    JSON.stringify(envelope),
+  );
+  return envelope;
+}
 
 function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
   if (!req.user) {
@@ -160,11 +242,13 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
     return rows[0] ?? null;
   }
 
-  async function resolveIdentity(
-    playerId: string,
-  ): Promise<{ eosId: string | null; steamId64: string | null } | null> {
+  async function resolveIdentity(playerId: string): Promise<PlayerIdentity | null> {
     const rows = await app.db
-      .select({ eosId: players.eosId, steamId64: players.steamId64 })
+      .select({
+        eosId: players.eosId,
+        steamId64: players.steamId64,
+        name: players.canonicalName,
+      })
       .from(players)
       .where(eq(players.id, playerId))
       .limit(1);
@@ -173,6 +257,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
     return {
       eosId: row.eosId,
       steamId64: row.steamId64 != null ? row.steamId64.toString() : null,
+      name: row.name,
     };
   }
 
@@ -245,7 +330,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
       const primaryEntry = targetEntries[0];
       const primaryIdentity = primaryEntry?.identity;
       const target = primaryIdentity?.eosId ?? primaryIdentity?.steamId64 ?? null;
-      if (!primaryEntry || !target) {
+      if (!primaryEntry || !primaryIdentity || !target) {
         reply.code(400);
         return { error: 'target_identity_missing' };
       }
@@ -306,21 +391,35 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
           reportId: report.id,
         })
         .returning({ id: moderationActions.id });
+      if (!inserted) throw new Error('moderation action insert returned no row');
+
+      const insertedActions: Array<{
+        id: string;
+        playerId: string;
+        identity: PlayerIdentity;
+      }> = [{ id: inserted.id, playerId: primaryEntry.playerId, identity: primaryIdentity }];
 
       for (const playerId of alsoPlayerIds) {
-        await app.db.insert(moderationActions).values({
-          playerId,
-          serverId: report.serverId,
-          actionType,
-          authorPlayerId: actorPlayerId,
-          reason,
-          context: {
-            report_id: report.id,
-            ban_length: banLength,
-            related_action_id: inserted?.id ?? null,
-          },
-          reportId: report.id,
-        });
+        const entry = targetEntries.find((targetEntry) => targetEntry.playerId === playerId);
+        if (!entry?.identity) throw new Error(`resolved alt identity missing for ${playerId}`);
+        const [related] = await app.db
+          .insert(moderationActions)
+          .values({
+            playerId,
+            serverId: report.serverId,
+            actionType,
+            authorPlayerId: actorPlayerId,
+            reason,
+            context: {
+              report_id: report.id,
+              ban_length: banLength,
+              related_action_id: inserted.id,
+            },
+            reportId: report.id,
+          })
+          .returning({ id: moderationActions.id });
+        if (!related) throw new Error('related moderation action insert returned no row');
+        insertedActions.push({ id: related.id, playerId, identity: entry.identity });
 
         await writeAuditEntry(app.db, {
           actor: auditActor(req),
@@ -332,15 +431,32 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
             action_type: actionType,
             reason,
             target_player_id: playerId,
-            related_action_id: inserted?.id ?? null,
+            related_action_id: inserted.id,
           },
           context: {
             requestId: req.id,
             method: req.method,
             url: req.url,
-            related_action_id: inserted?.id ?? null,
+            related_action_id: inserted.id,
           },
           statusCode: reply.statusCode,
+        });
+      }
+
+      const actorIdentity = await resolveIdentity(actorPlayerId);
+      if (!actorIdentity) throw new Error('moderation actor identity missing');
+      for (const action of insertedActions) {
+        await publishModerationEvent(app, {
+          actionId: action.id,
+          actionType,
+          actorPlayerId,
+          actorName: actorIdentity.name,
+          playerId: action.playerId,
+          player: action.identity,
+          serverId: report.serverId,
+          reportId: report.id,
+          reason,
+          duration: actionType === 'ban' ? banLength : null,
         });
       }
 
@@ -369,7 +485,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
           requestId: req.id,
           method: req.method,
           url: req.url,
-          moderation_action_id: inserted?.id,
+          moderation_action_id: inserted.id,
         },
         statusCode: reply.statusCode,
       });
@@ -394,7 +510,7 @@ const reportActionsRoutes: FastifyPluginAsync = async (app) => {
         FROM moderation_actions ma
         LEFT JOIN players ap ON ap.id = ma.author_player_id
         LEFT JOIN servers s ON s.id = ma.server_id
-        WHERE ma.id = ${inserted?.id}
+        WHERE ma.id = ${inserted.id}
       `)) as unknown as ModerationActionApiRow[];
       const row = rows[0];
       return row ? serializeActionRow(row) : { ok: true };
