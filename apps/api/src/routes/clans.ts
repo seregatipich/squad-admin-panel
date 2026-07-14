@@ -132,6 +132,16 @@ const memberParams = z.object({ id: z.string().uuid(), playerId: z.string().uuid
 
 const setPriorityBody = z.object({ enabled: z.boolean() });
 
+const rosterExportQuery = z.object({ format: z.literal('csv').default('csv') });
+
+/** Escapes a CSV field per RFC 4180 when it contains a comma, quote, or newline. */
+function csvEscape(value: string): string {
+  if (/[",\r\n]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
 interface RosterRow {
   player_id: string;
   member_role: string;
@@ -348,6 +358,10 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
       reply.code(401);
       return { error: 'unauthenticated' };
     }
+    if (!req.user.permissions.panelAccess) {
+      reply.code(403);
+      return { error: 'forbidden' };
+    }
     const rows = await app.db
       .select({
         id: clans.id,
@@ -394,6 +408,10 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
       if (!req.user) {
         reply.code(401);
         return { error: 'unauthenticated' };
+      }
+      if (!req.user.permissions.panelAccess) {
+        reply.code(403);
+        return { error: 'forbidden' };
       }
       const clan = await loadActiveClan(req.params.id);
       if (!clan) {
@@ -1305,6 +1323,65 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         page,
         limit,
       };
+    },
+  );
+
+  fast.get(
+    '/api/v1/clans/:id/roster/export',
+    { schema: { params: clanIdParams, querystring: rosterExportQuery }, config: { audit: false } },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.header('content-type', 'application/json; charset=utf-8');
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      if (!req.user.permissions.panelAccess) {
+        reply.header('content-type', 'application/json; charset=utf-8');
+        reply.code(403);
+        return { error: 'forbidden' };
+      }
+      const clan = await loadActiveClan(req.params.id);
+      if (!clan) {
+        reply.header('content-type', 'application/json; charset=utf-8');
+        reply.code(404);
+        return { error: 'clan_not_found' };
+      }
+      const rows = await app.db
+        .select({
+          canonicalName: players.canonicalName,
+          steamId64: players.steamId64,
+          memberRole: clanMembers.memberRole,
+          hasPriority: clanMembers.hasPriority,
+          joinedAt: clanMembers.joinedAt,
+          lastSeenAt: players.lastSeenAt,
+        })
+        .from(clanMembers)
+        .innerJoin(players, eq(players.id, clanMembers.playerId))
+        .where(eq(clanMembers.clanId, clan.id))
+        .orderBy(asc(clanMembers.joinedAt));
+
+      const lines = [
+        'canonical_name,steam_id64,member_role,has_priority,joined_at,last_seen_at',
+        ...rows.map((row) =>
+          [
+            csvEscape(row.canonicalName),
+            row.steamId64 ? row.steamId64.toString() : '',
+            row.memberRole,
+            row.hasPriority ? 'true' : 'false',
+            row.joinedAt.toISOString(),
+            row.lastSeenAt ? row.lastSeenAt.toISOString() : '',
+          ].join(','),
+        ),
+      ];
+      const body = `${lines.join('\r\n')}\r\n`;
+      const stamp = new Date().toISOString().slice(0, 10);
+
+      reply.header('content-type', 'text/csv; charset=utf-8');
+      reply.header(
+        'content-disposition',
+        `attachment; filename="clan-${clan.id}-roster-${stamp}.csv"`,
+      );
+      return body;
     },
   );
 

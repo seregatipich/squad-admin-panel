@@ -1,16 +1,20 @@
-import { clanMembers, clans, players } from '@squad/db/schema';
+import { clanMembers, clans, players, roles } from '@squad/db/schema';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
+import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 
 const OWNER_STEAM = testSteamId(870001);
+const NOBODY_STEAM = testSteamId(870003);
 
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 let h: IntegrationHarness;
 let clanId: string;
 let memberPlayerId: string;
+let nobodyCookie: string;
 
 beforeAll(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM } });
@@ -43,9 +47,36 @@ beforeAll(async () => {
     },
     { clanId, playerId: memberPlayerId, memberRole: 'member', hasPriority: false },
   ]);
+
+  const nobodyRoleId = uuidv7();
+  await h.db.insert(roles).values({
+    id: nobodyRoleId,
+    name: 'ClanViewNobodyRole',
+    color: '#3366AA',
+    panelAccess: false,
+    canManageClans: false,
+  });
+  const [nobody] = await h.db
+    .insert(players)
+    .values({
+      steamId64: NOBODY_STEAM,
+      canonicalName: 'НиктоБезДоступа',
+      canonicalNameNormalized: 'никтобездоступа',
+      roleId: nobodyRoleId,
+    })
+    .returning({ id: players.id });
+  invalidateAllPermissionCaches();
+  const { token } = await createSession(h.db, h.redis, {
+    playerId: nobody.id,
+    ip: null,
+    userAgent: 'clan9-test',
+    ttlMs: 21_600_000,
+  });
+  nobodyCookie = `__Host-sid=${token}`;
 }, 60_000);
 
 afterAll(async () => {
+  invalidateAllPermissionCaches();
   await h.cleanup();
 }, 60_000);
 
@@ -93,6 +124,16 @@ describeIfDb('GET /api/v1/clans', () => {
     const body = res.json() as { items: Array<{ id: string }> };
     expect(body.items.some((c) => c.id === deletedId)).toBe(false);
   });
+
+  it('rejects an authenticated user without panel access with 403', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/clans',
+      headers: { cookie: nobodyCookie },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((res.json() as { error: string }).error).toBe('forbidden');
+  });
 });
 
 describeIfDb('GET /api/v1/clans/:id', () => {
@@ -137,5 +178,15 @@ describeIfDb('GET /api/v1/clans/:id', () => {
       headers: { cookie: await loginAsOwner(h) },
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('rejects an authenticated user without panel access with 403', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/clans/${clanId}`,
+      headers: { cookie: nobodyCookie },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((res.json() as { error: string }).error).toBe('forbidden');
   });
 });

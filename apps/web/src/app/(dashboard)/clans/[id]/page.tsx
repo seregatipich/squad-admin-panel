@@ -1,8 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { use, useCallback, useEffect, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import { priorityBadge } from '../helpers';
+import ClanSettingsPanel from './ClanSettingsPanel';
 import ClanStatsPanel from './ClanStatsPanel';
 import RosterPanel from './RosterPanel';
 import TagProtectionCard from './TagProtectionCard';
@@ -13,7 +15,27 @@ interface ClanDetail {
   tags: string[];
   description: string | null;
   is_tag_protected: boolean;
+  is_public: boolean;
+  max_priority_slots: number;
+  priority_count: number;
+  priority_expires_at: string | null;
+  primary_server_id: string | null;
 }
+
+interface ServerOption {
+  id: string;
+  display_name: string;
+}
+
+interface MeResponse {
+  can_manage_clans: boolean;
+}
+
+const BADGE_TONE_CLASSES: Record<'neutral' | 'danger' | 'warning', string> = {
+  neutral: 'bg-neutral-800 text-neutral-300',
+  danger: 'bg-red-950 text-red-300',
+  warning: 'bg-amber-950 text-amber-300',
+};
 
 interface OnlineMember {
   player_id: string;
@@ -147,6 +169,8 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   const [matchesLoaded, setMatchesLoaded] = useState(false);
   const [expandedMatchId, setExpandedMatchId] = useState<string | null>(null);
   const [serverOptions, setServerOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [allServers, setAllServers] = useState<ServerOption[]>([]);
+  const [canManageClans, setCanManageClans] = useState(false);
 
   const loadClan = useCallback(async () => {
     try {
@@ -222,6 +246,29 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   }, [loadClan]);
 
   useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' });
+        if (!res.ok) return;
+        const body = (await res.json()) as { items: ServerOption[] };
+        setAllServers(body.items);
+      } catch {
+        /* server names are a display nicety only */
+      }
+    })();
+    void (async () => {
+      try {
+        const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
+        if (!res.ok) return;
+        const body = (await res.json()) as MeResponse;
+        setCanManageClans(body.can_manage_clans);
+      } catch {
+        /* leave the settings panel hidden on failure */
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
     void loadMatches(null, matchServerFilter, true);
   }, [loadMatches, matchServerFilter]);
 
@@ -237,16 +284,20 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   }, []);
 
   const onlineCount = online?.servers.reduce((sum, group) => sum + group.members.length, 0) ?? 0;
+  const expiryBadge = useMemo(
+    () => (clan ? priorityBadge(clan.priority_expires_at) : null),
+    [clan],
+  );
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Link href="/clans" className="text-sm text-sky-400 hover:text-sky-300">
             ← Кланы
           </Link>
           <h1 className="text-2xl font-semibold">{clan?.name ?? 'Клан'}</h1>
-          <div className="flex flex-wrap gap-1">
+          <div className="flex flex-wrap items-center gap-1">
             {clan?.tags.map((tag) => (
               <span
                 key={tag}
@@ -255,6 +306,28 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
                 {tag}
               </span>
             ))}
+            {clan ? (
+              <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-300">
+                {clan.priority_count} из {clan.max_priority_slots}
+              </span>
+            ) : null}
+            {expiryBadge ? (
+              <span
+                className={`rounded px-1.5 py-0.5 text-xs ${BADGE_TONE_CLASSES[expiryBadge.tone]}`}
+              >
+                {expiryBadge.label}
+              </span>
+            ) : null}
+            {clan?.is_tag_protected ? (
+              <span className="rounded bg-emerald-950 px-1.5 py-0.5 text-xs text-emerald-300">
+                Тег защищён
+              </span>
+            ) : null}
+            {clan && !clan.is_public ? (
+              <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">
+                Скрытый
+              </span>
+            ) : null}
           </div>
         </div>
         <LiveIndicator lastUpdate={lastUpdate} />
@@ -322,6 +395,23 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
       <ClanStatsPanel clanId={clanId} />
 
       {clan ? <TagProtectionCard clanId={clanId} initialProtected={clan.is_tag_protected} /> : null}
+
+      {clan && canManageClans ? (
+        <ClanSettingsPanel
+          clanId={clanId}
+          initial={{
+            name: clan.name,
+            description: clan.description,
+            tags: clan.tags,
+            max_priority_slots: clan.max_priority_slots,
+            primary_server_id: clan.primary_server_id,
+            is_public: clan.is_public,
+            priority_expires_at: clan.priority_expires_at,
+          }}
+          servers={allServers}
+          onSaved={() => void loadClan()}
+        />
+      ) : null}
 
       <RosterPanel clanId={clanId} />
 
