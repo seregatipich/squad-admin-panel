@@ -135,6 +135,17 @@ export interface ReportLiveView {
   resolved_at: string | null;
 }
 
+/** A media file (MOD-3/VIDEO-1) attached to a report as evidence (REPORT-4). */
+export interface ReportEvidenceItem {
+  id: string;
+  kind: 'video' | 'image' | 'external_link';
+  external_url: string | null;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  title: string | null;
+}
+
 /** Full report view returned by GET /api/v1/reports (and /:id), with resolved names. */
 export interface ReportListItem extends ReportLiveView {
   server_name: string | null;
@@ -142,6 +153,8 @@ export interface ReportListItem extends ReportLiveView {
   reporter_name: string | null;
   target_name: string | null;
   handler_name: string | null;
+  evidence: ReportEvidenceItem[];
+  evidence_count: number;
 }
 
 export interface VoteEndedData {

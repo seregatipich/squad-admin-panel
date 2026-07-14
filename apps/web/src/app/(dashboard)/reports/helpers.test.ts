@@ -1,12 +1,31 @@
 import { describe, expect, it } from 'vitest';
+import type { ReportEvidenceItem } from '@/lib/live-bus';
 import {
   buildApiQuery,
   buildQueryString,
+  evidenceBadgeLabel,
+  evidenceLabel,
   formatDateTime,
+  isExternalLinkEvidence,
+  isImageEvidence,
+  isVideoEvidence,
   parseFilters,
   playerLabel,
   totalPages,
 } from './helpers';
+
+function makeEvidence(overrides: Partial<ReportEvidenceItem> = {}): ReportEvidenceItem {
+  return {
+    id: 'e1',
+    kind: 'image',
+    external_url: null,
+    original_filename: 'screenshot.png',
+    mime_type: 'image/png',
+    size_bytes: 100,
+    title: null,
+    ...overrides,
+  };
+}
 
 describe('parseFilters', () => {
   it('reads status and page from URL params', () => {
@@ -85,5 +104,53 @@ describe('playerLabel', () => {
 
   it('falls back to an em dash when nothing is known', () => {
     expect(playerLabel(null, null, null)).toBe('—');
+  });
+});
+
+describe('evidenceBadgeLabel', () => {
+  it('is empty when there is no evidence', () => {
+    expect(evidenceBadgeLabel([])).toBe('');
+    expect(evidenceBadgeLabel(undefined)).toBe('');
+  });
+
+  it('shows a paperclip + count when evidence is attached', () => {
+    expect(evidenceBadgeLabel([makeEvidence()])).toBe('📎 1');
+    expect(evidenceBadgeLabel([makeEvidence(), makeEvidence({ id: 'e2' })])).toBe('📎 2');
+  });
+});
+
+describe('evidence kind predicates', () => {
+  it('classifies image/video/external_link kinds', () => {
+    const image = makeEvidence({ kind: 'image' });
+    const video = makeEvidence({ kind: 'video' });
+    const link = makeEvidence({ kind: 'external_link' });
+
+    expect(isImageEvidence(image)).toBe(true);
+    expect(isVideoEvidence(image)).toBe(false);
+    expect(isExternalLinkEvidence(image)).toBe(false);
+
+    expect(isVideoEvidence(video)).toBe(true);
+    expect(isImageEvidence(video)).toBe(false);
+
+    expect(isExternalLinkEvidence(link)).toBe(true);
+    expect(isVideoEvidence(link)).toBe(false);
+  });
+});
+
+describe('evidenceLabel', () => {
+  it('prefers the title', () => {
+    expect(evidenceLabel(makeEvidence({ title: 'Аимбот на записи' }))).toBe('Аимбот на записи');
+  });
+
+  it('falls back to the external URL when there is no title', () => {
+    expect(
+      evidenceLabel(
+        makeEvidence({ title: null, external_url: 'https://youtu.be/abc', kind: 'external_link' }),
+      ),
+    ).toBe('https://youtu.be/abc');
+  });
+
+  it('falls back to the original filename when there is no title or URL', () => {
+    expect(evidenceLabel(makeEvidence({ title: null, external_url: null }))).toBe('screenshot.png');
   });
 });
