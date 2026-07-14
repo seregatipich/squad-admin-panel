@@ -17,7 +17,8 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-import PlayerDetailPage, { ClanWidget } from './page';
+import { ClanWidget } from './ClanWidget';
+import PlayerDetailPage from './page';
 
 afterEach(() => {
   cleanup();
