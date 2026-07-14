@@ -1,7 +1,10 @@
+import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { auditLog, discordIntegration, discordWebhooks, players, roles } from '@squad/db/schema';
 import { desc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { decryptString, deserialize } from '../../src/lib/crypto.js';
+import { decryptString, deserialize, encrypt, serialize } from '../../src/lib/crypto.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -12,6 +15,27 @@ import {
   loginAsOwner,
   makeFakeBridge,
 } from './harness.js';
+
+interface FakeDiscordServer {
+  url: string;
+  close: () => Promise<void>;
+}
+
+/** Spins up a local HTTP listener that stands in for a Discord webhook endpoint. */
+async function startFakeDiscordServer(
+  handler: (
+    req: import('node:http').IncomingMessage,
+    res: import('node:http').ServerResponse,
+  ) => void,
+): Promise<FakeDiscordServer> {
+  const server = createServer(handler);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}/webhook`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
 
 const OWNER_STEAM = testSteamId(910001);
 const MODERATOR_STEAM = testSteamId(910002);
@@ -317,5 +341,142 @@ describeIfDb('Discord integration — validation', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).not.toContain(rotatedUrl);
     expect(res.json()).toMatchObject({ url_mask: '…/9988…/****', enabled: false });
+  });
+});
+
+describeIfDb('Discord integration — POST /webhooks/:id/test', () => {
+  async function insertWebhookRow(opts: {
+    url: string;
+    eventType?: string;
+    mentionEveryone?: boolean;
+  }): Promise<string> {
+    const id = randomUUID();
+    await h.db.insert(discordWebhooks).values({
+      id,
+      eventType: opts.eventType ?? 'ban_issued',
+      webhookUrlEncrypted: serialize(encrypt(TEST_KEY, opts.url)),
+      enabled: true,
+      mentionEveryone: opts.mentionEveryone ?? false,
+    });
+    return id;
+  }
+
+  const UNKNOWN_ID = '00000000-0000-0000-0000-0000000000ff';
+
+  it('rejects unauthenticated test-send with 401', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/integrations/discord/webhooks/${UNKNOWN_ID}/test`,
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'unauthenticated' });
+  });
+
+  it('rejects a user without integration:manage with 403', async () => {
+    const cookie = await loginAsSteam(MODERATOR_STEAM);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/integrations/discord/webhooks/${UNKNOWN_ID}/test`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'forbidden' });
+  });
+
+  it('returns 404 webhook_not_found for an unknown webhook id', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/integrations/discord/webhooks/${UNKNOWN_ID}/test`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'webhook_not_found' });
+  });
+
+  it('returns {ok:true} and writes an audit row when the fake Discord endpoint accepts the embed', async () => {
+    const fake = await startFakeDiscordServer((_req, res) => {
+      res.writeHead(204);
+      res.end();
+    });
+    try {
+      const id = await insertWebhookRow({ url: fake.url });
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/discord/webhooks/${id}/test`,
+        headers: { cookie: await loginAsOwner(h) },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+      const entry = await assertAuditRow(h, {
+        action: 'integration.discord.webhook.test',
+        resource: 'discord_webhook',
+        targetId: id,
+      });
+      expect(entry.afterSnapshot).toMatchObject({ outcome: 'ok', discord_status: 204 });
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('returns 502 discord_error with the upstream status when the fake endpoint responds 500', async () => {
+    const fake = await startFakeDiscordServer((_req, res) => {
+      res.writeHead(500);
+      res.end();
+    });
+    try {
+      const id = await insertWebhookRow({ url: fake.url, eventType: 'kick' });
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/discord/webhooks/${id}/test`,
+        headers: { cookie: await loginAsOwner(h) },
+      });
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toEqual({ error: 'discord_error', status: 500 });
+      const entry = await assertAuditRow(h, {
+        action: 'integration.discord.webhook.test',
+        resource: 'discord_webhook',
+        targetId: id,
+      });
+      expect(entry.afterSnapshot).toMatchObject({ outcome: 'discord_error', discord_status: 500 });
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it('returns 502 unreachable when nothing listens on the webhook host', async () => {
+    const id = await insertWebhookRow({ url: 'http://127.0.0.1:1/webhook', eventType: 'warn' });
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/integrations/discord/webhooks/${id}/test`,
+      headers: { cookie: await loginAsOwner(h) },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'unreachable' });
+  });
+
+  it('mention_everyone webhooks include @everyone content in the test-send payload', async () => {
+    let receivedBody = '';
+    const fake = await startFakeDiscordServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        receivedBody = Buffer.concat(chunks).toString('utf-8');
+        res.writeHead(204);
+        res.end();
+      });
+    });
+    try {
+      const id = await insertWebhookRow({ url: fake.url, mentionEveryone: true });
+      const res = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/integrations/discord/webhooks/${id}/test`,
+        headers: { cookie: await loginAsOwner(h) },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(receivedBody) as { content?: string };
+      expect(body.content).toBe('@everyone');
+    } finally {
+      await fake.close();
+    }
   });
 });

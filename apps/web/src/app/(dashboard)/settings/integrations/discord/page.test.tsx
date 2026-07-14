@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+// @vitest-environment jsdom
+import '@testing-library/jest-dom/vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/navigation', () => ({
   redirect: vi.fn(),
@@ -8,7 +11,12 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 
-import { DISCORD_EVENT_TYPES, eventLabel, looksLikeWebhookUrl } from './discord-events';
+import {
+  DISCORD_EVENT_TYPES,
+  describeTestSendOutcome,
+  eventLabel,
+  looksLikeWebhookUrl,
+} from './discord-events';
 import DiscordIntegrationPage from './page';
 
 describe('DiscordIntegrationPage', () => {
@@ -38,5 +46,131 @@ describe('DiscordIntegrationPage', () => {
     expect(looksLikeWebhookUrl('https://evil.example/api/webhooks/1/2')).toBe(false);
     expect(looksLikeWebhookUrl('not a url')).toBe(false);
     expect(looksLikeWebhookUrl('')).toBe(false);
+  });
+});
+
+describe('describeTestSendOutcome', () => {
+  it('returns "Отправлено" for a 2xx response', () => {
+    expect(describeTestSendOutcome(true, {})).toEqual({ kind: 'ok', text: 'Отправлено' });
+  });
+
+  it('surfaces the upstream Discord status', () => {
+    expect(describeTestSendOutcome(false, { error: 'discord_error', status: 500 })).toEqual({
+      kind: 'err',
+      text: 'Discord вернул 500',
+    });
+  });
+
+  it('surfaces an unreachable webhook', () => {
+    expect(describeTestSendOutcome(false, { error: 'unreachable' })).toEqual({
+      kind: 'err',
+      text: 'Вебхук недоступен',
+    });
+  });
+
+  it('surfaces webhook_not_found', () => {
+    expect(describeTestSendOutcome(false, { error: 'webhook_not_found' })).toEqual({
+      kind: 'err',
+      text: 'Вебхук не найден',
+    });
+  });
+
+  it('falls back to a generic message for an unrecognized error', () => {
+    expect(describeTestSendOutcome(false, {})).toEqual({
+      kind: 'err',
+      text: 'Не удалось отправить тестовое сообщение',
+    });
+  });
+});
+
+const INTEGRATION_SETTINGS = {
+  guild_id: null,
+  enabled: false,
+  bot_token_configured: false,
+  bot_token_mask: null,
+  updated_at: null,
+};
+
+const WEBHOOK_ROW = {
+  id: 'wh-1',
+  event_type: 'ban_issued',
+  channel_label: '#bans',
+  enabled: true,
+  mention_everyone: false,
+  server_id: null,
+  url_configured: true,
+  url_mask: '…/1122…/****',
+  created_at: '2026-01-01T00:00:00.000Z',
+  updated_at: '2026-01-01T00:00:00.000Z',
+};
+
+function mockFetch(overrides: { test?: () => Promise<Response> } = {}) {
+  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input.toString();
+    if (url.endsWith('/api/v1/integrations/discord') && init?.method === undefined) {
+      return Promise.resolve(new Response(JSON.stringify(INTEGRATION_SETTINGS), { status: 200 }));
+    }
+    if (url.endsWith('/api/v1/integrations/discord/webhooks') && init?.method === undefined) {
+      return Promise.resolve(new Response(JSON.stringify([WEBHOOK_ROW]), { status: 200 }));
+    }
+    if (url.endsWith('/test') && init?.method === 'POST') {
+      return overrides.test
+        ? overrides.test()
+        : Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    }
+    return Promise.reject(new Error(`unexpected fetch: ${url} ${init?.method}`));
+  });
+}
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+describe('Тест button', () => {
+  it('renders one per webhook row and shows success after a 2xx response', async () => {
+    vi.stubGlobal('fetch', mockFetch());
+    render(<DiscordIntegrationPage />);
+
+    const button = await screen.findByRole('button', { name: 'Тест' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(screen.getByText('Отправлено')).toBeInTheDocument());
+  });
+
+  it('shows the specific discord_error message on a 502', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        test: () =>
+          Promise.resolve(
+            new Response(JSON.stringify({ error: 'discord_error', status: 500 }), {
+              status: 502,
+            }),
+          ),
+      }),
+    );
+    render(<DiscordIntegrationPage />);
+
+    const button = await screen.findByRole('button', { name: 'Тест' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(screen.getByText('Discord вернул 500')).toBeInTheDocument());
+  });
+
+  it('shows the unreachable message when the webhook cannot be reached', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        test: () =>
+          Promise.resolve(new Response(JSON.stringify({ error: 'unreachable' }), { status: 502 })),
+      }),
+    );
+    render(<DiscordIntegrationPage />);
+
+    const button = await screen.findByRole('button', { name: 'Тест' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(screen.getByText('Вебхук недоступен')).toBeInTheDocument());
   });
 });
