@@ -1,5 +1,11 @@
 # worker-scheduler — Data model
 
-P2 stub. No data is read or written.
+The worker reads enabled rows from `seed_schedule` and `rotation_schedule`.
+`rotation_schedule.last_executed_at` prevents a one-off row from being queued
+more than once. Weekly rows in `rotation_profiles` store one default profile
+(`weekday IS NULL`) and optional server-local weekday overrides; the selected
+row's `last_applied_at` prevents repeated application on the same local day.
 
-When implemented, will read scheduled task definitions from a Postgres table (schema TBD).
+Execution and profile application are recorded in `audit_log` with system actor
+label `rotation-scheduler`. The 0078 migration creates the two ROT-4 tables;
+the migration journal is finalized by the integration branch owner.

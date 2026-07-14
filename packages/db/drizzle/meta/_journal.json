@@ -428,6 +428,13 @@
       "when": 1783400500000,
       "tag": "0071_seed_schedule",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1783400600000,
+      "tag": "0078_rotation_calendar",
+      "breakpoints": true
     }
   ]
 }

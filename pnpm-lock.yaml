@@ -800,6 +800,9 @@ importers:
 
   apps/workers/scheduler:
     dependencies:
+      '@squad/bridge-client':
+        specifier: workspace:*
+        version: link:../../../packages/bridge-client
       '@squad/db':
         specifier: workspace:*
         version: link:../../../packages/db

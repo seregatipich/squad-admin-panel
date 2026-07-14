@@ -407,6 +407,12 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
             Сид-календарь →
           </Link>
           <Link
+            href={`/servers/${server.id}/rotation-calendar`}
+            className="text-xs text-sky-400 hover:text-sky-300"
+          >
+            Календарь ротации →
+          </Link>
+          <Link
             href={`/servers/${server.id}/settings`}
             className="text-xs text-sky-400 hover:text-sky-300"
           >

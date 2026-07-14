@@ -72,6 +72,7 @@ import playerSeedContributionRoutes from '../../src/routes/player-seed-contribut
 import playerSteamFriendCheckRoutes from '../../src/routes/player-steam-friend-check.js';
 import playerRoutes from '../../src/routes/players.js';
 import publicBanlistRoutes from '../../src/routes/public-banlist.js';
+import publicClansRoutes from '../../src/routes/public-clans.js';
 import publicStatsRoutes from '../../src/routes/public-stats.js';
 import reportActionsRoutes from '../../src/routes/report-actions.js';
 import reportAnalyticsRoutes from '../../src/routes/report-analytics.js';
@@ -89,6 +90,7 @@ import serverMessagingRoutes from '../../src/routes/server-messaging.js';
 import serverMetricsRoutes from '../../src/routes/server-metrics.js';
 import serverRosterRoutes from '../../src/routes/server-roster.js';
 import serverRotationRoutes from '../../src/routes/server-rotation.js';
+import serverRotationCalendarRoutes from '../../src/routes/server-rotation-calendar.js';
 import serverSeedScheduleRoutes from '../../src/routes/server-seed-schedule.js';
 import serverSeedingRoutes from '../../src/routes/server-seeding.js';
 import serverSettingsRoutes from '../../src/routes/server-settings.js';
@@ -456,6 +458,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(serverMetricsRoutes);
   await app.register(serverConfigRoutes);
   await app.register(serverRotationRoutes);
+  await app.register(serverRotationCalendarRoutes);
   await app.register(depotRoutes);
   await app.register(playerRoutes);
   await app.register(issuesRoutes);
@@ -507,6 +510,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(adminsCfgRoutes);
   await app.register(analyticsRoutes);
   await app.register(publicStatsRoutes);
+  await app.register(publicClansRoutes);
   await app.register(publicBanlistRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(banSourcesRoutes);

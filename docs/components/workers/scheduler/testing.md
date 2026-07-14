@@ -10,15 +10,19 @@ REDIS_URL=redis://127.0.0.1:6379/14 pnpm --filter @squad/worker-scheduler test
 
 All tests live under `apps/workers/scheduler/test/`.
 
-### `contract.test.ts`
+### Scheduler tick tests
 
-Subprocess contract tests (Redis DB 14, spawns `dist/index.js`).
+The unit tests cover SEED-3 and ROT-4 scheduling without external services:
 
-| Test | What it verifies |
-|---|---|
-| Publishes heartbeat within 30s of start | `worker:heartbeat:scheduler` key has TTL ≤ 30s |
-| Exits 0 on SIGTERM within 5s | Graceful shutdown path |
+- `seed-schedule-tick.test.ts` covers recurring/one-off seed execution,
+  seeding liveness, depot windows, and command selection.
+- `rotation-schedule-tick.test.ts` covers due-entry execution, command
+  selection, depot skips, and audit behavior.
+- `rotation-profile-tick.test.ts` covers weekday/default selection, the
+  configurable apply hour, once-per-day behavior, and managed-segment
+  preservation.
 
-## Coverage gaps
+## Integration coverage
 
-Domain logic is not implemented — deferred to Phase 2.
+`apps/api/test/integration/rotation-calendar.test.ts` exercises the API route,
+database tables, permission gate, seed-overlap warning, and audit rows.
