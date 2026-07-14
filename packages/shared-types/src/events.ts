@@ -18,6 +18,12 @@ export const EVENT_TYPES = [
   'player.connected',
   'player.disconnected',
   'player.name_changed',
+  'player_report',
+
+  'moderation.ban',
+  'moderation.kick',
+  'moderation.warn',
+  'moderation.unban',
 
   'match.started',
   'match.ended',
@@ -89,6 +95,41 @@ export const playerDisconnectedPayload = z
   })
   .strict();
 export type PlayerDisconnectedPayload = z.infer<typeof playerDisconnectedPayload>;
+
+/** Payload emitted when an in-game or panel report is recorded. */
+export const playerReportPayload = z
+  .object({
+    report_id: z.string().uuid(),
+    reporter_player_id: z.string().uuid().nullable(),
+    reporter_name: z.string().min(1),
+    target_player_id: z.string().uuid().nullable(),
+    target_raw: z.string().min(1),
+    body: z.string().min(1),
+    channel: z.string().min(1),
+    source: z.enum(['ingame', 'ui']),
+  })
+  .strict();
+export type PlayerReportPayload = z.infer<typeof playerReportPayload>;
+
+/** Payload shared by moderation ban/kick/warn/unban event envelopes. */
+export const moderationActionPayload = z
+  .object({
+    moderation_action_id: z.string().uuid(),
+    action_type: z.enum(['ban', 'kick', 'warn', 'unban']),
+    player_id: z.string().uuid(),
+    steam_id64: z
+      .string()
+      .regex(/^\d{17}$/)
+      .nullable(),
+    eos_id: z.string().min(1).nullable(),
+    name: z.string().min(1),
+    reason: z.string().nullable(),
+    duration: z.string().nullable(),
+    actor_name: z.string().min(1),
+    report_id: z.string().uuid().nullable(),
+  })
+  .strict();
+export type ModerationActionPayload = z.infer<typeof moderationActionPayload>;
 
 export const bannameMatchedPayload = z
   .object({
@@ -208,6 +249,11 @@ export type SeedingTransitionPayload = z.infer<typeof seedingTransitionPayload>;
 export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodTypeAny>> = {
   'player.connected': playerConnectedPayload,
   'player.disconnected': playerDisconnectedPayload,
+  player_report: playerReportPayload,
+  'moderation.ban': moderationActionPayload,
+  'moderation.kick': moderationActionPayload,
+  'moderation.warn': moderationActionPayload,
+  'moderation.unban': moderationActionPayload,
   'rcon.players_polled': rconPlayersPolledPayload,
   'match.started': matchStateChangedPayload,
   'match.ended': matchStateChangedPayload,

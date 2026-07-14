@@ -6,8 +6,10 @@ import {
   eventEnvelope,
   externalBanMatchedPayload,
   matchStateChangedPayload,
+  moderationActionPayload,
   playerConnectedPayload,
   playerDisconnectedPayload,
+  playerReportPayload,
   rconPlayersPolledPayload,
   seedCallSentPayload,
   seedingTransitionPayload,
@@ -85,6 +87,58 @@ describe('externalban.matched payload schema', () => {
     };
     expect(externalBanMatchedPayload.safeParse(payload).success).toBe(true);
     expect(externalBanMatchedPayload.safeParse({ ...payload, extra: true }).success).toBe(false);
+  });
+});
+
+describe('moderation action payload schema', () => {
+  const payload = {
+    moderation_action_id: '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c6',
+    action_type: 'ban' as const,
+    player_id: '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c7',
+    steam_id64: '76561198012345678',
+    eos_id: null,
+    name: 'PlayerOne',
+    reason: 'Cheating',
+    duration: '7d',
+    actor_name: 'AdminOne',
+    report_id: '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c8',
+  };
+
+  it('accepts a complete moderation action and rejects an unknown action type', () => {
+    expect(moderationActionPayload.safeParse(payload).success).toBe(true);
+    expect(moderationActionPayload.safeParse({ ...payload, action_type: 'mute' }).success).toBe(
+      false,
+    );
+  });
+
+  it('allows EOS-only targets and action-specific nullable fields', () => {
+    expect(
+      moderationActionPayload.safeParse({
+        ...payload,
+        action_type: 'warn',
+        steam_id64: null,
+        eos_id: 'eos-player-one',
+        duration: null,
+        report_id: null,
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe('player report payload schema', () => {
+  it('accepts the event written by the in-game report pipeline', () => {
+    expect(
+      playerReportPayload.safeParse({
+        report_id: '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c6',
+        reporter_player_id: null,
+        reporter_name: 'Reporter',
+        target_player_id: null,
+        target_raw: 'UnknownPlayer',
+        body: 'Team killing',
+        channel: 'ChatAll',
+        source: 'ingame',
+      }).success,
+    ).toBe(true);
   });
 });
 

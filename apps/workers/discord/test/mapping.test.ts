@@ -34,6 +34,17 @@ describe('mapEventToDiscordType', () => {
     expect(mapEventToDiscordType('server.seeding_started')).toBe('seed_needed');
   });
 
+  it('maps every moderation event to its configured Discord type', () => {
+    expect(mapEventToDiscordType('moderation.ban')).toBe('ban_issued');
+    expect(mapEventToDiscordType('moderation.kick')).toBe('kick');
+    expect(mapEventToDiscordType('moderation.warn')).toBe('warn');
+    expect(mapEventToDiscordType('moderation.unban')).toBe('unban');
+  });
+
+  it('maps an in-game player report to player_report', () => {
+    expect(mapEventToDiscordType('player_report')).toBe('player_report');
+  });
+
   it('returns null for event types with no configured Discord notification', () => {
     expect(mapEventToDiscordType('player.connected')).toBeNull();
     expect(mapEventToDiscordType('rcon.connected')).toBeNull();
@@ -149,6 +160,63 @@ describe('buildTemplateContext', () => {
       panelBaseUrl: 'https://panel.example',
     });
     expect(withBaseUrl.player_url).toBe('https://panel.example/players/p-1');
+  });
+
+  it('extracts moderation template fields', () => {
+    const context = buildTemplateContext({
+      envelope: envelope({
+        type: 'moderation.ban',
+        payload: {
+          moderation_action_id: '33333333-3333-3333-3333-333333333333',
+          action_type: 'ban',
+          player_id: '44444444-4444-4444-4444-444444444444',
+          steam_id64: '76561198000000001',
+          eos_id: null,
+          name: 'Нарушитель',
+          reason: 'Читы',
+          duration: '7d',
+          actor_name: 'Администратор',
+          report_id: null,
+        },
+      }),
+      serverName: 'RU #1',
+      panelBaseUrl: 'https://panel.test',
+    });
+
+    expect(context).toMatchObject({
+      player_name: 'Нарушитель',
+      reason: 'Читы',
+      duration: '7d',
+      actor_name: 'Администратор',
+      player_url: 'https://panel.test/players/44444444-4444-4444-4444-444444444444',
+    });
+  });
+
+  it('uses report payload aliases for player, reason, actor, and player URL', () => {
+    const context = buildTemplateContext({
+      envelope: envelope({
+        type: 'player_report',
+        payload: {
+          report_id: '33333333-3333-3333-3333-333333333333',
+          reporter_player_id: null,
+          reporter_name: 'Репортёр',
+          target_player_id: '44444444-4444-4444-4444-444444444444',
+          target_raw: 'Нарушитель',
+          body: 'Тимкилл',
+          channel: 'ChatAll',
+          source: 'ingame',
+        },
+      }),
+      serverName: 'RU #1',
+      panelBaseUrl: 'https://panel.test',
+    });
+
+    expect(context).toMatchObject({
+      player_name: 'Нарушитель',
+      reason: 'Тимкилл',
+      actor_name: 'Репортёр',
+      player_url: 'https://panel.test/players/44444444-4444-4444-4444-444444444444',
+    });
   });
 
   it('handles a null payload without throwing', () => {

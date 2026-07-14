@@ -1,5 +1,6 @@
 import { type DatabaseClient, events, playerNameHistory, playerReports, players } from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
+import { type EventEnvelope, playerReportPayload, STREAM_NAME } from '@squad/shared-types';
 import { and, desc, eq, gte, isNull, or } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import type { ParsedReport } from '../parser/report.js';
@@ -12,6 +13,7 @@ const STEAM_FORM = /^\d{17}$/;
 
 export interface ReportPublisher {
   publish(channel: string, message: string): Promise<unknown>;
+  xadd(key: string, ...args: (string | number)[]): Promise<unknown>;
 }
 
 export interface HandleReportParams {
@@ -121,26 +123,52 @@ async function writeEvent(
     targetPlayerId: string | null;
     report: ParsedReport;
   },
-): Promise<void> {
-  await db.insert(events).values({
-    eventId: uuidv7(),
-    serverId: params.serverId,
-    occurredAt: params.occurredAt,
-    kind: 'player_report',
-    version: 1,
-    actorKind: 'system',
-    actorId: params.reporterPlayerId,
-    correlationId: params.reportId,
-    payload: {
-      report_id: params.reportId,
-      reporter_player_id: params.reporterPlayerId,
-      target_player_id: params.targetPlayerId,
-      target_raw: params.report.targetRaw,
-      body: params.report.body,
-      channel: params.report.channel,
-      source: 'ingame',
-    },
+): Promise<EventEnvelope> {
+  const payload = playerReportPayload.parse({
+    report_id: params.reportId,
+    reporter_player_id: params.reporterPlayerId,
+    reporter_name: params.report.reporterName,
+    target_player_id: params.targetPlayerId,
+    target_raw: params.report.targetRaw,
+    body: params.report.body,
+    channel: params.report.channel,
+    source: 'ingame',
   });
+  const envelope: EventEnvelope = {
+    event_id: uuidv7(),
+    server_id: params.serverId,
+    version: 1,
+    type: 'player_report',
+    ts: params.occurredAt.toISOString(),
+    actor: { kind: 'system', id: params.reporterPlayerId },
+    correlation_id: params.reportId,
+    payload,
+  };
+  await db.insert(events).values({
+    eventId: envelope.event_id,
+    serverId: envelope.server_id,
+    occurredAt: new Date(envelope.ts),
+    kind: envelope.type,
+    version: envelope.version,
+    actorKind: envelope.actor?.kind ?? null,
+    actorId: envelope.actor?.id ?? null,
+    correlationId: envelope.correlation_id,
+    payload: envelope.payload,
+  });
+  return envelope;
+}
+
+async function publishEvent(redis: ReportPublisher | null, envelope: EventEnvelope): Promise<void> {
+  if (!redis) return;
+  await redis.xadd(
+    envelope.server_id ? STREAM_NAME.eventsServer(envelope.server_id) : STREAM_NAME.eventsGlobal(),
+    'MAXLEN',
+    '~',
+    '10000',
+    '*',
+    'envelope',
+    JSON.stringify(envelope),
+  );
 }
 
 export async function handleReport(
@@ -165,7 +193,7 @@ export async function handleReport(
       .update(playerReports)
       .set({ body: `${duplicate.body}\n${report.body}` })
       .where(eq(playerReports.id, duplicate.id));
-    await writeEvent(db, {
+    const envelope = await writeEvent(db, {
       serverId,
       reportId: duplicate.id,
       occurredAt,
@@ -173,6 +201,7 @@ export async function handleReport(
       targetPlayerId,
       report,
     });
+    await publishEvent(redis, envelope);
     return { reportId: duplicate.id, deduped: true, reporterPlayerId, targetPlayerId };
   }
 
@@ -188,7 +217,7 @@ export async function handleReport(
     status: 'pending',
   });
 
-  await writeEvent(db, {
+  const envelope = await writeEvent(db, {
     serverId,
     reportId,
     occurredAt,
@@ -196,6 +225,7 @@ export async function handleReport(
     targetPlayerId,
     report,
   });
+  await publishEvent(redis, envelope);
 
   if (redis) {
     const frame = JSON.stringify({
