@@ -89,6 +89,7 @@ A task — issue, fix, feature, or module — counts as **done** only when ALL o
 2. The change is **completely covered by tests** (regression tests for fixes, integration tests for modules — see Testing policy).
 3. **ALL tests are verified passing** — the full suite green on the `dev` CI run, not just the tests you added.
 4. The **Completion verification** checklist below has been executed at completion time — `scripts/verify-done.sh` exits 0 and every judgment angle is backed by evidence.
+5. When the work originated from a GitHub issue, a **100% completion evidence comment** has been posted to that issue and verified visible, as defined below.
 
 Until every condition holds, the task is in progress: do not report it as complete, do not close the issue, and do not promote to `master`.
 
@@ -107,6 +108,27 @@ Until every condition holds, the task is in progress: do not report it as comple
 
 If any angle cannot be satisfied, the task stays in progress and the blocker must be reported — never report around it.
 
+## GitHub issue completion evidence (MANDATORY)
+
+GitHub issue comments are the permanent review record for issue work. Chat summaries, local terminal output, commit messages, and CI status alone do not satisfy this requirement.
+
+After the work is merged and pushed to `dev`, the current `dev` CI run is green, and `bash scripts/verify-done.sh` passes, the integrating agent must post a final comment on the originating issue with the heading **`Completion evidence — 100% verified`**. Post it with `gh issue comment <number> --repo <owner/repo> ...` (or the equivalent GitHub tool), capture the returned comment URL, and re-read the published comment to verify that it is visible and correctly rendered before reporting or closing the issue.
+
+The final comment must contain fresh, reviewable evidence for every item below:
+
+1. **Requirements** — a point-by-point checklist mapping every issue requirement or acceptance criterion to the implementation and its proving test. Include relevant file paths and commit SHAs or links.
+2. **Automated tests** — every exact command run, its result, and useful test counts. For a bug fix, include the regression test's observed red-before / green-after evidence.
+3. **Functionality verification** — the real API, UI, CLI, worker, deployment, or other user-visible scenario exercised; the applicable tool used (for example browser automation, `curl`, a database client, or service logs); and the actual observed result. Include reviewable response excerpts, screenshots, recordings, or artifact/log links when the applicable tool can produce them. “Should work” is not evidence.
+4. **Quality gates** — fresh results for typecheck, Biome, affected/full tests, and any applicable Go, build, migration, security, or platform-specific checks.
+5. **Delivery and CI** — work branch, delivered commit(s), current `dev` SHA, and the CI run URL/ID with every job's conclusion.
+6. **Completion verification** — the command and passing result from `bash scripts/verify-done.sh` for the current `dev` tip.
+7. **Verification provenance** — the agent/model or session identity when available, the tools used for verification, and the verification timestamp.
+8. **Risks, skips, and limitations** — this must say `None` for a 100% completion claim. If any required check, runtime scenario, tool, or acceptance criterion was skipped, unavailable, inconclusive, or failed, the issue is not 100% complete; post a progress/blocker comment instead and keep the issue open.
+
+Do not expose secrets, credentials, private user data, or unredacted sensitive logs in evidence comments. Link safe CI artifacts or include minimal redacted excerpts instead.
+
+The evidence comment must describe the exact code and CI state being delivered. If code changes, tests are rerun, or CI is rerun after the comment is published, update the comment or publish a superseding fresh comment and verify it again. The issue may be closed only after the final evidence comment is visible. If GitHub commenting or comment verification is unavailable, the task remains in progress and the access failure must be reported as a blocker.
+
 ### Parallel-wave handoff (feature-branch terminal state)
 
 When many tasks run in parallel (one work branch each) and an **orchestrator integrates them serially**, a task agent's terminal state is a *pushed feature branch*, not a dev merge — so the default `scripts/verify-done.sh` (which requires `dev == origin/dev` + a green dev-CI run) does **not** apply. For that flow, **done = implemented + tested + committed + pushed feature branch**, verified with:
@@ -116,6 +138,8 @@ bash scripts/verify-done.sh --feature      # clean tree, on a work branch, pushe
 ```
 
 The judgment angles above (requirements walked, tests actually run and load-bearing, diff self-review, docs) still apply in full. The orchestrator then merges the branch into `dev` and runs the default `scripts/verify-done.sh` before promotion.
+
+Every parallel task agent must also post a **`Feature-branch handoff evidence — not yet 100% complete`** comment on its issue before handoff. That comment must include the branch and commit SHA, requirement coverage, exact test and quality-gate results, runtime verification evidence, verification provenance, and every skip or limitation. It must explicitly state that final completion is pending merge to `dev`, full `dev` CI, and the integrating agent's completion verification. The task agent must return the published comment URL to the orchestrator. After integration, the orchestrator is responsible for posting and verifying the final **`Completion evidence — 100% verified`** comment described above; a handoff comment can never substitute for it.
 
 ## Promotion `dev` → `master`
 

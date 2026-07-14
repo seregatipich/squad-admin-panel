@@ -129,7 +129,7 @@ describe('buildTaskPrompt', () => {
     url: 'https://github.com/octo/repo/issues/207',
   };
 
-  test('contains the issue, branch, mount path, and handoff rules', () => {
+  test('contains the issue, branch, mount path, and evidenced handoff rules', () => {
     const prompt = buildTaskPrompt(issue, 'octo/repo', '/workspace/repo');
     assert.ok(prompt.includes('#207'));
     assert.ok(prompt.includes(issue.title));
@@ -139,6 +139,11 @@ describe('buildTaskPrompt', () => {
     assert.ok(prompt.includes('feature/issue-207-api-integration-harness'));
     assert.ok(prompt.includes('verify-done.sh --feature'));
     assert.ok(prompt.includes('Do NOT merge into `dev`'));
+    assert.ok(prompt.includes('Feature-branch handoff evidence — not yet 100% complete'));
+    assert.ok(prompt.includes('point-by-point requirement coverage'));
+    assert.ok(prompt.includes('runtime/functionality verification'));
+    assert.ok(prompt.includes('Re-read the published comment'));
+    assert.ok(prompt.includes('handoff-evidence comment URL'));
   });
 
   test('never embeds credentials', () => {
