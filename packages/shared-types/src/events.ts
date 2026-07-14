@@ -32,6 +32,8 @@ export const EVENT_TYPES = [
   'performance.degraded',
 
   'banname.matched',
+  'bansync.completed',
+  'bansync.failed',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
