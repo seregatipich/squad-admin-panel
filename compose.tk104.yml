@@ -229,6 +229,23 @@ services:
         condition: service_completed_successfully
     logging: *default-logging
 
+  worker-ban-sync:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: ban-sync } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      BAN_SYNC_INTERVAL_MS: ${BAN_SYNC_INTERVAL_MS:-60000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
   worker-leaderboard-aggregator:
     build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: leaderboard-aggregator } }
     restart: unless-stopped

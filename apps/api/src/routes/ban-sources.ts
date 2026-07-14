@@ -19,6 +19,7 @@ const createBody = z.object({
   auth_header: z.string().min(1).max(1024).nullable().optional(),
   enabled: z.boolean().default(true),
   poll_interval_minutes: z.number().int().min(15).max(10080).default(60),
+  parser_config: z.record(z.unknown()).optional(),
 });
 
 const updateBody = z.object({
@@ -30,6 +31,7 @@ const updateBody = z.object({
   auth_header: z.string().min(1).max(1024).nullable().optional(),
   enabled: z.boolean().optional(),
   poll_interval_minutes: z.number().int().min(15).max(10080).optional(),
+  parser_config: z.record(z.unknown()).optional(),
 });
 
 const idParam = z.object({ id: z.string().uuid() });
@@ -48,6 +50,8 @@ interface SourceRow {
   lastSyncStatus: string | null;
   lastSyncError: string | null;
   importedCount: number;
+  parserConfig: unknown;
+  consecutiveFailures: number;
   createdAt: Date;
 }
 
@@ -66,6 +70,8 @@ interface PublicSource {
   imported_count: number;
   record_count: number;
   has_auth_header: boolean;
+  parser_config: unknown;
+  consecutive_failures: number;
   created_at: string;
 }
 
@@ -85,6 +91,8 @@ function toPublic(row: SourceRow, recordCount: number): PublicSource {
     imported_count: row.importedCount,
     record_count: recordCount,
     has_auth_header: row.authHeaderEncrypted != null,
+    parser_config: row.parserConfig,
+    consecutive_failures: row.consecutiveFailures,
     created_at: row.createdAt.toISOString(),
   };
 }
@@ -202,6 +210,7 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
         authHeaderEncrypted,
         enabled: req.body.enabled,
         pollIntervalMinutes: req.body.poll_interval_minutes,
+        parserConfig: req.body.parser_config ?? {},
       });
       const created = (await app.db
         .select()
@@ -249,6 +258,7 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
       if (req.body.enabled !== undefined) updates.enabled = req.body.enabled;
       if (req.body.poll_interval_minutes !== undefined)
         updates.pollIntervalMinutes = req.body.poll_interval_minutes;
+      if (req.body.parser_config !== undefined) updates.parserConfig = req.body.parser_config;
       if (req.body.auth_header !== undefined) {
         updates.authHeaderEncrypted =
           req.body.auth_header === null
@@ -329,28 +339,31 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'ban_source_not_found' };
       }
-      const syncedAt = new Date();
-      await app.db
-        .update(externalBanSources)
-        .set({ lastSyncAt: syncedAt, lastSyncStatus: 'ok', lastSyncError: null })
-        .where(eq(externalBanSources.id, req.params.id));
-      const refreshed = (await app.db
-        .select()
-        .from(externalBanSources)
-        .where(eq(externalBanSources.id, req.params.id))
-        .limit(1)) as unknown as SourceRow[];
-      // biome-ignore lint/style/noNonNullAssertion: row exists (guarded above)
-      const publicSource = toPublic(refreshed[0]!, await recordCountFor(req.params.id));
+      const enqueuedAt = new Date().toISOString();
+      await app.redis.xadd(
+        'bansync:manual',
+        'MAXLEN',
+        '~',
+        '1000',
+        '*',
+        'job',
+        JSON.stringify({
+          source_id: req.params.id,
+          actor_player_id: req.user?.playerId ?? null,
+          request_id: req.id,
+          enqueued_at: enqueuedAt,
+        }),
+      );
       await writeAuditEntry(app.db, {
         actor: actorFrom(req),
         actorIp: req.ip ?? null,
         actionType: 'ban_source.sync',
         targetType: 'ban_source',
         targetId: req.params.id,
-        context: { requestId: req.id, method: req.method, url: req.url, mode: 'manual_stub' },
+        context: { requestId: req.id, method: req.method, url: req.url, mode: 'manual' },
         statusCode: 200,
       });
-      return publicSource;
+      return { ok: true, queued: true };
     },
   );
 };

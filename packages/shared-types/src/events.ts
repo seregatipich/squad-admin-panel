@@ -30,6 +30,9 @@ export const EVENT_TYPES = [
   'bridge.disconnected',
 
   'performance.degraded',
+
+  'bansync.completed',
+  'bansync.failed',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

@@ -256,19 +256,75 @@ describeIfDb('ban-sources update / disable / sync', () => {
     expect((res.json() as Record<string, unknown>).enabled).toBe(false);
   });
 
-  it('sync stub records last_sync_at and last_sync_status=ok', async () => {
+  it('sync enqueues a job onto the bansync:manual stream and returns {ok:true, queued:true}', async () => {
     const { body } = await createSource(managerCookie);
     const id = body.id as string;
+    const before = await h.redis.xlen('bansync:manual');
     const res = await h.app.inject({
       method: 'POST',
       url: `/api/v1/ban-sources/${id}/sync`,
       headers: { cookie: managerCookie },
     });
     expect(res.statusCode).toBe(200);
-    const synced = res.json() as Record<string, unknown>;
-    expect(synced.last_sync_status).toBe('ok');
-    expect(synced.last_sync_at).toBeTruthy();
-    expect(synced.last_sync_error).toBeNull();
+    expect(res.json()).toEqual({ ok: true, queued: true });
+
+    const after = await h.redis.xlen('bansync:manual');
+    expect(after).toBe(before + 1);
+
+    const entries = await h.redis.xrevrange('bansync:manual', '+', '-', 'COUNT', 1);
+    const [, fields] = entries[0] as [string, string[]];
+    const jobIdx = fields.indexOf('job');
+    expect(jobIdx).toBeGreaterThanOrEqual(0);
+    const job = JSON.parse(fields[jobIdx + 1] as string) as Record<string, unknown>;
+    expect(job.source_id).toBe(id);
+    expect(job).toHaveProperty('request_id');
+    expect(job).toHaveProperty('enqueued_at');
+  });
+
+  it('returns 404 when syncing a missing source without enqueueing a job', async () => {
+    const missing = '00000000-0000-0000-0000-000000000000';
+    const before = await h.redis.xlen('bansync:manual');
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/ban-sources/${missing}/sync`,
+      headers: { cookie: managerCookie },
+    });
+    expect(res.statusCode).toBe(404);
+    const after = await h.redis.xlen('bansync:manual');
+    expect(after).toBe(before);
+  });
+
+  it('accepts parser_config on create and round-trips it through GET and PUT', async () => {
+    const { statusCode, body } = await createSource(managerCookie, {
+      parser_config: { list_path: 'data', fields: { steam_id64: 'attributes.steamId' } },
+    });
+    expect(statusCode).toBe(201);
+    expect(body.parser_config).toEqual({
+      list_path: 'data',
+      fields: { steam_id64: 'attributes.steamId' },
+    });
+    const id = body.id as string;
+
+    const got = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/ban-sources/${id}`,
+      headers: { cookie: managerCookie },
+    });
+    expect((got.json() as Record<string, unknown>).parser_config).toEqual({
+      list_path: 'data',
+      fields: { steam_id64: 'attributes.steamId' },
+    });
+
+    const updated = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${id}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ parser_config: { csv: { delimiter: ';' } } }),
+    });
+    expect(updated.statusCode).toBe(200);
+    expect((updated.json() as Record<string, unknown>).parser_config).toEqual({
+      csv: { delimiter: ';' },
+    });
   });
 
   it('returns 404 for update/sync of a missing source', async () => {
