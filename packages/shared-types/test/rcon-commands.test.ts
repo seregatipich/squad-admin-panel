@@ -19,10 +19,11 @@ describe('rcon command contract', () => {
     expect(rconCommandResultKey('req-1')).toBe('rcon:command-result:req-1');
   });
 
-  it('allows only the P0 operator command names', () => {
+  it('allows only the whitelisted operator command names', () => {
     expect(RCON_OPERATOR_COMMANDS).toEqual([
       'AdminBroadcast',
       'AdminEndMatch',
+      'AdminKick',
       'AdminReloadServerConfig',
       'AdminWarn',
     ]);
@@ -30,6 +31,13 @@ describe('rcon command contract', () => {
       rconCommandRequestSchema.safeParse({
         request_id: 'req-1',
         command: 'AdminKick',
+        args: ['76561198000000001', 'Banned nickname'],
+      }).success,
+    ).toBe(true);
+    expect(
+      rconCommandRequestSchema.safeParse({
+        request_id: 'req-1',
+        command: 'AdminBan',
         args: ['76561198000000001'],
       }).success,
     ).toBe(false);

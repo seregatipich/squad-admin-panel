@@ -66,15 +66,50 @@ describe('buildOperatorCommand', () => {
         }),
       ),
     ).toBe('AdminWarn 76561198000000123 Please stop teamkilling');
+    expect(
+      buildOperatorCommand(
+        commandRequest({
+          command: 'AdminKick',
+          args: ['76561198000000123', 'Banned nickname'],
+        }),
+      ),
+    ).toBe('AdminKick 76561198000000123 Banned nickname');
   });
 
   it('rejects unsupported commands and unsafe broadcast text', () => {
-    expect(() => buildOperatorCommand(commandRequest({ command: 'AdminKick' }))).toThrow(
+    expect(() => buildOperatorCommand(commandRequest({ command: 'AdminBan' }))).toThrow(
       /unsupported/i,
     );
     expect(() =>
       buildOperatorCommand(commandRequest({ args: ['first line\nsecond line'] })),
     ).toThrow(/unsafe/i);
+  });
+
+  it('rejects AdminKick with the wrong argument count', () => {
+    expect(() =>
+      buildOperatorCommand(commandRequest({ command: 'AdminKick', args: ['target-only'] })),
+    ).toThrow(/exactly two arguments/i);
+    expect(() =>
+      buildOperatorCommand(
+        commandRequest({ command: 'AdminKick', args: ['target', 'reason', 'extra'] }),
+      ),
+    ).toThrow(/exactly two arguments/i);
+  });
+
+  it('rejects AdminKick with unsafe target or reason text', () => {
+    expect(() =>
+      buildOperatorCommand(
+        commandRequest({ command: 'AdminKick', args: ['target\nid', 'reason'] }),
+      ),
+    ).toThrow(/unsafe/i);
+    expect(() =>
+      buildOperatorCommand(
+        commandRequest({ command: 'AdminKick', args: ['target', 'line one\nline two'] }),
+      ),
+    ).toThrow(/unsafe/i);
+    expect(() =>
+      buildOperatorCommand(commandRequest({ command: 'AdminKick', args: ['', 'reason'] })),
+    ).toThrow(/is required/i);
   });
 
   it('rejects AdminWarn with the wrong argument count', () => {
@@ -206,7 +241,7 @@ describe('RconCommandQueue', () => {
 
   it('rejects malformed operator commands with a result instead of executing them', async () => {
     const redis = makeRedis([
-      ['1700-2', ['request', JSON.stringify(commandRequest({ command: 'AdminKick' }))]],
+      ['1700-2', ['request', JSON.stringify(commandRequest({ command: 'AdminBan' }))]],
     ]);
     const execute = vi.fn();
     const queue = new RconCommandQueue({

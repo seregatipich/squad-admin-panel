@@ -42,6 +42,7 @@ describe('shared-types index re-exports', () => {
     expect(root.RCON_OPERATOR_COMMANDS).toEqual([
       'AdminBroadcast',
       'AdminEndMatch',
+      'AdminKick',
       'AdminReloadServerConfig',
       'AdminWarn',
     ]);

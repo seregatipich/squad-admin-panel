@@ -53,6 +53,8 @@ export function buildOperatorCommand(input: unknown): string {
       return 'AdminReloadServerConfig';
     case 'AdminWarn':
       return buildAdminWarnCommand(request.args);
+    case 'AdminKick':
+      return buildAdminKickCommand(request.args);
   }
 }
 
@@ -258,6 +260,22 @@ function buildAdminWarnCommand(args: string[]): string {
   const target = assertSafeSingleLineText(args[0], 'AdminWarn target', TARGET_MAX_CHARS);
   const message = assertSafeSingleLineText(args[1], 'AdminWarn message', BROADCAST_MAX_CHARS);
   return `AdminWarn ${target} ${message}`;
+}
+
+/**
+ * Builds `AdminKick <target> <reason>`, reusing the same text-safety checks as
+ * AdminWarn (no CR/LF/NUL, length cap). The target is the player's EOS id,
+ * SteamID64, or in-game name resolved by the caller; the reason is surfaced to
+ * the kicked player. Automated kicks (banned-name / external-ban / clan-tag
+ * enforcement) enqueue this command via the worker-rcon queue.
+ */
+function buildAdminKickCommand(args: string[]): string {
+  if (args.length !== 2) {
+    throw new Error('AdminKick expects exactly two arguments: target id and reason');
+  }
+  const target = assertSafeSingleLineText(args[0], 'AdminKick target', TARGET_MAX_CHARS);
+  const reason = assertSafeSingleLineText(args[1], 'AdminKick reason', BROADCAST_MAX_CHARS);
+  return `AdminKick ${target} ${reason}`;
 }
 
 function assertSafeSingleLineText(
