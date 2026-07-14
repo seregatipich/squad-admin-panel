@@ -18,6 +18,12 @@ const DEFAULT_BLOCK_MS = 500;
 const DEFAULT_COUNT = 10;
 const BROADCAST_MAX_CHARS = 300;
 const TARGET_MAX_CHARS = 64;
+const LAYER_NAME_MAX_CHARS = 128;
+// Squad layer identifiers are the exact `layers.name` catalog values (ROT-1),
+// e.g. "Yehorivka RAAS v11" or "Fool's Road AAS v1" — spaces and apostrophes
+// are routine, so only an allowlisted charset (plus the CR/LF/NUL ban from
+// assertSafeSingleLineText) guards against a malformed/injected argument.
+const LAYER_NAME_PATTERN = /^[A-Za-z0-9 '_.-]{1,128}$/;
 const DEFAULT_RECLAIM_MIN_IDLE_MS = 60_000;
 const DEFAULT_RECLAIM_INTERVAL_MS = 30_000;
 // Squad RCON ban-length syntax: a bare integer (days) or an integer with a
@@ -48,12 +54,16 @@ export function buildOperatorCommand(input: unknown): string {
   switch (request.command) {
     case 'AdminBroadcast':
       return `AdminBroadcast ${validateBroadcastText(request.args)}`;
+    case 'AdminChangeLayer':
+      return `AdminChangeLayer ${validateLayerName(request.args)}`;
     case 'AdminEndMatch':
       ensureNoArgs(request);
       return 'AdminEndMatch';
     case 'AdminReloadServerConfig':
       ensureNoArgs(request);
       return 'AdminReloadServerConfig';
+    case 'AdminSetNextLayer':
+      return `AdminSetNextLayer ${validateLayerName(request.args)}`;
     case 'AdminWarn':
       return buildAdminWarnCommand(request.args);
     case 'AdminKick':
@@ -245,6 +255,27 @@ export class RconCommandQueue {
       return false;
     }
   }
+}
+
+/**
+ * Validates the single `<layer>` argument for `AdminChangeLayer` /
+ * `AdminSetNextLayer`. Squad layer identifiers are the exact catalog `name`
+ * from the `layers` table (ROT-1) — e.g. "Yehorivka RAAS v11" or "Fool's Road
+ * AAS v1" — which routinely contain spaces and apostrophes, so (unlike
+ * AdminKick/AdminWarn's target id) whitespace cannot be rejected outright.
+ * The charset is still allowlisted (letters, digits, space, `'_.-`) and
+ * CR/LF/NUL are blocked, matching the single-line-safety approach used by
+ * `assertSafeSingleLineText` for the other text-bearing commands.
+ */
+function validateLayerName(args: string[]): string {
+  if (args.length !== 1) {
+    throw new Error('AdminChangeLayer/AdminSetNextLayer expects exactly one layer argument');
+  }
+  const text = assertSafeSingleLineText(args[0], 'layer name', LAYER_NAME_MAX_CHARS);
+  if (!LAYER_NAME_PATTERN.test(text)) {
+    throw new Error('unsafe layer name');
+  }
+  return text;
 }
 
 function validateBroadcastText(args: string[]): string {

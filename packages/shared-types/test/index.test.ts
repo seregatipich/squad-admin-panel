@@ -42,9 +42,11 @@ describe('shared-types index re-exports', () => {
     expect(root.RCON_OPERATOR_COMMANDS).toEqual([
       'AdminBan',
       'AdminBroadcast',
+      'AdminChangeLayer',
       'AdminEndMatch',
       'AdminKick',
       'AdminReloadServerConfig',
+      'AdminSetNextLayer',
       'AdminWarn',
     ]);
   });
