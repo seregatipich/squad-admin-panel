@@ -1,4 +1,5 @@
 export * from './alert-rules.js';
+export * from './alt-detection.js';
 export * from './audit-log.js';
 export * from './banned-name-rules.js';
 export * from './bonus-transactions.js';
