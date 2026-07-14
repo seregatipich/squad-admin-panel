@@ -16,6 +16,10 @@ vi.mock('@squad/db', () => ({
       }),
     }),
   })),
+  findConfirmedAltLinks: vi.fn().mockResolvedValue([]),
+  moderationActions: { playerId: 'playerId', actionType: 'actionType', revertedAt: 'revertedAt' },
+  players: { id: 'id', steamId64: 'steamId64', eosId: 'eosId' },
+  raiseAltBanAlert: vi.fn().mockResolvedValue(0),
   servers: { id: 'id', status: 'status' },
   serverSettings: { serverId: 'serverId', logsEnabled: 'logsEnabled' },
 }));
@@ -46,7 +50,11 @@ vi.mock('@squad/diag', () => ({
   createDiag: vi.fn(() => ({ emit: vi.fn().mockResolvedValue(undefined) })),
 }));
 vi.mock('drizzle-orm', () => ({
+  and: vi.fn(() => ({})),
   eq: vi.fn(() => ({})),
+  inArray: vi.fn(() => ({})),
+  isNull: vi.fn(() => ({})),
+  or: vi.fn(() => ({})),
 }));
 vi.mock('pino', () => {
   const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn(), fatal: vi.fn() };

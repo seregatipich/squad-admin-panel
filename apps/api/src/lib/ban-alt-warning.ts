@@ -1,4 +1,5 @@
-import { playerLinks, playerSessions, players } from '@squad/db/schema';
+import { findConfirmedAltLinks } from '@squad/db';
+import { playerSessions, players } from '@squad/db/schema';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 
@@ -56,25 +57,8 @@ export async function loadBanAltWarning(
     .limit(1);
   if (!target) return null;
 
-  const links = await app.db
-    .select({
-      id: playerLinks.id,
-      playerAId: playerLinks.playerAId,
-      playerBId: playerLinks.playerBId,
-      linkType: playerLinks.linkType,
-      status: playerLinks.status,
-    })
-    .from(playerLinks)
-    .where(
-      and(
-        eq(playerLinks.status, 'confirmed'),
-        eq(playerLinks.linkType, 'alt'),
-        sql`(${playerLinks.playerAId} = ${input.playerId} OR ${playerLinks.playerBId} = ${input.playerId})`,
-      ),
-    );
-  const confirmedIds = links.map((link) =>
-    link.playerAId === input.playerId ? link.playerBId : link.playerAId,
-  );
+  const links = await findConfirmedAltLinks(app.db, input.playerId);
+  const confirmedIds = links.map((link) => link.linkedPlayerId);
 
   if (!input.canViewIps) {
     return {
@@ -149,7 +133,7 @@ export async function loadBanAltWarning(
   const nameById = new Map(summaries.map((row) => [row.id, row.name]));
 
   const confirmed = links.map((link) => {
-    const id = link.playerAId === input.playerId ? link.playerBId : link.playerAId;
+    const id = link.linkedPlayerId;
     return {
       player_id: id,
       name: nameById.get(id) ?? '—',

@@ -1,3 +1,4 @@
+export * from './alt-ban.js';
 export * from './client.js';
 export * from './coplay/aggregate.js';
 export * from './dossier/aggregate.js';

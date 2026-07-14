@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  altBanEvasionSuspectedPayload,
   bannameMatchedPayload,
   EVENT_TYPES,
   eventEnvelope,
@@ -84,6 +85,24 @@ describe('externalban.matched payload schema', () => {
     };
     expect(externalBanMatchedPayload.safeParse(payload).success).toBe(true);
     expect(externalBanMatchedPayload.safeParse({ ...payload, extra: true }).success).toBe(false);
+  });
+});
+
+describe('alt.ban_evasion_suspected payload schema', () => {
+  it('accepts a connect signal with at least one actively banned linked account', () => {
+    const payload = {
+      target_player_id: '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c6',
+      confirmed_alt_ids: ['01903f7d-6a15-7c81-aa91-1e4fa9f9b7c7'],
+      candidate_ids: [],
+      trigger: 'player_connected',
+      server_id: '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c5',
+      connection_event_id: '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c8',
+    };
+
+    expect(altBanEvasionSuspectedPayload.safeParse(payload).success).toBe(true);
+    expect(
+      altBanEvasionSuspectedPayload.safeParse({ ...payload, confirmed_alt_ids: [] }).success,
+    ).toBe(false);
   });
 });
 
