@@ -16,10 +16,27 @@ export interface AdminEntry {
   comment?: string | null;
 }
 
+/** A clan member with `has_priority` on an active, unexpired clan. */
+export interface ClanPriorityEntry {
+  eosId: string;
+  clanName: string;
+}
+
 export interface SegmentInputs {
   roles: RoleEntry[];
   admins: AdminEntry[];
+  clanPriority?: ClanPriorityEntry[];
 }
+
+/**
+ * Synthetic role name used to grant the `reserve` Squad permission to clan
+ * members with an active priority slot (CLAN-4). If a real DB role happens
+ * to be named `ClanPriority`, its own Group= line is used instead and the
+ * synthetic one is skipped (see risk note in the CLAN-4 issue) — the Admin=
+ * lines for clan-priority members are still emitted either way.
+ */
+export const CLAN_PRIORITY_GROUP_NAME = 'ClanPriority';
+const CLAN_PRIORITY_PERMISSION = 'reserve';
 
 export interface ManagedSegment {
   body: string;
@@ -33,8 +50,14 @@ export interface ManagedSegment {
  * snapshot of the DB. Only roles with at least one Squad permission emit
  * a Group= line. Only admin entries whose role has at least one Squad
  * permission emit an Admin= line. The order is deterministic (sorted
- * alphabetically by role name then by eos_id) so the
- * sha256 idempotency check is stable.
+ * alphabetically by role name then by eos_id) so the sha256 idempotency
+ * check is stable.
+ *
+ * `clanPriority` (CLAN-4) is appended after the role-derived groups/admins:
+ * a constant `Group=ClanPriority:reserve` line (skipped if a real role is
+ * already named `ClanPriority`, to avoid a duplicate Group= definition),
+ * followed by one `Admin=<eosId>:ClanPriority // clan:<name>` line per
+ * entry, sorted by eos_id.
  */
 export function buildManagedSegment(inputs: SegmentInputs): ManagedSegment {
   const rolesWithPerms = inputs.roles
@@ -51,14 +74,28 @@ export function buildManagedSegment(inputs: SegmentInputs): ManagedSegment {
       return a.eosId.localeCompare(b.eosId);
     });
 
+  const clanPriority = inputs.clanPriority ?? [];
+  const hasClanPriorityRole = validRoleNames.has(CLAN_PRIORITY_GROUP_NAME);
+  const emitClanPriorityGroup = clanPriority.length > 0 && !hasClanPriorityRole;
+  const clanAdmins = [...clanPriority].sort((a, b) => a.eosId.localeCompare(b.eosId));
+
+  const totalGroups = rolesWithPerms.length + (emitClanPriorityGroup ? 1 : 0);
+  const totalAdmins = admins.length + clanAdmins.length;
+
   const lines: string[] = [BEGIN_LINE];
   for (const role of rolesWithPerms) {
     lines.push(`Group=${role.name}:${role.squadPermissions.join(',')}`);
   }
-  if (rolesWithPerms.length > 0 && admins.length > 0) lines.push('');
+  if (emitClanPriorityGroup) {
+    lines.push(`Group=${CLAN_PRIORITY_GROUP_NAME}:${CLAN_PRIORITY_PERMISSION}`);
+  }
+  if (totalGroups > 0 && totalAdmins > 0) lines.push('');
   for (const admin of admins) {
     const base = `Admin=${admin.eosId}:${admin.roleName}`;
     lines.push(admin.comment ? `${base} // ${admin.comment}` : base);
+  }
+  for (const entry of clanAdmins) {
+    lines.push(`Admin=${entry.eosId}:${CLAN_PRIORITY_GROUP_NAME} // clan:${entry.clanName}`);
   }
   lines.push(END_MARKER);
 
@@ -67,8 +104,8 @@ export function buildManagedSegment(inputs: SegmentInputs): ManagedSegment {
   return {
     body,
     hash,
-    groupsCount: rolesWithPerms.length,
-    adminsCount: admins.length,
+    groupsCount: totalGroups,
+    adminsCount: totalAdmins,
   };
 }
 

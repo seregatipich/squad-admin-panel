@@ -8,6 +8,79 @@ import {
   spliceManagedSegment,
 } from '../src/segment.js';
 
+describe('buildManagedSegment — clan priority (CLAN-4)', () => {
+  it('emits a constant ClanPriority group and Admin lines with a clan comment, sorted by eos_id', () => {
+    const out = buildManagedSegment({
+      roles: [{ name: 'Admin', squadPermissions: ['kick'] }],
+      admins: [{ eosId: '0002a10186d9414e8e15c66eb3dbf70a', roleName: 'Admin' }],
+      clanPriority: [
+        { eosId: '0002d40486d9414e8e15c66eb3dbf70d', clanName: 'Бета' },
+        { eosId: '0002c30386d9414e8e15c66eb3dbf70c', clanName: 'Альфа' },
+      ],
+    });
+    expect(out.body).toContain('Group=ClanPriority:reserve');
+    const adminLines = out.body
+      .split('\r\n')
+      .filter((l) => l.startsWith('Admin='))
+      .map((l) => l.replace('Admin=', ''));
+    expect(adminLines).toEqual([
+      '0002a10186d9414e8e15c66eb3dbf70a:Admin',
+      '0002c30386d9414e8e15c66eb3dbf70c:ClanPriority // clan:Альфа',
+      '0002d40486d9414e8e15c66eb3dbf70d:ClanPriority // clan:Бета',
+    ]);
+    expect(out.groupsCount).toBe(2);
+    expect(out.adminsCount).toBe(3);
+  });
+
+  it('emits neither the group nor any Admin= line when clanPriority is empty or absent', () => {
+    const withEmpty = buildManagedSegment({
+      roles: [{ name: 'Admin', squadPermissions: ['kick'] }],
+      admins: [],
+      clanPriority: [],
+    });
+    const withoutField = buildManagedSegment({
+      roles: [{ name: 'Admin', squadPermissions: ['kick'] }],
+      admins: [],
+    });
+    expect(withEmpty.body).not.toContain('ClanPriority');
+    expect(withoutField.body).not.toContain('ClanPriority');
+    expect(withEmpty.hash).toBe(withoutField.hash);
+  });
+
+  it('skips the synthetic Group= line when a real role is already named ClanPriority, but still emits Admin lines', () => {
+    const out = buildManagedSegment({
+      roles: [{ name: 'ClanPriority', squadPermissions: ['reserve', 'cameraman'] }],
+      admins: [],
+      clanPriority: [{ eosId: '0002c30386d9414e8e15c66eb3dbf70c', clanName: 'Альфа' }],
+    });
+    const groupLines = out.body.split('\r\n').filter((l) => l.startsWith('Group='));
+    expect(groupLines).toEqual(['Group=ClanPriority:cameraman,reserve']);
+    expect(out.body).toContain('Admin=0002c30386d9414e8e15c66eb3dbf70c:ClanPriority // clan:Альфа');
+    expect(out.groupsCount).toBe(1);
+    expect(out.adminsCount).toBe(1);
+  });
+
+  it('produces a deterministic hash regardless of clanPriority input order', () => {
+    const a = buildManagedSegment({
+      roles: [],
+      admins: [],
+      clanPriority: [
+        { eosId: 'aaa', clanName: 'X' },
+        { eosId: 'bbb', clanName: 'Y' },
+      ],
+    });
+    const b = buildManagedSegment({
+      roles: [],
+      admins: [],
+      clanPriority: [
+        { eosId: 'bbb', clanName: 'Y' },
+        { eosId: 'aaa', clanName: 'X' },
+      ],
+    });
+    expect(a.hash).toBe(b.hash);
+  });
+});
+
 describe('buildManagedSegment', () => {
   it('emits Group= per role with permissions and Admin= per assignment, sorted', () => {
     const out = buildManagedSegment({

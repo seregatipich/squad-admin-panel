@@ -9,6 +9,7 @@ import {
   playerSessions,
   playerStatPeriods,
   players,
+  roleSquadPermissions,
   servers,
 } from '@squad/db/schema';
 import { normalizePlayerName } from '@squad/shared-config';
@@ -17,6 +18,7 @@ import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
+import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { writeAuditEntry } from '../lib/audit.js';
 
 const NAME_MAX = 32;
@@ -24,6 +26,7 @@ const TAG_MAX = 32;
 const TAGS_MAX = 16;
 const DESCRIPTION_MAX = 2000;
 const SLOTS_MAX = 999;
+const RESERVE_SQUAD_PERMISSION_KEY = 'reserve';
 
 const clanIdParams = z.object({ id: z.string().uuid() });
 
@@ -127,6 +130,8 @@ const transferBody = z.object({ player_id: z.string().uuid() });
 
 const memberParams = z.object({ id: z.string().uuid(), playerId: z.string().uuid() });
 
+const setPriorityBody = z.object({ enabled: z.boolean() });
+
 interface RosterRow {
   player_id: string;
   member_role: string;
@@ -137,6 +142,7 @@ interface RosterRow {
   eos_id: string | null;
   last_seen_at: string | null;
   online_60d: number;
+  reserve_from_role: boolean;
 }
 
 function clanSnapshot(row: ClanRow) {
@@ -168,6 +174,16 @@ function toClanDto(row: ClanRow) {
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
   };
+}
+
+/** Thrown inside the priority-toggle transaction to abort with a rollback when the pool is full. */
+class PriorityPoolLimitError extends Error {
+  constructor(
+    public readonly used: number,
+    public readonly limit: number,
+  ) {
+    super('priority_pool_limit');
+  }
 }
 
 function pgError(err: unknown): { code?: string; constraint?: string } {
@@ -391,18 +407,25 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
           hasPriority: clanMembers.hasPriority,
           joinedAt: clanMembers.joinedAt,
           canonicalName: players.canonicalName,
+          reserveFromRole: sql<boolean>`EXISTS (
+            SELECT 1 FROM role_squad_permissions rsp
+            WHERE rsp.role_id = ${players.roleId} AND rsp.squad_permission_key = ${RESERVE_SQUAD_PERMISSION_KEY}
+          )`,
         })
         .from(clanMembers)
         .innerJoin(players, eq(players.id, clanMembers.playerId))
         .where(eq(clanMembers.clanId, clan.id))
         .orderBy(asc(clanMembers.joinedAt));
+      const priorityCount = members.filter((m) => m.hasPriority).length;
       return {
         ...toClanDto(clan),
+        priority_count: priorityCount,
         members: members.map((m) => ({
           player_id: m.playerId,
           canonical_name: m.canonicalName,
           member_role: m.memberRole,
           has_priority: m.hasPriority,
+          reserve_from_role: m.reserveFromRole,
           joined_at: m.joinedAt.toISOString(),
         })),
       };
@@ -1093,10 +1116,27 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
       const expiresAt = req.body.priority_expires_at
         ? new Date(req.body.priority_expires_at)
         : null;
-      await app.db
-        .update(clans)
-        .set({ priorityExpiresAt: expiresAt, updatedAt: new Date() })
-        .where(and(eq(clans.id, clan.id), isNull(clans.deletedAt)));
+      const now = new Date();
+      // Extending/clearing the deadline resets the expirer's processed flag
+      // so priorities re-materialize on the next sync without any manual
+      // toggling — see clan-priority-expirer/src/tick.ts.
+      const resetsExpiry = expiresAt === null || expiresAt > now;
+      await app.db.transaction(async (tx) => {
+        await tx
+          .update(clans)
+          .set({
+            priorityExpiresAt: expiresAt,
+            updatedAt: now,
+            ...(resetsExpiry ? { priorityExpiryProcessed: false } : {}),
+          })
+          .where(and(eq(clans.id, clan.id), isNull(clans.deletedAt)));
+        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+          reason: 'clan.expire.update',
+          actor_player_id: req.user?.playerId ?? null,
+          enqueued_at: now.toISOString(),
+          request_id: req.id,
+        });
+      });
       const updated = await loadActiveClan(clan.id);
       if (!updated) {
         reply.code(500);
@@ -1144,6 +1184,12 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
           .update(clans)
           .set({ deletedAt: disbandedAt, updatedAt: disbandedAt })
           .where(eq(clans.id, clan.id));
+        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+          reason: 'clan.disband',
+          actor_player_id: req.user?.playerId ?? null,
+          enqueued_at: disbandedAt.toISOString(),
+          request_id: req.id,
+        });
       });
       const afterRows = await app.db.select().from(clans).where(eq(clans.id, clan.id)).limit(1);
       const after = afterRows[0];
@@ -1206,7 +1252,11 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
                cm.joined_at::text AS joined_at,
                p.canonical_name, p.steam_id64::text AS steam_id64, p.eos_id,
                p.last_seen_at::text AS last_seen_at,
-               COALESCE(pres.online, 0)::int AS online_60d
+               COALESCE(pres.online, 0)::int AS online_60d,
+               EXISTS (
+                 SELECT 1 FROM role_squad_permissions rsp
+                 WHERE rsp.role_id = p.role_id AND rsp.squad_permission_key = ${RESERVE_SQUAD_PERMISSION_KEY}
+               ) AS reserve_from_role
         FROM clan_members cm
         JOIN players p ON p.id = cm.player_id
         LEFT JOIN (
@@ -1228,8 +1278,17 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
       `)) as unknown as Array<{ total: number }>;
       const total = countRows[0]?.total ?? 0;
 
+      const priorityCountRows = (await app.db.execute(sql`
+        SELECT COUNT(*)::int AS priority_count
+        FROM clan_members cm
+        WHERE cm.clan_id = ${clan.id} AND cm.has_priority
+      `)) as unknown as Array<{ priority_count: number }>;
+      const priorityCount = priorityCountRows[0]?.priority_count ?? 0;
+
       return {
         clan_id: clan.id,
+        priority_count: priorityCount,
+        max_priority_slots: clan.maxPrioritySlots,
         items: rows.map((row) => ({
           player_id: row.player_id,
           canonical_name: row.canonical_name,
@@ -1237,6 +1296,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
           eos_id: row.eos_id,
           member_role: row.member_role,
           has_priority: row.has_priority,
+          reserve_from_role: row.reserve_from_role,
           joined_at: new Date(row.joined_at).toISOString(),
           last_seen_at: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : null,
           online_60d_seconds: Number(row.online_60d),
@@ -1397,9 +1457,27 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'sole_leader_removal' };
       }
-      await app.db
-        .delete(clanMembers)
-        .where(and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)));
+      const [removedMember] = await app.db
+        .select({ hasPriority: clanMembers.hasPriority })
+        .from(clanMembers)
+        .where(and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)))
+        .limit(1);
+      const hadPriority = removedMember?.hasPriority ?? false;
+      await app.db.transaction(async (tx) => {
+        await tx
+          .delete(clanMembers)
+          .where(
+            and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)),
+          );
+        if (hadPriority) {
+          await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+            reason: 'clan.member.remove',
+            actor_player_id: req.user?.playerId ?? null,
+            enqueued_at: new Date().toISOString(),
+            request_id: req.id,
+          });
+        }
+      });
       await writeAuditEntry(app.db, {
         actor: auditActor(req),
         actorIp: req.ip ?? null,
@@ -1411,6 +1489,137 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
         context: { requestId: req.id, method: req.method, url: req.url },
       });
       return { ok: true };
+    },
+  );
+
+  fast.put(
+    '/api/v1/clans/:id/members/:playerId/priority',
+    { schema: { params: memberParams, body: setPriorityBody }, config: { audit: false } },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      const clan = await loadActiveClan(req.params.id);
+      if (!clan) {
+        reply.code(404);
+        return { error: 'clan_not_found' };
+      }
+      const level = await clanManageLevel(clan.id, req.user);
+      if (!level) {
+        reply.code(403);
+        return { error: 'forbidden' };
+      }
+      const [member] = await app.db
+        .select({ hasPriority: clanMembers.hasPriority, roleId: players.roleId })
+        .from(clanMembers)
+        .innerJoin(players, eq(players.id, clanMembers.playerId))
+        .where(and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)))
+        .limit(1);
+      if (!member) {
+        reply.code(404);
+        return { error: 'member_not_found' };
+      }
+
+      const enabled = req.body.enabled;
+      if (enabled === member.hasPriority) {
+        const countRows = await app.db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(clanMembers)
+          .where(and(eq(clanMembers.clanId, clan.id), eq(clanMembers.hasPriority, true)));
+        return {
+          player_id: req.params.playerId,
+          has_priority: member.hasPriority,
+          priority_count: Number(countRows[0]?.count ?? 0),
+          max_priority_slots: clan.maxPrioritySlots,
+        };
+      }
+
+      if (enabled) {
+        const now = new Date();
+        if (clan.priorityExpiresAt && clan.priorityExpiresAt <= now) {
+          reply.code(409);
+          return { error: 'priority_expired' };
+        }
+        if (member.roleId) {
+          const [conflict] = await app.db
+            .select({ roleId: roleSquadPermissions.roleId })
+            .from(roleSquadPermissions)
+            .where(
+              and(
+                eq(roleSquadPermissions.roleId, member.roleId),
+                eq(roleSquadPermissions.squadPermissionKey, RESERVE_SQUAD_PERMISSION_KEY),
+              ),
+            )
+            .limit(1);
+          if (conflict) {
+            reply.code(409);
+            return { error: 'priority_source_conflict' };
+          }
+        }
+      }
+
+      let priorityCount = 0;
+      try {
+        await app.db.transaction(async (tx) => {
+          if (enabled) {
+            // Serialize concurrent toggles against the same clan so the
+            // pool-limit check below can't race past max_priority_slots.
+            await tx.execute(sql`SELECT id FROM clans WHERE id = ${clan.id} FOR UPDATE`);
+            const countRows = await tx
+              .select({ count: sql<number>`count(*)::int` })
+              .from(clanMembers)
+              .where(and(eq(clanMembers.clanId, clan.id), eq(clanMembers.hasPriority, true)));
+            const used = Number(countRows[0]?.count ?? 0);
+            if (used + 1 > clan.maxPrioritySlots) {
+              throw new PriorityPoolLimitError(used, clan.maxPrioritySlots);
+            }
+            priorityCount = used + 1;
+          } else {
+            const countRows = await tx
+              .select({ count: sql<number>`count(*)::int` })
+              .from(clanMembers)
+              .where(and(eq(clanMembers.clanId, clan.id), eq(clanMembers.hasPriority, true)));
+            priorityCount = Math.max(0, Number(countRows[0]?.count ?? 0) - 1);
+          }
+          await tx
+            .update(clanMembers)
+            .set({ hasPriority: enabled })
+            .where(
+              and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)),
+            );
+          await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+            reason: 'clan.priority.toggle',
+            actor_player_id: req.user?.playerId ?? null,
+            enqueued_at: new Date().toISOString(),
+            request_id: req.id,
+          });
+        });
+      } catch (err) {
+        if (err instanceof PriorityPoolLimitError) {
+          reply.code(409);
+          return { error: 'priority_pool_limit', limit: err.limit, used: err.used };
+        }
+        throw err;
+      }
+
+      await writeAuditEntry(app.db, {
+        actor: auditActor(req),
+        actorIp: req.ip ?? null,
+        actionType: 'clan.member.priority',
+        targetType: 'clan',
+        targetId: clan.id,
+        before: { player_id: req.params.playerId, has_priority: member.hasPriority },
+        after: { player_id: req.params.playerId, has_priority: enabled },
+        context: { requestId: req.id, method: req.method, url: req.url },
+      });
+
+      return {
+        player_id: req.params.playerId,
+        has_priority: enabled,
+        priority_count: priorityCount,
+        max_priority_slots: clan.maxPrioritySlots,
+      };
     },
   );
 

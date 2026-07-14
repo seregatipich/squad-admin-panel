@@ -13,6 +13,7 @@ import RosterPanel, {
   formatLastSeen,
   formatOnlineDuration,
   memberRoleLabel,
+  priorityErrorMessage,
   type RosterMember,
   RosterRow,
 } from './RosterPanel';
@@ -25,6 +26,7 @@ function member(overrides: Partial<RosterMember> = {}): RosterMember {
     eos_id: overrides.eos_id ?? null,
     member_role: overrides.member_role ?? 'leader',
     has_priority: overrides.has_priority ?? true,
+    reserve_from_role: overrides.reserve_from_role ?? false,
     joined_at: overrides.joined_at ?? '2026-01-01T00:00:00.000Z',
     last_seen_at: overrides.last_seen_at ?? '2026-07-01T12:00:00.000Z',
     online_60d_seconds: overrides.online_60d_seconds ?? 7200,
@@ -32,6 +34,7 @@ function member(overrides: Partial<RosterMember> = {}): RosterMember {
 }
 
 const noop = () => {};
+const noopToggle = () => {};
 
 describe('RosterPanel helpers', () => {
   it('formats online duration in hours and minutes', () => {
@@ -55,6 +58,34 @@ describe('RosterPanel helpers', () => {
   });
 });
 
+describe('priorityErrorMessage', () => {
+  it('renders the pool-limit message with usage numbers when present', () => {
+    expect(priorityErrorMessage({ error: 'priority_pool_limit', used: 5, limit: 5 })).toBe(
+      'Лимит пула приоритетов исчерпан (5 из 5)',
+    );
+  });
+
+  it('falls back to a fixed pool-limit message without usage numbers', () => {
+    expect(priorityErrorMessage({ error: 'priority_pool_limit' })).toBe(
+      'Лимит пула приоритетов исчерпан',
+    );
+  });
+
+  it('renders the expiry message', () => {
+    expect(priorityErrorMessage({ error: 'priority_expired' })).toBe('Срок приоритета клана истёк');
+  });
+
+  it('renders the source-conflict message', () => {
+    expect(priorityErrorMessage({ error: 'priority_source_conflict' })).toBe(
+      'Приоритет уже предоставлен через роль игрока',
+    );
+  });
+
+  it('falls back to a generic message for unknown codes', () => {
+    expect(priorityErrorMessage({ error: 'something_else' })).toContain('something_else');
+  });
+});
+
 describe('deriveCapabilities', () => {
   const roster = [
     member({ player_id: 'p-leader', member_role: 'leader' }),
@@ -64,30 +95,58 @@ describe('deriveCapabilities', () => {
 
   it('grants full control to a global clan manager', () => {
     const caps = deriveCapabilities({ player_id: 'p-outsider', can_manage_clans: true }, roster);
-    expect(caps).toEqual({ canManageFull: true, canAdd: true, canRemoveMembers: true });
+    expect(caps).toEqual({
+      canManageFull: true,
+      canAdd: true,
+      canRemoveMembers: true,
+      canTogglePriority: true,
+    });
   });
 
   it('grants full control to the clan leader', () => {
     const caps = deriveCapabilities({ player_id: 'p-leader', can_manage_clans: false }, roster);
     expect(caps.canManageFull).toBe(true);
+    expect(caps.canTogglePriority).toBe(true);
   });
 
-  it('grants a deputy add/remove but not full control', () => {
+  it('grants a deputy add/remove/priority-toggle but not full control', () => {
     const caps = deriveCapabilities({ player_id: 'p-deputy', can_manage_clans: false }, roster);
     expect(caps.canManageFull).toBe(false);
     expect(caps.canAdd).toBe(true);
     expect(caps.canRemoveMembers).toBe(true);
+    expect(caps.canTogglePriority).toBe(true);
   });
 
   it('grants a rank-and-file member nothing', () => {
     const caps = deriveCapabilities({ player_id: 'p-member', can_manage_clans: false }, roster);
-    expect(caps).toEqual({ canManageFull: false, canAdd: false, canRemoveMembers: false });
+    expect(caps).toEqual({
+      canManageFull: false,
+      canAdd: false,
+      canRemoveMembers: false,
+      canTogglePriority: false,
+    });
   });
 });
 
 describe('RosterRow', () => {
-  const fullCaps = { canManageFull: true, canAdd: true, canRemoveMembers: true };
-  const deputyCaps = { canManageFull: false, canAdd: true, canRemoveMembers: true };
+  const fullCaps = {
+    canManageFull: true,
+    canAdd: true,
+    canRemoveMembers: true,
+    canTogglePriority: true,
+  };
+  const deputyCaps = {
+    canManageFull: false,
+    canAdd: true,
+    canRemoveMembers: true,
+    canTogglePriority: true,
+  };
+  const memberCaps = {
+    canManageFull: false,
+    canAdd: false,
+    canRemoveMembers: false,
+    canTogglePriority: false,
+  };
 
   it('shows transfer + role select for a non-leader when the actor has full control', () => {
     const html = renderToStaticMarkup(
@@ -100,6 +159,7 @@ describe('RosterRow', () => {
             onChangeRole={noop}
             onRemove={noop}
             onTransfer={noop}
+            onTogglePriority={noopToggle}
           />
         </tbody>
       </table>,
@@ -120,6 +180,7 @@ describe('RosterRow', () => {
             onChangeRole={noop}
             onRemove={noop}
             onTransfer={noop}
+            onTogglePriority={noopToggle}
           />
         </tbody>
       </table>,
@@ -140,6 +201,7 @@ describe('RosterRow', () => {
             onChangeRole={noop}
             onRemove={noop}
             onTransfer={noop}
+            onTogglePriority={noopToggle}
           />
         </tbody>
       </table>,
@@ -160,11 +222,73 @@ describe('RosterRow', () => {
             onChangeRole={noop}
             onRemove={noop}
             onTransfer={noop}
+            onTogglePriority={noopToggle}
           />
         </tbody>
       </table>,
     );
     expect(html).not.toContain('Удалить');
+  });
+
+  it('renders an enabled priority checkbox for a manager', () => {
+    const html = renderToStaticMarkup(
+      <table>
+        <tbody>
+          <RosterRow
+            member={member({ has_priority: true })}
+            caps={fullCaps}
+            busy={false}
+            onChangeRole={noop}
+            onRemove={noop}
+            onTransfer={noop}
+            onTogglePriority={noopToggle}
+          />
+        </tbody>
+      </table>,
+    );
+    expect(html).toContain('type="checkbox"');
+    expect(html).toContain('checked');
+    expect(html).not.toContain('disabled=""');
+  });
+
+  it('renders a locked, disabled checkbox with a tooltip when priority comes from a role', () => {
+    const html = renderToStaticMarkup(
+      <table>
+        <tbody>
+          <RosterRow
+            member={member({ reserve_from_role: true })}
+            caps={fullCaps}
+            busy={false}
+            onChangeRole={noop}
+            onRemove={noop}
+            onTransfer={noop}
+            onTogglePriority={noopToggle}
+          />
+        </tbody>
+      </table>,
+    );
+    expect(html).toContain('Приоритет из другого источника');
+    expect(html).toContain('disabled=""');
+  });
+
+  it('renders a read-only priority indicator for a rank-and-file viewer', () => {
+    const html = renderToStaticMarkup(
+      <table>
+        <tbody>
+          <RosterRow
+            member={member({ has_priority: true })}
+            caps={memberCaps}
+            busy={false}
+            onChangeRole={noop}
+            onRemove={noop}
+            onTransfer={noop}
+            onTogglePriority={noopToggle}
+          />
+        </tbody>
+      </table>,
+    );
+    expect(html).not.toContain('type="checkbox"');
+    expect(html).toContain('да');
   });
 });
 

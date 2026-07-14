@@ -10,6 +10,7 @@ export interface RosterMember {
   eos_id: string | null;
   member_role: string;
   has_priority: boolean;
+  reserve_from_role: boolean;
   joined_at: string;
   last_seen_at: string | null;
   online_60d_seconds: number;
@@ -21,6 +22,34 @@ interface RosterResponse {
   total: number;
   page: number;
   limit: number;
+  priority_count: number;
+  max_priority_slots: number;
+}
+
+interface PriorityErrorBody {
+  error?: string;
+  limit?: number;
+  used?: number;
+}
+
+/**
+ * Maps a `PUT .../priority` error body to a Russian message for the error
+ * banner. `priority_pool_limit` includes the pool usage when the API
+ * returns it; other codes fall back to a fixed message.
+ */
+export function priorityErrorMessage(body: PriorityErrorBody): string {
+  switch (body.error) {
+    case 'priority_pool_limit':
+      return typeof body.used === 'number' && typeof body.limit === 'number'
+        ? `Лимит пула приоритетов исчерпан (${body.used} из ${body.limit})`
+        : 'Лимит пула приоритетов исчерпан';
+    case 'priority_expired':
+      return 'Срок приоритета клана истёк';
+    case 'priority_source_conflict':
+      return 'Приоритет уже предоставлен через роль игрока';
+    default:
+      return `Действие не выполнено: ${body.error ?? 'unknown'}`;
+  }
 }
 
 interface MeResponse {
@@ -78,6 +107,7 @@ export interface Capabilities {
   canAdd: boolean;
   canRemoveMembers: boolean;
   canManageFull: boolean;
+  canTogglePriority: boolean;
 }
 
 export function deriveCapabilities(me: MeResponse | null, members: RosterMember[]): Capabilities {
@@ -88,6 +118,9 @@ export function deriveCapabilities(me: MeResponse | null, members: RosterMember[
     canManageFull,
     canAdd: canManageFull || isDeputy,
     canRemoveMembers: canManageFull || isDeputy,
+    // Mirrors the API gate on PUT .../priority (clanManageLevel !== null):
+    // full managers and deputies may toggle, rank-and-file members may not.
+    canTogglePriority: canManageFull || isDeputy,
   };
 }
 
@@ -145,13 +178,18 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
   const caps = useMemo(() => deriveCapabilities(me, members), [me, members]);
 
   const mutate = useCallback(
-    async (playerId: string, run: () => Promise<Response>) => {
+    async (
+      playerId: string,
+      run: () => Promise<Response>,
+      mapError: (body: PriorityErrorBody) => string = (body) =>
+        `Действие не выполнено: ${body.error ?? 'unknown'}`,
+    ) => {
       setBusyPlayerId(playerId);
       try {
         const res = await run();
         if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { error?: string };
-          setErr(`Действие не выполнено: ${body.error ?? res.status}`);
+          const body = (await res.json().catch(() => ({}))) as PriorityErrorBody;
+          setErr(mapError(body));
           return false;
         }
         setErr(null);
@@ -208,6 +246,22 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
     [clanId, mutate],
   );
 
+  const togglePriority = useCallback(
+    (member: RosterMember, enabled: boolean) =>
+      mutate(
+        member.player_id,
+        () =>
+          fetch(`/api/v1/clans/${clanId}/members/${member.player_id}/priority`, {
+            method: 'PUT',
+            credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ enabled }),
+          }),
+        priorityErrorMessage,
+      ),
+    [clanId, mutate],
+  );
+
   const addMember = useCallback(
     async (playerId: string, role: string) => {
       const ok = await mutate(playerId, () =>
@@ -229,7 +283,14 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-medium">Ростер</h2>
+        <div className="flex flex-wrap items-baseline gap-3">
+          <h2 className="text-lg font-medium">Ростер</h2>
+          {roster ? (
+            <span className="text-sm text-neutral-400">
+              Приоритет: {roster.priority_count} из {roster.max_priority_slots}
+            </span>
+          ) : null}
+        </div>
         {caps.canAdd ? (
           <button
             type="button"
@@ -303,6 +364,7 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
                 onChangeRole={changeRole}
                 onRemove={removeMember}
                 onTransfer={transferLeadership}
+                onTogglePriority={togglePriority}
               />
             ))}
           </tbody>
@@ -357,6 +419,7 @@ export function RosterRow({
   onChangeRole,
   onRemove,
   onTransfer,
+  onTogglePriority,
 }: {
   member: RosterMember;
   caps: Capabilities;
@@ -364,6 +427,7 @@ export function RosterRow({
   onChangeRole: (playerId: string, role: string) => void;
   onRemove: (member: RosterMember) => void;
   onTransfer: (member: RosterMember) => void;
+  onTogglePriority: (member: RosterMember, enabled: boolean) => void;
 }) {
   const isLeader = member.member_role === 'leader';
   const canEditThisRole = caps.canManageFull && !isLeader;
@@ -400,7 +464,28 @@ export function RosterRow({
           </span>
         )}
       </td>
-      <td className="p-2 text-neutral-400">{member.has_priority ? 'да' : '—'}</td>
+      <td className="p-2">
+        {member.reserve_from_role ? (
+          <span
+            className="inline-flex items-center gap-1.5 text-neutral-500"
+            title="Приоритет из другого источника"
+          >
+            <input type="checkbox" checked disabled className="h-4 w-4 accent-neutral-600" />
+            <span className="text-xs">роль</span>
+          </span>
+        ) : caps.canTogglePriority ? (
+          <input
+            type="checkbox"
+            checked={member.has_priority}
+            disabled={busy}
+            onChange={(e) => onTogglePriority(member, e.target.checked)}
+            className="h-4 w-4 accent-sky-500 disabled:opacity-50"
+            aria-label="Приоритет в очереди"
+          />
+        ) : (
+          <span className="text-neutral-400">{member.has_priority ? 'да' : '—'}</span>
+        )}
+      </td>
       <td className="p-2 whitespace-nowrap text-neutral-400">
         {formatLastSeen(member.last_seen_at)}
       </td>
