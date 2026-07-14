@@ -64,6 +64,7 @@ import matchesRoutes from './routes/matches.js';
 import meTokensRoutes from './routes/me-tokens.js';
 import mediaRoutes from './routes/media.js';
 import messageTemplatesRoutes from './routes/message-templates.js';
+import moderationActionsRoutes from './routes/moderation-actions.js';
 import notesFeedRoutes from './routes/notes-feed.js';
 import permissionsRoutes from './routes/permissions.js';
 import playerCoplayRoutes from './routes/player-coplay.js';
@@ -195,6 +196,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(playerMatchesRoutes);
   await app.register(playerPresenceRoutes);
   await app.register(playerCoplayRoutes);
+  await app.register(moderationActionsRoutes);
   await app.register(playerDossierStatsRoutes);
   await app.register(playerGeoAnomaliesRoutes);
   await app.register(leaderboardsRoutes);
