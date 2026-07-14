@@ -1,4 +1,5 @@
 import { externalBanSources, externalBans } from '@squad/db/schema';
+import { EXTERNAL_BAN_CACHE_VERSION_KEY } from '@squad/shared-types';
 import { eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -9,12 +10,14 @@ import { encrypt, serialize } from '../lib/crypto.js';
 
 const BAN_SOURCE_FORMATS = ['squad_bans_cfg', 'battlemetrics_json', 'json_generic', 'csv'] as const;
 const TRUST_LEVELS = ['trusted', 'normal', 'low'] as const;
+const ON_MATCH_ACTIONS = ['none', 'alert', 'kick'] as const;
 
 const createBody = z.object({
   name: z.string().trim().min(1).max(128),
   url: z.string().url().max(2048),
   format: z.enum(BAN_SOURCE_FORMATS),
   trust_level: z.enum(TRUST_LEVELS).default('normal'),
+  on_match: z.enum(ON_MATCH_ACTIONS).default('alert'),
   discord_url: z.string().url().max(2048).nullable().optional(),
   auth_header: z.string().min(1).max(1024).nullable().optional(),
   enabled: z.boolean().default(true),
@@ -27,6 +30,7 @@ const updateBody = z.object({
   url: z.string().url().max(2048).optional(),
   format: z.enum(BAN_SOURCE_FORMATS).optional(),
   trust_level: z.enum(TRUST_LEVELS).optional(),
+  on_match: z.enum(ON_MATCH_ACTIONS).optional(),
   discord_url: z.string().url().max(2048).nullable().optional(),
   auth_header: z.string().min(1).max(1024).nullable().optional(),
   enabled: z.boolean().optional(),
@@ -43,6 +47,7 @@ interface SourceRow {
   format: string;
   authHeaderEncrypted: Buffer | null;
   trustLevel: string;
+  onMatch: string;
   discordUrl: string | null;
   enabled: boolean;
   pollIntervalMinutes: number;
@@ -61,6 +66,7 @@ interface PublicSource {
   url: string;
   format: string;
   trust_level: string;
+  on_match: string;
   discord_url: string | null;
   enabled: boolean;
   poll_interval_minutes: number;
@@ -82,6 +88,7 @@ function toPublic(row: SourceRow, recordCount: number): PublicSource {
     url: row.url,
     format: row.format,
     trust_level: row.trustLevel,
+    on_match: row.onMatch,
     discord_url: row.discordUrl,
     enabled: row.enabled,
     poll_interval_minutes: row.pollIntervalMinutes,
@@ -103,6 +110,7 @@ function auditSnapshot(source: PublicSource) {
     url: source.url,
     format: source.format,
     trust_level: source.trust_level,
+    on_match: source.on_match,
     discord_url: source.discord_url,
     enabled: source.enabled,
     poll_interval_minutes: source.poll_interval_minutes,
@@ -195,6 +203,10 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
     { schema: { body: createBody }, config: { audit: false } },
     async (req, reply) => {
       if (denyManage(req, reply)) return;
+      if (req.body.on_match === 'kick' && req.body.trust_level !== 'trusted') {
+        reply.code(422);
+        return { error: 'kick_requires_trusted_source' };
+      }
       const id = uuidv7();
       const authHeaderEncrypted =
         req.body.auth_header != null
@@ -206,6 +218,7 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
         url: req.body.url,
         format: req.body.format,
         trustLevel: req.body.trust_level,
+        onMatch: req.body.on_match,
         discordUrl: req.body.discord_url ?? null,
         authHeaderEncrypted,
         enabled: req.body.enabled,
@@ -254,6 +267,7 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
       if (req.body.url !== undefined) updates.url = req.body.url;
       if (req.body.format !== undefined) updates.format = req.body.format;
       if (req.body.trust_level !== undefined) updates.trustLevel = req.body.trust_level;
+      if (req.body.on_match !== undefined) updates.onMatch = req.body.on_match;
       if (req.body.discord_url !== undefined) updates.discordUrl = req.body.discord_url;
       if (req.body.enabled !== undefined) updates.enabled = req.body.enabled;
       if (req.body.poll_interval_minutes !== undefined)
@@ -266,10 +280,17 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
             : serialize(encrypt(app.encryptionKey, req.body.auth_header));
       }
       if (Object.keys(updates).length > 0) {
+        const nextTrustLevel = req.body.trust_level ?? before.trustLevel;
+        const nextOnMatch = req.body.on_match ?? before.onMatch;
+        if (nextOnMatch === 'kick' && nextTrustLevel !== 'trusted') {
+          reply.code(422);
+          return { error: 'kick_requires_trusted_source' };
+        }
         await app.db
           .update(externalBanSources)
           .set(updates)
           .where(eq(externalBanSources.id, req.params.id));
+        await app.redis.incr(EXTERNAL_BAN_CACHE_VERSION_KEY);
       }
       const refreshed = (await app.db
         .select()
@@ -311,6 +332,7 @@ const banSourcesRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'ban_source_not_found' };
       }
       await app.db.delete(externalBanSources).where(eq(externalBanSources.id, req.params.id));
+      await app.redis.incr(EXTERNAL_BAN_CACHE_VERSION_KEY);
       await writeAuditEntry(app.db, {
         actor: actorFrom(req),
         actorIp: req.ip ?? null,

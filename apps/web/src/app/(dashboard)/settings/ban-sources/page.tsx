@@ -9,6 +9,7 @@ interface BanSource {
   url: string;
   format: string;
   trust_level: string;
+  on_match: string;
   discord_url: string | null;
   enabled: boolean;
   poll_interval_minutes: number;
@@ -39,6 +40,12 @@ const TRUST_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'low', label: 'Низкий' },
 ];
 
+const ON_MATCH_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'none', label: 'Только запись события' },
+  { value: 'alert', label: 'Алерт без кика' },
+  { value: 'kick', label: 'Кик (только trusted)' },
+];
+
 const TRUST_BADGE: Record<string, string> = {
   trusted: 'border-emerald-800 bg-emerald-950/50 text-emerald-300',
   normal: 'border-sky-800 bg-sky-950/50 text-sky-300',
@@ -63,6 +70,7 @@ const EMPTY_FORM = {
   url: '',
   format: 'squad_bans_cfg',
   trust_level: 'normal',
+  on_match: 'alert',
   discord_url: '',
   auth_header: '',
   poll_interval_minutes: 60,
@@ -109,6 +117,7 @@ export default function BanSourcesPage() {
           url: form.url.trim(),
           format: form.format,
           trust_level: form.trust_level,
+          on_match: form.on_match,
           discord_url: form.discord_url.trim() || null,
           auth_header: form.auth_header.trim() || null,
           poll_interval_minutes: form.poll_interval_minutes,
@@ -271,6 +280,22 @@ export default function BanSourcesPage() {
                 />
               </label>
               <label className="block text-xs">
+                <span className="mb-1 block text-neutral-400">Действие при совпадении</span>
+                <select
+                  value={form.on_match}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, on_match: event.target.value }))
+                  }
+                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
+                >
+                  {ON_MATCH_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-xs">
                 <span className="mb-1 block text-neutral-400">Интервал опроса (мин, ≥15)</span>
                 <input
                   type="number"
@@ -336,6 +361,10 @@ export default function BanSourcesPage() {
                     </span>
                     <span className="rounded bg-neutral-900 px-2 py-0.5 text-[10px] uppercase text-neutral-400">
                       {formatLabel(source.format)}
+                    </span>
+                    <span className="rounded bg-neutral-900 px-2 py-0.5 text-[10px] text-neutral-400">
+                      {ON_MATCH_OPTIONS.find((option) => option.value === source.on_match)?.label ??
+                        source.on_match}
                     </span>
                     {source.has_auth_header ? (
                       <span

@@ -28,6 +28,7 @@ export const externalBanSources = pgTable(
     format: text('format').notNull(),
     authHeaderEncrypted: bytea('auth_header_encrypted'),
     trustLevel: text('trust_level').notNull().default('normal'),
+    onMatch: text('on_match').notNull().default('alert'),
     discordUrl: text('discord_url'),
     enabled: boolean('enabled').notNull().default(true),
     pollIntervalMinutes: integer('poll_interval_minutes').notNull().default(60),
@@ -47,6 +48,10 @@ export const externalBanSources = pgTable(
     trustLevelChk: check(
       'external_ban_sources_trust_level_chk',
       sql`${table.trustLevel} IN ('trusted','normal','low')`,
+    ),
+    onMatchChk: check(
+      'external_ban_sources_on_match_chk',
+      sql`${table.onMatch} IN ('none','alert','kick')`,
     ),
     lastSyncStatusChk: check(
       'external_ban_sources_last_sync_status_chk',

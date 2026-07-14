@@ -1,6 +1,7 @@
 import type { DatabaseClient } from '@squad/db';
 import { externalBanSources, externalBans } from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
+import { EXTERNAL_BAN_CACHE_VERSION_KEY } from '@squad/shared-types';
 import { eq } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { parseBanList } from './adapters/index.js';
@@ -57,6 +58,8 @@ export interface SyncSourceDeps {
     errorText: string,
     consecutiveFailures: number,
   ) => Promise<number>;
+  /** Best-effort invalidation signal for log-ingest's in-memory CBAN-4 cache. */
+  onSyncComplete?: () => Promise<void>;
   diag: Pick<Diag, 'emit'>;
 }
 
@@ -92,6 +95,7 @@ export async function syncSource(
       lastSyncAt: syncedAt,
       importedCount: applied.added + applied.updated,
     });
+    if (deps.onSyncComplete) await deps.onSyncComplete().catch(() => undefined);
 
     await deps.persistAndPublish(
       buildBansyncEnvelope('bansync.completed', {
@@ -211,6 +215,7 @@ export function createSyncSourceDeps(
         .where(eq(externalBanSources.id, sourceId));
     },
     persistAndPublish: (envelope) => persistAndPublish(db, redis, envelope),
+    onSyncComplete: () => redis.incr(EXTERNAL_BAN_CACHE_VERSION_KEY).then(() => undefined),
     raiseFailureAlert: (source, errorText, consecutiveFailures) =>
       raiseBanSyncFailureAlert(db, redis, source, errorText, consecutiveFailures),
     diag,

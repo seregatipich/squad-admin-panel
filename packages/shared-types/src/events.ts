@@ -32,6 +32,7 @@ export const EVENT_TYPES = [
   'performance.degraded',
 
   'banname.matched',
+  'externalban.matched',
   'bansync.completed',
   'bansync.failed',
   'server.seeding_started',
@@ -97,6 +98,24 @@ export const bannameMatchedPayload = z
   })
   .strict();
 export type BannameMatchedPayload = z.infer<typeof bannameMatchedPayload>;
+
+export const externalBanMatchedPayload = z
+  .object({
+    player_id: z.string().uuid().nullable(),
+    source_id: z.string().uuid(),
+    external_ban_id: z.string().uuid(),
+    steam_id64: z.string().regex(/^\d{17}$/),
+    eos_id: z
+      .string()
+      .regex(/^[a-f0-9]{32}$/)
+      .nullable(),
+    name: z.string().min(1).max(128),
+    source_name: z.string().min(1).max(128),
+    reason: z.string().max(1024).nullable(),
+    action: z.enum(['none', 'alert', 'kick']),
+  })
+  .strict();
+export type ExternalBanMatchedPayload = z.infer<typeof externalBanMatchedPayload>;
 
 export const rconPlayersPolledPayload = z
   .object({
@@ -170,6 +189,7 @@ export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodTypeAny>> = {
   'server.stopped': serverLifecyclePayload,
   'server.crashed': serverLifecyclePayload,
   'banname.matched': bannameMatchedPayload,
+  'externalban.matched': externalBanMatchedPayload,
   'server.seeding_started': seedingTransitionPayload,
   'server.seeding_ended': seedingTransitionPayload,
 };

@@ -140,6 +140,32 @@ describeIfDb('ban-sources RBAC (can_manage_ban_sources)', () => {
     expect(body.trust_level).toBe('trusted');
     expect(body.enabled).toBe(true);
     expect(body.poll_interval_minutes).toBe(30);
+    expect(body.on_match).toBe('alert');
+  });
+
+  it('rejects kick for a non-trusted source with 422', async () => {
+    const { statusCode, body } = await createSource(managerCookie, {
+      trust_level: 'normal',
+      on_match: 'kick',
+    });
+    expect(statusCode).toBe(422);
+    expect(body).toEqual({ error: 'kick_requires_trusted_source' });
+  });
+
+  it('allows kick only for a trusted source and rejects a later trust downgrade', async () => {
+    const { statusCode, body } = await createSource(managerCookie, { on_match: 'kick' });
+    expect(statusCode).toBe(201);
+    expect(body.on_match).toBe('kick');
+    const id = body.id as string;
+
+    const downgrade = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/ban-sources/${id}`,
+      headers: { cookie: managerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ trust_level: 'normal' }),
+    });
+    expect(downgrade.statusCode).toBe(422);
+    expect(downgrade.json()).toEqual({ error: 'kick_requires_trusted_source' });
   });
 
   it('allows the Owner to create (201)', async () => {
