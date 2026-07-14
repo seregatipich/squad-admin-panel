@@ -308,6 +308,72 @@ services:
         condition: service_healthy
     logging: *default-logging
 
+  worker-clan-guard:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-guard } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      CLAN_GUARD_INTERVAL_MS: ${CLAN_GUARD_INTERVAL_MS:-120000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  worker-ban-sync:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: ban-sync } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      BAN_SYNC_INTERVAL_MS: ${BAN_SYNC_INTERVAL_MS:-60000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  worker-clan-priority-expirer:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: clan-priority-expirer } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      CLAN_PRIORITY_EXPIRER_INTERVAL_MS: ${CLAN_PRIORITY_EXPIRER_INTERVAL_MS:-60000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  worker-discord:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: discord } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
