@@ -47,6 +47,7 @@ export * from './report-evidence.js';
 export * from './role-permissions.js';
 export * from './role-squad-permissions.js';
 export * from './roles.js';
+export * from './seed-schedule.js';
 export * from './server-credentials.js';
 export * from './server-settings.js';
 export * from './servers.js';

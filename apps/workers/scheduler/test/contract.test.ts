@@ -4,7 +4,14 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import Redis from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
 
-const TEST_REDIS_URL = 'redis://127.0.0.1:6379/14';
+// DATABASE_URL/REDIS_URL are intentionally read from the ambient environment
+// (never hardcoded here) — see scripts/new-test-db.sh / AGENTS.md local test
+// setup. Without a real DATABASE_URL the worker fails to start and this
+// contract test times out waiting for the heartbeat key, which is the
+// expected local-worktree behavior; the orchestrator runs this against a
+// provisioned DB.
+const TEST_REDIS_URL =
+  process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? 'redis://127.0.0.1:6379/14';
 const ENTRY = path.resolve(import.meta.dirname, '../dist/index.js');
 const WORKER = 'scheduler';
 const HB_KEY = `worker:heartbeat:${WORKER}`;
@@ -13,7 +20,7 @@ let child: ChildProcess | null = null;
 let redis: Redis | null = null;
 
 afterEach(async () => {
-  if (child && !child.killed) {
+  if (child && child.exitCode === null && child.signalCode === null) {
     child.kill('SIGTERM');
     await new Promise((r) => child?.once('exit', r));
   }
