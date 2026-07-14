@@ -4,7 +4,7 @@ import type { EventEnvelope, EventType } from '@squad/shared-types';
 
 /**
  * Pure `EventType` (the shared event bus, EVT-1) → `DiscordEventType` (the
- * twelve editable Discord templates, DISCORD-1/3) mapping.
+ * editable Discord templates, DISCORD-1/3) mapping.
  *
  * Scope note (DISCORD-2 vs. its stated dependencies): the events stream
  * today only carries `EVENT_TYPES` from `@squad/shared-types` — server
@@ -20,6 +20,8 @@ import type { EventEnvelope, EventType } from '@squad/shared-types';
  */
 const EVENT_TYPE_MAP: Partial<Record<EventType, DiscordEventType>> = {
   'server.crashed': 'server_crashed',
+  'server.seeding_started': 'seed_needed',
+  'seed.call_sent': 'seed_needed',
   'match.ended': 'match_ended',
   'match.started': 'map_changed',
 };
@@ -63,11 +65,14 @@ export function buildTemplateContext({
   if (serverName) context.server_name = serverName;
 
   const { payload } = envelope;
-  const layer = readString(payload, 'layer');
+  const layer = readString(payload, 'layer') ?? readString(payload, 'seed_layer');
   if (layer) context.map = layer;
 
   const reason = readString(payload, 'reason');
   if (reason) context.reason = reason;
+
+  const joinLink = readString(payload, 'join_link');
+  if (joinLink) context.join_link = joinLink;
 
   const playerName = readString(payload, 'name');
   if (playerName) context.player_name = playerName;

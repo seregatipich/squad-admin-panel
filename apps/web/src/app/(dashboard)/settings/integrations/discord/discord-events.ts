@@ -11,6 +11,7 @@ export const DISCORD_EVENT_TYPES = [
   'marked_player_joined',
   'drift_detected',
   'server_monitoring',
+  'seed_needed',
 ] as const;
 
 export type DiscordEventType = (typeof DISCORD_EVENT_TYPES)[number];
@@ -28,6 +29,7 @@ const EVENT_LABELS: Record<DiscordEventType, string> = {
   marked_player_joined: 'Зашёл отмеченный игрок',
   drift_detected: 'Обнаружен дрейф конфигурации',
   server_monitoring: 'Мониторинг сервера',
+  seed_needed: 'Нужны сидеры',
 };
 
 export function eventLabel(type: string): string {

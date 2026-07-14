@@ -18,6 +18,7 @@ const createBody = z.object({
   starts_at: z.string().datetime(),
   seed_layer: z.string().min(1).max(128),
   broadcast_text: z.string().max(512).nullable().optional(),
+  notify_minutes_before: z.number().int().min(0).max(1440).optional(),
   recurrence: z.string().min(1).max(64).nullable().optional(),
   enabled: z.boolean().optional(),
 });
@@ -27,6 +28,7 @@ const updateBody = z
     starts_at: z.string().datetime().optional(),
     seed_layer: z.string().min(1).max(128).optional(),
     broadcast_text: z.string().max(512).nullable().optional(),
+    notify_minutes_before: z.number().int().min(0).max(1440).optional(),
     recurrence: z.string().min(1).max(64).nullable().optional(),
     enabled: z.boolean().optional(),
   })
@@ -40,6 +42,7 @@ interface SeedScheduleEntryOut {
   starts_at: string;
   seed_layer: string;
   broadcast_text: string | null;
+  notify_minutes_before: number;
   recurrence: string | null;
   enabled: boolean;
   created_by: string | null;
@@ -55,6 +58,7 @@ function serialize(row: typeof seedSchedule.$inferSelect): SeedScheduleEntryOut 
     starts_at: row.startsAt.toISOString(),
     seed_layer: row.seedLayer,
     broadcast_text: row.broadcastText,
+    notify_minutes_before: row.notifyMinutesBefore,
     recurrence: row.recurrence,
     enabled: row.enabled,
     created_by: row.createdBy,
@@ -259,6 +263,7 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
           startsAt: new Date(req.body.starts_at),
           seedLayer: req.body.seed_layer,
           broadcastText: req.body.broadcast_text ?? null,
+          notifyMinutesBefore: req.body.notify_minutes_before ?? 0,
           recurrence: req.body.recurrence ?? null,
           createdBy: req.user?.playerId ?? null,
           enabled: req.body.enabled ?? true,
@@ -321,6 +326,9 @@ const serverSeedScheduleRoutes: FastifyPluginAsync = async (app) => {
       if (req.body.starts_at !== undefined) updateSet.startsAt = new Date(req.body.starts_at);
       if (req.body.seed_layer !== undefined) updateSet.seedLayer = req.body.seed_layer;
       if (req.body.broadcast_text !== undefined) updateSet.broadcastText = req.body.broadcast_text;
+      if (req.body.notify_minutes_before !== undefined) {
+        updateSet.notifyMinutesBefore = req.body.notify_minutes_before;
+      }
       if (req.body.recurrence !== undefined) updateSet.recurrence = req.body.recurrence;
       if (req.body.enabled !== undefined) updateSet.enabled = req.body.enabled;
 

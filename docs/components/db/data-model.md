@@ -615,6 +615,24 @@ Setting `deleted_at = now()` retires a row. The partial unique index allows a fr
 
 ---
 
+## `seed_subscriptions`
+
+Per-player opt-in channels for SEED-4 “need seeders” notifications. The
+composite key makes channel toggles idempotent; rows are removed with either
+the player or server.
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `player_id` | `uuid` | NO | — | FK → `players.id` ON DELETE CASCADE |
+| `server_id` | `uuid` | NO | — | FK → `servers.id` ON DELETE CASCADE |
+| `channel` | `text` | NO | — | `email` or `webpush` |
+| `created_at` | `timestamptz` | NO | `now()` | |
+
+Primary key: (`player_id`, `server_id`, `channel`). Index:
+`seed_subscriptions_server_channel_idx` on (`server_id`, `channel`).
+
+---
+
 ## `sessions`
 
 Browser session tokens. The `id` column is an opaque string (UUID or prefixed random value) set as the `__Host-sid` cookie. Sessions are looked up on every authenticated request.
@@ -663,3 +681,4 @@ Applied in order by `pnpm db:migrate`. Journal: [`packages/db/drizzle/meta/_jour
 | 0013 | `0013_servers_soft_delete` | 2026-04-30 | Adds `servers.deleted_at` / `deleted_by_steam_id64` / `deletion_backup_marker_id`; replaces full unique `servers_slug_key` with partial `servers_slug_active_key` (where `deleted_at IS NULL`); adds `servers_deleted_at_idx` |
 | 0017 | `0017_diagnostic_events` | 2026-04-28 | Creates `diagnostic_events` partitioned table (range on `ts`, daily) with composite PK, severity check, FK → `servers.id` ON DELETE SET NULL, and 25-day bootstrap of partitions |
 | 0018 | `0018_diagnostic_events_utc_invariant` | 2026-04-28 | No-op (SELECT 1). Documents the UTC-bounds invariant for `diagnostic_events` partitions enforced by `worker-event-partition`. Required because `0017`'s bootstrap used session-TZ-dependent `current_date` |
+| 0077 | `0077_seed4_notifications` | 2026-07-14 | Adds `seed_subscriptions`, schedule notification lead time, built-in AUTO-3 seed-call rules, and the Discord `seed_needed` template |

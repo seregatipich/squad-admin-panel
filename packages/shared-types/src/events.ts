@@ -33,6 +33,7 @@ export const EVENT_TYPES = [
 
   'banname.matched',
   'externalban.matched',
+  'seed.call_sent',
   'bansync.completed',
   'bansync.failed',
   'server.seeding_started',
@@ -117,6 +118,18 @@ export const externalBanMatchedPayload = z
   .strict();
 export type ExternalBanMatchedPayload = z.infer<typeof externalBanMatchedPayload>;
 
+export const seedCallSentPayload = z
+  .object({
+    server_name: z.string().min(1).max(128),
+    join_link: z.string().url().max(512),
+    seed_layer: z.string().max(128).nullable(),
+    scheduled_for: z.string().datetime().nullable(),
+    source: z.enum(['manual', 'schedule']),
+    message: z.string().max(512),
+  })
+  .strict();
+export type SeedCallSentPayload = z.infer<typeof seedCallSentPayload>;
+
 export const rconPlayersPolledPayload = z
   .object({
     players: z.array(
@@ -172,6 +185,8 @@ export const seedingTransitionPayload = z
     live_at: z.number().int().positive(),
     hysteresis: z.number().int().nonnegative(),
     progress_pct: z.number().int().min(0).max(100),
+    server_name: z.string().min(1).max(128).optional(),
+    join_link: z.string().url().max(512).optional(),
   })
   .strict();
 export type SeedingTransitionPayload = z.infer<typeof seedingTransitionPayload>;
@@ -190,6 +205,7 @@ export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodTypeAny>> = {
   'server.crashed': serverLifecyclePayload,
   'banname.matched': bannameMatchedPayload,
   'externalban.matched': externalBanMatchedPayload,
+  'seed.call_sent': seedCallSentPayload,
   'server.seeding_started': seedingTransitionPayload,
   'server.seeding_ended': seedingTransitionPayload,
 };

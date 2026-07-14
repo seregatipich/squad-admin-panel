@@ -7,6 +7,7 @@ export interface SeedScheduleEntry {
   starts_at: string;
   seed_layer: string;
   broadcast_text: string | null;
+  notify_minutes_before: number;
   /** 5-field cron expression, UTC. Null = one-off. */
   recurrence: string | null;
   enabled: boolean;

@@ -14,7 +14,7 @@
  * a warn log) — a missing value never throws, so delivery is never dropped.
  */
 
-/** The twelve Discord event types that own an editable template. */
+/** The Discord event types that own an editable template. */
 export const DISCORD_TEMPLATE_EVENT_TYPES = [
   'server_crashed',
   'ban_issued',
@@ -28,6 +28,7 @@ export const DISCORD_TEMPLATE_EVENT_TYPES = [
   'marked_player_joined',
   'drift_detected',
   'server_monitoring',
+  'seed_needed',
 ] as const;
 
 export type DiscordTemplateEventType = (typeof DISCORD_TEMPLATE_EVENT_TYPES)[number];
@@ -48,6 +49,7 @@ export const DISCORD_TEMPLATE_PLACEHOLDERS = [
   'duration',
   'actor_name',
   'map',
+  'join_link',
 ] as const;
 
 export type DiscordTemplatePlaceholder = (typeof DISCORD_TEMPLATE_PLACEHOLDERS)[number];
@@ -312,6 +314,20 @@ export const DEFAULT_DISCORD_TEMPLATES: readonly DefaultTemplate[] = [
       description: 'Monitoring update for `{server_name}`.',
       color: COLOR_GREY,
       fields: [{ name: 'Server', value: '{server_name}', inline: true }],
+    },
+  },
+  {
+    eventType: 'seed_needed',
+    locale: 'en',
+    template: {
+      title: 'Seeders needed',
+      url: null,
+      description: '`{server_name}` needs seeders. Join: {join_link}',
+      color: COLOR_ORANGE,
+      fields: [
+        { name: 'Server', value: '{server_name}', inline: true },
+        { name: 'Layer', value: '{map}', inline: true },
+      ],
     },
   },
 ];

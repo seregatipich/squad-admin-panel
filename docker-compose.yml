@@ -330,6 +330,7 @@ services:
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
+      PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:-https://squad-panel.lan}
       SCHEDULER_INTERVAL_MS: ${SCHEDULER_INTERVAL_MS:-30000}
     depends_on:
       postgres:

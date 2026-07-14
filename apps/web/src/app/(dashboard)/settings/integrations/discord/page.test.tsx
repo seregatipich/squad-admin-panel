@@ -25,10 +25,11 @@ describe('DiscordIntegrationPage', () => {
     expect(typeof DiscordIntegrationPage).toBe('function');
   });
 
-  it('exposes the twelve fixed event types', () => {
-    expect(DISCORD_EVENT_TYPES).toHaveLength(12);
+  it('exposes the fixed event types', () => {
+    expect(DISCORD_EVENT_TYPES).toHaveLength(13);
     expect(DISCORD_EVENT_TYPES).toContain('server_crashed');
     expect(DISCORD_EVENT_TYPES).toContain('server_monitoring');
+    expect(DISCORD_EVENT_TYPES).toContain('seed_needed');
   });
 
   it('maps event types to Russian labels and falls back to the raw key', () => {

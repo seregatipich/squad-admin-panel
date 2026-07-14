@@ -68,6 +68,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/settings/chat-flags', label: 'Флаги чата', permission: 'role:edit' },
       { href: '/settings/alt-detection', label: 'Альт-детект', permission: 'player:view_ips' },
       { href: '/settings/alerts', label: 'Оповещения' },
+      { href: '/settings/seed-notifications', label: 'Уведомления о сидинге' },
       { href: '/settings/whitelist', label: 'Whitelist', permission: 'whitelist:view' },
       { href: '/settings/economy', label: 'Экономика' },
       { href: '/settings/clan-guard', label: 'Защита клан-тегов' },

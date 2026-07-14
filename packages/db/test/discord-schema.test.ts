@@ -29,9 +29,10 @@ describe('discord schema', () => {
     expect(cols.serverId.notNull).toBe(false);
   });
 
-  it('exposes the fixed twelve event types', () => {
-    expect(DISCORD_EVENT_TYPES).toHaveLength(12);
+  it('exposes the fixed Discord event types', () => {
+    expect(DISCORD_EVENT_TYPES).toHaveLength(13);
     expect(DISCORD_EVENT_TYPES).toContain('server_crashed');
+    expect(DISCORD_EVENT_TYPES).toContain('seed_needed');
     expect(DISCORD_EVENT_TYPES).toContain('drift_detected');
     expect(isDiscordEventType('ban_issued')).toBe(true);
     expect(isDiscordEventType('not_a_real_event')).toBe(false);

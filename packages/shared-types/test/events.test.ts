@@ -8,6 +8,7 @@ import {
   playerConnectedPayload,
   playerDisconnectedPayload,
   rconPlayersPolledPayload,
+  seedCallSentPayload,
   seedingTransitionPayload,
   serverLifecyclePayload,
   validatePayload,
@@ -83,6 +84,34 @@ describe('externalban.matched payload schema', () => {
     };
     expect(externalBanMatchedPayload.safeParse(payload).success).toBe(true);
     expect(externalBanMatchedPayload.safeParse({ ...payload, extra: true }).success).toBe(false);
+  });
+});
+
+describe('seed.call_sent payload schema', () => {
+  it('accepts a manual call with a Steam join link', () => {
+    expect(
+      seedCallSentPayload.safeParse({
+        server_name: 'RU #1',
+        join_link: 'steam://connect/10.0.0.1:27015',
+        seed_layer: null,
+        scheduled_for: null,
+        source: 'manual',
+        message: 'Нужен сид',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a call without a valid join link', () => {
+    expect(
+      seedCallSentPayload.safeParse({
+        server_name: 'RU #1',
+        join_link: 'not-a-link',
+        seed_layer: null,
+        scheduled_for: null,
+        source: 'manual',
+        message: 'Нужен сид',
+      }).success,
+    ).toBe(false);
   });
 });
 

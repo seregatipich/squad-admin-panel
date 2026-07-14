@@ -15,6 +15,7 @@ function makeEntry(overrides: Partial<SeedScheduleEntry> = {}): SeedScheduleEntr
     starts_at: '2026-07-11T10:00:00.000Z',
     seed_layer: 'Sumari Seed v1',
     broadcast_text: null,
+    notify_minutes_before: 0,
     recurrence: null,
     enabled: true,
     created_by: null,

@@ -1,7 +1,15 @@
-import { type DatabaseClient, events, type GeoLookup, layers } from '@squad/db';
+import {
+  type DatabaseClient,
+  events,
+  type GeoLookup,
+  layers,
+  notifySeedSubscribers,
+  serverSettings,
+  servers,
+} from '@squad/db';
 import type { Diag } from '@squad/diag';
 import { CONSUMER_GROUP, type EventEnvelope, STREAM_NAME } from '@squad/shared-types';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import type { Logger } from 'pino';
 import { v7 as uuidv7 } from 'uuid';
@@ -303,6 +311,31 @@ class PerServerSupervisor {
   ): Promise<void> {
     const eventId = uuidv7();
     const ts = new Date();
+    let eventPayload = payload;
+    if (type === 'server.seeding_started') {
+      try {
+        const [server, settings] = await Promise.all([
+          this.opts.db.query.servers.findFirst({
+            where: and(eq(servers.id, this.target.serverId), isNull(servers.deletedAt)),
+          }),
+          this.opts.db.query.serverSettings.findFirst({
+            where: eq(serverSettings.serverId, this.target.serverId),
+          }),
+        ]);
+        if (server && settings) {
+          eventPayload = {
+            ...payload,
+            server_name: server.displayName,
+            join_link: `steam://connect/${this.target.host}:${settings.gamePort}`,
+          };
+        }
+      } catch (err) {
+        this.opts.log.warn(
+          { err: (err as Error).message, serverId: this.target.serverId },
+          'seeding notification context lookup failed',
+        );
+      }
+    }
     const envelope: EventEnvelope = {
       event_id: eventId,
       version: 1,
@@ -311,7 +344,7 @@ class PerServerSupervisor {
       ts: ts.toISOString(),
       actor: { kind: 'system', id: null },
       correlation_id: null,
-      payload,
+      payload: eventPayload,
     };
     try {
       await this.opts.redis.xadd(
@@ -338,11 +371,23 @@ class PerServerSupervisor {
           actorKind: 'system',
           actorId: null,
           correlationId: null,
-          payload,
+          payload: eventPayload,
         })
         .onConflictDoNothing({ target: [events.eventId, events.occurredAt] });
     } catch (err) {
       this.opts.log.warn({ err: (err as Error).message, type }, 'seeding event persist failed');
+    }
+    if (type === 'server.seeding_started') {
+      await notifySeedSubscribers(this.opts.db, this.opts.redis, {
+        serverId: this.target.serverId,
+        eventKind: 'server.seeding_started',
+        payload: eventPayload,
+      }).catch((err: unknown) => {
+        this.opts.log.warn(
+          { err: (err as Error).message, serverId: this.target.serverId },
+          'seeding alert notification failed',
+        );
+      });
     }
   }
 
