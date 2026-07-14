@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { BridgeClient } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { createDiag, type Diag } from '@squad/diag';
@@ -8,7 +9,13 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
-import { createSeedScheduleDeps } from './deps.js';
+import {
+  createRotationProfileDeps,
+  createRotationScheduleDeps,
+  createSeedScheduleDeps,
+} from './deps.js';
+import { runRotationProfileTick } from './rotation-profile-tick.js';
+import { runRotationScheduleTick } from './rotation-schedule-tick.js';
 import { runSeedScheduleTick } from './seed-schedule-tick.js';
 
 const log = pino({
@@ -17,6 +24,7 @@ const log = pino({
 });
 
 const TICK_INTERVAL_MS = Number(process.env.SCHEDULER_INTERVAL_MS ?? 30_000);
+const DEFAULT_ROTATION_PROFILE_APPLY_HOUR = 4;
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -27,12 +35,17 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+function rotationProfileApplyHour(): number {
+  const value = Number(process.env.ROTATION_PROFILE_APPLY_HOUR);
+  return Number.isInteger(value) && value >= 0 && value <= 23
+    ? value
+    : DEFAULT_ROTATION_PROFILE_APPLY_HOUR;
+}
+
 /**
- * `@squad/worker-scheduler`: currently hosts SEED-3's (#142) seed-schedule
- * execution tick (`runSeedScheduleTick`). AUTO-2 (#73), a generic scheduled-
- * job registry, is designated to absorb this package's role later; until
- * then this is a single-purpose interval worker, structured like
- * `apps/workers/role-expirer` (pure tick + deps + heartbeat/diag/shutdown).
+ * `@squad/worker-scheduler`: hosts the SEED-3 and ROT-4 scheduled ticks.
+ * RCON changes are queued for worker-rcon; weekly profiles use the host
+ * bridge to replace only the managed LayerRotation.cfg segment.
  */
 async function main() {
   const sql = postgres(requiredEnv('DATABASE_URL'), { max: 4, prepare: false });
@@ -46,6 +59,11 @@ async function main() {
   redis.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
 
   const diag: Diag = createDiag({ redis, log });
+  const bridge = new BridgeClient({
+    socketPath: process.env.PANEL_BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
+    onLog: (message, meta) => log.info({ ...meta }, message),
+  });
+  await bridge.connect();
   let lastTickAt: string | null = null;
   const stopHeartbeat = startHeartbeat({
     redis,
@@ -54,6 +72,9 @@ async function main() {
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
   const runtimeDeps = createSeedScheduleDeps(db, redis);
+  const rotationScheduleDeps = createRotationScheduleDeps(db, redis);
+  const rotationProfileDeps = createRotationProfileDeps(db, bridge);
+  const profileApplyHour = rotationProfileApplyHour();
 
   await diag.emit({
     component: 'worker-scheduler',
@@ -64,9 +85,13 @@ async function main() {
   });
 
   async function tick(): Promise<void> {
-    const result = await runSeedScheduleTick({ ...runtimeDeps, diag });
+    const [seedResult, rotationResult, profileResult] = await Promise.all([
+      runSeedScheduleTick({ ...runtimeDeps, diag }),
+      runRotationScheduleTick({ ...rotationScheduleDeps, diag }),
+      runRotationProfileTick({ ...rotationProfileDeps, applyHour: profileApplyHour, diag }),
+    ]);
     lastTickAt = new Date().toISOString();
-    log.info(result, 'seed-schedule tick');
+    log.info({ seedResult, rotationResult, profileResult }, 'scheduler tick');
   }
 
   // Registered before the first tick (not after) so a SIGTERM/SIGINT that
@@ -85,6 +110,7 @@ async function main() {
       payload: { sig },
     });
     stopHeartbeat();
+    await bridge.close();
     await sql.end({ timeout: 5 });
     await redis.quit().catch(() => undefined);
     process.exit(0);

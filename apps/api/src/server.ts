@@ -99,6 +99,7 @@ import serverMetricsRoutes from './routes/server-metrics.js';
 import serverRnsquadjsRoutes from './routes/server-rnsquadjs.js';
 import serverRosterRoutes from './routes/server-roster.js';
 import serverRotationRoutes from './routes/server-rotation.js';
+import serverRotationCalendarRoutes from './routes/server-rotation-calendar.js';
 import serverSeedScheduleRoutes from './routes/server-seed-schedule.js';
 import serverSeedingRoutes from './routes/server-seeding.js';
 import serverSettingsRoutes from './routes/server-settings.js';
@@ -202,6 +203,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(serverMetricsRoutes);
   await app.register(serverConfigRoutes);
   await app.register(serverRotationRoutes);
+  await app.register(serverRotationCalendarRoutes);
   await app.register(depotRoutes);
   await app.register(permissionsRoutes);
   await app.register(rolesRoutes);

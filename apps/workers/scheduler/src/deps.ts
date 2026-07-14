@@ -1,13 +1,30 @@
+import type { BridgeClient } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
-import { auditLog, seedSchedule } from '@squad/db/schema';
+import {
+  auditLog,
+  rotationProfiles,
+  rotationSchedule,
+  seedSchedule,
+  servers,
+} from '@squad/db/schema';
 import {
   type RconOperatorCommandName,
   rconCommandRequestSchema,
   rconCommandStream,
 } from '@squad/shared-types';
-import { eq } from 'drizzle-orm';
+import { eq, isNull } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
+import type {
+  RotationProfileAuditEntry,
+  RotationProfileEntry,
+  RotationProfileTickDeps,
+} from './rotation-profile-tick.js';
+import type {
+  RotationScheduleAuditEntry,
+  RotationScheduleEntry,
+  RotationScheduleTickDeps,
+} from './rotation-schedule-tick.js';
 import type {
   SeedingLiveness,
   SeedScheduleAuditEntry,
@@ -121,6 +138,104 @@ export async function writeSeedScheduleAuditEntry(
   });
 }
 
+/** Loads enabled one-off rotation changes for the scheduler tick. */
+export async function loadEnabledRotationScheduleEntries(
+  db: DatabaseClient,
+): Promise<RotationScheduleEntry[]> {
+  const rows = await db.select().from(rotationSchedule).where(eq(rotationSchedule.enabled, true));
+  return rows.map((row) => ({
+    id: row.id,
+    serverId: row.serverId,
+    scheduledAt: row.scheduledAt,
+    layer: row.layer,
+    mode: row.mode,
+    lastExecutedAt: row.lastExecutedAt,
+  }));
+}
+
+/** Advances a rotation schedule cursor only after its RCON request is queued. */
+export async function setRotationScheduleLastExecutedAt(
+  db: DatabaseClient,
+  entryId: string,
+  executedAt: Date,
+): Promise<void> {
+  await db
+    .update(rotationSchedule)
+    .set({ lastExecutedAt: executedAt, updatedAt: new Date() })
+    .where(eq(rotationSchedule.id, entryId));
+}
+
+export async function writeRotationScheduleAuditEntry(
+  db: DatabaseClient,
+  entry: RotationScheduleAuditEntry,
+): Promise<void> {
+  await db.insert(auditLog).values({
+    actorKind: entry.actor.kind,
+    actorPlayerId: null,
+    actorTokenId: null,
+    actorSystemLabel: entry.actor.label,
+    actorIp: null,
+    actionType: entry.actionType,
+    targetType: entry.targetType,
+    targetId: entry.targetId,
+    beforeSnapshot: null,
+    afterSnapshot: null,
+    context: entry.context,
+    statusCode: null,
+    rowHash: Buffer.from([]),
+  });
+}
+
+/** Loads profiles together with each server's configured timezone. */
+export async function loadRotationProfiles(db: DatabaseClient): Promise<RotationProfileEntry[]> {
+  const rows = await db
+    .select({
+      id: rotationProfiles.id,
+      serverId: rotationProfiles.serverId,
+      serverTimezone: servers.timezone,
+      name: rotationProfiles.name,
+      weekday: rotationProfiles.weekday,
+      layers: rotationProfiles.layers,
+      lastAppliedAt: rotationProfiles.lastAppliedAt,
+    })
+    .from(rotationProfiles)
+    .innerJoin(servers, eq(servers.id, rotationProfiles.serverId))
+    .where(isNull(servers.deletedAt));
+  return rows;
+}
+
+export async function setRotationProfileLastAppliedAt(
+  db: DatabaseClient,
+  profileId: string,
+  appliedAt: Date,
+): Promise<void> {
+  await db
+    .update(rotationProfiles)
+    .set({ lastAppliedAt: appliedAt, updatedAt: new Date() })
+    .where(eq(rotationProfiles.id, profileId));
+}
+
+export async function writeRotationProfileAuditEntry(
+  db: DatabaseClient,
+  entry: RotationProfileAuditEntry,
+): Promise<void> {
+  await db.insert(auditLog).values({
+    actorKind: entry.actor.kind,
+    actorPlayerId: null,
+    actorTokenId: null,
+    actorSystemLabel: entry.actor.label,
+    actorIp: null,
+    actionType: entry.actionType,
+    targetType: entry.targetType,
+    targetId: entry.targetId,
+    beforeSnapshot: null,
+    afterSnapshot: null,
+    context: entry.context,
+    statusCode: null,
+    rowHash: Buffer.from([]),
+  });
+}
+
 export function createSeedScheduleDeps(
   db: DatabaseClient,
   redis: Pick<Redis, 'get' | 'xadd'>,
@@ -132,5 +247,32 @@ export function createSeedScheduleDeps(
     sendRconCommand: (input) => sendRconCommand(redis, input),
     setLastExecutedAt: (entryId, executedAt) => setLastExecutedAt(db, entryId, executedAt),
     writeAuditEntry: (entry) => writeSeedScheduleAuditEntry(db, entry),
+  };
+}
+
+export function createRotationScheduleDeps(
+  db: DatabaseClient,
+  redis: Pick<Redis, 'get' | 'xadd'>,
+): Omit<RotationScheduleTickDeps, 'now' | 'diag'> {
+  return {
+    loadEnabledEntries: () => loadEnabledRotationScheduleEntries(db),
+    isDepotUpdating: () => isDepotUpdating(redis),
+    sendRconCommand: (input) => sendRconCommand(redis, input),
+    setLastExecutedAt: (entryId, executedAt) =>
+      setRotationScheduleLastExecutedAt(db, entryId, executedAt),
+    writeAuditEntry: (entry) => writeRotationScheduleAuditEntry(db, entry),
+  };
+}
+
+export function createRotationProfileDeps(
+  db: DatabaseClient,
+  bridge: Pick<BridgeClient, 'fileRead' | 'fileAtomicWrite'>,
+): Omit<RotationProfileTickDeps, 'now' | 'diag'> {
+  return {
+    loadProfiles: () => loadRotationProfiles(db),
+    bridge,
+    setLastAppliedAt: (profileId, appliedAt) =>
+      setRotationProfileLastAppliedAt(db, profileId, appliedAt),
+    writeAuditEntry: (entry) => writeRotationProfileAuditEntry(db, entry),
   };
 }

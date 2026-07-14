@@ -251,7 +251,12 @@ services:
     environment:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
+      PANEL_BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
+      ROTATION_PROFILE_APPLY_HOUR: ${ROTATION_PROFILE_APPLY_HOUR:-4}
       SCHEDULER_INTERVAL_MS: ${SCHEDULER_INTERVAL_MS:-30000}
+    user: "0:${PANEL_GID:-987}"
+    volumes:
+      - /run/panel-host-bridge:/run/panel-host-bridge
     depends_on:
       postgres:
         condition: service_healthy

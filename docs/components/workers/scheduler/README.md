@@ -4,16 +4,22 @@
 
 Will execute cron-style scheduled tasks against Squad servers: periodic restarts, layer rotations, broadcast messages on a timed schedule.
 
-## Current status — P2 stub
+## Current status
 
-No-op process. Logs `"worker-scheduler idle — deferred to later phase"` and loops with a 60 s internal heartbeat log. Does not publish a Redis heartbeat.
+The worker runs the SEED-3 seed schedule and ROT-4 rotation calendar ticks every
+30 seconds by default. One-off rotation entries enqueue `AdminSetNextLayer` or
+`AdminChangeLayer` through worker-rcon. Weekly profiles replace only the
+managed `LayerRotation.cfg` segment through the host bridge.
 
 ## Code location
 
 ```
 apps/workers/scheduler/
   src/
-    index.ts    — P2 stub
+    index.ts                    — tick loop, heartbeat, and graceful shutdown
+    seed-schedule-tick.ts       — SEED-3 execution
+    rotation-schedule-tick.ts   — ROT-4 one-off execution
+    rotation-profile-tick.ts    — ROT-4 weekly managed-segment application
 ```
 
 ## Related docs
