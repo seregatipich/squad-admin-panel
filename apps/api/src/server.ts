@@ -80,6 +80,7 @@ import playerPresenceRoutes from './routes/player-presence.js';
 import playerSeedContributionRoutes from './routes/player-seed-contribution.js';
 import playerRoutes from './routes/players.js';
 import publicBanlistRoutes from './routes/public-banlist.js';
+import publicClansRoutes from './routes/public-clans.js';
 import publicStatsRoutes from './routes/public-stats.js';
 import reportActionsRoutes from './routes/report-actions.js';
 import reportAnalyticsRoutes from './routes/report-analytics.js';
@@ -259,6 +260,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(liveRoutes);
   await app.register(analyticsRoutes);
   await app.register(publicStatsRoutes);
+  await app.register(publicClansRoutes);
   await app.register(publicBanlistRoutes);
   await app.register(steamRoutes);
   await app.register(setupRoutes);

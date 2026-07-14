@@ -70,6 +70,7 @@ import playerPresenceRoutes from '../../src/routes/player-presence.js';
 import playerSeedContributionRoutes from '../../src/routes/player-seed-contribution.js';
 import playerRoutes from '../../src/routes/players.js';
 import publicBanlistRoutes from '../../src/routes/public-banlist.js';
+import publicClansRoutes from '../../src/routes/public-clans.js';
 import publicStatsRoutes from '../../src/routes/public-stats.js';
 import reportActionsRoutes from '../../src/routes/report-actions.js';
 import reportAnalyticsRoutes from '../../src/routes/report-analytics.js';
@@ -503,6 +504,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(adminsCfgRoutes);
   await app.register(analyticsRoutes);
   await app.register(publicStatsRoutes);
+  await app.register(publicClansRoutes);
   await app.register(publicBanlistRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(banSourcesRoutes);
