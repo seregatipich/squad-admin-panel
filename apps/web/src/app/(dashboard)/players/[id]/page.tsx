@@ -169,6 +169,15 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
       <BonusSection playerId={playerId} />
 
+      <div className="flex justify-end">
+        <Link
+          href={`/players/${playerId}/compare`}
+          className="text-sky-400 hover:text-sky-300 text-xs"
+        >
+          Сравнить онлайн →
+        </Link>
+      </div>
+
       <PresenceSection playerId={playerId} />
 
       <NotesSection playerId={playerId} me={me} />
