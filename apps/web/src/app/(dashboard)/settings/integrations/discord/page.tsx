@@ -4,8 +4,10 @@ import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   DISCORD_EVENT_TYPES,
   type DiscordEventType,
+  describeTestSendOutcome,
   eventLabel,
   looksLikeWebhookUrl,
+  type TestSendOutcome,
 } from './discord-events';
 
 const POLL_MS = 60_000;
@@ -56,6 +58,8 @@ export default function DiscordIntegrationPage() {
   const [creating, setCreating] = useState(false);
 
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, TestSendOutcome>>({});
   const [banner, setBanner] = useState<Banner>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [forbidden, setForbidden] = useState(false);
@@ -195,6 +199,30 @@ export default function DiscordIntegrationPage() {
       setBanner({ kind: 'err', text: (err as Error).message });
     } finally {
       setBusyId(null);
+    }
+  }
+
+  async function testWebhook(id: string) {
+    setTestingId(id);
+    setTestResults((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    try {
+      const res = await fetch(`/api/v1/integrations/discord/webhooks/${id}/test`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const body = (await res.json().catch(() => ({}))) as { error?: string; status?: number };
+      setTestResults((prev) => ({ ...prev, [id]: describeTestSendOutcome(res.ok, body) }));
+    } catch {
+      setTestResults((prev) => ({
+        ...prev,
+        [id]: { kind: 'err', text: 'Сетевая ошибка при отправке.' },
+      }));
+    } finally {
+      setTestingId(null);
     }
   }
 
@@ -376,13 +404,14 @@ export default function DiscordIntegrationPage() {
                 <th className="py-2 pr-2">URL</th>
                 <th className="py-2 pr-2">@everyone</th>
                 <th className="py-2 pr-2">Статус</th>
+                <th className="py-2 pr-2">Тест</th>
                 <th className="py-2 pr-2"></th>
               </tr>
             </thead>
             <tbody>
               {webhooks.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-3 text-center text-xs text-neutral-500">
+                  <td colSpan={7} className="py-3 text-center text-xs text-neutral-500">
                     Вебхуков пока нет.
                   </td>
                 </tr>
@@ -410,6 +439,29 @@ export default function DiscordIntegrationPage() {
                       >
                         {row.enabled ? 'вкл' : 'выкл'}
                       </button>
+                    </td>
+                    <td className="py-2 pr-2">
+                      <div className="flex flex-col items-start gap-1">
+                        <button
+                          type="button"
+                          disabled={testingId === row.id}
+                          onClick={() => testWebhook(row.id)}
+                          className="rounded border border-sky-900 px-3 py-0.5 text-xs text-sky-300 hover:border-sky-700 disabled:opacity-40"
+                        >
+                          {testingId === row.id ? 'Отправка…' : 'Тест'}
+                        </button>
+                        {testResults[row.id] ? (
+                          <span
+                            className={`text-[11px] ${
+                              testResults[row.id]?.kind === 'ok'
+                                ? 'text-emerald-400'
+                                : 'text-red-400'
+                            }`}
+                          >
+                            {testResults[row.id]?.text}
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="py-2 pr-2 text-right">
                       <button

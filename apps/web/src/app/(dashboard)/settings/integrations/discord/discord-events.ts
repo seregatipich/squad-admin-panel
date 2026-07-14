@@ -39,3 +39,30 @@ export function looksLikeWebhookUrl(url: string): boolean {
     url.trim(),
   );
 }
+
+export interface TestSendOutcome {
+  kind: 'ok' | 'err';
+  text: string;
+}
+
+/**
+ * Turns a `POST /webhooks/:id/test` response into the Russian inline message
+ * shown next to the "Тест" button. `ok` distinguishes a 2xx from any other
+ * status; `body` is the parsed JSON error payload (or `{}` if unparseable).
+ */
+export function describeTestSendOutcome(
+  ok: boolean,
+  body: { error?: string; status?: number },
+): TestSendOutcome {
+  if (ok) return { kind: 'ok', text: 'Отправлено' };
+  switch (body.error) {
+    case 'discord_error':
+      return { kind: 'err', text: `Discord вернул ${body.status ?? '?'}` };
+    case 'unreachable':
+      return { kind: 'err', text: 'Вебхук недоступен' };
+    case 'webhook_not_found':
+      return { kind: 'err', text: 'Вебхук не найден' };
+    default:
+      return { kind: 'err', text: 'Не удалось отправить тестовое сообщение' };
+  }
+}

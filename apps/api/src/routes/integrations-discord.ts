@@ -87,6 +87,22 @@ const previewBody = z.object({
   context: z.record(z.string(), z.string()).default({}),
 });
 
+/** Cyrillic-safe placeholder values for POST /webhooks/:id/test — exercises markdown escaping the same way real player names would. */
+const TEST_SEND_SAMPLE_CONTEXT: Record<string, string> = {
+  player_name: 'Тестовый Игрок',
+  player_id: '00000000-0000-0000-0000-000000000000',
+  player_url: '#',
+  steam_id64: '76561198000000000',
+  eos_id: '00000000000000000000000000000000',
+  server_name: 'Тестовый сервер',
+  reason: 'Тестовая причина',
+  duration: 'постоянно',
+  actor_name: 'Администратор',
+  map: 'Narva_RAAS_v1',
+};
+
+const TEST_SEND_TIMEOUT_MS = 5_000;
+
 function templateView(row: DiscordMessageTemplateRow) {
   return {
     event_type: row.eventType,
@@ -393,6 +409,90 @@ const integrationsDiscordRoutes: FastifyPluginAsync = async (app) => {
         context: auditContext(req),
         statusCode: 200,
       });
+      return { ok: true };
+    },
+  );
+
+  fast.post(
+    '/api/v1/integrations/discord/webhooks/:id/test',
+    {
+      schema: { params: idParam },
+      config: { permissions: [INTEGRATION_PERMISSION], audit: false },
+    },
+    async (req, reply) => {
+      if (isForbidden(req, reply)) return;
+      const [webhook] = await app.db
+        .select()
+        .from(discordWebhooks)
+        .where(eq(discordWebhooks.id, req.params.id))
+        .limit(1);
+      if (!webhook) {
+        reply.code(404);
+        return { error: 'webhook_not_found' };
+      }
+
+      const [templateRow] = await app.db
+        .select()
+        .from(discordMessageTemplates)
+        .where(eq(discordMessageTemplates.eventType, webhook.eventType))
+        .limit(1);
+      const template = templateRow
+        ? (templateRow.template as DiscordEmbedTemplate)
+        : defaultDiscordTemplate(webhook.eventType)?.template;
+      if (!template) {
+        reply.code(404);
+        return { error: 'template_not_found' };
+      }
+
+      const embed = renderDiscordTemplate(template, TEST_SEND_SAMPLE_CONTEXT);
+      const payload: Record<string, unknown> = { embeds: [embed] };
+      if (webhook.mentionEveryone) {
+        payload.content = '@everyone';
+        payload.allowed_mentions = { parse: ['everyone'] };
+      }
+
+      const url = decryptString(
+        app.encryptionKey,
+        deserialize(Buffer.from(webhook.webhookUrlEncrypted as unknown as Buffer)),
+      );
+
+      let outcome: 'ok' | 'discord_error' | 'unreachable';
+      let discordStatus: number | null = null;
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(TEST_SEND_TIMEOUT_MS),
+        });
+        discordStatus = res.status;
+        outcome = res.ok ? 'ok' : 'discord_error';
+      } catch {
+        // Network error, DNS failure, connection refused, or the AbortSignal
+        // timeout firing — all surface identically to the operator as
+        // "webhook unreachable"; the exact cause is not actionable from the UI.
+        outcome = 'unreachable';
+      }
+
+      await writeAuditEntry(app.db, {
+        actor: auditActor(req),
+        actorIp: req.ip ?? null,
+        actionType: 'integration.discord.webhook.test',
+        targetType: 'discord_webhook',
+        targetId: req.params.id,
+        after: { outcome, discord_status: discordStatus },
+        context: auditContext(req),
+        statusCode: outcome === 'ok' ? 200 : 502,
+      });
+
+      if (outcome === 'unreachable') {
+        reply.code(502);
+        return { error: 'unreachable' };
+      }
+      if (outcome === 'discord_error') {
+        reply.code(502);
+        return { error: 'discord_error', status: discordStatus };
+      }
       return { ok: true };
     },
   );
