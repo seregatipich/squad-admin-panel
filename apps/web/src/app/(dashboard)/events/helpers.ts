@@ -79,6 +79,7 @@ export const KNOWN_EVENT_KINDS: Array<{ value: string; label: string }> = [
   { value: 'rcon.connected', label: 'RCON подключён' },
   { value: 'rcon.disconnected', label: 'RCON отключён' },
   { value: 'rcon.players_polled', label: 'Опрос игроков' },
+  { value: 'banname.matched', label: 'Совпадение по запрещённому нику' },
 ];
 
 const KIND_LABELS = new Map(KNOWN_EVENT_KINDS.map((entry) => [entry.value, entry.label]));
@@ -313,7 +314,11 @@ export function kindTone(kind: string): string {
   if (kind.startsWith('player.connected') || kind.startsWith('match.started')) {
     return 'border-emerald-900 bg-emerald-950/40 text-emerald-300';
   }
-  if (kind.startsWith('player.disconnected') || kind.startsWith('match.ended')) {
+  if (
+    kind.startsWith('player.disconnected') ||
+    kind.startsWith('match.ended') ||
+    kind.startsWith('banname.matched')
+  ) {
     return 'border-amber-900 bg-amber-950/40 text-amber-300';
   }
   return 'border-neutral-800 bg-neutral-900 text-neutral-300';

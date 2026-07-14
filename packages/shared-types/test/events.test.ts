@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  bannameMatchedPayload,
   EVENT_TYPES,
   eventEnvelope,
   matchStateChangedPayload,
@@ -278,5 +279,44 @@ describe('exhaustive payload schemas', () => {
         actor: { kind: 'bot', id: null },
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('banname.matched payload schema', () => {
+  const basePayload = {
+    player_id: '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c6',
+    rule_id: '01903f7d-6a15-7c81-aa91-1e4fa9f9b7c7',
+    nickname: 'CheaterXYZ',
+    action: 'kick' as const,
+    escalated: false,
+  };
+
+  it('accepts a well-formed kick match', () => {
+    expect(bannameMatchedPayload.safeParse(basePayload).success).toBe(true);
+  });
+
+  it('accepts action=alert with escalated=true', () => {
+    expect(
+      bannameMatchedPayload.safeParse({ ...basePayload, action: 'alert', escalated: true }).success,
+    ).toBe(true);
+  });
+
+  it('accepts player_id=null (player not yet resolved)', () => {
+    expect(bannameMatchedPayload.safeParse({ ...basePayload, player_id: null }).success).toBe(true);
+  });
+
+  it('rejects an unknown action value', () => {
+    expect(bannameMatchedPayload.safeParse({ ...basePayload, action: 'ban' }).success).toBe(false);
+  });
+
+  it('rejects a missing rule_id', () => {
+    const { rule_id: _omit, ...rest } = basePayload;
+    void _omit;
+    expect(bannameMatchedPayload.safeParse(rest).success).toBe(false);
+  });
+
+  it('validatePayload dispatches banname.matched through its schema', () => {
+    expect(validatePayload('banname.matched', basePayload).ok).toBe(true);
+    expect(validatePayload('banname.matched', { ...basePayload, action: 'ban' }).ok).toBe(false);
   });
 });
