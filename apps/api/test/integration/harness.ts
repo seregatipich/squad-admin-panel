@@ -69,6 +69,7 @@ import playerMatchesRoutes from '../../src/routes/player-matches.js';
 import playerNotesRoutes from '../../src/routes/player-notes.js';
 import playerPresenceRoutes from '../../src/routes/player-presence.js';
 import playerSeedContributionRoutes from '../../src/routes/player-seed-contribution.js';
+import playerSteamFriendCheckRoutes from '../../src/routes/player-steam-friend-check.js';
 import playerRoutes from '../../src/routes/players.js';
 import publicBanlistRoutes from '../../src/routes/public-banlist.js';
 import publicStatsRoutes from '../../src/routes/public-stats.js';
@@ -466,6 +467,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(playerPresenceRoutes);
   await app.register(playerCompareOnlineRoutes);
   await app.register(playerSeedContributionRoutes);
+  await app.register(playerSteamFriendCheckRoutes);
   await app.register(playerCoplayRoutes);
   await app.register(playerAltCandidatesRoutes);
   await app.register(playerBanAltWarningRoutes);

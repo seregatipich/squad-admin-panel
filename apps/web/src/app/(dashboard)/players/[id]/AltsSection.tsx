@@ -9,6 +9,7 @@ import {
   type PlayerLink,
   splitCandidates,
 } from './alt-links';
+import { SteamFriendCheck, type SteamFriendCheckResult } from './SteamFriendCheck';
 
 const CONFIDENCE_LABELS_RU: Record<AltCandidate['confidence'], string> = {
   high: 'высокая',
@@ -56,6 +57,7 @@ export function AltsSection({ playerId }: { playerId: string }) {
   const [candidates, setCandidates] = useState<AltCandidate[]>([]);
   const [showAll, setShowAll] = useState(false);
   const [savingCandidate, setSavingCandidate] = useState<string | null>(null);
+  const [friendResults, setFriendResults] = useState<Record<string, SteamFriendCheckResult>>({});
 
   const load = useCallback(
     async (force = false) => {
@@ -116,6 +118,7 @@ export function AltsSection({ playerId }: { playerId: string }) {
               confidence: candidate.confidence,
               shared_ip_count: candidate.shared_ip_count,
               signals: candidate.signals,
+              steam_friend: friendResults[candidate.player_id] ?? null,
             },
           }),
         });
@@ -127,7 +130,7 @@ export function AltsSection({ playerId }: { playerId: string }) {
         setSavingCandidate(null);
       }
     },
-    [load, playerId],
+    [friendResults, load, playerId],
   );
 
   if (hidden) return null;
@@ -231,6 +234,18 @@ export function AltsSection({ playerId }: { playerId: string }) {
                           <span className="rounded border border-red-900 bg-red-950/50 px-1.5 py-0.5 text-[10px] uppercase text-red-300">
                             перманентный бан
                           </span>
+                        ) : null}
+                        {!isRejected ? (
+                          <SteamFriendCheck
+                            playerId={playerId}
+                            otherPlayerId={candidate.player_id}
+                            onResult={(result) =>
+                              setFriendResults((current) => ({
+                                ...current,
+                                [candidate.player_id]: result,
+                              }))
+                            }
+                          />
                         ) : null}
                         {isRejected ? (
                           <span className="text-xs">

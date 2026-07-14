@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { type PickedPlayer, PlayerSearchSelect } from '../../../issues/PlayerSearchSelect';
 import { fmtDuration, utcDayKey, weekStartMsForEndDay } from '../presence';
+import { SteamFriendCheck } from '../SteamFriendCheck';
 import {
   buildCompareWeekGrid,
   type CompareOnlineResponse,
@@ -119,6 +120,7 @@ export function CompareOnlineView({
             <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-neutral-100">
               {other.canonical_name}
             </span>
+            <SteamFriendCheck key={other.id} playerId={playerId} otherPlayerId={other.id} />
             <button
               type="button"
               onClick={() => setOther(null)}

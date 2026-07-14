@@ -79,6 +79,7 @@ import playerMatchesRoutes from './routes/player-matches.js';
 import playerNotesRoutes from './routes/player-notes.js';
 import playerPresenceRoutes from './routes/player-presence.js';
 import playerSeedContributionRoutes from './routes/player-seed-contribution.js';
+import playerSteamFriendCheckRoutes from './routes/player-steam-friend-check.js';
 import playerRoutes from './routes/players.js';
 import publicBanlistRoutes from './routes/public-banlist.js';
 import publicStatsRoutes from './routes/public-stats.js';
@@ -218,6 +219,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(playerPresenceRoutes);
   await app.register(playerCompareOnlineRoutes);
   await app.register(playerSeedContributionRoutes);
+  await app.register(playerSteamFriendCheckRoutes);
   await app.register(playerCoplayRoutes);
   await app.register(playerAltCandidatesRoutes);
   await app.register(playerBanAltWarningRoutes);
