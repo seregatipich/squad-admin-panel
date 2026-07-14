@@ -54,6 +54,7 @@ import matchesRoutes from '../../src/routes/matches.js';
 import meTokensRoutes from '../../src/routes/me-tokens.js';
 import mediaRoutes from '../../src/routes/media.js';
 import messageTemplatesRoutes from '../../src/routes/message-templates.js';
+import moderationActionsRoutes from '../../src/routes/moderation-actions.js';
 import notesFeedRoutes from '../../src/routes/notes-feed.js';
 import permissionsRoutes from '../../src/routes/permissions.js';
 import playerCoplayRoutes from '../../src/routes/player-coplay.js';
@@ -460,6 +461,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);
   await app.register(reportsRoutes);
+  await app.register(moderationActionsRoutes);
   await app.register(eventsRoutes);
   await app.register(playerNotesRoutes);
   await app.register(notesFeedRoutes);

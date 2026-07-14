@@ -25,6 +25,7 @@ export * from './match-players.js';
 export * from './matches.js';
 export * from './media-files.js';
 export * from './message-templates.js';
+export * from './moderation-actions.js';
 export * from './panel-meta.js';
 export * from './player-api-tokens.js';
 export * from './player-coplay.js';
