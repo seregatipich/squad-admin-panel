@@ -52,9 +52,6 @@ function parseField(raw: string, min: number, max: number): number[] | null {
     }
     values.add(value);
   }
-  if (values.size === 0) {
-    throw new Error(`invalid cron field "${raw}": no values parsed`);
-  }
   return Array.from(values).sort((a, b) => a - b);
 }
 
