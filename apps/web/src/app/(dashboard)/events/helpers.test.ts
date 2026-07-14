@@ -45,6 +45,7 @@ describe('events helpers', () => {
       servers: ['srv-1', 'srv-2'],
       kinds: ['player.connected', 'match.ended'],
       playerQuery: 'rambo',
+      ruleId: '22222222-2222-2222-2222-222222222222',
       preset: 'custom',
       from: '2026-07-01',
       to: '2026-07-31',
@@ -52,6 +53,24 @@ describe('events helpers', () => {
     };
     const parsed = parseFilters(params(buildQueryString(filters)));
     expect(parsed).toEqual(filters);
+  });
+
+  it('round-trips the rule filter through the "rule" query param', () => {
+    const filters: EventFilters = { ...defaultFilters(), ruleId: 'rule-abc' };
+    const qs = buildQueryString(filters);
+    expect(new URLSearchParams(qs).get('rule')).toBe('rule-abc');
+    expect(parseFilters(params(qs))).toEqual(filters);
+  });
+
+  it('sends the rule filter as ruleId on list/count/export API queries', () => {
+    const filters: EventFilters = { ...defaultFilters(), ruleId: 'rule-abc' };
+    for (const qs of [
+      buildListApiQuery(filters),
+      buildCountApiQuery(filters),
+      buildExportApiQuery(filters),
+    ]) {
+      expect(new URLSearchParams(qs).get('ruleId')).toBe('rule-abc');
+    }
   });
 
   it('defaults to empty desc filters', () => {

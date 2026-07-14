@@ -205,6 +205,22 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
         </div>
       ) : null}
 
+      {filters.ruleId ? (
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-2 rounded border border-sky-800 bg-sky-950/40 px-2 py-1 text-xs text-sky-200">
+            Правило: {filters.ruleId.slice(0, 8)}…
+            <button
+              type="button"
+              onClick={() => navigate({ ruleId: '' })}
+              aria-label="Убрать фильтр по правилу"
+              className="text-sky-400 hover:text-sky-100"
+            >
+              ×
+            </button>
+          </span>
+        </div>
+      ) : null}
+
       <div className="flex gap-6">
         <aside className="hidden w-64 shrink-0 lg:block">
           <FilterPanel

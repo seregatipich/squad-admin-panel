@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { BanNickButton } from '@/components/BannedNameRuleModal';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
@@ -56,6 +57,7 @@ export function ChatArchive() {
   const [lastLiveAt, setLastLiveAt] = useState<Date | null>(null);
   const [servers, setServers] = useState<ServerOption[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [canBan, setCanBan] = useState(false);
 
   const serverNames = useMemo(() => {
     const map = new Map<string, string>();
@@ -81,6 +83,21 @@ export function ChatArchive() {
       .then((res) => (res.ok ? res.json() : { items: [] }))
       .then((data: { items: ServerOption[] }) => {
         if (!cancelled) setServers(data.items ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // BANNAME-3 — derives the «Забанить ник» button's visibility the same way
+  // servers/[id]/page.tsx does: from the squad `ban` permission on /api/v1/me.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((me: { squad_permissions?: string[] } | null) => {
+        if (!cancelled) setCanBan(me?.squad_permissions?.includes('ban') ?? false);
       })
       .catch(() => {});
     return () => {
@@ -211,6 +228,7 @@ export function ChatArchive() {
                     <th className="px-3 py-2 font-medium">Игрок</th>
                     <th className="px-3 py-2 font-medium">Скоуп</th>
                     <th className="px-3 py-2 font-medium">Сообщение</th>
+                    {canBan ? <th className="px-3 py-2 font-medium"></th> : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -219,6 +237,7 @@ export function ChatArchive() {
                       key={row.key}
                       row={row}
                       serverName={serverNames.get(row.serverId)}
+                      canBan={canBan}
                     />
                   ))}
                 </tbody>
@@ -275,7 +294,15 @@ export function ChatArchive() {
   );
 }
 
-function ChatTableRow({ row, serverName }: { row: ChatRow; serverName: string | undefined }) {
+function ChatTableRow({
+  row,
+  serverName,
+  canBan,
+}: {
+  row: ChatRow;
+  serverName: string | undefined;
+  canBan: boolean;
+}) {
   const scope = scopeMeta(row.scope);
   const team = teamFlagMeta(row.teamId);
   const href = playerHref(row);
@@ -325,6 +352,15 @@ function ChatTableRow({ row, serverName }: { row: ChatRow; serverName: string | 
         ) : null}
         {row.message}
       </td>
+      {canBan ? (
+        <td className="whitespace-nowrap px-3 py-2">
+          <BanNickButton
+            nick={row.nickname}
+            canBan={canBan}
+            className="rounded border border-red-900 px-1.5 py-0.5 text-[10px] text-red-400 hover:border-red-700"
+          />
+        </td>
+      ) : null}
     </tr>
   );
 }

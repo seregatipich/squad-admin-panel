@@ -3,9 +3,12 @@ import {
   BANNED_NAME_ACTIONS,
   BANNED_NAME_MATCH_TYPES,
   type BannedNameMatchType,
+  findBannedNameRuleMatch,
+  isBannedNameAction,
+  isBannedNameMatchType,
   validateBannedNamePattern,
 } from '@squad/shared-config';
-import { and, desc, eq, ilike, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -30,6 +33,10 @@ const createBody = z.object({
   reason: z.string().trim().max(512).nullish(),
   action: actionSchema.default('kick'),
   is_active: z.boolean().default(true),
+});
+
+const checkQuery = z.object({
+  nick: z.string().trim().min(1).max(256),
 });
 
 const updateBody = z.object({
@@ -161,6 +168,58 @@ const bannedNamesRoutes: FastifyPluginAsync = async (app) => {
         total: totalRows[0]?.c ?? 0,
         page,
         page_size,
+        can_mutate: hasBanPermission(req),
+      };
+    },
+  );
+
+  // BANNAME-3: lets any surface (player card, live roster, chat) check
+  // whether a nickname currently matches an active rule, so a «Ник забанен»
+  // badge / «Разбанить ник» action can be offered in place, without
+  // duplicating the enforcement matcher. Loads active rules in the same
+  // `created_at, id` order the log-ingest worker's rule cache uses, so the
+  // badge never disagrees with what actually gets kicked.
+  fast.get(
+    '/api/v1/banned-names/check',
+    { schema: { querystring: checkQuery }, config: { audit: false } },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+      const rows = await app.db
+        .select({
+          id: bannedNameRules.id,
+          pattern: bannedNameRules.pattern,
+          match_type: bannedNameRules.matchType,
+          action: bannedNameRules.action,
+          reason: bannedNameRules.reason,
+          is_active: bannedNameRules.isActive,
+        })
+        .from(bannedNameRules)
+        .where(eq(bannedNameRules.isActive, true))
+        .orderBy(asc(bannedNameRules.createdAt), asc(bannedNameRules.id));
+      const activeRules = rows.map((row) => ({
+        id: row.id,
+        pattern: row.pattern,
+        match_type: isBannedNameMatchType(row.match_type) ? row.match_type : ('exact' as const),
+        action: isBannedNameAction(row.action) ? row.action : ('kick' as const),
+        reason: row.reason,
+        is_active: row.is_active,
+      }));
+      const matched = findBannedNameRuleMatch(activeRules, req.query.nick);
+      return {
+        matched: matched !== null,
+        rule: matched
+          ? {
+              id: matched.id,
+              pattern: matched.pattern,
+              match_type: matched.match_type,
+              action: matched.action,
+              reason: matched.reason,
+              is_active: matched.is_active,
+            }
+          : null,
         can_mutate: hasBanPermission(req),
       };
     },

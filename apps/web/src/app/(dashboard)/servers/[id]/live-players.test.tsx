@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));
@@ -73,6 +73,29 @@ describe('LivePlayers', () => {
       render(<LivePlayers serverId="srv-1" canChat={true} />);
       await screen.findByText('Leader');
       expect(screen.getByRole('button', { name: /сообщение отряду/i })).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'hides the per-player «Забанить ник» button without the ban permission',
+    async () => {
+      render(<LivePlayers serverId="srv-1" canBan={false} />);
+      await screen.findByText('Leader');
+      expect(screen.queryByRole('button', { name: /забанить ник/i })).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows a per-player «Забанить ник» button with the ban permission, prefilling the modal with the roster name',
+    async () => {
+      render(<LivePlayers serverId="srv-1" canBan={true} />);
+      await screen.findByText('Leader');
+      const buttons = screen.getAllByRole('button', { name: /забанить ник «leader»/i });
+      fireEvent.click(buttons[0]);
+      const patternInput = (await screen.findByLabelText(/паттерн/i)) as HTMLInputElement;
+      expect(patternInput.value).toBe('Leader');
     },
     TEST_TIMEOUT_MS,
   );
