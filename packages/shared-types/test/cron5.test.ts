@@ -18,6 +18,9 @@ describe('parseCron5 / isValidCron5', () => {
     expect(expr.minute).toEqual([0, 30]);
     expect(expr.hour).toEqual([0, 6, 12, 18]);
     expect(expr.dayOfMonth).toEqual([1, 15]);
+
+    const numericStart = parseCron5('* * 5/10 * *');
+    expect(numericStart.dayOfMonth).toEqual([5, 15, 25]);
   });
 
   it('rejects an expression without exactly 5 fields', () => {
@@ -41,6 +44,10 @@ describe('parseCron5 / isValidCron5', () => {
   it('accepts a valid expression', () => {
     expect(isValidCron5('*/2 * * * *')).toBe(true);
   });
+
+  it('rejects a step expression with a non-positive step', () => {
+    expect(isValidCron5('*/0 * * * *')).toBe(false);
+  });
 });
 
 describe('cron5Matches', () => {
@@ -48,6 +55,12 @@ describe('cron5Matches', () => {
     const expr = parseCron5('30 14 * * *');
     expect(cron5Matches(expr, new Date('2026-07-11T14:30:00.000Z'))).toBe(true);
     expect(cron5Matches(expr, new Date('2026-07-11T14:31:00.000Z'))).toBe(false);
+  });
+
+  it('matches only within a restricted month', () => {
+    const expr = parseCron5('30 14 * 7 *');
+    expect(cron5Matches(expr, new Date('2026-07-11T14:30:00.000Z'))).toBe(true);
+    expect(cron5Matches(expr, new Date('2026-06-11T14:30:00.000Z'))).toBe(false);
   });
 
   it('matches weekly on the configured day-of-week', () => {
@@ -64,6 +77,22 @@ describe('cron5Matches', () => {
     // 2026-07-11 is a Saturday: matches via day-of-week.
     expect(cron5Matches(expr, new Date('2026-07-11T00:00:00.000Z'))).toBe(true);
     // Neither day-of-month nor day-of-week matches.
+    expect(cron5Matches(expr, new Date('2026-07-02T00:00:00.000Z'))).toBe(false);
+  });
+
+  it('rejects a day outside a day-of-month-only expression', () => {
+    const expr = parseCron5('0 0 1 * *');
+    expect(cron5Matches(expr, new Date('2026-07-02T00:00:00.000Z'))).toBe(false);
+  });
+
+  it('treats malformed undefined day fields as a non-match', () => {
+    const expr = {
+      minute: null,
+      hour: null,
+      dayOfMonth: undefined as unknown as readonly number[],
+      month: null,
+      dayOfWeek: undefined as unknown as readonly number[],
+    } as Parameters<typeof cron5Matches>[0];
     expect(cron5Matches(expr, new Date('2026-07-02T00:00:00.000Z'))).toBe(false);
   });
 });
