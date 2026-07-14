@@ -101,6 +101,7 @@ async function seedMatchPlayer(
     team?: 1 | 2 | null;
     squadName?: string | null;
     playSeconds?: number;
+    leftAt?: Date | null;
     kills?: number | null;
     deaths?: number | null;
     teamkills?: number | null;
@@ -115,6 +116,7 @@ async function seedMatchPlayer(
     squadName: opts.squadName ?? null,
     playSeconds: opts.playSeconds ?? 600,
     joinedAt: new Date('2026-06-01T10:00:00.000Z'),
+    leftAt: opts.leftAt ?? null,
     kills: opts.kills ?? null,
     deaths: opts.deaths ?? null,
     teamkills: opts.teamkills ?? null,
@@ -506,6 +508,8 @@ describeIfDb('matches API (MATCH-4)', () => {
         team: number | null;
         squad_name: string | null;
         play_seconds: number;
+        left_at: string | null;
+        left_early: boolean;
         kills: number | null;
         deaths: number | null;
         teamkills: number | null;
@@ -545,6 +549,8 @@ describeIfDb('matches API (MATCH-4)', () => {
     expect(aliceEntry?.teamkills).toBe(1);
     expect(aliceEntry?.wounds).toBe(4);
     expect(aliceEntry?.revives).toBe(3);
+    expect(aliceEntry?.left_at).toBeNull();
+    expect(aliceEntry?.left_early).toBe(false);
     expect(body.teams.team1.players).toBe(2);
     expect(body.teams.team1.play_seconds).toBe(4500);
     expect(body.teams.team1.kills).toBe(7);
@@ -567,6 +573,98 @@ describeIfDb('matches API (MATCH-4)', () => {
       attacker: { player_id: alice, current_name: 'AliceRoster' },
       victim: { player_id: carol, current_name: 'CarolRoster' },
     });
+  });
+
+  it('match card flags roster entries who left well before the match ended as left_early (AC)', async () => {
+    const srv = await seedServer(h.db, 'LeftEarlySrv');
+    const startedAt = new Date('2026-05-22T10:00:00.000Z');
+    const endedAt = new Date('2026-05-22T11:00:00.000Z');
+    const matchId = await seedMatch(h.db, { serverId: srv, startedAt, endedAt });
+    const earlyLeaver = await seedPlayer(h.db, { name: 'EarlyLeaverRoster' });
+    const staffedToEnd = await seedPlayer(h.db, { name: 'StayedToEndRoster' });
+    const neverDisconnected = await seedPlayer(h.db, { name: 'NeverDisconnectedRoster' });
+    await seedMatchPlayer(h.db, {
+      matchId,
+      playerId: earlyLeaver,
+      team: 1,
+      playSeconds: 600,
+      // Left 10 minutes before the match ended — well outside the tolerance window.
+      leftAt: new Date('2026-05-22T10:50:00.000Z'),
+    });
+    await seedMatchPlayer(h.db, {
+      matchId,
+      playerId: staffedToEnd,
+      team: 1,
+      playSeconds: 3600,
+      // Disconnect logged a few seconds before the round-end line: within tolerance.
+      leftAt: new Date('2026-05-22T10:59:45.000Z'),
+    });
+    await seedMatchPlayer(h.db, {
+      matchId,
+      playerId: neverDisconnected,
+      team: 1,
+      playSeconds: 3600,
+      leftAt: null,
+    });
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/matches/${matchId}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      roster: Array<{ player_id: string; left_at: string | null; left_early: boolean }>;
+    };
+    const earlyEntry = body.roster.find((r) => r.player_id === earlyLeaver);
+    const stayedEntry = body.roster.find((r) => r.player_id === staffedToEnd);
+    const neverEntry = body.roster.find((r) => r.player_id === neverDisconnected);
+
+    expect(earlyEntry?.left_at).toBe('2026-05-22T10:50:00.000Z');
+    expect(earlyEntry?.left_early).toBe(true);
+    expect(stayedEntry?.left_at).toBe('2026-05-22T10:59:45.000Z');
+    expect(stayedEntry?.left_early).toBe(false);
+    expect(neverEntry?.left_at).toBeNull();
+    expect(neverEntry?.left_early).toBe(false);
+  });
+
+  it('match card flags a left_at on an open match (ended_at null) as left_early (AC)', async () => {
+    const srv = await seedServer(h.db, 'OpenLeftEarlySrv');
+    const matchId = await seedMatch(h.db, {
+      serverId: srv,
+      startedAt: new Date('2026-05-23T10:00:00.000Z'),
+      // endedAt intentionally omitted: this is still an open match.
+    });
+    const disconnected = await seedPlayer(h.db, { name: 'OpenDisconnectedRoster' });
+    const stillConnected = await seedPlayer(h.db, { name: 'OpenStillConnectedRoster' });
+    await seedMatchPlayer(h.db, {
+      matchId,
+      playerId: disconnected,
+      team: 1,
+      playSeconds: 300,
+      leftAt: new Date('2026-05-23T10:05:00.000Z'),
+    });
+    await seedMatchPlayer(h.db, {
+      matchId,
+      playerId: stillConnected,
+      team: 1,
+      playSeconds: 900,
+      leftAt: null,
+    });
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/matches/${matchId}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      ended_at: string | null;
+      roster: Array<{ player_id: string; left_early: boolean }>;
+    };
+    expect(body.ended_at).toBeNull();
+    expect(body.roster.find((r) => r.player_id === disconnected)?.left_early).toBe(true);
+    expect(body.roster.find((r) => r.player_id === stillConnected)?.left_early).toBe(false);
   });
 
   it('match card 404 for unknown id', async () => {

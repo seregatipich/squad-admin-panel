@@ -40,6 +40,8 @@ export interface MatchRosterEntry extends MatchCombatStats {
   team: number | null;
   squad_name: string | null;
   play_seconds: number;
+  left_at: string | null;
+  left_early: boolean;
 }
 
 export type MatchRosterSortField = 'player' | 'squad' | 'time' | 'kd' | 'tk' | 'wounds' | 'revives';
@@ -550,6 +552,20 @@ export function sortMatchRosterEntries(
       result = compareNullableNumber(left.revives, right.revives, sort.order);
     return result || compareRosterFallback(left, right);
   });
+}
+
+const ROSTER_ROW_BASE_CLASS = 'border-t border-neutral-900';
+const ROSTER_ROW_DIMMED_CLASS = `${ROSTER_ROW_BASE_CLASS} opacity-50`;
+export const ROSTER_LEFT_EARLY_TITLE = 'Покинул матч до конца';
+
+/** A roster row is dimmed when the player disconnected before the match ended. */
+export function isDimmedRosterEntry(entry: Pick<MatchRosterEntry, 'left_early'>): boolean {
+  return entry.left_early;
+}
+
+/** Row class for a roster `<tr>`: dimmed for players who left before the match ended. */
+export function rosterRowClass(entry: Pick<MatchRosterEntry, 'left_early'>): string {
+  return isDimmedRosterEntry(entry) ? ROSTER_ROW_DIMMED_CLASS : ROSTER_ROW_BASE_CLASS;
 }
 
 export function formatMatchTimelineOffset(occurredAt: string, startedAt: string): string {

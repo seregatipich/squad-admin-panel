@@ -19,6 +19,8 @@ import {
   type MatchTeamAggregate,
   type MatchTimelineEvent,
   PILL_CLASSES,
+  ROSTER_LEFT_EARLY_TITLE,
+  rosterRowClass,
   safeMatchBackHref,
   sortMatchRosterEntries,
   teamPillTone,
@@ -328,7 +330,11 @@ function RosterColumn({
             </thead>
             <tbody>
               {sortedEntries.map((entry) => (
-                <tr key={entry.player_id} className="border-t border-neutral-900">
+                <tr
+                  key={entry.player_id}
+                  className={rosterRowClass(entry)}
+                  title={entry.left_early ? ROSTER_LEFT_EARLY_TITLE : undefined}
+                >
                   <td className="max-w-[180px] py-2 pr-3">
                     <Link
                       href={`/players/${entry.player_id}`}
