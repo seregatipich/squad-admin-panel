@@ -161,4 +161,12 @@ describe('findBannedNameRuleMatch', () => {
     expect(() => findBannedNameRuleMatch(rules, 'anything goes')).not.toThrow();
     expect(findBannedNameRuleMatch(rules, 'anything goes')?.id).toBe('fallback');
   });
+
+  it('skips rules with an invalid match type', () => {
+    const rules = [
+      rule({ id: 'invalid', pattern: 'anything', match_type: 'invalid' as never }),
+      rule({ id: 'fallback', pattern: 'anything', match_type: 'substring' }),
+    ];
+    expect(findBannedNameRuleMatch(rules, 'anything goes')?.id).toBe('fallback');
+  });
 });
