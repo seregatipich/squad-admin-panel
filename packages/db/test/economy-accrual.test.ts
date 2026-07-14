@@ -9,6 +9,7 @@ const describeIfDb = DATABASE_URL ? describe : describe.skip;
 const PLAYER_STEAM = '000000a1-0000-4000-8000-000000000000';
 const PLAYER_EOS = '000000e0-0000-4000-8000-000000000000';
 const SERVER_1 = '00000011-0000-4000-8000-000000000000';
+const SERVER_2 = '00000012-0000-4000-8000-000000000000';
 const DAY = '2026-07-06';
 const NOW = new Date('2026-07-07T00:00:00.000Z');
 
@@ -76,6 +77,25 @@ async function recompute() {
   await recomputeDailyPresence(sql, { fromDay: DAY, toDay: DAY, now: NOW });
 }
 
+async function seedSeedingTransition(
+  serverId: string,
+  kind: 'server.seeding_started' | 'server.seeding_ended',
+  occurredAt: string,
+) {
+  await sql`
+    INSERT INTO events (event_id, server_id, occurred_at, kind, actor_kind, actor_id, payload)
+    VALUES (
+      gen_random_uuid(),
+      ${serverId},
+      ${occurredAt}::timestamptz,
+      ${kind},
+      'system',
+      NULL,
+      ${JSON.stringify({ player_count: 10, layer: null, live_at: 60, hysteresis: 5, progress_pct: 16 })}::jsonb
+    )
+  `;
+}
+
 beforeAll(async () => {
   if (!DATABASE_URL) return;
   sql = postgres(DATABASE_URL, { max: 1, onnotice: () => undefined });
@@ -94,6 +114,11 @@ beforeAll(async () => {
     VALUES (${SERVER_1}, 'srv-1', 'srv-1')
     ON CONFLICT (id) DO NOTHING
   `;
+  await sql`
+    INSERT INTO servers (id, display_name, slug)
+    VALUES (${SERVER_2}, 'srv-2', 'srv-2')
+    ON CONFLICT (id) DO NOTHING
+  `;
 });
 
 afterAll(async () => {
@@ -101,7 +126,8 @@ afterAll(async () => {
   await sql`TRUNCATE bonus_transactions`;
   await sql`TRUNCATE player_daily_presence`;
   await sql`TRUNCATE player_sessions`;
-  await sql`DELETE FROM servers WHERE id = ${SERVER_1}`;
+  await sql`DELETE FROM events WHERE server_id = ANY(${[SERVER_1, SERVER_2]})`;
+  await sql`DELETE FROM servers WHERE id = ANY(${[SERVER_1, SERVER_2]})`;
   await sql`DELETE FROM players WHERE id = ANY(${[PLAYER_STEAM, PLAYER_EOS]})`;
   await sql`UPDATE economy_settings SET economy_enabled = false WHERE id = 1`;
   await sql.end({ timeout: 5 });
@@ -112,6 +138,7 @@ beforeEach(async () => {
   await sql`TRUNCATE bonus_transactions`;
   await sql`TRUNCATE player_daily_presence`;
   await sql`TRUNCATE player_sessions`;
+  await sql`DELETE FROM events WHERE server_id = ANY(${[SERVER_1, SERVER_2]})`;
   await sql`UPDATE players SET bonus_balance = 0`;
 });
 
@@ -233,5 +260,112 @@ describeIfDb('accrueDailyBonuses', () => {
     expect(await balanceOf(PLAYER_STEAM)).toBe(0);
     const ledger = await ledgerFor(PLAYER_STEAM);
     expect(ledger).toEqual([]);
+  });
+});
+
+describeIfDb('accrueDailyBonuses with SEED-1 seeding-window attribution', () => {
+  it('attributes seed_seconds from session∩seeding-window intersection, splitting a session that crosses the seeding→live boundary', async () => {
+    // Server has seeding events → window-based attribution applies instead of
+    // the threshold sweep, even with a high seed_threshold that would
+    // otherwise treat a lone connected player as seeding for the whole session.
+    await seedSeedingTransition(SERVER_2, 'server.seeding_started', `${DAY}T10:00:00.000Z`);
+    await seedSeedingTransition(SERVER_2, 'server.seeding_ended', `${DAY}T10:30:00.000Z`);
+
+    // Session starts before the window and ends after it: only the 30 min
+    // inside [10:00, 10:30) should count as seed time.
+    await seedSession({
+      playerId: PLAYER_STEAM,
+      serverId: SERVER_2,
+      connectedAt: `${DAY}T09:45:00.000Z`,
+      disconnectedAt: `${DAY}T11:00:00.000Z`,
+      mode: 'online',
+    });
+    await recompute();
+    await setEconomy({ enabled: true, kSeed: 3, seedThreshold: 100 });
+
+    await accrueDailyBonuses(sql, { day: DAY, now: NOW });
+
+    const [presence] = await sql<{ seed_seconds: number }[]>`
+      SELECT seed_seconds FROM player_daily_presence
+      WHERE player_id = ${PLAYER_STEAM} AND day = ${DAY}::date AND server_id = ${SERVER_2}
+    `;
+    expect(presence?.seed_seconds).toBe(1800); // 30 minutes inside the window
+
+    const ledger = await ledgerFor(PLAYER_STEAM);
+    const seedTx = ledger.find((tx) => tx.type === 'earn_seed');
+    expect(seedTx?.amount).toBe(2); // round(3 * 1800 / 3600) = round(1.5) = 2
+  });
+
+  it('recovers a server already seeding at day start from the pre-day transition', async () => {
+    // seeding_started the day before; seeding_ended partway through the target day.
+    await seedSeedingTransition(SERVER_2, 'server.seeding_started', `2026-07-05T23:00:00.000Z`);
+    await seedSeedingTransition(SERVER_2, 'server.seeding_ended', `${DAY}T02:00:00.000Z`);
+
+    await seedSession({
+      playerId: PLAYER_STEAM,
+      serverId: SERVER_2,
+      connectedAt: `${DAY}T00:00:00.000Z`,
+      disconnectedAt: `${DAY}T04:00:00.000Z`,
+      mode: 'online',
+    });
+    await recompute();
+    await setEconomy({ enabled: true, seedThreshold: 100 });
+
+    await accrueDailyBonuses(sql, { day: DAY, now: NOW });
+
+    const [presence] = await sql<{ seed_seconds: number }[]>`
+      SELECT seed_seconds FROM player_daily_presence
+      WHERE player_id = ${PLAYER_STEAM} AND day = ${DAY}::date AND server_id = ${SERVER_2}
+    `;
+    // Day starts already seeding (00:00) through 02:00 → 2h = 7200s.
+    expect(presence?.seed_seconds).toBe(7200);
+  });
+
+  it('falls back to the threshold sweep, unchanged, for a server with no seeding events at all', async () => {
+    // SERVER_1 has never emitted a seeding event in this suite; a lone
+    // connected player below seed_threshold still accrues seed time exactly
+    // as before window-based attribution existed (regression guard).
+    await seedSession({
+      playerId: PLAYER_STEAM,
+      serverId: SERVER_1,
+      connectedAt: `${DAY}T10:00:00.000Z`,
+      disconnectedAt: `${DAY}T11:00:00.000Z`,
+      mode: 'online',
+    });
+    await recompute();
+    await setEconomy({ enabled: true, seedThreshold: 40 });
+
+    await accrueDailyBonuses(sql, { day: DAY, now: NOW });
+
+    const [presence] = await sql<{ seed_seconds: number }[]>`
+      SELECT seed_seconds FROM player_daily_presence
+      WHERE player_id = ${PLAYER_STEAM} AND day = ${DAY}::date AND server_id = ${SERVER_1}
+    `;
+    expect(presence?.seed_seconds).toBe(3600);
+  });
+
+  it('is idempotent for window-based attribution: re-running the same day does not double-count the balance', async () => {
+    await seedSeedingTransition(SERVER_2, 'server.seeding_started', `${DAY}T10:00:00.000Z`);
+    await seedSeedingTransition(SERVER_2, 'server.seeding_ended', `${DAY}T10:30:00.000Z`);
+    await seedSession({
+      playerId: PLAYER_STEAM,
+      serverId: SERVER_2,
+      connectedAt: `${DAY}T10:00:00.000Z`,
+      disconnectedAt: `${DAY}T10:30:00.000Z`,
+      mode: 'online',
+    });
+    await recompute();
+    await setEconomy({ enabled: true, kSeed: 3, seedThreshold: 100 });
+
+    const first = await accrueDailyBonuses(sql, { day: DAY, now: NOW });
+    const second = await accrueDailyBonuses(sql, { day: DAY, now: NOW });
+
+    expect(second.balanceDelta).toBe(0);
+    expect(await balanceOf(PLAYER_STEAM)).toBe(first.balanceDelta);
+    const seedTxCount = await sql<{ n: number }[]>`
+      SELECT COUNT(*)::int AS n FROM bonus_transactions
+      WHERE player_id = ${PLAYER_STEAM} AND type = 'earn_seed' AND reference_id = ${DAY}
+    `;
+    expect(seedTxCount[0]?.n).toBe(1);
   });
 });

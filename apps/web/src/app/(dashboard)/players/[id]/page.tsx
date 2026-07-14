@@ -24,6 +24,7 @@ import { PresenceSection } from './PresenceSection';
 import { RecentMatchesSection } from './RecentMatchesSection';
 import { ReportPlayerSection } from './ReportPlayerSection';
 import { ReportsSection } from './ReportsSection';
+import { SeedContributionSection } from './SeedContributionSection';
 import { VotesSection } from './VotesSection';
 
 interface Player {
@@ -180,6 +181,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
           Сравнить онлайн →
         </Link>
       </div>
+
+      <SeedContributionSection playerId={playerId} />
 
       <PresenceSection playerId={playerId} />
 
