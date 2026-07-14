@@ -25,9 +25,18 @@ export function workerContract(opts: ContractOpts) {
   let redis: RedisContractClient | null = null;
 
   afterEach(async () => {
-    if (child && !child.killed) {
-      child.kill('SIGTERM');
-      await new Promise((r) => child?.once('exit', r));
+    const c = child;
+    if (c && !c.killed) {
+      c.kill('SIGTERM');
+      // Bound the wait: under CI coverage instrumentation a clean shutdown can
+      // take several seconds; never let a slow (or genuinely stuck) child hang
+      // the hook — SIGKILL as a fallback so cleanup always completes.
+      const exited = new Promise((r) => c.once('exit', r));
+      const timedOut = await Promise.race([exited.then(() => false), sleep(8000).then(() => true)]);
+      if (timedOut) {
+        c.kill('SIGKILL');
+        await exited;
+      }
     }
     if (redis) await redis.quit();
     child = null;
@@ -71,8 +80,11 @@ export function workerContract(opts: ContractOpts) {
         child?.once('exit', (code) => resolve(code ?? -1)),
       );
       child.kill('SIGTERM');
-      const code = await Promise.race([exitPromise, sleep(5000).then(() => -1 as number)]);
+      // 8s window (was 5s): under v8 coverage instrumentation a clean shutdown
+      // of the built worker binary can exceed 5s on the loaded CI runner. Still
+      // asserts a clean exit(0) — a genuinely hung worker is caught within 8s.
+      const code = await Promise.race([exitPromise, sleep(8000).then(() => -1 as number)]);
       expect(code).toBe(0);
-    }, 10_000);
+    }, 15_000);
   });
 }
