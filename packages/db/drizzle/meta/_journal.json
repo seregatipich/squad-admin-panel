@@ -379,6 +379,13 @@
       "when": 1783399800000,
       "tag": "0049_clan_priority_expiry",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1783399900000,
+      "tag": "0055_alt_detection",
+      "breakpoints": true
     }
   ]
 }
