@@ -34,6 +34,8 @@ export const EVENT_TYPES = [
   'banname.matched',
   'bansync.completed',
   'bansync.failed',
+  'server.seeding_started',
+  'server.seeding_ended',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -139,6 +141,22 @@ export const serverLifecyclePayload = z
   .strict();
 export type ServerLifecyclePayload = z.infer<typeof serverLifecyclePayload>;
 
+/**
+ * Payload for `server.seeding_started` / `server.seeding_ended` transitions
+ * emitted by worker-rcon's per-server seeding state machine (SEED-1, #140).
+ * See `apps/workers/rcon/src/seeding.ts` for the state machine itself.
+ */
+export const seedingTransitionPayload = z
+  .object({
+    player_count: z.number().int().nonnegative(),
+    layer: z.string().nullable(),
+    live_at: z.number().int().positive(),
+    hysteresis: z.number().int().nonnegative(),
+    progress_pct: z.number().int().min(0).max(100),
+  })
+  .strict();
+export type SeedingTransitionPayload = z.infer<typeof seedingTransitionPayload>;
+
 export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodTypeAny>> = {
   'player.connected': playerConnectedPayload,
   'player.disconnected': playerDisconnectedPayload,
@@ -152,6 +170,8 @@ export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodTypeAny>> = {
   'server.stopped': serverLifecyclePayload,
   'server.crashed': serverLifecyclePayload,
   'banname.matched': bannameMatchedPayload,
+  'server.seeding_started': seedingTransitionPayload,
+  'server.seeding_ended': seedingTransitionPayload,
 };
 
 export function validatePayload<T extends EventType>(

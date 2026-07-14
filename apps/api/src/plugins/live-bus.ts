@@ -41,6 +41,19 @@ export type LiveEvent =
       data: { server_id: string; player_count: number; polled_at: string };
     }
   | {
+      type: 'server.seeding';
+      ts: string;
+      data: {
+        server_id: string;
+        state: 'seeding' | 'live';
+        current_players: number;
+        live_at: number;
+        progress_pct: number;
+        started_at: string | null;
+        layer: string | null;
+      };
+    }
+  | {
       type: 'bridge.connection';
       ts: string;
       data: { state: 'up' | 'down'; down_for_s: number };

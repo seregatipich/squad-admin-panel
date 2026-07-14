@@ -19,6 +19,8 @@ interface Settings {
   memory_high_mb: number | null;
   memory_max_mb: number | null;
   io_weight: number | null;
+  seed_live_at: number;
+  seed_hysteresis: number;
 }
 
 interface ServerInfo {
@@ -39,6 +41,15 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const [tags, setTags] = useState<string[]>([]);
   const [licenseId, setLicenseId] = useState('');
   const [licenseKey, setLicenseKey] = useState('');
+
+  const [canManageServer, setCanManageServer] = useState(false);
+  const [seedingDraft, setSeedingDraft] = useState<{
+    seed_live_at?: number;
+    seed_hysteresis?: number;
+  }>({});
+  const [seedingBusy, setSeedingBusy] = useState(false);
+  const [seedingSaved, setSeedingSaved] = useState(false);
+  const [seedingErr, setSeedingErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -61,6 +72,27 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // The "Пороги сидинга" section is gated on the `manageserver` squad
+  // permission (not `server:edit_settings`, which governs the rest of this
+  // page) — hidden entirely rather than shown-then-403'd, mirroring how
+  // the chat composer on the detail page checks `/api/v1/me` up front.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
+        if (!res.ok || cancelled) return;
+        const me = (await res.json()) as { squad_permissions?: string[] };
+        if (!cancelled) setCanManageServer(me.squad_permissions?.includes('manageserver') ?? false);
+      } catch {
+        // permission fetch is best-effort; the section simply stays hidden
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const isRunning = serverInfo && !['stopped', 'ready', 'pending'].includes(serverInfo.status);
 
@@ -92,6 +124,32 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
       setErr((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function saveSeedingSettings() {
+    setSeedingBusy(true);
+    setSeedingErr(null);
+    try {
+      const res = await fetch(`/api/v1/servers/${id}/seeding-settings`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(seedingDraft),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`);
+      }
+      const updated = (await res.json()) as { seed_live_at: number; seed_hysteresis: number };
+      setSettings((prev) => (prev ? { ...prev, ...updated } : prev));
+      setSeedingDraft({});
+      setSeedingSaved(true);
+      setTimeout(() => setSeedingSaved(false), 2000);
+    } catch (e) {
+      setSeedingErr((e as Error).message);
+    } finally {
+      setSeedingBusy(false);
     }
   }
 
@@ -252,6 +310,65 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
           </label>
         </div>
       </section>
+
+      {canManageServer && (
+        <section className="mb-6">
+          <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
+            Пороги сидинга
+          </h2>
+          {seedingErr && (
+            <div className="mb-2 rounded border border-red-900 bg-red-950 px-3 py-2 text-sm text-red-300">
+              {seedingErr}
+            </div>
+          )}
+          {seedingSaved && (
+            <div className="mb-2 rounded border border-emerald-900 bg-emerald-950 px-3 py-2 text-sm text-emerald-300">
+              Сохранено
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs text-neutral-500">Порог live (игроков)</span>
+              <input
+                type="number"
+                value={seedingDraft.seed_live_at ?? settings.seed_live_at}
+                onChange={(e) => {
+                  setSeedingDraft((prev) => ({ ...prev, seed_live_at: Number(e.target.value) }));
+                  setSeedingSaved(false);
+                }}
+                min={1}
+                max={200}
+                className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs text-neutral-500">Гистерезис (игроков)</span>
+              <input
+                type="number"
+                value={seedingDraft.seed_hysteresis ?? settings.seed_hysteresis}
+                onChange={(e) => {
+                  setSeedingDraft((prev) => ({
+                    ...prev,
+                    seed_hysteresis: Number(e.target.value),
+                  }));
+                  setSeedingSaved(false);
+                }}
+                min={0}
+                max={50}
+                className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            disabled={Object.keys(seedingDraft).length === 0 || seedingBusy}
+            onClick={saveSeedingSettings}
+            className="mt-3 rounded bg-sky-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {seedingBusy ? 'Сохранение...' : 'Сохранить'}
+          </button>
+        </section>
+      )}
 
       <section className="mb-6">
         <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
