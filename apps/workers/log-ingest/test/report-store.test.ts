@@ -18,7 +18,10 @@ const REPORTER_EOS = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const TARGET_EOS = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 function makePublisher() {
-  return { publish: vi.fn().mockResolvedValue(1) };
+  return {
+    publish: vi.fn().mockResolvedValue(1),
+    xadd: vi.fn().mockResolvedValue('1-0'),
+  };
 }
 
 function makeReport(overrides: Partial<ParsedReport> = {}): ParsedReport {
@@ -131,6 +134,31 @@ describe('handleReport', () => {
     expect(frame.type).toBe('report.created');
     expect(frame.data.report_id).toBe(result.reportId);
     expect(frame.data.target_player_id).toBe(TARGET_ID);
+  });
+
+  it('publishes the typed player_report envelope to the per-server event stream', async () => {
+    const publisher = makePublisher();
+    const result = await handleReport(db, publisher, {
+      serverId: SERVER_ID,
+      report: makeReport(),
+    });
+
+    expect(publisher.xadd).toHaveBeenCalledTimes(1);
+    const [stream, ...args] = publisher.xadd.mock.calls[0] as string[];
+    expect(stream).toBe(`events:server:${SERVER_ID}`);
+    const envelopeIndex = args.indexOf('envelope');
+    const envelope = JSON.parse(args[envelopeIndex + 1] as string);
+    expect(envelope).toMatchObject({
+      type: 'player_report',
+      server_id: SERVER_ID,
+      correlation_id: result.reportId,
+      payload: {
+        report_id: result.reportId,
+        reporter_name: 'Reporter One',
+        target_raw: 'BadGuy',
+        body: 'is team killing at main',
+      },
+    });
   });
 
   it('stores an EOS-only reporter and target (no steam id linkage)', async () => {
