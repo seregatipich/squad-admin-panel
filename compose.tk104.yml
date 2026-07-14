@@ -245,6 +245,22 @@ services:
         condition: service_completed_successfully
     logging: *default-logging
 
+  worker-scheduler:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: scheduler } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      SCHEDULER_INTERVAL_MS: ${SCHEDULER_INTERVAL_MS:-30000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
   worker-ban-sync:
     build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: ban-sync } }
     restart: unless-stopped

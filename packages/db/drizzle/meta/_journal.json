@@ -421,6 +421,13 @@
       "when": 1783400400000,
       "tag": "0068_coplay_anti_signal",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1783400500000,
+      "tag": "0071_seed_schedule",
+      "breakpoints": true
     }
   ]
 }
