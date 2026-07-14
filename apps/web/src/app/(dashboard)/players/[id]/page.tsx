@@ -14,6 +14,7 @@ import {
 } from '@/lib/role-expiry';
 import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
+import { ExternalBansSection } from './ExternalBansSection';
 import { GeoAnomaliesSection } from './GeoAnomaliesSection';
 import { NotesSection } from './NotesSection';
 import { PlayerTeamkillsSection } from './PlayerTeamkillsSection';
@@ -176,6 +177,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <PlayerTeamkillsSection playerId={playerId} />
 
       <ReportsSection playerId={playerId} />
+
+      <ExternalBansSection playerId={playerId} />
 
       <VotesSection playerId={playerId} />
 
