@@ -18,6 +18,9 @@ export interface TeamkillSummaryRow {
   tk_30d: number;
   victim_of_tk_total: number;
   last_tk_at: string | null;
+  moderation_total: number;
+  last_moderation_at: string | null;
+  last_moderation_type: string | null;
 }
 
 export interface TeamkillSummaryResponse {
@@ -127,4 +130,20 @@ export function formatTeamkillDate(value: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+/**
+ * Formats the read-only moderation-history summary shown next to a teamkill
+ * offender: the latest non-reverted action type/date plus the total count.
+ * Returns "—" when the player has no moderation_actions on record.
+ */
+export function formatModerationSummary(row: {
+  moderation_total: number;
+  last_moderation_at: string | null;
+  last_moderation_type: string | null;
+}): string {
+  if (row.moderation_total === 0) return '—';
+  const type = row.last_moderation_type ?? '—';
+  const date = formatTeamkillDate(row.last_moderation_at);
+  return `${type} · ${date}, всего ${formatTeamkillCount(row.moderation_total)}`;
 }

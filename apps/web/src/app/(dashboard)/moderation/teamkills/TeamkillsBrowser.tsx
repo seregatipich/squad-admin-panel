@@ -7,6 +7,7 @@ import {
   buildCombatLogTeamkillHref,
   buildTeamkillQueryString,
   buildTeamkillSummaryApiQuery,
+  formatModerationSummary,
   formatTeamkillCount,
   formatTeamkillDate,
   parseTeamkillFilters,
@@ -249,6 +250,7 @@ function TeamkillTable({
               <SortableHead sort="total" filters={filters} onSort={onSort} />
               <th className="px-3 py-2 text-right font-medium">Получал TK</th>
               <th className="px-3 py-2 font-medium">Последний TK</th>
+              <th className="px-3 py-2 font-medium">Модерация</th>
               <th className="px-3 py-2 font-medium">Переходы</th>
             </tr>
           </thead>
@@ -275,6 +277,13 @@ function TeamkillTable({
                 <NumericCell value={row.victim_of_tk_total} muted />
                 <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-neutral-400">
                   {formatTeamkillDate(row.last_tk_at)}
+                </td>
+                <td
+                  className={`whitespace-nowrap px-3 py-2 text-xs ${
+                    row.moderation_total > 0 ? 'text-amber-200' : 'text-neutral-400'
+                  }`}
+                >
+                  {formatModerationSummary(row)}
                 </td>
                 <td className="px-3 py-2">
                   <Link
@@ -323,6 +332,13 @@ function TeamkillTable({
             </dl>
             <div className="mt-2 text-xs text-neutral-500">
               Последний TK: {formatTeamkillDate(row.last_tk_at)}
+            </div>
+            <div
+              className={`mt-1 text-xs ${
+                row.moderation_total > 0 ? 'text-amber-200' : 'text-neutral-500'
+              }`}
+            >
+              Модерация: {formatModerationSummary(row)}
             </div>
           </li>
         ))}

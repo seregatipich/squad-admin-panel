@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCombatLogTeamkillHref,
   buildTeamkillSummaryApiQuery,
+  formatModerationSummary,
   formatTeamkillDate,
   parseTeamkillFilters,
   teamkillSortLabel,
@@ -48,5 +49,47 @@ describe('teamkill moderation helpers', () => {
     expect(formatTeamkillDate(null)).toBe('—');
     expect(formatTeamkillDate('bad date')).toBe('—');
     expect(formatTeamkillDate('2026-07-07T18:30:00.000Z')).not.toBe('—');
+  });
+
+  describe('formatModerationSummary', () => {
+    it('returns an em dash when there is no moderation history', () => {
+      expect(
+        formatModerationSummary({
+          moderation_total: 0,
+          last_moderation_at: null,
+          last_moderation_type: null,
+        }),
+      ).toBe('—');
+    });
+
+    it('formats the latest action type, date and total count', () => {
+      expect(
+        formatModerationSummary({
+          moderation_total: 3,
+          last_moderation_at: '2026-07-12T14:30:00.000Z',
+          last_moderation_type: 'warn',
+        }),
+      ).toBe(`warn · ${formatTeamkillDate('2026-07-12T14:30:00.000Z')}, всего 3`);
+    });
+
+    it('falls back to an em dash date when last_moderation_at is null despite a positive total', () => {
+      expect(
+        formatModerationSummary({
+          moderation_total: 1,
+          last_moderation_at: null,
+          last_moderation_type: 'kick',
+        }),
+      ).toBe('kick · —, всего 1');
+    });
+
+    it('falls back to an em dash date for an invalid last_moderation_at', () => {
+      expect(
+        formatModerationSummary({
+          moderation_total: 1,
+          last_moderation_at: 'not-a-date',
+          last_moderation_type: 'ban',
+        }),
+      ).toBe('ban · —, всего 1');
+    });
   });
 });
