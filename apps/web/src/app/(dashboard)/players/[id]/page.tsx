@@ -21,6 +21,7 @@ import { PresenceSection } from './PresenceSection';
 import { RecentMatchesSection } from './RecentMatchesSection';
 import { ReportPlayerSection } from './ReportPlayerSection';
 import { ReportsSection } from './ReportsSection';
+import { SeedContributionSection } from './SeedContributionSection';
 import { VotesSection } from './VotesSection';
 
 interface Player {
@@ -166,6 +167,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <PanelAccessSection playerId={playerId} canManage={canManageRoles} />
 
       <BonusSection playerId={playerId} />
+
+      <SeedContributionSection playerId={playerId} />
 
       <PresenceSection playerId={playerId} />
 

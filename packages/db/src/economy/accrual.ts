@@ -21,6 +21,113 @@ export interface SeedSessionInterval {
   endSec: number;
 }
 
+/** A single `server.seeding_started`/`server.seeding_ended` transition, for one server. */
+export interface SeedingTransitionEvent {
+  type: 'started' | 'ended';
+  atSec: number;
+}
+
+/** A reconstructed seeding window (epoch seconds), for one server. */
+export interface SeedingWindow {
+  startSec: number;
+  endSec: number;
+}
+
+/**
+ * Reconstructs the seeding windows for a single server from its ordered
+ * `server.seeding_started` / `server.seeding_ended` transitions (SEED-1,
+ * #140 — see `apps/workers/rcon/src/seeding.ts`).
+ *
+ * `transitions` must be sorted ascending by `atSec` and may include, as its
+ * first element, the latest transition that occurred strictly before
+ * `dayStartSec` (recovering whether the server was already seeding when the
+ * day began); every other element must fall within `[dayStartSec,
+ * dayEndSec]`. A window still open at `dayEndSec` (a `started` with no
+ * matching `ended`) is closed there — pass `min(now, actualDayEnd)` as
+ * `dayEndSec` so an in-progress window is clipped to "now" rather than
+ * assumed to run to the end of the calendar day.
+ *
+ * Duplicate transitions are tolerated: a `started` while already seeding, or
+ * an `ended` while already live, is a no-op (worker-rcon persists
+ * transitions best-effort and can retry/duplicate one).
+ *
+ * @param transitions ordered transitions for one server (see above)
+ * @param dayStartSec inclusive start of the accrual day, epoch seconds
+ * @param dayEndSec end of the reconstruction window, already clipped to `now`
+ * @returns seeding windows clipped to `[dayStartSec, dayEndSec]`
+ */
+export function computeSeedingWindows(
+  transitions: SeedingTransitionEvent[],
+  dayStartSec: number,
+  dayEndSec: number,
+): SeedingWindow[] {
+  const windows: SeedingWindow[] = [];
+  let seeding = false;
+  let openStart: number | null = null;
+
+  for (const transition of transitions) {
+    if (transition.atSec < dayStartSec) {
+      seeding = transition.type === 'started';
+      continue;
+    }
+    if (transition.atSec > dayEndSec) break;
+
+    if (transition.type === 'started') {
+      if (!seeding) {
+        seeding = true;
+        openStart = Math.max(transition.atSec, dayStartSec);
+      }
+    } else if (seeding) {
+      const start = openStart ?? dayStartSec;
+      const end = Math.min(Math.max(transition.atSec, start), dayEndSec);
+      if (end > start) windows.push({ startSec: start, endSec: end });
+      seeding = false;
+      openStart = null;
+    }
+  }
+
+  if (seeding) {
+    const start = openStart ?? dayStartSec;
+    if (dayEndSec > start) windows.push({ startSec: start, endSec: dayEndSec });
+  }
+
+  return windows;
+}
+
+/**
+ * Computes, per `player_id|server_id`, the seconds each connected session
+ * overlaps its server's seeding windows (from {@link computeSeedingWindows}).
+ * A session that crosses a seeding→live boundary contributes only the
+ * portion inside the window.
+ *
+ * @param intervals connected sessions clipped to the accrual window
+ * @param windowsByServer seeding windows keyed by `serverId`
+ * @returns map keyed by `${playerId}|${serverId}` → seed seconds (integer)
+ */
+export function computeSeedSecondsWithinWindows(
+  intervals: SeedSessionInterval[],
+  windowsByServer: Map<string, SeedingWindow[]>,
+): Map<string, number> {
+  const result = new Map<string, number>();
+  for (const interval of intervals) {
+    if (interval.endSec <= interval.startSec) continue;
+    const windows = windowsByServer.get(interval.serverId);
+    if (!windows || windows.length === 0) continue;
+
+    let seconds = 0;
+    for (const window of windows) {
+      const overlapStart = Math.max(interval.startSec, window.startSec);
+      const overlapEnd = Math.min(interval.endSec, window.endSec);
+      if (overlapEnd > overlapStart) seconds += overlapEnd - overlapStart;
+    }
+    if (seconds > 0) {
+      const key = `${interval.playerId}|${interval.serverId}`;
+      result.set(key, (result.get(key) ?? 0) + seconds);
+    }
+  }
+  return result;
+}
+
 /**
  * Compute, per `player_id|server_id`, the number of seconds each player was
  * connected while the concurrent player count on that server was strictly below
@@ -118,6 +225,22 @@ interface PresenceAggRow {
   seed_seconds: number;
 }
 
+/** `events.kind` values for the SEED-1 (#140) seeding state-machine transitions. */
+const SEEDING_EVENT_KINDS = ['server.seeding_started', 'server.seeding_ended'] as const;
+
+interface SeedingEventRow {
+  server_id: string;
+  kind: string;
+  at_sec: number;
+}
+
+function toTransition(row: SeedingEventRow): SeedingTransitionEvent {
+  return {
+    type: row.kind === 'server.seeding_started' ? 'started' : 'ended',
+    atSec: Math.floor(Number(row.at_sec)),
+  };
+}
+
 /**
  * Accrue online/boost/seed bonuses for every player with presence on `day`.
  *
@@ -125,8 +248,15 @@ interface PresenceAggRow {
  * for the day. Steps, all in one transaction:
  *  1. read `economy_settings`; if the economy is disabled, do nothing;
  *  2. derive `seed_seconds` per (player, server) from the day's connected
- *     sessions and the configured `seed_threshold`, and persist it into
- *     `player_daily_presence`;
+ *     sessions: for a server that has ever emitted a `server.seeding_started`/
+ *     `server.seeding_ended` event (SEED-1, #140), seed time is the
+ *     intersection of the player's connected sessions with that server's
+ *     reconstructed seeding windows ({@link computeSeedingWindows} /
+ *     {@link computeSeedSecondsWithinWindows}); servers with no seeding
+ *     events at all fall back to the legacy concurrency-vs-`seed_threshold`
+ *     sweep ({@link computeSeedSecondsByPlayerServer}), preserving behavior
+ *     for history predating SEED-1. The result is persisted into
+ *     `player_daily_presence.seed_seconds`;
  *  3. for each player, compute `round(k × seconds / 3600)` per bonus type and
  *     write one `earn_online`/`earn_boost`/`earn_seed` transaction each
  *     (`reference = (player_id, day)`), skipping zero amounts;
@@ -136,6 +266,11 @@ interface PresenceAggRow {
  * the balance is adjusted by the net delta, so re-running for the same day never
  * double-counts. Accruals are machine-generated and intentionally not written to
  * `audit_log`.
+ *
+ * Note: switching a server's attribution from the threshold sweep to
+ * seeding-window intersection (the moment its first seeding event lands)
+ * changes that day's `seed_seconds` retroactively for any day still inside
+ * the worker's recompute window; this is expected and idempotent.
  *
  * @param sql postgres.js connection
  * @param input target day and reference clock
@@ -191,7 +326,63 @@ export async function accrueDailyBonuses(
       startSec: Math.max(Math.floor(Number(s.start_sec)), dayStartSec),
       endSec: Math.min(Math.floor(Number(s.end_sec)), dayEndSec),
     }));
-    const seedByKey = computeSeedSecondsByPlayerServer(intervals, seedThreshold);
+
+    const nowSec = Math.floor(now.getTime() / 1000);
+    const effectiveDayEnd = Math.min(dayEndSec, nowSec);
+
+    const inDaySeedingEvents = await tx<SeedingEventRow[]>`
+      SELECT server_id, kind, EXTRACT(EPOCH FROM occurred_at)::double precision AS at_sec
+      FROM events
+      WHERE kind = ANY(${SEEDING_EVENT_KINDS})
+        AND server_id IS NOT NULL
+        AND occurred_at >= to_timestamp(${dayStartSec})
+        AND occurred_at < to_timestamp(${dayEndSec})
+      ORDER BY server_id, occurred_at ASC
+    `;
+    const preDaySeedingEvents = await tx<SeedingEventRow[]>`
+      SELECT DISTINCT ON (server_id)
+        server_id, kind, EXTRACT(EPOCH FROM occurred_at)::double precision AS at_sec
+      FROM events
+      WHERE kind = ANY(${SEEDING_EVENT_KINDS})
+        AND server_id IS NOT NULL
+        AND occurred_at < to_timestamp(${dayStartSec})
+      ORDER BY server_id, occurred_at DESC
+    `;
+
+    const inDayByServer = new Map<string, SeedingTransitionEvent[]>();
+    for (const row of inDaySeedingEvents) {
+      const list = inDayByServer.get(row.server_id) ?? [];
+      list.push(toTransition(row));
+      inDayByServer.set(row.server_id, list);
+    }
+    const preDayByServer = new Map<string, SeedingTransitionEvent>();
+    for (const row of preDaySeedingEvents) {
+      preDayByServer.set(row.server_id, toTransition(row));
+    }
+
+    const seedingServerIds = new Set<string>([...preDayByServer.keys(), ...inDayByServer.keys()]);
+
+    const windowsByServer = new Map<string, SeedingWindow[]>();
+    for (const serverId of seedingServerIds) {
+      const preDay = preDayByServer.get(serverId);
+      const transitions: SeedingTransitionEvent[] = preDay ? [preDay] : [];
+      transitions.push(...(inDayByServer.get(serverId) ?? []));
+      windowsByServer.set(
+        serverId,
+        computeSeedingWindows(transitions, dayStartSec, effectiveDayEnd),
+      );
+    }
+
+    const windowIntervals = intervals.filter((i) => seedingServerIds.has(i.serverId));
+    const fallbackIntervals = intervals.filter((i) => !seedingServerIds.has(i.serverId));
+
+    const seedByKey = computeSeedSecondsWithinWindows(windowIntervals, windowsByServer);
+    for (const [key, seconds] of computeSeedSecondsByPlayerServer(
+      fallbackIntervals,
+      seedThreshold,
+    )) {
+      seedByKey.set(key, (seedByKey.get(key) ?? 0) + seconds);
+    }
 
     await tx`UPDATE player_daily_presence SET seed_seconds = 0 WHERE day = ${day}::date`;
     for (const [key, seconds] of seedByKey) {
