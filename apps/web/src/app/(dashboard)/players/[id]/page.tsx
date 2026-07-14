@@ -19,6 +19,7 @@ import { NotesSection } from './NotesSection';
 import { PlayerTeamkillsSection } from './PlayerTeamkillsSection';
 import { PresenceSection } from './PresenceSection';
 import { RecentMatchesSection } from './RecentMatchesSection';
+import { ReportPlayerSection } from './ReportPlayerSection';
 import { VotesSection } from './VotesSection';
 
 interface Player {
@@ -129,6 +130,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <PlayerMarks playerId={playerId} />
 
       <WhitelistQuickAction playerId={playerId} canEdit={canEditWhitelist} />
+
+      <ReportPlayerSection playerId={playerId} />
 
       <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
         <h2 className="text-xs uppercase tracking-widest text-neutral-400">Профиль</h2>

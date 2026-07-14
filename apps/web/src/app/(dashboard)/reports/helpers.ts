@@ -1,4 +1,4 @@
-import type { ReportStatus } from '@/lib/live-bus';
+import type { ReportEvidenceItem, ReportStatus } from '@/lib/live-bus';
 
 export const PAGE_SIZE = 20;
 export const NOTE_MAX = 2000;
@@ -90,4 +90,27 @@ export function playerLabel(
   if (name) return name;
   if (id) return `${id.slice(0, 8)}…`;
   return fallbackRaw ?? '—';
+}
+
+/** Attachment-count badge label for a report card, e.g. "📎 2". Empty when there is no evidence. */
+export function evidenceBadgeLabel(evidence: ReportEvidenceItem[] | undefined): string {
+  const count = evidence?.length ?? 0;
+  return count > 0 ? `📎 ${count}` : '';
+}
+
+export function isImageEvidence(item: ReportEvidenceItem): boolean {
+  return item.kind === 'image';
+}
+
+export function isVideoEvidence(item: ReportEvidenceItem): boolean {
+  return item.kind === 'video';
+}
+
+export function isExternalLinkEvidence(item: ReportEvidenceItem): boolean {
+  return item.kind === 'external_link';
+}
+
+/** Display label for an evidence item: its title, or the original filename/URL as a fallback. */
+export function evidenceLabel(item: ReportEvidenceItem): string {
+  return item.title ?? item.external_url ?? item.original_filename;
 }

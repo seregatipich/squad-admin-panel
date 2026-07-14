@@ -1,8 +1,9 @@
-import { playerReports, players, servers } from '@squad/db/schema';
-import { and, desc, eq, gte, ilike, lte, type SQL, sql } from 'drizzle-orm';
+import { mediaFiles, playerReports, players, reportEvidence, servers } from '@squad/db/schema';
+import { and, desc, eq, gte, ilike, inArray, isNull, lte, type SQL, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { type AuditActor, writeAuditEntry } from '../lib/audit.js';
 import type { ReportLiveView } from '../plugins/live-bus.js';
@@ -11,6 +12,8 @@ const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
 const BODY_MAX = 200;
 const RESOLUTION_NOTE_MAX = 2000;
+const REPORT_BODY_MAX = 2000;
+const EVIDENCE_MAX = 10;
 
 const statusEnum = z.enum(['pending', 'in_review', 'resolved', 'rejected']);
 
@@ -27,6 +30,13 @@ const listQuery = z.object({
 });
 
 const idParam = z.object({ id: z.string().uuid() });
+
+const createBody = z.object({
+  server_id: z.string().uuid(),
+  target_player_id: z.string().uuid(),
+  body: z.string().trim().min(1).max(REPORT_BODY_MAX),
+  evidence_media_ids: z.array(z.string().uuid()).max(EVIDENCE_MAX).default([]),
+});
 
 const patchBody = z
   .object({
@@ -62,6 +72,16 @@ function auditActor(req: FastifyRequest): AuditActor {
   };
 }
 
+interface EvidenceItem {
+  id: string;
+  kind: string;
+  external_url: string | null;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  title: string | null;
+}
+
 interface ReportRow {
   id: string;
   serverId: string;
@@ -83,7 +103,7 @@ interface ReportRow {
   resolvedAt: Date | null;
 }
 
-function serializeReport(row: ReportRow) {
+function serializeReport(row: ReportRow, evidence: EvidenceItem[] = []) {
   return {
     id: row.id,
     server_id: row.serverId,
@@ -103,6 +123,8 @@ function serializeReport(row: ReportRow) {
     created_at: row.createdAt.toISOString(),
     claimed_at: row.claimedAt ? row.claimedAt.toISOString() : null,
     resolved_at: row.resolvedAt ? row.resolvedAt.toISOString() : null,
+    evidence,
+    evidence_count: evidence.length,
   };
 }
 
@@ -186,6 +208,48 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
     return rows[0] ?? null;
   }
 
+  /**
+   * Loads evidence (active, non-deleted media files) attached to the given
+   * reports, keyed by report id. Used to populate `evidence`/`evidence_count`
+   * on both the list and detail responses.
+   */
+  async function loadEvidenceForReports(reportIds: string[]): Promise<Map<string, EvidenceItem[]>> {
+    const byReport = new Map<string, EvidenceItem[]>();
+    if (reportIds.length === 0) return byReport;
+
+    const rows = await app.db
+      .select({
+        reportId: reportEvidence.reportId,
+        id: mediaFiles.id,
+        kind: mediaFiles.kind,
+        externalUrl: mediaFiles.externalUrl,
+        originalFilename: mediaFiles.originalFilename,
+        mimeType: mediaFiles.mimeType,
+        sizeBytes: mediaFiles.sizeBytes,
+        title: mediaFiles.title,
+      })
+      .from(reportEvidence)
+      .innerJoin(mediaFiles, eq(mediaFiles.id, reportEvidence.mediaFileId))
+      .where(and(inArray(reportEvidence.reportId, reportIds), isNull(mediaFiles.deletedAt)))
+      .orderBy(reportEvidence.createdAt);
+
+    for (const row of rows) {
+      const item: EvidenceItem = {
+        id: row.id,
+        kind: row.kind,
+        external_url: row.externalUrl,
+        original_filename: row.originalFilename,
+        mime_type: row.mimeType,
+        size_bytes: row.sizeBytes,
+        title: row.title,
+      };
+      const existing = byReport.get(row.reportId);
+      if (existing) existing.push(item);
+      else byReport.set(row.reportId, [item]);
+    }
+    return byReport;
+  }
+
   fast.get(
     '/api/v1/reports',
     { schema: { querystring: listQuery }, config: { audit: false } },
@@ -209,8 +273,10 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
         .limit(pageSize)
         .offset((page - 1) * pageSize);
 
+      const evidenceByReport = await loadEvidenceForReports(rows.map((row) => row.id));
+
       return {
-        items: rows.map(serializeReport),
+        items: rows.map((row) => serializeReport(row, evidenceByReport.get(row.id) ?? [])),
         total,
         page,
         page_size: pageSize,
@@ -230,7 +296,98 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'report_not_found' };
       }
-      return serializeReport(report);
+      const evidenceByReport = await loadEvidenceForReports([report.id]);
+      return serializeReport(report, evidenceByReport.get(report.id) ?? []);
+    },
+  );
+
+  fast.post(
+    '/api/v1/reports',
+    { schema: { body: createBody }, config: { audit: false } },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+      // biome-ignore lint/style/noNonNullAssertion: panelGuard() above guarantees req.user
+      const actorId = req.user!.playerId;
+
+      const { server_id, target_player_id, body, evidence_media_ids } = req.body;
+
+      const [server] = await app.db
+        .select({ id: servers.id })
+        .from(servers)
+        .where(and(eq(servers.id, server_id), isNull(servers.deletedAt)))
+        .limit(1);
+      if (!server) {
+        reply.code(400);
+        return { error: 'server_not_found' };
+      }
+
+      const [target] = await app.db
+        .select({ id: players.id })
+        .from(players)
+        .where(eq(players.id, target_player_id))
+        .limit(1);
+      if (!target) {
+        reply.code(400);
+        return { error: 'target_not_found' };
+      }
+
+      const evidenceIds = Array.from(new Set(evidence_media_ids));
+      if (evidenceIds.length > 0) {
+        const activeMedia = await app.db
+          .select({ id: mediaFiles.id })
+          .from(mediaFiles)
+          .where(and(inArray(mediaFiles.id, evidenceIds), isNull(mediaFiles.deletedAt)));
+        const activeIds = new Set(activeMedia.map((row) => row.id));
+        const missing = evidenceIds.find((id) => !activeIds.has(id));
+        if (missing) {
+          reply.code(400);
+          return { error: 'media_not_found', id: missing };
+        }
+      }
+
+      const reportId = uuidv7();
+      await app.db.insert(playerReports).values({
+        id: reportId,
+        serverId: server_id,
+        reporterPlayerId: actorId,
+        targetPlayerId: target_player_id,
+        targetRaw: null,
+        body,
+        source: 'ui',
+        status: 'pending',
+      });
+
+      if (evidenceIds.length > 0) {
+        await app.db
+          .insert(reportEvidence)
+          .values(evidenceIds.map((mediaFileId) => ({ reportId, mediaFileId })));
+      }
+
+      const created = await loadReport(reportId);
+      if (!created) throw new Error('player_reports insert returned no row');
+      const evidenceByReport = await loadEvidenceForReports([reportId]);
+      const evidence = evidenceByReport.get(reportId) ?? [];
+      const after = serializeReport(created, evidence);
+
+      await writeAuditEntry(app.db, {
+        actor: auditActor(req),
+        actorIp: req.ip ?? null,
+        actionType: 'report.create',
+        targetType: 'report',
+        targetId: reportId,
+        after,
+        context: { requestId: req.id, method: req.method, url: req.url },
+        statusCode: 201,
+      });
+      app.liveBus.publish({
+        type: 'report.created',
+        ts: new Date().toISOString(),
+        data: { report: toLiveView(created) },
+      });
+
+      reply.code(201);
+      return after;
     },
   );
 
@@ -250,7 +407,9 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'report_not_found' };
       }
-      const before = serializeReport(existing);
+      const evidenceByReport = await loadEvidenceForReports([existing.id]);
+      const evidence = evidenceByReport.get(existing.id) ?? [];
+      const before = serializeReport(existing, evidence);
 
       const updates: Partial<typeof playerReports.$inferInsert> = {};
       if (req.body.status !== undefined && req.body.status !== existing.status) {
@@ -277,7 +436,7 @@ const reportsRoutes: FastifyPluginAsync = async (app) => {
         reply.code(500);
         return { error: 'update_failed' };
       }
-      const after = serializeReport(updated);
+      const after = serializeReport(updated, evidence);
 
       await writeAuditEntry(app.db, {
         actor: auditActor(req),

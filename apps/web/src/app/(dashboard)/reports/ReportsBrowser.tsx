@@ -4,12 +4,22 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
-import type { ReportListItem, ReportLiveView, ReportStatus } from '@/lib/live-bus';
+import type {
+  ReportEvidenceItem,
+  ReportListItem,
+  ReportLiveView,
+  ReportStatus,
+} from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   buildApiQuery,
   buildQueryString,
+  evidenceBadgeLabel,
+  evidenceLabel,
   formatDateTime,
+  isExternalLinkEvidence,
+  isImageEvidence,
+  isVideoEvidence,
   NOTE_MAX,
   parseFilters,
   playerLabel,
@@ -247,9 +257,19 @@ function ReportCard({
           </span>
           <span>{formatDateTime(report.created_at)}</span>
         </div>
-        <span className={`rounded px-2 py-0.5 text-xs ${STATUS_BADGE_CLASSES[report.status]}`}>
-          {STATUS_LABELS[report.status]}
-        </span>
+        <div className="flex items-center gap-2">
+          {report.evidence.length > 0 ? (
+            <span
+              className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-300"
+              title="Есть вложения"
+            >
+              {evidenceBadgeLabel(report.evidence)}
+            </span>
+          ) : null}
+          <span className={`rounded px-2 py-0.5 text-xs ${STATUS_BADGE_CLASSES[report.status]}`}>
+            {STATUS_LABELS[report.status]}
+          </span>
+        </div>
       </div>
 
       <div className="text-sm">
@@ -263,6 +283,8 @@ function ReportCard({
       </div>
 
       <p className="whitespace-pre-wrap text-sm text-neutral-300">{report.body}</p>
+
+      {report.evidence.length > 0 ? <ReportEvidenceBlock evidence={report.evidence} /> : null}
 
       {report.handler_name || report.handler_player_id ? (
         <p className="text-xs text-neutral-500">
@@ -321,6 +343,43 @@ function ReportCard({
           </button>
         )
       ) : null}
+    </div>
+  );
+}
+
+function ReportEvidenceBlock({ evidence }: { evidence: ReportEvidenceItem[] }) {
+  return (
+    <div className="space-y-2 border-t border-neutral-900 pt-2">
+      <h3 className="text-xs uppercase tracking-widest text-neutral-500">Доказательства</h3>
+      <div className="flex flex-wrap gap-3">
+        {evidence.map((item) => (
+          <div key={item.id} className="max-w-[220px] space-y-1">
+            {isImageEvidence(item) ? (
+              <img
+                src={`/api/v1/media/${item.id}/stream`}
+                alt={evidenceLabel(item)}
+                className="max-h-40 rounded border border-neutral-800 object-cover"
+              />
+            ) : isVideoEvidence(item) ? (
+              // biome-ignore lint/a11y/useMediaCaption: user-submitted evidence has no captions
+              <video
+                controls
+                src={`/api/v1/media/${item.id}/stream`}
+                className="max-h-40 rounded border border-neutral-800"
+              />
+            ) : isExternalLinkEvidence(item) && item.external_url ? (
+              <a
+                href={item.external_url}
+                target="_blank"
+                rel="noreferrer"
+                className="block truncate text-xs text-sky-400 hover:text-sky-300"
+              >
+                {evidenceLabel(item)}
+              </a>
+            ) : null}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
