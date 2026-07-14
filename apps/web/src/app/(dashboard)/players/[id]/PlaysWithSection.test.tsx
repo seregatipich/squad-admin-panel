@@ -51,4 +51,51 @@ describe('PlaysWithSection', () => {
     const { container } = render(<PlaysWithSection playerId="player-1" />);
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
+
+  it('shows an empty-state message when no partners clear the threshold', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify({ partners: [] }), { status: 200 }))),
+    );
+    render(<PlaysWithSection playerId="player-1" />);
+    expect(
+      await screen.findByText('Совместных игровых сессий выше порога не найдено.'),
+    ).toBeInTheDocument();
+  });
+
+  it('renders a placeholder for a partner without a current name', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              partners: [
+                {
+                  player_id: 'partner-2',
+                  player_name: null,
+                  overlap_seconds: 30,
+                  shared_session_count: 1,
+                },
+              ],
+            }),
+          ),
+        ),
+      ),
+    );
+    render(<PlaysWithSection playerId="player-1" />);
+    expect(await screen.findByText('—')).toBeInTheDocument();
+    expect(screen.getByText('30с вместе')).toBeInTheDocument();
+  });
+
+  it('shows a request error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(new Response(JSON.stringify({ error: 'down' }), { status: 503 })),
+      ),
+    );
+    render(<PlaysWithSection playerId="player-1" />);
+    expect(await screen.findByText('Ошибка: HTTP 503')).toBeInTheDocument();
+  });
 });
