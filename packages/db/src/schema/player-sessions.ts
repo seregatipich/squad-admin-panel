@@ -16,7 +16,7 @@ import { servers } from './servers.js';
 export const CLOSED_REASONS = ['disconnect', 'server_crashed', 'kicked', 'banned'] as const;
 export type ClosedReason = (typeof CLOSED_REASONS)[number];
 
-export const SESSION_MODES = ['online', 'boost', 'queue'] as const;
+export const SESSION_MODES = ['online', 'boost', 'queue', 'seed'] as const;
 export type SessionMode = (typeof SESSION_MODES)[number];
 
 export const playerSessions = pgTable(
@@ -55,7 +55,7 @@ export const playerSessions = pgTable(
       'player_sessions_closed_reason_chk',
       sql`closed_reason IS NULL OR closed_reason IN ('disconnect','server_crashed','kicked','banned')`,
     ),
-    modeChk: check('player_sessions_mode_chk', sql`mode IN ('online','boost','queue')`),
+    modeChk: check('player_sessions_mode_chk', sql`mode IN ('online','boost','queue','seed')`),
   }),
 );
 

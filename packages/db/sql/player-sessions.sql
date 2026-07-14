@@ -25,8 +25,13 @@ CREATE TABLE IF NOT EXISTS player_sessions (
     CHECK (closed_reason IS NULL
       OR closed_reason IN ('disconnect','server_crashed','kicked','banned')),
   CONSTRAINT player_sessions_mode_chk
-    CHECK (mode IN ('online','boost','queue'))
+    CHECK (mode IN ('online','boost','queue','seed'))
 ) PARTITION BY RANGE (connected_at);
+
+ALTER TABLE player_sessions DROP CONSTRAINT IF EXISTS player_sessions_mode_chk;
+ALTER TABLE player_sessions
+  ADD CONSTRAINT player_sessions_mode_chk
+  CHECK (mode IN ('online','boost','queue','seed'));
 
 CREATE INDEX IF NOT EXISTS player_sessions_player_connected_idx
   ON player_sessions (player_id, connected_at DESC);

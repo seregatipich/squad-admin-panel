@@ -1,12 +1,16 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { DatabaseClient } from '../src/client.js';
 import {
   recomputeDailyPresence,
   recomputeDailyPresenceForAllSessions,
 } from '../src/presence/daily.js';
+import { splitOpenSessionsAtSeedingTransition } from '../src/presence/sessions.js';
+import * as schema from '../src/schema/index.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
@@ -26,6 +30,7 @@ const SERVER_2 = '00000022-0000-4000-8000-000000000000';
 const NOW = new Date('2026-07-10T00:00:00.000Z');
 
 let sql: ReturnType<typeof postgres>;
+let db: DatabaseClient;
 
 interface SeedSession {
   playerId: string;
@@ -62,11 +67,12 @@ async function dailyRows() {
       online_seconds: number;
       boost_seconds: number;
       queue_seconds: number;
+      seed_seconds: number;
       session_count: number;
     }[]
   >`
     SELECT player_id, server_id, day::text AS day,
-           online_seconds, boost_seconds, queue_seconds, session_count
+           online_seconds, boost_seconds, queue_seconds, seed_seconds, session_count
     FROM player_daily_presence
     ORDER BY player_id, day, server_id
   `;
@@ -74,7 +80,7 @@ async function dailyRows() {
 
 async function sumDaily(): Promise<number> {
   const [row] = await sql<{ total: number | null }[]>`
-    SELECT COALESCE(SUM(online_seconds + boost_seconds + queue_seconds), 0)::bigint AS total
+    SELECT COALESCE(SUM(online_seconds + boost_seconds + queue_seconds + seed_seconds), 0)::bigint AS total
     FROM player_daily_presence
   `;
   return Number(row.total ?? 0);
@@ -92,6 +98,7 @@ async function sumSessions(): Promise<number> {
 beforeAll(async () => {
   if (!DATABASE_URL) return;
   sql = postgres(DATABASE_URL, { max: 1, onnotice: () => undefined });
+  db = drizzle(sql, { schema }) as DatabaseClient;
   await sql.unsafe(SESSIONS_SQL);
   await sql.unsafe(DAILY_SQL);
   for (const [id, name] of [
@@ -201,6 +208,83 @@ describeIfDb('recomputeDailyPresence cross-midnight splitting', () => {
       boost_seconds: 3600,
       queue_seconds: 1800,
       session_count: 2,
+    });
+  });
+
+  it('splits sessions at seeding boundaries and aggregates only the seed interval', async () => {
+    await seedSession({
+      playerId: PLAYER_A,
+      serverId: SERVER_1,
+      connectedAt: '2026-07-05T09:00:00.000Z',
+    });
+
+    await splitOpenSessionsAtSeedingTransition(db, {
+      serverId: SERVER_1,
+      occurredAt: new Date('2026-07-05T10:00:00.000Z'),
+      kind: 'server.seeding_started',
+    });
+    await splitOpenSessionsAtSeedingTransition(db, {
+      serverId: SERVER_1,
+      occurredAt: new Date('2026-07-05T10:30:00.000Z'),
+      kind: 'server.seeding_ended',
+    });
+    await sql`
+      UPDATE player_sessions
+      SET disconnected_at = '2026-07-05T11:00:00.000Z'::timestamptz,
+          duration_seconds = 1800,
+          closed_reason = 'disconnect'
+      WHERE server_id = ${SERVER_1} AND disconnected_at IS NULL
+    `;
+
+    const intervals = await sql<
+      { mode: string; connected_at: Date; disconnected_at: Date | null; duration_seconds: number }[]
+    >`
+      SELECT mode, connected_at, disconnected_at, duration_seconds
+      FROM player_sessions
+      WHERE player_id = ${PLAYER_A} AND server_id = ${SERVER_1}
+      ORDER BY connected_at
+    `;
+    expect(
+      intervals.map((row) => ({
+        mode: row.mode,
+        connectedAt: new Date(row.connected_at).toISOString(),
+        disconnectedAt: row.disconnected_at
+          ? new Date(row.disconnected_at).toISOString()
+          : undefined,
+        durationSeconds: row.duration_seconds,
+      })),
+    ).toEqual([
+      {
+        mode: 'online',
+        connectedAt: '2026-07-05T09:00:00.000Z',
+        disconnectedAt: '2026-07-05T10:00:00.000Z',
+        durationSeconds: 3600,
+      },
+      {
+        mode: 'seed',
+        connectedAt: '2026-07-05T10:00:00.000Z',
+        disconnectedAt: '2026-07-05T10:30:00.000Z',
+        durationSeconds: 1800,
+      },
+      {
+        mode: 'online',
+        connectedAt: '2026-07-05T10:30:00.000Z',
+        disconnectedAt: '2026-07-05T11:00:00.000Z',
+        durationSeconds: 1800,
+      },
+    ]);
+
+    await recomputeDailyPresence(sql, {
+      fromDay: '2026-07-05',
+      toDay: '2026-07-05',
+      now: NOW,
+    });
+
+    const [presence] = await dailyRows();
+    expect(presence).toMatchObject({
+      online_seconds: 5400,
+      seed_seconds: 1800,
+      session_count: 3,
     });
   });
 

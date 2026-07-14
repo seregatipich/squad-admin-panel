@@ -112,6 +112,7 @@ describe('aggregateSessionsByDay', () => {
         onlineSeconds: 3600,
         boostSeconds: 0,
         queueSeconds: 0,
+        seedSeconds: 0,
         sessionCount: 1,
       },
       {
@@ -119,12 +120,13 @@ describe('aggregateSessionsByDay', () => {
         onlineSeconds: 3600,
         boostSeconds: 3600,
         queueSeconds: 1800,
+        seedSeconds: 0,
         sessionCount: 3,
       },
     ]);
 
     const aggregateTotal = buckets.reduce(
-      (sum, b) => sum + b.onlineSeconds + b.boostSeconds + b.queueSeconds,
+      (sum, b) => sum + b.onlineSeconds + b.boostSeconds + b.queueSeconds + b.seedSeconds,
       0,
     );
     const sessionTotal = sessions.reduce(
