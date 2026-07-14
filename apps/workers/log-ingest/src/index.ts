@@ -5,6 +5,8 @@ import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
+import { BannedNameRuleCache } from './banname/rules-cache.js';
+import { handleBannedNameConnect } from './banname/store.js';
 import { ChatFlagDetector } from './chat/flag-rules.js';
 import { handleChat } from './chat/store.js';
 import { handleCombat, handleVehicle } from './combat/store.js';
@@ -57,6 +59,7 @@ async function main() {
     Number(process.env.MATCH_SEED_ONLINE_THRESHOLD) || DEFAULT_SEED_ONLINE_THRESHOLD;
 
   const chatFlagDetector = new ChatFlagDetector(db);
+  const bannedNameCache = new BannedNameRuleCache(db);
 
   const manager = new TailManager((serverId, beaconPort) => {
     log.info({ serverId, beaconPort }, 'attaching log tail');
@@ -161,6 +164,11 @@ async function main() {
           publish(redis, e).catch((err) =>
             log.error({ err: (err as Error).message, type: e.type }, 'publish failed'),
           );
+          if (e.type === 'player.connected') {
+            handleBannedNameConnect(db, redis, { serverId, event: e }, bannedNameCache).catch(
+              (err) => log.error({ err: (err as Error).message }, 'banname handling failed'),
+            );
+          }
         }
       },
       onStarted: () => {

@@ -30,6 +30,8 @@ export const EVENT_TYPES = [
   'bridge.disconnected',
 
   'performance.degraded',
+
+  'banname.matched',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -80,6 +82,17 @@ export const playerDisconnectedPayload = z
   })
   .strict();
 export type PlayerDisconnectedPayload = z.infer<typeof playerDisconnectedPayload>;
+
+export const bannameMatchedPayload = z
+  .object({
+    player_id: z.string().uuid().nullable(),
+    rule_id: z.string().uuid(),
+    nickname: z.string().min(1).max(128),
+    action: z.enum(['kick', 'alert']),
+    escalated: z.boolean(),
+  })
+  .strict();
+export type BannameMatchedPayload = z.infer<typeof bannameMatchedPayload>;
 
 export const rconPlayersPolledPayload = z
   .object({
@@ -136,6 +149,7 @@ export const PAYLOAD_SCHEMAS: Partial<Record<EventType, z.ZodTypeAny>> = {
   'server.stopping': serverLifecyclePayload,
   'server.stopped': serverLifecyclePayload,
   'server.crashed': serverLifecyclePayload,
+  'banname.matched': bannameMatchedPayload,
 };
 
 export function validatePayload<T extends EventType>(

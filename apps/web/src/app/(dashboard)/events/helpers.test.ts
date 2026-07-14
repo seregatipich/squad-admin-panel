@@ -142,6 +142,11 @@ describe('events helpers', () => {
     expect(kindTone('player.connected')).toContain('emerald');
   });
 
+  it('labels banname.matched and tones it amber', () => {
+    expect(kindLabel('banname.matched')).toBe('Совпадение по запрещённому нику');
+    expect(kindTone('banname.matched')).toContain('amber');
+  });
+
   it('falls back through slug, name, id for the server label', () => {
     expect(shortServerName(makeEvent({ server_slug: 'main' }))).toBe('main');
     expect(shortServerName(makeEvent({ server_slug: null, server_name: 'Named' }))).toBe('Named');
