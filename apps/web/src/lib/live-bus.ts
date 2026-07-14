@@ -132,6 +132,11 @@ export type LiveEvent =
       type: 'server.map.changed';
       ts: string;
       data: { server_id: string; action: string; layer: string | null };
+    }
+  | {
+      type: 'alert.triggered';
+      ts: string;
+      data: Record<string, unknown>;
     };
 
 export type ReportStatus = 'pending' | 'in_review' | 'resolved' | 'rejected';

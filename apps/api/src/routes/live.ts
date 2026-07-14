@@ -65,6 +65,15 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
         if (event.type === 'session.revoked' && event.data.player_id !== connectionPlayerId) {
           return;
         }
+        if (
+          event.type === 'alert.triggered' &&
+          (event.data.event_kind === 'seed.call_sent' ||
+            event.data.event_kind === 'server.seeding_started') &&
+          typeof event.data.player_id === 'string' &&
+          event.data.player_id !== connectionPlayerId
+        ) {
+          return;
+        }
         if (event.type === 'combat.event' && !canViewCombat) return;
         safeSend(event);
       });
