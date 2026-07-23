@@ -1,3 +1,4 @@
+export * from './admins-config.js';
 export * from './banned-names.js';
 export * from './bridge-methods.js';
 export * from './chat-flag-rules.js';
