@@ -1,6 +1,6 @@
 import type { DatabaseClient } from '@squad/db';
-import { servers } from '@squad/db/schema';
-import { isNull, sql } from 'drizzle-orm';
+import { adminsCfgSyncOutbox, servers } from '@squad/db/schema';
+import { inArray, isNull } from 'drizzle-orm';
 import type Redis from 'ioredis';
 
 export const ADMINS_CFG_SYNC_STREAM_PREFIX = 'events:admins-cfg-sync:';
@@ -9,10 +9,10 @@ export const ADMINS_CFG_SYNC_GROUP = 'config-sync';
 // A db handle that can either be the top-level client or a transaction
 // passed into a `db.transaction(async tx => ...)` callback. Drizzle's
 // transaction value isn't structurally compatible with DatabaseClient
-// (no `$client`), but it has the same select/from/where surface used
-// here. Using the structural type lets the publish helper run inside
-// the same transaction as the DB mutation per spec §2.7.1.
-export type AdminsCfgSyncDb = Pick<DatabaseClient, 'select'>;
+// (no `$client`), but it has the same select/insert/update surface used
+// here. Using the structural type lets the enqueue helper run inside the
+// same transaction as the DB mutation per spec §2.7.1 / SYNC-1.
+export type AdminsCfgSyncDb = Pick<DatabaseClient, 'select' | 'insert' | 'update'>;
 
 export interface AdminsCfgSyncEvent {
   reason: string;
@@ -22,35 +22,87 @@ export interface AdminsCfgSyncEvent {
 }
 
 /**
- * Publish a sync task to every active server's `events:admins-cfg-sync:*`
- * stream. The worker `config-sync` consumes these in a consumer group.
+ * Enqueue a sync task for every active server via the durable transactional
+ * outbox (SYNC-1, #34).
  *
- * Always-fire on every relevant DB mutation: role changes, player role
- * changes, server install. Idempotency is the worker's job — it diff-
- * compares hashes before writing to the file.
+ * Called inside the same transaction as the domain mutation, this inserts one
+ * pending `admins_cfg_sync_outbox` row per active server. The insert commits or
+ * rolls back atomically with the mutation, so a committed mutation can never
+ * exist without a corresponding sync task — the durability guarantee a
+ * Redis-only queue cannot make (a trimmed or lost stream entry would strand the
+ * mutation until a manual force-sync).
+ *
+ * As a latency optimisation it then attempts an immediate best-effort `XADD`
+ * and stamps `relayed_at` on the rows that publish successfully. This publish
+ * is deliberately non-fatal: a transient Redis outage must not roll back the
+ * mutation, because the worker's outbox relay ({@link relayAdminsCfgSyncOutbox})
+ * will deliver any still-pending row at-least-once. Idempotency remains the
+ * worker's job — it diff-compares hashes before writing the file, so an
+ * at-least-once redelivery is a no-op.
  */
 export async function publishAdminsCfgSyncForAllServers(
   db: AdminsCfgSyncDb,
   redis: Redis,
   event: AdminsCfgSyncEvent,
 ): Promise<{ enqueued: number }> {
-  const rows = await db.select({ id: servers.id }).from(servers).where(isNull(servers.deletedAt));
-  if (rows.length === 0) return { enqueued: 0 };
-  const payload = JSON.stringify(event);
-  const pipeline = redis.pipeline();
-  for (const row of rows) {
-    pipeline.xadd(
-      `${ADMINS_CFG_SYNC_STREAM_PREFIX}${row.id}`,
-      'MAXLEN',
-      '~',
-      '500',
-      '*',
-      'event',
-      payload,
-    );
+  const activeServers = await db
+    .select({ id: servers.id })
+    .from(servers)
+    .where(isNull(servers.deletedAt));
+  if (activeServers.length === 0) return { enqueued: 0 };
+
+  const inserted = await db
+    .insert(adminsCfgSyncOutbox)
+    .values(activeServers.map((s) => ({ serverId: s.id, payload: event })))
+    .returning({ id: adminsCfgSyncOutbox.id, serverId: adminsCfgSyncOutbox.serverId });
+
+  const relayedIds = await tryImmediateDispatch(redis, inserted, event);
+  if (relayedIds.length > 0) {
+    await db
+      .update(adminsCfgSyncOutbox)
+      .set({ relayedAt: new Date() })
+      .where(inArray(adminsCfgSyncOutbox.id, relayedIds));
   }
-  await pipeline.exec();
-  return { enqueued: rows.length };
+
+  return { enqueued: inserted.length };
+}
+
+/**
+ * Best-effort immediate publish of freshly-inserted outbox rows. Returns the
+ * ids that were published so the caller can stamp them relayed in the same
+ * transaction. Any failure (Redis down, pipeline error) yields an empty list —
+ * the rows stay pending for the relay rather than blocking the mutation.
+ */
+async function tryImmediateDispatch(
+  redis: Redis,
+  rows: Array<{ id: string; serverId: string }>,
+  event: AdminsCfgSyncEvent,
+): Promise<string[]> {
+  const payload = JSON.stringify(event);
+  try {
+    const pipeline = redis.pipeline();
+    for (const row of rows) {
+      pipeline.xadd(
+        `${ADMINS_CFG_SYNC_STREAM_PREFIX}${row.serverId}`,
+        'MAXLEN',
+        '~',
+        '500',
+        '*',
+        'event',
+        payload,
+      );
+    }
+    const results = await pipeline.exec();
+    if (!results) return [];
+    const relayed: string[] = [];
+    results.forEach(([err], i) => {
+      const row = rows[i];
+      if (!err && row) relayed.push(row.id);
+    });
+    return relayed;
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -93,5 +145,3 @@ export async function ensureAdminsCfgSyncGroup(redis: Redis, serverId: string): 
     throw err;
   }
 }
-
-void sql; // keep import for downstream reuse

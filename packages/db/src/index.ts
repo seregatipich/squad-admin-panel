@@ -1,3 +1,4 @@
+export * from './admins-cfg-outbox.js';
 export * from './alt-ban.js';
 export * from './client.js';
 export * from './coplay/aggregate.js';
