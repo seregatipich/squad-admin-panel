@@ -10,6 +10,7 @@ interface RoleSqlRow extends Record<string, unknown> {
 interface AdminSqlRow extends Record<string, unknown> {
   eos_id: string;
   role_name: string;
+  comment: string | null;
 }
 
 interface ClanPrioritySqlRow extends Record<string, unknown> {
@@ -33,7 +34,7 @@ export async function snapshotRolesAndAdmins(db: DatabaseClient): Promise<{
     ORDER BY r.name
   `);
   const adminRows = await db.execute<AdminSqlRow>(sql`
-    SELECT p.eos_id, r.name AS role_name
+    SELECT p.eos_id, r.name AS role_name, p.role_comment AS comment
     FROM players p
     JOIN roles r ON r.id = p.role_id
     WHERE p.role_id IS NOT NULL AND p.eos_id IS NOT NULL
@@ -63,6 +64,7 @@ export async function snapshotRolesAndAdmins(db: DatabaseClient): Promise<{
     admins: (adminRows as unknown as AdminSqlRow[]).map((a) => ({
       eosId: a.eos_id,
       roleName: a.role_name,
+      comment: a.comment ?? null,
     })),
     clanPriority: (clanPriorityRows as unknown as ClanPrioritySqlRow[]).map((c) => ({
       eosId: c.eos_id,

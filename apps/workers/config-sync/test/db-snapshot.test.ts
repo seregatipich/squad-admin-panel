@@ -22,10 +22,42 @@ describe('snapshotRolesAndAdmins', () => {
   });
 
   it('maps admin rows to AdminEntry array', async () => {
-    const db = makeDb([], [{ eos_id: '0002a10186d9414e8e15c66eb3dbf70a', role_name: 'Admin' }]);
+    const db = makeDb(
+      [],
+      [{ eos_id: '0002a10186d9414e8e15c66eb3dbf70a', role_name: 'Admin', comment: null }],
+    );
     const { roles, admins } = await snapshotRolesAndAdmins(db);
     expect(roles).toEqual([]);
-    expect(admins).toEqual([{ eosId: '0002a10186d9414e8e15c66eb3dbf70a', roleName: 'Admin' }]);
+    expect(admins).toEqual([
+      { eosId: '0002a10186d9414e8e15c66eb3dbf70a', roleName: 'Admin', comment: null },
+    ]);
+  });
+
+  it('carries per-assignment role_comment through to AdminEntry.comment', async () => {
+    const db = makeDb(
+      [],
+      [
+        {
+          eos_id: '0002a10186d9414e8e15c66eb3dbf70a',
+          role_name: 'Admin',
+          comment: 'VIP до конца сезона',
+        },
+      ],
+    );
+    const { admins } = await snapshotRolesAndAdmins(db);
+    expect(admins).toEqual([
+      {
+        eosId: '0002a10186d9414e8e15c66eb3dbf70a',
+        roleName: 'Admin',
+        comment: 'VIP до конца сезона',
+      },
+    ]);
+  });
+
+  it('defaults a missing/null role_comment to null', async () => {
+    const db = makeDb([], [{ eos_id: '0002a10186d9414e8e15c66eb3dbf70a', role_name: 'Admin' }]);
+    const { admins } = await snapshotRolesAndAdmins(db);
+    expect(admins[0]?.comment).toBeNull();
   });
 
   it('returns empty arrays when queries return no rows', async () => {
@@ -49,15 +81,23 @@ describe('snapshotRolesAndAdmins', () => {
         { name: 'Mod', squad_permissions: ['warn'] },
       ],
       [
-        { eos_id: '0002a10186d9414e8e15c66eb3dbf70a', role_name: 'Admin' },
-        { eos_id: '0002b20286d9414e8e15c66eb3dbf70b', role_name: 'Mod' },
+        { eos_id: '0002a10186d9414e8e15c66eb3dbf70a', role_name: 'Admin', comment: null },
+        { eos_id: '0002b20286d9414e8e15c66eb3dbf70b', role_name: 'Mod', comment: null },
       ],
     );
     const { roles, admins } = await snapshotRolesAndAdmins(db);
     expect(roles).toHaveLength(2);
     expect(admins).toHaveLength(2);
-    expect(admins[0]).toEqual({ eosId: '0002a10186d9414e8e15c66eb3dbf70a', roleName: 'Admin' });
-    expect(admins[1]).toEqual({ eosId: '0002b20286d9414e8e15c66eb3dbf70b', roleName: 'Mod' });
+    expect(admins[0]).toEqual({
+      eosId: '0002a10186d9414e8e15c66eb3dbf70a',
+      roleName: 'Admin',
+      comment: null,
+    });
+    expect(admins[1]).toEqual({
+      eosId: '0002b20286d9414e8e15c66eb3dbf70b',
+      roleName: 'Mod',
+      comment: null,
+    });
   });
 
   // The filtering semantics themselves (active/unexpired clan, soft-deleted
