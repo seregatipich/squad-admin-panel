@@ -111,20 +111,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         reply.code(401);
         return { error: 'unauthenticated' };
       }
-      const ownSessions = await app.db
-        .select({ id: sessionsTable.id })
-        .from(sessionsTable)
-        .where(eq(sessionsTable.playerId, req.user.playerId));
-      await revokeAllForPlayer(app.db, app.redis, req.user.playerId);
+      await revokeAllForPlayer(app.db, app.redis, req.user.playerId, app.liveBus);
       reply.clearCookie(SESSION_COOKIE, { path: '/' });
-      const ts = new Date().toISOString();
-      for (const revoked of ownSessions) {
-        app.liveBus.publish({
-          type: 'session.revoked',
-          ts,
-          data: { player_id: req.user.playerId, session_id: revoked.id },
-        });
-      }
       return { ok: true };
     },
   );

@@ -132,7 +132,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       });
       invalidatePermissionCache(playerId);
       if (!role.panelAccess) {
-        await revokeAllForPlayer(app.db, app.redis, playerId);
+        await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
       }
       reply.code(201);
       return { ok: true };
@@ -184,7 +184,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         });
       });
       invalidatePermissionCache(playerId);
-      await revokeAllForPlayer(app.db, app.redis, playerId);
+      await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
       return { ok: true };
     },
   );

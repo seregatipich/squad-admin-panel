@@ -17,6 +17,19 @@ export interface SessionRecord {
 const REDIS_PREFIX = 'session:';
 const REDIS_TTL_SECONDS = 600;
 
+/**
+ * Minimal live-bus surface needed to push a forced logout. `app.liveBus`
+ * satisfies this structurally, so callers pass it directly without coupling
+ * this module to the full plugin type.
+ */
+export interface SessionRevokePublisher {
+  publish(event: {
+    type: 'session.revoked';
+    ts: string;
+    data: { player_id: string; session_id: string };
+  }): void;
+}
+
 export function mintSessionToken(): { token: string; tokenId: string } {
   const raw = randomBytes(24).toString('base64url');
   const token = `s_${uuidv7()}_${raw}`;
@@ -99,10 +112,19 @@ export async function revokeSession(
   await redis.del(`${REDIS_PREFIX}${tokenId}`);
 }
 
+/**
+ * Revokes every session belonging to `playerId` (DB rows + Redis cache).
+ *
+ * When a `publisher` is supplied, emits one `session.revoked` live-bus event
+ * per revoked session so connected browser tabs for that player are force-
+ * logged-out in real time (≤5 s) instead of only noticing on their next
+ * request or account-page poll.
+ */
 export async function revokeAllForPlayer(
   db: DatabaseClient,
   redis: Redis,
   playerId: string,
+  publisher?: SessionRevokePublisher,
 ): Promise<void> {
   const rows = await db
     .select({ id: sessions.id })
@@ -111,6 +133,16 @@ export async function revokeAllForPlayer(
   if (rows.length) {
     await db.delete(sessions).where(eq(sessions.playerId, playerId));
     await redis.del(...rows.map((r) => `${REDIS_PREFIX}${r.id}`));
+    if (publisher) {
+      const ts = new Date().toISOString();
+      for (const r of rows) {
+        publisher.publish({
+          type: 'session.revoked',
+          ts,
+          data: { player_id: playerId, session_id: r.id },
+        });
+      }
+    }
   }
 }
 

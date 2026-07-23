@@ -26,12 +26,14 @@ const SESSION_ID = `seed-reward-${PLAYER_ID}`;
 const db = DATABASE_URL ? createDatabaseClient(DATABASE_URL) : null;
 
 function makeRedis(): {
-  redis: Pick<Redis, 'del' | 'pipeline'>;
+  redis: Pick<Redis, 'del' | 'pipeline' | 'publish'>;
   del: ReturnType<typeof vi.fn>;
   xadd: ReturnType<typeof vi.fn>;
+  publish: ReturnType<typeof vi.fn>;
 } {
   const del = vi.fn(async () => 1);
   const xadd = vi.fn();
+  const publish = vi.fn(async () => 1);
   const pipeline = {
     xadd: (...args: unknown[]) => {
       xadd(...args);
@@ -43,10 +45,22 @@ function makeRedis(): {
     redis: {
       del,
       pipeline: vi.fn(() => pipeline),
-    } as unknown as Pick<Redis, 'del' | 'pipeline'>,
+      publish,
+    } as unknown as Pick<Redis, 'del' | 'pipeline' | 'publish'>,
     del,
     xadd,
+    publish,
   };
+}
+
+function revokedFor(
+  publish: ReturnType<typeof vi.fn>,
+): Array<{ playerId: string; sessionId: string }> {
+  return publish.mock.calls
+    .filter(([channel]) => channel === 'live-bus')
+    .map(([, raw]) => JSON.parse(raw as string) as { type: string; data: Record<string, string> })
+    .filter((evt) => evt.type === 'session.revoked')
+    .map((evt) => ({ playerId: evt.data.player_id, sessionId: evt.data.session_id }));
 }
 
 beforeAll(async () => {
@@ -134,6 +148,10 @@ describeIfDb('seed reward worker integration', () => {
     expect(afterGrant?.roleId).toBe(REWARD_ROLE_ID);
     expect(firstRedis.del).toHaveBeenCalledWith(`session:${SESSION_ID}`);
     expect(firstRedis.xadd).toHaveBeenCalledTimes(1);
+    expect(revokedFor(firstRedis.publish)).toContainEqual({
+      playerId: PLAYER_ID,
+      sessionId: SESSION_ID,
+    });
 
     await db
       .update(playerDailyPresence)
@@ -159,6 +177,10 @@ describeIfDb('seed reward worker integration', () => {
       .where(eq(players.steamId64, PLAYER_STEAM_ID));
     expect(afterRevoke?.roleId).toBeNull();
     expect(secondRedis.del).toHaveBeenCalledWith(`session:${SESSION_ID}-revoke`);
+    expect(revokedFor(secondRedis.publish)).toContainEqual({
+      playerId: PLAYER_ID,
+      sessionId: `${SESSION_ID}-revoke`,
+    });
 
     const audits = await db
       .select({

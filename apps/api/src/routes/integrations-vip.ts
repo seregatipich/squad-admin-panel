@@ -241,7 +241,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
         result.action === 'revoked' ||
         (result.action === 'assigned' && !result.rolePanelAccess)
       ) {
-        await revokeAllForPlayer(app.db, app.redis, result.playerId);
+        await revokeAllForPlayer(app.db, app.redis, result.playerId, app.liveBus);
       }
 
       reply.code(202);
