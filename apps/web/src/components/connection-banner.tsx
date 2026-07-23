@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslator } from '@/i18n/LocaleProvider';
 import { getLiveBus } from '@/lib/live-bus';
 
 // Minimal connectivity indicator. We do NOT render an alarming sticky
@@ -21,6 +22,7 @@ const HTTP_PROBE_INTERVAL_MS = 30_000;
 const FAIL_THRESHOLD = 2;
 
 export function ConnectionBanner() {
+  const t = useTranslator();
   const [hydrated, setHydrated] = useState(false);
   const [reachable, setReachable] = useState(true);
   const [dismissed, setDismissed] = useState(false);
@@ -81,7 +83,7 @@ export function ConnectionBanner() {
       data-testid="connection-banner"
       className="fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-lg border border-red-500/30 bg-red-950/90 px-3 py-2 text-xs text-red-200 shadow-lg backdrop-blur"
     >
-      <span>Панель временно недоступна.</span>
+      <span>{t('connection.unavailable')}</span>
       <button
         type="button"
         onClick={() => {
@@ -90,13 +92,13 @@ export function ConnectionBanner() {
         }}
         className="rounded border border-red-500/40 px-2 py-0.5 hover:bg-red-500/25"
       >
-        Повторить
+        {t('connection.retry')}
       </button>
       <button
         type="button"
         onClick={() => setDismissed(true)}
         className="text-red-300/70 hover:text-red-200"
-        aria-label="Скрыть"
+        aria-label={t('connection.dismiss')}
       >
         ✕
       </button>

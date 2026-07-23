@@ -3,7 +3,9 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
+import { LocaleSwitch } from '@/components/LocaleSwitch';
 import { LogoutButton } from '@/components/LogoutButton';
+import { useTranslator } from '@/i18n/LocaleProvider';
 import { NAV_GROUPS } from '@/lib/nav';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 
@@ -47,11 +49,12 @@ export function SidebarNav({
 }) {
   const pathname = usePathname() ?? '';
   const pendingReports = usePendingReportsCount();
+  const t = useTranslator();
 
   return (
     <nav className="flex w-56 shrink-0 flex-col border-r border-neutral-900 px-3 py-5 text-sm">
       <div className="mb-6 px-2 text-[10px] font-medium uppercase tracking-[0.22em] text-neutral-500">
-        Squad Admin Panel
+        {t('nav.brand')}
       </div>
       <div className="flex-1 space-y-5">
         {NAV_GROUPS.map((group, groupIndex) => {
@@ -63,7 +66,7 @@ export function SidebarNav({
             <div key={group.label ?? `group-${groupIndex}`} className="space-y-0.5">
               {group.label ? (
                 <div className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-600">
-                  {group.label}
+                  {group.labelKey ? t(group.labelKey) : group.label}
                 </div>
               ) : null}
               {visible.map((item) => {
@@ -86,7 +89,7 @@ export function SidebarNav({
                       />
                     ) : null}
                     <span className="inline-flex items-center gap-1.5">
-                      {item.label}
+                      {item.labelKey ? t(item.labelKey) : item.label}
                       {item.showsPendingReports && pendingReports > 0 ? (
                         <span className="rounded-full bg-amber-600 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-neutral-950">
                           {pendingReports > 99 ? '99+' : pendingReports}
@@ -102,7 +105,10 @@ export function SidebarNav({
       </div>
       <div className="mt-6 border-t border-neutral-900 px-2 pt-4 text-xs text-neutral-500">
         <div className="truncate text-neutral-400">{displayName}</div>
-        <LogoutButton />
+        <div className="mt-2 flex items-center justify-between">
+          <LogoutButton />
+          <LocaleSwitch className="-mr-1 flex items-center" />
+        </div>
       </div>
     </nav>
   );
