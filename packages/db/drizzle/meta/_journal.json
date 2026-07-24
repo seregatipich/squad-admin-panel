@@ -470,6 +470,13 @@
       "when": 1783401100000,
       "tag": "0081_player_steam_eos_conflict",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1783401200000,
+      "tag": "0082_scheduled_tasks",
+      "breakpoints": true
     }
   ]
 }
