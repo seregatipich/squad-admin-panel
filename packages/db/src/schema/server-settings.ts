@@ -1,4 +1,4 @@
-import { inet, integer, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { boolean, inet, integer, pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { servers } from './servers.js';
 
 export const serverSettings = pgTable('server_settings', {
@@ -26,6 +26,14 @@ export const serverSettings = pgTable('server_settings', {
   seedLiveAt: integer('seed_live_at').notNull().default(60),
   /** Hysteresis band (players) around seedLiveAt to avoid flapping at the boundary. See SEED-1 (#140). */
   seedHysteresis: integer('seed_hysteresis').notNull().default(5),
+  /**
+   * Whether AUTO-4 in-game chat commands (`!stats`/`!rules`/`!report`) are
+   * answered for this server. Lets operators disable panel-owned chat commands
+   * where an RNSquadJS sidecar runs its own `chatCommands`. See AUTO-4 (#75).
+   */
+  chatCommandsEnabled: boolean('chat_commands_enabled').notNull().default(true),
+  /** Text returned in-game for the `!rules` command; null = not configured. See AUTO-4 (#75). */
+  rulesText: text('rules_text'),
 });
 
 export type ServerSettingsRow = typeof serverSettings.$inferSelect;

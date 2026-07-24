@@ -82,6 +82,7 @@ import roleAssignmentsRoutes from '../../src/routes/role-assignments.js';
 import roleMembersRoutes from '../../src/routes/role-members.js';
 import rolesRoutes from '../../src/routes/roles.js';
 import archiveRoutes from '../../src/routes/server-archive.js';
+import serverChatCommandsRoutes from '../../src/routes/server-chat-commands.js';
 import serverConfigRoutes from '../../src/routes/server-configs.js';
 import forceStopRoutes from '../../src/routes/server-force-stop.js';
 import serverInstallRoutes from '../../src/routes/server-install.js';
@@ -453,6 +454,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(serverSeedingRoutes);
   await app.register(serverSeedScheduleRoutes);
   await app.register(serverScheduledTasksRoutes);
+  await app.register(serverChatCommandsRoutes);
   await app.register(serverSeedNotificationRoutes);
   await app.register(serverSettingsRoutes);
   await app.register(serverUpdateRoutes);

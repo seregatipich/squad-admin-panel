@@ -71,7 +71,10 @@ export interface ChatMessageFrame {
   data: ChatMessageData;
 }
 
-async function resolvePlayerId(db: DatabaseClient, chat: ParsedChat): Promise<string | null> {
+export async function resolvePlayerId(
+  db: DatabaseClient,
+  chat: ParsedChat,
+): Promise<string | null> {
   const filters = [];
   if (chat.eosId) filters.push(eq(players.eosId, chat.eosId));
   if (chat.steamId64) filters.push(eq(players.steamId64, BigInt(chat.steamId64)));

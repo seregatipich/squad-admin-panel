@@ -16,6 +16,11 @@ export const serverSettingsUpdate = z
     memory_high_mb: z.number().int().min(2048).nullable().optional(),
     memory_max_mb: z.number().int().min(2048).nullable().optional(),
     io_weight: z.number().int().min(10).max(1000).nullable().optional(),
+    // AUTO-4 (#75): per-server toggle for panel-owned in-game chat commands and
+    // the `!rules` reply text. `rules_text` is capped to worker-rcon's
+    // single-message limit since it is answered with one `AdminWarn`.
+    chat_commands_enabled: z.boolean().optional(),
+    rules_text: z.string().max(300).nullable().optional(),
   })
   .strict()
   .refine(

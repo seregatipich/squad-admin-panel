@@ -5,6 +5,7 @@ export * from './audit-log.js';
 export * from './banlist-publication-settings.js';
 export * from './banned-name-rules.js';
 export * from './bonus-transactions.js';
+export * from './chat-commands.js';
 export * from './chat-flag-rules.js';
 export * from './chat-messages.js';
 export * from './clan-guard-settings.js';

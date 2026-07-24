@@ -21,7 +21,11 @@ interface Settings {
   io_weight: number | null;
   seed_live_at: number;
   seed_hysteresis: number;
+  chat_commands_enabled: boolean;
+  rules_text: string | null;
 }
+
+const RULES_TEXT_MAX = 300;
 
 interface ServerInfo {
   status: string;
@@ -309,6 +313,36 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
             />
           </label>
         </div>
+      </section>
+
+      <section className="mb-6">
+        <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
+          Чат-команды
+        </h2>
+        <p className="mb-2 text-xs text-neutral-500">
+          Игровые команды <code>!stats</code>, <code>!rules</code>, <code>!report</code> через RCON.
+          Отключите, если RNSquadJS обрабатывает чат-команды сам.
+        </p>
+        <label className="mb-3 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={val('chat_commands_enabled') as boolean}
+            onChange={(e) => setField('chat_commands_enabled', e.target.checked)}
+            className="h-4 w-4 rounded border-neutral-700 bg-neutral-950"
+          />
+          <span className="text-sm text-neutral-200">Включить игровые чат-команды</span>
+        </label>
+        <label className="block">
+          <span className="text-xs text-neutral-500">Текст для !rules</span>
+          <textarea
+            value={(val('rules_text') as string | null) ?? ''}
+            onChange={(e) => setField('rules_text', e.target.value === '' ? null : e.target.value)}
+            maxLength={RULES_TEXT_MAX}
+            rows={3}
+            placeholder="Правила не заданы"
+            className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
+          />
+        </label>
       </section>
 
       {canManageServer && (
