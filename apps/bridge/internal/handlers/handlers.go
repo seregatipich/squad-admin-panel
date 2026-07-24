@@ -9,6 +9,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -128,6 +129,8 @@ func (d *Dispatcher) Handle(
 		return d.fileRead(req)
 	case "file_read_tail":
 		return d.fileReadTail(req)
+	case "file_read_stream":
+		return d.fileReadStream(req, onStream)
 	case "file_write":
 		return d.fileWrite(req)
 	case "file_atomic_write":
@@ -136,6 +139,8 @@ func (d *Dispatcher) Handle(
 		return d.directoryDelete(req)
 	case "list_panel_dirs":
 		return d.listPanelDirs(req)
+	case "squad_log_list":
+		return d.squadLogList(req)
 	case "list_squad_containers":
 		return d.listSquadContainers(ctx, req)
 	case "ufw_rule":
@@ -314,6 +319,74 @@ func (d *Dispatcher) fileReadTail(req *rpc.Request) rpc.Response {
 	return rpc.NewSuccessResponse(req.ID, body)
 }
 
+const (
+	// fileReadStreamDefaultChunkBytes is the read size used when the caller does
+	// not pin chunk_size. 1 MiB keeps every emitted frame far below rpc.MaxFrame
+	// (16 MiB) even after base64 expansion (~1.33 MiB), so an arbitrarily large
+	// file (e.g. a 500 MB Squad log) is streamed frame-by-frame and is never
+	// held whole in memory — the constraint that rules out plain file_read.
+	fileReadStreamDefaultChunkBytes int64 = 1 << 20
+	// fileReadStreamMaxChunkBytes bounds a caller-supplied chunk_size so the
+	// base64-expanded frame still fits under rpc.MaxFrame with envelope room.
+	fileReadStreamMaxChunkBytes int64 = 8 << 20
+)
+
+type fileReadStreamParams struct {
+	Path      string `json:"path"`
+	ChunkSize int64  `json:"chunk_size,omitempty"`
+}
+
+// fileReadStream streams a readable file back to the caller as an ordered
+// sequence of stdout StreamFrames, each carrying a base64-encoded chunk. The
+// file is read chunk_size bytes at a time and never buffered in full, so it
+// satisfies the "500 MB download must not be held in memory" requirement.
+// Modeled on containerLogsFollow (the existing streaming handler): the terminal
+// Response reports how many bytes were streamed.
+func (d *Dispatcher) fileReadStream(req *rpc.Request, onStream func(rpc.StreamFrame)) rpc.Response {
+	var p fileReadStreamParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
+	}
+	if err := validateReadablePath(p.Path); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
+	}
+	chunkSize := p.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = fileReadStreamDefaultChunkBytes
+	} else if chunkSize > fileReadStreamMaxChunkBytes {
+		chunkSize = fileReadStreamMaxChunkBytes
+	}
+	f, err := os.Open(p.Path)
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	} else if st.IsDir() {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, "path is a directory")
+	}
+
+	buf := make([]byte, chunkSize)
+	var sent int64
+	for {
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			encoded, _ := json.Marshal(base64.StdEncoding.EncodeToString(buf[:n]))
+			onStream(rpc.StreamFrame{ID: req.ID, Stream: "stdout", Data: encoded})
+			sent += int64(n)
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, readErr.Error())
+		}
+	}
+	body, _ := json.Marshal(map[string]int64{"bytes_sent": sent})
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
 type fileWriteParams struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
@@ -418,6 +491,59 @@ func (d *Dispatcher) listPanelDirs(req *rpc.Request) rpc.Response {
 		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, "saved: "+err.Error())
 	}
 	body, _ := json.Marshal(map[string][]string{"configs": configs, "saved": saved})
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+type squadLogListParams struct {
+	Path string `json:"path"`
+}
+
+type squadLogFile struct {
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	Mtime  string `json:"mtime"`
+	IsLive bool   `json:"is_live"`
+}
+
+// squadLogList returns the SquadGame*.log files in the caller-supplied Logs
+// directory (validated read-only under the panel roots), each with its size,
+// RFC3339 mtime, and an is_live flag set on the active SquadGame.log. The API
+// builds the path as <saved>/<uuid>/SquadGame/Saved/Logs; a missing directory
+// yields an empty list rather than an error, mirroring readImmediateDirs.
+func (d *Dispatcher) squadLogList(req *rpc.Request) rpc.Response {
+	var p squadLogListParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
+	}
+	if err := validateReadablePath(p.Path); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeForbidden, err.Error())
+	}
+	entries, err := os.ReadDir(p.Path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			body, _ := json.Marshal(map[string][]squadLogFile{"files": {}})
+			return rpc.NewSuccessResponse(req.ID, body)
+		}
+		return rpc.NewErrorResponse(req.ID, rpc.CodeRuntimeError, err.Error())
+	}
+	files := make([]squadLogFile, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !isSquadGameLog(entry.Name()) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, squadLogFile{
+			Name:   entry.Name(),
+			Size:   info.Size(),
+			Mtime:  info.ModTime().UTC().Format(time.RFC3339),
+			IsLive: entry.Name() == "SquadGame.log",
+		})
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+	body, _ := json.Marshal(map[string][]squadLogFile{"files": files})
 	return rpc.NewSuccessResponse(req.ID, body)
 }
 
@@ -551,6 +677,12 @@ func runSquadLogRetentionSweep(savedRoot string, now time.Time, retentionDays in
 
 func isRotatedSquadGameLog(name string) bool {
 	return name != "SquadGame.log" && strings.HasPrefix(name, "SquadGame") && strings.HasSuffix(name, ".log")
+}
+
+// isSquadGameLog matches the live SquadGame.log and every rotated SquadGame*.log
+// sibling — the set of files browsable/downloadable through the panel.
+func isSquadGameLog(name string) bool {
+	return strings.HasPrefix(name, "SquadGame") && strings.HasSuffix(name, ".log")
 }
 
 func (r *squadLogRetentionSweepResult) addRetentionError(serverID string, file string, err error) {

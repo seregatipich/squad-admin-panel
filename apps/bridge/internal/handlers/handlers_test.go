@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1114,5 +1115,293 @@ func TestVolumeOnDiskBytes_BindMountedVolumeReturnsRealSize(t *testing.T) {
 	}
 	if got < int64(len(payload)) {
 		t.Fatalf("volumeOnDiskBytes(%s) = %d, expected >= %d", volName, got, len(payload))
+	}
+}
+
+// --- squad_log_list ---
+
+func TestSquadLogList_ListsSquadGameLogsWithMetadata(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
+	logsDir := filepath.Join(tmp, "SquadGame", "Saved", "Logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatalf("mkdir logs dir: %v", err)
+	}
+
+	now := time.Date(2026, 7, 20, 8, 30, 0, 0, time.UTC)
+	liveContent := "live log body\n"
+	rotatedContent := "rotated log body which is longer\n"
+	writeRetentionTestFile(t, filepath.Join(logsDir, "SquadGame.log"), liveContent, now)
+	writeRetentionTestFile(t, filepath.Join(logsDir, "SquadGame-2026.07.19-12.00.00.log"),
+		rotatedContent, now.Add(-24*time.Hour))
+	// Non-matching files must be excluded from the listing.
+	writeRetentionTestFile(t, filepath.Join(logsDir, "ChatGame.log"), "nope\n", now)
+	writeRetentionTestFile(t, filepath.Join(logsDir, "notes.txt"), "nope\n", now)
+	// A subdirectory must be skipped (only regular files are listed).
+	if err := os.MkdirAll(filepath.Join(logsDir, "SquadGame.log.d"), 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]any{"path": logsDir})
+	resp := d.Handle(context.Background(), &rpc.Request{
+		ID:     "req-loglist-1",
+		Method: "squad_log_list",
+		Params: params,
+	}, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected OK, got %+v", resp.Error)
+	}
+
+	var got struct {
+		Files []struct {
+			Name   string `json:"name"`
+			Size   int64  `json:"size"`
+			Mtime  string `json:"mtime"`
+			IsLive bool   `json:"is_live"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Files) != 2 {
+		t.Fatalf("files = %d (%+v), want 2 SquadGame*.log entries", len(got.Files), got.Files)
+	}
+	byName := map[string]struct {
+		Size   int64
+		Mtime  string
+		IsLive bool
+	}{}
+	for _, f := range got.Files {
+		byName[f.Name] = struct {
+			Size   int64
+			Mtime  string
+			IsLive bool
+		}{f.Size, f.Mtime, f.IsLive}
+	}
+	live, ok := byName["SquadGame.log"]
+	if !ok {
+		t.Fatalf("SquadGame.log missing from listing: %+v", got.Files)
+	}
+	if !live.IsLive {
+		t.Fatalf("SquadGame.log is_live = false, want true")
+	}
+	if live.Size != int64(len(liveContent)) {
+		t.Fatalf("SquadGame.log size = %d, want %d", live.Size, len(liveContent))
+	}
+	if live.Mtime != now.Format(time.RFC3339) {
+		t.Fatalf("SquadGame.log mtime = %q, want %q", live.Mtime, now.Format(time.RFC3339))
+	}
+	rotated, ok := byName["SquadGame-2026.07.19-12.00.00.log"]
+	if !ok {
+		t.Fatalf("rotated log missing from listing: %+v", got.Files)
+	}
+	if rotated.IsLive {
+		t.Fatalf("rotated log is_live = true, want false")
+	}
+	if rotated.Size != int64(len(rotatedContent)) {
+		t.Fatalf("rotated size = %d, want %d", rotated.Size, len(rotatedContent))
+	}
+}
+
+func TestSquadLogList_MissingDirReturnsEmpty(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
+	missing := filepath.Join(tmp, "SquadGame", "Saved", "Logs")
+
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]any{"path": missing})
+	resp := d.Handle(context.Background(), &rpc.Request{
+		ID:     "req-loglist-empty",
+		Method: "squad_log_list",
+		Params: params,
+	}, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected OK for missing dir, got %+v", resp.Error)
+	}
+	var got struct {
+		Files []json.RawMessage `json:"files"`
+	}
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Files) != 0 {
+		t.Fatalf("files = %d, want 0 for a missing Logs dir", len(got.Files))
+	}
+}
+
+func TestSquadLogList_ForbiddenPath(t *testing.T) {
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]any{"path": "/etc"})
+	resp := d.Handle(context.Background(), &rpc.Request{
+		ID:     "req-loglist-forbid",
+		Method: "squad_log_list",
+		Params: params,
+	}, func(rpc.StreamFrame) {})
+	if resp.OK {
+		t.Fatalf("expected error for path outside allowlist, got success")
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeForbidden {
+		t.Fatalf("expected CodeForbidden, got %+v", resp.Error)
+	}
+}
+
+// --- file_read_stream ---
+
+// collectStreamFrames drives file_read_stream and returns the decoded, ordered
+// chunk byte slices plus the final response.
+func collectStreamFrames(t *testing.T, d *Dispatcher, req *rpc.Request) ([][]byte, rpc.Response) {
+	t.Helper()
+	var chunks [][]byte
+	resp := d.Handle(context.Background(), req, func(f rpc.StreamFrame) {
+		if f.ID != req.ID {
+			t.Fatalf("stream frame id = %q, want %q", f.ID, req.ID)
+		}
+		if f.Stream != "stdout" {
+			t.Fatalf("stream = %q, want stdout", f.Stream)
+		}
+		var b64 string
+		if err := json.Unmarshal(f.Data, &b64); err != nil {
+			t.Fatalf("frame data is not a JSON string: %v", err)
+		}
+		raw, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			t.Fatalf("frame data is not valid base64: %v", err)
+		}
+		buf := make([]byte, len(raw))
+		copy(buf, raw)
+		chunks = append(chunks, buf)
+	})
+	return chunks, resp
+}
+
+func TestFileReadStream_EmitsMultipleChunksExactly(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
+	logPath := filepath.Join(tmp, "SquadGame.log")
+	content := []byte("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-the-quick-brown-fox\n")
+	if err := os.WriteFile(logPath, content, 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	d := &Dispatcher{}
+	const chunkSize = 8
+	params, _ := json.Marshal(map[string]any{"path": logPath, "chunk_size": chunkSize})
+	req := &rpc.Request{ID: "req-stream-1", Method: "file_read_stream", Params: params}
+	chunks, resp := collectStreamFrames(t, d, req)
+	if !resp.OK {
+		t.Fatalf("expected OK, got %+v", resp.Error)
+	}
+
+	// A file of len(content) bytes read in chunkSize-byte reads must produce
+	// ceil(len/chunkSize) frames — proof the content is streamed, not returned
+	// whole in one frame.
+	wantFrames := (len(content) + chunkSize - 1) / chunkSize
+	if len(chunks) != wantFrames {
+		t.Fatalf("emitted %d frames, want %d", len(chunks), wantFrames)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple frames, got %d (not chunked)", len(chunks))
+	}
+	var reassembled []byte
+	for _, c := range chunks {
+		if len(c) > chunkSize {
+			t.Fatalf("frame carried %d bytes, exceeds chunk_size %d", len(c), chunkSize)
+		}
+		reassembled = append(reassembled, c...)
+	}
+	if !bytes.Equal(reassembled, content) {
+		t.Fatalf("reassembled stream != file content\n got %q\nwant %q", reassembled, content)
+	}
+
+	var final struct {
+		BytesSent int64 `json:"bytes_sent"`
+	}
+	if err := json.Unmarshal(resp.Result, &final); err != nil {
+		t.Fatalf("decode final: %v", err)
+	}
+	if final.BytesSent != int64(len(content)) {
+		t.Fatalf("bytes_sent = %d, want %d", final.BytesSent, len(content))
+	}
+}
+
+func TestFileReadStream_DefaultChunkSpansMultipleFrames(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
+	logPath := filepath.Join(tmp, "SquadGame.log")
+	// Larger than the default 1 MiB read chunk: proves the handler never holds
+	// (or emits) the whole file at once — the criterion that rules out fileRead.
+	size := fileReadStreamDefaultChunkBytes*2 + 4096
+	content := make([]byte, size)
+	for i := range content {
+		content[i] = byte(i % 251)
+	}
+	if err := os.WriteFile(logPath, content, 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]any{"path": logPath})
+	req := &rpc.Request{ID: "req-stream-2", Method: "file_read_stream", Params: params}
+	chunks, resp := collectStreamFrames(t, d, req)
+	if !resp.OK {
+		t.Fatalf("expected OK, got %+v", resp.Error)
+	}
+	if len(chunks) < 3 {
+		t.Fatalf("emitted %d frames for a >2 MiB file, want >= 3 (streamed)", len(chunks))
+	}
+	var total int
+	for _, c := range chunks {
+		if int64(len(c)) > fileReadStreamDefaultChunkBytes {
+			t.Fatalf("frame carried %d bytes, exceeds default chunk %d", len(c), fileReadStreamDefaultChunkBytes)
+		}
+		total += len(c)
+	}
+	if total != len(content) {
+		t.Fatalf("streamed %d bytes, want %d", total, len(content))
+	}
+	// Verify byte-exact reconstruction.
+	var reassembled []byte
+	for _, c := range chunks {
+		reassembled = append(reassembled, c...)
+	}
+	if !bytes.Equal(reassembled, content) {
+		t.Fatalf("reassembled stream != file content for large file")
+	}
+}
+
+func TestFileReadStream_ForbiddenPath(t *testing.T) {
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]any{"path": "/etc/passwd"})
+	req := &rpc.Request{ID: "req-stream-forbid", Method: "file_read_stream", Params: params}
+	chunks, resp := collectStreamFrames(t, d, req)
+	if resp.OK {
+		t.Fatalf("expected error response, got success")
+	}
+	if len(chunks) != 0 {
+		t.Fatalf("emitted %d frames before rejecting a forbidden path", len(chunks))
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeForbidden {
+		t.Fatalf("expected CodeForbidden, got %+v", resp.Error)
+	}
+}
+
+func TestFileReadStream_TraversalRejected(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("PANEL_DEPOT_HOST_PATH", tmp)
+	// Path escapes the allowed depot root via traversal.
+	evil := filepath.Join(tmp, "SquadGame", "Saved", "Logs", "..", "..", "..", "..", "etc", "shadow")
+	d := &Dispatcher{}
+	params, _ := json.Marshal(map[string]any{"path": evil})
+	req := &rpc.Request{ID: "req-stream-traverse", Method: "file_read_stream", Params: params}
+	chunks, resp := collectStreamFrames(t, d, req)
+	if resp.OK {
+		t.Fatalf("expected error for traversal path, got success")
+	}
+	if len(chunks) != 0 {
+		t.Fatalf("emitted %d frames for a traversal path", len(chunks))
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeForbidden {
+		t.Fatalf("expected CodeForbidden, got %+v", resp.Error)
 	}
 }
