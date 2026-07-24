@@ -1,5 +1,5 @@
 import { BridgeClient } from '@squad/bridge-client';
-import { createDatabaseClient, servers } from '@squad/db';
+import { createDatabaseClient, relayAdminsCfgSyncOutbox, servers } from '@squad/db';
 import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
 import { isNull } from 'drizzle-orm';
 import Redis from 'ioredis';
@@ -36,6 +36,12 @@ const STREAM_BLOCK_MS = 5_000;
 // and replayed. This is the bottom of the spec §2.7.7 retry stack.
 const RECLAIM_INTERVAL_MS = Number(process.env.ADMINS_CFG_RECLAIM_INTERVAL_MS ?? 30_000);
 const RECLAIM_MIN_IDLE_MS = Number(process.env.ADMINS_CFG_RECLAIM_MIN_IDLE_MS ?? 60_000);
+// Cadence for draining the durable Postgres outbox onto the Redis streams
+// (SYNC-1, #34). The API publishes immediately on enqueue as a fast path; this
+// sweep is the at-least-once fallback that delivers any row whose immediate
+// publish failed (e.g. Redis was briefly unavailable), so no committed mutation
+// is ever stranded without its sync task.
+const RELAY_INTERVAL_MS = Number(process.env.ADMINS_CFG_RELAY_INTERVAL_MS ?? 1_000);
 const CONSUMER_NAME = `consumer-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 
 async function ensureGroup(redis: Redis, serverId: string): Promise<void> {
@@ -282,6 +288,18 @@ async function main() {
     }
   }
 
+  async function relayOutbox(): Promise<void> {
+    try {
+      const { relayed } = await relayAdminsCfgSyncOutbox(db, redis, {
+        streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX,
+        maxlen: 500,
+      });
+      if (relayed > 0) log.info({ relayed }, 'relayed admins-cfg-sync outbox rows');
+    } catch (err) {
+      log.warn({ err: (err as Error).message }, 'admins-cfg-sync outbox relay failed');
+    }
+  }
+
   async function driftSweep(): Promise<void> {
     for (const serverId of activeServerIds) {
       if (shouldSkip(serverId)) continue;
@@ -311,6 +329,9 @@ async function main() {
   await reclaimPendingMessages().catch((err) =>
     log.warn({ err: (err as Error).message }, 'boot reclaim failed'),
   );
+  // Boot-time relay pass — drain any outbox rows whose immediate publish never
+  // reached Redis (e.g. Redis was down when the mutation committed).
+  await relayOutbox();
   const refreshTimer = setInterval(() => {
     refreshServerList().catch((err) =>
       log.error({ err: (err as Error).message }, 'server-list refresh failed'),
@@ -324,6 +345,11 @@ async function main() {
       log.error({ err: (err as Error).message }, 'reclaim sweep failed'),
     );
   }, RECLAIM_INTERVAL_MS);
+  const relayTimer = setInterval(() => {
+    relayOutbox().catch((err) =>
+      log.error({ err: (err as Error).message }, 'outbox relay sweep failed'),
+    );
+  }, RELAY_INTERVAL_MS);
 
   const stopHeartbeat = startHeartbeat({
     redis,
@@ -341,6 +367,7 @@ async function main() {
     clearInterval(refreshTimer);
     clearInterval(driftTimer);
     clearInterval(reclaimTimer);
+    clearInterval(relayTimer);
     await bridge.close().catch(() => undefined);
     await redis.quit().catch(() => undefined);
     process.exit(0);

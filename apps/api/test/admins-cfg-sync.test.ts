@@ -3,12 +3,17 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   ADMINS_CFG_SYNC_GROUP,
   ADMINS_CFG_SYNC_STREAM_PREFIX,
-  type AdminsCfgSyncDb,
   type AdminsCfgSyncEvent,
   ensureAdminsCfgSyncGroup,
-  publishAdminsCfgSyncForAllServers,
   publishAdminsCfgSyncForServer,
 } from '../src/lib/admins-cfg-sync.js';
+
+// `publishAdminsCfgSyncForAllServers` now writes to the durable Postgres outbox
+// (SYNC-1, #34), so it can no longer be meaningfully unit-tested against a fake
+// db. Its behaviour — one outbox row per active server, transactional
+// atomicity/rollback, immediate best-effort dispatch, and the relay — is
+// covered end-to-end against real Postgres + Redis in
+// `test/integration/admins-cfg-outbox.test.ts`.
 
 const testEvent: AdminsCfgSyncEvent = {
   reason: 'role-change',
@@ -16,83 +21,6 @@ const testEvent: AdminsCfgSyncEvent = {
   enqueued_at: '2026-01-01T00:00:00.000Z',
   request_id: 'req-123',
 };
-
-function fakeDb(rows: Array<{ id: string }>): AdminsCfgSyncDb {
-  return {
-    select() {
-      return {
-        from() {
-          return {
-            where() {
-              return Promise.resolve(rows);
-            },
-          };
-        },
-      };
-    },
-  } as unknown as AdminsCfgSyncDb;
-}
-
-interface PipelineCall {
-  method: string;
-  args: unknown[];
-}
-
-function fakePipelineRedis(): {
-  redis: Redis;
-  xaddCalls: PipelineCall[];
-  xaddResult: Promise<void>;
-} {
-  const xaddCalls: PipelineCall[] = [];
-  const pipeline = {
-    xadd(...args: unknown[]) {
-      xaddCalls.push({ method: 'xadd', args });
-      return pipeline;
-    },
-    exec: vi.fn().mockResolvedValue([]),
-  };
-  const redis = {
-    pipeline: vi.fn().mockReturnValue(pipeline),
-  } as unknown as Redis;
-  return { redis, xaddCalls, xaddResult: Promise.resolve() };
-}
-
-describe('publishAdminsCfgSyncForAllServers', () => {
-  it('returns { enqueued: 0 } when no active servers', async () => {
-    const db = fakeDb([]);
-    const { redis } = fakePipelineRedis();
-    const result = await publishAdminsCfgSyncForAllServers(db, redis, testEvent);
-    expect(result).toEqual({ enqueued: 0 });
-  });
-
-  it('pipelines one XADD per server with correct stream key', async () => {
-    const id1 = 'aaaaaaaa-0000-0000-0000-000000000001';
-    const id2 = 'aaaaaaaa-0000-0000-0000-000000000002';
-    const db = fakeDb([{ id: id1 }, { id: id2 }]);
-    const { redis, xaddCalls } = fakePipelineRedis();
-
-    const result = await publishAdminsCfgSyncForAllServers(db, redis, testEvent);
-
-    expect(result).toEqual({ enqueued: 2 });
-    expect(xaddCalls).toHaveLength(2);
-    expect(xaddCalls[0]?.args[0]).toBe(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${id1}`);
-    expect(xaddCalls[1]?.args[0]).toBe(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${id2}`);
-  });
-
-  it('serialises the event as JSON in the xadd payload', async () => {
-    const id = 'aaaaaaaa-0000-0000-0000-000000000001';
-    const db = fakeDb([{ id }]);
-    const { redis, xaddCalls } = fakePipelineRedis();
-
-    await publishAdminsCfgSyncForAllServers(db, redis, testEvent);
-
-    const args = xaddCalls[0]?.args as string[];
-    const eventArgIndex = args.indexOf('event');
-    expect(eventArgIndex).toBeGreaterThan(-1);
-    const eventPayload = args[eventArgIndex + 1];
-    expect(JSON.parse(eventPayload ?? '')).toEqual(testEvent);
-  });
-});
 
 describe('publishAdminsCfgSyncForServer', () => {
   it('calls xadd on the correct stream key', async () => {
