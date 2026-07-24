@@ -37,6 +37,21 @@ import type { ParsedChat } from '../parser/chat.js';
 import { resolvePlayerId } from './store.js';
 
 const RCON_STREAM_MAXLEN = 500;
+/** worker-rcon caps `AdminWarn`/`AdminBroadcast` text (BROADCAST_MAX_CHARS) and rejects CR/LF/NUL. */
+const MAX_WARN_CHARS = 300;
+
+/**
+ * Collapses whitespace/newlines and truncates so any message — including a
+ * user-configured `rules_text` — is a single line within worker-rcon's cap and
+ * cannot be rejected by its `assertSafeSingleLineText` guard.
+ */
+function toWarnMessage(text: string): string {
+  const single = text
+    .replace(/[\r\n\0]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return single.length > MAX_WARN_CHARS ? single.slice(0, MAX_WARN_CHARS) : single;
+}
 
 /** Minimal redis surface: enqueue an RCON command onto worker-rcon's stream. */
 export interface RconEnqueue {
@@ -167,7 +182,7 @@ export async function handleChatCommand(
     await sendRconCommand(redis, {
       serverId,
       command: 'AdminWarn',
-      args: [warnTarget(chat), message],
+      args: [warnTarget(chat), toWarnMessage(message)],
     });
     responded = true;
     responseSource = 'rcon_warn';

@@ -159,6 +159,9 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
       if ('memory_high_mb' in body) updateSet.memoryHighMb = body.memory_high_mb ?? null;
       if ('memory_max_mb' in body) updateSet.memoryMaxMb = body.memory_max_mb ?? null;
       if ('io_weight' in body) updateSet.ioWeight = body.io_weight ?? null;
+      if (body.chat_commands_enabled !== undefined)
+        updateSet.chatCommandsEnabled = body.chat_commands_enabled;
+      if ('rules_text' in body) updateSet.rulesText = body.rules_text ?? null;
 
       // --- apply UFW rule updates for changed ports (remove old, add new) ---
       if (hasPortChange) {
@@ -224,6 +227,8 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
         memory_high_mb: updated.memoryHighMb,
         memory_max_mb: updated.memoryMaxMb,
         io_weight: updated.ioWeight,
+        chat_commands_enabled: updated.chatCommandsEnabled,
+        rules_text: updated.rulesText,
       };
     },
   );

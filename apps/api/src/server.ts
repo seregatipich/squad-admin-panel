@@ -91,6 +91,7 @@ import roleAssignmentsRoutes from './routes/role-assignments.js';
 import roleMembersRoutes from './routes/role-members.js';
 import rolesRoutes from './routes/roles.js';
 import archiveRoutes from './routes/server-archive.js';
+import serverChatCommandsRoutes from './routes/server-chat-commands.js';
 import serverConfigRoutes from './routes/server-configs.js';
 import forceStopRoutes from './routes/server-force-stop.js';
 import serverInstallRoutes from './routes/server-install.js';
@@ -196,6 +197,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(serverSeedingRoutes);
   await app.register(serverSeedScheduleRoutes);
   await app.register(serverScheduledTasksRoutes);
+  await app.register(serverChatCommandsRoutes);
   await app.register(serverSeedNotificationRoutes);
   await app.register(serverSettingsRoutes);
   await app.register(serverUpdateRoutes);
