@@ -33,7 +33,7 @@ const REPRESENTATIVE_INPUTS: SegmentInputs = {
   ],
 };
 
-export const REPRESENTATIVE_BODY = [
+const REPRESENTATIVE_BODY = [
   '//SQUAD-PANEL BEGIN — не редактировать вручную',
   'Group=Admin:ban,cameraman,kick',
   'Group=QueuePriority:reserve',
