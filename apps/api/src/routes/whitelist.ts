@@ -119,7 +119,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     });
     invalidatePermissionCache(playerId);
     if (!roleRows[0]?.panelAccess) {
-      await revokeAllForPlayer(app.db, app.redis, playerId);
+      await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
     }
     return 'assigned';
   }
@@ -244,7 +244,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
         });
       });
       invalidatePermissionCache(player.id);
-      await revokeAllForPlayer(app.db, app.redis, player.id);
+      await revokeAllForPlayer(app.db, app.redis, player.id, app.liveBus);
       await writeAuditEntry(app.db, {
         actor: actorFrom(req),
         actorIp: req.ip ?? null,

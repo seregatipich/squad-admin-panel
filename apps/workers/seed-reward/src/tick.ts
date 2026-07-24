@@ -12,6 +12,9 @@ import type { Diag } from '@squad/diag';
 import { and, eq, gte, isNull, lte, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
 
+/** Redis pub/sub channel the API's live-bus subscribes to for real-time fan-out. */
+const LIVE_BUS_CHANNEL = 'live-bus';
+
 const ROLLING_WINDOW_DAYS = 30;
 const SECONDS_PER_HOUR = 3600;
 
@@ -127,7 +130,7 @@ export async function runSeedRewardTick(deps: SeedRewardTickDeps): Promise<SeedR
 
 export function createSeedRewardDeps(
   db: DatabaseClient,
-  redis: Pick<Redis, 'del' | 'pipeline'>,
+  redis: Pick<Redis, 'del' | 'pipeline' | 'publish'>,
 ): Omit<SeedRewardTickDeps, 'now' | 'diag'> {
   return {
     reconcileAssignments: (now) => reconcileSeedRewardAssignments(db, now),
@@ -265,9 +268,17 @@ export async function reconcileSeedRewardAssignments(
   });
 }
 
+/**
+ * Deletes every session for `playerId` (DB rows + Redis cache) and pushes one
+ * `session.revoked` event per session onto the live-bus channel, so a seed-
+ * reward role change that drops panel access force-logs-out the player's open
+ * tabs in ≤5 s rather than only on their next request. Mirrors the API's
+ * `revokeAllForPlayer` (`apps/api/src/lib/sessions.ts`); workers publish over
+ * Redis pub/sub because they have no in-process `app.liveBus`.
+ */
 export async function revokeAllSessionsForPlayer(
   db: DatabaseClient,
-  redis: Pick<Redis, 'del'>,
+  redis: Pick<Redis, 'del' | 'publish'>,
   playerId: string,
 ): Promise<void> {
   const rows = await db
@@ -277,6 +288,17 @@ export async function revokeAllSessionsForPlayer(
   if (rows.length === 0) return;
   await db.delete(sessions).where(eq(sessions.playerId, playerId));
   await redis.del(...rows.map((row) => `session:${row.id}`));
+  const ts = new Date().toISOString();
+  for (const row of rows) {
+    await redis.publish(
+      LIVE_BUS_CHANNEL,
+      JSON.stringify({
+        type: 'session.revoked',
+        ts,
+        data: { player_id: playerId, session_id: row.id },
+      }),
+    );
+  }
 }
 
 export async function publishAdminsCfgSyncForAllServers(

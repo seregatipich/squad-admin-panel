@@ -385,7 +385,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       invalidatePermissionCache(playerId);
 
       if (!newRolePanelAccess) {
-        await revokeAllForPlayer(app.db, app.redis, playerId);
+        await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
       }
       return { ok: true };
     },
@@ -441,7 +441,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         });
       });
       invalidatePermissionCache(playerId);
-      await revokeAllForPlayer(app.db, app.redis, playerId);
+      await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
       return { ok: true };
     },
   );
