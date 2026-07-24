@@ -33,6 +33,7 @@ import {
   type ProcessInfoResult,
   type SquadLogListParams,
   type SquadLogListResult,
+  type SquadLogRetentionSweepParams,
   type SquadLogRetentionSweepResult,
   type UfwRuleParams,
 } from './types.js';
@@ -261,8 +262,8 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
       timeoutMs: 30_000,
     });
 
-  squadLogRetentionSweep = () =>
-    this.call<SquadLogRetentionSweepResult>('squad_log_retention_sweep', undefined, {
+  squadLogRetentionSweep = (p: SquadLogRetentionSweepParams = { archive_server_ids: [] }) =>
+    this.call<SquadLogRetentionSweepResult>('squad_log_retention_sweep', p, {
       timeoutMs: 60_000,
     });
 

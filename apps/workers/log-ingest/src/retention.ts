@@ -11,15 +11,23 @@ export interface LogRetentionSweepDeps {
   bridge: RetentionBridge;
   diag: Diag;
   log: RetentionLogger;
+  /**
+   * Returns the server UUIDs whose expiring rotated logs must be archived into
+   * the restic backup staging tree before deletion (LOG-3, #51). Resolves to an
+   * empty array when no server has the toggle on — the delete-only default.
+   */
+  listArchiveServerIds: () => Promise<string[]>;
 }
 
 export async function runLogRetentionSweep({
   bridge,
   diag,
   log,
+  listArchiveServerIds,
 }: LogRetentionSweepDeps): Promise<void> {
   try {
-    const result = await bridge.squadLogRetentionSweep();
+    const archiveServerIds = await listArchiveServerIds();
+    const result = await bridge.squadLogRetentionSweep({ archive_server_ids: archiveServerIds });
     const fields = retentionCounterFields(result);
     const severity = result.error_count > 0 ? 'warn' : 'info';
     log[severity](fields, 'log retention sweep completed');
@@ -28,7 +36,7 @@ export async function runLogRetentionSweep({
         component: 'worker-log-ingest',
         kind: 'log.retention.sweep',
         severity,
-        message: `log retention sweep completed: deleted=${result.deleted_count}, bytes=${result.deleted_bytes}, errors=${result.error_count}`,
+        message: `log retention sweep completed: deleted=${result.deleted_count}, archived=${result.archived_count}, bytes=${result.deleted_bytes}, errors=${result.error_count}`,
         payload: {
           ...fields,
           errors: result.errors,
@@ -80,6 +88,8 @@ function retentionCounterFields(result: SquadLogRetentionSweepResult) {
     files_scanned: result.files_scanned,
     deleted_count: result.deleted_count,
     deleted_bytes: result.deleted_bytes,
+    archived_count: result.archived_count,
+    archived_bytes: result.archived_bytes,
     error_count: result.error_count,
   };
 }
