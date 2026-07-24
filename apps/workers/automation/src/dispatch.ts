@@ -82,6 +82,13 @@ export interface DispatchDeps {
   registry: PluginRegistry;
   log: Logger;
   pluginTimeoutMs?: number;
+  /**
+   * Optional per-envelope hook run after plugin dispatch, inside the same
+   * dedup-guarded block (so it fires at most once per event per consumer
+   * group). AUTO-1 (#72) wires the automation rule engine here; a failure is
+   * logged and swallowed so it never affects plugin delivery or acking.
+   */
+  onEnvelope?: (envelope: EventEnvelope) => Promise<void>;
 }
 
 export interface DispatchResult {
@@ -217,6 +224,11 @@ async function processEntry(
     }
 
     await dispatchEnvelope(deps, envelope);
+    if (deps.onEnvelope) {
+      await deps.onEnvelope(envelope).catch((err: unknown) => {
+        log.error({ err: (err as Error).message, stream, id }, 'automation onEnvelope hook failed');
+      });
+    }
     await redis.xack(stream, group, id);
   } catch (err) {
     log.error({ err: (err as Error).message, stream, id }, 'event entry processing failed');
@@ -257,6 +269,7 @@ export async function runDispatchLoop(opts: RunDispatchLoopOpts): Promise<void> 
     registry: opts.registry,
     log,
     pluginTimeoutMs: opts.pluginTimeoutMs,
+    onEnvelope: opts.onEnvelope,
   };
 
   const knownStreams = new Set<string>();

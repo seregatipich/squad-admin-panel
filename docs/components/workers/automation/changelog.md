@@ -1,5 +1,21 @@
 # Changelog — worker-automation
 
+## 2026-07-24
+
+### Added
+
+- `AUTO-1` (#72): user-defined trigger rules ("if {condition} → {action}").
+  - Tables `automation_rules` + `automation_runs` (`packages/db/src/schema/automation-rules.ts`, migration `0084_automation_rules.sql`).
+  - Shared contracts + pure engine/actions in `@squad/shared-types` (`automation.ts`, `automation-engine.ts` `evaluate`, `automation-actions.ts` `runMatch` with the dry-run guard).
+  - `src/rules/{runtime,deps,engine,actions}.ts`: the worker loads enabled rules (cached ~15s), evaluates event-driven conditions (`player_count`, `player_flag`, `time_of_day`) via an `onEnvelope` hook added to the dispatch loop, and executes actions (enqueue RCON / notify) while recording `automation_runs` + `audit_log`. `chat_keyword` is evaluated in `@squad/worker-log-ingest`'s `onChat`.
+  - Managed via `apps/api/src/routes/automation-rules.ts` (CRUD + `:id/dry-run` + `automation-runs` history).
+  - Added the `worker-automation` service to `docker-compose.yml` and `compose.tk104.yml`.
+- Added `@squad/db`, `drizzle-orm`, and `uuid` dependencies.
+
+### Changed
+
+- `DATABASE_URL` is now a required environment variable (the worker previously had no Postgres dependency).
+
 ## 2026-07-09
 
 ### Added

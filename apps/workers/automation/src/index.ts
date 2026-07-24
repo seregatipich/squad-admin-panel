@@ -1,9 +1,21 @@
+import { createDatabaseClient } from '@squad/db';
 import { startHeartbeat } from '@squad/shared-config';
+import type { AutomationRuleInput } from '@squad/shared-types';
+import { runMatch } from '@squad/shared-types';
 import Redis from 'ioredis';
 import pino from 'pino';
 import { runDispatchLoop } from './dispatch.js';
 import { BUILTIN_PLUGINS, loadPlugins } from './loader.js';
 import { PluginRegistry } from './registry.js';
+import {
+  createRunMatchDeps,
+  loadEnabledAutomationRules,
+  resolvePlayerFlags,
+} from './rules/deps.js';
+import { processAutomationEnvelope } from './rules/runtime.js';
+
+/** How long the enabled-rules snapshot is reused before reloading from the DB. */
+const RULES_CACHE_TTL_MS = 15_000;
 
 const log = pino({
   level: process.env.LOG_LEVEL ?? 'info',
@@ -26,6 +38,7 @@ function requiredEnv(name: string): string {
  * its kind. See `dispatch.ts` for the consumer loop and permission gate.
  */
 async function main() {
+  const db = createDatabaseClient(requiredEnv('DATABASE_URL'));
   const redis = new Redis(requiredEnv('REDIS_URL'), {
     maxRetriesPerRequest: null,
     enableReadyCheck: true,
@@ -38,12 +51,34 @@ async function main() {
   loadPlugins(registry, BUILTIN_PLUGINS);
   log.info({ plugins: registry.list().map((p) => p.id) }, 'plugins loaded');
 
+  // AUTO-1 (#72): evaluate the trigger rules against each event. Enabled rules
+  // are cached briefly so a busy event stream does not hammer the DB.
+  const runMatchDeps = createRunMatchDeps(db, redis, log);
+  let rulesCache: { at: number; rules: AutomationRuleInput[] } | null = null;
+  const loadRules = async (): Promise<AutomationRuleInput[]> => {
+    if (rulesCache && Date.now() - rulesCache.at < RULES_CACHE_TTL_MS) return rulesCache.rules;
+    const rules = await loadEnabledAutomationRules(db);
+    rulesCache = { at: Date.now(), rules };
+    return rules;
+  };
+  const runtimeDeps = {
+    loadRules,
+    resolvePlayerFlags: (ref: { steamId64: string | null; eosId: string | null }) =>
+      resolvePlayerFlags(db, ref),
+    runMatch: (match: Parameters<typeof runMatch>[1], opts: { dryRun: boolean }) =>
+      runMatch(runMatchDeps, match, opts),
+    redis,
+    log,
+  };
+
   let stopped = false;
   const dispatchLoop = runDispatchLoop({
     redis,
     registry,
     log,
     shouldStop: () => stopped,
+    onEnvelope: (envelope) =>
+      processAutomationEnvelope(runtimeDeps, envelope).then(() => undefined),
   }).catch((err) => {
     log.error({ err: (err as Error).message }, 'dispatch loop crashed');
   });

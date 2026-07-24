@@ -1,4 +1,7 @@
 export * from './api.js';
+export * from './automation.js';
+export * from './automation-actions.js';
+export * from './automation-engine.js';
 export * from './cron5.js';
 export * from './events.js';
 export * from './external-bans.js';

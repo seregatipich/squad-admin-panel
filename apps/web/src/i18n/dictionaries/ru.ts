@@ -43,6 +43,7 @@ export const ru = {
   'nav.chatFlags': 'Флаги чата',
   'nav.altDetection': 'Альт-детект',
   'nav.alerts': 'Оповещения',
+  'nav.automation': 'Автоматизация',
   'nav.seedNotifications': 'Уведомления о сидинге',
   'nav.whitelist': 'Whitelist',
   'nav.economy': 'Экономика',

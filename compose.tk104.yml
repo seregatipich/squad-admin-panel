@@ -261,6 +261,23 @@ services:
         condition: service_completed_successfully
     logging: *default-logging
 
+  # AUTO-1 (#72): evaluates user-defined trigger rules over the event streams
+  # and enqueues RCON actions / records firings. DB + Redis only, no bridge.
+  worker-automation:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: automation } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
   worker-scheduler:
     build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: scheduler } }
     restart: unless-stopped

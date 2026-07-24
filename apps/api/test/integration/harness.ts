@@ -31,6 +31,7 @@ import alertRulesRoutes from '../../src/routes/alert-rules.js';
 import analyticsRoutes from '../../src/routes/analytics.js';
 import auditRoutes from '../../src/routes/audit.js';
 import authRoutes from '../../src/routes/auth.js';
+import automationRulesRoutes from '../../src/routes/automation-rules.js';
 import banSourcesRoutes from '../../src/routes/ban-sources.js';
 import bannedNamesRoutes from '../../src/routes/banned-names.js';
 import chatRoutes from '../../src/routes/chat.js';
@@ -526,6 +527,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(banSourcesRoutes);
   await app.register(externalBansRoutes);
   await app.register(alertRulesRoutes);
+  await app.register(automationRulesRoutes);
   await app.register(whitelistRoutes);
 
   // Test fixture: legacy "Viewer" role used by older permission-bound

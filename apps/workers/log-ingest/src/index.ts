@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
 import { handleAltBanConnect } from './alt-ban/store.js';
+import { handleAutomationChat } from './automation/chat.js';
 import { BannedNameRuleCache } from './banname/rules-cache.js';
 import { handleBannedNameEvent } from './banname/store.js';
 import { handleChatCommand } from './chat/commands.js';
@@ -132,6 +133,12 @@ async function main() {
         // report record itself to REPORT-1 via the ingestor's onReport path.
         handleChatCommand(db, redis, { serverId, chat }).catch((err) =>
           log.error({ err: (err as Error).message }, 'chat command handling failed'),
+        );
+        // AUTO-1 (#72): fire automation rules whose chat_keyword condition
+        // matches this line (chat is not on the event stream the automation
+        // worker reads, so it is evaluated here).
+        handleAutomationChat(db, redis, { serverId, chat }).catch((err) =>
+          log.error({ err: (err as Error).message }, 'automation chat handling failed'),
         );
       },
       onVote: (command) => {

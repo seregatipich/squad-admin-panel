@@ -1,6 +1,18 @@
 # worker-automation — API surface
 
-No HTTP surface. The worker's "API" is the in-process plugin contract it hosts, defined in `packages/shared-types/src/plugins.ts`:
+No HTTP surface of its own. AUTO-1 (#72) rules are **managed** over HTTP by the API service (`apps/api/src/routes/automation-rules.ts`), and this worker consumes them:
+
+| Endpoint (in `@squad/api`) | Purpose |
+|---|---|
+| `GET/POST /api/v1/automation-rules`, `PUT/DELETE /api/v1/automation-rules/:id` | CRUD for rules (gated on `role:edit`; every mutation audited) |
+| `POST /api/v1/automation-rules/:id/dry-run` | Evaluate a rule against a sample **without executing the action**; persists an `automation_runs` row with `dry_run=true` |
+| `GET /api/v1/automation-runs` | Firing history (real firings + dry-runs) |
+
+The worker loads the enabled rules from `automation_rules` and evaluates them per event (see [flows.md](./flows.md)). The pure `evaluate`/`runMatch` shared with the dry-run route live in `@squad/shared-types`.
+
+## Plugin host contract (INT-4)
+
+The worker also hosts the in-process plugin contract, defined in `packages/shared-types/src/plugins.ts`:
 
 ## `pluginManifest` (Zod schema)
 
