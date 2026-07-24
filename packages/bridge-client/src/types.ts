@@ -89,6 +89,34 @@ export interface FileReadTailResult {
   truncated: boolean;
 }
 
+export interface FileReadStreamParams {
+  path: string;
+  /** Read/emit chunk size in bytes. Bridge default 1 MiB, capped at 8 MiB. */
+  chunk_size?: number;
+}
+
+export interface FileReadStreamResult {
+  bytes_sent: number;
+}
+
+export interface SquadLogListParams {
+  /** Absolute Logs directory: <saved>/<uuid>/SquadGame/Saved/Logs. */
+  path: string;
+}
+
+export interface SquadLogFileEntry {
+  name: string;
+  size: number;
+  /** RFC3339 UTC modification time. */
+  mtime: string;
+  /** True for the active SquadGame.log; false for rotated siblings. */
+  is_live: boolean;
+}
+
+export interface SquadLogListResult {
+  files: SquadLogFileEntry[];
+}
+
 export interface FileWriteParams {
   path: string;
   content: string;

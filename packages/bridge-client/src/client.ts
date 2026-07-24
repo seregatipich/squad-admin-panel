@@ -19,6 +19,8 @@ import {
   type DirectoryDeleteParams,
   type DirectoryDeleteResult,
   type FileReadParams,
+  type FileReadStreamParams,
+  type FileReadStreamResult,
   type FileReadTailParams,
   type FileReadTailResult,
   type FileWriteParams,
@@ -29,6 +31,8 @@ import {
   type PingResult,
   type ProcessInfoParams,
   type ProcessInfoResult,
+  type SquadLogListParams,
+  type SquadLogListResult,
   type SquadLogRetentionSweepResult,
   type UfwRuleParams,
 } from './types.js';
@@ -169,6 +173,14 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
     this.call<{ content: string }>('file_read', p, { retryOnTransport: true });
   fileReadTail = (p: FileReadTailParams) =>
     this.call<FileReadTailResult>('file_read_tail', p, { retryOnTransport: true });
+
+  // Streams a file back as ordered stdout frames, each a base64-encoded chunk.
+  // Used for downloading large Squad logs without buffering the whole file.
+  fileReadStream = (p: FileReadStreamParams, onStream: (frame: BridgeStreamFrame) => void) =>
+    this.call<FileReadStreamResult>('file_read_stream', p, {
+      onStream,
+      timeoutMs: 600_000,
+    });
   fileWrite = (p: FileWriteParams) => this.call<{ status: string }>('file_write', p);
   fileAtomicWrite = (p: FileWriteParams) =>
     this.call<{ status: string }>('file_atomic_write', p, { retryOnTransport: true });
@@ -183,6 +195,9 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
     this.call<{ configs: string[]; saved: string[] }>('list_panel_dirs', undefined, {
       retryOnTransport: true,
     });
+
+  squadLogList = (p: SquadLogListParams) =>
+    this.call<SquadLogListResult>('squad_log_list', p, { retryOnTransport: true });
 
   listSquadContainers = () =>
     this.call<{ containers: string[] }>('list_squad_containers', undefined, {

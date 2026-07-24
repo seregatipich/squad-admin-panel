@@ -15,7 +15,7 @@ Current keys by category:
 
 | Category | Keys |
 |---|---|
-| servers | `server:view`, `server:install`, `server:start`, `server:stop`, `server:force_stop`, `server:restart`, `server:delete`, `server:edit_settings`, `server:update` |
+| servers | `server:view`, `server:install`, `server:start`, `server:stop`, `server:force_stop`, `server:restart`, `server:delete`, `server:edit_settings`, `server:update`, `server:download_logs` |
 | configs | `config:view`, `config:edit`, `config:rollback` |
 | players | `player:view`, `player:view_ips`, `player:view_notes`*, `player:edit_notes`*, `player:set_flags`* |
 | moderation | `mod:kick`*, `mod:warn`*, `mod:ban_temp`*, `mod:ban_perm`*, `mod:unban`* |

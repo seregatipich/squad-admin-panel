@@ -45,6 +45,11 @@ export const PERMISSIONS = [
     label: 'Resource limits, ports, max_players',
   },
   { key: 'server:update', category: 'servers', label: 'app_update через SteamCMD' },
+  {
+    key: 'server:download_logs',
+    category: 'servers',
+    label: 'Просмотр и скачивание файлов логов сервера',
+  },
   { key: 'config:view', category: 'configs', label: 'Читать .cfg файлы' },
   { key: 'config:edit', category: 'configs', label: 'Редактировать через Monaco' },
   { key: 'config:rollback', category: 'configs', label: 'Откат к предыдущей версии' },

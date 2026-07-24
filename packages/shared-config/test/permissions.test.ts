@@ -40,6 +40,15 @@ describe('PERMISSIONS registry', () => {
     expect(byKey.get('admin_group:edit')?.unimplemented).toBeUndefined();
   });
 
+  it('exposes server:download_logs as a production-active servers permission', () => {
+    const byKey = new Map(PERMISSIONS.map((p) => [p.key, p]));
+    const def = byKey.get('server:download_logs');
+    expect(def).toBeDefined();
+    expect(def?.category).toBe('servers');
+    expect(def?.unimplemented).toBeUndefined();
+    expect(def?.dangerous).toBeUndefined();
+  });
+
   it('PERMISSION_KEYS matches PERMISSIONS', () => {
     expect(PERMISSION_KEYS).toEqual(PERMISSIONS.map((p) => p.key));
   });

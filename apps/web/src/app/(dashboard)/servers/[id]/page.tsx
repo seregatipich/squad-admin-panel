@@ -9,6 +9,7 @@ import { CrashBadge } from '@/components/CrashBadge';
 import { ForceStopDialog } from '@/components/ForceStopDialog';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
+import { ServerLogFiles } from '@/components/ServerLogFiles';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { nextBackoffMs } from '@/lib/ws-backoff';
 import type { SeedingSummary } from '../seeding-format';
@@ -99,6 +100,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const [canManageServer, setCanManageServer] = useState(false);
   const [canChangeMap, setCanChangeMap] = useState(false);
   const [canBan, setCanBan] = useState(false);
+  const [canDownloadLogs, setCanDownloadLogs] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -151,12 +153,13 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       try {
         const res = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
         if (!res.ok || cancelled) return;
-        const me = (await res.json()) as { squad_permissions?: string[] };
+        const me = (await res.json()) as { squad_permissions?: string[]; permissions?: string[] };
         if (!cancelled) {
           setCanChat(me.squad_permissions?.includes('chat') ?? false);
           setCanManageServer(me.squad_permissions?.includes('manageserver') ?? false);
           setCanChangeMap(me.squad_permissions?.includes('changemap') ?? false);
           setCanBan(me.squad_permissions?.includes('ban') ?? false);
+          setCanDownloadLogs(me.permissions?.includes('server:download_logs') ?? false);
         }
       } catch {
         // permission fetch is best-effort; chat UI simply stays hidden
@@ -636,6 +639,10 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
                 : 'Сервер остановлен — здесь будут последние 200 строк после запуска.'
           }
         />
+      </section>
+
+      <section>
+        <ServerLogFiles serverId={id} canDownload={canDownloadLogs} />
       </section>
 
       <section>

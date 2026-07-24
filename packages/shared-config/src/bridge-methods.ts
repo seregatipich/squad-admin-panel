@@ -23,6 +23,8 @@ export const BRIDGE_METHODS = [
   'docker_prune',
   'panel_disk_usage',
   'squad_log_retention_sweep',
+  'squad_log_list',
+  'file_read_stream',
   'host_agent_restart',
 ] as const;
 
@@ -32,6 +34,7 @@ export const BRIDGE_STREAMING_METHODS: readonly BridgeMethod[] = [
   'container_logs_follow',
   'depot_update',
   'docker_prune',
+  'file_read_stream',
 ];
 
 export const BRIDGE_SOCKET_DEFAULT = '/run/panel-host-bridge/bridge.sock';

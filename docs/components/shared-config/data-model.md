@@ -33,6 +33,7 @@ Streaming methods (deliver `BridgeStreamFrame` before the final response): `cont
 | `servers` | `server:delete` | ✓ | |
 | `servers` | `server:edit_settings` | | |
 | `servers` | `server:update` | | |
+| `servers` | `server:download_logs` | | |
 | `configs` | `config:view` | | |
 | `configs` | `config:edit` | | |
 | `configs` | `config:rollback` | | |

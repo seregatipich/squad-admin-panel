@@ -87,6 +87,7 @@ import serverChatCommandsRoutes from '../../src/routes/server-chat-commands.js';
 import serverConfigRoutes from '../../src/routes/server-configs.js';
 import forceStopRoutes from '../../src/routes/server-force-stop.js';
 import serverInstallRoutes from '../../src/routes/server-install.js';
+import serverLogFilesRoutes from '../../src/routes/server-log-files.js';
 import serverLogsRoutes from '../../src/routes/server-logs.js';
 import serverMapRoutes from '../../src/routes/server-map.js';
 import serverMessagingRoutes from '../../src/routes/server-messaging.js';
@@ -157,6 +158,13 @@ export interface FakeBridge {
     sampled_at: string;
   }>;
   fileRead: (p: { path: string }) => Promise<{ content: string }>;
+  fileReadStream: (
+    p: { path: string; chunk_size?: number },
+    onStream: (frame: { id: string; stream: 'stdout' | 'stderr' | 'event'; data: unknown }) => void,
+  ) => Promise<{ bytes_sent: number }>;
+  squadLogList: (p: { path: string }) => Promise<{
+    files: Array<{ name: string; size: number; mtime: string; is_live: boolean }>;
+  }>;
   fileWrite: (p: { path: string; content: string; mode?: number }) => Promise<{ status: string }>;
   fileAtomicWrite: (p: {
     path: string;
@@ -274,6 +282,13 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
       if (!buf) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
       return { content: buf.toString('utf-8') };
     },
+    fileReadStream: async ({ path }, onStream) => {
+      const buf = files.get(path);
+      if (!buf) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+      onStream({ id: 'fake', stream: 'stdout', data: buf.toString('base64') });
+      return { bytes_sent: buf.length };
+    },
+    squadLogList: async () => ({ files: [] }),
     fileWrite: async ({ path, content }) => {
       files.set(path, Buffer.from(content, 'utf-8'));
       return { status: 'ok' };
@@ -463,6 +478,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(serverInstallRoutes);
   await app.register(forceStopRoutes);
   await app.register(serverLogsRoutes);
+  await app.register(serverLogFilesRoutes);
   await app.register(serverMapRoutes);
   await app.register(serverMessagingRoutes);
   await app.register(serverMetricsRoutes);
