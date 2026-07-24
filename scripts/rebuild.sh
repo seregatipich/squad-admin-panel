@@ -64,7 +64,7 @@ log "compose volumes removed"
 # ── step 3: wipe data directories (preserve depot) ─────────────────────────
 
 printf '%b[3/6]%b Wiping all data directories...\n' "${C_CYAN}${C_BOLD}" "${C_RST}"
-for sub in postgres redis caddy-data caddy-config backup-repo depot; do
+for sub in postgres redis caddy-data caddy-config backup-repo backup-dump depot; do
   if [[ -d "${DATA_DIR}/${sub}" ]]; then
     rm -rf "${DATA_DIR:?}/${sub:?}"
     mkdir -p "${DATA_DIR}/${sub}"

@@ -115,6 +115,7 @@ mkdir -p \
   "${DATA_DIR}/caddy-data" \
   "${DATA_DIR}/caddy-config" \
   "${DATA_DIR}/backup-repo" \
+  "${DATA_DIR}/backup-dump" \
   "${DATA_DIR}/depot" \
   "${DATA_DIR}/servers/configs" \
   "${DATA_DIR}/servers/saved"
