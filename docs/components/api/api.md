@@ -174,6 +174,8 @@ Errors:
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
 | WS | `/api/v1/servers/:id/logs/ws` | Live `docker logs -f` via dedicated bridge connection. `?lines=<N≤5000>` for backfill (default 200). 20 s heartbeat frame so proxies don't kill idle sockets. | `server:view` |
+| GET | `/api/v1/servers/:id/logs/files` | Lists on-disk `SquadGame*.log` files under `<saved>/<id>/SquadGame/Saved/Logs` via `bridge.squad_log_list`: `{ files: [{ name, size, mtime (RFC3339), is_live }] }`. `is_live` marks the active `SquadGame.log`. | `server:download_logs` |
+| GET | `/api/v1/servers/:id/logs/files/:name/download` | Streams the chosen log (`Content-Disposition: attachment`) by piping `bridge.file_read_stream` chunk frames straight to the reply — a multi-hundred-MB file is never buffered whole. `:name` must match `SquadGame*.log` (else 400). | `server:download_logs` |
 
 ## Live event bus (panel-wide)
 

@@ -33,7 +33,7 @@ Source: `apps/bridge/internal/rpc/types.go`.
 | Field | Type | Description |
 |---|---|---|
 | `id` | string | Caller-assigned request identifier; echoed back in the response. |
-| `method` | string | One of the 25 whitelisted RPC methods. |
+| `method` | string | One of the 27 whitelisted RPC methods. |
 | `params` | object (optional) | Method-specific parameters. Omitted for methods that take no params (e.g., `host_info`). |
 
 ---
