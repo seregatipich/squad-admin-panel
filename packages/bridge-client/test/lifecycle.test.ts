@@ -174,6 +174,78 @@ describe('streaming method', () => {
   });
 });
 
+describe('squad log file RPCs (LOG-2)', () => {
+  it('squadLogList sends squad_log_list and returns the file listing', async () => {
+    server.on('connection', (conn) => {
+      conn.once('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as {
+          id: string;
+          method: string;
+          params: unknown;
+        };
+        expect(req.method).toBe('squad_log_list');
+        expect(req.params).toEqual({ path: '/saved/x/SquadGame/Saved/Logs' });
+        sendFrame(conn, {
+          id: req.id,
+          ok: true,
+          result: {
+            files: [
+              { name: 'SquadGame.log', size: 10, mtime: '2026-07-24T00:00:00Z', is_live: true },
+            ],
+          },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    try {
+      const res = await client.squadLogList({ path: '/saved/x/SquadGame/Saved/Logs' });
+      expect(res.files).toHaveLength(1);
+      expect(res.files[0]?.is_live).toBe(true);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('fileReadStream delivers chunk frames via onStream and resolves with bytes_sent', async () => {
+    server.on('connection', (conn) => {
+      conn.once('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as {
+          id: string;
+          method: string;
+        };
+        expect(req.method).toBe('file_read_stream');
+        sendFrame(conn, {
+          id: req.id,
+          stream: 'stdout',
+          data: Buffer.from('AAAA').toString('base64'),
+        });
+        sendFrame(conn, {
+          id: req.id,
+          stream: 'stdout',
+          data: Buffer.from('BBBB').toString('base64'),
+        });
+        sendFrame(conn, { id: req.id, ok: true, result: { bytes_sent: 8 } });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    try {
+      const frames: string[] = [];
+      const res = await client.fileReadStream(
+        { path: '/saved/x/SquadGame/Saved/Logs/SquadGame.log', chunk_size: 4 },
+        (f) => frames.push(f.data as string),
+      );
+      expect(res.bytes_sent).toBe(8);
+      expect(frames).toHaveLength(2);
+    } finally {
+      await client.close();
+    }
+  });
+});
+
 describe('transport retry on socket close', () => {
   it('idempotent rpc auto-retries when the bridge drops the socket mid-call', async () => {
     let connectionCount = 0;

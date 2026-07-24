@@ -93,7 +93,8 @@ function zoneMinuteAndWeekday(now: Date, timezone: string): { minute: number; we
   for (const part of parts) {
     if (part.type === 'hour') hour = Number(part.value) % 24;
     else if (part.type === 'minute') minute = Number(part.value);
-    else if (part.type === 'weekday') weekday = WEEKDAY_INDEX[part.value] ?? 0;
+    // en-US `weekday: 'short'` always yields a WEEKDAY_INDEX key (Sun..Sat).
+    else if (part.type === 'weekday') weekday = WEEKDAY_INDEX[part.value] as number;
   }
   return { minute: hour * 60 + minute, weekday };
 }
@@ -139,8 +140,6 @@ function compare(observed: number, operator: PlayerCountCondition['operator'], t
       return observed < threshold;
     case 'eq':
       return observed === threshold;
-    default:
-      return false;
   }
 }
 
@@ -207,8 +206,6 @@ function evaluateCondition(
       return matchTimeOfDay(input, parsed.data as TimeOfDayCondition);
     case 'player_flag':
       return matchPlayerFlag(input, parsed.data as PlayerFlagCondition);
-    default:
-      return null;
   }
 }
 
