@@ -484,6 +484,13 @@
       "when": 1783401300000,
       "tag": "0083_chat_commands",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1783401400000,
+      "tag": "0084_automation_rules",
+      "breakpoints": true
     }
   ]
 }
