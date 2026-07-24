@@ -2,7 +2,7 @@ import { BridgeClient } from '@squad/bridge-client';
 import { createDatabaseClient, serverSettings, servers } from '@squad/db';
 import { createDiag } from '@squad/diag';
 import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
 import { handleAltBanConnect } from './alt-ban/store.js';
@@ -59,7 +59,21 @@ async function main() {
   });
 
   const diag = createDiag({ redis, log });
-  const stopLogRetentionSweep = scheduleLogRetentionSweep({ bridge, diag, log });
+  const stopLogRetentionSweep = scheduleLogRetentionSweep({
+    bridge,
+    diag,
+    log,
+    // LOG-3 (#51): the servers whose expiring rotated logs must be archived
+    // into the restic backup staging tree before the sweep deletes them.
+    listArchiveServerIds: async () => {
+      const rows = await db
+        .select({ id: serverSettings.serverId })
+        .from(serverSettings)
+        .innerJoin(servers, eq(serverSettings.serverId, servers.id))
+        .where(and(eq(serverSettings.archiveLogsToBackup, true), isNull(servers.deletedAt)));
+      return rows.map((r) => r.id);
+    },
+  });
 
   const seedThreshold =
     Number(process.env.MATCH_SEED_ONLINE_THRESHOLD) || DEFAULT_SEED_ONLINE_THRESHOLD;

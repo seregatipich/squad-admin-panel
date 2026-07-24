@@ -247,9 +247,9 @@ Response shape:
 
 Errors: returns `runtime_error` with a descriptive message when `du`, `statfs`, or `docker system df` fail. There is no `forbidden` path because no caller input feeds into a path or shell argument.
 
-#### `squad_log_retention_sweep()` → `SquadLogRetentionSweepResult`
+#### `squad_log_retention_sweep({ archive_server_ids })` → `SquadLogRetentionSweepResult`
 
-Deletes expired rotated Squad log files from the host saved tree. This method intentionally takes no params: callers cannot pass a path, glob, server id, or retention duration. The bridge scans only `/var/lib/squad-panel/saved/{uuid}/SquadGame/Saved/Logs/`.
+Deletes expired rotated Squad log files from the host saved tree. The only accepted param is `archive_server_ids: string[]` (LOG-3, #51) — the set of server UUIDs whose expiring logs must be archived before deletion. Callers still cannot pass a path, glob, or retention duration, and the bridge owns every filesystem path: it scans only `/var/lib/squad-panel/saved/{uuid}/SquadGame/Saved/Logs/` and stages archives only under `$PANEL_BACKUP_DUMP_ROOT` (`${DATA_DIR}/backup-dump`). Unknown keys (e.g. a caller-supplied `path`) are rejected as `invalid_args`.
 
 Deletion policy:
 
@@ -257,6 +257,7 @@ Deletion policy:
 - never delete exact `SquadGame.log`, even if its `mtime` is older than 10 days;
 - delete only when `mtime + 10d < now`;
 - skip non-UUID saved subdirectories and missing log directories;
+- for a server in `archive_server_ids`, copy the expiring file into `$PANEL_BACKUP_DUMP_ROOT/log-archive/{uuid}/{name}` **before** deleting it (the restic `backup` sidecar snapshots this path via `RESTIC_BACKUP_SOURCES=/data`). A copy failure is recorded as an error and the file is **not** deleted — never removed unarchived;
 - continue on per-file/per-server errors and return a bounded error summary.
 
 Response shape:
@@ -270,10 +271,12 @@ Response shape:
 | `files_scanned` | int | Count of regular files found in scanned log dirs. |
 | `deleted_count` | int | Count of files removed. |
 | `deleted_bytes` | int64 | Sum of removed file sizes before deletion. |
+| `archived_count` | int | Count of files copied into the backup staging tree before deletion. |
+| `archived_bytes` | int64 | Sum of archived file sizes. |
 | `error_count` | int | Total errors encountered while continuing the sweep. |
 | `errors` | array | First 20 error summaries: `{ server_id?, file?, error }`. |
 
-Errors: `invalid_args` if any params are supplied. OS-level per-file failures are captured in the response instead of failing the whole RPC.
+Errors: `invalid_args` if an unknown param key is supplied or an `archive_server_ids` entry is not a valid server UUID. OS-level per-file failures (including archive-copy failures) are captured in the response instead of failing the whole RPC.
 
 ### Self
 

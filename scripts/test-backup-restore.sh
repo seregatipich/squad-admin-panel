@@ -29,6 +29,12 @@ CANARY_TABLE="canary"
 CANARY_VALUE="INFRA8-postgres-$RANDOM"
 REDIS_KEY="infra8:canary"
 REDIS_VALUE="INFRA8-redis-$RANDOM"
+# LOG-3 (#51): a rotated log the bridge stages under backup-dump/log-archive/
+# before the retention sweep deletes it. The staging tree is part of
+# RESTIC_BACKUP_SOURCES=/data, so a snapshot must carry it through a restore.
+LOG3_SERVER_ID="019dbaa5-1234-7abc-8def-0123456789ab"
+LOG3_LOG_NAME="SquadGame-2026.06.26-12.00.00.log"
+LOG3_VALUE="LOG3-archived-log-$RANDOM"
 
 C_RED=$'\e[31m'; C_GREEN=$'\e[32m'; C_CYAN=$'\e[36m'; C_BOLD=$'\e[1m'; C_RST=$'\e[0m'
 step() { printf '%b==>%b %s\n' "${C_CYAN}${C_BOLD}" "${C_RST}" "$1"; }
@@ -109,6 +115,11 @@ redis-cli -h redis --rdb /data/redis/dump.rdb' || fail "dump commands failed"
 [ -s "$TMP/dump/redis/dump.rdb" ] || fail "redis-cli --rdb produced no dump.rdb"
 ok "admin.dump and dump.rdb written"
 
+step "Staging a LOG-3 archived log under the backup-dump tree (as the bridge does)"
+mkdir -p "$TMP/dump/log-archive/${LOG3_SERVER_ID}"
+printf '%s\n' "$LOG3_VALUE" > "$TMP/dump/log-archive/${LOG3_SERVER_ID}/${LOG3_LOG_NAME}"
+ok "archived log staged at log-archive/${LOG3_SERVER_ID}/${LOG3_LOG_NAME}"
+
 step "restic init + backup + forget --prune (asserting retention flags)"
 tool 'restic init' || fail "restic init failed"
 tool 'restic backup /data' || fail "restic backup failed"
@@ -172,5 +183,13 @@ got_rd="$(docker exec "$RD2" redis-cli get "$REDIS_KEY" 2>/dev/null)"
 [ "$got_rd" = "$REDIS_VALUE" ] || fail "redis key not restored (got '${got_rd}', want '${REDIS_VALUE}')"
 ok "redis canary key restored"
 
-printf '\n%bPASS%b — backup → down -v → restore round-trip verified for Postgres and Redis.\n' \
+step "Asserting the LOG-3 archived log survived the snapshot + restore"
+log3_restored="$TMP/restore/data/log-archive/${LOG3_SERVER_ID}/${LOG3_LOG_NAME}"
+[ -f "$log3_restored" ] || fail "archived log missing after restore ($log3_restored)"
+got_log3="$(tr -d '[:space:]' < "$log3_restored")"
+[ "$got_log3" = "$LOG3_VALUE" ] \
+  || fail "archived log content not restored (got '${got_log3}', want '${LOG3_VALUE}')"
+ok "LOG-3 archived log restored from snapshot"
+
+printf '\n%bPASS%b — backup → down -v → restore round-trip verified for Postgres, Redis, and LOG-3 archived logs.\n' \
   "${C_GREEN}${C_BOLD}" "${C_RST}"

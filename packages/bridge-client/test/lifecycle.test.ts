@@ -440,7 +440,7 @@ describe('panel_disk_usage', () => {
 });
 
 describe('squad_log_retention_sweep', () => {
-  it('squadLogRetentionSweep sends method without caller params and returns sweep counters', async () => {
+  it('squadLogRetentionSweep sends the archive-enabled server set and returns sweep counters', async () => {
     let receivedMethod: string | undefined;
     let receivedParams: unknown = 'not-captured';
     server.on('connection', (conn) => {
@@ -464,6 +464,57 @@ describe('squad_log_retention_sweep', () => {
             files_scanned: 8,
             deleted_count: 3,
             deleted_bytes: 4096,
+            archived_count: 1,
+            archived_bytes: 512,
+            error_count: 0,
+            errors: [],
+          },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    const flagged = ['019dbaa5-1234-7abc-8def-0123456789ab'];
+    try {
+      const result = await client.squadLogRetentionSweep({ archive_server_ids: flagged });
+      expect(receivedMethod).toBe('squad_log_retention_sweep');
+      expect(receivedParams).toEqual({ archive_server_ids: flagged });
+      expect(result.retention_days).toBe(10);
+      expect(result.deleted_count).toBe(3);
+      expect(result.deleted_bytes).toBe(4096);
+      expect(result.archived_count).toBe(1);
+      expect(result.archived_bytes).toBe(512);
+      expect(result.error_count).toBe(0);
+      expect(result.errors).toEqual([]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('squadLogRetentionSweep defaults to an empty archive set when called with no args', async () => {
+    let receivedParams: unknown = 'not-captured';
+    server.on('connection', (conn) => {
+      conn.once('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as {
+          id: string;
+          method: string;
+          params?: unknown;
+        };
+        receivedParams = req.params;
+        sendFrame(conn, {
+          id: req.id,
+          ok: true,
+          result: {
+            retention_days: 10,
+            cutoff: '2026-06-27T12:00:00Z',
+            servers_scanned: 0,
+            log_dirs_scanned: 0,
+            files_scanned: 0,
+            deleted_count: 0,
+            deleted_bytes: 0,
+            archived_count: 0,
+            archived_bytes: 0,
             error_count: 0,
             errors: [],
           },
@@ -473,14 +524,8 @@ describe('squad_log_retention_sweep', () => {
 
     const client = new BridgeClient({ socketPath });
     try {
-      const result = await client.squadLogRetentionSweep();
-      expect(receivedMethod).toBe('squad_log_retention_sweep');
-      expect(receivedParams).toBeUndefined();
-      expect(result.retention_days).toBe(10);
-      expect(result.deleted_count).toBe(3);
-      expect(result.deleted_bytes).toBe(4096);
-      expect(result.error_count).toBe(0);
-      expect(result.errors).toEqual([]);
+      await client.squadLogRetentionSweep();
+      expect(receivedParams).toEqual({ archive_server_ids: [] });
     } finally {
       await client.close();
     }

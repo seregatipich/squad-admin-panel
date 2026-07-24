@@ -23,6 +23,7 @@ interface Settings {
   seed_hysteresis: number;
   chat_commands_enabled: boolean;
   rules_text: string | null;
+  archive_logs_to_backup: boolean;
 }
 
 const RULES_TEXT_MAX = 300;
@@ -342,6 +343,25 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
             placeholder="Правила не заданы"
             className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
           />
+        </label>
+      </section>
+
+      <section className="mb-6">
+        <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
+          Архив логов
+        </h2>
+        <p className="mb-2 text-xs text-neutral-500">
+          Перед удалением по 10-дневному retention ротированный <code>SquadGame*.log</code>{' '}
+          копируется в restic-бэкап (хранение 7д/4н/6м). По умолчанию отключено.
+        </p>
+        <label className="mb-3 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={val('archive_logs_to_backup') as boolean}
+            onChange={(e) => setField('archive_logs_to_backup', e.target.checked)}
+            className="h-4 w-4 rounded border-neutral-700 bg-neutral-950"
+          />
+          <span className="text-sm text-neutral-200">Архивировать в backup перед удалением</span>
         </label>
       </section>
 

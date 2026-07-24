@@ -4,7 +4,7 @@
 
 1. Read `DATABASE_URL`, `REDIS_URL` from environment; fatal-exit if missing.
 2. Create `BridgeClient` (socket path from `BRIDGE_SOCKET` or `/run/panel-host-bridge/bridge.sock`).
-3. Start raw log retention sweep: run once immediately, then every 1 hour via `bridge.squadLogRetentionSweep()`.
+3. Start raw log retention sweep: run once immediately, then every 1 hour via `bridge.squadLogRetentionSweep({ archive_server_ids })` (the archive-enabled server set is re-read from the DB each tick).
 4. Call `reconcile()` immediately.
 5. Start `setInterval(reconcile, 15_000)`.
 6. Start heartbeat (`worker:heartbeat:log-ingest`, every 5 s).
@@ -33,7 +33,7 @@ The worker translates each `onStopped` into a `tail.stopped` diag emit carrying 
 
 ## Raw log retention sweep (startup + hourly)
 
-`retention.ts` calls `bridge.squadLogRetentionSweep()` without params. The worker never receives a direct filesystem mount and never passes a path to the bridge.
+`retention.ts` calls `bridge.squadLogRetentionSweep({ archive_server_ids })`, where `archive_server_ids` is the set of servers whose `server_settings.archive_logs_to_backup` flag is on (LOG-3, #51). The worker never receives a direct filesystem mount and never passes a path to the bridge — it only names which servers are archive-enabled; the bridge owns every filesystem path.
 
 The bridge-side policy is fixed:
 
@@ -41,17 +41,18 @@ The bridge-side policy is fixed:
 2. Delete only regular files matching `SquadGame*.log`.
 3. Never delete exact `SquadGame.log`.
 4. Delete only when `mtime + 10d < now`.
-5. Continue after per-file/per-server errors and return counters.
+5. For an archive-enabled server, copy the expiring file into the restic backup staging tree (`$PANEL_BACKUP_DUMP_ROOT/log-archive/{uuid}/`, i.e. `${DATA_DIR}/backup-dump/...` — the tree the `backup` sidecar snapshots via `RESTIC_BACKUP_SOURCES=/data`) **before** deleting it. A copy failure records an error and leaves the file in place — the file is never deleted unarchived. The next restic snapshot retains it under the existing `--keep-daily 7 --keep-weekly 4 --keep-monthly 6` policy. Non-flagged servers keep the delete-only behavior (backwards compatible; default off).
+6. Continue after per-file/per-server errors and return counters.
 
-On success the worker logs `deleted_count`, `deleted_bytes`, `error_count`, `servers_scanned`, `log_dirs_scanned`, `files_scanned`, `retention_days`, and `cutoff`, then emits:
+On success the worker logs `deleted_count`, `deleted_bytes`, `archived_count`, `archived_bytes`, `error_count`, `servers_scanned`, `log_dirs_scanned`, `files_scanned`, `retention_days`, and `cutoff`, then emits:
 
 ```ts
 {
   component: 'worker-log-ingest',
   kind: 'log.retention.sweep',
   severity: 'info' | 'warn',
-  message: 'log retention sweep completed: deleted=<n>, bytes=<n>, errors=<n>',
-  payload: { retention_days, cutoff, servers_scanned, log_dirs_scanned, files_scanned, deleted_count, deleted_bytes, error_count, errors }
+  message: 'log retention sweep completed: deleted=<n>, archived=<n>, bytes=<n>, errors=<n>',
+  payload: { retention_days, cutoff, servers_scanned, log_dirs_scanned, files_scanned, deleted_count, deleted_bytes, archived_count, archived_bytes, error_count, errors }
 }
 ```
 

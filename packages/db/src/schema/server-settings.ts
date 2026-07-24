@@ -34,6 +34,13 @@ export const serverSettings = pgTable('server_settings', {
   chatCommandsEnabled: boolean('chat_commands_enabled').notNull().default(true),
   /** Text returned in-game for the `!rules` command; null = not configured. See AUTO-4 (#75). */
   rulesText: text('rules_text'),
+  /**
+   * When true, a rotated `SquadGame*.log` about to be deleted by the LOG-1
+   * 10-day retention sweep is first copied into the restic backup staging tree
+   * so the next snapshot archives it under the existing 7d/4w/6m retention.
+   * Default false keeps the server on the current delete-only path. See LOG-3 (#51).
+   */
+  archiveLogsToBackup: boolean('archive_logs_to_backup').notNull().default(false),
 });
 
 export type ServerSettingsRow = typeof serverSettings.$inferSelect;

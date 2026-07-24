@@ -236,6 +236,16 @@ export interface SquadLogRetentionSweepError {
   error: string;
 }
 
+export interface SquadLogRetentionSweepParams {
+  /**
+   * Server UUIDs whose expiring rotated logs must be copied into the restic
+   * backup staging tree before deletion (LOG-3, #51). Servers absent from this
+   * set keep the delete-only behavior. The bridge owns every filesystem path;
+   * the caller only supplies which servers are archive-enabled.
+   */
+  archive_server_ids: string[];
+}
+
 export interface SquadLogRetentionSweepResult {
   retention_days: number;
   cutoff: string;
@@ -244,6 +254,9 @@ export interface SquadLogRetentionSweepResult {
   files_scanned: number;
   deleted_count: number;
   deleted_bytes: number;
+  /** LOG-3 (#51): expiring logs copied into the restic staging tree before delete. */
+  archived_count: number;
+  archived_bytes: number;
   error_count: number;
   errors: SquadLogRetentionSweepError[];
 }

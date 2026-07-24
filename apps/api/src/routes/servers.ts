@@ -341,6 +341,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
               seed_hysteresis: settingsRow.seedHysteresis,
               chat_commands_enabled: settingsRow.chatCommandsEnabled,
               rules_text: settingsRow.rulesText,
+              archive_logs_to_backup: settingsRow.archiveLogsToBackup,
             }
           : null,
         rcon_status,

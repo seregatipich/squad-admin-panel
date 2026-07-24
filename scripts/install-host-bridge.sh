@@ -179,13 +179,19 @@ cat > "${UNIT_DIR}/panel-host-bridge.service.d/install.conf" <<EOF
 #   - PANEL_DEPOT_HOST_PATH: for bind-mounted squad-depot volumes, Docker
 #     does not populate /var/lib/docker/volumes/squad-depot/_data — the
 #     bridge and api both read depot files from the bind-mount source.
+#   - PANEL_BACKUP_DUMP_ROOT: LOG-3 (#51). The restic backup staging tree
+#     (RESTIC_BACKUP_SOURCES=/data → backup_dump volume). The bridge copies a
+#     flagged server's expiring rotated log under log-archive/ here before the
+#     retention sweep deletes it, so the next snapshot archives it.
 [Service]
 ProtectHome=no
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
 AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
 Environment=PANEL_DEPOT_HOST_PATH=${DATA_DIR}/depot
+Environment=PANEL_BACKUP_DUMP_ROOT=${DATA_DIR}/backup-dump
 ReadWritePaths=${DATA_DIR}/servers
 ReadWritePaths=${DATA_DIR}/depot
+ReadWritePaths=${DATA_DIR}/backup-dump
 EOF
 
 systemctl daemon-reload

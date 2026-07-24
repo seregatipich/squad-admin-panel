@@ -92,6 +92,13 @@ type Dispatcher struct {
 	// panelSavedRoot overrides the saved root for squad log retention tests.
 	// Production uses validate.PanelSavedRoot and never accepts it from RPC params.
 	panelSavedRoot string
+	// backupDumpRoot is the host path of the restic backup staging tree
+	// (${DATA_DIR}/backup-dump, snapshotted via RESTIC_BACKUP_SOURCES=/data —
+	// see INFRA-8). LOG-3 (#51) copies a flagged server's expiring rotated log
+	// under <backupDumpRoot>/log-archive/<serverID>/ before deleting it. Empty
+	// falls back to the PANEL_BACKUP_DUMP_ROOT env var; it is never accepted
+	// from RPC params. Tests inject a t.TempDir.
+	backupDumpRoot string
 	// nowFn overrides the clock for retention tests.
 	nowFn func() time.Time
 	// duFn measures bytes used at a path. Tests stub it; production uses du -sb.
@@ -584,25 +591,53 @@ type squadLogRetentionSweepResult struct {
 	FilesScanned   int                           `json:"files_scanned"`
 	DeletedCount   int                           `json:"deleted_count"`
 	DeletedBytes   int64                         `json:"deleted_bytes"`
+	ArchivedCount  int                           `json:"archived_count"`
+	ArchivedBytes  int64                         `json:"archived_bytes"`
 	ErrorCount     int                           `json:"error_count"`
 	Errors         []squadLogRetentionSweepError `json:"errors"`
 }
 
+// squadLogRetentionSweepParams carries the LOG-3 (#51) archive-enabled server
+// set. The caller (worker-log-ingest) never controls filesystem paths — the
+// swept root and the archive staging root are both owned by the bridge —
+// so only server IDs are accepted. DisallowUnknownFields keeps rejecting a
+// caller-supplied `path` (or any other key) as an invalid argument.
+type squadLogRetentionSweepParams struct {
+	ArchiveServerIDs []string `json:"archive_server_ids"`
+}
+
 func (d *Dispatcher) squadLogRetentionSweep(req *rpc.Request) rpc.Response {
+	var p squadLogRetentionSweepParams
 	if !emptyJSONParams(req.Params) {
-		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, "squad_log_retention_sweep does not accept params")
+		dec := json.NewDecoder(bytes.NewReader(req.Params))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&p); err != nil {
+			return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
+		}
+	}
+
+	archiveSet := make(map[string]struct{}, len(p.ArchiveServerIDs))
+	for _, id := range p.ArchiveServerIDs {
+		if err := validate.ServerUUID(id); err != nil {
+			return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, "invalid archive_server_ids entry: "+id)
+		}
+		archiveSet[id] = struct{}{}
 	}
 
 	savedRoot := d.panelSavedRoot
 	if savedRoot == "" {
 		savedRoot = validate.PanelSavedRoot
 	}
+	backupDumpRoot := d.backupDumpRoot
+	if backupDumpRoot == "" {
+		backupDumpRoot = os.Getenv("PANEL_BACKUP_DUMP_ROOT")
+	}
 	now := time.Now().UTC()
 	if d.nowFn != nil {
 		now = d.nowFn().UTC()
 	}
 
-	result := runSquadLogRetentionSweep(savedRoot, now, squadLogRetentionDays)
+	result := runSquadLogRetentionSweep(savedRoot, now, squadLogRetentionDays, archiveSet, backupDumpRoot)
 	body, _ := json.Marshal(result)
 	return rpc.NewSuccessResponse(req.ID, body)
 }
@@ -612,7 +647,7 @@ func emptyJSONParams(raw json.RawMessage) bool {
 	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("{}"))
 }
 
-func runSquadLogRetentionSweep(savedRoot string, now time.Time, retentionDays int) squadLogRetentionSweepResult {
+func runSquadLogRetentionSweep(savedRoot string, now time.Time, retentionDays int, archiveSet map[string]struct{}, backupDumpRoot string) squadLogRetentionSweepResult {
 	retention := time.Duration(retentionDays) * 24 * time.Hour
 	cutoff := now.Add(-retention)
 	result := squadLogRetentionSweepResult{
@@ -635,6 +670,7 @@ func runSquadLogRetentionSweep(savedRoot string, now time.Time, retentionDays in
 			continue
 		}
 		serverID := serverEntry.Name()
+		_, archiveEnabled := archiveSet[serverID]
 		result.ServersScanned++
 		logsDir := filepath.Join(savedRoot, serverID, "SquadGame", "Saved", "Logs")
 		logEntries, err := os.ReadDir(logsDir)
@@ -663,6 +699,17 @@ func runSquadLogRetentionSweep(savedRoot string, now time.Time, retentionDays in
 			if !info.ModTime().Add(retention).Before(now) {
 				continue
 			}
+			// LOG-3 (#51): for a flagged server, copy the expiring file into the
+			// restic backup staging tree BEFORE deleting it. A copy failure must
+			// leave the file in place (Rule 7 safety) — never delete unarchived.
+			if archiveEnabled {
+				if err := archiveExpiringLog(backupDumpRoot, serverID, logsDir, logEntry.Name()); err != nil {
+					result.addRetentionError(serverID, logEntry.Name(), fmt.Errorf("archive log file failed: %w", err))
+					continue
+				}
+				result.ArchivedCount++
+				result.ArchivedBytes += info.Size()
+			}
 			if err := os.Remove(filepath.Join(logsDir, logEntry.Name())); err != nil {
 				result.addRetentionError(serverID, logEntry.Name(), fmt.Errorf("delete log file failed: %w", err))
 				continue
@@ -677,6 +724,55 @@ func runSquadLogRetentionSweep(savedRoot string, now time.Time, retentionDays in
 
 func isRotatedSquadGameLog(name string) bool {
 	return name != "SquadGame.log" && strings.HasPrefix(name, "SquadGame") && strings.HasSuffix(name, ".log")
+}
+
+// archiveExpiringLog copies a single expiring rotated log into the restic
+// backup staging tree at <backupDumpRoot>/log-archive/<serverID>/<name> before
+// the retention sweep deletes it (LOG-3, #51). serverID is a validated UUID and
+// name is a validated rotated-log filename, so neither can escape the staging
+// root. The copy is staged to a sibling temp file and renamed into place so a
+// snapshot never observes a half-written archive. Returns an error (leaving the
+// source untouched) when the staging root is unconfigured or the copy fails —
+// the caller then skips the delete.
+func archiveExpiringLog(backupDumpRoot, serverID, logsDir, name string) error {
+	if backupDumpRoot == "" {
+		return fmt.Errorf("backup dump root not configured")
+	}
+	destDir := filepath.Join(backupDumpRoot, "log-archive", serverID)
+	if err := os.MkdirAll(destDir, 0o750); err != nil {
+		return fmt.Errorf("create staging dir failed: %w", err)
+	}
+
+	src, err := os.Open(filepath.Join(logsDir, name))
+	if err != nil {
+		return fmt.Errorf("open source failed: %w", err)
+	}
+	defer src.Close()
+
+	tmp, err := os.CreateTemp(destDir, name+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create staging temp failed: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := io.Copy(tmp, src); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("copy failed: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("sync failed: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close staging temp failed: %w", err)
+	}
+	if err := os.Rename(tmpPath, filepath.Join(destDir, name)); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename staging temp failed: %w", err)
+	}
+	return nil
 }
 
 // isSquadGameLog matches the live SquadGame.log and every rotated SquadGame*.log
