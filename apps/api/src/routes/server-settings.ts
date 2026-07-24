@@ -162,6 +162,8 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
       if (body.chat_commands_enabled !== undefined)
         updateSet.chatCommandsEnabled = body.chat_commands_enabled;
       if ('rules_text' in body) updateSet.rulesText = body.rules_text ?? null;
+      if (body.archive_logs_to_backup !== undefined)
+        updateSet.archiveLogsToBackup = body.archive_logs_to_backup;
 
       // --- apply UFW rule updates for changed ports (remove old, add new) ---
       if (hasPortChange) {
@@ -229,6 +231,7 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
         io_weight: updated.ioWeight,
         chat_commands_enabled: updated.chatCommandsEnabled,
         rules_text: updated.rulesText,
+        archive_logs_to_backup: updated.archiveLogsToBackup,
       };
     },
   );

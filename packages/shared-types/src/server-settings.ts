@@ -21,6 +21,10 @@ export const serverSettingsUpdate = z
     // single-message limit since it is answered with one `AdminWarn`.
     chat_commands_enabled: z.boolean().optional(),
     rules_text: z.string().max(300).nullable().optional(),
+    // LOG-3 (#51): per-server toggle. When true, rotated logs expiring under the
+    // LOG-1 retention sweep are copied into the restic backup staging tree
+    // before deletion. Default (column) false = current delete-only behavior.
+    archive_logs_to_backup: z.boolean().optional(),
   })
   .strict()
   .refine(
