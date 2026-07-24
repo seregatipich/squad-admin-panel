@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import {
   buildVotesQuery,
   formatPassRate,
@@ -30,9 +30,15 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
   const serverSelectId = useId();
   const windowSelectId = useId();
 
-  const range = useMemo(() => voteWindowRange(windowDays), [windowDays]);
+  // See AnalyticsPanel: reading the clock during render desyncs SSR vs. the first client
+  // render (a hydration mismatch on the CSV href). Defer voteWindowRange() to after mount.
+  const [range, setRange] = useState<{ from: string; to: string } | null>(null);
+  useEffect(() => {
+    setRange(voteWindowRange(windowDays));
+  }, [windowDays]);
 
   const load = useCallback(async () => {
+    if (!range) return;
     setLoading(true);
     setError(null);
     try {
@@ -48,7 +54,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
     } finally {
       setLoading(false);
     }
-  }, [serverId, range.from, range.to]);
+  }, [serverId, range]);
 
   useEffect(() => {
     void load();
@@ -56,8 +62,8 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
 
   const csvHref = `/api/v1/analytics/votes${buildVotesQuery({
     serverId: serverId || null,
-    from: range.from,
-    to: range.to,
+    from: range?.from,
+    to: range?.to,
     format: 'csv',
   })}`;
 
