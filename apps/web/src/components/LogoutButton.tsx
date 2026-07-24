@@ -1,8 +1,10 @@
 'use client';
 import { useState } from 'react';
+import { useTranslator } from '@/i18n/LocaleProvider';
 
 export function LogoutButton() {
   const [pending, setPending] = useState(false);
+  const t = useTranslator();
   return (
     <button
       type="button"
@@ -22,7 +24,7 @@ export function LogoutButton() {
         }
       }}
     >
-      Выйти
+      {t('nav.logout')}
     </button>
   );
 }

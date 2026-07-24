@@ -141,7 +141,8 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
 
       const ctx = await loadUserPermissions(app.db, playerId);
       if (!ctx.panelAccess) {
-        return reply.redirect(`/no-access?steam_id64=${String(steamId64)}`, 302);
+        const reason = ctx.roleId === null ? 'no_role' : 'role_no_access';
+        return reply.redirect(`/no-access?steam_id64=${String(steamId64)}&reason=${reason}`, 302);
       }
 
       const { token } = await createSession(app.db, app.redis, {

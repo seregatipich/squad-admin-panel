@@ -13,6 +13,15 @@ interface AuditEntry {
   status_code: number | null;
   duration_ms: number | null;
   context: Record<string, unknown>;
+  row_hash?: string | null;
+  prev_hash?: string | null;
+}
+
+interface VerifyChainResult {
+  ok: boolean;
+  checked: number;
+  broken_at: string | null;
+  reason: 'prev_hash' | 'row_hash' | null;
 }
 
 const POLL_MS = 6000;
@@ -23,6 +32,27 @@ export default function AuditPage() {
   const [q, setQ] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<VerifyChainResult | null>(null);
+  const [verifyErr, setVerifyErr] = useState<string | null>(null);
+
+  async function verifyChain() {
+    setVerifying(true);
+    setVerifyErr(null);
+    setVerifyResult(null);
+    try {
+      const r = await fetch('/api/v1/audit/verify-chain', {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setVerifyResult((await r.json()) as VerifyChainResult);
+    } catch (e) {
+      setVerifyErr((e as Error).message);
+    } finally {
+      setVerifying(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -68,6 +98,14 @@ export default function AuditPage() {
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Журнал действий</h1>
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={verifyChain}
+            disabled={verifying}
+            className="rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs hover:bg-neutral-800 disabled:opacity-50"
+          >
+            {verifying ? 'Проверка…' : 'Проверить цепочку'}
+          </button>
           <span className="text-xs text-neutral-500">записей: {items.length}</span>
           <LiveIndicator lastUpdate={lastUpdate} />
         </div>
@@ -75,6 +113,25 @@ export default function AuditPage() {
 
       {err ? (
         <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{err}</div>
+      ) : null}
+
+      {verifyErr ? (
+        <output className="block rounded border border-red-900 bg-red-950 p-3 text-sm">
+          Проверка цепочки не удалась: {verifyErr}
+        </output>
+      ) : null}
+
+      {verifyResult ? (
+        verifyResult.ok ? (
+          <output className="block rounded border border-emerald-900 bg-emerald-950 p-3 text-sm text-emerald-300">
+            Цепочка цела: проверено записей — {verifyResult.checked}.
+          </output>
+        ) : (
+          <output className="block rounded border border-red-900 bg-red-950 p-3 text-sm text-red-300">
+            Обнаружен разрыв цепочки на записи #{verifyResult.broken_at} ({verifyResult.reason}).
+            Проверено до разрыва — {verifyResult.checked}.
+          </output>
+        )
       ) : null}
 
       <input
@@ -134,6 +191,18 @@ export default function AuditPage() {
                         <pre className="text-[11px] font-mono text-neutral-400 whitespace-pre-wrap break-all">
                           {JSON.stringify(r.context, null, 2)}
                         </pre>
+                        {r.row_hash ? (
+                          <dl className="mt-2 space-y-0.5 text-[11px] font-mono text-neutral-500 break-all">
+                            <div>
+                              <span className="text-neutral-600">row_hash: </span>
+                              {r.row_hash}
+                            </div>
+                            <div>
+                              <span className="text-neutral-600">prev_hash: </span>
+                              {r.prev_hash ?? '—'}
+                            </div>
+                          </dl>
+                        ) : null}
                       </td>
                     </tr>
                   ) : null}

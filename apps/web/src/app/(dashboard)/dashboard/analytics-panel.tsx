@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import {
   buildAnalyticsQuery,
   type DashboardAnalytics,
@@ -35,9 +35,17 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
   const serverSelectId = useId();
   const windowSelectId = useId();
 
-  const range = useMemo(() => windowRange(windowDays), [windowDays]);
+  // `windowRange()` reads the current clock. Computing it during render makes the
+  // server-rendered HTML and the first client render disagree (the CSV href carries a
+  // `to=<now>` timestamp), which React reports as a hydration mismatch. Defer the clock
+  // read to after mount so the initial markup is deterministic.
+  const [range, setRange] = useState<{ from: string; to: string } | null>(null);
+  useEffect(() => {
+    setRange(windowRange(windowDays));
+  }, [windowDays]);
 
   const load = useCallback(async () => {
+    if (!range) return;
     setLoading(true);
     setError(null);
     try {
@@ -57,7 +65,7 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
     } finally {
       setLoading(false);
     }
-  }, [serverId, range.from, range.to]);
+  }, [serverId, range]);
 
   useEffect(() => {
     void load();
@@ -65,8 +73,8 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
 
   const csvHref = `/api/v1/analytics/dashboard${buildAnalyticsQuery({
     serverId: serverId || null,
-    from: range.from,
-    to: range.to,
+    from: range?.from,
+    to: range?.to,
     format: 'csv',
   })}`;
 

@@ -1,5 +1,6 @@
 'use client';
 
+import { buildManagedSegmentBody } from '@squad/shared-config/admins-config';
 import type { RoleColor } from '@squad/shared-config/role-colors';
 import {
   SQUAD_PERMISSIONS,
@@ -7,7 +8,7 @@ import {
   type SquadPermissionKey,
 } from '@squad/shared-config/squad-permissions';
 import Link from 'next/link';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
@@ -34,8 +35,6 @@ interface Me {
   permissions: string[];
 }
 
-const PERM_GRID = chunk(SQUAD_PERMISSIONS as readonly SquadPermissionDef[], 3);
-
 function chunk<T>(arr: readonly T[], cols: number): T[][] {
   const perCol = Math.ceil(arr.length / cols);
   const out: T[][] = Array.from({ length: cols }, () => []);
@@ -51,6 +50,7 @@ export default function GroupsPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [globalErr, setGlobalErr] = useState<string | null>(null);
   const [savingByRole, setSavingByRole] = useState<Record<string, boolean>>({});
+  const [presetRoleId, setPresetRoleId] = useState('');
 
   const refresh = useCallback(async () => {
     const [rolesRes, meRes] = await Promise.all([
@@ -114,10 +114,11 @@ export default function GroupsPage() {
 
   async function createRole() {
     setGlobalErr(null);
+    const preset = presetRoleId ? rows?.find((r) => r.id === presetRoleId) : undefined;
     const body = {
       name: 'Новая роль',
       color: '#737373',
-      squad_permissions: [],
+      squad_permissions: preset ? [...preset.squad_permissions] : [],
       panel_access: false,
       can_view_ips: false,
       can_assign_roles: false,
@@ -193,13 +194,31 @@ export default function GroupsPage() {
           </p>
         </div>
         {canCreate ? (
-          <button
-            type="button"
-            onClick={createRole}
-            className="rounded-md border border-sky-700 bg-sky-950 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-900"
-          >
-            + Создать роль
-          </button>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-neutral-400">
+              <span className="sr-only">Скопировать права из роли</span>
+              <select
+                aria-label="Скопировать права из роли"
+                value={presetRoleId}
+                onChange={(e) => setPresetRoleId(e.target.value)}
+                className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm text-neutral-200"
+              >
+                <option value="">Без пресета (пустая)</option>
+                {rows.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    Скопировать права из «{r.name}»
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={createRole}
+              className="rounded-md border border-sky-700 bg-sky-950 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-900"
+            >
+              + Создать роль
+            </button>
+          </div>
         ) : null}
       </header>
 
@@ -260,6 +279,21 @@ function RoleCard({
     },
     [onSave],
   );
+
+  const [permFilter, setPermFilter] = useState('');
+  const permGrid = useMemo(() => {
+    const q = permFilter.trim().toLowerCase();
+    const all = SQUAD_PERMISSIONS as readonly SquadPermissionDef[];
+    const filtered = q
+      ? all.filter(
+          (p) =>
+            p.key.toLowerCase().includes(q) ||
+            p.label.toLowerCase().includes(q) ||
+            p.description.toLowerCase().includes(q),
+        )
+      : all;
+    return { filtered, columns: chunk(filtered, 3) };
+  }, [permFilter]);
 
   const togglePerm = (key: SquadPermissionKey) => {
     if (!canEdit) return;
@@ -434,11 +468,26 @@ function RoleCard({
       </div>
 
       <div className="mt-5">
-        <div className="text-xs uppercase tracking-widest text-neutral-500">
-          ≡ Squad permissions
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-xs uppercase tracking-widest text-neutral-500">
+            ≡ Squad permissions
+          </div>
+          <input
+            type="search"
+            value={permFilter}
+            onChange={(e) => setPermFilter(e.target.value)}
+            placeholder="Фильтр прав…"
+            aria-label="Фильтр прав"
+            className="w-40 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 placeholder:text-neutral-600"
+          />
         </div>
+        {permGrid.filtered.length === 0 ? (
+          <p className="mt-2 text-xs text-neutral-500">
+            Ничего не найдено по фильтру «{permFilter}».
+          </p>
+        ) : null}
         <div className="mt-2 grid grid-cols-1 gap-1 md:grid-cols-3">
-          {PERM_GRID.map((col, idx) => (
+          {permGrid.columns.map((col, idx) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: layout columns are stable
             <ul key={idx} className="space-y-1">
               {col.map((perm) => {
@@ -478,7 +527,23 @@ function RoleCard({
         <summary className="cursor-pointer hover:text-neutral-300">
           Как это выглядит в Admins.cfg
         </summary>
-        <pre className="mt-2 overflow-auto rounded border border-neutral-900 bg-black p-2 font-mono text-[11px] text-neutral-300">{`Group=${role.name}:${[...role.squad_permissions].sort().join(',') || '(нет permissions — Group= не пишется)'}`}</pre>
+        <pre
+          data-testid="admins-cfg-preview"
+          className="mt-2 overflow-auto rounded border border-neutral-900 bg-black p-2 font-mono text-[11px] text-neutral-300"
+        >
+          {
+            buildManagedSegmentBody({
+              roles: [{ name: role.name, squadPermissions: role.squad_permissions }],
+              admins: [],
+            }).body
+          }
+        </pre>
+        <p className="mt-1 text-[11px] text-neutral-600">
+          Рендер из того же генератора, что и config-sync (SYNC-2) — побайтно совпадает с файлом.
+          {role.squad_permissions.length === 0
+            ? ' У роли нет Squad permissions, поэтому строка Group= не пишется.'
+            : ''}
+        </p>
       </details>
     </section>
   );

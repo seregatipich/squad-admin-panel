@@ -104,6 +104,7 @@ import settingsChatFlagsRoutes from '../../src/routes/settings-chat-flags.js';
 import settingsClanGuardRoutes from '../../src/routes/settings-clan-guard.js';
 import settingsCoplayRoutes from '../../src/routes/settings-coplay.js';
 import settingsEconomyRoutes from '../../src/routes/settings-economy.js';
+import setupRoutes from '../../src/routes/setup.js';
 import suspectsRoutes from '../../src/routes/suspects.js';
 import teamkillsRoutes from '../../src/routes/teamkills.js';
 import usersRoutes from '../../src/routes/users.js';
@@ -436,6 +437,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   }
 
   await app.register(authRoutes);
+  await app.register(setupRoutes);
   await app.register(meTokensRoutes);
   await app.register(messageTemplatesRoutes);
   await app.register(permissionsRoutes);

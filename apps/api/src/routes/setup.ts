@@ -5,12 +5,20 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 const completeBody = z.object({
-  organization_name: z.string().min(1).max(100).trim(),
+  // Trim before the length check so a whitespace-only name is rejected (400)
+  // rather than persisted as an empty string into a setup that then locks (410).
+  organization_name: z.string().trim().min(1).max(100),
 });
 
 const setupRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
+  // Intentionally NOT gated behind the setup_completed 410: the wizard page is a
+  // client-rendered SPA that has no other way to learn it must redirect away once
+  // setup is done. `/status` therefore stays a public 200 status probe for the
+  // whole lifecycle (before and after completion); the wizard becomes unreachable
+  // by reading `setup_completed: true` here and redirecting to `/`. Only the
+  // mutating `/setup/complete` returns 410 after completion (see below).
   fast.get('/api/v1/setup/status', { config: { audit: false } }, async () => {
     const meta = await app.db.select().from(panelMeta).where(eq(panelMeta.id, 1)).limit(1);
     const row = meta[0];

@@ -56,6 +56,31 @@ export async function restoreLiveOwners(
     .where(eq(panelMeta.id, 1));
 }
 
+/**
+ * Forces the singleton `panel_meta` row (id=1) into a known setup state.
+ *
+ * Setup completion is a one-way latch, so a suite exercising the pre- and
+ * post-completion behaviour of `/api/v1/setup/*` must be able to reset it
+ * between cases. This lives here (not in the test file) because the
+ * test-isolation guard forbids unguarded `panel_meta` mutations in `*.test.ts`;
+ * this helper is only safe against an **isolated-schema** harness
+ * (`buildIntegrationApp` without `reusePublicSchema`), never the shared
+ * `public` schema, since it overwrites real setup state unconditionally.
+ */
+export async function resetSetupState(
+  db: DatabaseClient,
+  state: { setupCompleted?: boolean; firstOwnerClaimed?: boolean; organizationName?: string } = {},
+): Promise<void> {
+  await db
+    .update(panelMeta)
+    .set({
+      setupCompleted: state.setupCompleted ?? false,
+      firstOwnerClaimed: state.firstOwnerClaimed ?? false,
+      organizationName: state.organizationName ?? '',
+    })
+    .where(eq(panelMeta.id, 1));
+}
+
 export const TEST_STEAM_BASE = 76561197999000000n;
 export function testSteamId(suffix: number): bigint {
   if (suffix < 0 || suffix > 999999) {
