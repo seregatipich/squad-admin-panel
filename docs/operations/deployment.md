@@ -227,6 +227,32 @@ docker compose --profile backup up -d backup
 
 Requires `RESTIC_REPOSITORY` and `RESTIC_PASSWORD` in `.env`. Snapshots are taken daily at 03:00 UTC. Retention: 7 daily, 4 weekly, 6 monthly.
 
+The `backup` service (image built from [`docker/restic.Dockerfile`](../../docker/restic.Dockerfile)) does **not** snapshot the raw data directories. Before every snapshot its `PRE_COMMANDS` produce **logical dumps** — `pg_dump -Fc` for Postgres and `redis-cli --rdb` for Redis — into the `backup_dump` volume (`${DATA_DIR}/backup-dump`), and restic snapshots that directory. Logical dumps restore cleanly into a fresh, freshly-migrated stack; a raw snapshot of live WAL/AOF files cannot guarantee that. `pg_dump`/`redis-cli` reuse `POSTGRES_PASSWORD` — no additional secret is required. The service waits for `postgres` and `redis` to be healthy (`depends_on`) before it starts.
+
+### Disaster-recovery restore (manual)
+
+Restore is a deliberate host operation, run with [`scripts/restore.sh`](../../scripts/restore.sh) — it is **not** automated (CI only exercises the mechanism, see below). Run a dry run first; it lists the snapshots and mutates nothing:
+
+```bash
+scripts/restore.sh            # dry run — prints the plan and `restic snapshots`
+scripts/restore.sh --apply    # destructive — overwrites live Postgres + Redis
+```
+
+`--apply` restores the latest snapshot: it waits for `postgres` to be healthy, runs `pg_restore --clean --if-exists`, then reloads the Redis dataset. Run it with `sudo` if `${DATA_DIR}/redis` is not writable by your user — the Redis container owns those files (uid 999), and `--apply` rewrites them on the host. Redis is loaded via a one-off `redis-server` that reads the restored `dump.rdb` and rewrites it into an AOF, because the `redis` service runs with `--appendonly yes` and would otherwise ignore a bare `dump.rdb`.
+
+**Acceptance procedure (full `down -v` recovery).** This is the manual proof that a total-loss restore works. It destroys the live stack — run it only against a scratch host or a copy of production:
+
+```bash
+docker compose --profile backup up -d backup      # start the backup service
+docker compose --profile backup run --rm backup backup   # force one snapshot now
+docker compose --profile backup down -v            # stop everything, drop the volumes
+rm -rf data/postgres/* data/redis/*                # bind mounts survive `down -v`; wipe them too
+docker compose up -d postgres redis                # fresh, empty databases
+scripts/restore.sh --apply                          # restore from the restic repository
+```
+
+Because the panel's volumes are host bind mounts (`type=none, o=bind`), `down -v` removes the volume definitions but leaves `${DATA_DIR}/{postgres,redis}` on disk; the `rm -rf` step is required to genuinely simulate data loss. The automated equivalent — build the image, dump, snapshot, `down -v`, restore, assert the seeded row and key survive — runs on every CI push via [`scripts/test-backup-restore.sh`](../../scripts/test-backup-restore.sh) in the `docker` job.
+
 ## See also
 
 - [`setup.md`](./setup.md) — initial host setup including first-owner claim.
