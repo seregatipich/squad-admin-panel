@@ -9,6 +9,11 @@
       "development": "./src/index.ts",
       "default": "./dist/index.js"
     },
+    "./admins-config": {
+      "types": "./dist/admins-config.d.ts",
+      "development": "./src/admins-config.ts",
+      "default": "./dist/admins-config.js"
+    },
     "./banned-names": {
       "types": "./dist/banned-names.d.ts",
       "development": "./src/banned-names.ts",

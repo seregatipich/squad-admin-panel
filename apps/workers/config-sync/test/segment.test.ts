@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BEGIN_MARKER,
   buildManagedSegment,
+  buildManagedSegmentBody,
   END_MARKER,
   findManagedSegment,
   hashSegment,
@@ -199,6 +200,34 @@ describe('spliceManagedSegment', () => {
 describe('hashSegment', () => {
   it('returns 64-char hex sha256', () => {
     expect(hashSegment('foo')).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe('buildManagedSegment consumes the shared generator (ROLE-6)', () => {
+  const inputs = {
+    roles: [
+      { name: 'Admin', squadPermissions: ['kick', 'ban', 'cameraman'] },
+      { name: 'QueuePriority', squadPermissions: ['reserve'] },
+    ],
+    admins: [
+      { eosId: '0002a10186d9414e8e15c66eb3dbf70a', roleName: 'Admin', comment: 'manual addition' },
+      { eosId: '0002b20286d9414e8e15c66eb3dbf70b', roleName: 'Admin' },
+    ],
+    clanPriority: [{ eosId: '0002e50586d9414e8e15c66eb3dbf70e', clanName: 'Альфа' }],
+  };
+
+  it('writes exactly the bytes the shared buildManagedSegmentBody produces', () => {
+    const shared = buildManagedSegmentBody(inputs);
+    const withHash = buildManagedSegment(inputs);
+    expect(withHash.body).toBe(shared.body);
+    expect(withHash.groupsCount).toBe(shared.groupsCount);
+    expect(withHash.adminsCount).toBe(shared.adminsCount);
+  });
+
+  it('layers a sha256 idempotency hash over the shared body', () => {
+    const out = buildManagedSegment(inputs);
+    expect(out.hash).toBe(hashSegment(out.body));
+    expect(out.hash).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 
