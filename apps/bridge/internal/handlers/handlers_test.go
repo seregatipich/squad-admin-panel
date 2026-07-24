@@ -283,6 +283,203 @@ func assertPathMissing(t *testing.T, path string) {
 	}
 }
 
+// LOG-3 (#51): a flagged server's expiring rotated log must be copied into the
+// restic backup staging tree BEFORE it is deleted from the Logs directory. The
+// non-flagged sweep behaviour is unchanged (delete-only).
+func TestSquadLogRetentionSweep_ArchivesFlaggedServerBeforeDelete(t *testing.T) {
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	serverID := "019dbaa5-1234-7abc-8def-0123456789ab"
+	savedRoot := t.TempDir()
+	stagingRoot := t.TempDir()
+	logsDir := filepath.Join(savedRoot, serverID, "SquadGame", "Saved", "Logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatalf("mkdir logs dir: %v", err)
+	}
+
+	expiredName := "SquadGame-2026.06.26-12.00.00.log"
+	expiredRotated := filepath.Join(logsDir, expiredName)
+	freshRotated := filepath.Join(logsDir, "SquadGame-2026.06.30-12.00.00.log")
+	expiredContent := "expired rotated payload to archive\n"
+	expiredBytes := writeRetentionTestFile(t, expiredRotated, expiredContent, now.Add(-11*24*time.Hour))
+	writeRetentionTestFile(t, freshRotated, "fresh rotated\n", now.Add(-9*24*time.Hour))
+
+	d := &Dispatcher{
+		panelSavedRoot: savedRoot,
+		backupDumpRoot: stagingRoot,
+		nowFn:          func() time.Time { return now },
+	}
+	resp := d.Handle(context.Background(), &rpc.Request{
+		ID:     "req-retention-archive-1",
+		Method: "squad_log_retention_sweep",
+		Params: json.RawMessage(`{"archive_server_ids":["` + serverID + `"]}`),
+	}, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected OK, got error: %+v", resp.Error)
+	}
+
+	var got struct {
+		DeletedCount  int   `json:"deleted_count"`
+		DeletedBytes  int64 `json:"deleted_bytes"`
+		ArchivedCount int   `json:"archived_count"`
+		ArchivedBytes int64 `json:"archived_bytes"`
+		ErrorCount    int   `json:"error_count"`
+	}
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if got.ArchivedCount != 1 {
+		t.Fatalf("archived_count = %d, want 1", got.ArchivedCount)
+	}
+	if got.ArchivedBytes != expiredBytes {
+		t.Fatalf("archived_bytes = %d, want %d", got.ArchivedBytes, expiredBytes)
+	}
+	if got.DeletedCount != 1 {
+		t.Fatalf("deleted_count = %d, want 1", got.DeletedCount)
+	}
+	if got.ErrorCount != 0 {
+		t.Fatalf("error_count = %d, want 0", got.ErrorCount)
+	}
+
+	// The expiring file must be archived into the staging tree AND removed from Logs.
+	archived := filepath.Join(stagingRoot, "log-archive", serverID, expiredName)
+	assertPathExists(t, archived)
+	body, err := os.ReadFile(archived)
+	if err != nil {
+		t.Fatalf("read archived file: %v", err)
+	}
+	if string(body) != expiredContent {
+		t.Fatalf("archived content = %q, want %q", string(body), expiredContent)
+	}
+	assertPathMissing(t, expiredRotated)
+	// The fresh (non-expired) file is neither archived nor deleted.
+	assertPathExists(t, freshRotated)
+	assertPathMissing(t, filepath.Join(stagingRoot, "log-archive", serverID, "SquadGame-2026.06.30-12.00.00.log"))
+}
+
+func TestSquadLogRetentionSweep_UnflaggedServerDeleteOnly(t *testing.T) {
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	serverID := "019dbaa5-1234-7abc-8def-0123456789ab"
+	savedRoot := t.TempDir()
+	stagingRoot := t.TempDir()
+	logsDir := filepath.Join(savedRoot, serverID, "SquadGame", "Saved", "Logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatalf("mkdir logs dir: %v", err)
+	}
+
+	expiredName := "SquadGame-2026.06.26-12.00.00.log"
+	expiredRotated := filepath.Join(logsDir, expiredName)
+	writeRetentionTestFile(t, expiredRotated, "expired rotated\n", now.Add(-11*24*time.Hour))
+
+	d := &Dispatcher{
+		panelSavedRoot: savedRoot,
+		backupDumpRoot: stagingRoot,
+		nowFn:          func() time.Time { return now },
+	}
+	// Empty archive set (the backwards-compatible default): nothing is archived.
+	resp := d.Handle(context.Background(), &rpc.Request{
+		ID:     "req-retention-archive-2",
+		Method: "squad_log_retention_sweep",
+		Params: json.RawMessage(`{"archive_server_ids":[]}`),
+	}, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected OK, got error: %+v", resp.Error)
+	}
+
+	var got struct {
+		DeletedCount  int `json:"deleted_count"`
+		ArchivedCount int `json:"archived_count"`
+		ErrorCount    int `json:"error_count"`
+	}
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if got.DeletedCount != 1 {
+		t.Fatalf("deleted_count = %d, want 1", got.DeletedCount)
+	}
+	if got.ArchivedCount != 0 {
+		t.Fatalf("archived_count = %d, want 0", got.ArchivedCount)
+	}
+	if got.ErrorCount != 0 {
+		t.Fatalf("error_count = %d, want 0", got.ErrorCount)
+	}
+
+	assertPathMissing(t, expiredRotated)
+	// Nothing was written into the staging tree for an unflagged server.
+	if _, err := os.Stat(filepath.Join(stagingRoot, "log-archive")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("expected no staging tree for unflagged server, stat err=%v", err)
+	}
+}
+
+// LOG-3 (#51), safety (Rule 7): a copy failure must NOT delete the file. With no
+// staging root configured, a flagged server's archive fails and the expiring
+// file is left in place with an error recorded — never silently lost.
+func TestSquadLogRetentionSweep_ArchiveFailureKeepsFile(t *testing.T) {
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	serverID := "019dbaa5-1234-7abc-8def-0123456789ab"
+	savedRoot := t.TempDir()
+	logsDir := filepath.Join(savedRoot, serverID, "SquadGame", "Saved", "Logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatalf("mkdir logs dir: %v", err)
+	}
+
+	expiredRotated := filepath.Join(logsDir, "SquadGame-2026.06.26-12.00.00.log")
+	writeRetentionTestFile(t, expiredRotated, "expired rotated\n", now.Add(-11*24*time.Hour))
+
+	d := &Dispatcher{
+		panelSavedRoot: savedRoot,
+		backupDumpRoot: "", // not configured → archive must fail
+		nowFn:          func() time.Time { return now },
+	}
+	resp := d.Handle(context.Background(), &rpc.Request{
+		ID:     "req-retention-archive-3",
+		Method: "squad_log_retention_sweep",
+		Params: json.RawMessage(`{"archive_server_ids":["` + serverID + `"]}`),
+	}, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected OK envelope, got error: %+v", resp.Error)
+	}
+
+	var got struct {
+		DeletedCount  int `json:"deleted_count"`
+		ArchivedCount int `json:"archived_count"`
+		ErrorCount    int `json:"error_count"`
+	}
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if got.DeletedCount != 0 {
+		t.Fatalf("deleted_count = %d, want 0 (archive failed → no delete)", got.DeletedCount)
+	}
+	if got.ArchivedCount != 0 {
+		t.Fatalf("archived_count = %d, want 0", got.ArchivedCount)
+	}
+	if got.ErrorCount != 1 {
+		t.Fatalf("error_count = %d, want 1", got.ErrorCount)
+	}
+	// The file survives the failed archive attempt.
+	assertPathExists(t, expiredRotated)
+}
+
+// LOG-3 (#51): a bogus archive_server_ids entry is rejected before any deletion.
+func TestSquadLogRetentionSweep_RejectsMalformedArchiveServerID(t *testing.T) {
+	d := &Dispatcher{
+		panelSavedRoot: t.TempDir(),
+		backupDumpRoot: t.TempDir(),
+		nowFn:          func() time.Time { return time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC) },
+	}
+	resp := d.Handle(context.Background(), &rpc.Request{
+		ID:     "req-retention-archive-4",
+		Method: "squad_log_retention_sweep",
+		Params: json.RawMessage(`{"archive_server_ids":["not-a-uuid"]}`),
+	}, func(rpc.StreamFrame) {})
+	if resp.OK {
+		t.Fatalf("expected error response, got success")
+	}
+	if resp.Error == nil || resp.Error.Code != rpc.CodeInvalidArgs {
+		t.Fatalf("expected CodeInvalidArgs, got %+v", resp.Error)
+	}
+}
+
 func TestValidateReadablePath_AcceptsConfigsAndSaved(t *testing.T) {
 	cases := []string{
 		"/var/lib/squad-panel/configs/019dbaa5-1234-7abc-8def-0123456789ab/ServerConfig/Admins.cfg",
