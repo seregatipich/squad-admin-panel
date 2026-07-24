@@ -43,6 +43,7 @@ import eventsRoutes from '../../src/routes/events.js';
 import externalBansRoutes from '../../src/routes/external-bans.js';
 import hostRoutes from '../../src/routes/host.js';
 import hostActionsRoutes from '../../src/routes/host-actions.js';
+import hostBackupRoutes from '../../src/routes/host-backup.js';
 import integrationsDiscordRoutes from '../../src/routes/integrations-discord.js';
 import integrationsGeoipRoutes from '../../src/routes/integrations-geoip.js';
 import integrationsVipRoutes from '../../src/routes/integrations-vip.js';
@@ -221,6 +222,18 @@ export interface FakeBridge {
   directoryDelete: (p: { path: string }) => Promise<{ removed: boolean }>;
   processInfo: (p: { pid: number }) => Promise<{ pid: number; exists: boolean }>;
   hostAgentRestart: () => Promise<{ status: 'restarting' }>;
+  backupSnapshots: () => Promise<{
+    snapshots: Array<{
+      id: string;
+      short_id: string;
+      time: string;
+      hostname: string;
+      paths: string[];
+      tags: string[];
+    }>;
+  }>;
+  backupRun: () => Promise<{ exit_code: number }>;
+  backupRestore: (p: { snapshot_id: string }) => Promise<{ exit_code: number }>;
   panelDiskUsage: (opts?: { force?: boolean }) => Promise<{
     configs_bytes: number;
     saved_total_bytes: number;
@@ -330,6 +343,9 @@ export function makeFakeBridge(overrides: FakeBridgeOverrides = {}): FakeBridge 
     directoryDelete: async () => ({ removed: true }),
     processInfo: async ({ pid }) => ({ pid, exists: true }),
     hostAgentRestart: async () => ({ status: 'restarting' as const }),
+    backupSnapshots: async () => ({ snapshots: [] }),
+    backupRun: async () => ({ exit_code: 0 }),
+    backupRestore: async () => ({ exit_code: 0 }),
     panelDiskUsage: async () => ({
       configs_bytes: 0,
       saved_total_bytes: 0,
@@ -465,6 +481,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(usersRoutes);
   await app.register(hostRoutes);
   await app.register(hostActionsRoutes);
+  await app.register(hostBackupRoutes);
   await app.register(serverRoutes);
   await app.register(serverRosterRoutes);
   await app.register(serverSeedingRoutes);

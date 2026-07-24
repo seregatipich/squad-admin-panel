@@ -52,6 +52,7 @@ import eventsRoutes from './routes/events.js';
 import externalBansRoutes from './routes/external-bans.js';
 import hostRoutes from './routes/host.js';
 import hostActionsRoutes from './routes/host-actions.js';
+import hostBackupRoutes from './routes/host-backup.js';
 import integrationsDiscordRoutes from './routes/integrations-discord.js';
 import integrationsGeoipRoutes from './routes/integrations-geoip.js';
 import integrationsVipRoutes from './routes/integrations-vip.js';
@@ -194,6 +195,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(messageTemplatesRoutes);
   await app.register(hostRoutes);
   await app.register(hostActionsRoutes);
+  await app.register(hostBackupRoutes);
   await app.register(serverRoutes);
   await app.register(serverRosterRoutes);
   await app.register(serverSeedingRoutes);
