@@ -6,32 +6,15 @@
  * row's row_hash equals sha256(prev_hash || canonicalized-row). Fails
  * fast on the first mismatch. Exits 0 when the chain is intact.
  *
+ * Shares the walk/compare logic with the `/api/v1/audit/verify-chain`
+ * endpoint via `apps/api/src/lib/audit-chain.ts`, so this out-of-band check
+ * and the in-panel button agree by construction.
+ *
  * Usage: DATABASE_URL=postgres://... pnpm verify:audit-chain
  */
 
-import { createHash } from 'node:crypto';
 import postgres from 'postgres';
-
-interface Row {
-  id: string;
-  created_at: string;
-  action_type: string;
-  target_type: string | null;
-  target_id: string | null;
-  context_text: string;
-  prev_hash: Buffer | null;
-  row_hash: Buffer;
-}
-
-function canonical(row: Row): string {
-  return [
-    row.action_type,
-    row.target_type ?? '',
-    row.target_id ?? '',
-    row.context_text,
-    row.created_at,
-  ].join('|');
-}
+import { type AuditChainRow, verifyAuditChain } from '../apps/api/src/lib/audit-chain.js';
 
 async function main() {
   const url = process.env.DATABASE_URL;
@@ -40,39 +23,29 @@ async function main() {
     process.exit(2);
   }
   const sql = postgres(url, { max: 1, prepare: false });
-  let prevHash: Buffer | null = null;
-  let count = 0;
 
   try {
-    const rows = await sql<Row[]>`
-      SELECT id::text AS id, created_at::text, action_type, target_type, target_id,
-             context::text AS context_text, prev_hash, row_hash
-        FROM audit_log
-        ORDER BY audit_log.id ASC
+    const rows = await sql<AuditChainRow[]>`
+      SELECT
+        id::text AS id,
+        action_type,
+        target_type,
+        target_id,
+        context::text AS context_text,
+        created_at::text AS created_at,
+        encode(prev_hash, 'hex') AS prev_hash_hex,
+        encode(row_hash, 'hex') AS row_hash_hex
+      FROM audit_log
+      ORDER BY audit_log.id ASC
     `;
 
-    for (const row of rows) {
-      const currentRowHash = Buffer.from(row.row_hash);
-      const expectedPrev = prevHash ?? Buffer.alloc(0);
-      const actualPrev = row.prev_hash ? Buffer.from(row.prev_hash) : Buffer.alloc(0);
-      if (!expectedPrev.equals(actualPrev)) {
-        console.error(`Chain break at id=${row.id}: prev_hash mismatch`);
-        console.error(`  expected=${expectedPrev.toString('hex')}`);
-        console.error(`  actual  =${actualPrev.toString('hex')}`);
-        process.exit(1);
-      }
-      const material = Buffer.concat([expectedPrev, Buffer.from(canonical(row), 'utf-8')]);
-      const expected = createHash('sha256').update(material).digest();
-      if (!expected.equals(currentRowHash)) {
-        console.error(`Chain break at id=${row.id}: row_hash mismatch`);
-        console.error(`  expected=${expected.toString('hex')}`);
-        console.error(`  actual  =${currentRowHash.toString('hex')}`);
-        process.exit(1);
-      }
-      prevHash = currentRowHash;
-      count++;
+    const result = verifyAuditChain(rows);
+    if (!result.ok) {
+      console.error(`Chain break at id=${result.brokenAt}: ${result.reason} mismatch`);
+      console.error(`  verified ${result.checked} row(s) before the break`);
+      process.exit(1);
     }
-    console.log(`ok: audit chain intact (${count} rows)`);
+    console.log(`ok: audit chain intact (${result.checked} rows)`);
   } finally {
     await sql.end({ timeout: 5 });
   }
