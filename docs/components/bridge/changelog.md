@@ -1,5 +1,17 @@
 # `bridge` — changelog
 
+## 2026-07-24 — `squad_log_retention_sweep` archives flagged logs before delete (LOG-3, #51)
+
+### Changed
+
+- `squad_log_retention_sweep` now accepts `{ archive_server_ids: string[] }` — the servers whose `server_settings.archive_logs_to_backup` flag is on. For those servers the bridge copies each expiring `SquadGame*.log` into `$PANEL_BACKUP_DUMP_ROOT/log-archive/{uuid}/{name}` (`${DATA_DIR}/backup-dump`, snapshotted by the restic `backup` sidecar via `RESTIC_BACKUP_SOURCES=/data`) **before** deleting it. Delete happens only after a successful archive copy; a copy failure records an error and leaves the file in place.
+- Non-flagged servers are unchanged (delete-only). The archive staging root is bridge-owned (`PANEL_BACKUP_DUMP_ROOT` env, set by the `install-host-bridge.sh` systemd drop-in); the caller never supplies a path. Unknown param keys are still rejected as `invalid_args`, preserving the "callers cannot control paths" invariant.
+
+### Added
+
+- Response counters `archived_count` and `archived_bytes`.
+- Go tests: archive-before-delete ordering (staging present + Logs absent), unflagged delete-only, archive-failure-keeps-file (safety), and malformed `archive_server_ids` rejection.
+
 ## 2026-07-07 — `squad_log_retention_sweep` for raw Squad logs
 
 ### Added
