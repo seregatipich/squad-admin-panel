@@ -510,3 +510,181 @@ func TestEnsureSidecarDirSetsModeAndToleratesNonRootChown(t *testing.T) {
 		t.Fatalf("sock dir mode = %v, want drwxrws--- (02770)", sockInfo.Mode())
 	}
 }
+
+// --- restic backup / restore (INFRA-8-P1) ---
+
+func TestBackupSnapshotsParsesJSON(t *testing.T) {
+	f := &Fake{Stdout: []byte(`[
+	  {"id":"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90","short_id":"a1b2c3d4","time":"2026-07-24T03:00:00Z","hostname":"tk104","paths":["/data"],"tags":["cron"]}
+	]`)}
+	d := &DockerRunner{Bin: "docker", R: f, ComposeDir: "/opt/squad-admin-panel"}
+	snaps, err := d.BackupSnapshots(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(snaps) != 1 {
+		t.Fatalf("expected 1 snapshot, got %d", len(snaps))
+	}
+	got := snaps[0]
+	if got.ShortID != "a1b2c3d4" || got.Hostname != "tk104" {
+		t.Errorf("unexpected snapshot: %+v", got)
+	}
+	if len(got.Paths) != 1 || got.Paths[0] != "/data" {
+		t.Errorf("unexpected paths: %+v", got.Paths)
+	}
+	// Assert the composed docker compose invocation.
+	args := strings.Join(f.Calls[0].Args, " ")
+	for _, must := range []string{
+		"compose --project-directory /opt/squad-admin-panel",
+		"-f /opt/squad-admin-panel/docker-compose.yml",
+		"--profile backup",
+		"run --rm --no-TTY --entrypoint /bin/sh backup -c restic snapshots --json",
+	} {
+		if !strings.Contains(args, must) {
+			t.Errorf("expected args to contain %q, got: %s", must, args)
+		}
+	}
+}
+
+func TestBackupSnapshotsEmptyRepoReturnsEmpty(t *testing.T) {
+	f := &Fake{Stdout: []byte("  \n")}
+	d := &DockerRunner{Bin: "docker", R: f, ComposeDir: "/opt/squad-admin-panel"}
+	snaps, err := d.BackupSnapshots(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(snaps) != 0 {
+		t.Fatalf("expected 0 snapshots, got %d", len(snaps))
+	}
+}
+
+func TestBackupSnapshotsNonZeroExitErrors(t *testing.T) {
+	f := &Fake{Stderr: []byte("Fatal: unable to open config file"), Exit: 1}
+	d := &DockerRunner{Bin: "docker", R: f, ComposeDir: "/opt/squad-admin-panel"}
+	if _, err := d.BackupSnapshots(context.Background()); err == nil {
+		t.Fatalf("expected error on non-zero exit")
+	}
+}
+
+func TestBackupSnapshotsBadJSONErrors(t *testing.T) {
+	f := &Fake{Stdout: []byte("not json")}
+	d := &DockerRunner{Bin: "docker", R: f, ComposeDir: "/opt/squad-admin-panel"}
+	if _, err := d.BackupSnapshots(context.Background()); err == nil {
+		t.Fatalf("expected parse error for malformed json")
+	}
+}
+
+func TestBackupSnapshotsRunErrorPropagates(t *testing.T) {
+	f := &Fake{Err: errors.New("exec boom")}
+	d := &DockerRunner{Bin: "docker", R: f, ComposeDir: "/opt/squad-admin-panel"}
+	if _, err := d.BackupSnapshots(context.Background()); err == nil {
+		t.Fatalf("expected runner error to propagate")
+	}
+}
+
+func TestBackupSnapshotsUnconfiguredComposeDirForbidden(t *testing.T) {
+	t.Setenv("PANEL_COMPOSE_DIR", "")
+	f := &Fake{}
+	d := &DockerRunner{Bin: "docker", R: f}
+	_, err := d.BackupSnapshots(context.Background())
+	if err == nil || !errors.Is(err, validate.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden for unconfigured compose dir, got %v", err)
+	}
+	if len(f.Calls) != 0 {
+		t.Fatalf("expected no docker invocation when compose dir is unset")
+	}
+}
+
+func TestBackupSnapshotsComposeDirFromEnv(t *testing.T) {
+	t.Setenv("PANEL_COMPOSE_DIR", "/srv/panel")
+	f := &Fake{Stdout: []byte("[]")}
+	d := &DockerRunner{Bin: "docker", R: f}
+	if _, err := d.BackupSnapshots(context.Background()); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	args := strings.Join(f.Calls[0].Args, " ")
+	if !strings.Contains(args, "--project-directory /srv/panel") {
+		t.Errorf("expected env compose dir in args, got: %s", args)
+	}
+}
+
+func TestBackupSnapshotsRelativeComposeDirForbidden(t *testing.T) {
+	f := &Fake{}
+	d := &DockerRunner{Bin: "docker", R: f, ComposeDir: "relative/dir"}
+	_, err := d.BackupSnapshots(context.Background())
+	if err == nil || !errors.Is(err, validate.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden for relative compose dir, got %v", err)
+	}
+}
+
+func TestBackupRunComposesBackupCommand(t *testing.T) {
+	f := &Fake{Stdout: []byte("snapshot saved\n")}
+	d := &DockerRunner{Bin: "docker", R: f, ComposeDir: "/opt/squad-admin-panel"}
+	var out strings.Builder
+	exit, err := d.BackupRun(context.Background(), func(b []byte) { out.Write(b) }, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if exit != 0 {
+		t.Errorf("expected exit 0, got %d", exit)
+	}
+	if out.String() != "snapshot saved\n" {
+		t.Errorf("expected streamed stdout, got %q", out.String())
+	}
+	args := strings.Join(f.Calls[0].Args, " ")
+	if !strings.Contains(args, "run --rm backup backup") {
+		t.Errorf("expected compose backup run, got: %s", args)
+	}
+}
+
+func TestBackupRunUnconfiguredComposeDirForbidden(t *testing.T) {
+	t.Setenv("PANEL_COMPOSE_DIR", "")
+	f := &Fake{}
+	d := &DockerRunner{Bin: "docker", R: f}
+	_, err := d.BackupRun(context.Background(), nil, nil)
+	if err == nil || !errors.Is(err, validate.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestBackupRestoreInvokesRestoreScript(t *testing.T) {
+	f := &Fake{Stdout: []byte("Restore complete.\n")}
+	d := &DockerRunner{Bin: "docker", R: f, ComposeDir: "/opt/squad-admin-panel"}
+	exit, err := d.BackupRestore(context.Background(), "a1b2c3d4", nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if exit != 0 {
+		t.Errorf("expected exit 0, got %d", exit)
+	}
+	call := f.Calls[0]
+	if call.Cmd != "bash" {
+		t.Errorf("expected bash cmd, got %q", call.Cmd)
+	}
+	args := strings.Join(call.Args, " ")
+	if !strings.Contains(args, "/opt/squad-admin-panel/scripts/restore.sh --apply --snapshot a1b2c3d4") {
+		t.Errorf("expected restore.sh invocation with snapshot, got: %s", args)
+	}
+}
+
+func TestBackupRestoreRejectsBadSnapshotID(t *testing.T) {
+	f := &Fake{}
+	d := &DockerRunner{Bin: "docker", R: f, ComposeDir: "/opt/squad-admin-panel"}
+	_, err := d.BackupRestore(context.Background(), "; rm -rf /", nil, nil)
+	if err == nil || !errors.Is(err, validate.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden for bad snapshot id, got %v", err)
+	}
+	if len(f.Calls) != 0 {
+		t.Fatalf("expected no restore invocation for a rejected snapshot id")
+	}
+}
+
+func TestBackupRestoreUnconfiguredComposeDirForbidden(t *testing.T) {
+	t.Setenv("PANEL_COMPOSE_DIR", "")
+	f := &Fake{}
+	d := &DockerRunner{Bin: "docker", R: f}
+	_, err := d.BackupRestore(context.Background(), "a1b2c3d4", nil, nil)
+	if err == nil || !errors.Is(err, validate.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+}

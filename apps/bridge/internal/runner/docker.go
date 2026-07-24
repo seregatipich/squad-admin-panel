@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -21,6 +22,13 @@ type DockerRunner struct {
 	// (production default validate.PanelSocketRoot). Tests point it at a
 	// temp dir so ensureSidecarDir does not touch the real /run tree.
 	SocketRoot string
+	// ComposeDir is the panel deploy directory that holds docker-compose.yml,
+	// .env and scripts/restore.sh. The backup RPCs run `docker compose` (and the
+	// restore script) from here so they inherit RESTIC_PASSWORD/POSTGRES_PASSWORD
+	// from .env instead of the bridge having to hold those secrets. Empty falls
+	// back to the PANEL_COMPOSE_DIR env var; it is never accepted from RPC
+	// params. Tests inject a t.TempDir.
+	ComposeDir string
 }
 
 func NewDocker(r Runner) *DockerRunner {
@@ -681,4 +689,121 @@ func (d *DockerRunner) SystemPrune(
 		"--filter", "label!=panel.preserve=true",
 	}
 	return d.R.Stream(ctx, d.Bin, args, nil, onStdout, onStderr)
+}
+
+// --- restic backup / restore (INFRA-8-P1) ---
+
+// composeDir resolves the panel deploy directory the backup RPCs shell out in.
+// It must be an absolute path, from the ComposeDir field or PANEL_COMPOSE_DIR;
+// an unset or relative value is a policy error (ErrForbidden) so the RPC fails
+// closed rather than running `docker compose` from an unexpected cwd.
+func (d *DockerRunner) composeDir() (string, error) {
+	dir := d.ComposeDir
+	if dir == "" {
+		dir = os.Getenv("PANEL_COMPOSE_DIR")
+	}
+	if dir == "" {
+		return "", fmt.Errorf("%w: compose directory not configured (set PANEL_COMPOSE_DIR)", validate.ErrForbidden)
+	}
+	if !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("%w: compose directory %q must be absolute", validate.ErrForbidden, dir)
+	}
+	return dir, nil
+}
+
+// composeBackupArgs builds the `docker compose` prefix that targets the
+// backup-profile service from the resolved deploy directory. The compose file
+// and .env are pinned explicitly so the invocation is independent of the
+// bridge's cwd.
+func composeBackupArgs(dir string) []string {
+	return []string{
+		"compose",
+		"--project-directory", dir,
+		"-f", filepath.Join(dir, "docker-compose.yml"),
+		"--profile", "backup",
+	}
+}
+
+// BackupSnapshot is one restic snapshot as surfaced to the panel UI. It is the
+// subset of `restic snapshots --json` fields the operator needs to pick a
+// snapshot to restore.
+type BackupSnapshot struct {
+	ID       string   `json:"id"`
+	ShortID  string   `json:"short_id"`
+	Time     string   `json:"time"`
+	Hostname string   `json:"hostname"`
+	Paths    []string `json:"paths"`
+	Tags     []string `json:"tags"`
+}
+
+// BackupSnapshots lists the restic snapshots in the panel's backup repository
+// by running `restic snapshots --json` inside a one-off backup container (the
+// resticker entrypoint is overridden so the args are not treated as a restic
+// subcommand). An empty repository yields an empty slice, not an error.
+func (d *DockerRunner) BackupSnapshots(ctx context.Context) ([]BackupSnapshot, error) {
+	dir, err := d.composeDir()
+	if err != nil {
+		return nil, err
+	}
+	args := append(composeBackupArgs(dir),
+		"run", "--rm", "--no-TTY",
+		"--entrypoint", "/bin/sh", "backup",
+		"-c", "restic snapshots --json",
+	)
+	so, se, exit, err := d.R.Run(ctx, d.Bin, args, nil)
+	if err != nil {
+		return nil, err
+	}
+	if exit != 0 {
+		return nil, fmt.Errorf("restic snapshots exit %d: %s", exit, strings.TrimSpace(string(se)))
+	}
+	trimmed := strings.TrimSpace(string(so))
+	if trimmed == "" {
+		return []BackupSnapshot{}, nil
+	}
+	var snaps []BackupSnapshot
+	if err := json.Unmarshal([]byte(trimmed), &snaps); err != nil {
+		return nil, fmt.Errorf("parse restic snapshots json: %w", err)
+	}
+	return snaps, nil
+}
+
+// BackupRun triggers a one-off backup cycle by running the resticker `backup`
+// command in a throwaway container: it evaluates the compose PRE_COMMANDS
+// (pg_dump + redis-cli --rdb into the staging tree), takes a restic snapshot,
+// then applies RESTIC_FORGET_ARGS retention. Streams progress; returns the
+// exit code.
+func (d *DockerRunner) BackupRun(
+	ctx context.Context,
+	onStdout, onStderr func([]byte),
+) (int, error) {
+	dir, err := d.composeDir()
+	if err != nil {
+		return 0, err
+	}
+	args := append(composeBackupArgs(dir), "run", "--rm", "backup", "backup")
+	return d.R.Stream(ctx, d.Bin, args, nil, onStdout, onStderr)
+}
+
+// BackupRestore restores the panel's Postgres + Redis from the given restic
+// snapshot by invoking the proven scripts/restore.sh from the deploy directory
+// with --apply. This is DESTRUCTIVE: it overwrites the live database and Redis
+// dataset. The snapshot id is validated to a restic id (or "latest") before it
+// reaches the shell, so it cannot smuggle extra arguments. Streams progress;
+// returns the script exit code.
+func (d *DockerRunner) BackupRestore(
+	ctx context.Context,
+	snapshotID string,
+	onStdout, onStderr func([]byte),
+) (int, error) {
+	dir, err := d.composeDir()
+	if err != nil {
+		return 0, err
+	}
+	if err := validate.ResticSnapshotID(snapshotID); err != nil {
+		return 0, err
+	}
+	script := filepath.Join(dir, "scripts", "restore.sh")
+	args := []string{script, "--apply", "--snapshot", snapshotID}
+	return d.R.Stream(ctx, "bash", args, nil, onStdout, onStderr)
 }
