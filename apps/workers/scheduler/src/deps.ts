@@ -4,6 +4,8 @@ import {
   auditLog,
   rotationProfiles,
   rotationSchedule,
+  scheduledTaskRuns,
+  scheduledTasks,
   seedSchedule,
   serverSettings,
   servers,
@@ -29,6 +31,12 @@ import type {
   RotationScheduleEntry,
   RotationScheduleTickDeps,
 } from './rotation-schedule-tick.js';
+import type {
+  ScheduledTaskAuditEntry,
+  ScheduledTaskEntry,
+  ScheduledTaskRunRecord,
+  ScheduledTaskTickDeps,
+} from './scheduled-task-tick.js';
 import type {
   SeedingLiveness,
   SeedScheduleAuditEntry,
@@ -381,5 +389,99 @@ export function createRotationProfileDeps(
     setLastAppliedAt: (profileId, appliedAt) =>
       setRotationProfileLastAppliedAt(db, profileId, appliedAt),
     writeAuditEntry: (entry) => writeRotationProfileAuditEntry(db, entry),
+  };
+}
+
+/** Loads enabled general scheduled tasks (AUTO-2, #73) for the scheduler tick. */
+export async function loadEnabledScheduledTasks(db: DatabaseClient): Promise<ScheduledTaskEntry[]> {
+  const rows = await db.select().from(scheduledTasks).where(eq(scheduledTasks.enabled, true));
+  return rows.map((row) => ({
+    id: row.id,
+    serverId: row.serverId,
+    name: row.name,
+    taskType: row.taskType,
+    params: row.params ?? {},
+    scheduledAt: row.scheduledAt,
+    recurrence: row.recurrence,
+    lastExecutedAt: row.lastExecutedAt,
+    createdAt: row.createdAt,
+  }));
+}
+
+/** Advances a scheduled task's execution cursor after a successful dispatch. */
+export async function setScheduledTaskLastExecutedAt(
+  db: DatabaseClient,
+  taskId: string,
+  executedAt: Date,
+): Promise<void> {
+  await db
+    .update(scheduledTasks)
+    .set({ lastExecutedAt: executedAt, updatedAt: new Date() })
+    .where(eq(scheduledTasks.id, taskId));
+}
+
+/** Appends one execution-history row to `scheduled_task_runs`. */
+export async function recordScheduledTaskRun(
+  db: DatabaseClient,
+  run: ScheduledTaskRunRecord,
+): Promise<void> {
+  await db.insert(scheduledTaskRuns).values({
+    taskId: run.taskId,
+    executedAt: run.executedAt,
+    status: run.status,
+    detail: run.detail,
+  });
+}
+
+export async function writeScheduledTaskAuditEntry(
+  db: DatabaseClient,
+  entry: ScheduledTaskAuditEntry,
+): Promise<void> {
+  await db.insert(auditLog).values({
+    actorKind: entry.actor.kind,
+    actorPlayerId: null,
+    actorTokenId: null,
+    actorSystemLabel: entry.actor.label,
+    actorIp: null,
+    actionType: entry.actionType,
+    targetType: entry.targetType,
+    targetId: entry.targetId,
+    beforeSnapshot: null,
+    afterSnapshot: null,
+    context: entry.context,
+    statusCode: null,
+    rowHash: Buffer.from([]),
+  });
+}
+
+/**
+ * Restarts a server via the SRV-3 container-restart mechanism — the same
+ * `containerStop` + `containerStart` on `squad-<serverId>` that
+ * `POST /api/v1/servers/:id/restart` performs, driven here through the host
+ * bridge the scheduler already holds.
+ */
+export async function restartServerContainer(
+  bridge: Pick<BridgeClient, 'containerStop' | 'containerStart'>,
+  serverId: string,
+): Promise<void> {
+  const name = `squad-${serverId}`;
+  await bridge.containerStop({ name, timeout_sec: 60 }).catch(() => {});
+  await bridge.containerStart({ name });
+}
+
+export function createScheduledTaskDeps(
+  db: DatabaseClient,
+  redis: Pick<Redis, 'get' | 'xadd'>,
+  bridge: Pick<BridgeClient, 'containerStop' | 'containerStart'>,
+): Omit<ScheduledTaskTickDeps, 'now' | 'diag'> {
+  return {
+    loadEnabledTasks: () => loadEnabledScheduledTasks(db),
+    isDepotUpdating: () => isDepotUpdating(redis),
+    sendRconCommand: (input) => sendRconCommand(redis, input),
+    restartServer: (serverId) => restartServerContainer(bridge, serverId),
+    setLastExecutedAt: (taskId, executedAt) =>
+      setScheduledTaskLastExecutedAt(db, taskId, executedAt),
+    recordRun: (run) => recordScheduledTaskRun(db, run),
+    writeAuditEntry: (entry) => writeScheduledTaskAuditEntry(db, entry),
   };
 }
