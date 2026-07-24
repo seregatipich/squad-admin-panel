@@ -123,6 +123,7 @@ export const NAV_GROUPS: NavGroup[] = [
         permission: 'player:view_ips',
       },
       { href: '/settings/alerts', label: 'Оповещения', labelKey: 'nav.alerts' },
+      { href: '/settings/automation', label: 'Автоматизация', labelKey: 'nav.automation' },
       {
         href: '/settings/seed-notifications',
         label: 'Уведомления о сидинге',

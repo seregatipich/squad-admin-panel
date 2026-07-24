@@ -42,6 +42,7 @@ export const en: Record<TranslationKey, string> = {
   'nav.chatFlags': 'Chat flags',
   'nav.altDetection': 'Alt detection',
   'nav.alerts': 'Alerts',
+  'nav.automation': 'Automation',
   'nav.seedNotifications': 'Seeding notifications',
   'nav.whitelist': 'Whitelist',
   'nav.economy': 'Economy',
