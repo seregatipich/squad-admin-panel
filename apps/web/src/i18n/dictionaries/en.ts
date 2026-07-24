@@ -48,6 +48,7 @@ export const en: Record<TranslationKey, string> = {
   'nav.economy': 'Economy',
   'nav.clanGuard': 'Clan-tag protection',
   'nav.tokens': 'API tokens',
+  'nav.backup': 'Backups',
   'nav.banSources': 'Ban sources',
   'nav.discord': 'Discord',
   'nav.geoip': 'GeoIP (MaxMind)',

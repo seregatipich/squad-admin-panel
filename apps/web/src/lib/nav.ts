@@ -138,6 +138,12 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/settings/economy', label: 'Экономика', labelKey: 'nav.economy' },
       { href: '/settings/clan-guard', label: 'Защита клан-тегов', labelKey: 'nav.clanGuard' },
       { href: '/settings/tokens', label: 'API-токены', labelKey: 'nav.tokens' },
+      {
+        href: '/settings/backup',
+        label: 'Бэкапы',
+        labelKey: 'nav.backup',
+        permission: 'host:manage',
+      },
       { href: '/settings/ban-sources', label: 'Источники банов', labelKey: 'nav.banSources' },
       {
         href: '/settings/integrations/discord',
