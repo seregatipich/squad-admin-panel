@@ -8,6 +8,7 @@ import pino, { multistream } from 'pino';
 import { handleAltBanConnect } from './alt-ban/store.js';
 import { BannedNameRuleCache } from './banname/rules-cache.js';
 import { handleBannedNameEvent } from './banname/store.js';
+import { handleChatCommand } from './chat/commands.js';
 import { ChatFlagDetector } from './chat/flag-rules.js';
 import { handleChat } from './chat/store.js';
 import { handleCombat, handleVehicle } from './combat/store.js';
@@ -125,6 +126,12 @@ async function main() {
       onChat: (chat) => {
         handleChat(db, redis, { serverId, chat }, chatFlagDetector).catch((err) =>
           log.error({ err: (err as Error).message }, 'chat handling failed'),
+        );
+        // AUTO-4 (#75): answer in-game `!stats`/`!rules`/`!report` over RCON.
+        // Independent of the chat-message record above; `!report` delegates the
+        // report record itself to REPORT-1 via the ingestor's onReport path.
+        handleChatCommand(db, redis, { serverId, chat }).catch((err) =>
+          log.error({ err: (err as Error).message }, 'chat command handling failed'),
         );
       },
       onVote: (command) => {

@@ -477,6 +477,13 @@
       "when": 1783401200000,
       "tag": "0082_scheduled_tasks",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1783401300000,
+      "tag": "0083_chat_commands",
+      "breakpoints": true
     }
   ]
 }
