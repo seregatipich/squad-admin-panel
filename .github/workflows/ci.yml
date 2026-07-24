@@ -196,6 +196,8 @@ jobs:
         run: docker build -f docker/worker.Dockerfile --build-arg WORKER=rcon -t squad-admin-panel/worker-rcon:ci .
       - name: build rnsquadjs sidecar image
         run: docker build -f docker/rnsquadjs.Dockerfile -t squad-panel/rnsquadjs:ci .
+      - name: backup/restore round-trip (INFRA-8)
+        run: bash scripts/test-backup-restore.sh
       # The 20 GB disk has no auto-refresh yet, so CI must self-clean after every
       # run. `docker image prune -f` (no -a) only drops untagged/dangling layers —
       # e.g. the old squad-admin-panel/api:ci image superseded by this run's build —
