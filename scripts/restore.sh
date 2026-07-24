@@ -8,11 +8,17 @@
 # never run automatically by CI.
 #
 # Usage:
-#   scripts/restore.sh            # DRY RUN: print the plan + list snapshots, mutate nothing
-#   scripts/restore.sh --apply    # DESTRUCTIVE: overwrite the live Postgres + Redis data
+#   scripts/restore.sh                       # DRY RUN: print the plan + list snapshots, mutate nothing
+#   scripts/restore.sh --apply               # DESTRUCTIVE: overwrite live Postgres + Redis from `latest`
+#   scripts/restore.sh --apply --snapshot ID # DESTRUCTIVE: restore a specific restic snapshot id
+#
+# --snapshot selects which restic snapshot to restore (default `latest`). It
+# accepts a restic short/long id (lowercase hex) or the literal `latest`; the
+# backup-restore UI (INFRA-8-P1) drives this path through the host bridge with
+# the operator-selected id.
 #
 # The backup service (profile `backup`) writes logical dumps into the backup_dump
-# volume before each snapshot; this script restores the newest snapshot and loads
+# volume before each snapshot; this script restores the selected snapshot and loads
 # those dumps back:
 #   - Postgres: pg_restore --clean --if-exists into the running `postgres` service.
 #   - Redis: the RDB is loaded via a one-off redis-server, then converted to an
@@ -44,12 +50,23 @@ warn() { printf '%b!!%b %s\n' "${C_YELLOW}${C_BOLD}" "${C_RST}" "$1"; }
 # ── args ────────────────────────────────────────────────────────────────────
 
 APPLY=0
-case "${1:-}" in
-  --apply) APPLY=1 ;;
-  ''|--dry-run|--plan) APPLY=0 ;;
-  -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
-  *) die "unknown argument: $1 (use --apply, or no argument for a dry run)" ;;
-esac
+SNAPSHOT=latest
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --apply) APPLY=1 ;;
+    --dry-run|--plan) APPLY=0 ;;
+    --snapshot) shift; SNAPSHOT="${1:-}" ;;
+    --snapshot=*) SNAPSHOT="${1#*=}" ;;
+    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    *) die "unknown argument: $1 (use --apply [--snapshot <id>], or no argument for a dry run)" ;;
+  esac
+  shift
+done
+
+# A restic snapshot id is an 8- or 64-char lowercase hex string; `latest` is the
+# default. Reject anything else so the id cannot smuggle arguments into restic.
+[[ "$SNAPSHOT" == "latest" || "$SNAPSHOT" =~ ^[a-f0-9]{8}([a-f0-9]{56})?$ ]] \
+  || die "invalid snapshot id: $SNAPSHOT (expected a restic short/long id or 'latest')"
 
 command -v docker >/dev/null 2>&1 || die "docker is not installed / not on PATH"
 [[ -f "$ENV_FILE" ]] || die "missing $ENV_FILE (needed for RESTIC_* and POSTGRES_PASSWORD)"
@@ -66,9 +83,9 @@ if [[ "$APPLY" -eq 0 ]]; then
   step "DRY RUN — nothing will be modified. Re-run with --apply to restore."
   cat <<PLAN
 
-  On --apply this script will, from the latest restic snapshot:
+  On --apply this script will, from restic snapshot '${SNAPSHOT}':
     1. Ensure the postgres service is up and healthy.
-    2. restic restore latest into the backup container.
+    2. restic restore ${SNAPSHOT} into the backup container.
     3. pg_restore --clean --if-exists -h postgres -U admin -d admin admin.dump
        (drops and recreates every object, then loads the dumped data).
     4. Stop redis, replace ${DATA_DIR}/redis with the restored dump.rdb,
@@ -102,12 +119,14 @@ done
 [[ "${health:-}" == "healthy" ]] || die "postgres did not become healthy in time"
 log "postgres healthy"
 
-step "Restoring Postgres from the latest snapshot"
-# Override the `exec restic "$@"` entrypoint so this runs as a shell script.
-"${COMPOSE[@]}" run --rm --entrypoint /bin/sh -T backup -c '
+step "Restoring Postgres from snapshot ${SNAPSHOT}"
+# Override the `exec restic "$@"` entrypoint so this runs as a shell script. The
+# snapshot id crosses into the container via an env var (never interpolated into
+# the single-quoted script body), and was regex-validated above.
+"${COMPOSE[@]}" run --rm -e RESTORE_SNAPSHOT="$SNAPSHOT" --entrypoint /bin/sh -T backup -c '
   set -e
   rm -rf /tmp/restore
-  restic restore latest --target /tmp/restore
+  restic restore "$RESTORE_SNAPSHOT" --target /tmp/restore
   test -f /tmp/restore/data/postgres/admin.dump || { echo "no admin.dump in snapshot" >&2; exit 1; }
   PGPASSWORD="$POSTGRES_PASSWORD" pg_restore --clean --if-exists -h postgres -U admin -d admin /tmp/restore/data/postgres/admin.dump
   mkdir -p /data/redis

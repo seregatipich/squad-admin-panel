@@ -785,3 +785,98 @@ describe('independent client teardown', () => {
     }
   });
 });
+
+describe('backup RPCs (INFRA-8-P1)', () => {
+  it('backupSnapshots sends backup_snapshots and returns the snapshot listing', async () => {
+    server.on('connection', (conn) => {
+      conn.once('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as {
+          id: string;
+          method: string;
+        };
+        expect(req.method).toBe('backup_snapshots');
+        sendFrame(conn, {
+          id: req.id,
+          ok: true,
+          result: {
+            snapshots: [
+              {
+                id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
+                short_id: 'a1b2c3d4',
+                time: '2026-07-24T03:00:00Z',
+                hostname: 'tk104',
+                paths: ['/data'],
+                tags: [],
+              },
+            ],
+          },
+        });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    try {
+      const res = await client.backupSnapshots();
+      expect(res.snapshots).toHaveLength(1);
+      expect(res.snapshots[0]?.short_id).toBe('a1b2c3d4');
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('backupRun streams progress frames and resolves with exit_code', async () => {
+    server.on('connection', (conn) => {
+      conn.once('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as {
+          id: string;
+          method: string;
+        };
+        expect(req.method).toBe('backup_run');
+        sendFrame(conn, { id: req.id, stream: 'stdout', data: 'Files:  10 new\n' });
+        sendFrame(conn, { id: req.id, stream: 'stdout', data: 'snapshot a1b2c3d4 saved\n' });
+        sendFrame(conn, { id: req.id, ok: true, result: { exit_code: 0 } });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    try {
+      const frames: string[] = [];
+      const res = await client.backupRun((f) => frames.push(f.data as string));
+      expect(res.exit_code).toBe(0);
+      expect(frames).toEqual(['Files:  10 new\n', 'snapshot a1b2c3d4 saved\n']);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('backupRestore sends the snapshot id, streams, and resolves with exit_code', async () => {
+    server.on('connection', (conn) => {
+      conn.once('data', (chunk) => {
+        const size = chunk.readUInt32BE(0);
+        const req = JSON.parse(chunk.subarray(4, 4 + size).toString('utf-8')) as {
+          id: string;
+          method: string;
+          params: { snapshot_id: string };
+        };
+        expect(req.method).toBe('backup_restore');
+        expect(req.params).toEqual({ snapshot_id: 'a1b2c3d4' });
+        sendFrame(conn, { id: req.id, stream: 'stdout', data: 'Restore complete.\n' });
+        sendFrame(conn, { id: req.id, ok: true, result: { exit_code: 0 } });
+      });
+    });
+
+    const client = new BridgeClient({ socketPath });
+    try {
+      const frames: string[] = [];
+      const res = await client.backupRestore({ snapshot_id: 'a1b2c3d4' }, (f) =>
+        frames.push(f.data as string),
+      );
+      expect(res.exit_code).toBe(0);
+      expect(frames).toEqual(['Restore complete.\n']);
+    } finally {
+      await client.close();
+    }
+  });
+});

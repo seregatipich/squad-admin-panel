@@ -4,6 +4,10 @@ import { BRIDGE_SOCKET_DEFAULT } from '@squad/shared-config';
 import { v7 as uuidv7 } from 'uuid';
 import { decodeFrames, encodeFrame } from './frame.js';
 import {
+  type BackupRestoreParams,
+  type BackupRestoreResult,
+  type BackupRunResult,
+  type BackupSnapshotsResult,
   BridgeError,
   type BridgeRequest,
   type BridgeResponse,
@@ -256,6 +260,24 @@ export class BridgeClient extends (EventEmitter as new () => TypedEmitter<Bridge
       undefined,
       { onStream, timeoutMs: 600_000 },
     );
+
+  backupSnapshots = () =>
+    this.call<BackupSnapshotsResult>('backup_snapshots', undefined, {
+      timeoutMs: 60_000,
+      retryOnTransport: true,
+    });
+
+  backupRun = (onStream?: (frame: BridgeStreamFrame) => void) =>
+    this.call<BackupRunResult>('backup_run', undefined, {
+      onStream,
+      timeoutMs: 3_600_000,
+    });
+
+  backupRestore = (p: BackupRestoreParams, onStream?: (frame: BridgeStreamFrame) => void) =>
+    this.call<BackupRestoreResult>('backup_restore', p, {
+      onStream,
+      timeoutMs: 3_600_000,
+    });
 
   panelDiskUsage = (opts: { force?: boolean } = {}) =>
     this.call<PanelDiskUsage>('panel_disk_usage', opts.force ? { force: true } : {}, {

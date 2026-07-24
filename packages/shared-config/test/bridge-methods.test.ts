@@ -44,6 +44,9 @@ describe('bridge methods constants', () => {
       'container_logs_follow',
       'depot_update',
       'docker_prune',
+      'backup_snapshots',
+      'backup_run',
+      'backup_restore',
       'panel_disk_usage',
       'squad_log_retention_sweep',
       'squad_log_list',
@@ -57,6 +60,8 @@ describe('bridge methods constants', () => {
       'container_logs_follow',
       'depot_update',
       'docker_prune',
+      'backup_run',
+      'backup_restore',
       'file_read_stream',
     ]);
     for (const m of BRIDGE_STREAMING_METHODS) {
