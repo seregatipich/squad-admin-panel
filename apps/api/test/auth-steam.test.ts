@@ -1,11 +1,12 @@
 import cookie from '@fastify/cookie';
 import * as schema from '@squad/db/schema';
-import { panelMeta } from '@squad/db/schema';
+import { panelMeta, players, roles } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Fastify from 'fastify';
 import Redis from 'ioredis';
 import postgres from 'postgres';
+import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import steamRoutes from '../src/routes/auth-steam.js';
 import { createIsolatedSchema, makeFakeBridge, runMigrations } from './integration/harness.js';
@@ -214,7 +215,7 @@ describe('GET /api/v1/auth/steam/callback', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('player without role lands on /no-access (when sentinel already claimed)', async () => {
+  it('player without role lands on /no-access with reason=no_role (when sentinel already claimed)', async () => {
     await h.db.update(panelMeta).set({ firstOwnerClaimed: true }).where(eq(panelMeta.id, 1));
     const NONCE = 'noaccess-nonce';
     await h.redis.set(`steam-nonce:${NONCE}`, '{}', 'EX', 300);
@@ -235,7 +236,51 @@ describe('GET /api/v1/auth/steam/callback', () => {
       cookies: { '__Host-steam-nonce': NONCE },
     });
     expect(res.statusCode).toBe(302);
-    expect(res.headers.location).toMatch(/^\/no-access\?steam_id64=76561198000000200$/);
+    expect(res.headers.location).toBe('/no-access?steam_id64=76561198000000200&reason=no_role');
+    const cookieHeader = (res.headers['set-cookie'] ?? '') as string | string[];
+    const flat = Array.isArray(cookieHeader) ? cookieHeader.join('\n') : cookieHeader;
+    expect(flat).not.toMatch(/__Host-sid=/);
+  });
+
+  it('player whose role lacks panel access lands on /no-access with reason=role_no_access', async () => {
+    await h.db.update(panelMeta).set({ firstOwnerClaimed: true }).where(eq(panelMeta.id, 1));
+
+    const roleId = uuidv7();
+    await h.db.insert(roles).values({
+      id: roleId,
+      name: 'No Panel Access',
+      panelAccess: false,
+    });
+    await h.db.insert(players).values({
+      id: uuidv7(),
+      steamId64: 76561198000000201n,
+      canonicalName: 'RoleLackingAccess',
+      canonicalNameNormalized: 'rolelackingaccess',
+      roleId,
+    });
+
+    const NONCE = 'roleaccess-nonce';
+    await h.redis.set(`steam-nonce:${NONCE}`, '{}', 'EX', 300);
+    const u = new URLSearchParams({
+      n: NONCE,
+      'openid.ns': 'http://specs.openid.net/auth/2.0',
+      'openid.mode': 'id_res',
+      'openid.claimed_id': 'https://steamcommunity.com/openid/id/76561198000000201',
+      'openid.identity': 'https://steamcommunity.com/openid/id/76561198000000201',
+      'openid.return_to': `https://panel.test/api/v1/auth/steam/callback?n=${NONCE}`,
+      'openid.response_nonce': '2026-04-25T12:00:00Zroleaccess',
+      'openid.signed': 'signed,op_endpoint',
+      'openid.sig': 'sig',
+    });
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/steam/callback?${u.toString()}`,
+      cookies: { '__Host-steam-nonce': NONCE },
+    });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe(
+      '/no-access?steam_id64=76561198000000201&reason=role_no_access',
+    );
     const cookieHeader = (res.headers['set-cookie'] ?? '') as string | string[];
     const flat = Array.isArray(cookieHeader) ? cookieHeader.join('\n') : cookieHeader;
     expect(flat).not.toMatch(/__Host-sid=/);
