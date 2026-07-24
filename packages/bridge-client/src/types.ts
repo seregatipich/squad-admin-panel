@@ -230,6 +230,36 @@ export interface HostAgentRestartResult {
   status: 'restarting';
 }
 
+/** One restic snapshot in the panel backup repository (INFRA-8-P1). */
+export interface BackupSnapshot {
+  /** Full 64-char restic snapshot id. */
+  id: string;
+  /** 8-char short id used for display and restore selection. */
+  short_id: string;
+  /** RFC3339 snapshot timestamp. */
+  time: string;
+  hostname: string;
+  paths: string[];
+  tags: string[];
+}
+
+export interface BackupSnapshotsResult {
+  snapshots: BackupSnapshot[];
+}
+
+export interface BackupRunResult {
+  exit_code: number;
+}
+
+export interface BackupRestoreParams {
+  /** restic snapshot id (short/long hex) or `latest`. */
+  snapshot_id: string;
+}
+
+export interface BackupRestoreResult {
+  exit_code: number;
+}
+
 export interface SquadLogRetentionSweepError {
   server_id?: string;
   file?: string;

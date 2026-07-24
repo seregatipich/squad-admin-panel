@@ -49,6 +49,7 @@ export const ru = {
   'nav.economy': 'Экономика',
   'nav.clanGuard': 'Защита клан-тегов',
   'nav.tokens': 'API-токены',
+  'nav.backup': 'Бэкапы',
   'nav.banSources': 'Источники банов',
   'nav.discord': 'Discord',
   'nav.geoip': 'GeoIP (MaxMind)',

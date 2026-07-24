@@ -174,6 +174,12 @@ func (d *Dispatcher) Handle(
 		return d.depotUpdate(ctx, req, onStream)
 	case "docker_prune":
 		return d.dockerPrune(ctx, req, onStream)
+	case "backup_snapshots":
+		return d.backupSnapshots(ctx, req)
+	case "backup_run":
+		return d.backupRun(ctx, req, onStream)
+	case "backup_restore":
+		return d.backupRestore(ctx, req, onStream)
 	case "panel_disk_usage":
 		return d.panelDiskUsage(req)
 	case "squad_log_retention_sweep":
@@ -1103,6 +1109,82 @@ func (d *Dispatcher) dockerPrune(
 		"reclaimed_bytes": reclaimed,
 		"reclaimed_human": humanReclaimed(stdoutBuf.String()),
 	})
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+// --- restic backup / restore (INFRA-8-P1) ---
+
+// backupErrCode maps a backup runner error onto an RPC error code: policy
+// rejections (unconfigured/relative compose dir, bad snapshot id) surface as
+// forbidden, everything else as a runtime error.
+func backupErrCode(err error) string {
+	if isForbidden(err) {
+		return rpc.CodeForbidden
+	}
+	return rpc.CodeRuntimeError
+}
+
+// backupSnapshots lists the restic snapshots in the panel backup repository.
+func (d *Dispatcher) backupSnapshots(ctx context.Context, req *rpc.Request) rpc.Response {
+	snaps, err := d.Docker.BackupSnapshots(ctx)
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, backupErrCode(err), err.Error())
+	}
+	body, _ := json.Marshal(map[string]any{"snapshots": snaps})
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+// backupRun triggers a one-off restic backup (dumps + snapshot + retention),
+// streaming progress like dockerPrune.
+func (d *Dispatcher) backupRun(
+	ctx context.Context,
+	req *rpc.Request,
+	onStream func(rpc.StreamFrame),
+) rpc.Response {
+	push := func(stream string) func([]byte) {
+		return func(chunk []byte) {
+			raw, _ := json.Marshal(string(chunk))
+			onStream(rpc.StreamFrame{ID: req.ID, Stream: stream, Data: raw})
+		}
+	}
+	exit, err := d.Docker.BackupRun(ctx, push("stdout"), push("stderr"))
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, backupErrCode(err), err.Error())
+	}
+	body, _ := json.Marshal(map[string]int{"exit_code": exit})
+	return rpc.NewSuccessResponse(req.ID, body)
+}
+
+type backupRestoreParams struct {
+	SnapshotID string `json:"snapshot_id"`
+}
+
+// backupRestore restores Postgres + Redis from a chosen restic snapshot. This
+// is destructive; the snapshot id is validated in the runner before it reaches
+// the shell. Streams progress.
+func (d *Dispatcher) backupRestore(
+	ctx context.Context,
+	req *rpc.Request,
+	onStream func(rpc.StreamFrame),
+) rpc.Response {
+	var p backupRestoreParams
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, err.Error())
+	}
+	if p.SnapshotID == "" {
+		return rpc.NewErrorResponse(req.ID, rpc.CodeInvalidArgs, "snapshot_id is required")
+	}
+	push := func(stream string) func([]byte) {
+		return func(chunk []byte) {
+			raw, _ := json.Marshal(string(chunk))
+			onStream(rpc.StreamFrame{ID: req.ID, Stream: stream, Data: raw})
+		}
+	}
+	exit, err := d.Docker.BackupRestore(ctx, p.SnapshotID, push("stdout"), push("stderr"))
+	if err != nil {
+		return rpc.NewErrorResponse(req.ID, backupErrCode(err), err.Error())
+	}
+	body, _ := json.Marshal(map[string]int{"exit_code": exit})
 	return rpc.NewSuccessResponse(req.ID, body)
 }
 

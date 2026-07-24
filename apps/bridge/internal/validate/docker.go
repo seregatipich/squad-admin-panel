@@ -23,6 +23,10 @@ var (
 	depotJobRegex           = regexp.MustCompile(`^squad-depot-init-[0-9]{14}$`)
 	rnsquadjsContainerRegex = regexp.MustCompile(`^rnsquadjs-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 	cfgFileRegex            = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}\.cfg$`)
+	// resticSnapshotIDRegex matches a restic snapshot id (an 8-char short id or
+	// the 64-char full id, both lowercase hex). The literal "latest" is accepted
+	// separately by ResticSnapshotID.
+	resticSnapshotIDRegex = regexp.MustCompile(`^[a-f0-9]{8}([a-f0-9]{56})?$`)
 	// allowedImages gates the caller-supplied image of the generic
 	// container_run RPC. RNSquadJSImage is deliberately absent: the sidecar
 	// image is launchable ONLY via container_run_rnsquadjs, which hardcodes
@@ -74,6 +78,21 @@ func ServerUUID(uuid string) error {
 func ContainerImage(image string) error {
 	if _, ok := allowedImages[image]; !ok {
 		return fmt.Errorf("%w: image %q not in allowlist", ErrForbidden, image)
+	}
+	return nil
+}
+
+// ResticSnapshotID rejects any value that is not a restic snapshot id
+// (short/long lowercase hex) or the literal "latest". The id is passed as a
+// bare token to `restic restore <id>` inside the backup container, so this
+// gate is what prevents a compromised API from injecting shell/restic
+// arguments through the restore RPC.
+func ResticSnapshotID(id string) error {
+	if id == "latest" {
+		return nil
+	}
+	if !resticSnapshotIDRegex.MatchString(id) {
+		return fmt.Errorf("%w: snapshot id %q is not a restic snapshot id", ErrForbidden, id)
 	}
 	return nil
 }

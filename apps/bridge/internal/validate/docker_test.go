@@ -38,6 +38,38 @@ func TestContainerImage(t *testing.T) {
 	}
 }
 
+func TestResticSnapshotID(t *testing.T) {
+	ok := []string{
+		"latest",
+		"a1b2c3d4", // short id
+		"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90", // 64-char full id
+	}
+	for _, id := range ok {
+		if err := ResticSnapshotID(id); err != nil {
+			t.Errorf("ResticSnapshotID(%q) = %v, want ok", id, err)
+		}
+	}
+	bad := []string{
+		"",
+		"LATEST",
+		"A1B2C3D4",             // uppercase hex not allowed
+		"a1b2c3d",              // 7 chars
+		"a1b2c3d4e",            // 9 chars (between short and full)
+		"a1b2c3d4; rm -rf /",   // injection attempt
+		"latest --target /etc", // arg smuggling
+		"$(whoami)",            // command substitution
+		"a1b2c3d4\n",           // trailing newline
+		"g1b2c3d4",             // non-hex char
+	}
+	for _, id := range bad {
+		if err := ResticSnapshotID(id); err == nil {
+			t.Errorf("ResticSnapshotID(%q) = ok, want error", id)
+		} else if !errors.Is(err, ErrForbidden) {
+			t.Errorf("ResticSnapshotID(%q) = %v, want ErrForbidden", id, err)
+		}
+	}
+}
+
 func TestPanelConfigFilePath(t *testing.T) {
 	ok := "/var/lib/squad-panel/configs/019dbb45-3556-751f-9124-d4cf0e6b0053/ServerConfig/Server.cfg"
 	if _, err := PanelConfigFilePath(ok); err != nil {

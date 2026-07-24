@@ -1602,3 +1602,128 @@ func TestFileReadStream_TraversalRejected(t *testing.T) {
 		t.Fatalf("expected CodeForbidden, got %+v", resp.Error)
 	}
 }
+
+// --- restic backup / restore dispatch (INFRA-8-P1) ---
+
+func backupDispatcher(f *runner.Fake) *Dispatcher {
+	return &Dispatcher{Docker: &runner.DockerRunner{Bin: "docker", R: f, ComposeDir: "/opt/squad-admin-panel"}}
+}
+
+func collectStreamBackupFrames(d *Dispatcher, req *rpc.Request) ([]rpc.StreamFrame, rpc.Response) {
+	var frames []rpc.StreamFrame
+	resp := d.Handle(context.Background(), req, func(sf rpc.StreamFrame) {
+		frames = append(frames, sf)
+	})
+	return frames, resp
+}
+
+func TestBackupSnapshots_ReturnsParsedSnapshots(t *testing.T) {
+	f := &runner.Fake{Stdout: []byte(`[{"id":"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90","short_id":"a1b2c3d4","time":"2026-07-24T03:00:00Z","hostname":"tk104","paths":["/data"],"tags":[]}]`)}
+	d := backupDispatcher(f)
+	resp := d.Handle(context.Background(), &rpc.Request{ID: "b1", Method: "backup_snapshots", Params: json.RawMessage(`{}`)}, func(rpc.StreamFrame) {})
+	if !resp.OK {
+		t.Fatalf("expected OK, got %+v", resp.Error)
+	}
+	var got struct {
+		Snapshots []struct {
+			ShortID  string `json:"short_id"`
+			Hostname string `json:"hostname"`
+		} `json:"snapshots"`
+	}
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Snapshots) != 1 || got.Snapshots[0].ShortID != "a1b2c3d4" {
+		t.Fatalf("unexpected snapshots: %+v", got.Snapshots)
+	}
+}
+
+func TestBackupSnapshots_RuntimeErrorSurfaces(t *testing.T) {
+	f := &runner.Fake{Stderr: []byte("Fatal: repo locked"), Exit: 1}
+	d := backupDispatcher(f)
+	resp := d.Handle(context.Background(), &rpc.Request{ID: "b2", Method: "backup_snapshots", Params: json.RawMessage(`{}`)}, func(rpc.StreamFrame) {})
+	if resp.OK || resp.Error == nil || resp.Error.Code != rpc.CodeRuntimeError {
+		t.Fatalf("expected runtime_error, got %+v", resp)
+	}
+}
+
+func TestBackupSnapshots_UnconfiguredComposeDirForbidden(t *testing.T) {
+	t.Setenv("PANEL_COMPOSE_DIR", "")
+	f := &runner.Fake{}
+	d := &Dispatcher{Docker: &runner.DockerRunner{Bin: "docker", R: f}}
+	resp := d.Handle(context.Background(), &rpc.Request{ID: "b3", Method: "backup_snapshots", Params: json.RawMessage(`{}`)}, func(rpc.StreamFrame) {})
+	if resp.OK || resp.Error == nil || resp.Error.Code != rpc.CodeForbidden {
+		t.Fatalf("expected forbidden, got %+v", resp)
+	}
+}
+
+func TestBackupRun_StreamsAndReturnsExit(t *testing.T) {
+	f := &runner.Fake{Stdout: []byte("snapshot saved\n")}
+	d := backupDispatcher(f)
+	frames, resp := collectStreamBackupFrames(d, &rpc.Request{ID: "b4", Method: "backup_run", Params: json.RawMessage(`{}`)})
+	if !resp.OK {
+		t.Fatalf("expected OK, got %+v", resp.Error)
+	}
+	if len(frames) == 0 {
+		t.Fatalf("expected at least one stream frame")
+	}
+	var got struct {
+		ExitCode int `json:"exit_code"`
+	}
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ExitCode != 0 {
+		t.Fatalf("expected exit 0, got %d", got.ExitCode)
+	}
+}
+
+func TestBackupRestore_HappyPathStreams(t *testing.T) {
+	f := &runner.Fake{Stdout: []byte("Restore complete.\n")}
+	d := backupDispatcher(f)
+	req := &rpc.Request{ID: "b5", Method: "backup_restore", Params: json.RawMessage(`{"snapshot_id":"a1b2c3d4"}`)}
+	frames, resp := collectStreamBackupFrames(d, req)
+	if !resp.OK {
+		t.Fatalf("expected OK, got %+v", resp.Error)
+	}
+	if len(frames) == 0 {
+		t.Fatalf("expected stream frames")
+	}
+	call := f.Calls[0]
+	if call.Cmd != "bash" || !strings.Contains(strings.Join(call.Args, " "), "restore.sh --apply --snapshot a1b2c3d4") {
+		t.Fatalf("expected restore.sh invocation, got %s %v", call.Cmd, call.Args)
+	}
+}
+
+func TestBackupRestore_MissingSnapshotIDInvalidArgs(t *testing.T) {
+	f := &runner.Fake{}
+	d := backupDispatcher(f)
+	resp := d.Handle(context.Background(), &rpc.Request{ID: "b6", Method: "backup_restore", Params: json.RawMessage(`{}`)}, func(rpc.StreamFrame) {})
+	if resp.OK || resp.Error == nil || resp.Error.Code != rpc.CodeInvalidArgs {
+		t.Fatalf("expected invalid_args, got %+v", resp)
+	}
+	if len(f.Calls) != 0 {
+		t.Fatalf("expected no restore invocation for missing snapshot id")
+	}
+}
+
+func TestBackupRestore_MalformedParamsInvalidArgs(t *testing.T) {
+	f := &runner.Fake{}
+	d := backupDispatcher(f)
+	resp := d.Handle(context.Background(), &rpc.Request{ID: "b7", Method: "backup_restore", Params: json.RawMessage(`not-json`)}, func(rpc.StreamFrame) {})
+	if resp.OK || resp.Error == nil || resp.Error.Code != rpc.CodeInvalidArgs {
+		t.Fatalf("expected invalid_args, got %+v", resp)
+	}
+}
+
+func TestBackupRestore_BadSnapshotIDForbidden(t *testing.T) {
+	f := &runner.Fake{}
+	d := backupDispatcher(f)
+	resp := d.Handle(context.Background(), &rpc.Request{ID: "b8", Method: "backup_restore", Params: json.RawMessage(`{"snapshot_id":"; rm -rf /"}`)}, func(rpc.StreamFrame) {})
+	if resp.OK || resp.Error == nil || resp.Error.Code != rpc.CodeForbidden {
+		t.Fatalf("expected forbidden, got %+v", resp)
+	}
+	if len(f.Calls) != 0 {
+		t.Fatalf("expected no restore invocation for a rejected snapshot id")
+	}
+}
