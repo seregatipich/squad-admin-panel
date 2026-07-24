@@ -563,6 +563,10 @@ One row per server; primary key mirrors `servers.id`. Stores Docker-level and Sq
 | `memory_high_mb` | `integer` | YES | NULL | cgroup `MemoryHigh` in MiB |
 | `memory_max_mb` | `integer` | YES | NULL | cgroup `MemoryMax` in MiB |
 | `io_weight` | `integer` | YES | NULL | cgroup `IOWeight` (1–10000) |
+| `chat_commands_enabled` | `boolean` | NO | `true` | AUTO-4 (#75): per-server toggle for panel-owned in-game chat commands (`!stats`/`!rules`/`!report`); disable where an RNSquadJS sidecar runs its own `chatCommands` |
+| `rules_text` | `text` | YES | NULL | AUTO-4 (#75): text returned in-game for `!rules` (capped to the RCON single-message limit) |
+
+> Also present but not enumerated above: `seed_live_at`, `seed_hysteresis` (SEED-1, migration 0058).
 
 ---
 
