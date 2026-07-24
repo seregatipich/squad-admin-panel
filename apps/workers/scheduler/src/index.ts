@@ -12,10 +12,12 @@ import postgres from 'postgres';
 import {
   createRotationProfileDeps,
   createRotationScheduleDeps,
+  createScheduledTaskDeps,
   createSeedScheduleDeps,
 } from './deps.js';
 import { runRotationProfileTick } from './rotation-profile-tick.js';
 import { runRotationScheduleTick } from './rotation-schedule-tick.js';
+import { runScheduledTaskTick } from './scheduled-task-tick.js';
 import { runSeedScheduleTick } from './seed-schedule-tick.js';
 
 const log = pino({
@@ -74,6 +76,7 @@ async function main() {
   const runtimeDeps = createSeedScheduleDeps(db, redis);
   const rotationScheduleDeps = createRotationScheduleDeps(db, redis);
   const rotationProfileDeps = createRotationProfileDeps(db, bridge);
+  const scheduledTaskDeps = createScheduledTaskDeps(db, redis, bridge);
   const profileApplyHour = rotationProfileApplyHour();
 
   await diag.emit({
@@ -85,13 +88,14 @@ async function main() {
   });
 
   async function tick(): Promise<void> {
-    const [seedResult, rotationResult, profileResult] = await Promise.all([
+    const [seedResult, rotationResult, profileResult, scheduledTaskResult] = await Promise.all([
       runSeedScheduleTick({ ...runtimeDeps, diag }),
       runRotationScheduleTick({ ...rotationScheduleDeps, diag }),
       runRotationProfileTick({ ...rotationProfileDeps, applyHour: profileApplyHour, diag }),
+      runScheduledTaskTick({ ...scheduledTaskDeps, diag }),
     ]);
     lastTickAt = new Date().toISOString();
-    log.info({ seedResult, rotationResult, profileResult }, 'scheduler tick');
+    log.info({ seedResult, rotationResult, profileResult, scheduledTaskResult }, 'scheduler tick');
   }
 
   // Registered before the first tick (not after) so a SIGTERM/SIGINT that
