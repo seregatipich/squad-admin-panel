@@ -19,6 +19,7 @@ import { TailManager } from './manager.js';
 import { DEFAULT_SEED_ONLINE_THRESHOLD, handleMatchCommand } from './match/store.js';
 import { handleMatchClose } from './match-roster/store.js';
 import { LogIngestor } from './parser/ingest.js';
+import { handlePlayerConnected } from './player-identity/store.js';
 import { publish } from './publish.js';
 import { handleReport } from './report/store.js';
 import { scheduleLogRetentionSweep } from './retention.js';
@@ -169,18 +170,30 @@ async function main() {
             log.error({ err: (err as Error).message, type: e.type }, 'publish failed'),
           );
           if (e.type === 'player.connected') {
-            handleAltBanConnect(db, redis, e).catch((err) =>
-              log.error({ err: (err as Error).message }, 'alt-ban handling failed'),
-            );
+            // Upsert the canonical identity first (PLAYER-1, #22) so the player
+            // row exists before the ban handlers below read it — otherwise a
+            // first-time connector is invisible to alt/external-ban enforcement
+            // until the next RCON poll.
+            handlePlayerConnected(db, e)
+              .catch((err) =>
+                log.error({ err: (err as Error).message }, 'player identity handling failed'),
+              )
+              .finally(() => {
+                handleAltBanConnect(db, redis, e).catch((err) =>
+                  log.error({ err: (err as Error).message }, 'alt-ban handling failed'),
+                );
+                handleBannedNameEvent(db, redis, { serverId, event: e }, bannedNameCache).catch(
+                  (err) => log.error({ err: (err as Error).message }, 'banname handling failed'),
+                );
+                handleExternalBanConnect(db, redis, externalBanCache, { serverId, event: e }).catch(
+                  (err) =>
+                    log.error({ err: (err as Error).message }, 'external-ban handling failed'),
+                );
+              });
           }
-          if (e.type === 'player.connected' || e.type === 'player.name_changed') {
+          if (e.type === 'player.name_changed') {
             handleBannedNameEvent(db, redis, { serverId, event: e }, bannedNameCache).catch((err) =>
               log.error({ err: (err as Error).message }, 'banname handling failed'),
-            );
-          }
-          if (e.type === 'player.connected') {
-            handleExternalBanConnect(db, redis, externalBanCache, { serverId, event: e }).catch(
-              (err) => log.error({ err: (err as Error).message }, 'external-ban handling failed'),
             );
           }
         }

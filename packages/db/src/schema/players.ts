@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   bigint,
+  boolean,
   check,
   index,
   inet,
@@ -22,6 +23,7 @@ export const players = pgTable(
     canonicalNameNormalized: text('canonical_name_normalized').notNull(),
     eosId: text('eos_id'),
     battleEyeGuid: text('battle_eye_guid'),
+    steamEosConflict: boolean('steam_eos_conflict').notNull().default(false),
     lastKnownIp: inet('last_known_ip'),
     roleId: uuid('role_id').references(() => roles.id, { onDelete: 'set null' }),
     roleExpiresAt: timestamp('role_expires_at', { withTimezone: true, mode: 'date' }),
