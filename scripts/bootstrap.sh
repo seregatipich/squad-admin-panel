@@ -221,10 +221,10 @@ stage_end
 
 stage_begin "data tree"
 
-for sub in postgres redis caddy-data caddy-config backup-repo depot servers; do
+for sub in postgres redis caddy-data caddy-config backup-repo backup-dump depot servers; do
   [[ -d "${DATA_DIR}/${sub}" ]] || die "missing ${DATA_DIR}/${sub} (install-host-bridge.sh should have created it)"
 done
-step_ok "${DATA_DIR}/{postgres,redis,caddy-data,caddy-config,backup-repo,depot,servers}"
+step_ok "${DATA_DIR}/{postgres,redis,caddy-data,caddy-config,backup-repo,backup-dump,depot,servers}"
 
 if [[ -L /var/lib/squad-panel ]] && [[ "$(readlink /var/lib/squad-panel)" == "${DATA_DIR}/servers" ]]; then
   step_ok "/var/lib/squad-panel → ${DATA_DIR}/servers"

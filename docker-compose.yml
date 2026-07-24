@@ -482,19 +482,38 @@ services:
     command: ['/bin/true']
     restart: 'no'
 
+  # Restic backup of LOGICAL dumps, not the raw data dirs. PRE_COMMANDS run
+  # (via the base image, which evals them in bash) before each snapshot:
+  # pg_dump writes a custom-format Postgres dump and redis-cli fetches the
+  # Redis RDB into the backup_dump volume, then restic backs up /data. Logical
+  # dumps restore cleanly into a fresh stack (see scripts/restore.sh), which a
+  # snapshot of live WAL/AOF files cannot guarantee — that is the point of #14.
   backup:
-    image: mazzolino/restic:latest
+    build:
+      context: .
+      dockerfile: docker/restic.Dockerfile
+    image: squad-panel/restic:latest
     restart: unless-stopped
     profiles: ['backup']
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-/backup/repo}
       RESTIC_PASSWORD: ${RESTIC_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       BACKUP_CRON: '0 3 * * *'
       RESTIC_FORGET_ARGS: '--keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune'
+      RESTIC_BACKUP_SOURCES: /data
+      PRE_COMMANDS: |
+        mkdir -p /data/postgres /data/redis
+        PGPASSWORD=$${POSTGRES_PASSWORD} pg_dump -h postgres -U admin -d admin -Fc -f /data/postgres/admin.dump
+        redis-cli -h redis --rdb /data/redis/dump.rdb
     volumes:
       - backup_repo:/backup
-      - postgres_data:/srv/postgres:ro
-      - redis_data:/srv/redis:ro
+      - backup_dump:/data
     logging: *default-logging
 
 volumes:
@@ -528,3 +547,11 @@ volumes:
       type: none
       o: bind
       device: ${DATA_DIR}/backup-repo
+  # Staging area the backup service writes its logical dumps into before restic
+  # snapshots them (RESTIC_BACKUP_SOURCES=/data).
+  backup_dump:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_DIR}/backup-dump
