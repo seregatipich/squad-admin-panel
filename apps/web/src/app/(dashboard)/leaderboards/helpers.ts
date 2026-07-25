@@ -159,7 +159,7 @@ export const COLUMNS: ColumnDef[] = [
   {
     key: 'bonus',
     label: 'Бонусы',
-    tooltip: 'Начисленные бонусы (онлайн + буст по коэффициентам экономики)',
+    tooltip: 'Начисленные бонусы (онлайн + буст + сидинг по коэффициентам экономики)',
     metric: 'bonus',
     combat: false,
     economy: true,

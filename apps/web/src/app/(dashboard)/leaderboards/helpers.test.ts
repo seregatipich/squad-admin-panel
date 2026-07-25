@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildApiQuery,
   buildQueryString,
+  COLUMNS,
   canNavigatePeriod,
   columnMetric,
   currentPeriodStart,
@@ -225,6 +226,14 @@ describe('economy column visibility (LEAD-4)', () => {
   it('formats boost as a duration and bonus as a count', () => {
     expect(normalizeSpaces(formatMetricValue('boost', 3600))).toBe('1ч 0м');
     expect(normalizeSpaces(formatMetricValue('bonus', 12345))).toBe('12 345');
+  });
+
+  it('names the seeding component in the bonus tooltip (LEAD-6)', () => {
+    const bonus = COLUMNS.find((column) => column.key === 'bonus');
+    expect(bonus?.tooltip).toContain('сидинг');
+    expect(bonus?.tooltip).toBe(
+      'Начисленные бонусы (онлайн + буст + сидинг по коэффициентам экономики)',
+    );
   });
 });
 

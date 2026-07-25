@@ -162,12 +162,14 @@ export async function recomputeLeaderboardPeriod(
       WITH settings AS (
         SELECT
           COALESCE((SELECT k_online FROM economy_settings WHERE id = 1), 1) AS k_online,
-          COALESCE((SELECT k_boost FROM economy_settings WHERE id = 1), 2) AS k_boost
+          COALESCE((SELECT k_boost FROM economy_settings WHERE id = 1), 2) AS k_boost,
+          COALESCE((SELECT k_seed FROM economy_settings WHERE id = 1), 3) AS k_seed
       ),
       presence_agg AS (
         SELECT player_id, server_id,
                COALESCE(SUM(online_seconds), 0)::int AS online_seconds,
-               COALESCE(SUM(boost_seconds), 0)::int AS boost_seconds
+               COALESCE(SUM(boost_seconds), 0)::int AS boost_seconds,
+               COALESCE(SUM(seed_seconds), 0)::int AS seed_seconds
         FROM player_daily_presence
         ${presenceFilter}
         GROUP BY player_id, server_id
@@ -186,19 +188,21 @@ export async function recomputeLeaderboardPeriod(
           COALESCE(p.server_id, mm.server_id) AS server_id,
           COALESCE(p.online_seconds, 0) AS online_seconds,
           COALESCE(p.boost_seconds, 0) AS boost_seconds,
+          COALESCE(p.seed_seconds, 0) AS seed_seconds,
           COALESCE(mm.matches_played, 0) AS matches_played
         FROM presence_agg p
         FULL OUTER JOIN matches_agg mm
           ON p.player_id = mm.player_id AND p.server_id = mm.server_id
       ),
       per_server AS (
-        SELECT player_id, server_id, online_seconds, boost_seconds, matches_played
+        SELECT player_id, server_id, online_seconds, boost_seconds, seed_seconds, matches_played
         FROM combined
       ),
       rollup AS (
         SELECT player_id, NULL::uuid AS server_id,
                SUM(online_seconds)::int AS online_seconds,
                SUM(boost_seconds)::int AS boost_seconds,
+               SUM(seed_seconds)::int AS seed_seconds,
                SUM(matches_played)::int AS matches_played
         FROM combined
         GROUP BY player_id
@@ -218,7 +222,7 @@ export async function recomputeLeaderboardPeriod(
         ${periodType},
         ${periodStart}::date,
         all_rows.online_seconds,
-        0,
+        all_rows.seed_seconds,
         0,
         0,
         0,
@@ -227,7 +231,8 @@ export async function recomputeLeaderboardPeriod(
         all_rows.matches_played,
         all_rows.boost_seconds,
         (settings.k_online * all_rows.online_seconds
-          + settings.k_boost * all_rows.boost_seconds)::numeric
+          + settings.k_boost * all_rows.boost_seconds
+          + settings.k_seed * all_rows.seed_seconds)::numeric
       FROM all_rows CROSS JOIN settings
       RETURNING player_id
     `;

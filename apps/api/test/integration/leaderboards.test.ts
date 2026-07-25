@@ -466,3 +466,95 @@ describeIfDb('economy leaderboard gating (LEAD-4)', () => {
     expect(body.rows[0]?.metric_value).toBe(400);
   });
 });
+
+describeIfDb('GET /api/v1/leaderboards — seeding metric (LEAD-6)', () => {
+  const SEED_PERIOD = '2026-09-01';
+
+  beforeAll(async () => {
+    await h.db.insert(playerStatPeriods).values([
+      // Per-server seeding rows.
+      {
+        playerId: charlie,
+        serverId: SERVER_A,
+        periodType: 'day',
+        periodStart: SEED_PERIOD,
+        seedingSeconds: 2000,
+      },
+      {
+        playerId: alpha,
+        serverId: SERVER_A,
+        periodType: 'day',
+        periodStart: SEED_PERIOD,
+        seedingSeconds: 1200,
+      },
+      {
+        playerId: alpha,
+        serverId: SERVER_B,
+        periodType: 'day',
+        periodStart: SEED_PERIOD,
+        seedingSeconds: 400,
+      },
+      {
+        playerId: bravo,
+        serverId: SERVER_A,
+        periodType: 'day',
+        periodStart: SEED_PERIOD,
+        seedingSeconds: 800,
+      },
+      // All-servers rollup rows (server_id NULL) — alpha's rollup (1600) is the
+      // sum of its two per-server rows, distinct from either one.
+      {
+        playerId: charlie,
+        serverId: null,
+        periodType: 'day',
+        periodStart: SEED_PERIOD,
+        seedingSeconds: 2000,
+      },
+      {
+        playerId: alpha,
+        serverId: null,
+        periodType: 'day',
+        periodStart: SEED_PERIOD,
+        seedingSeconds: 1600,
+      },
+      {
+        playerId: bravo,
+        serverId: null,
+        periodType: 'day',
+        periodStart: SEED_PERIOD,
+        seedingSeconds: 800,
+      },
+    ]);
+  });
+
+  it('is available and ranks top seeders across the all-servers rollup, descending', async () => {
+    const res = await fetchLeaderboard(`?metric=seeding&period=day&period_start=${SEED_PERIOD}`);
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as LeaderboardBody;
+    expect(body.available).toBe(true);
+    expect(body.server_id).toBeNull();
+    expect(body.rows.map((r) => r.current_name)).toEqual(['Charlie', 'Alpha', 'Bravo']);
+    expect(body.rows.map((r) => r.rank)).toEqual([1, 2, 3]);
+    expect(body.rows[0]?.metric_value).toBe(2000);
+    expect(body.rows[1]?.metric_value).toBe(1600);
+    expect(body.total_rows).toBe(3);
+  });
+
+  it('exposes seeding_seconds in the secondary payload', async () => {
+    const res = await fetchLeaderboard(`?metric=seeding&period=day&period_start=${SEED_PERIOD}`);
+    const body = res.json() as LeaderboardBody;
+    expect(body.rows[0]?.secondary.seeding_seconds).toBe(2000);
+    expect(body.rows[1]?.secondary.seeding_seconds).toBe(1600);
+  });
+
+  it('honours server_id filtering — per-server seeding differs from the rollup', async () => {
+    const res = await fetchLeaderboard(
+      `?metric=seeding&period=day&period_start=${SEED_PERIOD}&server_id=${SERVER_A}`,
+    );
+    const body = res.json() as LeaderboardBody;
+    expect(body.server_id).toBe(SERVER_A);
+    expect(body.rows.map((r) => r.current_name)).toEqual(['Charlie', 'Alpha', 'Bravo']);
+    // Alpha's SERVER_A seeding (1200) is not its all-servers rollup (1600).
+    expect(body.rows.find((r) => r.current_name === 'Alpha')?.metric_value).toBe(1200);
+  });
+});
