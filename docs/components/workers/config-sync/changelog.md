@@ -1,5 +1,18 @@
 # Changelog — worker-config-sync
 
+## 2026-07-25 — RCON reload after write (SYNC-3, #36)
+
+### Added
+
+- **`AdminReloadServerConfig` after every successful `Admins.cfg` write** (`src/rcon-reload.ts` → `requestAdminsCfgReload`). Closes SYNC-3 correction №1 (`ai_docs/plans/2026-07-04-task-decomposition.md`): Squad does **not** passively re-read `Admins.cfg`, so the panel must issue the RCON reload for permission changes to take effect without a container restart. The command is `XADD`'d onto worker-rcon's `rcon:commands:<server_id>` stream (`MAXLEN ~ 500`), byte-identical to the clan-guard / log-ingest / scheduler `sendRconCommand` helpers.
+- The reload is **gated** on `rcon:status:<server_id>.state === 'connected'` (one Redis `GET`) — skipped otherwise, so commands don't pile up on a stopped server — and **strictly best-effort**: it never throws and never rolls back the committed write. Its outcome (`enqueued` | `skipped_rcon_disconnected` | `failed`) is exposed on `SyncResult.reload` and recorded in the `admins_cfg.synced` / `admins_cfg.force_synced` audit `context.reload`.
+- Fired **only on the successful-write branch** — not on `in_sync` (no write), `drift`, or failure (`unreachable`) branches.
+- `test/rcon-reload.test.ts` (pure unit, fake Redis) and reload coverage in `test/syncer.test.ts`. New run-deferred live e2e `apps/api/test/e2e/admins-cfg-reload-live.e2e.test.ts` (tier-3).
+
+### Changed
+
+- `package.json`: added deps `@squad/shared-types` (`rconCommandRequestSchema` / `rconCommandStream`) and `uuid` (v7 `request_id`).
+
 ## 2026-04-28
 
 ### Changed

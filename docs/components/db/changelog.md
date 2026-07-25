@@ -4,6 +4,20 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-07-25
+
+### LEAD-6 — materialize `player_stat_periods.seeding_seconds` (no migration)
+
+**Files:** `packages/db/src/leaderboard/aggregate.ts`, `packages/db/src/economy/accrual.ts`
+
+No schema change — the `seeding_seconds` column, its `player_stat_periods_metrics_chk` bound and the `player_stat_periods_seeding_idx` ranking index already shipped with the table. This entry records the aggregation/accrual behavior that now populates them (#177).
+
+#### Changed
+
+- `recomputeLeaderboardPeriod` now threads `SUM(player_daily_presence.seed_seconds)` through the `presence_agg` → `combined` → `per_server`/`rollup` CTEs and writes it into `player_stat_periods.seeding_seconds`, replacing the previous hard-coded `0`. The all-servers rollup (`server_id IS NULL`) sums the per-server seeding rows, matching the online/boost columns.
+- `bonus_points` gains the seeding term: it is now `k_online × online + k_boost × boost + k_seed × seed`, with `k_seed` read from `economy_settings` (`COALESCE(k_seed, 3)`), consistent with the ECON-2 `earn_seed` ledger.
+- `accrueDailyBonuses` now derives and persists `player_daily_presence.seed_seconds` **before** the `economy_enabled` short-circuit. Seed attribution (SEED-1 seeding-window intersection, with the legacy threshold sweep as fallback) is no longer gated on the monetization flag, so the seeding leaderboard is populated even with the economy off. Ledger writes (`bonus_transactions`, `players.bonus_balance`) stay gated on `economy_enabled`; the `AccrueDailyBonusesResult` shape is unchanged.
+
 ## 2026-05-02
 
 ### Migration 0016 — drop legacy "Viewer" role from production seed

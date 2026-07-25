@@ -2,6 +2,35 @@
 
 Meaningful architectural choices, recorded as we make them.
 
+## 2026-07-25 — WL-2: no per-server whitelist group template; roles are global
+
+### Context
+
+WL-2 ([#66](https://github.com/breaking-squad/squad-admin-panel/issues/66)) asked to first *decide* whether the panel still needs a per-server "whitelist-group template" — a construct that would let an operator define a whitelist group once and push it to every server in a single action. The task flagged the item as a probable duplicate (spec §2.1, "роли и так глобальны") and gave a two-branch acceptance: (a) record the decision; only (b) build the template if it is kept. This entry records branch (a).
+
+### Decision
+
+WL-2 is a structural duplicate of the model the panel already ships. **No new schema, route, or UI is added.** The "apply a whitelist group to every server in one action" criterion is already satisfied by the existing global-role + Admins.cfg-sync design:
+
+1. **Roles are global.** [`packages/db/src/schema/roles.ts`](../../packages/db/src/schema/roles.ts) has no `server_id` column and `players.role_id` is a single global FK — a role (including the designated whitelist role at `panel_meta.whitelist_role_id`) is never scoped to one server.
+2. **One global snapshot, written identically to every server.** The Admins.cfg managed segment is generated once from a single DB snapshot (`snapshotRolesAndAdmins` in [`apps/workers/config-sync/src/db-snapshot.ts`](../../apps/workers/config-sync/src/db-snapshot.ts)) rendered by [`buildManagedSegmentBody`](../../packages/shared-config/src/admins-config.ts), then written into every active server's file between the `//SQUAD-PANEL` markers.
+3. **One action fans out to every active server.** Every whitelist/role mutation calls [`publishAdminsCfgSyncForAllServers`](../../apps/api/src/lib/admins-cfg-sync.ts), which — in the same transaction as the mutation — inserts one durable outbox row per active server (`WHERE deleted_at IS NULL`). Adding or removing a whitelist member (`POST`/`DELETE /api/v1/whitelist/members`) is therefore already a single action that reaches every server; soft-deleted servers are excluded.
+
+### Rationale
+
+- **The template is the model we already have.** A per-server template only makes sense if roles or whitelists could diverge per server; they cannot. Building a second grouping construct on top of global roles would duplicate the fan-out the transactional outbox already guarantees, and re-introduce the server-scoped grouping the RBAC redesign deliberately dissolved.
+- **Decision over code.** The acceptance criterion is met by recording the duplicate and locking the existing behaviour with a regression test, not by shipping a redundant endpoint.
+
+### Consequences
+
+- No migration, no route, no permission, no UI change. The RBAC surface and the Admins.cfg-sync pipeline are unchanged.
+- The whitelist fan-out invariant is now pinned by an integration test (`apps/api/test/integration/whitelist.test.ts`, the "whitelist mutations fan out to every active server (WL-2)" block): a member add/remove enqueues exactly one `admins_cfg_sync_outbox` row per active server, never for a soft-deleted server, and a no-op re-add enqueues none. A future refactor that narrows the fan-out will fail the suite.
+
+### Alternatives considered
+
+- **Build a per-server whitelist-group template.** Rejected — duplicates the global-role model and its existing all-servers fan-out; see the 2026-04-25 "Panel RBAC" and 2026-05-01 "Roles unified" decisions.
+- **Close the issue with no artifact.** Rejected — the decision needs a durable record (this ADR) and a test that prevents silent regression of the "one action → all servers" property the task cared about.
+
 ## 2026-05-01 — Roles unified with Squad permissions; Admins.cfg synthesized from DB
 
 ### Context

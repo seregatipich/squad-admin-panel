@@ -1,6 +1,6 @@
 # worker-config-sync — API surface
 
-The worker has **no inbound HTTP/RPC surface**. Its public boundary is two Redis stream contracts and one Redis status key contract that the API and UI rely on.
+The worker has **no inbound HTTP/RPC surface**. Its public boundary is a set of Redis stream contracts and one Redis status key contract that the API and UI rely on. It consumes the `events:admins-cfg-sync:<server_id>` streams and, after a successful write, produces onto the worker-rcon command stream (`rcon:commands:<server_id>`) — reading `rcon:status:<server_id>` to decide whether to.
 
 ## Inputs (Redis Streams) — what the worker consumes
 
@@ -38,7 +38,24 @@ The reclaim pass is invoked once at boot (catches messages orphaned across resta
 
 The API helper `publishAdminsCfgSyncForAllServers` in `apps/api/src/lib/admins-cfg-sync.ts` enqueues one entry into every active server's stream in a single Redis pipeline.
 
-## Outputs (Redis keys) — what the worker writes
+## Outputs (Redis streams / keys) — what the worker writes
+
+### `rcon:commands:<server_id>` (worker-rcon command stream)
+
+After **every successful `Admins.cfg` write** (not on the `in_sync`/`drift`/`unreachable` branches), the worker enqueues a single `AdminReloadServerConfig` command so Squad applies the new permissions without a container restart (SYNC-3 correction №1). The enqueue is done by `requestAdminsCfgReload` (`src/rcon-reload.ts`) and mirrors the payload shape used by the clan-guard / log-ingest / scheduler workers:
+
+```
+XADD rcon:commands:<server_id> MAXLEN ~ 500 * request <json>
+```
+
+where `<json>` is a `rconCommandRequestSchema` (`@squad/shared-types`) document `{ request_id: <uuidv7>, command: 'AdminReloadServerConfig', args: [], actor_player_id: null, enqueued_at }`.
+
+The reload is **gated and best-effort**:
+
+- Reads `rcon:status:<server_id>` first; if the key is absent or `state !== 'connected'` the reload is **skipped** (no `XADD`) — worker-rcon replays the current config on its next connect, so nothing is lost.
+- It never throws. A Redis failure is caught, logged at warn, and reported as `failed`. A reload hiccup never rolls back the committed file write.
+
+The outcome is surfaced on `SyncResult.reload` and recorded in the `admins_cfg.synced` / `admins_cfg.force_synced` audit `context.reload` field (`'enqueued' | 'skipped_rcon_disconnected' | 'failed'`).
 
 ### `admins-cfg:status:<server_id>`
 
@@ -71,7 +88,12 @@ On every successful write, the worker appends a chained-hash audit row using `ap
   "target_id": "<server_uuid>",
   "before_snapshot": { "segment_hash": "<sha256-hex|null>" },
   "after_snapshot":  { "segment_hash": "<sha256-hex>" },
-  "context": { "reason": "...", "groups_count": 5, "admins_count": 247 }
+  "context": {
+    "reason": "...",
+    "groups_count": 5,
+    "admins_count": 247,
+    "reload": "enqueued"        // 'enqueued' | 'skipped_rcon_disconnected' | 'failed'
+  }
 }
 ```
 

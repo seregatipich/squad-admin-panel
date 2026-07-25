@@ -20,7 +20,7 @@ Current keys by category:
 | players | `player:view`, `player:view_ips`, `player:view_notes`*, `player:edit_notes`*, `player:set_flags`* |
 | moderation | `mod:kick`*, `mod:warn`*, `mod:ban_temp`*, `mod:ban_perm`*, `mod:unban`* |
 | admin_groups | `admin_group:view`, `admin_group:edit` |
-| whitelist | `whitelist:view`*, `whitelist:edit`* |
+| whitelist | `whitelist:view`, `whitelist:edit` |
 | host | `host:view`, `host:metrics` |
 | audit | `audit:view`, `audit:export`* |
 | events | `events:view` |
@@ -35,7 +35,12 @@ Current keys by category:
 _* = `unimplemented: true` — key is registered but no route enforces it yet.
 `admin_group:view` и `admin_group:edit` являются production-active: ими защищены
 `/api/v1/admins-cfg/drift`, `/api/v1/admins-cfg/drift/all` и
-`/api/v1/admins-cfg/sync`._
+`/api/v1/admins-cfg/sync`.
+`whitelist:view` и `whitelist:edit` тоже production-active — ими защищены роуты
+`/api/v1/whitelist/*`. Whitelist-роль — это обычная **глобальная** роль
+(`panel_meta.whitelist_role_id`), которая реплицируется в `Admins.cfg` каждого
+сервера через `publishAdminsCfgSyncForAllServers` (см. решение WL-2 в
+[`decisions.md`](./decisions.md))._
 
 Routes refer to these as literal strings; the type system narrows them to `PermissionKey`.
 

@@ -3,6 +3,14 @@ import type postgres from 'postgres';
 const SECONDS_PER_HOUR = 3600;
 const DAY_SECONDS = 86_400;
 
+/**
+ * Fallback threshold for the legacy concurrency sweep when no `economy_settings`
+ * row exists (mirrors `economy_settings.seed_threshold`'s schema default). The
+ * migration seeds the singleton row, so this only guards a genuinely
+ * uninitialized database.
+ */
+const DEFAULT_SEED_THRESHOLD = 40;
+
 /** Ledger reference type used for machine-generated daily presence accruals. */
 export const DAILY_PRESENCE_REFERENCE_TYPE = 'daily_presence';
 
@@ -246,7 +254,7 @@ function toTransition(row: SeedingEventRow): SeedingTransitionEvent {
  *
  * Runs after {@link recomputeDailyPresence} has (re)built `player_daily_presence`
  * for the day. Steps, all in one transaction:
- *  1. read `economy_settings`; if the economy is disabled, do nothing;
+ *  1. read `economy_settings`;
  *  2. derive `seed_seconds` per (player, server) from the day's connected
  *     sessions: for a server that has ever emitted a `server.seeding_started`/
  *     `server.seeding_ended` event (SEED-1, #140), seed time is the
@@ -256,11 +264,16 @@ function toTransition(row: SeedingEventRow): SeedingTransitionEvent {
  *     events at all fall back to the legacy concurrency-vs-`seed_threshold`
  *     sweep ({@link computeSeedSecondsByPlayerServer}), preserving behavior
  *     for history predating SEED-1. The result is persisted into
- *     `player_daily_presence.seed_seconds`;
- *  3. for each player, compute `round(k × seconds / 3600)` per bonus type and
+ *     `player_daily_presence.seed_seconds`. This attribution runs regardless
+ *     of `economy_settings.economy_enabled`: seeding accounting feeds the
+ *     LEAD-6 seeding leaderboard and must not be gated on the monetization
+ *     flag (#177);
+ *  3. if the economy is disabled, stop here — `seed_seconds` is persisted but
+ *     no ledger rows or balances are touched;
+ *  4. for each player, compute `round(k × seconds / 3600)` per bonus type and
  *     write one `earn_online`/`earn_boost`/`earn_seed` transaction each
  *     (`reference = (player_id, day)`), skipping zero amounts;
- *  4. keep `players.bonus_balance` in sync.
+ *  5. keep `players.bonus_balance` in sync.
  *
  * Idempotent: existing accrual rows for the day are deleted and replaced, and
  * the balance is adjusted by the net delta, so re-running for the same day never
@@ -293,20 +306,7 @@ export async function accrueDailyBonuses(
       WHERE id = 1
     `;
 
-    if (!settings || !settings.economy_enabled) {
-      return {
-        day,
-        economyEnabled: false,
-        playersAccrued: 0,
-        transactionsWritten: 0,
-        balanceDelta: 0,
-      };
-    }
-
-    const kOnline = Number(settings.k_online);
-    const kBoost = Number(settings.k_boost);
-    const kSeed = Number(settings.k_seed);
-    const seedThreshold = Number(settings.seed_threshold);
+    const seedThreshold = Number(settings?.seed_threshold ?? DEFAULT_SEED_THRESHOLD);
 
     const sessions = await tx<SessionRow[]>`
       SELECT
@@ -396,6 +396,20 @@ export async function accrueDailyBonuses(
           AND server_id = ${serverId}::uuid
       `;
     }
+
+    if (!settings?.economy_enabled) {
+      return {
+        day,
+        economyEnabled: false,
+        playersAccrued: 0,
+        transactionsWritten: 0,
+        balanceDelta: 0,
+      };
+    }
+
+    const kOnline = Number(settings.k_online);
+    const kBoost = Number(settings.k_boost);
+    const kSeed = Number(settings.k_seed);
 
     const aggregates = await tx<PresenceAggRow[]>`
       SELECT
