@@ -10,5 +10,13 @@
 4. At the configured server-local hour, choose the weekday profile or default,
    replace only the ROT-2 managed segment, and write the application cursor and
    audit row.
-5. On SIGTERM/SIGINT, stop the interval, publish shutdown diagnostics, close
+5. AUTO-2 scheduled tasks: for each due row, dispatch the action (restart via the
+   SRV-3 container boundary, or an `AdminSetNextLayer`/`AdminChangeLayer`/
+   `AdminBroadcast` RCON command). For a `broadcast` (MSG-4), resolve the text at
+   `params.messages[rotation_index]` (falling back to the single `params.message`),
+   then after a successful dispatch advance `rotation_index` (only when the list
+   has more than one entry) and echo the text into `chat_messages` when the task
+   has a creator. Depot-window overlap skips without advancing any cursor; a
+   dispatch throw records a `failed` run and likewise leaves cursors unchanged.
+6. On SIGTERM/SIGINT, stop the interval, publish shutdown diagnostics, close
    the bridge, and close Postgres/Redis connections.

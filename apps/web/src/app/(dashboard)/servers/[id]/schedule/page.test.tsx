@@ -56,6 +56,90 @@ const LAYERS_POOL = {
   ],
 };
 
+const TEMPLATES = [
+  {
+    id: 't1',
+    title: 'Rules',
+    body: 'Welcome to {server}! Follow the rules.',
+    category: 'info',
+    locale: 'ru',
+    sort_order: 1,
+    is_enabled: true,
+    created_by: null,
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-01T00:00:00.000Z',
+  },
+  {
+    id: 't2',
+    title: 'Discord',
+    body: 'Join {server} Discord',
+    category: 'info',
+    locale: 'ru',
+    sort_order: 2,
+    is_enabled: true,
+    created_by: null,
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-01T00:00:00.000Z',
+  },
+];
+
+const SERVERS = {
+  items: [
+    { id: 'srv-1', display_name: 'Alpha' },
+    { id: 'srv-2', display_name: 'Bravo' },
+    { id: 'srv-3', display_name: 'Charlie' },
+  ],
+  total: 3,
+};
+
+interface CapturedPost {
+  url: string;
+  // biome-ignore lint/suspicious/noExplicitAny: test captures arbitrary POST bodies
+  body: any;
+}
+
+/** Broadcast-aware fetch mock: serves templates + servers and records POST bodies. */
+function mockBroadcastFetch(): CapturedPost[] {
+  const posts: CapturedPost[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string, init?: RequestInit) => {
+      if (url.includes('/scheduled-tasks/history')) {
+        return Promise.resolve(new Response(JSON.stringify({ runs: [] }), { status: 200 }));
+      }
+      if (url.endsWith('/scheduled-tasks')) {
+        if (init?.method === 'POST') {
+          posts.push({ url, body: JSON.parse(init.body as string) });
+          return Promise.resolve(
+            new Response(JSON.stringify({ id: 'new-task', server_id: 'srv-1', also_created: [] }), {
+              status: 201,
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ tasks: [], capabilities: CAPABILITIES }), { status: 200 }),
+        );
+      }
+      if (url.startsWith('/api/v1/layers')) {
+        return Promise.resolve(new Response(JSON.stringify(LAYERS_POOL), { status: 200 }));
+      }
+      if (url.startsWith('/api/v1/message-templates')) {
+        return Promise.resolve(new Response(JSON.stringify(TEMPLATES), { status: 200 }));
+      }
+      if (url.startsWith('/api/v1/servers')) {
+        return Promise.resolve(new Response(JSON.stringify(SERVERS), { status: 200 }));
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }));
+    }),
+  );
+  return posts;
+}
+
+async function selectBroadcast() {
+  fireEvent.change(screen.getByLabelText('Тип задачи'), { target: { value: 'broadcast' } });
+  await screen.findByTestId('broadcast-editor');
+}
+
 function mockFetch(capabilities = CAPABILITIES, opts: { fail?: 'list' | 'history' } = {}) {
   vi.stubGlobal(
     'fetch',
@@ -176,5 +260,111 @@ describe('SchedulePage', () => {
       target: { value: '0 5 * * *' },
     });
     expect(screen.getByRole('button', { name: 'Создать задачу' })).toBeEnabled();
+  });
+
+  describe('MSG-4 (#187): broadcast rotation, fan-out, and 5-minute floor', () => {
+    it('renders the template picker only for the broadcast task type', async () => {
+      mockBroadcastFetch();
+      await renderPage();
+      await screen.findByTestId('scheduled-tasks-list');
+
+      // Default type is restart → no broadcast editor / template picker.
+      expect(screen.queryByTestId('broadcast-editor')).not.toBeInTheDocument();
+
+      await selectBroadcast();
+      expect(screen.getByTestId('broadcast-editor')).toBeInTheDocument();
+      expect(screen.getByText('Rules')).toBeInTheDocument();
+      expect(screen.getByText('Discord')).toBeInTheDocument();
+    });
+
+    it('posts the ordered rotation with {server} substituted for two picked templates', async () => {
+      const posts = mockBroadcastFetch();
+      await renderPage();
+      await screen.findByTestId('scheduled-tasks-list');
+      await selectBroadcast();
+
+      fireEvent.click(screen.getByText('Rules'));
+      fireEvent.click(screen.getByText('Discord'));
+
+      const rotation = screen.getByTestId('broadcast-rotation');
+      expect(
+        within(rotation).getByText(/Welcome to Alpha! Follow the rules\./),
+      ).toBeInTheDocument();
+      expect(within(rotation).getByText(/Join Alpha Discord/)).toBeInTheDocument();
+
+      fireEvent.change(screen.getByPlaceholderText('Название задачи'), {
+        target: { value: 'Rotation rules' },
+      });
+      fireEvent.change(screen.getByLabelText('Тип расписания'), { target: { value: 'cron' } });
+      fireEvent.change(screen.getByPlaceholderText('* * * * *'), {
+        target: { value: '*/30 * * * *' },
+      });
+
+      const submit = screen.getByRole('button', { name: 'Создать задачу' });
+      expect(submit).toBeEnabled();
+      await act(async () => {
+        fireEvent.click(submit);
+      });
+      await screen.findByText('Задача создана');
+
+      const post = posts.find((p) => p.body.task_type === 'broadcast');
+      expect(post).toBeDefined();
+      expect(post?.body.params.messages).toEqual([
+        'Welcome to Alpha! Follow the rules.',
+        'Join Alpha Discord',
+      ]);
+    });
+
+    it('includes the selected servers as server_ids in the broadcast POST', async () => {
+      const posts = mockBroadcastFetch();
+      await renderPage();
+      await screen.findByTestId('scheduled-tasks-list');
+      await selectBroadcast();
+
+      fireEvent.click(screen.getByText('Rules'));
+      fireEvent.click(screen.getByLabelText('Bravo'));
+
+      fireEvent.change(screen.getByPlaceholderText('Название задачи'), {
+        target: { value: 'To Bravo too' },
+      });
+      fireEvent.change(screen.getByLabelText('Тип расписания'), { target: { value: 'cron' } });
+      fireEvent.change(screen.getByPlaceholderText('* * * * *'), {
+        target: { value: '0 * * * *' },
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Создать задачу' }));
+      });
+      await screen.findByText('Задача создана');
+
+      const post = posts.find((p) => p.body.task_type === 'broadcast');
+      expect(post?.body.server_ids).toEqual(['srv-2']);
+    });
+
+    it('disables submit and shows the 5-minute hint for a broadcast recurring more often than 5 minutes', async () => {
+      mockBroadcastFetch();
+      await renderPage();
+      await screen.findByTestId('scheduled-tasks-list');
+      await selectBroadcast();
+
+      fireEvent.click(screen.getByText('Rules'));
+      fireEvent.change(screen.getByPlaceholderText('Название задачи'), {
+        target: { value: 'Spammy' },
+      });
+      fireEvent.change(screen.getByLabelText('Тип расписания'), { target: { value: 'cron' } });
+      fireEvent.change(screen.getByPlaceholderText('* * * * *'), {
+        target: { value: '*/2 * * * *' },
+      });
+
+      expect(screen.getByTestId('broadcast-interval-hint')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Создать задачу' })).toBeDisabled();
+
+      // Loosening to every 5 minutes clears the hint and enables submit.
+      fireEvent.change(screen.getByPlaceholderText('* * * * *'), {
+        target: { value: '*/5 * * * *' },
+      });
+      expect(screen.queryByTestId('broadcast-interval-hint')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Создать задачу' })).toBeEnabled();
+    });
   });
 });

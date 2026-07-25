@@ -2,6 +2,7 @@ import type { BridgeClient } from '@squad/bridge-client';
 import { type DatabaseClient, events, notifySeedSubscribers } from '@squad/db';
 import {
   auditLog,
+  chatMessages,
   rotationProfiles,
   rotationSchedule,
   scheduledTaskRuns,
@@ -32,6 +33,7 @@ import type {
   RotationScheduleTickDeps,
 } from './rotation-schedule-tick.js';
 import type {
+  ScheduledBroadcastEcho,
   ScheduledTaskAuditEntry,
   ScheduledTaskEntry,
   ScheduledTaskRunRecord,
@@ -404,6 +406,8 @@ export async function loadEnabledScheduledTasks(db: DatabaseClient): Promise<Sch
     scheduledAt: row.scheduledAt,
     recurrence: row.recurrence,
     lastExecutedAt: row.lastExecutedAt,
+    rotationIndex: row.rotationIndex,
+    createdBy: row.createdBy,
     createdAt: row.createdAt,
   }));
 }
@@ -418,6 +422,38 @@ export async function setScheduledTaskLastExecutedAt(
     .update(scheduledTasks)
     .set({ lastExecutedAt: executedAt, updatedAt: new Date() })
     .where(eq(scheduledTasks.id, taskId));
+}
+
+/** Advances a rotating broadcast's cursor to `nextIndex` (MSG-4, #187). */
+export async function setScheduledTaskRotationIndex(
+  db: DatabaseClient,
+  taskId: string,
+  nextIndex: number,
+): Promise<void> {
+  await db
+    .update(scheduledTasks)
+    .set({ rotationIndex: nextIndex, updatedAt: new Date() })
+    .where(eq(scheduledTasks.id, taskId));
+}
+
+/**
+ * Records a scheduled broadcast in `chat_messages` the same way the MSG-3
+ * messaging route does — scope `broadcast`, source `panel`, authored by the
+ * task's creator (`created_by`). Skipped by the tick when the task has no
+ * author, since `chat_messages.player_id` is NOT NULL.
+ */
+export async function echoScheduledBroadcast(
+  db: DatabaseClient,
+  echo: ScheduledBroadcastEcho,
+): Promise<void> {
+  await db.insert(chatMessages).values({
+    playerId: echo.authorPlayerId,
+    serverId: echo.serverId,
+    scope: 'broadcast',
+    source: 'panel',
+    message: echo.message,
+    sentAt: echo.sentAt,
+  });
 }
 
 /** Appends one execution-history row to `scheduled_task_runs`. */
@@ -481,6 +517,9 @@ export function createScheduledTaskDeps(
     restartServer: (serverId) => restartServerContainer(bridge, serverId),
     setLastExecutedAt: (taskId, executedAt) =>
       setScheduledTaskLastExecutedAt(db, taskId, executedAt),
+    advanceRotationIndex: (taskId, nextIndex) =>
+      setScheduledTaskRotationIndex(db, taskId, nextIndex),
+    echoBroadcastToChat: (echo) => echoScheduledBroadcast(db, echo),
     recordRun: (run) => recordScheduledTaskRun(db, run),
     writeAuditEntry: (entry) => writeScheduledTaskAuditEntry(db, entry),
   };

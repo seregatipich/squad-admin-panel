@@ -1,5 +1,17 @@
 # Changelog — worker-scheduler
 
+## 2026-07-25
+
+### Added
+
+- MSG-4 (#187): `broadcast` scheduled tasks now rotate through
+  `params.messages`, advancing the new `scheduled_tasks.rotation_index` cursor
+  (migration `0086`) after each successful dispatch, and echo the resolved text
+  into `chat_messages` (scope `broadcast`, source `panel`) authored by the task
+  creator. A null creator skips the echo; an echo failure leaves the run
+  `executed`. Added `advanceRotationIndex` / `echoBroadcastToChat` deps and
+  scheduler-tick coverage for rotation, echo, and the no-author path.
+
 ## 2026-07-14
 
 ### Added

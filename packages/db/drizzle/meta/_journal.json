@@ -498,6 +498,13 @@
       "when": 1783401500000,
       "tag": "0085_log_archive_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1783401600000,
+      "tag": "0086_scheduled_task_broadcast_rotation",
+      "breakpoints": true
     }
   ]
 }
