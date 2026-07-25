@@ -1,5 +1,27 @@
 # Changelog — worker-log-ingest
 
+## 2026-07-25
+
+### Added
+
+- DOSSIER-2 (#189): `src/combat/store.ts` now writes the typed `combat_events` row
+  and folds the per-weapon/per-vehicle dossier aggregates
+  (`player_weapon_stats`, `player_vehicle_stats`, `player_vehicle_kills`) via
+  `applyCombatEventToDossier`, in the **same transaction** as the `events` envelope
+  insert. The `combat_events` insert and the aggregate fold run only when the
+  envelope actually inserted, so offset replay never double-counts. The `live-bus`
+  publish stays outside the transaction.
+- `test/combat-store.test.ts` / `test/vehicle-store.test.ts`: DB-backed coverage of
+  the atomic `combat_events` + aggregate writes, teamkill vs kill, damage/shots
+  accumulation, attacker-vehicle stats, EOS-only aggregation by uuid, wound recorded
+  without aggregate movement, and replay idempotency.
+
+### Notes
+
+- `combat_events.match_id` is written `NULL`: the column is `bigint` while log-ingest
+  resolves a `uuid` match id (a COMBAT-2/DOSSIER-1 schema gap, out of scope). The
+  aggregates and the reconcile guard do not use it.
+
 ## 2026-07-09
 
 ### Added

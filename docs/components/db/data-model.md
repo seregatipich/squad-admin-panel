@@ -17,6 +17,9 @@ All tables live in the `public` schema of a PostgreSQL 16+ database. The Drizzle
 | [`player_api_tokens`](#player_api_tokens) | `player-api-tokens.ts` | Bearer API tokens issued to players |
 | [`player_ip_history`](#player_ip_history) | `player-ip-history.ts` | Per-player IP observation dedup log |
 | [`player_name_history`](#player_name_history) | `player-name-history.ts` | Per-player display-name dedup log |
+| [`player_weapon_stats`](#dossier-aggregates-dossier-2) | `player-weapon-stats.ts` | Per-player, per-weapon dossier aggregate |
+| [`player_vehicle_stats`](#dossier-aggregates-dossier-2) | `player-vehicle-stats.ts` | Per-player kills/damage dealt from a vehicle |
+| [`player_vehicle_kills`](#dossier-aggregates-dossier-2) | `player-vehicle-kills.ts` | Per-player vehicles destroyed, per (vehicle, weapon) |
 | [`players`](#players) | `players.ts` | One row per SteamID64; universal identity anchor |
 | [`role_permissions`](#role_permissions) | `role-permissions.ts` | M:N mapping of roles to permission keys |
 | [`roles`](#roles) | `roles.ts` | RBAC role definitions |
@@ -663,6 +666,52 @@ Browser session tokens. The `id` column is an opaque string (UUID or prefixed ra
 
 ---
 
+## Dossier aggregates (DOSSIER-2)
+
+Three incremental aggregate tables back the player dossier (per-weapon / per-vehicle
+stats). All are keyed on `players.id` (**uuid**, not `steam_id64`) so EOS-only
+players aggregate correctly, and `damage` is **nullable** everywhere — when a source
+log line carries no damage magnitude the aggregate keeps only the counters and the
+UI renders "—". Migration [`0038`](#migration-history) creates them.
+
+They are maintained by two paths in [`packages/db/src/dossier/aggregate.ts`](../../../packages/db/src/dossier/aggregate.ts):
+
+- **Incremental** — `worker-log-ingest` calls `applyCombatEventToDossier(tx, …)` in
+  the same transaction as each `combat_events` insert (see
+  [log-ingest/flows.md](../workers/log-ingest/flows.md#combat--vehicle-events-dossier-2)).
+- **Reconcile** — `worker-stats` runs `reconcileDossierAggregates(sql, { windowHours: 48 })`
+  nightly, report-only, to alert on drift (see [workers/stats/README.md](../workers/stats/README.md)).
+
+**Retention is indefinite.** Unlike the source `combat_events` feed (COMBAT-2,
+monthly partitions with ~12–24-month retention), these aggregates are never
+partition-dropped — they are the dossier's multi-year history and survive
+`combat_events` partition drops untouched.
+
+### `player_weapon_stats`
+
+PK `(player_id, weapon)`. Columns: `player_id uuid` (FK → `players.id` ON DELETE
+CASCADE), `weapon text`, `kills int`, `teamkills int`, `damage numeric NULL`,
+`shots_events int` (count of damage events), `last_used_at timestamptz`. CHECK
+`kills, teamkills, shots_events >= 0`. Index `(player_id, kills DESC)`.
+
+### `player_vehicle_stats`
+
+Kills/damage dealt **from** a vehicle (source `attacker_vehicle`). PK
+`(player_id, vehicle_asset_id)`. Columns: `player_id uuid`, `vehicle_asset_id text`,
+`kills int`, `damage numeric NULL`. CHECK `kills >= 0`. Index `(player_id, kills DESC)`.
+
+### `player_vehicle_kills`
+
+Vehicles **destroyed**, per (vehicle, weapon). PK
+`(player_id, victim_vehicle_asset_id, weapon)`. Columns: `player_id uuid`,
+`victim_vehicle_asset_id text`, `weapon text`, `destroyed_count int`. CHECK
+`destroyed_count >= 0`. Index `(player_id, destroyed_count DESC)`.
+
+Read by the API dossier routes (`GET /api/v1/players/:playerId/{weapon,vehicle}-stats`,
+see [api/api.md](../api/api.md#players)).
+
+---
+
 ## Migration history
 
 Applied in order by `pnpm db:migrate`. Journal: [`packages/db/drizzle/meta/_journal.json`](../../../packages/db/drizzle/meta/_journal.json).
@@ -685,4 +734,5 @@ Applied in order by `pnpm db:migrate`. Journal: [`packages/db/drizzle/meta/_jour
 | 0013 | `0013_servers_soft_delete` | 2026-04-30 | Adds `servers.deleted_at` / `deleted_by_steam_id64` / `deletion_backup_marker_id`; replaces full unique `servers_slug_key` with partial `servers_slug_active_key` (where `deleted_at IS NULL`); adds `servers_deleted_at_idx` |
 | 0017 | `0017_diagnostic_events` | 2026-04-28 | Creates `diagnostic_events` partitioned table (range on `ts`, daily) with composite PK, severity check, FK → `servers.id` ON DELETE SET NULL, and 25-day bootstrap of partitions |
 | 0018 | `0018_diagnostic_events_utc_invariant` | 2026-04-28 | No-op (SELECT 1). Documents the UTC-bounds invariant for `diagnostic_events` partitions enforced by `worker-event-partition`. Required because `0017`'s bootstrap used session-TZ-dependent `current_date` |
+| 0038 | `0038_dossier_weapon_vehicle_stats` | 2026-07 | DOSSIER-2: creates the three dossier aggregate tables (`player_weapon_stats`, `player_vehicle_stats`, `player_vehicle_kills`), uuid-keyed with nullable `damage` (see [Dossier aggregates](#dossier-aggregates-dossier-2)) |
 | 0077 | `0077_seed4_notifications` | 2026-07-14 | Adds `seed_subscriptions`, schedule notification lead time, built-in AUTO-3 seed-call rules, and the Discord `seed_needed` template |

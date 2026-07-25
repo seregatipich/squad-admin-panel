@@ -1,4 +1,11 @@
-import { createDatabaseClient, events, players, servers } from '@squad/db';
+import {
+  combatEvents,
+  createDatabaseClient,
+  events,
+  players,
+  playerVehicleKills,
+  servers,
+} from '@squad/db';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -50,6 +57,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await db.delete(combatEvents).where(eq(combatEvents.serverId, SERVER_ID));
   await db.delete(events).where(eq(events.serverId, SERVER_ID));
   await db.delete(players).where(eq(players.id, ALICE_ID));
   await db.delete(servers).where(eq(servers.id, SERVER_ID));
@@ -57,6 +65,8 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  await db.delete(combatEvents).where(eq(combatEvents.serverId, SERVER_ID));
+  await db.delete(playerVehicleKills).where(eq(playerVehicleKills.playerId, ALICE_ID));
   await db.delete(events).where(eq(events.serverId, SERVER_ID));
 });
 
@@ -65,6 +75,13 @@ async function eventsOfKind(kind: string) {
     .select()
     .from(events)
     .where(and(eq(events.serverId, SERVER_ID), eq(events.kind, kind)));
+}
+
+async function combatEventsOfType(eventType: string) {
+  return db
+    .select()
+    .from(combatEvents)
+    .where(and(eq(combatEvents.serverId, SERVER_ID), eq(combatEvents.eventType, eventType)));
 }
 
 describe('handleVehicle', () => {
@@ -119,5 +136,47 @@ describe('handleVehicle', () => {
     expect(second.eventId).toBe(first.eventId);
     const rows = await eventsOfKind('vehicle_destroyed');
     expect(rows).toHaveLength(1);
+  });
+});
+
+describe('handleVehicle dossier aggregation (DOSSIER-2)', () => {
+  async function vehicleKill(playerId: string, vehicle: string, weapon: string) {
+    const rows = await db
+      .select()
+      .from(playerVehicleKills)
+      .where(
+        and(
+          eq(playerVehicleKills.playerId, playerId),
+          eq(playerVehicleKills.victimVehicleAssetId, vehicle),
+          eq(playerVehicleKills.weapon, weapon),
+        ),
+      );
+    return rows[0] ?? null;
+  }
+
+  it('writes a vehicle_destroyed combat_events row and the (vehicle, weapon) kill atomically', async () => {
+    await handleVehicle(db, makeRedis(), command(VEHICLE_KILL, 'BP_BRDM2_Woodland'));
+
+    const ce = await combatEventsOfType('vehicle_destroyed');
+    expect(ce).toHaveLength(1);
+    expect(ce[0].attackerPlayerId).toBe(ALICE_ID);
+    expect(ce[0].victimPlayerId).toBeNull();
+    expect(ce[0].victimVehicle).toBe('BP_MBT_ArbitraryUnknownAsset');
+    expect(ce[0].weapon).toBe('BP_Projectile_HEAT');
+
+    const vk = await vehicleKill(ALICE_ID, 'BP_MBT_ArbitraryUnknownAsset', 'BP_Projectile_HEAT');
+    expect(vk?.destroyedCount).toBe(1);
+  });
+
+  it('does not double-count the vehicle kill on offset replay (idempotency)', async () => {
+    const cmd = command(VEHICLE_KILL, 'BP_BRDM2_Woodland');
+    await handleVehicle(db, makeRedis(), cmd);
+    const second = await handleVehicle(db, makeRedis(), cmd);
+    expect(second.inserted).toBe(false);
+
+    const ce = await combatEventsOfType('vehicle_destroyed');
+    expect(ce).toHaveLength(1);
+    const vk = await vehicleKill(ALICE_ID, 'BP_MBT_ArbitraryUnknownAsset', 'BP_Projectile_HEAT');
+    expect(vk?.destroyedCount).toBe(1);
   });
 });
