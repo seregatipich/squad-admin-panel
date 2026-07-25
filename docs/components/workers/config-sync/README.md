@@ -9,6 +9,7 @@ Synthesizes the **managed segment of `Admins.cfg`** on every controlled Squad se
 - Does not parse Admins.cfg back into the database. Manual edits inside the markers are flagged as drift; the operator decides whether to force-sync (overwriting them) or copy them by hand into the UI.
 - Does not touch any other `.cfg` file (Server.cfg, MapRotation.cfg, etc.) — the editor at `/servers/:id/configs` owns those.
 - Does not push to a Git remote (that was the prior P2 stub plan; superseded — config history lives in `config_versions`).
+- Does not let servers **pull** the admin list from a panel-hosted URL. Squad's `RemoteAdminListHosts.cfg` pull mechanism was evaluated as an alternative to this push architecture (SYNC-9) and **rejected in favour of staying on push** — pull loses sha256 drift detection, per-server audit, and the unreachable/outage state machine, and adds a silent-staleness failure mode. See the ADR under Related docs.
 
 ## Code location
 
@@ -68,3 +69,4 @@ curl -X POST -b "__Host-sid=$COOKIE" \
 - [testing.md](./testing.md)
 - [troubleshooting.md](./troubleshooting.md)
 - [changelog.md](./changelog.md)
+- [ADR: `RemoteAdminListHosts.cfg` (pull) vs. push](../../../../ai_docs/adr/2026-07-25-remote-admin-list-hosts-vs-push.md) — SYNC-9 evaluation; verdict: stay on push.
