@@ -6,7 +6,7 @@ import {
   scheduledTasks,
   servers,
 } from '@squad/db/schema';
-import { isValidCron5 } from '@squad/shared-types';
+import { isValidCron5, minCron5IntervalMinutes } from '@squad/shared-types';
 import { and, desc, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -22,11 +22,25 @@ const historyQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).optional(),
 });
 
+/** Anti-spam floor for recurring broadcasts (MSG-4, #187): minimum minutes between fires. */
+const MIN_BROADCAST_INTERVAL_MINUTES = 5;
+/** AdminBroadcast caps at 300 chars; a rotation carries up to 10 messages. */
+const BROADCAST_MESSAGE_MAX = 300;
+const MAX_ROTATION_MESSAGES = 10;
+const MAX_FANOUT_SERVERS = 50;
+
 const taskTypeSchema = z.enum(['restart', 'set_next_layer', 'change_layer', 'broadcast']);
 const paramsSchema = z.object({
   layer: z.string().min(1).max(128).optional(),
   message: z.string().min(1).max(512).optional(),
+  messages: z
+    .array(z.string().trim().min(1).max(BROADCAST_MESSAGE_MAX))
+    .min(1)
+    .max(MAX_ROTATION_MESSAGES)
+    .optional(),
+  template_ids: z.array(z.string().uuid()).max(MAX_ROTATION_MESSAGES).optional(),
 });
+type ParamsInput = z.infer<typeof paramsSchema>;
 
 const createBody = z.object({
   name: z.string().min(1).max(128),
@@ -35,6 +49,8 @@ const createBody = z.object({
   scheduled_at: z.string().datetime().nullable().optional(),
   recurrence: z.string().min(1).max(64).nullable().optional(),
   enabled: z.boolean().optional(),
+  /** Additional target servers for a broadcast fan-out; the path server is always included. */
+  server_ids: z.array(z.string().uuid()).max(MAX_FANOUT_SERVERS).optional(),
 });
 
 const updateBody = z
@@ -58,6 +74,7 @@ interface ScheduledTaskOut {
   scheduled_at: string | null;
   recurrence: string | null;
   enabled: boolean;
+  rotation_index: number;
   created_by: string | null;
   last_executed_at: string | null;
   created_at: string;
@@ -74,6 +91,7 @@ function serialize(row: typeof scheduledTasks.$inferSelect): ScheduledTaskOut {
     scheduled_at: row.scheduledAt?.toISOString() ?? null,
     recurrence: row.recurrence,
     enabled: row.enabled,
+    rotation_index: row.rotationIndex,
     created_by: row.createdBy,
     last_executed_at: row.lastExecutedAt?.toISOString() ?? null,
     created_at: row.createdAt.toISOString(),
@@ -98,7 +116,11 @@ function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string }
  * SRV-3 `server:restart` panel permission (the same guard as
  * `POST /api/v1/servers/:id/restart`); `set_next_layer`/`change_layer` reuse
  * the `changemap` squad permission (as the rotation editors do); `broadcast`
- * reuses the `chat` squad permission (as the messaging route does).
+ * reuses the `chat` squad permission (as the messaging route does) AND, per
+ * MSG-4 (#187), additionally requires the `role:edit` panel permission — the
+ * `can_edit_roles` gate the issue mandates for scheduled-rule authorship. The
+ * `chat` check runs first so a chat-less caller still gets the unchanged
+ * `required_squad_permission: 'chat'` payload.
  */
 function taskTypeGuard(
   req: FastifyRequest,
@@ -120,6 +142,10 @@ function taskTypeGuard(
   if (!req.user.permissions.squadPermissions.has(squadPermission)) {
     reply.code(403);
     return { error: 'forbidden', required_squad_permission: squadPermission };
+  }
+  if (taskType === 'broadcast' && !req.user.permissions.permissions.has('role:edit')) {
+    reply.code(403);
+    return { error: 'forbidden', required_permission: 'role:edit' };
   }
   return null;
 }
@@ -158,10 +184,14 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
   /**
    * Validates + normalizes `params` for the given task type. Returns the
    * params to store, or an `{ error }` when a required value is missing/unknown.
+   *
+   * For `broadcast` (MSG-4, #187) either `message` (single) or `messages`
+   * (rotation) must be present. A one-entry `messages` normalises to the legacy
+   * single-`message` shape; two or more entries store `{ messages, templateIds? }`.
    */
   async function resolveParams(
     taskType: ScheduledTaskType,
-    params: ScheduledTaskParams | undefined,
+    params: ParamsInput | undefined,
   ): Promise<{ value: ScheduledTaskParams } | { error: 'invalid_params' | 'unknown_layer' }> {
     switch (taskType) {
       case 'restart':
@@ -174,6 +204,15 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
         return { value: { layer } };
       }
       case 'broadcast': {
+        const messages = params?.messages;
+        if (messages && messages.length > 0) {
+          if (messages.length === 1) return { value: { message: messages[0] } };
+          const value: ScheduledTaskParams = { messages };
+          if (params?.template_ids && params.template_ids.length > 0) {
+            value.templateIds = params.template_ids;
+          }
+          return { value };
+        }
         const message = params?.message;
         if (!message) return { error: 'invalid_params' };
         return { value: { message } };
@@ -288,42 +327,82 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: 'invalid_recurrence', recurrence };
       }
+      if (
+        req.body.task_type === 'broadcast' &&
+        recurrence !== null &&
+        minCron5IntervalMinutes(recurrence) < MIN_BROADCAST_INTERVAL_MINUTES
+      ) {
+        reply.code(400);
+        return {
+          error: 'interval_too_short',
+          min_interval_minutes: MIN_BROADCAST_INTERVAL_MINUTES,
+        };
+      }
       const resolvedParams = await resolveParams(req.body.task_type, req.body.params);
       if ('error' in resolvedParams) {
         reply.code(400);
         return { error: resolvedParams.error };
       }
 
-      const [row] = await app.db
-        .insert(scheduledTasks)
-        .values({
-          serverId: req.params.id,
-          name: req.body.name,
-          taskType: req.body.task_type,
-          params: resolvedParams.value,
-          scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
-          recurrence,
-          enabled: req.body.enabled ?? true,
-          createdBy: req.user?.playerId ?? null,
-        })
-        .returning();
-      if (!row) throw new Error('scheduled_tasks insert returned no row');
+      // MSG-4 (#187): fan-out — create one row per unique target server (the
+      // path server is always included). Every target must exist and not be
+      // soft-deleted; all rows are inserted in one transaction so a bad id
+      // rolls the whole batch back.
+      const targetIds = [...new Set([req.params.id, ...(req.body.server_ids ?? [])])];
+      for (const targetId of targetIds) {
+        if (targetId === req.params.id) continue;
+        const target = await loadServer(targetId);
+        if (!target) {
+          reply.code(404);
+          return { error: 'not_found', server_id: targetId };
+        }
+      }
+
+      const insertedRows = await app.db.transaction(async (tx) => {
+        const created: (typeof scheduledTasks.$inferSelect)[] = [];
+        for (const targetId of targetIds) {
+          const [inserted] = await tx
+            .insert(scheduledTasks)
+            .values({
+              serverId: targetId,
+              name: req.body.name,
+              taskType: req.body.task_type,
+              params: resolvedParams.value,
+              scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+              recurrence,
+              enabled: req.body.enabled ?? true,
+              createdBy: req.user?.playerId ?? null,
+            })
+            .returning();
+          if (!inserted) throw new Error('scheduled_tasks insert returned no row');
+          created.push(inserted);
+        }
+        return created;
+      });
+
+      const primary = insertedRows[0];
+      if (!primary) throw new Error('scheduled_tasks insert returned no row');
 
       // biome-ignore lint/style/noNonNullAssertion: taskTypeGuard above requires req.user
       const user = req.user!;
-      await writeAuditEntry(app.db, {
-        actor: { kind: 'steam', playerId: user.playerId, tokenId: req.apiTokenId ?? null },
-        actorIp: req.ip ?? null,
-        actionType: 'server.scheduled_task.create',
-        targetType: 'scheduled_task',
-        targetId: row.id,
-        after: serialize(row),
-        context: { server_id: req.params.id },
-        statusCode: reply.statusCode,
-      });
+      for (const inserted of insertedRows) {
+        await writeAuditEntry(app.db, {
+          actor: { kind: 'steam', playerId: user.playerId, tokenId: req.apiTokenId ?? null },
+          actorIp: req.ip ?? null,
+          actionType: 'server.scheduled_task.create',
+          targetType: 'scheduled_task',
+          targetId: inserted.id,
+          after: serialize(inserted),
+          context: { server_id: inserted.serverId },
+          statusCode: 201,
+        });
+      }
 
       reply.code(201);
-      return serialize(row);
+      return {
+        ...serialize(primary),
+        also_created: insertedRows.slice(1).map((r) => ({ id: r.id, server_id: r.serverId })),
+      };
     },
   );
 
@@ -368,6 +447,18 @@ const serverScheduledTasksRoutes: FastifyPluginAsync = async (app) => {
       ) {
         reply.code(400);
         return { error: 'invalid_recurrence', recurrence: req.body.recurrence };
+      }
+      if (
+        existing.taskType === 'broadcast' &&
+        nextRecurrence !== null &&
+        isValidCron5(nextRecurrence) &&
+        minCron5IntervalMinutes(nextRecurrence) < MIN_BROADCAST_INTERVAL_MINUTES
+      ) {
+        reply.code(400);
+        return {
+          error: 'interval_too_short',
+          min_interval_minutes: MIN_BROADCAST_INTERVAL_MINUTES,
+        };
       }
 
       const updateSet: Partial<typeof scheduledTasks.$inferInsert> = { updatedAt: new Date() };
