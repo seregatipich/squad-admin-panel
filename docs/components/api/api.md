@@ -177,6 +177,23 @@ Errors:
 | GET | `/api/v1/servers/:id/logs/files` | Lists on-disk `SquadGame*.log` files under `<saved>/<id>/SquadGame/Saved/Logs` via `bridge.squad_log_list`: `{ files: [{ name, size, mtime (RFC3339), is_live }] }`. `is_live` marks the active `SquadGame.log`. | `server:download_logs` |
 | GET | `/api/v1/servers/:id/logs/files/:name/download` | Streams the chosen log (`Content-Disposition: attachment`) by piping `bridge.file_read_stream` chunk frames straight to the reply — a multi-hundred-MB file is never buffered whole. `:name` must match `SquadGame*.log` (else 400). | `server:download_logs` |
 
+## Server scheduled tasks
+
+AUTO-2 (#73) task definitions run out-of-band by `@squad/worker-scheduler`
+(`runScheduledTaskTick`); this route only manages definitions and surfaces run
+history. A task fires on a one-off `scheduled_at` instant or a recurring 5-field
+UTC cron `recurrence`. Reads are gated on panel access; mutations are gated per
+`task_type` (`restart` → `server:restart`; `set_next_layer`/`change_layer` →
+Squad `changemap`; `broadcast` → Squad `chat` **and** `role:edit`, MSG-4 #187).
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/servers/:id/scheduled-tasks` | Lists tasks (newest first) plus per-type `capabilities` so the UI can hide actions the caller cannot schedule. | panel access |
+| GET | `/api/v1/servers/:id/scheduled-tasks/history` | Execution runs (newest first). Query: `from`, `to`, `limit` (≤500). | panel access |
+| POST | `/api/v1/servers/:id/scheduled-tasks` | Creates a task. Body: `{ name, task_type, params?, scheduled_at?, recurrence?, enabled?, server_ids? }`. `broadcast` `params` accepts `message` (single) OR `messages: string[1..10]` (rotation, each ≤300 chars) with optional `template_ids`; a 1-element `messages` normalises to `{message}`. `server_ids` (≤50) fans the task out to one row per unique target (path server always included) in a single transaction — the response is the path-server row plus additive `also_created: [{id, server_id}]`, with one audit row per created row; an unknown/soft-deleted target 404s and rolls back. A recurring `broadcast` firing more often than every 5 minutes is rejected `400 {error:'interval_too_short', min_interval_minutes:5}`. Audit `server.scheduled_task.create`. | per `task_type` |
+| PATCH | `/api/v1/servers/:id/scheduled-tasks/:taskId` | Updates `name`/`params`/`scheduled_at`/`recurrence`/`enabled`. Setting `enabled:false` stops firing without deleting the rule. The 5-minute broadcast floor is re-checked. Audit `server.scheduled_task.update`. | per `task_type` |
+| DELETE | `/api/v1/servers/:id/scheduled-tasks/:taskId` | Deletes the task (cascades its run history). Audit `server.scheduled_task.delete`. | per `task_type` |
+
 ## Live event bus (panel-wide)
 
 | Method | Path | Purpose | Permissions |
