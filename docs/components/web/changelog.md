@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-07-25 — WL-3 whitelist application portal
+
+### Added
+
+- `apps/web/src/app/(public)/public/whitelist/page.tsx` — public, no-session application form (SteamID64 + message + optional contact) reading the open/closed switch from `/api/v1/public/whitelist/settings` and posting to `/api/v1/public/whitelist/applications`; renders closed / success / duplicate / error states.
+- `apps/web/src/app/(dashboard)/settings/whitelist/ApplicationsSection.tsx` — review queue on `/settings/whitelist`: portal open/closed toggle + default-term, status filter, and per-application approve (role + term preset → time-bounded grant) / reject (note). Gated on `whitelist:edit` for mutations, `whitelist:view` for reads.
+
 ## 2026-07-14 — CBAN-4 local-ban action
 
 ### Added
