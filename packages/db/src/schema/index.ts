@@ -64,3 +64,4 @@ export * from './sessions.js';
 export * from './vehicle-catalog.js';
 export * from './vip-lifecycle-events.js';
 export * from './vip-tiers.js';
+export * from './whitelist-applications.js';

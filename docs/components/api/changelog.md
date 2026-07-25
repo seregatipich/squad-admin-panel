@@ -1,5 +1,12 @@
 # `api` — changelog
 
+## 2026-07-25 — WL-3 whitelist application portal
+
+### Added
+
+- `whitelist-applications.ts` route: public portal (`GET /api/v1/public/whitelist/settings`, `POST /api/v1/public/whitelist/applications` — unauthenticated, rate limited, one pending application per SteamID64) and panel approval workflow (`GET`/`PUT /api/v1/whitelist/applications/settings`, `GET /api/v1/whitelist/applications`, `PATCH /api/v1/whitelist/applications/:id`), gated on `whitelist:view`/`whitelist:edit`.
+- Approving a pending application grants the resolved role to the applicant time-bounded via `players.role_expires_at` and fans the change out to every active server's `Admins.cfg`; auto-expiry reuses the existing `worker-role-expirer` (VIPSUB-1) — no new expiry mechanic. New audit actions `whitelist.application.create` / `.review` / `.settings.update`.
+
 ## 2026-07-25 — Server-delete Admins.cfg sync-queue cleanup (SYNC-5, #38)
 
 ### Changed

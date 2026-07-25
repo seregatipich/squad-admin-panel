@@ -213,6 +213,26 @@ Squad `changemap`; `broadcast` → Squad `chat` **and** `role:edit`, MSG-4 #187)
 | GET | `/api/v1/players/:steamId/role` | Returns current role or `{role: null}`. Single-role model — each player has at most one panel role. | `user:view` |
 | PUT | `/api/v1/players/:steamId/role` | Assign or clear a role. Body: `{role_id: uuid \| null}`. 404 `role_not_found` if the role UUID doesn't exist. 409 `cannot_remove_last_owner` when the change would leave zero Owners. Invalidates the player's permission cache. Audit: `player.role.assign`. | `user:manage_roles` |
 
+## Whitelist applications
+
+WL-3 (#67) public application portal + panel approval. The public half is
+unauthenticated and rate limited; anyone can read whether the portal is open and
+submit one **pending** application per SteamID64 (a partial-unique index enforces
+the single-pending rule). Approving grants the resolved role to the matching
+`players` row, time-bounded via `players.role_expires_at` — the existing
+`worker-role-expirer` (VIPSUB-1) clears it automatically when the term lapses,
+and the grant fans out to every active server's `Admins.cfg` via the durable
+outbox. WL-3 adds no new expiry mechanic.
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/public/whitelist/settings` | Portal open/closed flag `{ enabled }`. Rate limit 60/min. | none (public) |
+| POST | `/api/v1/public/whitelist/applications` | Submit an application. Body: `{ steam_id64 (17 digits), body (1..2000), contact? (≤128) }`. `404 applications_disabled` when closed; `409 application_already_pending` on a duplicate pending SteamID64; else `201 {id, status:'pending'}`. Best-effort player resolution; audit `whitelist.application.create` (anonymous `actor_kind='system'`, label `http-anonymous`). Rate limit 5/hour. | none (public) |
+| GET | `/api/v1/whitelist/applications?status=&page=&page_size=` | Paginated review queue (newest first), joined to player/role/reviewer names. | `whitelist:view` |
+| GET | `/api/v1/whitelist/applications/settings` | Panel view of `{ enabled, default_days }`. | `whitelist:view` |
+| PUT | `/api/v1/whitelist/applications/settings` | Set `{ enabled, default_days (1..3650 \| null) }` (null = permanent grants). Audit `whitelist.application.settings.update`. | `whitelist:edit` |
+| PATCH | `/api/v1/whitelist/applications/:id` | Approve or reject. Body: `{ status:'approved'\|'rejected', review_note?, role_id?, expires_at? }`. Approve resolves the role as `role_id ?? requested_role_id ?? whitelist_role_id`, computes the term as `expires_at ?? now+default_days` (null = permanent), grants + fans out in one transaction, and invalidates the permission cache. Errors: `404 application_not_found`/`player_not_found`/`role_not_found`, `409 application_not_pending`/`whitelist_role_not_configured`, `400 role_expiry_must_be_future`, `403 self_approval_forbidden`. Both branches audit `whitelist.application.review`. | `whitelist:edit` |
+
 ## Audit
 
 | Method | Path | Purpose | Permissions |

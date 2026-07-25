@@ -14,6 +14,7 @@ All tables live in the `public` schema of a PostgreSQL 16+ database. The Drizzle
 | [`events`](#events) | `events.ts` | Monthly-partitioned Squad event feed |
 | [`processed_events`](#processed_events) | `events.ts` | Event-consumer idempotency tracker |
 | [`panel_meta`](#panel_meta) | `panel-meta.ts` | Singleton row for panel bootstrap state |
+| [`whitelist_applications`](#whitelist_applications) | `whitelist-applications.ts` | WL-3 public whitelist/VIP application queue |
 | [`player_api_tokens`](#player_api_tokens) | `player-api-tokens.ts` | Bearer API tokens issued to players |
 | [`player_ip_history`](#player_ip_history) | `player-ip-history.ts` | Per-player IP observation dedup log |
 | [`player_name_history`](#player_name_history) | `player-name-history.ts` | Per-player display-name dedup log |
@@ -305,6 +306,9 @@ Singleton row (enforced by `CHECK (id = 1)`). Tracks bootstrap state so the firs
 | `id` | `smallint` | NO | `1` | Primary key; CHECK enforces value = 1 |
 | `first_owner_claimed` | `boolean` | NO | `false` | Set to `true` after the first Steam login claims the Owner role |
 | `roles_seeded` | `boolean` | NO | `false` | Set to `true` by migration `0009_panel_rbac.sql` after inserting the 5 system roles |
+| `whitelist_role_id` | `uuid` | YES | `null` | WL-1: role treated as the whitelist grant (FK → `roles.id`) |
+| `whitelist_applications_enabled` | `boolean` | NO | `false` | WL-3: master switch for the public application portal (default closed) |
+| `whitelist_application_default_days` | `integer` | YES | `null` | WL-3: default grant term in days for approvals with no explicit `expires_at`; `null` = permanent |
 | `created_at` | `timestamptz` | NO | `now()` | |
 
 **Constraints**
@@ -711,6 +715,34 @@ Read by the API dossier routes (`GET /api/v1/players/:playerId/{weapon,vehicle}-
 see [api/api.md](../api/api.md#players)).
 
 ---
+## `whitelist_applications`
+
+WL-3 (#67) public whitelist/VIP application queue. Anyone may submit one **pending** application per SteamID64 via the public portal; a whitelist admin approves (granting a time-bounded role) or rejects it. Auto-expiry of an approved grant is handled by `worker-role-expirer` via `players.role_expires_at` — this table only records the request and its decision.
+
+**Columns**
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | `uuid` | NO | `gen_random_uuid()` | Primary key |
+| `steam_id64` | `bigint` | NO | | Applicant SteamID64 |
+| `player_id` | `uuid` | YES | `null` | FK → `players.id` ON DELETE SET NULL; best-effort resolution at submit |
+| `contact` | `text` | YES | `null` | Optional contact string (Discord, Steam profile, …) |
+| `body` | `text` | NO | | Application message |
+| `requested_role_id` | `uuid` | YES | `null` | FK → `roles.id` ON DELETE SET NULL |
+| `status` | `text` | NO | `'pending'` | CHECK IN (`pending`,`approved`,`rejected`) |
+| `reviewer_player_id` | `uuid` | YES | `null` | FK → `players.id` ON DELETE SET NULL |
+| `review_note` | `text` | YES | `null` | Reviewer note |
+| `granted_role_id` | `uuid` | YES | `null` | FK → `roles.id` ON DELETE SET NULL; role granted on approval |
+| `granted_until` | `timestamptz` | YES | `null` | Mirrors `players.role_expires_at`; `null` = permanent |
+| `source` | `text` | NO | `'public'` | CHECK IN (`public`,`panel`) |
+| `created_at` | `timestamptz` | NO | `now()` | |
+| `decided_at` | `timestamptz` | YES | `null` | Set when approved/rejected |
+
+**Indexes**
+
+- `whitelist_applications_status_created_idx` on `(status, created_at)`
+- `whitelist_applications_steam_id64_idx` on `(steam_id64)`
+- `whitelist_applications_pending_unique_idx` UNIQUE on `(steam_id64) WHERE status = 'pending'` — one open application per SteamID64
 
 ## Migration history
 
@@ -736,3 +768,4 @@ Applied in order by `pnpm db:migrate`. Journal: [`packages/db/drizzle/meta/_jour
 | 0018 | `0018_diagnostic_events_utc_invariant` | 2026-04-28 | No-op (SELECT 1). Documents the UTC-bounds invariant for `diagnostic_events` partitions enforced by `worker-event-partition`. Required because `0017`'s bootstrap used session-TZ-dependent `current_date` |
 | 0038 | `0038_dossier_weapon_vehicle_stats` | 2026-07 | DOSSIER-2: creates the three dossier aggregate tables (`player_weapon_stats`, `player_vehicle_stats`, `player_vehicle_kills`), uuid-keyed with nullable `damage` (see [Dossier aggregates](#dossier-aggregates-dossier-2)) |
 | 0077 | `0077_seed4_notifications` | 2026-07-14 | Adds `seed_subscriptions`, schedule notification lead time, built-in AUTO-3 seed-call rules, and the Discord `seed_needed` template |
+| 0087 | `0087_whitelist_applications` | 2026-07-25 | WL-3: creates `whitelist_applications` (status/source CHECKs, partial-unique pending index, FKs to `players`/`roles`) and adds `panel_meta.whitelist_applications_enabled` / `whitelist_application_default_days` |

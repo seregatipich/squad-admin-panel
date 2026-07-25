@@ -118,6 +118,7 @@ import vipTiersRoutes from '../../src/routes/vip-tiers.js';
 import voteAnalyticsRoutes from '../../src/routes/vote-analytics.js';
 import votesRoutes from '../../src/routes/votes.js';
 import whitelistRoutes from '../../src/routes/whitelist.js';
+import whitelistApplicationsRoutes from '../../src/routes/whitelist-applications.js';
 import { createIsolatedSchema, hostDbUrl, hostRedisUrl } from './isolated-db.js';
 
 export { createIsolatedSchema };
@@ -562,6 +563,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(alertRulesRoutes);
   await app.register(automationRulesRoutes);
   await app.register(whitelistRoutes);
+  await app.register(whitelistApplicationsRoutes);
 
   // Test fixture: legacy "Viewer" role used by older permission-bound
   // tests (depot, host-actions, logs, rbac, ...). The production seed
