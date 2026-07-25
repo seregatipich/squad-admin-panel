@@ -24,14 +24,18 @@ vi.mock('@squad/db', () => ({
   servers: { id: 'id', deletedAt: 'deletedAt' },
 }));
 
+const redisMock = vi.hoisted(() => ({
+  xreadgroup: vi
+    .fn()
+    .mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve(null), 50))),
+}));
+
 vi.mock('ioredis', () => ({
   default: vi.fn(() => ({
     on: vi.fn(),
     quit: vi.fn().mockReturnValue(Promise.resolve('OK')),
     xgroup: vi.fn().mockResolvedValue('OK'),
-    xreadgroup: vi
-      .fn()
-      .mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve(null), 50))),
+    xreadgroup: redisMock.xreadgroup,
     xautoclaim: vi.fn().mockResolvedValue(['0-0', [], []]),
     xack: vi.fn().mockResolvedValue(1),
   })),
@@ -113,5 +117,25 @@ describe('config-sync index.ts', () => {
       { serverId: SERVER_ID, expected: 'expected', actual: 'actual' },
       'admins.cfg drift detected — awaiting force-sync',
     );
+  });
+
+  it('refreshes the server list immediately on a NOGROUP xreadgroup error (SYNC-5)', async () => {
+    // A destroyed per-server stream/group (server soft-deleted) makes the
+    // multiplexed XREADGROUP reject NOGROUP for the whole batch. The worker
+    // must re-query the server list at once and resume, not stall.
+    const selectCallsBefore = selectMock.mock.calls.length;
+    redisMock.xreadgroup.mockImplementationOnce(() =>
+      Promise.reject(new Error("NOGROUP No such key 'events:admins-cfg-sync:x' or consumer group")),
+    );
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    // refreshServerList() re-queried the DB in direct response to the NOGROUP.
+    expect(selectMock.mock.calls.length).toBeGreaterThan(selectCallsBefore);
+
+    // The run loop kept polling afterwards — the read recovered rather than stalling.
+    const readsAfter = redisMock.xreadgroup.mock.calls.length;
+    await new Promise((r) => setTimeout(r, 150));
+    expect(redisMock.xreadgroup.mock.calls.length).toBeGreaterThan(readsAfter);
   });
 });
