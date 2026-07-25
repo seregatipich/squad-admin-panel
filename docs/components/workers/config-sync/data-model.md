@@ -43,11 +43,15 @@ The worker maps each row to an `Admin=<steam_id64>:<role_name>` line provided th
 
 ### `audit_log`
 
-Each successful sync emits a row with `action_type ∈ { 'admins_cfg.synced', 'admins_cfg.force_synced' }`. The chained `row_hash` is honoured (`prev_hash || canonical_json(payload)` → sha256). See [api.md](./api.md#audit_log-rows-postgres) for the exact payload.
+Each successful sync emits a row with `action_type ∈ { 'admins_cfg.synced', 'admins_cfg.force_synced' }`. The chained `row_hash` is honoured (`prev_hash || canonical_json(payload)` → sha256). The row `context` carries the post-write RCON reload outcome as `reload` (`'enqueued' | 'skipped_rcon_disconnected' | 'failed'`). See [api.md](./api.md#audit_log-rows-postgres) for the exact payload.
 
 ### Redis status key (not Postgres)
 
 `admins-cfg:status:<server_id>` — see [api.md](./api.md#admins-cfgstatusserver_id).
+
+### Redis RCON command stream (not Postgres)
+
+`rcon:commands:<server_id>` — one best-effort `AdminReloadServerConfig` entry per successful write, gated on `rcon:status:<server_id>.state === 'connected'`. See [api.md](./api.md#rconcommandsserver_id-worker-rcon-command-stream).
 
 ## In-memory model — managed segment
 
