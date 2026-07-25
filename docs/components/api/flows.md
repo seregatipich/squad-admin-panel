@@ -69,22 +69,34 @@ softDeleteServer(ctx, serverId):
            updatedAt = now()
      WHERE id = ? AND deleted_at IS NULL          ← partial-unique-safe
 
+  Phase 6 — Admins.cfg sync-queue cleanup (SYNC-5, best-effort; requires ctx.redis)
+    runs AFTER Phase 5 so the outbox relay's `deleted_at IS NULL` guard is live
+    (a) UPDATE admins_cfg_sync_outbox SET relayed_at = now()
+          WHERE server_id = ? AND relayed_at IS NULL   → sync_outbox_cancelled = rowcount
+    (b) XGROUP DESTROY events:admins-cfg-sync:<id> config-sync
+          ← swallow NOGROUP / "no such key" / "requires the key to exist"
+    (c) UNLINK events:admins-cfg-sync:<id>            ← fall back to DEL
+    (d) DEL admins-cfg:status:<id>                    ← drop stale unreachable alert
+    sync_queue_removed = true; any Redis fault → errors.push({phase:'sync_queue_cleanup', error})
+    When ctx.redis is omitted the whole phase is skipped (sync_queue_removed = false).
+
   return DeleteResult { backup_marker_id, files_backed_up, files_attempted,
                         container_removed, configs_dir_removed, saved_dir_removed,
-                        ufw_rules_removed, errors[] }
+                        ufw_rules_removed, sync_queue_removed, sync_outbox_cancelled,
+                        errors[] }
 
 route layer:
-  Phase 6 — audit
+  Phase 7 — audit
     auditPlugin writes audit_log row with action='server.delete',
     target='server', context=DeleteResult JSON.
 
-  Phase 7 — live event
+  Phase 8 — live event
     app.liveBus.publish({type: 'server.deleted', ts, data: {server_id, deleted_at, by}})
     → in-process WS subscribers see it immediately,
     → Redis PUBLISH live-bus replicates to other API instances.
 ```
 
-Failure handling per phase: phase 1 throws → 500, server stays alive. Phases 2-4 errors are collected in `result.errors[]` and the delete still completes (operator inspects `audit_log.context.errors` and cleans up by hand if needed). Phase 5 always runs because phases 2-4 do not throw; the row gets `deleted_at` even when the container or files survive.
+Failure handling per phase: phase 1 throws → 500, server stays alive. Phases 2-4 and phase 6 errors are collected in `result.errors[]` and the delete still completes (operator inspects `audit_log.context.errors` and cleans up by hand if needed). Phase 5 always runs because phases 2-4 do not throw; the row gets `deleted_at` even when the container or files survive. Phase 6 runs after phase 5 and is itself best-effort: destroying the per-server Redis stream + consumer group + status key stops the config-sync worker from replaying against a deleted server, and stamping the still-pending outbox rows relayed (paired with the relay's own soft-delete guard) prevents a racing enqueue from resurrecting the torn-down stream.
 
 ## Server restore (archive → new server)
 
@@ -649,11 +661,11 @@ The reconciler-confirmed event is documented separately because it lives in `plu
 
 #### Soft-delete (DELETE /servers/:id)
 
-Source: [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). Calls `softDeleteServer` from [`lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts), which performs config backup → container stop+rm → directory delete → ufw rule remove → set `deletedAt`.
+Source: [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). Calls `softDeleteServer` from [`lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts), which performs config backup → container stop+rm → directory delete → ufw rule remove → set `deletedAt` → Admins.cfg sync-queue cleanup (`redis: app.redis`).
 
 ```
 api emits server.soft_delete.requested
-  ├─ softDeleteServer(...)                    ← reads + backs up configs, removes container, drops ufw rules
+  ├─ softDeleteServer(...)                    ← backs up configs, removes container, drops ufw rules, tears down the Admins.cfg sync queue
   └─ liveBus.publish({type: 'server.deleted', ...})
 api emits server.soft_delete.done            ← payload.backup_id + files_backed_up + durationMs
 ─────── on throw ───────

@@ -1,5 +1,13 @@
 # `api` — changelog
 
+## 2026-07-25 — Server-delete Admins.cfg sync-queue cleanup (SYNC-5, #38)
+
+### Changed
+
+- `softDeleteServer` ([`lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts)) gained an optional `redis` on `DeleteContext` and a new **Phase 6** that runs after the soft-delete UPDATE: it stamps every still-pending `admins_cfg_sync_outbox` row for the server `relayed_at` (reported as `sync_outbox_cancelled`), then `XGROUP DESTROY` + `UNLINK` (falling back to `DEL`) the `events:admins-cfg-sync:<id>` stream and `DEL`s the `admins-cfg:status:<id>` key. Every step is best-effort — a Redis fault is recorded on `result.errors` under `phase: 'sync_queue_cleanup'` and never aborts the delete; the server row is already marked deleted. `DeleteResult` gains `sync_queue_removed` and `sync_outbox_cancelled`. Prior to this, a soft-deleted server left an orphan Redis stream, its `config-sync` consumer group, and a stale status key behind (the queue was never explicitly cleaned — only bounded by `MAXLEN ~ 500`).
+- `DELETE /api/v1/servers/:id` ([`routes/servers.ts`](../../../apps/api/src/routes/servers.ts)) now passes `redis: app.redis` into the delete context so the cleanup runs in production; the field stays optional so archival/unit callers compile unchanged.
+- The stream-prefix and consumer-group names are imported from [`lib/admins-cfg-sync.ts`](../../../apps/api/src/lib/admins-cfg-sync.ts) rather than re-declared.
+
 ## 2026-07-09 — Parallel API test suite
 
 ### Changed

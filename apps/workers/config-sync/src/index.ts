@@ -144,7 +144,27 @@ async function main() {
         ...ids,
       )) as Array<[string, Array<[string, string[]]>]> | null;
     } catch (err) {
-      log.warn({ err: (err as Error).message }, 'xreadgroup failed');
+      const msg = (err as Error).message;
+      // A destroyed per-server stream/group (its server was soft-deleted,
+      // SYNC-5) makes the multiplexed XREADGROUP reject NOGROUP for the WHOLE
+      // batch, stalling sync for every server until the next 30 s refresh.
+      // Recover immediately: re-query the server list so the vanished id is
+      // dropped (and its group is not re-created), prune its per-server
+      // backoff, and let the next loop iteration read the surviving streams.
+      if (/NOGROUP|no such key/i.test(msg)) {
+        log.info({ err: msg }, 'xreadgroup NOGROUP — refreshing server list');
+        await refreshServerList().catch((refreshErr) =>
+          log.warn(
+            { err: (refreshErr as Error).message },
+            'server-list refresh after NOGROUP failed',
+          ),
+        );
+        for (const id of backoffByServer.keys()) {
+          if (!activeServerIds.has(id)) backoffByServer.delete(id);
+        }
+        return;
+      }
+      log.warn({ err: msg }, 'xreadgroup failed');
       await new Promise((r) => setTimeout(r, 1000));
       return;
     }

@@ -900,6 +900,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
             actorPlayerId: req.user?.playerId ?? null,
             actorIp: req.ip ?? null,
             actorLabel: req.user ? `player:${req.user.playerId}` : 'system',
+            redis: app.redis,
           },
           row.id,
         );
