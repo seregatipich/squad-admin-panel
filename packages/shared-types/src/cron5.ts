@@ -167,12 +167,13 @@ export function minCron5IntervalMinutes(expression: string): number {
   if (occurrences.length < 2) return Number.POSITIVE_INFINITY;
 
   let min = Number.POSITIVE_INFINITY;
-  for (let i = 1; i < occurrences.length; i++) {
-    const current = occurrences[i];
-    const previous = occurrences[i - 1];
-    if (!current || !previous) continue;
-    const delta = (current.getTime() - previous.getTime()) / 60_000;
-    if (delta < min) min = delta;
+  let previous: Date | undefined;
+  for (const current of occurrences) {
+    if (previous) {
+      const delta = (current.getTime() - previous.getTime()) / 60_000;
+      if (delta < min) min = delta;
+    }
+    previous = current;
   }
   return min;
 }
