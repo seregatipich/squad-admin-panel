@@ -16,6 +16,8 @@ function makeEntry(overrides: Partial<ScheduledTaskEntry> = {}): ScheduledTaskEn
     scheduledAt: new Date('2026-07-11T10:00:00.000Z'),
     recurrence: null,
     lastExecutedAt: null,
+    rotationIndex: 0,
+    createdBy: null,
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
     ...overrides,
   };
@@ -28,12 +30,16 @@ function makeDeps(overrides: Partial<ScheduledTaskTickDeps> = {}): ScheduledTask
     sendRconCommand: vi.fn().mockResolvedValue(undefined),
     restartServer: vi.fn().mockResolvedValue(undefined),
     setLastExecutedAt: vi.fn().mockResolvedValue(undefined),
+    advanceRotationIndex: vi.fn().mockResolvedValue(undefined),
+    echoBroadcastToChat: vi.fn().mockResolvedValue(undefined),
     recordRun: vi.fn().mockResolvedValue(undefined),
     writeAuditEntry: vi.fn().mockResolvedValue(undefined),
     diag: { emit: vi.fn().mockResolvedValue(undefined) },
     ...overrides,
   };
 }
+
+const AUTHOR_ID = '019f46a1-0000-7000-8000-0000000000aa';
 
 describe('resolveDueOccurrence', () => {
   it('is due for a one-off task once scheduled_at <= now and never executed', () => {
@@ -288,5 +294,192 @@ describe('runScheduledTaskTick', () => {
       }),
     );
     expect(result3.executed).toBe(0);
+  });
+
+  it('rotates a multi-message broadcast across occurrences, dispatching [0],[1],[2] and advancing 1→2→0', async () => {
+    const messages = ['first', 'second', 'third'];
+    async function tickAt(rotationIndex: number) {
+      const entry = makeEntry({
+        taskType: 'broadcast',
+        params: { messages },
+        scheduledAt: null,
+        recurrence: '0 10 * * 6',
+        rotationIndex,
+        createdBy: AUTHOR_ID,
+        lastExecutedAt: null,
+      });
+      const deps = makeDeps({
+        now: new Date('2026-07-11T10:05:00.000Z'),
+        loadEnabledTasks: vi.fn().mockResolvedValue([entry]),
+      });
+      const result = await runScheduledTaskTick(deps);
+      expect(result.executed).toBe(1);
+      return deps;
+    }
+
+    const d0 = await tickAt(0);
+    expect(d0.sendRconCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ command: 'AdminBroadcast', args: ['first'] }),
+    );
+    expect(d0.advanceRotationIndex).toHaveBeenCalledWith(expect.any(String), 1);
+
+    const d1 = await tickAt(1);
+    expect(d1.sendRconCommand).toHaveBeenCalledWith(expect.objectContaining({ args: ['second'] }));
+    expect(d1.advanceRotationIndex).toHaveBeenCalledWith(expect.any(String), 2);
+
+    const d2 = await tickAt(2);
+    expect(d2.sendRconCommand).toHaveBeenCalledWith(expect.objectContaining({ args: ['third'] }));
+    expect(d2.advanceRotationIndex).toHaveBeenCalledWith(expect.any(String), 0);
+  });
+
+  it('dispatches a legacy single-message broadcast but never advances the rotation cursor', async () => {
+    const entry = makeEntry({
+      taskType: 'broadcast',
+      params: { message: 'only one' },
+      createdBy: AUTHOR_ID,
+    });
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledTasks: vi.fn().mockResolvedValue([entry]),
+    });
+
+    await runScheduledTaskTick(deps);
+
+    expect(deps.sendRconCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ command: 'AdminBroadcast', args: ['only one'] }),
+    );
+    expect(deps.advanceRotationIndex).not.toHaveBeenCalled();
+  });
+
+  it('echoes a successful broadcast to chat exactly once with the resolved text', async () => {
+    const entry = makeEntry({
+      taskType: 'broadcast',
+      params: { messages: ['alpha', 'beta'] },
+      rotationIndex: 1,
+      createdBy: AUTHOR_ID,
+    });
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledTasks: vi.fn().mockResolvedValue([entry]),
+    });
+
+    await runScheduledTaskTick(deps);
+
+    expect(deps.echoBroadcastToChat).toHaveBeenCalledTimes(1);
+    expect(deps.echoBroadcastToChat).toHaveBeenCalledWith({
+      serverId: entry.serverId,
+      authorPlayerId: AUTHOR_ID,
+      message: 'beta',
+      sentAt: new Date('2026-07-11T10:00:05.000Z'),
+    });
+    expect(deps.recordRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'executed',
+        detail: expect.objectContaining({ message: 'beta', echo: 'sent' }),
+      }),
+    );
+  });
+
+  it('does not echo to chat for restart or layer tasks', async () => {
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledTasks: vi.fn().mockResolvedValue([
+        makeEntry({ taskType: 'restart', createdBy: AUTHOR_ID }),
+        makeEntry({
+          taskType: 'set_next_layer',
+          params: { layer: 'Narva RAAS v1' },
+          createdBy: AUTHOR_ID,
+        }),
+      ]),
+    });
+
+    await runScheduledTaskTick(deps);
+
+    expect(deps.echoBroadcastToChat).not.toHaveBeenCalled();
+  });
+
+  it('skips the chat echo and records skipped_no_author when the task has no creator', async () => {
+    const entry = makeEntry({
+      taskType: 'broadcast',
+      params: { messages: ['x', 'y'] },
+      createdBy: null,
+    });
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledTasks: vi.fn().mockResolvedValue([entry]),
+    });
+
+    const result = await runScheduledTaskTick(deps);
+
+    expect(result.executed).toBe(1);
+    expect(deps.echoBroadcastToChat).not.toHaveBeenCalled();
+    // The rotation still advances even without an echo.
+    expect(deps.advanceRotationIndex).toHaveBeenCalledWith(expect.any(String), 1);
+    expect(deps.recordRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'executed',
+        detail: expect.objectContaining({ echo: 'skipped_no_author' }),
+      }),
+    );
+  });
+
+  it('records a failed run and does not advance the cursor for an empty message list', async () => {
+    const emptyList = makeEntry({
+      taskType: 'broadcast',
+      params: { messages: [] },
+      createdBy: AUTHOR_ID,
+    });
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledTasks: vi.fn().mockResolvedValue([emptyList]),
+    });
+
+    const result = await runScheduledTaskTick(deps);
+
+    expect(result).toEqual({ executed: 0, skippedDepotUpdate: 0, failed: 1 });
+    expect(deps.sendRconCommand).not.toHaveBeenCalled();
+    expect(deps.advanceRotationIndex).not.toHaveBeenCalled();
+    expect(deps.echoBroadcastToChat).not.toHaveBeenCalled();
+    expect(deps.recordRun).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+  });
+
+  it('records a failed run for a broadcast task with empty params', async () => {
+    const entry = makeEntry({ taskType: 'broadcast', params: {}, createdBy: AUTHOR_ID });
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledTasks: vi.fn().mockResolvedValue([entry]),
+    });
+
+    const result = await runScheduledTaskTick(deps);
+
+    expect(result.failed).toBe(1);
+    expect(deps.advanceRotationIndex).not.toHaveBeenCalled();
+  });
+
+  it('keeps a broadcast run executed even when the chat echo rejects after the RCON enqueue', async () => {
+    const entry = makeEntry({
+      taskType: 'broadcast',
+      params: { messages: ['one', 'two'] },
+      rotationIndex: 0,
+      createdBy: AUTHOR_ID,
+    });
+    const deps = makeDeps({
+      now: new Date('2026-07-11T10:00:05.000Z'),
+      loadEnabledTasks: vi.fn().mockResolvedValue([entry]),
+      echoBroadcastToChat: vi.fn().mockRejectedValue(new Error('chat insert failed')),
+    });
+
+    const result = await runScheduledTaskTick(deps);
+
+    expect(result).toEqual({ executed: 1, skippedDepotUpdate: 0, failed: 0 });
+    expect(deps.sendRconCommand).toHaveBeenCalledWith(expect.objectContaining({ args: ['one'] }));
+    expect(deps.setLastExecutedAt).toHaveBeenCalled();
+    expect(deps.advanceRotationIndex).toHaveBeenCalledWith(expect.any(String), 1);
+    expect(deps.recordRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'executed',
+        detail: expect.objectContaining({ echo: 'failed' }),
+      }),
+    );
   });
 });
