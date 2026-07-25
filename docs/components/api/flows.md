@@ -161,6 +161,8 @@ writeVersion():
                                  author_label=actor?NULL:'system',
                                  author_ip, message)
   Step 5 — best-effort live reload (no audit on its own)
+    if configFileClass(name) != 'hot_reload':
+      return { applied:false, reason:'not_hot_reload' }   ← no RCON is sent
     reloadServerConfig(app, serverId):
       if status NOT IN (running, starting):
         return { applied:false, reason:'not_running' }
@@ -189,17 +191,19 @@ audit plugin writes `config.write` row with before.sha256 / after.sha256
 
 **Behavior classes** (`configFileClass` in `@squad/shared-config`) decide whether the file-being-present is enough or whether Squad needs a nudge:
 
+The behavior class also gates whether step 5 fires RCON at all: **only `hot_reload` files trigger `AdminReloadServerConfig`** (CFG-1, #63). For the other two classes step 5 short-circuits with `reload: { applied:false, reason:'not_hot_reload' }` and no RCON is sent.
+
 | Class | Files | What happens after step 3 |
 |---|---|---|
-| `hot_reload` | `Admins.cfg`, `Bans.cfg`, `RemoteAdminListHosts.cfg`, `RemoteBanListHosts.cfg` | Squad re-reads from disk on its own when a relevant command fires (e.g. an admin runs `/admin`). RCON reload in step 5 still fires but is effectively a no-op for these. |
-| `rotation` | `LayerRotation.cfg`, `LevelRotation.cfg`, `Excluded{Layers,Levels,Factions}.cfg`, `LayerVoting{,LowPlayers,Night}.cfg`, `VoteConfig.cfg` | RCON `AdminReloadServerConfig` (step 5) makes Squad re-parse them in-place. |
-| `requires_restart` | `CustomOptions.cfg`, `License.cfg`, `MOTD.cfg`, `Rcon.cfg`, `Server.cfg`, `ServerMessages.cfg` | File on disk is fresh, but Squad cached the old values at boot. Operator must restart the container; UI surfaces this via `behavior` + `reload.applied=false`. |
+| `hot_reload` | `Admins.cfg`, `Bans.cfg`, `RemoteAdminListHosts.cfg`, `RemoteBanListHosts.cfg` | The **only** class where step 5 sends RCON `AdminReloadServerConfig`, so Squad re-reads the file live. (Squad also re-reads some of these on its own when a relevant command fires, e.g. an admin runs `/admin`.) |
+| `rotation` | `LayerRotation.cfg`, `LevelRotation.cfg`, `Excluded{Layers,Levels,Factions}.cfg`, `LayerVoting{,LowPlayers,Night}.cfg`, `VoteConfig.cfg` | Applies from the next match. Step 5 sends **no** RCON (`reason:'not_hot_reload'`); the UI shows a "next match" hint. |
+| `requires_restart` | `CustomOptions.cfg`, `License.cfg`, `MOTD.cfg`, `Rcon.cfg`, `Server.cfg`, `ServerMessages.cfg` | File on disk is fresh, but Squad cached the old values at boot. Step 5 sends **no** RCON (`reason:'not_hot_reload'`); the operator must restart the container, which the config editor offers via a "Рестарт сервера" button (needs `server:restart`). |
 
 **Failure modes**:
 
 - Step 3 fails (path forbidden, disk full, bridge down): the route returns the bridge error verbatim (typically 500), DB unchanged, no audit `config.write` row.
 - Step 4 fails after step 3 succeeded (DB unreachable mid-request): the file on disk is the new content but no `config_versions` row exists. The next successful PUT will see `prev.sha256` from the previous-but-one row and produce a normal lineage; the orphan-on-disk state is benign and self-heals on next save. There is **no rollback** of the disk write.
-- Step 5 fails: reported in the response (`reload.applied=false`, `reason`); the audit row is still written (the edit *did* happen). UI shows a warning suggesting a manual restart.
+- Step 5 fails or is skipped: reported in the response (`reload.applied=false`, `reason` — `rcon_failed`/`not_running`/`no_credentials` for a hot_reload file, or `not_hot_reload` for rotation/requires_restart files); the audit row is still written (the edit *did* happen). UI shows a warning suggesting a manual restart for `requires_restart` files.
 
 ## Status reconciler
 
