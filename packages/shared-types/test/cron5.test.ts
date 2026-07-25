@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { cron5Matches, expandCron5Occurrences, isValidCron5, parseCron5 } from '../src/cron5.js';
+import {
+  cron5Matches,
+  expandCron5Occurrences,
+  isValidCron5,
+  minCron5IntervalMinutes,
+  parseCron5,
+} from '../src/cron5.js';
 
 describe('parseCron5 / isValidCron5', () => {
   it('parses a well-formed 5-field expression', () => {
@@ -117,5 +123,35 @@ describe('expandCron5Occurrences', () => {
       new Date('2026-07-02T00:00:00.000Z'),
     );
     expect(occurrences).toEqual([]);
+  });
+});
+
+describe('minCron5IntervalMinutes', () => {
+  it('returns the minute step for a sub-hourly step expression', () => {
+    expect(minCron5IntervalMinutes('*/1 * * * *')).toBe(1);
+    expect(minCron5IntervalMinutes('*/5 * * * *')).toBe(5);
+    expect(minCron5IntervalMinutes('*/30 * * * *')).toBe(30);
+  });
+
+  it('returns 60 for an hourly expression', () => {
+    expect(minCron5IntervalMinutes('0 * * * *')).toBe(60);
+  });
+
+  it('returns the weekly gap (10080 minutes) for a once-a-week expression', () => {
+    expect(minCron5IntervalMinutes('0 10 * * 6')).toBe(10080);
+  });
+
+  it('returns the smallest gap when a day has two close occurrences', () => {
+    expect(minCron5IntervalMinutes('0,1 10 * * *')).toBe(1);
+  });
+
+  it('returns Infinity when fewer than two occurrences fall in the probe window', () => {
+    // 00:00 on the 1st of the month: only 2024-12-01 lands in the December
+    // probe window, so there is no consecutive pair to measure.
+    expect(minCron5IntervalMinutes('0 0 1 * *')).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('throws on a malformed expression', () => {
+    expect(() => minCron5IntervalMinutes('not a cron')).toThrow();
   });
 });
