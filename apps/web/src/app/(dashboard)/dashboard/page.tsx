@@ -394,7 +394,7 @@ export default function DashboardPage() {
             method: 'POST',
             credentials: 'include',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ stop_server_ids: serverIds }),
+            body: JSON.stringify({ server_ids: serverIds }),
           });
           void load();
         }}

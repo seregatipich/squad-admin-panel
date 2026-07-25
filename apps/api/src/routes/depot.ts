@@ -24,6 +24,7 @@ const depotUpdateBody = z
   .object({
     server_ids: z.array(z.string().uuid()).optional().default([]),
   })
+  .strict()
   .default({});
 
 function parseBuildId(manifest: string): string | null {
