@@ -4,6 +4,7 @@ import type Redis from 'ioredis';
 import type { Logger } from 'pino';
 import { appendWorkerAudit } from './audit.js';
 import { snapshotRolesAndAdmins } from './db-snapshot.js';
+import { type AdminsCfgReloadOutcome, requestAdminsCfgReload } from './rcon-reload.js';
 import {
   buildManagedSegment,
   findManagedSegment,
@@ -38,6 +39,10 @@ export interface SyncResult {
   groupsCount: number;
   adminsCount: number;
   error?: string;
+  /** Outcome of the post-write RCON `AdminReloadServerConfig` request. Present
+   *  only on the successful-write branch (`state: 'wrote'`); absent on the
+   *  no-write (`in_sync`/`drift`) and failure (`unreachable`) branches. */
+  reload?: AdminsCfgReloadOutcome;
 }
 
 export function adminsCfgPath(serverId: string): string {
@@ -269,6 +274,12 @@ export async function syncServerAdminsCfg(
     admins_count: generated.adminsCount,
   });
 
+  // SYNC-3 correction №1: Squad does NOT passively re-read Admins.cfg — the
+  // panel must issue an RCON `AdminReloadServerConfig` so the freshly-written
+  // permissions take effect without a container restart. Best-effort and gated
+  // on a connected RCON listener; never blocks or fails the sync itself.
+  const reload = await requestAdminsCfgReload(redis, serverId, log);
+
   try {
     await appendWorkerAudit(db, {
       actorPlayerId: opts.actorPlayerId,
@@ -281,6 +292,7 @@ export async function syncServerAdminsCfg(
         reason: opts.reason,
         groups_count: generated.groupsCount,
         admins_count: generated.adminsCount,
+        reload,
       },
     });
   } catch (err) {
@@ -294,6 +306,7 @@ export async function syncServerAdminsCfg(
     actualHash: currentHash,
     groupsCount: generated.groupsCount,
     adminsCount: generated.adminsCount,
+    reload,
   };
 }
 

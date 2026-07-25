@@ -15,9 +15,11 @@
     "@squad/bridge-client": "workspace:*",
     "@squad/db": "workspace:*",
     "@squad/shared-config": "workspace:*",
+    "@squad/shared-types": "workspace:*",
     "drizzle-orm": "^0.45.0",
     "ioredis": "^5.4.1",
-    "pino": "^9.5.0"
+    "pino": "^9.5.0",
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
