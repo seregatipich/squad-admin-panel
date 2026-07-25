@@ -1,5 +1,17 @@
 # Changelog — worker-config-sync
 
+## 2026-07-25 — Server-delete queue cleanup fallout (SYNC-5, #38)
+
+### Changed
+
+- **`XREADGROUP` `NOGROUP` fast-refresh** (`src/index.ts`). When the API tears down a per-server stream + `config-sync` group on soft-delete (SYNC-5), the worker's multiplexed `XREADGROUP` rejects `NOGROUP` / "no such key" for the whole batch. The catch now detects that class of error, logs `xreadgroup NOGROUP — refreshing server list`, calls `refreshServerList()` immediately (dropping the vanished id and pruning its `backoffByServer` entry), and resumes on the next loop iteration — instead of sleeping 1 s and re-hitting the same error until the 30-s refresh tick.
+- **Outbox relay soft-delete guard** ([`packages/db/src/admins-cfg-outbox.ts`](../../../../packages/db/src/admins-cfg-outbox.ts), consumed by `relayOutbox`). `relayAdminsCfgSyncOutbox` now inner-joins `servers` (`FOR UPDATE OF admins_cfg_sync_outbox`) and, for any pending row whose server is soft-deleted, stamps it `relayed_at` **without** publishing — so a mutation that raced a delete cannot `XADD` the torn-down stream back into existence. Rows for live servers relay unchanged.
+
+### Tests
+
+- `test/index-import.test.ts` gains the `NOGROUP xreadgroup → immediate refresh` case (mocked `ioredis`).
+- API-side DB coverage in `apps/api/test/server-delete.test.ts` and `apps/api/test/integration/admins-cfg-outbox.test.ts` (see [testing.md](./testing.md)).
+
 ## 2026-07-25 — RCON reload after write (SYNC-3, #36)
 
 ### Added

@@ -54,6 +54,16 @@ Beyond the read-modify-write branches, guards the reload wiring:
 | RCON not connected | `reload === 'skipped_rcon_disconnected'`, no enqueue |
 | audit context | the `admins_cfg.synced` row `context` carries `reload` |
 
+### `index-import.test.ts` — module-import (all deps mocked)
+
+Imports `src/index.ts` with `ioredis`, `@squad/db`, `@squad/bridge-client`, `@squad/shared-config`, and `pino` mocked, and drives the running `main()` loop:
+
+| Test | What it verifies |
+|---|---|
+| importable + calls syncer | the module boots and wires the syncer |
+| passive drift logs "awaiting force-sync" | the `drift` branch surfaces the warn, does not overwrite |
+| **NOGROUP xreadgroup → immediate refresh (SYNC-5)** | a one-shot `mockImplementationOnce` rejects `XREADGROUP` with `NOGROUP …`; the worker calls `refreshServerList()` at once (observed as an extra `db.select` call) and keeps polling afterwards — proving the destroyed-stream case self-heals within one loop iteration rather than stalling |
+
 ### `contract.test.ts` — subprocess
 
 Spawns `dist/index.js` with a real Redis (DB 14) and a real Postgres test DB; verifies:
@@ -71,6 +81,8 @@ Cross-component coverage that the API publishes the right events:
 
 - `apps/api/test/integration/roles-and-access.test.ts > admins-cfg sync stream is published on role mutations` — asserts `XLEN events:admins-cfg-sync:<server_id> ≥ 1` after `POST /api/v1/roles`.
 - The API permission-matrix tests guard that `/api/v1/admins-cfg/drift` and `/api/v1/admins-cfg/drift/all` require `admin_group:view`, while `/api/v1/admins-cfg/sync` requires `admin_group:edit`.
+- `apps/api/test/server-delete.test.ts > softDeleteServer — Redis sync-queue cleanup (SYNC-5)` — DB + real-Redis coverage that soft-delete destroys the per-server stream, consumer group, and `admins-cfg:status:<id>` key, stamps pending outbox rows relayed (`sync_outbox_cancelled`), stays idempotent when nothing exists, is compatible when no `redis` is supplied, and records a `sync_queue_cleanup` error without aborting on Redis failure.
+- `apps/api/test/integration/admins-cfg-outbox.test.ts > stamps a soft-deleted server's pending rows relayed without publishing (SYNC-5)` — proves the relay drains an orphan row without an `XADD`, so a post-delete enqueue cannot resurrect the stream.
 
 ## What is explicitly NOT covered yet
 

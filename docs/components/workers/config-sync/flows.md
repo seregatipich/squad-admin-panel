@@ -66,6 +66,7 @@ The UI's `<AdminsCfgDriftBanner>` polls `/api/v1/admins-cfg/drift?server_id=...`
 | `bridge.fileAtomicWrite` fails | Same as above — status `unreachable`, no `XACK`, audit `phase=file_atomic_write`. | Auto-retry via reclaim. |
 | Audit append throws | Logged at error level, but the sync itself is committed. | Operator investigates DB connectivity; sync proceeds. |
 | Server deleted (`servers.deleted_at` set) | Worker drops it from the active set on next refresh (every 30 s); no further reads. | n/a |
+| `XREADGROUP` returns `NOGROUP` / "no such key" (a per-server stream+group was destroyed by the API on soft-delete, SYNC-5) | The multiplexed read rejects for the WHOLE batch, so the worker cannot tell which stream vanished. It logs `xreadgroup NOGROUP — refreshing server list`, calls `refreshServerList()` immediately (dropping the vanished id and pruning its `backoffByServer` entry), and resumes on the next loop iteration — instead of the pre-SYNC-5 behaviour of sleeping 1 s and re-hitting the same error until the 30-s refresh. | Self-heals within one loop iteration. |
 | Worker crash / SIGTERM | Heartbeat key expires within 30 s. In-flight messages stay in the crashed consumer's PEL. The next worker process — even with a fresh `consumer-${pid}-${rand}` name — picks them up via the periodic `XAUTOCLAIM` pass once they exceed `RECLAIM_MIN_IDLE_MS` (default 60 s). | systemd restart. |
 
 ## Pending-message reclaim (XAUTOCLAIM)
@@ -83,7 +84,7 @@ Together they guarantee:
 ## Per-server lifecycle
 
 - **Server install** — when a new server's row appears in DB, the next 30-s `refreshServerList` tick adds it to the active set and creates the consumer group with `MKSTREAM`. The API enqueues an initial sync event so the file is populated before Squad first boots.
-- **Server soft-delete** — once `deleted_at` is set the worker drops the server from `activeServerIds` after the 30-s refresh, stops reading its stream, and never writes its file again.
+- **Server soft-delete** — the API's `softDeleteServer` now tears the per-server sync queue down synchronously (SYNC-5, #38): it `XGROUP DESTROY`s the `config-sync` group, `UNLINK`s the `events:admins-cfg-sync:<id>` stream, `DEL`s the `admins-cfg:status:<id>` key, and stamps any still-pending `admins_cfg_sync_outbox` rows `relayed_at`. The worker reacts two ways: (1) the destroyed stream makes the next multiplexed `XREADGROUP` reject `NOGROUP`, which triggers an immediate `refreshServerList()` (see the retry table) so the id is dropped without waiting for the 30-s tick; (2) even without that, the id falls out of `activeServerIds` on the next refresh. The **outbox relay** ([`relayAdminsCfgSyncOutbox`](../../../../packages/db/src/admins-cfg-outbox.ts)) additionally joins `servers` and, for any pending row whose server is soft-deleted, stamps it `relayed_at` **without** an `XADD` — so a mutation that raced the delete can never resurrect the torn-down stream.
 - **Server restore** — re-appears on the active list, the consumer group is (re-)created with `MKSTREAM`, the next reconcile rewrites the managed segment from current DB.
 
 ## Background flow — heartbeat
