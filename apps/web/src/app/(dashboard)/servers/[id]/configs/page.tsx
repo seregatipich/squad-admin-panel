@@ -1,15 +1,16 @@
 'use client';
+import type { OnMount } from '@monaco-editor/react';
+import { BEGIN_MARKER } from '@squad/shared-config/admins-config';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
-
-// ROT-2 (#145): LayerRotation.cfg's managed segment is edited on the
-// dedicated rotation page, not here — the marker string must stay in sync
-// with apps/api/src/lib/rotation-segment.ts.
-const MANAGED_SEGMENT_MARKER = '//SQUAD-PANEL BEGIN';
+import { managedSegmentLineRange } from './managed-segment';
 
 const POLL_MS = 8000;
+
+type EditorInstance = Parameters<OnMount>[0];
+type MonacoInstance = Parameters<OnMount>[1];
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 const MonacoDiff = dynamic(
@@ -93,6 +94,25 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     serverShaRef.current = serverSha;
   }, [serverSha]);
 
+  // Admins.cfg managed-segment read-only enforcement (CFG-1, #63). monaco
+  // 0.55.1 has no read-only-range API, so the segment is guarded by a
+  // decorations overlay plus an undo of any edit that touches it — the rest
+  // of the file stays editable.
+  const editorRef = useRef<EditorInstance | null>(null);
+  const monacoRef = useRef<MonacoInstance | null>(null);
+  const decorationsRef = useRef<ReturnType<EditorInstance['createDecorationsCollection']> | null>(
+    null,
+  );
+  const protectedRangeRef = useRef<{ startLine: number; endLine: number } | null>(null);
+  const undoingRef = useRef(false);
+  const [editorReady, setEditorReady] = useState(false);
+  const [segmentNotice, setSegmentNotice] = useState(false);
+  const segmentNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Restart button for requires_restart files (CFG-1, #63).
+  const [canRestart, setCanRestart] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+
   const refreshFiles = useCallback(async () => {
     try {
       const r = await fetch(`/api/v1/servers/${id}/configs`, { credentials: 'include' });
@@ -140,6 +160,54 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       clearInterval(t);
     };
   }, [id, selected]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' });
+        if (!r.ok || cancelled) return;
+        const me = (await r.json()) as { permissions?: string[] };
+        if (!cancelled) setCanRestart(me.permissions?.includes('server:restart') ?? false);
+      } catch {
+        // best-effort; the restart button simply stays hidden without the permission
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const flashSegmentNotice = useCallback(() => {
+    setSegmentNotice(true);
+    if (segmentNoticeTimer.current) clearTimeout(segmentNoticeTimer.current);
+    segmentNoticeTimer.current = setTimeout(() => setSegmentNotice(false), 2500);
+  }, []);
+
+  const handleEditorMount = useCallback<OnMount>(
+    (editor, monaco) => {
+      editorRef.current = editor;
+      monacoRef.current = monaco;
+      editor.onDidChangeModelContent((ev) => {
+        // Ignore the model change our own undo produces, otherwise the guard
+        // would fight the undo it just issued and loop forever.
+        if (undoingRef.current) return;
+        const range = protectedRangeRef.current;
+        if (!range) return;
+        const touchesSegment = ev.changes.some(
+          (c) =>
+            c.range.startLineNumber <= range.endLine && c.range.endLineNumber >= range.startLine,
+        );
+        if (!touchesSegment) return;
+        undoingRef.current = true;
+        editor.trigger('managed-segment', 'undo', null);
+        undoingRef.current = false;
+        flashSegmentNotice();
+      });
+      setEditorReady(true);
+    },
+    [flashSegmentNotice],
+  );
 
   const load = useCallback(
     async (name: string) => {
@@ -293,9 +361,68 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     }
   }
 
+  async function restartServer() {
+    if (restarting) return;
+    if (!confirm('Перезапустить сервер? Игроки будут отключены на время рестарта.')) return;
+    setRestarting(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const r = await fetch(`/api/v1/servers/${id}/restart`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+      setMsg('Сервер перезапускается…');
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setRestarting(false);
+    }
+  }
+
   const selectedFile = files.find((f) => f.name === selected) ?? null;
-  const isManagedRotation =
-    selected === 'LayerRotation.cfg' && content.includes(MANAGED_SEGMENT_MARKER);
+  const isManagedRotation = selected === 'LayerRotation.cfg' && content.includes(BEGIN_MARKER);
+  const isManagedAdmins = selected === 'Admins.cfg' && managedSegmentLineRange(content) !== null;
+  const showRestart = selectedFile?.behavior === 'requires_restart' && canRestart;
+
+  useEffect(() => {
+    if (!editorReady) return;
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
+    const model = editor.getModel();
+    if (!model) return;
+    // Squad ships CRLF configs; keep the model's EOL aligned so getValue()
+    // (and therefore the PUT payload) round-trips byte-identically.
+    if (content.includes('\r\n')) {
+      model.setEOL(monaco.editor.EndOfLineSequence.CRLF);
+    }
+    const range = isManagedAdmins ? managedSegmentLineRange(content) : null;
+    protectedRangeRef.current = range;
+    decorationsRef.current?.clear();
+    decorationsRef.current = null;
+    if (range) {
+      decorationsRef.current = editor.createDecorationsCollection([
+        {
+          range: new monaco.Range(range.startLine, 1, range.endLine, 1),
+          options: {
+            isWholeLine: true,
+            className: 'squad-managed-segment',
+            linesDecorationsClassName: 'squad-managed-segment-gutter',
+            hoverMessage: { value: 'управляется панелью' },
+          },
+        },
+      ]);
+    }
+  }, [editorReady, content, isManagedAdmins]);
+
+  useEffect(
+    () => () => {
+      if (segmentNoticeTimer.current) clearTimeout(segmentNoticeTimer.current);
+    },
+    [],
+  );
 
   return (
     <div className="space-y-4">
@@ -399,6 +526,16 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
                       изменено
                     </span>
                   ) : null}
+                  {showRestart ? (
+                    <button
+                      type="button"
+                      onClick={restartServer}
+                      disabled={restarting}
+                      className="rounded bg-amber-700 px-2 py-1 text-[11px] text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {restarting ? 'Перезапуск…' : 'Рестарт сервера'}
+                    </button>
+                  ) : null}
                 </div>
                 <nav className="flex gap-1 text-xs">
                   <TabButton active={tab === 'editor'} onClick={() => setTab('editor')}>
@@ -429,6 +566,30 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
                       </span>
                     </div>
                   ) : null}
+                  {isManagedAdmins ? (
+                    <div
+                      data-testid="managed-admins-banner"
+                      className="flex items-center justify-between gap-3 border-b border-amber-900 bg-amber-950/40 px-3 py-2 text-xs text-amber-200"
+                    >
+                      <span>
+                        Блок между маркерами{' '}
+                        <code className="rounded bg-amber-900/50 px-1">{'//SQUAD-PANEL'}</code>{' '}
+                        управляется панелью и доступен только для чтения — меняйте состав через{' '}
+                        <Link href="/settings/groups" className="underline hover:text-amber-100">
+                          «Группы»
+                        </Link>
+                        .
+                      </span>
+                    </div>
+                  ) : null}
+                  {segmentNotice ? (
+                    <div
+                      data-testid="managed-segment-notice"
+                      className="border-b border-amber-900 bg-amber-900/30 px-3 py-1.5 text-xs text-amber-100"
+                    >
+                      Правка managed-сегмента отменена — этот блок доступен только для чтения.
+                    </div>
+                  ) : null}
                   <EditorView
                     content={content}
                     onChange={(v) => {
@@ -442,6 +603,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
                     onSave={save}
                     onDiscard={discard}
                     readOnly={isManagedRotation}
+                    onMount={handleEditorMount}
                   />
                 </>
               ) : null}
@@ -499,6 +661,7 @@ function EditorView(props: {
   onSave: () => void;
   onDiscard: () => void;
   readOnly?: boolean;
+  onMount?: OnMount;
 }) {
   return (
     <>
@@ -535,6 +698,7 @@ function EditorView(props: {
         theme="vs-dark"
         value={props.content}
         onChange={(v) => props.onChange(v ?? '')}
+        onMount={props.onMount}
         options={{
           minimap: { enabled: false },
           fontSize: 13,
