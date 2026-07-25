@@ -175,12 +175,14 @@ describe('GET /api/v1/servers/:id/configs/:name', () => {
 });
 
 describe('PUT /api/v1/servers/:id/configs/:name auto-reloads Squad', () => {
+  // These cases exercise the RCON reload path, which now fires only for
+  // hot_reload files (CFG-1, #63) — Admins.cfg is one, so they write it.
   it('reports reload.applied=false / reason=not_running when server status is pending', async () => {
     const cookie = await login();
     const id = await createServer(cookie);
     const resp = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/servers/${id}/configs/Server.cfg`,
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
       headers: { cookie },
       payload: { content: 'ServerName="x"' },
     });
@@ -211,7 +213,7 @@ describe('PUT /api/v1/servers/:id/configs/:name auto-reloads Squad', () => {
 
       const resp = await h.app.inject({
         method: 'PUT',
-        url: `/api/v1/servers/${id}/configs/Server.cfg`,
+        url: `/api/v1/servers/${id}/configs/Admins.cfg`,
         headers: { cookie },
         payload: { content: 'ServerName="y"' },
       });
@@ -253,7 +255,7 @@ describe('PUT /api/v1/servers/:id/configs/:name auto-reloads Squad', () => {
 
       const resp = await h.app.inject({
         method: 'PUT',
-        url: `/api/v1/servers/${id}/configs/Server.cfg`,
+        url: `/api/v1/servers/${id}/configs/Admins.cfg`,
         headers: { cookie },
         payload: { content: 'ServerName="fallback"' },
       });
@@ -287,7 +289,7 @@ describe('PUT /api/v1/servers/:id/configs/:name auto-reloads Squad', () => {
 
     const resp = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/servers/${id}/configs/Server.cfg`,
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
       headers: { cookie },
       payload: { content: 'ServerName="no-listener"' },
     });
@@ -300,6 +302,75 @@ describe('PUT /api/v1/servers/:id/configs/:name auto-reloads Squad', () => {
     expect(body.reload.applied).toBe(false);
     expect(body.reload.reason).toBe('rcon_failed');
     expect(body.reload.detail).toBeTruthy();
+  });
+});
+
+describe('PUT /api/v1/servers/:id/configs/:name gates reload on hot_reload (CFG-1, #63)', () => {
+  it('does NOT fire RCON for a requires_restart file, returns reason=not_hot_reload', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    // Running server with a reachable fake RCON: proves the gate short-circuits
+    // BEFORE any RCON command, not merely because the server is unreachable.
+    await h.db
+      .update(servers)
+      .set({ status: 'running', updatedAt: new Date() })
+      .where(eq(servers.id, id));
+    const fake = await startFakeRcon();
+    try {
+      await h.db
+        .update(serverCredentials)
+        .set({ rconHost: '127.0.0.1', rconPort: fake.port })
+        .where(eq(serverCredentials.serverId, id));
+
+      const resp = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${id}/configs/Server.cfg`,
+        headers: { cookie },
+        payload: { content: 'ServerName="requires-restart"' },
+      });
+      expect(resp.statusCode).toBe(200);
+      const body = resp.json<{
+        unchanged: boolean;
+        reload: { applied: boolean; reason?: string };
+      }>();
+      expect(body.unchanged).toBe(false); // the write still happened
+      expect(body.reload.applied).toBe(false);
+      expect(body.reload.reason).toBe('not_hot_reload');
+      expect(fake.receivedCommands).not.toContain('AdminReloadServerConfig');
+      expect(fake.receivedCommands).toHaveLength(0);
+    } finally {
+      fake.close();
+    }
+  });
+
+  it('does NOT fire RCON for a rotation file (LayerRotation.cfg), returns reason=not_hot_reload', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    await h.db
+      .update(servers)
+      .set({ status: 'running', updatedAt: new Date() })
+      .where(eq(servers.id, id));
+    const fake = await startFakeRcon();
+    try {
+      await h.db
+        .update(serverCredentials)
+        .set({ rconHost: '127.0.0.1', rconPort: fake.port })
+        .where(eq(serverCredentials.serverId, id));
+
+      const resp = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${id}/configs/LayerRotation.cfg`,
+        headers: { cookie },
+        payload: { content: 'Yehorivka RAAS v1' },
+      });
+      expect(resp.statusCode).toBe(200);
+      const body = resp.json<{ reload: { applied: boolean; reason?: string } }>();
+      expect(body.reload.applied).toBe(false);
+      expect(body.reload.reason).toBe('not_hot_reload');
+      expect(fake.receivedCommands).toHaveLength(0);
+    } finally {
+      fake.close();
+    }
   });
 });
 
@@ -351,6 +422,37 @@ describe('PUT /api/v1/servers/:id/configs/:name', () => {
       .from(configVersions)
       .where(eq(configVersions.serverId, id));
     expect(versions).toHaveLength(1);
+  });
+
+  it('round-trips a CRLF payload byte-identically through PUT → GET and into config_versions', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    const crlf = '[SquadName]\r\nServerName="Test"\r\nMaxPlayers=80\r\n';
+    const put = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Server.cfg`,
+      headers: { cookie },
+      payload: { content: crlf },
+    });
+    expect(put.statusCode).toBe(200);
+
+    const get = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Server.cfg`,
+      headers: { cookie },
+    });
+    expect(get.statusCode).toBe(200);
+    expect(get.json<{ content: string }>().content).toBe(crlf);
+
+    const [row] = await h.db
+      .select({ content: configVersions.content })
+      .from(configVersions)
+      .where(and(eq(configVersions.serverId, id), eq(configVersions.filename, 'Server.cfg')));
+    expect(row?.content).toBe(crlf);
+    // the bridge stored the exact bytes on disk too
+    expect(
+      h.bridge.files.get(`${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/Server.cfg`)?.toString('utf-8'),
+    ).toBe(crlf);
   });
 });
 

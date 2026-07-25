@@ -13,3 +13,13 @@ body {
     @apply text-sky-400 hover:text-sky-300 underline-offset-4;
   }
 }
+
+/* CFG-1 (#63): the Admins.cfg //SQUAD-PANEL managed segment is panel-owned and
+   read-only inside the Monaco editor — highlight it so operators see why their
+   edits are rejected. Applied via editor.createDecorationsCollection. */
+.squad-managed-segment {
+  background: rgba(180, 83, 9, 0.14);
+}
+.squad-managed-segment-gutter {
+  background: rgba(180, 83, 9, 0.55);
+}

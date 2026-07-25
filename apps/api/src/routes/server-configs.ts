@@ -453,14 +453,18 @@ export async function writeVersion(
     })
     .returning({ id: configVersions.id, createdAt: configVersions.createdAt });
 
-  // Push the change live: Squad already sees the new file through its bind
-  // mount, but only hot-reload files (Admins/Bans/RemoteAdmin/RemoteBan) are
-  // polled from disk automatically. For everything else we ask Squad to
-  // re-read its ServerConfig via AdminReloadServerConfig, over RCON. Best-
-  // effort: skip gracefully if the server isn't running or has no RCON
-  // credentials yet, and surface the outcome in the response so the UI can
-  // warn the operator that a restart is still needed.
-  const reload = await reloadServerConfig(app, serverId);
+  // Push the change live, but only for hot-reload files
+  // (Admins/Bans/RemoteAdmin/RemoteBan): those are the files Squad re-reads
+  // from disk when AdminReloadServerConfig fires. `rotation` files apply on
+  // the next match and `requires_restart` files need a container restart, so
+  // firing RCON for them is misleading — the UI surfaces `not_hot_reload` and
+  // (for requires_restart) offers a restart button instead (CFG-1, #63).
+  // Best-effort: skip gracefully if the server isn't running or has no RCON
+  // credentials yet, and surface the outcome so the UI can guide the operator.
+  const reload: ReloadOutcome =
+    configFileClass(name) === 'hot_reload'
+      ? await reloadServerConfig(app, serverId)
+      : { applied: false, reason: 'not_hot_reload' };
   return {
     ok: true,
     unchanged: false,
@@ -481,7 +485,11 @@ export type ReloadOutcome =
       response: string;
       request_id?: string;
     }
-  | { applied: false; reason: 'not_running' | 'no_credentials' | 'rcon_failed'; detail?: string };
+  | {
+      applied: false;
+      reason: 'not_running' | 'no_credentials' | 'rcon_failed' | 'not_hot_reload';
+      detail?: string;
+    };
 
 /**
  * Exported so POST /restore can trigger the same push. Never throws — a
