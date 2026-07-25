@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { recomputeLeaderboardPeriod } from '../src/leaderboard/aggregate.js';
+import { ALLTIME_PERIOD_START, recomputeLeaderboardPeriod } from '../src/leaderboard/aggregate.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
@@ -27,20 +27,26 @@ async function seedPresence(
   day: string,
   onlineSeconds: number,
   boostSeconds = 0,
+  seedSeconds = 0,
 ) {
   await sql`
-    INSERT INTO player_daily_presence (player_id, server_id, day, online_seconds, boost_seconds)
-    VALUES (${playerId}, ${serverId}, ${day}::date, ${onlineSeconds}, ${boostSeconds})
+    INSERT INTO player_daily_presence
+      (player_id, server_id, day, online_seconds, boost_seconds, seed_seconds)
+    VALUES (${playerId}, ${serverId}, ${day}::date, ${onlineSeconds}, ${boostSeconds}, ${seedSeconds})
     ON CONFLICT (player_id, day, server_id)
-    DO UPDATE SET online_seconds = EXCLUDED.online_seconds, boost_seconds = EXCLUDED.boost_seconds
+    DO UPDATE SET online_seconds = EXCLUDED.online_seconds,
+                  boost_seconds = EXCLUDED.boost_seconds,
+                  seed_seconds = EXCLUDED.seed_seconds
   `;
 }
 
-async function setEconomyCoefficients(kOnline: number, kBoost: number) {
+async function setEconomyCoefficients(kOnline: number, kBoost: number, kSeed = 3) {
   await sql`
-    INSERT INTO economy_settings (id, k_online, k_boost)
-    VALUES (1, ${kOnline}, ${kBoost})
-    ON CONFLICT (id) DO UPDATE SET k_online = EXCLUDED.k_online, k_boost = EXCLUDED.k_boost
+    INSERT INTO economy_settings (id, k_online, k_boost, k_seed)
+    VALUES (1, ${kOnline}, ${kBoost}, ${kSeed})
+    ON CONFLICT (id) DO UPDATE SET k_online = EXCLUDED.k_online,
+                                   k_boost = EXCLUDED.k_boost,
+                                   k_seed = EXCLUDED.k_seed
   `;
 }
 
@@ -285,6 +291,124 @@ describeIfDb('bonus/boost accrual (LEAD-4)', () => {
     await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
     const after = await statRows('day', '2026-07-05');
     expect(after.find((r) => r.server_id === SERVER_1)?.bonus_points).toBe(1000 + 10 * 100);
+  });
+});
+
+describeIfDb('seeding contribution (LEAD-6)', () => {
+  it('materialises per-server seeding_seconds and sums them into the rollup', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 3600, 0, 1200);
+    await seedPresence(PLAYER_A, SERVER_2, '2026-07-05', 1800, 0, 600);
+    await seedPresence(PLAYER_B, SERVER_1, '2026-07-05', 900, 0, 300);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+
+    const rows = await statRows('day', '2026-07-05');
+    const aServer1 = rows.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_1);
+    const aServer2 = rows.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_2);
+    const aRollup = rows.find((r) => r.player_id === PLAYER_A && r.server_id === null);
+    const bServer1 = rows.find((r) => r.player_id === PLAYER_B && r.server_id === SERVER_1);
+
+    // Per-server seeding_seconds matches the presence rows exactly.
+    expect(aServer1?.seeding_seconds).toBe(1200);
+    expect(aServer2?.seeding_seconds).toBe(600);
+    expect(bServer1?.seeding_seconds).toBe(300);
+    // The NULL-server rollup is the sum of the player's per-server rows.
+    expect(aRollup?.seeding_seconds).toBe(1800);
+
+    // The materialised total reconciles with player_daily_presence.
+    const [presenceSum] = await sql<{ total: number }[]>`
+      SELECT COALESCE(SUM(seed_seconds), 0)::bigint AS total
+      FROM player_daily_presence WHERE day = '2026-07-05'
+    `;
+    const [statSum] = await sql<{ total: number }[]>`
+      SELECT COALESCE(SUM(seeding_seconds), 0)::bigint AS total
+      FROM player_stat_periods
+      WHERE period_type = 'day' AND period_start = '2026-07-05' AND server_id IS NOT NULL
+    `;
+    expect(Number(statSum.total)).toBe(Number(presenceSum.total));
+    expect(Number(statSum.total)).toBe(2100);
+  });
+
+  it('ranks weekly top seeders by seeding_seconds with hand-computed totals', async () => {
+    // PLAYER_A seeds across two days on one server → 1000 + 2000 = 3000 for the week.
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-30', 0, 0, 1000);
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-01', 0, 0, 2000);
+    // PLAYER_B seeds 4000 on a single day → outranks PLAYER_A.
+    await seedPresence(PLAYER_B, SERVER_1, '2026-07-02', 0, 0, 4000);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'week', periodStart: '2026-06-29' });
+
+    const top = await sql<{ player_id: string; seeding_seconds: number }[]>`
+      SELECT player_id, seeding_seconds
+      FROM player_stat_periods
+      WHERE period_type = 'week' AND period_start = '2026-06-29' AND server_id IS NULL
+      ORDER BY seeding_seconds DESC
+    `;
+    expect(top.map((r) => r.player_id)).toEqual([PLAYER_B, PLAYER_A]);
+    expect(top[0]?.seeding_seconds).toBe(4000);
+    expect(top[1]?.seeding_seconds).toBe(3000);
+  });
+
+  it('adds k_seed × seed to bonus_points alongside online and boost', async () => {
+    await setEconomyCoefficients(1, 2, 3);
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 3600, 600, 1200);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+
+    const rows = await statRows('day', '2026-07-05');
+    const server1 = rows.find((r) => r.server_id === SERVER_1 && r.player_id === PLAYER_A);
+    expect(server1?.seeding_seconds).toBe(1200);
+    // bonus = k_online*online + k_boost*boost + k_seed*seed = 1*3600 + 2*600 + 3*1200
+    expect(server1?.bonus_points).toBe(1 * 3600 + 2 * 600 + 3 * 1200);
+  });
+
+  it('freezes seeding_seconds and its bonus until the period is recomputed', async () => {
+    await setEconomyCoefficients(1, 2, 3);
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 0, 0, 1000);
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+
+    const before = (await statRows('day', '2026-07-05')).find((r) => r.server_id === SERVER_1);
+    expect(before?.seeding_seconds).toBe(1000);
+    expect(before?.bonus_points).toBe(3 * 1000);
+
+    // Owner raises k_seed; the stored row stays frozen until an explicit recompute.
+    await setEconomyCoefficients(1, 2, 9);
+    const frozen = (await statRows('day', '2026-07-05')).find((r) => r.server_id === SERVER_1);
+    expect(frozen?.bonus_points).toBe(3 * 1000);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+    const after = (await statRows('day', '2026-07-05')).find((r) => r.server_id === SERVER_1);
+    expect(after?.bonus_points).toBe(9 * 1000);
+    // seeding_seconds is sourced from presence and is unaffected by k_seed.
+    expect(after?.seeding_seconds).toBe(1000);
+  });
+
+  it('stores zero seeding_seconds without a constraint violation and is idempotent', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 3600); // seedSeconds defaults to 0
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+    const first = await statRows('day', '2026-07-05');
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+    const second = await statRows('day', '2026-07-05');
+
+    expect(first.find((r) => r.server_id === SERVER_1)?.seeding_seconds).toBe(0);
+    expect(second).toStrictEqual(first);
+  });
+
+  it('sums seeding_seconds across every day for the alltime period', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-04', 0, 0, 500);
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 0, 0, 700);
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'alltime',
+      periodStart: ALLTIME_PERIOD_START,
+    });
+
+    const rows = await statRows('alltime', ALLTIME_PERIOD_START);
+    const server1 = rows.find((r) => r.server_id === SERVER_1 && r.player_id === PLAYER_A);
+    const rollup = rows.find((r) => r.server_id === null && r.player_id === PLAYER_A);
+    expect(server1?.seeding_seconds).toBe(1200);
+    expect(rollup?.seeding_seconds).toBe(1200);
   });
 });
 
