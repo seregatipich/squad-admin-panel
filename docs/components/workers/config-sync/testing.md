@@ -32,12 +32,38 @@ Covers the deterministic generator, parser, and splicer in `src/segment.ts`:
 | `spliceManagedSegment` | replaces in place, prepends to non-empty file with no markers, leaves outside-segment bytes untouched |
 | `hashSegment` | 64-char lowercase hex |
 
+### `rcon-reload.test.ts` — unit (pure, fake Redis)
+
+Covers `requestAdminsCfgReload` (`src/rcon-reload.ts`) in isolation:
+
+| Test | What it verifies |
+|---|---|
+| connected RCON | exactly one `XADD` to `rcon:commands:<id>` whose `request` parses to `command: 'AdminReloadServerConfig', args: []`; returns `enqueued` |
+| status absent / `connecting` / `disconnected` / malformed JSON | no `XADD`, returns `skipped_rcon_disconnected`, never throws |
+| `xadd` rejects | returns `failed`, never throws, logs one warn |
+
+### `syncer.test.ts` — unit (fake Redis/DB/bridge)
+
+Beyond the read-modify-write branches, guards the reload wiring:
+
+| Test | What it verifies |
+|---|---|
+| `not_found → write` and `forceWrite` paths | enqueue exactly one reload; `SyncResult.reload === 'enqueued'` |
+| `in_sync` (no write), `drift`, read-fail, write-fail paths | enqueue **zero** reloads |
+| reload `xadd` rejects | sync still returns `state: 'wrote'` (reload is strictly best-effort), `reload === 'failed'` |
+| RCON not connected | `reload === 'skipped_rcon_disconnected'`, no enqueue |
+| audit context | the `admins_cfg.synced` row `context` carries `reload` |
+
 ### `contract.test.ts` — subprocess
 
 Spawns `dist/index.js` with a real Redis (DB 14) and a real Postgres test DB; verifies:
 
 - `worker:heartbeat:config-sync` key appears within 30 s of start with TTL ≤ 30 s.
 - SIGTERM causes exit code 0 within 5 s.
+
+## Live e2e (run-deferred, tier-3)
+
+`apps/api/test/e2e/admins-cfg-reload-live.e2e.test.ts` proves SYNC-3 correction №1 end-to-end against the live stack: it force-syncs a running server, waits for `admins-cfg:status:<id> = in_sync`, and asserts the resulting `admins_cfg.force_synced` audit row records `context.reload = 'enqueued'` (with an `XLEN rcon:commands:<id>` growth check as corroboration). Like `config-reload-live.e2e.test.ts` it lives under `test/e2e/**`, which `apps/api/vitest.config.ts` excludes from the default run — it executes only in the CI tier-3 job. It **skips with a clear `console.warn`** when no server is `running` or `rcon:status:<id>.state !== 'connected'`.
 
 ## Integration coverage from API side
 

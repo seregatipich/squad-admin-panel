@@ -25,6 +25,8 @@
         └──────────┘               └──────────────────┘               └──────────────┘
 ```
 
+After a successful `fileAtomicWrite`, the worker also `XADD`s an `AdminReloadServerConfig` command onto `rcon:commands:<server_id>` (consumed by worker-rcon) so Squad applies the new permissions immediately — see step-by-step below.
+
 Step-by-step:
 
 1. The API records a mutation (e.g. `PUT /api/v1/roles/:id` updates squad permissions). In the same response cycle it calls `publishAdminsCfgSyncForAllServers(db, redis, event)`.
@@ -35,12 +37,13 @@ Step-by-step:
    - Snapshot DB: `roles` (with `role_squad_permissions`) + `players WHERE role_id IS NOT NULL` mapped to role names.
    - `buildManagedSegment(snapshot)` produces the deterministic byte body + sha256.
    - `bridge.fileRead({ path })` reads the current file; `findManagedSegment` extracts the existing managed slice.
-   - If hashes match and `forceWrite=false`, set status `in_sync` and **skip the write** (idempotency).
+   - If hashes match and `forceWrite=false`, set status `in_sync` and **skip the write** (idempotency) — no reload is issued on this branch.
    - Otherwise `bridge.fileAtomicWrite({ path, content })` with the spliced body.
    - Update status to `in_sync` with the fresh hash, group/admin counts, and a timestamp.
-   - Append an `admins_cfg.synced` (or `admins_cfg.force_synced`) row to `audit_log`.
+   - **Request an RCON `AdminReloadServerConfig`** via `requestAdminsCfgReload(redis, serverId, log)` (`src/rcon-reload.ts`) so the freshly-written permissions apply without a restart. This is gated on `rcon:status:<server_id>.state === 'connected'` and is strictly best-effort — it never throws and never rolls back the write. The outcome (`enqueued` | `skipped_rcon_disconnected` | `failed`) is captured on `SyncResult.reload`.
+   - Append an `admins_cfg.synced` (or `admins_cfg.force_synced`) row to `audit_log`, including the `reload` outcome in the row `context`.
    - `XACK` the stream entry.
-5. Squad re-reads `Admins.cfg` once a minute on its own — no container restart needed.
+5. **Squad does NOT passively re-read `Admins.cfg`** — the panel issues the RCON `AdminReloadServerConfig` above so the change takes effect immediately, without a container restart (SYNC-3 correction №1, `ai_docs/plans/2026-07-04-task-decomposition.md`). If no RCON listener is connected the reload is skipped; worker-rcon replays the current config on its next successful connect, and the periodic drift sweep keeps the file authoritative in the meantime.
 
 ## Drift detection flow (every 5 min)
 

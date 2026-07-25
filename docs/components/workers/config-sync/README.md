@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Synthesizes the **managed segment of `Admins.cfg`** on every controlled Squad server from the panel's role/player database, pushes it atomically through the host bridge, and detects drift if anyone edits the managed segment outside the panel. The worker is the single writer of the marker-fenced section between `//SQUAD-PANEL BEGIN` and `//SQUAD-PANEL END`; everything outside those markers is preserved verbatim.
+Synthesizes the **managed segment of `Admins.cfg`** on every controlled Squad server from the panel's role/player database, pushes it atomically through the host bridge, and detects drift if anyone edits the managed segment outside the panel. The worker is the single writer of the marker-fenced section between `//SQUAD-PANEL BEGIN` and `//SQUAD-PANEL END`; everything outside those markers is preserved verbatim. After every successful write it issues an RCON `AdminReloadServerConfig` (via worker-rcon) so permission changes take effect without a container restart.
 
 ## What it does NOT do
 
@@ -16,21 +16,26 @@ Synthesizes the **managed segment of `Admins.cfg`** on every controlled Squad se
 apps/workers/config-sync/
   src/
     index.ts        main loop: stream consumer + drift sweep
-    syncer.ts       per-server reconcile (bridge round-trip, audit, status)
+    syncer.ts       per-server reconcile (bridge round-trip, RCON reload, audit, status)
+    rcon-reload.ts  best-effort AdminReloadServerConfig enqueue onto worker-rcon
     segment.ts      pure generator/parser/splicer for the managed segment
     db-snapshot.ts  read roles + players + role_squad_permissions for synth
     audit.ts        chained-hash audit_log append from the worker side
   test/
-    contract.test.ts  subprocess contract tests (heartbeat, SIGTERM)
-    segment.test.ts   unit coverage of generator/parser/splicer
+    contract.test.ts   subprocess contract tests (heartbeat, SIGTERM)
+    segment.test.ts    unit coverage of generator/parser/splicer
+    rcon-reload.test.ts unit coverage of the reload enqueue + gating
+    syncer.test.ts     per-branch reconcile + reload wiring coverage
 ```
 
 ## Dependencies
 
 - `@squad/bridge-client` — talks to `/run/panel-host-bridge/bridge.sock` for `file_read` + `file_atomic_write`.
 - `@squad/db` + `drizzle-orm` — reads roles / role_squad_permissions / players.
-- `ioredis` — XREADGROUP consumer for `events:admins-cfg-sync:<server_id>` streams + status publishing.
+- `ioredis` — XREADGROUP consumer for `events:admins-cfg-sync:<server_id>` streams + status publishing + RCON reload enqueue.
 - `@squad/shared-config` — shared heartbeat / log-stream sink.
+- `@squad/shared-types` — `rconCommandRequestSchema` / `rconCommandStream` for the `AdminReloadServerConfig` enqueue.
+- `uuid` — v7 `request_id` for the enqueued RCON command (byte-parity with sibling workers).
 
 ## Components that depend on it
 
