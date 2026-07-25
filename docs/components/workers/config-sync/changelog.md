@@ -1,5 +1,11 @@
 # Changelog — worker-config-sync
 
+## 2026-07-25 — SYNC-9: pull vs. push evaluated, push retained (#39)
+
+### Decided
+
+- Evaluated Squad's `RemoteAdminListHosts.cfg` pull mechanism (servers fetch the admin list from a panel-hosted URL) as an alternative to this worker's push architecture. **Verdict: stay on push.** Pull would forfeit sha256 drift detection, the per-server `admins_cfg.synced`/`.force_synced`/`.sync_failed` audit trail, and the `admins-cfg:status:<id>` unreachable/outage state machine (incl. the SYNC-5 >1 h alert); it removes the panel's ability to force immediate application (push issues RCON `AdminReloadServerConfig` after each write, SYNC-3 correction №1); and it adds a silent-staleness failure mode when the panel URL is unreachable — with no offsetting cadence or bandwidth win. No code change; the push path is unchanged. Full analysis, three env-gated live-measurement protocols, and the reversal conditions are recorded in the ADR [`ai_docs/adr/2026-07-25-remote-admin-list-hosts-vs-push.md`](../../../../ai_docs/adr/2026-07-25-remote-admin-list-hosts-vs-push.md). A hybrid "push as source of truth + optionally publish a read-only URL" is left as a follow-up.
+
 ## 2026-07-25 — Server-delete queue cleanup fallout (SYNC-5, #38)
 
 ### Changed
