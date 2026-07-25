@@ -505,6 +505,13 @@
       "when": 1783401600000,
       "tag": "0086_scheduled_task_broadcast_rotation",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1783401700000,
+      "tag": "0087_whitelist_applications",
+      "breakpoints": true
     }
   ]
 }
