@@ -1,8 +1,19 @@
-import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
+import { relayAdminsCfgSyncOutbox } from '@squad/db';
+import {
+  adminsCfgSyncOutbox,
+  configVersions,
+  serverCredentials,
+  serverSettings,
+  servers,
+} from '@squad/db/schema';
 import { ALLOWED_CONFIG_FILES } from '@squad/shared-config';
-import { and, eq, like } from 'drizzle-orm';
+import { and, eq, isNull, like } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  ADMINS_CFG_SYNC_GROUP,
+  ADMINS_CFG_SYNC_STREAM_PREFIX,
+} from '../src/lib/admins-cfg-sync.js';
 import { softDeleteServer } from '../src/lib/server-delete.js';
 import { testSteamId } from './helpers/snapshot-restore.js';
 import {
@@ -11,6 +22,17 @@ import {
   type IntegrationHarness,
   loginAsOwner,
 } from './integration/harness.js';
+
+const ADMINS_CFG_STATUS_KEY_PREFIX = 'admins-cfg:status:';
+
+async function seedConfigs(h: IntegrationHarness, serverId: string): Promise<void> {
+  for (const file of ALLOWED_CONFIG_FILES) {
+    h.bridge.files.set(
+      `/var/lib/squad-panel/configs/${serverId}/ServerConfig/${file}`,
+      Buffer.from(`# ${file}\nkey=value\n`, 'utf-8'),
+    );
+  }
+}
 
 const OWNER_STEAM_ID = testSteamId(900);
 
@@ -369,5 +391,194 @@ describe('DELETE /api/v1/servers/:id route', () => {
     expect(row?.deletedAt).not.toBeNull();
 
     expect(events.some((e) => (e as { type: string }).type === 'server.deleted')).toBe(true);
+  });
+});
+
+describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
+  it('destroys the per-server stream, consumer group, and status key (happy path)', async () => {
+    const seeded = await seedServer(h, { slug: 'sync-happy' });
+    await seedConfigs(h, seeded.id);
+
+    const streamKey = `${ADMINS_CFG_SYNC_STREAM_PREFIX}${seeded.id}`;
+    const statusKey = `${ADMINS_CFG_STATUS_KEY_PREFIX}${seeded.id}`;
+    await h.redis.xadd(streamKey, '*', 'event', JSON.stringify({ reason: 'role.create' }));
+    await h.redis.xgroup('CREATE', streamKey, ADMINS_CFG_SYNC_GROUP, '0');
+    await h.redis.set(statusKey, JSON.stringify({ state: 'in_sync' }));
+    expect(await h.redis.exists(streamKey)).toBe(1);
+    expect(await h.redis.exists(statusKey)).toBe(1);
+
+    const result = await softDeleteServer(
+      {
+        db: h.db,
+        bridge: h.bridge as unknown as FakeBridge,
+        log: silentLogger,
+        actorPlayerId: h.seed.ownerPlayerId!,
+        actorIp: '127.0.0.1',
+        actorLabel: `player:${h.seed.ownerPlayerId}`,
+        redis: h.redis,
+      },
+      seeded.id,
+    );
+
+    expect(result.sync_queue_removed).toBe(true);
+    expect(result.errors.filter((e) => e.phase === 'sync_queue_cleanup')).toHaveLength(0);
+    expect(await h.redis.exists(streamKey)).toBe(0);
+    expect(await h.redis.exists(statusKey)).toBe(0);
+
+    const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
+    expect(row?.deletedAt).not.toBeNull();
+  });
+
+  it('stamps every still-pending outbox row relayed and reports the count', async () => {
+    const seeded = await seedServer(h, { slug: 'sync-outbox' });
+    await seedConfigs(h, seeded.id);
+
+    await h.db.insert(adminsCfgSyncOutbox).values([
+      { serverId: seeded.id, payload: { reason: 'a' } },
+      { serverId: seeded.id, payload: { reason: 'b' } },
+      { serverId: seeded.id, payload: { reason: 'c' } },
+    ]);
+
+    const result = await softDeleteServer(
+      {
+        db: h.db,
+        bridge: h.bridge as unknown as FakeBridge,
+        log: silentLogger,
+        actorPlayerId: h.seed.ownerPlayerId!,
+        actorIp: null,
+        actorLabel: `player:${h.seed.ownerPlayerId}`,
+        redis: h.redis,
+      },
+      seeded.id,
+    );
+
+    expect(result.sync_outbox_cancelled).toBe(3);
+    const stillPending = await h.db
+      .select({ id: adminsCfgSyncOutbox.id })
+      .from(adminsCfgSyncOutbox)
+      .where(
+        and(eq(adminsCfgSyncOutbox.serverId, seeded.id), isNull(adminsCfgSyncOutbox.relayedAt)),
+      );
+    expect(stillPending).toHaveLength(0);
+  });
+
+  it('a row enqueued after the delete is NOT relayed to a resurrected stream (relay guard)', async () => {
+    const seeded = await seedServer(h, { slug: 'sync-resurrect' });
+    await seedConfigs(h, seeded.id);
+
+    const streamKey = `${ADMINS_CFG_SYNC_STREAM_PREFIX}${seeded.id}`;
+    await h.redis.xadd(streamKey, '*', 'event', JSON.stringify({ reason: 'role.create' }));
+    await h.redis.xgroup('CREATE', streamKey, ADMINS_CFG_SYNC_GROUP, '0');
+
+    await softDeleteServer(
+      {
+        db: h.db,
+        bridge: h.bridge as unknown as FakeBridge,
+        log: silentLogger,
+        actorPlayerId: h.seed.ownerPlayerId!,
+        actorIp: null,
+        actorLabel: `player:${h.seed.ownerPlayerId}`,
+        redis: h.redis,
+      },
+      seeded.id,
+    );
+    expect(await h.redis.exists(streamKey)).toBe(0);
+
+    // A mutation racing the delete inserts a fresh pending row after cleanup.
+    await h.db
+      .insert(adminsCfgSyncOutbox)
+      .values({ serverId: seeded.id, payload: { reason: 'race' } });
+
+    const { relayed } = await relayAdminsCfgSyncOutbox(h.db, h.redis, {
+      streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX,
+    });
+    expect(relayed).toBe(0);
+    // The relay must NOT have recreated the deleted server's stream…
+    expect(await h.redis.exists(streamKey)).toBe(0);
+    // …yet it drained the orphan row so it never lingers pending forever.
+    const stillPending = await h.db
+      .select({ id: adminsCfgSyncOutbox.id })
+      .from(adminsCfgSyncOutbox)
+      .where(
+        and(eq(adminsCfgSyncOutbox.serverId, seeded.id), isNull(adminsCfgSyncOutbox.relayedAt)),
+      );
+    expect(stillPending).toHaveLength(0);
+  });
+
+  it('is idempotent when the stream and group never existed', async () => {
+    const seeded = await seedServer(h, { slug: 'sync-missing' });
+    await seedConfigs(h, seeded.id);
+
+    const result = await softDeleteServer(
+      {
+        db: h.db,
+        bridge: h.bridge as unknown as FakeBridge,
+        log: silentLogger,
+        actorPlayerId: null,
+        actorIp: null,
+        actorLabel: 'system',
+        redis: h.redis,
+      },
+      seeded.id,
+    );
+
+    expect(result.sync_queue_removed).toBe(true);
+    expect(result.errors.filter((e) => e.phase === 'sync_queue_cleanup')).toHaveLength(0);
+    const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
+    expect(row?.deletedAt).not.toBeNull();
+  });
+
+  it('completes with sync_queue_removed=false when no redis is supplied (compat)', async () => {
+    const seeded = await seedServer(h, { slug: 'sync-nocompat' });
+    await seedConfigs(h, seeded.id);
+
+    const result = await softDeleteServer(
+      {
+        db: h.db,
+        bridge: h.bridge as unknown as FakeBridge,
+        log: silentLogger,
+        actorPlayerId: null,
+        actorIp: null,
+        actorLabel: 'system',
+      },
+      seeded.id,
+    );
+
+    expect(result.sync_queue_removed).toBe(false);
+    expect(result.sync_outbox_cancelled).toBe(0);
+    const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
+    expect(row?.deletedAt).not.toBeNull();
+  });
+
+  it('records a sync_queue_cleanup error but still soft-deletes when redis fails', async () => {
+    const seeded = await seedServer(h, { slug: 'sync-failure' });
+    await seedConfigs(h, seeded.id);
+
+    const redisStub = {
+      xgroup: vi.fn(async () => 1),
+      unlink: vi.fn(async () => {
+        throw new Error('UNLINK boom');
+      }),
+      del: vi.fn(async () => {
+        throw new Error('DEL boom');
+      }),
+    };
+
+    const result = await softDeleteServer(
+      {
+        db: h.db,
+        bridge: h.bridge as unknown as FakeBridge,
+        log: silentLogger,
+        actorPlayerId: null,
+        actorIp: null,
+        actorLabel: 'system',
+        redis: redisStub as unknown as IntegrationHarness['redis'],
+      },
+      seeded.id,
+    );
+
+    expect(result.errors.some((e) => e.phase === 'sync_queue_cleanup')).toBe(true);
+    const row = await h.db.query.servers.findFirst({ where: eq(servers.id, seeded.id) });
+    expect(row?.deletedAt).not.toBeNull();
   });
 });
