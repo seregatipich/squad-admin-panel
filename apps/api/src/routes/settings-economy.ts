@@ -16,6 +16,9 @@ const SEED_THRESHOLD_MAX = 100;
 const SEED_REWARD_THRESHOLD_HOURS_MAX = 720;
 const PRIVILEGE_DAYS_MAX = 3650;
 const PRIVILEGE_PRICE_MAX = 100_000_000;
+const VIP_EXPIRY_WINDOW_DAYS_MIN = 1;
+const VIP_EXPIRY_WINDOW_DAYS_MAX = 90;
+const VIP_EXPIRY_WINDOWS_MAX_COUNT = 10;
 
 const DEFAULT_SETTINGS = {
   k_online: 1,
@@ -26,6 +29,8 @@ const DEFAULT_SETTINGS = {
   privilege_costs: {} as PrivilegeCostCatalog,
   seed_reward_threshold_hours_per_month: 0,
   seed_reward_role_id: null as string | null,
+  vip_expiry_windows_days: [7, 3, 1] as number[],
+  vip_expiry_warn_in_game: true,
 } as const;
 
 const coefficient = z.number().finite().min(0).max(COEFFICIENT_MAX);
@@ -50,6 +55,12 @@ const putBody = z
       .max(SEED_REWARD_THRESHOLD_HOURS_MAX)
       .optional(),
     seed_reward_role_id: z.string().uuid().nullable().optional(),
+    vip_expiry_windows_days: z
+      .array(z.number().int().min(VIP_EXPIRY_WINDOW_DAYS_MIN).max(VIP_EXPIRY_WINDOW_DAYS_MAX))
+      .min(1)
+      .max(VIP_EXPIRY_WINDOWS_MAX_COUNT)
+      .optional(),
+    vip_expiry_warn_in_game: z.boolean().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, { message: 'empty_update' });
 
@@ -62,6 +73,8 @@ interface EconomySettingsView {
   privilege_costs: PrivilegeCostCatalog;
   seed_reward_threshold_hours_per_month: number;
   seed_reward_role_id: string | null;
+  vip_expiry_windows_days: number[];
+  vip_expiry_warn_in_game: boolean;
   updated_at: string | null;
   updated_by_player_id: string | null;
 }
@@ -96,7 +109,9 @@ function updateGuard(
     body.k_seed !== undefined ||
     body.seed_threshold !== undefined ||
     body.economy_enabled !== undefined ||
-    body.privilege_costs !== undefined;
+    body.privilege_costs !== undefined ||
+    body.vip_expiry_windows_days !== undefined ||
+    body.vip_expiry_warn_in_game !== undefined;
   if (changesEconomy && !req.user.permissions.canManageEconomy) {
     reply.code(403);
     return { error: 'forbidden', required: 'can_manage_economy' };
@@ -121,6 +136,8 @@ function serialize(row: EconomySettingsRow | null): EconomySettingsView {
     privilege_costs: row.privilegeCosts,
     seed_reward_threshold_hours_per_month: row.seedRewardThresholdHoursPerMonth,
     seed_reward_role_id: row.seedRewardRoleId,
+    vip_expiry_windows_days: row.vipExpiryWindowsDays,
+    vip_expiry_warn_in_game: row.vipExpiryWarnInGame,
     updated_at: row.updatedAt.toISOString(),
     updated_by_player_id: row.updatedByPlayerId,
   };
@@ -192,6 +209,12 @@ const settingsEconomyRoutes: FastifyPluginAsync = async (app) => {
       }
       if (body.seed_reward_role_id !== undefined) {
         updates.seedRewardRoleId = body.seed_reward_role_id;
+      }
+      if (body.vip_expiry_windows_days !== undefined) {
+        updates.vipExpiryWindowsDays = body.vip_expiry_windows_days;
+      }
+      if (body.vip_expiry_warn_in_game !== undefined) {
+        updates.vipExpiryWarnInGame = body.vip_expiry_warn_in_game;
       }
 
       await app.db

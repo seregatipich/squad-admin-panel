@@ -27,6 +27,7 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
       let closed = false;
       const connectionPlayerId = req.user?.playerId ?? null;
       const canViewCombat = req.user?.permissions.combatView ?? false;
+      const canAssignRoles = req.user?.permissions.canAssignRoles ?? false;
 
       app.diag
         .emit({
@@ -71,6 +72,13 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
             event.data.event_kind === 'server.seeding_started') &&
           typeof event.data.player_id === 'string' &&
           event.data.player_id !== connectionPlayerId
+        ) {
+          return;
+        }
+        if (
+          event.type === 'alert.triggered' &&
+          event.data.event_kind === 'role_expiring' &&
+          !canAssignRoles
         ) {
           return;
         }
