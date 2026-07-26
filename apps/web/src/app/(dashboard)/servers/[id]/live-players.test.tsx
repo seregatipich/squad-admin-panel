@@ -13,7 +13,7 @@ const ROSTER = {
   polled_at: '2026-07-09T10:00:00.000Z',
   players: [
     {
-      player_id: null,
+      player_id: '019e2000-0000-7000-8000-0000000000aa',
       rcon_id: 0,
       eos_id: 'eos-leader',
       steam_id64: '76561198000000001',
@@ -73,6 +73,29 @@ describe('LivePlayers', () => {
       render(<LivePlayers serverId="srv-1" canChat={true} />);
       await screen.findByText('Leader');
       expect(screen.getByRole('button', { name: /сообщение отряду/i })).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'hides the per-player message button without the chat permission',
+    async () => {
+      render(<LivePlayers serverId="srv-1" canChat={false} />);
+      await screen.findByText('Leader');
+      expect(screen.queryByRole('button', { name: /сообщение игроку/i })).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'shows a per-player message button for a resolved roster player',
+    async () => {
+      render(<LivePlayers serverId="srv-1" canChat={true} />);
+      await screen.findByText('Leader');
+      // Only `Leader` carries a resolved player_id; `Mate` has none and gets no button.
+      const buttons = screen.getAllByRole('button', { name: /сообщение игроку/i });
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0]).toHaveAttribute('aria-label', 'Сообщение игроку: Leader');
     },
     TEST_TIMEOUT_MS,
   );
