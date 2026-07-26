@@ -93,6 +93,7 @@ import serverInstallRoutes from '../../src/routes/server-install.js';
 import serverLogFilesRoutes from '../../src/routes/server-log-files.js';
 import serverLogsRoutes from '../../src/routes/server-logs.js';
 import serverMapRoutes from '../../src/routes/server-map.js';
+import serverMapVoteRoutes from '../../src/routes/server-map-vote.js';
 import serverMessagingRoutes from '../../src/routes/server-messaging.js';
 import serverMetricsRoutes from '../../src/routes/server-metrics.js';
 import serverRosterRoutes from '../../src/routes/server-roster.js';
@@ -500,6 +501,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(serverLogsRoutes);
   await app.register(serverLogFilesRoutes);
   await app.register(serverMapRoutes);
+  await app.register(serverMapVoteRoutes);
   await app.register(serverMessagingRoutes);
   await app.register(serverMetricsRoutes);
   await app.register(serverConfigRoutes);

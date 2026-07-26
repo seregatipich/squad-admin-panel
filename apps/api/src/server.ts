@@ -102,6 +102,7 @@ import serverInstallRoutes from './routes/server-install.js';
 import serverLogFilesRoutes from './routes/server-log-files.js';
 import serverLogsRoutes from './routes/server-logs.js';
 import serverMapRoutes from './routes/server-map.js';
+import serverMapVoteRoutes from './routes/server-map-vote.js';
 import serverMessagingRoutes from './routes/server-messaging.js';
 import serverMetricsRoutes from './routes/server-metrics.js';
 import serverRnsquadjsRoutes from './routes/server-rnsquadjs.js';
@@ -215,6 +216,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(serverLogsRoutes);
   await app.register(serverLogFilesRoutes);
   await app.register(serverMapRoutes);
+  await app.register(serverMapVoteRoutes);
   await app.register(serverMessagingRoutes);
   await app.register(serverMetricsRoutes);
   await app.register(serverConfigRoutes);
