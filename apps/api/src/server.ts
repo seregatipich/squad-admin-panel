@@ -72,6 +72,7 @@ import notesFeedRoutes from './routes/notes-feed.js';
 import permissionsRoutes from './routes/permissions.js';
 import playerAltCandidatesRoutes from './routes/player-alt-candidates.js';
 import playerBanAltWarningRoutes from './routes/player-ban-alt-warning.js';
+import playerCombatTrendRoutes from './routes/player-combat-trend.js';
 import playerCompareOnlineRoutes from './routes/player-compare-online.js';
 import playerCoplayRoutes from './routes/player-coplay.js';
 import playerDossierStatsRoutes from './routes/player-dossier-stats.js';
@@ -243,6 +244,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(playerLinksRoutes);
   await app.register(moderationActionsRoutes);
   await app.register(playerDossierStatsRoutes);
+  await app.register(playerCombatTrendRoutes);
   await app.register(playerGeoAnomaliesRoutes);
   await app.register(leaderboardsRoutes);
   await app.register(economyRoutes);

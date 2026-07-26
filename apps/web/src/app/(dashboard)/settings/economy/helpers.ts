@@ -132,3 +132,130 @@ export function formatUpdatedAt(iso: string | null): string {
   if (Number.isNaN(date.getTime())) return 'ещё не сохранялись';
   return date.toLocaleString('ru-RU');
 }
+
+// VIP tier catalog (VIPSUB-3, #169). Bounds mirror the server zod schema in
+// apps/api/src/routes/vip-tiers.ts — keep them in sync.
+export const VIP_TIER_NAME_MAX = 64;
+export const VIP_TIER_DESCRIPTION_MAX = 1024;
+export const VIP_TIER_DEFAULT_DAYS_MIN = 1;
+export const VIP_TIER_DEFAULT_DAYS_MAX = 3650;
+export const VIP_TIER_SORT_ORDER_MIN = 0;
+export const VIP_TIER_SORT_ORDER_MAX = 100_000;
+
+/** Wire shape of GET/POST/PUT `/api/v1/vip-tiers` (server `serialize()`). */
+export interface VipTier {
+  id: string;
+  name: string;
+  role_id: string;
+  description: string | null;
+  default_days: number | null;
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** String-backed state of the tier create/edit form. */
+export interface VipTierFormState {
+  name: string;
+  roleId: string;
+  description: string;
+  defaultDays: string;
+  sortOrder: string;
+  isActive: boolean;
+}
+
+/** Payload for POST/PUT `/api/v1/vip-tiers`. */
+export interface VipTierBody {
+  name: string;
+  role_id: string;
+  description: string | null;
+  default_days: number | null;
+  sort_order: number;
+  is_active: boolean;
+}
+
+/** Blank form for creating a new tier (active by default, like the server). */
+export function emptyTierForm(): VipTierFormState {
+  return { name: '', roleId: '', description: '', defaultDays: '', sortOrder: '0', isActive: true };
+}
+
+/** Maps an API tier into the string-backed edit-form state. */
+export function tierToForm(tier: VipTier): VipTierFormState {
+  return {
+    name: tier.name,
+    roleId: tier.role_id,
+    description: tier.description ?? '',
+    defaultDays: tier.default_days === null ? '' : String(tier.default_days),
+    sortOrder: String(tier.sort_order),
+    isActive: tier.is_active,
+  };
+}
+
+function parseBoundedInt(raw: string, min: number, max: number): number | null {
+  const trimmed = raw.trim();
+  if (!/^-?\d+$/.test(trimmed)) return null;
+  const value = Number.parseInt(trimmed, 10);
+  if (value < min || value > max) return null;
+  return value;
+}
+
+export type VipTierValidation =
+  | { ok: true; value: VipTierBody }
+  | { ok: false; errors: Partial<Record<keyof VipTierFormState, string>> };
+
+/**
+ * Validates the tier form against the server bounds and produces the API
+ * payload. Empty description/default_days map to `null` (unlimited duration).
+ */
+export function validateVipTierForm(form: VipTierFormState): VipTierValidation {
+  const errors: Partial<Record<keyof VipTierFormState, string>> = {};
+
+  const name = form.name.trim();
+  if (name.length < 1 || name.length > VIP_TIER_NAME_MAX) {
+    errors.name = `Введите название от 1 до ${VIP_TIER_NAME_MAX} символов.`;
+  }
+  if (form.roleId === '') {
+    errors.roleId = 'Выберите роль.';
+  }
+  const description = form.description.trim();
+  if (description.length > VIP_TIER_DESCRIPTION_MAX) {
+    errors.description = `Описание не длиннее ${VIP_TIER_DESCRIPTION_MAX} символов.`;
+  }
+  const defaultDays =
+    form.defaultDays.trim() === ''
+      ? null
+      : parseBoundedInt(form.defaultDays, VIP_TIER_DEFAULT_DAYS_MIN, VIP_TIER_DEFAULT_DAYS_MAX);
+  if (form.defaultDays.trim() !== '' && defaultDays === null) {
+    errors.defaultDays = `Введите целое число от ${VIP_TIER_DEFAULT_DAYS_MIN} до ${VIP_TIER_DEFAULT_DAYS_MAX} или оставьте поле пустым.`;
+  }
+  const sortOrder = parseBoundedInt(
+    form.sortOrder,
+    VIP_TIER_SORT_ORDER_MIN,
+    VIP_TIER_SORT_ORDER_MAX,
+  );
+  if (sortOrder === null) {
+    errors.sortOrder = `Введите целое число от ${VIP_TIER_SORT_ORDER_MIN} до ${VIP_TIER_SORT_ORDER_MAX}.`;
+  }
+
+  if (Object.keys(errors).length > 0 || sortOrder === null) {
+    return { ok: false, errors };
+  }
+
+  return {
+    ok: true,
+    value: {
+      name,
+      role_id: form.roleId,
+      description: description === '' ? null : description,
+      default_days: defaultDays,
+      sort_order: sortOrder,
+      is_active: form.isActive,
+    },
+  };
+}
+
+/** Renders a tier's default duration: `30 дн.` or `бессрочно` for `null`. */
+export function formatTierDuration(defaultDays: number | null): string {
+  return defaultDays === null ? 'бессрочно' : `${defaultDays} дн.`;
+}

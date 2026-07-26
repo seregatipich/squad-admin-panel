@@ -2,6 +2,7 @@
 
 import { use, useCallback, useEffect, useState } from 'react';
 import { TagInput } from '@/components/TagInput';
+import { licenseRestartRequired } from './helpers';
 
 interface Settings {
   server_id: string;
@@ -34,6 +35,13 @@ interface ServerInfo {
   tags: string[];
 }
 
+interface LicenseState {
+  configured: boolean;
+  license_id: string | null;
+  updated_at: string | null;
+  restart_required: boolean;
+}
+
 export default function SettingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -46,6 +54,11 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const [tags, setTags] = useState<string[]>([]);
   const [licenseId, setLicenseId] = useState('');
   const [licenseKey, setLicenseKey] = useState('');
+  const [license, setLicense] = useState<LicenseState | null>(null);
+  const [container, setContainer] = useState<{
+    running: boolean;
+    started_at: string | null;
+  } | null>(null);
 
   const [canManageServer, setCanManageServer] = useState(false);
   const [seedingDraft, setSeedingDraft] = useState<{
@@ -67,6 +80,14 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         tags: data.server.tags ?? [],
       });
       setTags(data.server.tags ?? []);
+      const lic = (data.server.license ?? null) as LicenseState | null;
+      setLicense(lic);
+      setLicenseId(lic?.license_id ?? '');
+      setContainer(
+        data.container
+          ? { running: !!data.container.running, started_at: data.container.started_at ?? null }
+          : null,
+      );
       setSettings(data.settings);
       setDraft({});
     } catch (e) {
@@ -162,16 +183,22 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     setBusy(true);
     setErr(null);
     try {
+      // ID-only edit: with a key already stored, an empty key field means
+      // "keep the stored key" — send only the id.
+      const payload: { license_id: string; license_key?: string } = { license_id: licenseId };
+      if (licenseKey) payload.license_key = licenseKey;
       const r = await fetch(`/api/v1/servers/${id}`, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ license_id: licenseId, license_key: licenseKey }),
+        body: JSON.stringify(payload),
       });
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
         throw new Error(body.message ?? body.error ?? `HTTP ${r.status}`);
       }
+      setLicenseKey('');
+      await load();
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -197,6 +224,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
       }
       setLicenseId('');
       setLicenseKey('');
+      await load();
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -471,7 +499,24 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
           Лицензия
         </h2>
-        <p className="mb-2 text-xs text-neutral-500">Требуется перезапуск сервера</p>
+        {licenseRestartRequired(
+          license?.updated_at ?? null,
+          container?.running ?? false,
+          container?.started_at ?? null,
+        ) ? (
+          <p className="mb-2 flex items-center gap-2 text-xs text-amber-400">
+            <span className="rounded bg-amber-800 px-1.5 py-0.5 text-[10px] text-amber-100">
+              рестарт
+            </span>
+            Лицензия сохранена и применится после перезапуска сервера
+          </p>
+        ) : (
+          <p className="mb-2 text-xs text-neutral-500">
+            {license?.configured
+              ? 'Лицензия привязана и применена'
+              : 'License.cfg записывается панелью; применяется после перезапуска сервера'}
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <label className="block">
             <span className="text-xs text-neutral-500">License ID</span>
@@ -488,7 +533,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
               type="password"
               value={licenseKey}
               onChange={(e) => setLicenseKey(e.target.value)}
-              placeholder="Не указан"
+              placeholder={license?.configured ? '••••••••  (сохранён)' : 'Не указан'}
               className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
             />
           </label>
@@ -496,7 +541,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         <div className="mt-2 flex gap-2">
           <button
             type="button"
-            disabled={!licenseId || !licenseKey || busy}
+            disabled={!licenseId || (!licenseKey && !license?.configured) || busy}
             onClick={saveLicense}
             className="rounded bg-sky-700 px-3 py-1.5 text-xs text-white hover:bg-sky-600 disabled:opacity-40"
           >

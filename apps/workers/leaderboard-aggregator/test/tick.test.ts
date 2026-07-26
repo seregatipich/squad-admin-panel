@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { periodsToRecompute, recomputeLeaderboardPeriods } = vi.hoisted(() => ({
+const { backfillMonths, periodsToRecompute, recomputeLeaderboardPeriods } = vi.hoisted(() => ({
+  backfillMonths: vi.fn(),
   periodsToRecompute: vi.fn(() => [
     { periodType: 'day', periodStart: '2026-07-05' },
     { periodType: 'week', periodStart: '2026-06-29' },
@@ -9,6 +10,7 @@ const { periodsToRecompute, recomputeLeaderboardPeriods } = vi.hoisted(() => ({
 }));
 
 vi.mock('@squad/db', () => ({
+  backfillMonths,
   periodsToRecompute,
   recomputeLeaderboardPeriods,
 }));
@@ -21,7 +23,12 @@ vi.mock('pino', () => {
   return { default: vi.fn(() => logger) };
 });
 
-import { runLeaderboardAggregatorTick } from '../src/index.js';
+import {
+  resolveBackfillMonths,
+  resolveTickIntervalMs,
+  runLeaderboardAggregatorTick,
+  runStartupBackfill,
+} from '../src/index.js';
 
 describe('runLeaderboardAggregatorTick', () => {
   beforeEach(() => {
@@ -76,6 +83,60 @@ describe('runLeaderboardAggregatorTick', () => {
 
     expect(diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'leaderboard_aggregator.run_failed', severity: 'error' }),
+    );
+  });
+});
+
+describe('interval and backfill configuration (DOSSIER-4)', () => {
+  beforeEach(() => {
+    backfillMonths.mockReset();
+  });
+
+  it('respects LEADERBOARD_AGGREGATOR_INTERVAL_MS', () => {
+    expect(resolveTickIntervalMs({ LEADERBOARD_AGGREGATOR_INTERVAL_MS: '60000' })).toBe(60_000);
+    expect(resolveTickIntervalMs({})).toBe(15 * 60 * 1000);
+    expect(resolveTickIntervalMs({ LEADERBOARD_AGGREGATOR_INTERVAL_MS: 'not-a-number' })).toBe(
+      15 * 60 * 1000,
+    );
+    expect(resolveTickIntervalMs({ LEADERBOARD_AGGREGATOR_INTERVAL_MS: '-5' })).toBe(
+      15 * 60 * 1000,
+    );
+  });
+
+  it('parses LEADERBOARD_BACKFILL_MONTHS with a disabled default', () => {
+    expect(resolveBackfillMonths({})).toBe(0);
+    expect(resolveBackfillMonths({ LEADERBOARD_BACKFILL_MONTHS: '0' })).toBe(0);
+    expect(resolveBackfillMonths({ LEADERBOARD_BACKFILL_MONTHS: '6' })).toBe(6);
+    expect(resolveBackfillMonths({ LEADERBOARD_BACKFILL_MONTHS: 'junk' })).toBe(0);
+    expect(resolveBackfillMonths({ LEADERBOARD_BACKFILL_MONTHS: '-2' })).toBe(0);
+  });
+
+  it('runs backfill only when LEADERBOARD_BACKFILL_MONTHS > 0', async () => {
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+    const sql = {} as never;
+    backfillMonths.mockResolvedValue(42);
+
+    expect(await runStartupBackfill({ sql, diag }, 0)).toBe(0);
+    expect(backfillMonths).not.toHaveBeenCalled();
+    expect(diag.emit).not.toHaveBeenCalled();
+
+    expect(await runStartupBackfill({ sql, diag }, 3)).toBe(42);
+    expect(backfillMonths).toHaveBeenCalledWith(sql, 3);
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'leaderboard_aggregator.backfill_ok', severity: 'info' }),
+    );
+  });
+
+  it('emits backfill_failed without throwing when the backfill errors', async () => {
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+    backfillMonths.mockRejectedValue(new Error('boom'));
+
+    expect(await runStartupBackfill({ sql: {} as never, diag }, 2)).toBe(0);
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'leaderboard_aggregator.backfill_failed',
+        severity: 'error',
+      }),
     );
   });
 });

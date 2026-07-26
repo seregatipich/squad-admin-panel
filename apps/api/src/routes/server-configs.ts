@@ -13,6 +13,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { type BlameVersion, computeBlame } from '../lib/blame.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
+import { LICENSE_KEY_MASK, LICENSE_PLACEHOLDER } from '../lib/license-cfg.js';
 import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
@@ -107,6 +108,23 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: 'file_not_in_allowlist' };
       }
+      // SRV-6 (#45): License.cfg is panel-managed and holds the license key in
+      // plaintext on disk. The editor never sees the disk bytes — the response
+      // is re-rendered from server_credentials with the key masked.
+      if (req.params.name === 'License.cfg') {
+        const creds = await app.db.query.serverCredentials.findFirst({
+          where: eq(serverCredentials.serverId, req.params.id),
+        });
+        const content = creds?.licenseKeyEncrypted
+          ? `LicenseId=${creds.licenseId ?? ''}\nLicenseKey=${LICENSE_KEY_MASK}\n`
+          : LICENSE_PLACEHOLDER;
+        return {
+          name: req.params.name,
+          content,
+          sha256: hex(sha256(content)),
+          behavior: configFileClass(req.params.name),
+        };
+      }
       try {
         const { content } = await app.bridge.fileRead({
           path: configPath(req.params.id, req.params.name),
@@ -138,6 +156,13 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
       if (!isAllowed(req.params.name)) {
         reply.code(400);
         return { error: 'file_not_in_allowlist' };
+      }
+      // SRV-6 (#45): License.cfg is written exclusively by the server-settings
+      // license flow (syncLicenseCfg); an editor PUT would either leak the key
+      // into config_versions or clobber the real key on disk.
+      if (req.params.name === 'License.cfg') {
+        reply.code(400);
+        return { error: 'panel_managed_file' };
       }
       return writeVersion(
         app,
@@ -367,6 +392,12 @@ const serverConfigRoutes: FastifyPluginAsync = async (app) => {
       if (!isAllowed(req.params.name)) {
         reply.code(400);
         return { error: 'file_not_in_allowlist' };
+      }
+      // SRV-6 (#45): License.cfg history rows are masked; restoring one would
+      // write `LicenseKey=********` over the real key on disk.
+      if (req.params.name === 'License.cfg') {
+        reply.code(400);
+        return { error: 'panel_managed_file' };
       }
       const target = await app.db.query.configVersions.findFirst({
         where: and(

@@ -514,6 +514,20 @@
       "breakpoints": true
     },
     {
+      "idx": 73,
+      "version": "7",
+      "when": 1783401800000,
+      "tag": "0088_license_applied_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1783401900000,
+      "tag": "0089_player_monthly_combat_source",
+      "breakpoints": true
+    },
+    {
       "idx": 75,
       "version": "7",
       "when": 1783402000000,

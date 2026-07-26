@@ -116,7 +116,7 @@ describe('GET /api/v1/servers/:id/logs/files', () => {
     const roleId = uuidv7();
     await h.db.insert(roles).values({
       id: roleId,
-      name: `panel-${roleId.slice(0, 8)}`,
+      name: `panel-${roleId}`,
       color: 'neutral',
       isSystemRole: false,
       panelAccess: true,

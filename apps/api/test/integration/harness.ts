@@ -63,6 +63,7 @@ import notesFeedRoutes from '../../src/routes/notes-feed.js';
 import permissionsRoutes from '../../src/routes/permissions.js';
 import playerAltCandidatesRoutes from '../../src/routes/player-alt-candidates.js';
 import playerBanAltWarningRoutes from '../../src/routes/player-ban-alt-warning.js';
+import playerCombatTrendRoutes from '../../src/routes/player-combat-trend.js';
 import playerCompareOnlineRoutes from '../../src/routes/player-compare-online.js';
 import playerCoplayRoutes from '../../src/routes/player-coplay.js';
 import playerDossierStatsRoutes from '../../src/routes/player-dossier-stats.js';
@@ -522,6 +523,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(playerBanAltWarningRoutes);
   await app.register(playerLinksRoutes);
   await app.register(playerDossierStatsRoutes);
+  await app.register(playerCombatTrendRoutes);
   await app.register(playerGeoAnomaliesRoutes);
   await app.register(leaderboardsRoutes);
   await app.register(economyRoutes);

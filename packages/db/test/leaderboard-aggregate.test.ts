@@ -3,7 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { ALLTIME_PERIOD_START, recomputeLeaderboardPeriod } from '../src/leaderboard/aggregate.js';
+import {
+  ALLTIME_PERIOD_START,
+  backfillMonths,
+  recomputeLeaderboardPeriod,
+} from '../src/leaderboard/aggregate.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
@@ -50,16 +54,34 @@ async function setEconomyCoefficients(kOnline: number, kBoost: number, kSeed = 3
   `;
 }
 
-async function seedMatch(serverId: string, startedAt: string, playerIds: string[]) {
+interface MatchPlayerSeed {
+  playerId: string;
+  team?: number;
+  kills?: number;
+  deaths?: number;
+  teamkills?: number;
+  revives?: number;
+}
+
+async function seedMatch(
+  serverId: string,
+  startedAt: string,
+  playerSeeds: (string | MatchPlayerSeed)[],
+  winner: 'team1' | 'team2' | 'draw' | null = null,
+) {
   const [match] = await sql<{ id: string }[]>`
-    INSERT INTO matches (server_id, started_at)
-    VALUES (${serverId}, ${startedAt}::timestamptz)
+    INSERT INTO matches (server_id, started_at, winner)
+    VALUES (${serverId}, ${startedAt}::timestamptz, ${winner})
     RETURNING id
   `;
-  for (const playerId of playerIds) {
+  for (const entry of playerSeeds) {
+    const seed = typeof entry === 'string' ? { playerId: entry } : entry;
     await sql`
-      INSERT INTO match_players (match_id, player_id, joined_at, play_seconds)
-      VALUES (${match.id}, ${playerId}, ${startedAt}::timestamptz, 600)
+      INSERT INTO match_players
+        (match_id, player_id, joined_at, play_seconds, team, kills, deaths, teamkills, revives)
+      VALUES (${match.id}, ${seed.playerId}, ${startedAt}::timestamptz, 600,
+              ${seed.team ?? null}, ${seed.kills ?? null}, ${seed.deaths ?? null},
+              ${seed.teamkills ?? null}, ${seed.revives ?? null})
     `;
   }
 }
@@ -229,7 +251,7 @@ describeIfDb('recompute idempotency', () => {
 });
 
 describeIfDb('matches_played and combat availability', () => {
-  it('counts distinct matches per player/server and leaves combat metrics zero', async () => {
+  it('counts distinct matches per player/server', async () => {
     await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 3600);
     await seedMatch(SERVER_1, '2026-07-05T08:00:00.000Z', [PLAYER_A, PLAYER_B]);
     await seedMatch(SERVER_1, '2026-07-05T09:00:00.000Z', [PLAYER_A]);
@@ -241,11 +263,119 @@ describeIfDb('matches_played and combat availability', () => {
     const bravoServer1 = rows.find((r) => r.player_id === PLAYER_B && r.server_id === SERVER_1);
     expect(alphaServer1?.matches_played).toBe(2);
     expect(bravoServer1?.matches_played).toBe(1);
-    expect(alphaServer1?.kills).toBe(0);
-    expect(alphaServer1?.deaths).toBe(0);
-    expect(alphaServer1?.teamkills).toBe(0);
-    expect(alphaServer1?.revives).toBe(0);
     expect(bravoServer1?.online_seconds).toBe(0);
+  });
+});
+
+describeIfDb('combat aggregation (DOSSIER-4)', () => {
+  it('aggregates combat columns from match_players into month rows', async () => {
+    // June: one match on SERVER_1. July: two matches split across two servers.
+    await seedMatch(SERVER_1, '2026-06-10T18:00:00.000Z', [
+      { playerId: PLAYER_A, kills: 5, deaths: 2, teamkills: 1, revives: 3 },
+    ]);
+    await seedMatch(SERVER_1, '2026-07-05T08:00:00.000Z', [
+      { playerId: PLAYER_A, kills: 4, deaths: 3 },
+      { playerId: PLAYER_B, kills: 2, deaths: 1, revives: 6 },
+    ]);
+    await seedMatch(SERVER_2, '2026-07-20T09:00:00.000Z', [
+      { playerId: PLAYER_A, kills: 3, deaths: 1, teamkills: 2 },
+    ]);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'month', periodStart: '2026-06-01' });
+    await recomputeLeaderboardPeriod(sql, { periodType: 'month', periodStart: '2026-07-01' });
+
+    // Events from two different months land in two separate month rows.
+    const june = await statRows('month', '2026-06-01');
+    const july = await statRows('month', '2026-07-01');
+    const juneA = june.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_1);
+    expect(juneA?.kills).toBe(5);
+    expect(juneA?.deaths).toBe(2);
+    expect(juneA?.teamkills).toBe(1);
+    expect(juneA?.revives).toBe(3);
+    expect(juneA?.kd_ratio).toBe(2.5);
+
+    const julyAServer1 = july.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_1);
+    const julyAServer2 = july.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_2);
+    const julyARollup = july.find((r) => r.player_id === PLAYER_A && r.server_id === null);
+    const julyBServer1 = july.find((r) => r.player_id === PLAYER_B && r.server_id === SERVER_1);
+    expect(julyAServer1?.kills).toBe(4);
+    expect(julyAServer2?.kills).toBe(3);
+    // The all-servers rollup sums the per-server combat rows and recomputes kd.
+    expect(julyARollup?.kills).toBe(7);
+    expect(julyARollup?.deaths).toBe(4);
+    expect(julyARollup?.teamkills).toBe(2);
+    expect(julyARollup?.kd_ratio).toBe(7 / 4);
+    expect(julyBServer1?.revives).toBe(6);
+
+    // The materialised monthly kills reconcile with a manual sum over match_players.
+    const [manual] = await sql<{ total: number }[]>`
+      SELECT COALESCE(SUM(mp.kills), 0)::bigint AS total
+      FROM match_players mp
+      JOIN matches m ON m.id = mp.match_id
+      WHERE m.server_id = ANY(${[SERVER_1, SERVER_2]})
+    `;
+    const [materialised] = await sql<{ total: number }[]>`
+      SELECT COALESCE(SUM(kills), 0)::bigint AS total
+      FROM player_stat_periods
+      WHERE period_type = 'month' AND server_id IS NOT NULL
+    `;
+    expect(Number(materialised.total)).toBe(Number(manual.total));
+    expect(Number(materialised.total)).toBe(14);
+  });
+
+  it('kd_ratio uses kills when deaths is zero', async () => {
+    await seedMatch(SERVER_1, '2026-07-05T08:00:00.000Z', [
+      { playerId: PLAYER_A, kills: 4, deaths: 0 },
+    ]);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+
+    const rows = await statRows('day', '2026-07-05');
+    const server1 = rows.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_1);
+    expect(server1?.kills).toBe(4);
+    expect(server1?.deaths).toBe(0);
+    expect(server1?.kd_ratio).toBe(4);
+  });
+
+  it('players without combat rows keep zero metrics', async () => {
+    // match_players combat columns are nullable; a row with no recorded combat
+    // must COALESCE to zero, and presence-only players must stay at zero too.
+    await seedPresence(PLAYER_B, SERVER_2, '2026-07-05', 900);
+    await seedMatch(SERVER_1, '2026-07-05T08:00:00.000Z', [PLAYER_A]);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+
+    const rows = await statRows('day', '2026-07-05');
+    const alphaServer1 = rows.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_1);
+    const bravoServer2 = rows.find((r) => r.player_id === PLAYER_B && r.server_id === SERVER_2);
+    for (const row of [alphaServer1, bravoServer2]) {
+      expect(row?.kills).toBe(0);
+      expect(row?.deaths).toBe(0);
+      expect(row?.teamkills).toBe(0);
+      expect(row?.revives).toBe(0);
+      expect(row?.kd_ratio).toBe(0);
+    }
+    expect(alphaServer1?.matches_played).toBe(1);
+  });
+
+  it('backfillMonths recomputes the last N month periods and is a no-op for zero', async () => {
+    await seedMatch(SERVER_1, '2026-06-10T18:00:00.000Z', [
+      { playerId: PLAYER_A, kills: 5, deaths: 2 },
+    ]);
+    await seedMatch(SERVER_1, '2026-07-05T08:00:00.000Z', [
+      { playerId: PLAYER_A, kills: 4, deaths: 1 },
+    ]);
+
+    const now = new Date('2026-07-26T12:00:00.000Z');
+    expect(await backfillMonths(sql, 0, now)).toBe(0);
+
+    const written = await backfillMonths(sql, 2, now);
+    expect(written).toBeGreaterThan(0);
+
+    const june = await statRows('month', '2026-06-01');
+    const july = await statRows('month', '2026-07-01');
+    expect(june.find((r) => r.server_id === SERVER_1)?.kills).toBe(5);
+    expect(july.find((r) => r.server_id === SERVER_1)?.kills).toBe(4);
   });
 });
 

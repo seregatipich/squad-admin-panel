@@ -24,7 +24,7 @@ async function seedRole(db: DatabaseClient, opts: { panelAccess?: boolean } = {}
   const id = uuidv7();
   await db.insert(roles).values({
     id,
-    name: `Role-${id.slice(0, 12)}`,
+    name: `Role-${id}`,
     color: 'neutral',
     isSystemRole: false,
     panelAccess: opts.panelAccess ?? true,
@@ -41,7 +41,7 @@ async function seedPlayer(
   await db.insert(players).values({
     id,
     steamId64: opts.eosOnly ? null : nextSteam(),
-    eosId: opts.eosOnly ? `eos-${id.slice(0, 12)}` : null,
+    eosId: opts.eosOnly ? `eos-${id}` : null,
     canonicalName: name,
     canonicalNameNormalized: name.toLowerCase(),
     roleId: opts.roleId ?? null,

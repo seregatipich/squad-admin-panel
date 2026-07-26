@@ -4,6 +4,23 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-07-26
+
+### DOSSIER-4 — materialize `player_stat_periods` combat columns (migration 0089)
+
+**Files:** `packages/db/drizzle/0089_player_monthly_combat_source.sql`, `packages/db/src/leaderboard/aggregate.ts`, `packages/db/src/schema/player-stat-periods.ts`, `packages/db/sql/player-stat-periods.sql`
+
+The combat columns (`kills`, `deaths`, `teamkills`, `revives`, `kd_ratio`) already shipped with the table; this entry records the aggregation behavior that now populates them from real data and the one new index (#191). No new table and no materialized view — the issue's maintainer spec supersedes the original `player_monthly_combat` + MV design.
+
+#### Added
+
+- Index `player_stat_periods_player_idx` on `(player_id, period_type, period_start DESC)` — the lookup path for the per-player monthly K/D trend (`GET /api/v1/players/:playerId/combat-summary`). `match_players` needed no new index: `match_players_player_match_idx` already covers the aggregation side.
+- `backfillMonths(sql, months)` in `@squad/db` — one-shot recompute of the last N `month` periods, run at worker startup when `LEADERBOARD_BACKFILL_MONTHS > 0`.
+
+#### Changed
+
+- `recomputeLeaderboardPeriod` gains a `combat_agg` CTE over `match_players ⋈ matches` (same period filter as `matches_agg`) and writes `COALESCE(SUM(...), 0)` sums into the combat columns, replacing the previous hard-coded zeros. `kd_ratio` follows `computeKdRatio`: `deaths = 0 ⇒ kd = kills`, else `kills / deaths`. The all-servers rollup (`server_id IS NULL`) sums the per-server combat rows and recomputes `kd_ratio` from the summed totals.
+
 ## 2026-07-25
 
 ### LEAD-6 — materialize `player_stat_periods.seeding_seconds` (no migration)
