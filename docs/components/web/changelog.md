@@ -5,6 +5,28 @@
 ### Added
 
 - `apps/web/src/app/(dashboard)/settings/integrations/discord/DiscordTemplatesSection.tsx` — «Шаблоны сообщений» section on `/settings/integrations/discord`: per-event-type embed editor (title, url, description, colour, fields) over `GET/PUT /api/v1/integrations/discord/templates`, a «Сбросить к дефолту» button on `POST …/reset`, and a debounced server-rendered live preview on `POST …/preview` that names every placeholder the renderer could not substitute. Gated on `integration:manage`; the section renders nothing on a 403.
+## 2026-07-26 — PLAYER-6 sortable player list (#27)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/players/helpers.ts` — pure sort/filter helpers for the list page: `nextSortState` (two-state per-column toggle with per-column first-click direction), `sortIndicator` (`↑`/`↓`/`↕`), and `buildPlayersListQuery` (emits `sort`, `dir`, and optional `filter=new`).
+- **Created** column on `/players`, rendering each player's `first_seen_at` between Total playtime and Last seen.
+- Sortable Ник, Total playtime, Created, and Last seen headers, each a `SortHeader` button that drives `GET /api/v1/players?sort=&dir=` server-side and shows its direction indicator.
+- `новые (<7 дней)` checkbox that adds `filter=new` to the list request.
+
+The Статус header's client-side online sort, the `только онлайн` checkbox, and the in-memory search box are unchanged and still client-side.
+## 2026-07-26 — DOSSIER-6 player dossier tabs
+
+### Added
+
+- `apps/web/src/app/(dashboard)/players/[id]/DossierSection.tsx` — «Досье» block on the player card, fed by exactly one `GET /api/v1/players/:playerId/dossier` request per (server, period) selection; switching tabs never refetches.
+- Four tabs render from that single payload: `DossierSkillTab.tsx` (eleven combat KPIs, period selector, kills-vs-deaths donut and stacked month trend), `DossierWeaponsTab.tsx` (top-N weapon table with kills/damage sorting), `DossierVehiclesTab.tsx` («На технике» and «Уничтожено» sub-tables) and `DossierKitsTab.tsx` (kit time, longest first).
+- The block self-hides on `401`/`403` because the route is gated on `combat:view`, which `GET /api/v1/me` does not report — there is no permission flag to gate on client-side.
+- `skill.damage_dealt` is permanently null upstream, so the «Урон» tile and every null damage cell render `—` titled «Источник не содержит данных об уроне»; a zero is never substituted.
+- Vehicle names are localised from the `vehicle_catalog` `name_ru`/`name_en` columns via `useLocale()`; an uncatalogued row shows its raw asset id titled «Нет в каталоге техники».
+- The server selector appears only on «Скилл» and «Киты»; «Оружие» and «Техника» state «Пожизненно, без разбивки по серверам», matching the route's own lifetime-only aggregates.
+- `apps/web/src/app/(dashboard)/players/[id]/dossier.ts` — response types, formatters, sorters and the client-side zero-fill for the months the API's `matches_played > 0` filter drops, with `dossier.test.ts` unit coverage; `DossierSection.test.tsx` covers all four tabs, the empty state, the 401/403 self-hide and the no-refetch rule.
+- `DossierSkillChart.tsx` is loaded through `next/dynamic`, keeping recharts out of the curated static import graphs.
 
 ## 2026-07-25 — WL-3 whitelist application portal
 
