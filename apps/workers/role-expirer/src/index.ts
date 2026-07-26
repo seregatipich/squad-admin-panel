@@ -8,6 +8,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
+import { createRoleExpiryReminderDeps, runRoleExpiryReminderTick } from './reminders.js';
 import { createRoleExpiryDeps, runRoleExpiryTick } from './tick.js';
 
 const log = pino({
@@ -16,6 +17,8 @@ const log = pino({
 });
 
 const TICK_INTERVAL_MS = Number(process.env.ROLE_EXPIRER_INTERVAL_MS ?? 60_000);
+/** Daily VIPSUB-4 reminder pass — window crossings fire at most once, so once a day is enough. */
+const REMINDER_INTERVAL_MS = Number(process.env.ROLE_EXPIRY_REMINDER_INTERVAL_MS ?? 86_400_000);
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -59,14 +62,30 @@ async function main() {
     log.info(result, 'role-expirer tick');
   }
 
+  const reminderDeps = createRoleExpiryReminderDeps(db, redis);
+  async function reminderTick(): Promise<void> {
+    const result = await runRoleExpiryReminderTick({ ...reminderDeps, diag });
+    log.info(result, 'role-expirer reminder tick');
+  }
+
   await tick();
   const interval = setInterval(() => {
     tick().catch((err) => log.error({ err: (err as Error).message }, 'role-expirer tick failed'));
   }, TICK_INTERVAL_MS);
 
+  await reminderTick().catch((err) =>
+    log.error({ err: (err as Error).message }, 'role-expirer reminder tick failed'),
+  );
+  const reminderInterval = setInterval(() => {
+    reminderTick().catch((err) =>
+      log.error({ err: (err as Error).message }, 'role-expirer reminder tick failed'),
+    );
+  }, REMINDER_INTERVAL_MS);
+
   const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
     clearInterval(interval);
+    clearInterval(reminderInterval);
     await diag.emit({
       component: 'worker-role-expirer',
       kind: 'role_expirer.stopped',
