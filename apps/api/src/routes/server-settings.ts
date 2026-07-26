@@ -5,6 +5,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { encrypt, serialize } from '../lib/crypto.js';
+import { syncLicenseCfg } from '../lib/license-cfg.js';
 
 const idParam = z.object({ id: z.string().uuid() });
 
@@ -238,7 +239,13 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
 
   /**
    * PATCH /api/v1/servers/:id
-   * Updates server metadata: display_name, description, tags.
+   * Updates server metadata (display_name, description, tags) and the server
+   * license (SRV-6, #45). A license change is persisted to server_credentials
+   * (key encrypted, license_updated_at stamped) and then synced to disk as
+   * License.cfg via syncLicenseCfg — a requires_restart file, so no reload is
+   * fired; the UI derives a restart badge from license_updated_at instead.
+   * `attachValidation` lets the serverPatch `license_incomplete` zod refine
+   * map to 422 instead of fastify's default validation 400.
    */
   fast.patch(
     '/api/v1/servers/:id',
@@ -248,8 +255,17 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
         audit: { action: 'server.patch', resource: 'server' },
       },
       schema: { params: idParam, body: serverPatch },
+      attachValidation: true,
     },
     async (req, reply) => {
+      if (req.validationError) {
+        const issues = (req.validationError.validation ?? []) as Array<{ message?: string }>;
+        if (issues.some((issue) => issue.message === 'license_incomplete')) {
+          reply.code(422);
+          return { error: 'license_incomplete' };
+        }
+        throw req.validationError;
+      }
       const { id } = req.params;
       const body = req.body;
 
@@ -271,19 +287,33 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
       await app.db.update(servers).set(updateSet).where(eq(servers.id, id));
 
       if (body.license_id !== undefined || body.license_key !== undefined) {
-        const credUpdate: Record<string, unknown> = {};
-        if (body.license_id !== undefined) credUpdate.licenseId = body.license_id;
-        if (body.license_key !== undefined) {
-          credUpdate.licenseKeyEncrypted = body.license_key
-            ? serialize(encrypt(app.encryptionKey, body.license_key))
-            : null;
+        const credUpdate: Partial<typeof serverCredentials.$inferInsert> = {};
+        if (body.license_key === null) {
+          // Detach: clear the whole license; syncLicenseCfg writes the
+          // comment-only placeholder to disk.
+          credUpdate.licenseId = null;
+          credUpdate.licenseKeyEncrypted = null;
+          credUpdate.licenseUpdatedAt = null;
+        } else {
+          const creds = await app.db.query.serverCredentials.findFirst({
+            where: eq(serverCredentials.serverId, id),
+          });
+          if (body.license_id !== undefined) credUpdate.licenseId = body.license_id;
+          if (body.license_key !== undefined) {
+            credUpdate.licenseKeyEncrypted = serialize(
+              encrypt(app.encryptionKey, body.license_key),
+            );
+          }
+          // Stamp only when a key ends up stored — an id saved without any key
+          // changes nothing Squad can apply, so no restart badge.
+          const willHaveKey = body.license_key !== undefined || creds?.licenseKeyEncrypted != null;
+          credUpdate.licenseUpdatedAt = willHaveKey ? new Date() : null;
         }
-        if (Object.keys(credUpdate).length > 0) {
-          await app.db
-            .update(serverCredentials)
-            .set(credUpdate)
-            .where(eq(serverCredentials.serverId, id));
-        }
+        await app.db
+          .update(serverCredentials)
+          .set(credUpdate)
+          .where(eq(serverCredentials.serverId, id));
+        await syncLicenseCfg(app, id, req.user?.playerId ?? null, req.ip ?? null);
       }
 
       const updated = await app.db.query.servers.findFirst({

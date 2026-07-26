@@ -250,6 +250,9 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       const settingsRow = await app.db.query.serverSettings.findFirst({
         where: eq(serverSettings.serverId, req.params.id),
       });
+      const credsRow = await app.db.query.serverCredentials.findFirst({
+        where: eq(serverCredentials.serverId, req.params.id),
+      });
       const rconRaw = await app.redis.get(`rcon:status:${row.id}`);
       let rcon_status: {
         state: string;
@@ -311,6 +314,21 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       const crash_loop = row.status === 'failed';
       const seeding = await readSeedingSummary(app.redis, row.id);
 
+      // SRV-6 (#45): license *state* only — the key itself never leaves the
+      // API. License.cfg is requires_restart, so the license is live only if
+      // the container (re)started after license_updated_at.
+      const licenseUpdatedAt = credsRow?.licenseUpdatedAt ?? null;
+      const license = {
+        configured: credsRow?.licenseKeyEncrypted != null,
+        license_id: credsRow?.licenseId ?? null,
+        updated_at: licenseUpdatedAt ? licenseUpdatedAt.toISOString() : null,
+        restart_required:
+          licenseUpdatedAt != null &&
+          (!container?.running ||
+            !container.started_at ||
+            new Date(container.started_at).getTime() < licenseUpdatedAt.getTime()),
+      };
+
       return {
         server: {
           id: row.id,
@@ -324,6 +342,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
           timezone: row.timezone,
           created_at: row.createdAt,
           updated_at: row.updatedAt,
+          license,
         },
         settings: settingsRow
           ? {
