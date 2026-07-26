@@ -512,6 +512,13 @@
       "when": 1783401700000,
       "tag": "0087_whitelist_applications",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1783401800000,
+      "tag": "0088_license_applied_at",
+      "breakpoints": true
     }
   ]
 }

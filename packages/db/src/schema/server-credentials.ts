@@ -1,4 +1,4 @@
-import { customType, integer, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import { customType, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { servers } from './servers.js';
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
@@ -19,6 +19,10 @@ export const serverCredentials = pgTable('server_credentials', {
   rconPasswordEncrypted: bytea('rcon_password_encrypted').notNull(),
   licenseId: text('license_id'),
   licenseKeyEncrypted: bytea('license_key_encrypted'),
+  // SRV-6 (#45): when the stored license last changed. Drives the
+  // "restart required" badge — License.cfg is requires_restart, so the
+  // license only applies once the container (re)starts after this instant.
+  licenseUpdatedAt: timestamp('license_updated_at', { withTimezone: true, mode: 'date' }),
   keyVersion: integer('key_version').notNull().default(1),
 });
 
