@@ -240,6 +240,7 @@ services:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       ROLE_EXPIRER_INTERVAL_MS: ${ROLE_EXPIRER_INTERVAL_MS:-60000}
+      ROLE_EXPIRY_REMINDER_INTERVAL_MS: ${ROLE_EXPIRY_REMINDER_INTERVAL_MS:-86400000}
     depends_on:
       postgres:
         condition: service_healthy
