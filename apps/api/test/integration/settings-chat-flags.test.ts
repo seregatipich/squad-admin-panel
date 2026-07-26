@@ -27,7 +27,7 @@ async function asRole(flags: { panelAccess: boolean; canEditRoles: boolean }): P
   const roleId = uuidv7();
   await h.db.insert(roles).values({
     id: roleId,
-    name: `Custom-${roleId.slice(0, 8)}`,
+    name: `Custom-${roleId}`,
     color: 'neutral',
     isSystemRole: false,
     panelAccess: flags.panelAccess,
@@ -178,7 +178,7 @@ describe('POST /api/v1/settings/chat-flag-rules/reindex', () => {
     await h.db.insert(servers).values({
       id: serverId,
       displayName: 'Reindex Server',
-      slug: `reindex-${serverId.slice(0, 8)}`,
+      slug: `reindex-${serverId}`,
     });
     await h.db.insert(players).values({
       id: playerId,

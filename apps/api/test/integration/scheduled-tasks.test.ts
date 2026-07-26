@@ -73,7 +73,7 @@ async function asRole(opts: {
   await h.db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
-      name: `Sched-${roleId.slice(0, 8)}`,
+      name: `Sched-${roleId}`,
       color: 'blue',
       isSystemRole: false,
       panelAccess: opts.panelAccess ?? true,
