@@ -547,6 +547,13 @@
       "when": 1783402200000,
       "tag": "0092_vip_expiry_reminders",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1783402300000,
+      "tag": "0093_vip_tier_price",
+      "breakpoints": true
     }
   ]
 }

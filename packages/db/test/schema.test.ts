@@ -62,4 +62,10 @@ describe('schema surface', () => {
     expect(cols.roleComment).toBeDefined();
     expect(cols.roleComment.notNull).toBe(false);
   });
+
+  it('vip_tiers carries nullable price_bonuses', () => {
+    const cols = getTableColumns(schema.vipTiers);
+    expect(cols.priceBonuses).toBeDefined();
+    expect(cols.priceBonuses.notNull).toBe(false);
+  });
 });

@@ -126,6 +126,39 @@ export function formatBonusTs(iso: string): string {
   });
 }
 
+/** Purchasable tier as served by `GET /api/v1/bonus-shop/tiers` (ECON-6). */
+export interface ShopTier {
+  id: string;
+  name: string;
+  role_id: string;
+  description: string | null;
+  default_days: number | null;
+  sort_order: number;
+  is_active: boolean;
+  price_bonuses: number | null;
+}
+
+export function canAfford(balance: number | null, price: number | null | undefined): boolean {
+  if (balance == null || price == null) return false;
+  return balance >= price;
+}
+
+const PURCHASE_ERROR_TEXT: Record<string, string> = {
+  economy_disabled: 'Экономика отключена в настройках.',
+  tier_not_found: 'Привилегия не найдена — обновите список.',
+  tier_not_purchasable: 'У привилегии не задана цена, покупка недоступна.',
+  role_grants_panel_access: 'Роль привилегии даёт доступ к панели — покупка запрещена.',
+  insufficient_balance: 'Недостаточно бонусов для покупки.',
+  role_permanent: 'У игрока бессрочная роль — покупка не требуется.',
+  role_conflict: 'У игрока уже есть другая роль. Сначала снимите её.',
+  player_not_found: 'Игрок не найден.',
+  forbidden: 'Недостаточно прав: нужны can_manage_economy и can_assign_roles.',
+};
+
+export function purchaseErrorText(code: string): string {
+  return PURCHASE_ERROR_TEXT[code] ?? `Ошибка: ${code}`;
+}
+
 export interface AdjustValidation {
   amount: number;
   comment: string;

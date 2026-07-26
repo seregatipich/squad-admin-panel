@@ -8,6 +8,7 @@ import { writeAuditEntry } from '../lib/audit.js';
 
 const DEFAULT_DAYS_MAX = 3650;
 const SORT_ORDER_MAX = 100_000;
+const PRICE_BONUSES_MAX = 2_147_483_647;
 
 const idParam = z.object({ id: z.string().uuid() });
 
@@ -16,6 +17,7 @@ const createBody = z.object({
   role_id: z.string().uuid(),
   description: z.string().trim().max(1024).nullish(),
   default_days: z.number().int().min(1).max(DEFAULT_DAYS_MAX).nullish(),
+  price_bonuses: z.number().int().min(0).max(PRICE_BONUSES_MAX).nullish(),
   sort_order: z.number().int().min(0).max(SORT_ORDER_MAX).default(0),
   is_active: z.boolean().default(true),
 });
@@ -26,6 +28,7 @@ const updateBody = z
     role_id: z.string().uuid().optional(),
     description: z.string().trim().max(1024).nullable().optional(),
     default_days: z.number().int().min(1).max(DEFAULT_DAYS_MAX).nullable().optional(),
+    price_bonuses: z.number().int().min(0).max(PRICE_BONUSES_MAX).nullable().optional(),
     sort_order: z.number().int().min(0).max(SORT_ORDER_MAX).optional(),
     is_active: z.boolean().optional(),
   })
@@ -37,6 +40,7 @@ interface VipTierView {
   role_id: string;
   description: string | null;
   default_days: number | null;
+  price_bonuses: number | null;
   sort_order: number;
   is_active: boolean;
   created_at: string;
@@ -50,6 +54,7 @@ function serialize(row: VipTierRow): VipTierView {
     role_id: row.roleId,
     description: row.description,
     default_days: row.defaultDays,
+    price_bonuses: row.priceBonuses,
     sort_order: row.sortOrder,
     is_active: row.isActive,
     created_at: row.createdAt.toISOString(),
@@ -121,6 +126,10 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: 'role_not_found' };
       }
+      if (body.price_bonuses != null && body.default_days == null) {
+        reply.code(422);
+        return { error: 'price_requires_days' };
+      }
 
       const id = uuidv7();
       try {
@@ -130,6 +139,7 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
           roleId: body.role_id,
           description: body.description ?? null,
           defaultDays: body.default_days ?? null,
+          priceBonuses: body.price_bonuses ?? null,
           sortOrder: body.sort_order,
           isActive: body.is_active,
         });
@@ -191,11 +201,19 @@ const vipTiersRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'role_not_found' };
       }
 
+      const nextPrice = body.price_bonuses !== undefined ? body.price_bonuses : before.priceBonuses;
+      const nextDays = body.default_days !== undefined ? body.default_days : before.defaultDays;
+      if (nextPrice != null && nextDays == null) {
+        reply.code(422);
+        return { error: 'price_requires_days' };
+      }
+
       const updates: Partial<typeof vipTiers.$inferInsert> = { updatedAt: new Date() };
       if (body.name !== undefined) updates.name = body.name;
       if (body.role_id !== undefined) updates.roleId = body.role_id;
       if (body.description !== undefined) updates.description = body.description;
       if (body.default_days !== undefined) updates.defaultDays = body.default_days;
+      if (body.price_bonuses !== undefined) updates.priceBonuses = body.price_bonuses;
       if (body.sort_order !== undefined) updates.sortOrder = body.sort_order;
       if (body.is_active !== undefined) updates.isActive = body.is_active;
 
