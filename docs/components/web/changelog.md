@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-07-26 — PLAYER-6 sortable player list (#27)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/players/helpers.ts` — pure sort/filter helpers for the list page: `nextSortState` (two-state per-column toggle with per-column first-click direction), `sortIndicator` (`↑`/`↓`/`↕`), and `buildPlayersListQuery` (emits `sort`, `dir`, and optional `filter=new`).
+- **Created** column on `/players`, rendering each player's `first_seen_at` between Total playtime and Last seen.
+- Sortable Ник, Total playtime, Created, and Last seen headers, each a `SortHeader` button that drives `GET /api/v1/players?sort=&dir=` server-side and shows its direction indicator.
+- `новые (<7 дней)` checkbox that adds `filter=new` to the list request.
+
+The Статус header's client-side online sort, the `только онлайн` checkbox, and the in-memory search box are unchanged and still client-side.
+
 ## 2026-07-25 — WL-3 whitelist application portal
 
 ### Added

@@ -1,5 +1,14 @@
 # `api` — changelog
 
+## 2026-07-26 — PLAYER-6 player list sorting and filters (#27)
+
+### Changed
+
+- `GET /api/v1/players` querystring gains `sort` (`nickname` | `last_seen` | `created` | `total_time`, default `last_seen`), `dir` (`asc` | `desc`, default `desc`), and `filter` (`new`). Unrecognised values are rejected with 400 by the Zod `querystring` schema instead of being ignored — `?sort=nickname&dir=asc` sorts, `?sort=bogus` is a 400.
+- The route now applies the chosen key as a real SQL `ORDER BY` — `canonical_name_normalized`, `last_seen_at`, `first_seen_at`, or `total_time_played_seconds` — with `players.id` ascending as the stable tiebreak so equal sort values come back in a deterministic order. With no params the ordering is byte-for-byte today's `ORDER BY last_seen_at DESC`, `LIMIT 200`.
+- `filter=new` adds `first_seen_at >= now() - interval '7 days'` (evaluated by the database clock) and is `AND`-composed with the existing `?q=` predicate rather than replacing it.
+- The response body is unchanged: `{ items: [...], total }` with the same seven item fields, no `schema.response`, `total` still `rows.length` capped by the 200-row `LIMIT`. `GET /api/v1/players/search` is untouched. An active-bans filter stays out of the `filter` enum and is tracked in #59.
+
 ## 2026-07-25 — WL-3 whitelist application portal
 
 ### Added
