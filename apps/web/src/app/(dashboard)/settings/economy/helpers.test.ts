@@ -104,6 +104,12 @@ describe('validateEconomyForm', () => {
     if (!result.ok) expect(result.errors.kOnline).toBeTruthy();
   });
 
+  it('rejects an empty seed threshold', () => {
+    const result = validateEconomyForm(makeForm({ seedThreshold: '  ' }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.seedThreshold).toBeTruthy();
+  });
+
   it('accepts zero as the lower bound', () => {
     const result = validateEconomyForm(makeForm({ kOnline: '0', seedThreshold: '0' }));
     expect(result.ok).toBe(true);
@@ -154,6 +160,12 @@ describe('tierToForm / emptyTierForm', () => {
     });
   });
 
+  it('maps null description and default_days to empty strings', () => {
+    const form = tierToForm(makeTier({ description: null, default_days: null }));
+    expect(form.description).toBe('');
+    expect(form.defaultDays).toBe('');
+  });
+
   it('produces an empty active form for creation', () => {
     expect(emptyTierForm()).toEqual({
       name: '',
@@ -197,6 +209,12 @@ describe('validateVipTierForm', () => {
     const result = validateVipTierForm(makeTierForm({ name: '   ' }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.errors.name).toBeTruthy();
+  });
+
+  it('rejects a description longer than the maximum', () => {
+    const result = validateVipTierForm(makeTierForm({ description: 'x'.repeat(1025) }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.description).toBeTruthy();
   });
 
   it('rejects a missing role', () => {
