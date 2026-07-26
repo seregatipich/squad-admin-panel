@@ -35,6 +35,7 @@ export * from './message-templates.js';
 export * from './moderation-actions.js';
 export * from './panel-meta.js';
 export * from './player-api-tokens.js';
+export * from './player-bonus-accruals.js';
 export * from './player-coplay.js';
 export * from './player-daily-presence.js';
 export * from './player-ip-history.js';

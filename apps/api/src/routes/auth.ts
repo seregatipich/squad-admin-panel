@@ -1,4 +1,4 @@
-import { sessions as sessionsTable } from '@squad/db/schema';
+import { economySettings, sessions as sessionsTable } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -35,6 +35,11 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       reply.code(401);
       return { error: 'unauthenticated' };
     }
+    // ECON-5 (#165): the web nav hides economy-gated pages on this flag.
+    const [economyRow] = await app.db
+      .select({ enabled: economySettings.economyEnabled })
+      .from(economySettings)
+      .limit(1);
     return {
       player_id: req.user.playerId,
       steam_id64: req.user.steamId64 ? String(req.user.steamId64) : null,
@@ -47,6 +52,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       can_manage_issues: req.user.permissions.canManageIssues,
       can_manage_economy: req.user.permissions.canManageEconomy,
       can_handle_reports: req.user.permissions.canHandleReports,
+      economy_enabled: economyRow?.enabled ?? false,
     };
   });
 

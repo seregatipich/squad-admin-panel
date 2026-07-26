@@ -1,17 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { backfillMonths, periodsToRecompute, recomputeLeaderboardPeriods } = vi.hoisted(() => ({
-  backfillMonths: vi.fn(),
-  periodsToRecompute: vi.fn(() => [
-    { periodType: 'day', periodStart: '2026-07-05' },
-    { periodType: 'week', periodStart: '2026-06-29' },
-  ]),
-  recomputeLeaderboardPeriods: vi.fn(),
-}));
+const { backfillMonths, periodsToRecompute, recomputeBonusAccruals, recomputeLeaderboardPeriods } =
+  vi.hoisted(() => ({
+    backfillMonths: vi.fn(),
+    periodsToRecompute: vi.fn(() => [
+      { periodType: 'day', periodStart: '2026-07-05' },
+      { periodType: 'week', periodStart: '2026-06-29' },
+    ]),
+    recomputeBonusAccruals: vi.fn(),
+    recomputeLeaderboardPeriods: vi.fn(),
+  }));
 
 vi.mock('@squad/db', () => ({
   backfillMonths,
   periodsToRecompute,
+  recomputeBonusAccruals,
   recomputeLeaderboardPeriods,
 }));
 vi.mock('ioredis', () => ({ default: vi.fn(() => ({ on: vi.fn(), quit: vi.fn() })) }));
@@ -33,6 +36,8 @@ import {
 describe('runLeaderboardAggregatorTick', () => {
   beforeEach(() => {
     recomputeLeaderboardPeriods.mockReset();
+    recomputeBonusAccruals.mockReset();
+    recomputeBonusAccruals.mockResolvedValue(0);
     periodsToRecompute.mockClear();
   });
 
@@ -68,6 +73,49 @@ describe('runLeaderboardAggregatorTick', () => {
 
     expect(diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'leaderboard_aggregator.run_ok' }),
+    );
+  });
+
+  it('recomputes the bonus accrual window and folds its count into run_ok (ECON-5)', async () => {
+    recomputeLeaderboardPeriods.mockResolvedValue(5);
+    recomputeBonusAccruals.mockResolvedValue(11);
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+    const now = new Date('2026-07-05T02:00:00.000Z');
+    const sql = {} as never;
+
+    await runLeaderboardAggregatorTick({ sql, diag, now });
+
+    expect(recomputeBonusAccruals).toHaveBeenCalledWith(sql, now);
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'leaderboard_aggregator.run_ok',
+        payload: expect.objectContaining({ bonusAccrualRows: 11 }),
+      }),
+    );
+  });
+
+  it('keeps the tick alive and emits run_ok when the bonus accrual recompute fails', async () => {
+    recomputeLeaderboardPeriods.mockResolvedValue(5);
+    recomputeBonusAccruals.mockRejectedValue(new Error('accruals boom'));
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+
+    await runLeaderboardAggregatorTick({
+      sql: {} as never,
+      diag,
+      now: new Date('2026-07-05T02:00:00.000Z'),
+    });
+
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'leaderboard_aggregator.bonus_accruals_failed',
+        severity: 'error',
+      }),
+    );
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'leaderboard_aggregator.run_ok', severity: 'info' }),
+    );
+    expect(diag.emit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'leaderboard_aggregator.run_failed' }),
     );
   });
 

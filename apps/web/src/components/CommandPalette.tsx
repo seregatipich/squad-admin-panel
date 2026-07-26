@@ -39,7 +39,14 @@ interface Section {
  * once the query is at least `PLAYER_SEARCH_MIN_LENGTH` characters), or a
  * server (fetched once and filtered client-side).
  */
-export function CommandPalette({ permissions }: { permissions: string[] }) {
+export function CommandPalette({
+  permissions,
+  economyEnabled = false,
+}: {
+  permissions: string[];
+  /** ECON-5 (#165): pages with `requiresEconomy` are hidden while false. */
+  economyEnabled?: boolean;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -105,9 +112,12 @@ export function CommandPalette({ permissions }: { permissions: string[] }) {
   }, [open, query]);
 
   const sections: Section[] = useMemo(() => {
-    const pageResults: PaletteResult[] = filterPageResults(NAV_GROUPS, permissions, query).map(
-      (item) => ({ kind: 'page', ...item }),
-    );
+    const pageResults: PaletteResult[] = filterPageResults(
+      NAV_GROUPS,
+      permissions,
+      query,
+      economyEnabled,
+    ).map((item) => ({ kind: 'page', ...item }));
     const playerResults: PaletteResult[] = players.map((player) => ({
       kind: 'player',
       ...player,
@@ -121,7 +131,7 @@ export function CommandPalette({ permissions }: { permissions: string[] }) {
       { title: 'Игроки', results: playerResults },
       { title: 'Серверы', results: serverResults },
     ].filter((section) => section.results.length > 0);
-  }, [permissions, query, players, servers]);
+  }, [permissions, economyEnabled, query, players, servers]);
 
   const flatResults = useMemo(() => sections.flatMap((section) => section.results), [sections]);
 
