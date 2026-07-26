@@ -61,7 +61,7 @@ async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
   await h.db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
-      name: `Messaging-${keys.join('-') || 'none'}-${roleId.slice(0, 8)}`,
+      name: `Messaging-${keys.join('-') || 'none'}-${roleId}`,
       color: 'blue',
       isSystemRole: false,
       panelAccess: true,
