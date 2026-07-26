@@ -26,13 +26,14 @@ vi.mock('./VotesSection', () => ({ VotesSection: () => null }));
 import PlayerDetailPage from './page';
 
 const PLAYER_ID = 'b1e2c3d4-0000-0000-0000-000000000001';
+const EOS_ID = '0002a1b2c3d4e5f60708090a0b0c0d0e';
 
 const PLAYER_RESPONSE = {
   player: {
     id: PLAYER_ID,
-    steam_id64: '76561198000000001',
+    steam_id64: '76561198000000001' as string | null,
     canonical_name: 'CurrentNick',
-    eos_id: null,
+    eos_id: null as string | null,
     first_seen_at: new Date().toISOString(),
     last_seen_at: new Date().toISOString(),
     total_time_played_seconds: 3600,
@@ -52,11 +53,18 @@ const PLAYER_RESPONSE = {
   geo_configured: true,
 };
 
-function mockFetch(opts: { canBan: boolean; checkMatched?: boolean }) {
+function mockFetch(opts: {
+  canBan: boolean;
+  checkMatched?: boolean;
+  player?: Partial<(typeof PLAYER_RESPONSE)['player']>;
+}) {
   return vi.fn((input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString();
     if (url === `/api/v1/players/${PLAYER_ID}`) {
-      return Promise.resolve(new Response(JSON.stringify(PLAYER_RESPONSE), { status: 200 }));
+      const body = opts.player
+        ? { ...PLAYER_RESPONSE, player: { ...PLAYER_RESPONSE.player, ...opts.player } }
+        : PLAYER_RESPONSE;
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
     }
     if (url === '/api/v1/me') {
       return Promise.resolve(
@@ -112,6 +120,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function stubClipboard(writeText: (text: string) => Promise<void>) {
+  Object.defineProperty(navigator, 'clipboard', {
+    value: { writeText },
+    configurable: true,
+  });
+}
+
 async function renderPage() {
   await act(async () => {
     render(
@@ -151,5 +166,50 @@ describe('PlayerDetailPage', () => {
 
     const patternInput = (await screen.findByLabelText(/паттерн/i)) as HTMLInputElement;
     await waitFor(() => expect(patternInput.value).toBe('OldNick'));
+  });
+
+  it('renders EOS copy button when eos_id is set and copies on click', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(writeText);
+    vi.stubGlobal('fetch', mockFetch({ canBan: false, player: { eos_id: EOS_ID } }));
+    await renderPage();
+
+    const button = await screen.findByRole('button', { name: /скопировать/i });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(writeText).toHaveBeenCalledWith(EOS_ID);
+    expect(await screen.findByText(/скопировано/i)).toBeInTheDocument();
+  });
+
+  it('hides EOS copy button when eos_id is null', async () => {
+    vi.stubGlobal('fetch', mockFetch({ canBan: false }));
+    await renderPage();
+    await screen.findByText('OldNick');
+    expect(screen.queryByRole('button', { name: /скопировать/i })).not.toBeInTheDocument();
+  });
+
+  it('renders initials avatar in the header', async () => {
+    vi.stubGlobal('fetch', mockFetch({ canBan: false, player: { canonical_name: 'Test Player' } }));
+    await renderPage();
+    const avatar = await screen.findByTestId('player-avatar');
+    expect(avatar).toHaveTextContent('TP');
+  });
+
+  it('EOS-only player renders without Steam link and with working copy', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    stubClipboard(writeText);
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({ canBan: false, player: { steam_id64: null, eos_id: EOS_ID } }),
+    );
+    await renderPage();
+
+    const button = await screen.findByRole('button', { name: /скопировать/i });
+    expect(document.querySelector('a[href*="steamcommunity.com"]')).toBeNull();
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(writeText).toHaveBeenCalledWith(EOS_ID);
   });
 });
