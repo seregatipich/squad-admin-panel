@@ -237,10 +237,11 @@ describeIfDb('GET /api/v1/leaderboards', () => {
     expect(body.rows.find((r) => r.current_name === 'Alpha')?.metric_value).toBe(5000);
   });
 
-  it('marks combat metrics unavailable while stats-importer is not ready', async () => {
+  it('marks combat metrics available now that the recompute fills them (DOSSIER-4)', async () => {
     const res = await fetchLeaderboard('?metric=kills&period=alltime');
     const body = res.json() as LeaderboardBody;
-    expect(body.available).toBe(false);
+    expect(body.available).toBe(true);
+    // The seeded rows carry no kills, so the materialised metric is zero.
     expect(body.rows.every((r) => r.metric_value === 0)).toBe(true);
   });
 
@@ -365,10 +366,10 @@ describeIfDb('GET /api/v1/leaderboards', () => {
     expect(ascBody.rows.map((r) => r.rank)).toEqual([1, 2, 3]);
   });
 
-  it('reports combat stats as unavailable until the importer ships', async () => {
+  it('reports combat stats as available (DOSSIER-4)', async () => {
     const res = await fetchLeaderboard('?metric=online&period=alltime');
     const body = res.json() as LeaderboardBody & { combat_available: boolean };
-    expect(body.combat_available).toBe(false);
+    expect(body.combat_available).toBe(true);
   });
 
   it('returns an opaque error envelope when the query fails (no SQL leaked)', async () => {
