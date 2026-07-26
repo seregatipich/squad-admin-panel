@@ -2,9 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   type EconomyFormState,
   type EconomySettings,
+  emptyTierForm,
+  formatTierDuration,
   formatUpdatedAt,
   settingsToForm,
+  tierToForm,
+  type VipTier,
+  type VipTierFormState,
   validateEconomyForm,
+  validateVipTierForm,
 } from './helpers';
 
 function makeSettings(overrides: Partial<EconomySettings> = {}): EconomySettings {
@@ -98,6 +104,12 @@ describe('validateEconomyForm', () => {
     if (!result.ok) expect(result.errors.kOnline).toBeTruthy();
   });
 
+  it('rejects an empty seed threshold', () => {
+    const result = validateEconomyForm(makeForm({ seedThreshold: '  ' }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.seedThreshold).toBeTruthy();
+  });
+
   it('accepts zero as the lower bound', () => {
     const result = validateEconomyForm(makeForm({ kOnline: '0', seedThreshold: '0' }));
     expect(result.ok).toBe(true);
@@ -105,6 +117,140 @@ describe('validateEconomyForm', () => {
       expect(result.value.k_online).toBe(0);
       expect(result.value.seed_threshold).toBe(0);
     }
+  });
+});
+
+function makeTier(overrides: Partial<VipTier> = {}): VipTier {
+  return {
+    id: overrides.id ?? 'tier-1',
+    name: overrides.name ?? 'VIP Bronze',
+    role_id: overrides.role_id ?? 'role-1',
+    description: overrides.description ?? null,
+    default_days: overrides.default_days ?? null,
+    sort_order: overrides.sort_order ?? 0,
+    is_active: overrides.is_active ?? true,
+    created_at: overrides.created_at ?? '2026-07-01T00:00:00.000Z',
+    updated_at: overrides.updated_at ?? '2026-07-01T00:00:00.000Z',
+  };
+}
+
+function makeTierForm(overrides: Partial<VipTierFormState> = {}): VipTierFormState {
+  return {
+    name: overrides.name ?? 'VIP Bronze',
+    roleId: overrides.roleId ?? 'role-1',
+    description: overrides.description ?? '',
+    defaultDays: overrides.defaultDays ?? '',
+    sortOrder: overrides.sortOrder ?? '0',
+    isActive: overrides.isActive ?? true,
+  };
+}
+
+describe('tierToForm / emptyTierForm', () => {
+  it('maps a tier into string-backed form fields', () => {
+    const form = tierToForm(
+      makeTier({ description: 'reserve', default_days: 30, sort_order: 10, is_active: false }),
+    );
+    expect(form).toEqual({
+      name: 'VIP Bronze',
+      roleId: 'role-1',
+      description: 'reserve',
+      defaultDays: '30',
+      sortOrder: '10',
+      isActive: false,
+    });
+  });
+
+  it('maps null description and default_days to empty strings', () => {
+    const form = tierToForm(makeTier({ description: null, default_days: null }));
+    expect(form.description).toBe('');
+    expect(form.defaultDays).toBe('');
+  });
+
+  it('produces an empty active form for creation', () => {
+    expect(emptyTierForm()).toEqual({
+      name: '',
+      roleId: '',
+      description: '',
+      defaultDays: '',
+      sortOrder: '0',
+      isActive: true,
+    });
+  });
+});
+
+describe('validateVipTierForm', () => {
+  it('accepts a valid tier form', () => {
+    const result = validateVipTierForm(
+      makeTierForm({ description: ' reserve slot ', defaultDays: '30', sortOrder: '10' }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        name: 'VIP Bronze',
+        role_id: 'role-1',
+        description: 'reserve slot',
+        default_days: 30,
+        sort_order: 10,
+        is_active: true,
+      },
+    });
+  });
+
+  it('maps empty description and default_days to null', () => {
+    const result = validateVipTierForm(makeTierForm({ description: '  ', defaultDays: '' }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.description).toBeNull();
+      expect(result.value.default_days).toBeNull();
+    }
+  });
+
+  it('rejects empty name', () => {
+    const result = validateVipTierForm(makeTierForm({ name: '   ' }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.name).toBeTruthy();
+  });
+
+  it('rejects a description longer than the maximum', () => {
+    const result = validateVipTierForm(makeTierForm({ description: 'x'.repeat(1025) }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.description).toBeTruthy();
+  });
+
+  it('rejects a missing role', () => {
+    const result = validateVipTierForm(makeTierForm({ roleId: '' }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.roleId).toBeTruthy();
+  });
+
+  it('rejects default_days out of range', () => {
+    const tooLow = validateVipTierForm(makeTierForm({ defaultDays: '0' }));
+    expect(tooLow.ok).toBe(false);
+    if (!tooLow.ok) expect(tooLow.errors.defaultDays).toBeTruthy();
+
+    const tooHigh = validateVipTierForm(makeTierForm({ defaultDays: '3651' }));
+    expect(tooHigh.ok).toBe(false);
+    if (!tooHigh.ok) expect(tooHigh.errors.defaultDays).toBeTruthy();
+
+    const fractional = validateVipTierForm(makeTierForm({ defaultDays: '1.5' }));
+    expect(fractional.ok).toBe(false);
+    if (!fractional.ok) expect(fractional.errors.defaultDays).toBeTruthy();
+  });
+
+  it('rejects negative sort_order', () => {
+    const result = validateVipTierForm(makeTierForm({ sortOrder: '-1' }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors.sortOrder).toBeTruthy();
+  });
+});
+
+describe('formatTierDuration', () => {
+  it('renders a bounded duration in days', () => {
+    expect(formatTierDuration(30)).toBe('30 дн.');
+  });
+
+  it('renders null as unlimited', () => {
+    expect(formatTierDuration(null)).toBe('бессрочно');
   });
 });
 

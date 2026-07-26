@@ -267,6 +267,55 @@ describeIfDb('vip-tiers API (VIPSUB-3)', () => {
     expect(gone.length).toBe(0);
   });
 
+  it('refuses to delete a role referenced by a VIP tier (409) and keeps the role', async () => {
+    // Regression (#169, VIPSUB-3): vip_tiers.role_id is ON DELETE RESTRICT
+    // (migration 0035). Deleting a referenced role used to surface the raw
+    // Postgres FK violation as a 500; it must be a clean 409 instead.
+    const referencedRoleId = await seedRole(h.db, { panelAccess: true });
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/vip-tiers',
+      headers: { cookie: ownerCookie },
+      payload: { name: `VIP FK Guard ${uuidv7()}`, role_id: referencedRoleId },
+    });
+    expect(created.statusCode).toBe(201);
+    createdTierIds.push((created.json() as { id: string }).id);
+
+    const blocked = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/roles/${referencedRoleId}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toMatchObject({ error: 'role_referenced_by_vip_tier' });
+
+    // The rejected delete must leave the role intact.
+    const stillThere = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.id, referencedRoleId))
+      .limit(1);
+    expect(stillThere.length).toBe(1);
+  });
+
+  it('deletes a role with no referencing VIP tier (200 ok)', async () => {
+    const freeRoleId = await seedRole(h.db, { panelAccess: true });
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/roles/${freeRoleId}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true });
+
+    const gone = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.id, freeRoleId))
+      .limit(1);
+    expect(gone.length).toBe(0);
+  });
+
   it('treats an expired grant as inactive so its tier can be deleted', async () => {
     const expiredRoleId = await seedRole(h.db, { panelAccess: true });
     const created = await h.app.inject({
