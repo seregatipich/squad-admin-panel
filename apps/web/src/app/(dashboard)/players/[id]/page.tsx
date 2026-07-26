@@ -35,6 +35,8 @@ interface Player {
   steam_id64: string | null;
   canonical_name: string;
   eos_id: string | null;
+  /** Extension point for INT-1 (#76); the API never populates it yet. */
+  avatar_url?: string | null;
   first_seen_at: string;
   last_seen_at: string;
   total_time_played_seconds: number;
@@ -100,6 +102,13 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   const [err, setErr] = useState<string | null>(null);
   const [banTarget, setBanTarget] = useState<string | null>(null);
   const [nickBanRefreshKey, setNickBanRefreshKey] = useState(0);
+  const [eosCopied, setEosCopied] = useState(false);
+
+  useEffect(() => {
+    if (!eosCopied) return;
+    const timer = setTimeout(() => setEosCopied(false), 1500);
+    return () => clearTimeout(timer);
+  }, [eosCopied]);
 
   useEffect(() => {
     fetch(`/api/v1/players/${playerId}`, { credentials: 'include', cache: 'no-store' })
@@ -133,12 +142,30 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   const canViewIps = me?.permissions.includes('player:view_ips') ?? false;
   const canAccessPanel = me?.permissions.includes('player:view') ?? false;
 
+  async function copyEosId() {
+    if (!player.eos_id) return;
+    try {
+      await navigator.clipboard.writeText(player.eos_id);
+      setEosCopied(true);
+    } catch {
+      setEosCopied(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
         <Link href="/players" className="text-sky-400 hover:text-sky-300 text-xs font-mono">
           ← игроки
         </Link>
+        {!player.avatar_url && (
+          <div
+            data-testid="player-avatar"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral-800 text-sm font-semibold text-neutral-300"
+          >
+            {initials(player.canonical_name)}
+          </div>
+        )}
         <h1 className="text-2xl font-semibold">{player.canonical_name}</h1>
         <ClanWidget clan={clan} />
       </div>
@@ -170,7 +197,24 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
             )}
           </dd>
           <dt className="text-neutral-500">EOS ID</dt>
-          <dd className="font-mono">{player.eos_id ?? '—'}</dd>
+          <dd className="font-mono">
+            {player.eos_id != null ? (
+              <span className="inline-flex flex-wrap items-center gap-2">
+                {player.eos_id}
+                <button
+                  type="button"
+                  onClick={copyEosId}
+                  aria-label="Скопировать EOS ID"
+                  className="text-sky-400 hover:text-sky-300 text-xs"
+                >
+                  копировать
+                </button>
+                {eosCopied && <span className="text-emerald-400 text-xs">скопировано</span>}
+              </span>
+            ) : (
+              '—'
+            )}
+          </dd>
           <dt className="text-neutral-500">First seen</dt>
           <dd>{new Date(player.first_seen_at).toLocaleString()}</dd>
           <dt className="text-neutral-500">Last seen</dt>
@@ -714,6 +758,16 @@ function LocationSection({
       <GeoAnomaliesSection playerId={playerId} />
     </section>
   );
+}
+
+function initials(name: string): string {
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0] ?? '')
+    .join('')
+    .toUpperCase();
 }
 
 function fmtDuration(seconds: number): string {
