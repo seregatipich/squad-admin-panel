@@ -1,5 +1,13 @@
 # `api` — changelog
 
+## 2026-07-26 — MSG-2 direct player message (#185)
+
+### Added
+
+- `POST /api/v1/servers/:id/players/:playerId/message` in `server-messaging.ts`: one addressed in-game message delivered as RCON `AdminWarn <target> <message>` through the existing worker-rcon command queue. Target resolution prefers `players.eos_id` and falls back to `players.steam_id64`; a row with neither 404s as `player_not_addressable`. Gated on the Squad `chat` permission.
+- Body `{ message, log_to_card? }` with `message` capped at 300 characters after trim (minimum 2) — the worker's `BROADCAST_MAX_CHARS`, re-asserted when `AdminWarn` is built. `log_to_card: true` writes one `chat_messages` row keyed on the **addressee** (`scope: 'direct'`, `source: 'panel'`), making the message visible in the target's card chat history with no read-path change; a not-connected worker 502s and writes nothing.
+- Audit action `server.player_message` (target type `server`), carrying `player_id`, `target`, `message` and `log_to_card` in `after_snapshot`. No migration — `chat_messages` already accepted the `direct` scope.
+
 ## 2026-07-25 — WL-3 whitelist application portal
 
 ### Added
