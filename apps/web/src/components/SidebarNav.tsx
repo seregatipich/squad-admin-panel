@@ -43,9 +43,12 @@ function usePendingReportsCount(): number {
 export function SidebarNav({
   permissions,
   displayName,
+  economyEnabled = false,
 }: {
   permissions: string[];
   displayName: string;
+  /** ECON-5 (#165): items with `requiresEconomy` are hidden while false. */
+  economyEnabled?: boolean;
 }) {
   const pathname = usePathname() ?? '';
   const pendingReports = usePendingReportsCount();
@@ -59,7 +62,9 @@ export function SidebarNav({
       <div className="flex-1 space-y-5">
         {NAV_GROUPS.map((group, groupIndex) => {
           const visible = group.items.filter(
-            (item) => !item.permission || permissions.includes(item.permission),
+            (item) =>
+              (!item.permission || permissions.includes(item.permission)) &&
+              (!item.requiresEconomy || economyEnabled),
           );
           if (visible.length === 0) return null;
           return (

@@ -36,6 +36,36 @@ describe('SidebarNav', () => {
     });
   });
 
+  it('hides economy-gated items when economy is disabled', () => {
+    render(
+      <LocaleProvider locale="ru">
+        <SidebarNav permissions={[]} displayName="Alice" economyEnabled={false} />
+      </LocaleProvider>,
+    );
+    expect(screen.queryByRole('link', { name: 'Бонусы' })).not.toBeInTheDocument();
+    // The regular leaderboards item stays visible either way.
+    expect(screen.getByRole('link', { name: 'Лидерборды' })).toBeInTheDocument();
+  });
+
+  it('shows economy-gated items when economy is enabled', () => {
+    render(
+      <LocaleProvider locale="ru">
+        <SidebarNav permissions={[]} displayName="Alice" economyEnabled />
+      </LocaleProvider>,
+    );
+    const bonuses = screen.getByRole('link', { name: 'Бонусы' });
+    expect(bonuses).toHaveAttribute('href', '/leaderboards/bonuses');
+  });
+
+  it('hides economy-gated items when the flag is omitted (defaults off)', () => {
+    render(
+      <LocaleProvider locale="ru">
+        <SidebarNav permissions={[]} displayName="Alice" />
+      </LocaleProvider>,
+    );
+    expect(screen.queryByRole('link', { name: 'Бонусы' })).not.toBeInTheDocument();
+  });
+
   it('renders navigation labels in Russian', () => {
     render(
       <LocaleProvider locale="ru">

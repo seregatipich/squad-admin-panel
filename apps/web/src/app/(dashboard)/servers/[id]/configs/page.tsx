@@ -48,6 +48,19 @@ interface BlameResponse {
   authors: Record<string, string>;
 }
 
+// CFG-2 (#64): generic drift status for the non-managed config files.
+interface DriftItem {
+  name: string;
+  state: 'in_sync' | 'drift' | 'missing' | 'unreachable' | 'unknown';
+  disk_sha256: string | null;
+  version_sha256: string | null;
+  tip_version_id: string | null;
+}
+
+/** Files whose drift/reset story is owned by dedicated machinery — no
+ *  reset-to-depot-default button for them. */
+const RESET_EXCLUDED_FILES = ['License.cfg', 'Admins.cfg', 'LayerRotation.cfg'];
+
 const BEHAVIOR_BADGE: Record<FileItem['behavior'], { label: string; className: string }> = {
   hot_reload: { label: 'live-reload', className: 'bg-green-800 text-green-100' },
   rotation: { label: 'next match', className: 'bg-sky-800 text-sky-100' },
@@ -113,6 +126,14 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   const [canRestart, setCanRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
 
+  // Config drift banner + resolution (CFG-2, #64).
+  const [driftItems, setDriftItems] = useState<DriftItem[]>([]);
+  const [driftDiff, setDriftDiff] = useState<{ name: string; tip: string; disk: string } | null>(
+    null,
+  );
+  const [driftBusy, setDriftBusy] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+
   const refreshFiles = useCallback(async () => {
     try {
       const r = await fetch(`/api/v1/servers/${id}/configs`, { credentials: 'include' });
@@ -132,6 +153,28 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     }, POLL_MS);
     return () => clearInterval(t);
   }, [refreshFiles]);
+
+  const refreshDrift = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/v1/servers/${id}/configs/drift`, {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!r.ok) return;
+      const j = (await r.json()) as { items: DriftItem[] };
+      setDriftItems(j.items.filter((i) => i.state === 'drift'));
+    } catch {
+      // best-effort polling; keep the last known drift state on transient errors
+    }
+  }, [id]);
+
+  useEffect(() => {
+    void refreshDrift();
+    const t = setInterval(() => {
+      void refreshDrift();
+    }, POLL_MS);
+    return () => clearInterval(t);
+  }, [refreshDrift]);
 
   useEffect(() => {
     if (!selected) return;
@@ -381,10 +424,97 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     }
   }
 
+  async function resolveDrift(name: string, action: 'accept' | 'revert') {
+    const question =
+      action === 'accept'
+        ? `Принять ручную правку ${name} с диска как новую версию?`
+        : `Откатить ${name} к версии панели? Ручные изменения на диске будут перезаписаны.`;
+    if (!window.confirm(question)) return;
+    setDriftBusy(name);
+    setErr(null);
+    setMsg(null);
+    try {
+      const r = await fetch(`/api/v1/servers/${id}/configs/${name}/drift/${action}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+      setMsg(
+        action === 'accept'
+          ? `${name}: правка с диска принята как новая версия`
+          : `${name}: файл восстановлен из версии панели`,
+      );
+      setDriftDiff(null);
+      await refreshDrift();
+      if (selectedRef.current === name) await load(name);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setDriftBusy(null);
+    }
+  }
+
+  async function openDriftDiff(item: DriftItem) {
+    setErr(null);
+    try {
+      let tip = '';
+      if (item.tip_version_id) {
+        const r = await fetch(
+          `/api/v1/servers/${id}/configs/${item.name}/versions/${item.tip_version_id}`,
+          { credentials: 'include' },
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        tip = ((await r.json()) as { content: string }).content;
+      }
+      const diskR = await fetch(`/api/v1/servers/${id}/configs/${item.name}`, {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!diskR.ok) throw new Error(`HTTP ${diskR.status}`);
+      const disk = ((await diskR.json()) as { content: string }).content;
+      setDriftDiff({ name: item.name, tip, disk });
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }
+
+  async function resetToDefault() {
+    const name = selected;
+    if (!name || resetting) return;
+    if (
+      !window.confirm(
+        `Сбросить ${name} к депо-дефолту? Текущее содержимое будет заменено шаблоном.`,
+      )
+    )
+      return;
+    setResetting(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const r = await fetch(`/api/v1/servers/${id}/configs/${name}/reset-default`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+      setMsg(`${name}: сброшен к депо-дефолту`);
+      await refreshDrift();
+      await load(name);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setResetting(false);
+    }
+  }
+
   const selectedFile = files.find((f) => f.name === selected) ?? null;
   const isManagedRotation = selected === 'LayerRotation.cfg' && content.includes(BEGIN_MARKER);
   const isManagedAdmins = selected === 'Admins.cfg' && managedSegmentLineRange(content) !== null;
   const showRestart = selectedFile?.behavior === 'requires_restart' && canRestart;
+  const showReset = selected !== null && !RESET_EXCLUDED_FILES.includes(selected);
 
   useEffect(() => {
     if (!editorReady) return;
@@ -472,6 +602,76 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
           </span>
         </div>
       ) : null}
+      {driftItems.length > 0 ? (
+        <div
+          data-testid="config-drift-banner"
+          className="space-y-2 rounded border border-red-900 bg-red-950/60 px-3 py-2 text-sm"
+        >
+          <div className="text-red-200">
+            Обнаружены изменения конфигов на диске вне панели ({driftItems.length}):
+          </div>
+          {driftItems.map((item) => (
+            <div key={item.name} className="flex items-center justify-between gap-3">
+              <span className="font-mono text-xs">{item.name}</span>
+              <span className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void openDriftDiff(item)}
+                  className="rounded border border-red-800 px-2 py-1 text-xs text-red-200 hover:bg-red-900/40"
+                >
+                  Diff
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void resolveDrift(item.name, 'accept')}
+                  disabled={driftBusy !== null}
+                  className="rounded bg-sky-700 px-2 py-1 text-xs text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Принять
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void resolveDrift(item.name, 'revert')}
+                  disabled={driftBusy !== null}
+                  className="rounded bg-amber-700 px-2 py-1 text-xs text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Откатить
+                </button>
+              </span>
+            </div>
+          ))}
+          {driftDiff ? (
+            <div data-testid="config-drift-diff" className="rounded border border-neutral-800">
+              <div className="flex items-center justify-between border-b border-neutral-800 px-3 py-2 text-xs">
+                <div className="font-mono text-neutral-400">
+                  {driftDiff.name}: версия панели → диск
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDriftDiff(null)}
+                  className="rounded px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                >
+                  Закрыть diff
+                </button>
+              </div>
+              <MonacoDiff
+                height="45vh"
+                language="ini"
+                theme="vs-dark"
+                original={driftDiff.tip}
+                modified={driftDiff.disk}
+                options={{
+                  readOnly: true,
+                  minimap: { enabled: false },
+                  fontSize: 13,
+                  renderSideBySide: true,
+                  scrollBeyondLastLine: false,
+                }}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-[260px_1fr] gap-4">
         <aside className="rounded border border-neutral-800 bg-neutral-950">
@@ -492,10 +692,21 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
                     className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-xs hover:bg-neutral-900 ${selected === f.name ? 'bg-neutral-900' : ''} ${!f.exists ? 'text-neutral-500' : ''}`}
                   >
                     <span className="truncate font-mono">{f.name}</span>
-                    <span
-                      className={`shrink-0 rounded px-1 py-[1px] text-[10px] uppercase tracking-widest ${badge.className}`}
-                    >
-                      {badge.label}
+                    <span className="flex shrink-0 items-center gap-1">
+                      {driftItems.some((d) => d.name === f.name) ? (
+                        <span
+                          data-testid="file-drift-marker"
+                          title="изменён на диске вне панели"
+                          className="rounded bg-red-800 px-1 py-[1px] text-[10px] uppercase tracking-widest text-red-100"
+                        >
+                          drift
+                        </span>
+                      ) : null}
+                      <span
+                        className={`rounded px-1 py-[1px] text-[10px] uppercase tracking-widest ${badge.className}`}
+                      >
+                        {badge.label}
+                      </span>
                     </span>
                   </button>
                 </li>
@@ -534,6 +745,16 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
                       className="rounded bg-amber-700 px-2 py-1 text-[11px] text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       {restarting ? 'Перезапуск…' : 'Рестарт сервера'}
+                    </button>
+                  ) : null}
+                  {showReset ? (
+                    <button
+                      type="button"
+                      onClick={() => void resetToDefault()}
+                      disabled={resetting}
+                      className="rounded border border-neutral-700 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {resetting ? 'Сброс…' : 'Сброс к дефолту'}
                     </button>
                   ) : null}
                 </div>

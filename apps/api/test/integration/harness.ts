@@ -50,6 +50,7 @@ import integrationsVipRoutes from '../../src/routes/integrations-vip.js';
 import issuesRoutes from '../../src/routes/issues.js';
 import layersRoutes from '../../src/routes/layers.js';
 import leaderboardsRoutes from '../../src/routes/leaderboards.js';
+import leaderboardsBonusesRoutes from '../../src/routes/leaderboards-bonuses.js';
 import liveRoutes from '../../src/routes/live.js';
 import logsRoutes from '../../src/routes/logs.js';
 import markTypesRoutes from '../../src/routes/mark-types.js';
@@ -66,6 +67,7 @@ import playerBanAltWarningRoutes from '../../src/routes/player-ban-alt-warning.j
 import playerCombatTrendRoutes from '../../src/routes/player-combat-trend.js';
 import playerCompareOnlineRoutes from '../../src/routes/player-compare-online.js';
 import playerCoplayRoutes from '../../src/routes/player-coplay.js';
+import playerDossierRoutes from '../../src/routes/player-dossier.js';
 import playerDossierStatsRoutes from '../../src/routes/player-dossier-stats.js';
 import playerGeoAnomaliesRoutes from '../../src/routes/player-geo-anomalies.js';
 import playerLinksRoutes from '../../src/routes/player-links.js';
@@ -522,10 +524,12 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(playerAltCandidatesRoutes);
   await app.register(playerBanAltWarningRoutes);
   await app.register(playerLinksRoutes);
+  await app.register(playerDossierRoutes);
   await app.register(playerDossierStatsRoutes);
   await app.register(playerCombatTrendRoutes);
   await app.register(playerGeoAnomaliesRoutes);
   await app.register(leaderboardsRoutes);
+  await app.register(leaderboardsBonusesRoutes);
   await app.register(economyRoutes);
   await app.register(mediaRoutes);
   await app.register(settingsEconomyRoutes);

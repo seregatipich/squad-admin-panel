@@ -1,6 +1,11 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { backfillMonths, periodsToRecompute, recomputeLeaderboardPeriods } from '@squad/db';
+import {
+  backfillMonths,
+  periodsToRecompute,
+  recomputeBonusAccruals,
+  recomputeLeaderboardPeriods,
+} from '@squad/db';
 import { createDiag, type Diag } from '@squad/diag';
 import { startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
@@ -59,14 +64,36 @@ export async function runLeaderboardAggregatorTick(deps: LeaderboardTickDeps): P
   const periods = periodsToRecompute(now);
   try {
     const rows = await recomputeLeaderboardPeriods(sql, periods);
+
+    // ECON-5 (#165): the tick's second responsibility — rebuild the rolling
+    // 30-day bonus accrual window. Its failure must not kill the tick, so it
+    // is guarded separately and reported via its own diag kind.
+    let bonusAccrualRows = 0;
+    try {
+      bonusAccrualRows = await recomputeBonusAccruals(sql, now);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error({ err: message }, 'bonus accrual window recompute failed');
+      await diag.emit({
+        component: COMPONENT,
+        kind: 'leaderboard_aggregator.bonus_accruals_failed',
+        severity: 'error',
+        message: `bonus accrual window recompute failed: ${message}`,
+        payload: {},
+      });
+    }
+
     const invalidated = deps.invalidateCache ? await deps.invalidateCache() : 0;
-    log.info({ periods: periods.length, rows, invalidated }, 'leaderboard recompute ok');
+    log.info(
+      { periods: periods.length, rows, bonusAccrualRows, invalidated },
+      'leaderboard recompute ok',
+    );
     await diag.emit({
       component: COMPONENT,
       kind: 'leaderboard_aggregator.run_ok',
       severity: 'info',
       message: `recomputed ${periods.length} periods (${rows} rows)`,
-      payload: { periods: periods.length, rows, invalidated },
+      payload: { periods: periods.length, rows, bonusAccrualRows, invalidated },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -4,6 +4,7 @@ import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
 import { isNull } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
+import { sweepServerConfigDrift } from './config-drift.js';
 import { syncServerAdminsCfg } from './syncer.js';
 
 const ADMINS_CFG_SYNC_STREAM_PREFIX = 'events:admins-cfg-sync:';
@@ -28,6 +29,9 @@ const requiredEnv = (name: string): string => {
 
 const SERVERS_REFRESH_MS = 30_000;
 const DRIFT_INTERVAL_MS = Number(process.env.ADMINS_CFG_DRIFT_INTERVAL_MS ?? 5 * 60_000);
+// CFG-2 (#64): generic per-file drift sweep over the non-managed config files
+// (separate cadence from the Admins.cfg managed-segment sweep above).
+const CONFIG_DRIFT_INTERVAL_MS = Number(process.env.CONFIG_DRIFT_INTERVAL_MS ?? 5 * 60_000);
 const STREAM_BLOCK_MS = 5_000;
 // Pending-message claim cadence + minimum-idle window. A message that has
 // been delivered to *some* consumer but not XACK'd within `RECLAIM_MIN_IDLE_MS`
@@ -343,6 +347,22 @@ async function main() {
     }
   }
 
+  async function configDriftSweep(): Promise<void> {
+    for (const serverId of activeServerIds) {
+      try {
+        const status = await sweepServerConfigDrift(ctx, serverId);
+        const drifted = Object.entries(status.files)
+          .filter(([, f]) => f.state === 'drift')
+          .map(([name]) => name);
+        if (drifted.length > 0) {
+          log.warn({ serverId, files: drifted }, 'config files drifted — awaiting resolution');
+        }
+      } catch (err) {
+        log.error({ serverId, err: (err as Error).message }, 'config drift sweep failed');
+      }
+    }
+  }
+
   await refreshServerList();
   // Boot-time reclaim pass — picks up anything orphaned by a prior
   // process restart (consumer name regenerates each boot).
@@ -360,6 +380,11 @@ async function main() {
   const driftTimer = setInterval(() => {
     driftSweep().catch((err) => log.error({ err: (err as Error).message }, 'drift sweep failed'));
   }, DRIFT_INTERVAL_MS);
+  const configDriftTimer = setInterval(() => {
+    configDriftSweep().catch((err) =>
+      log.error({ err: (err as Error).message }, 'config drift sweep failed'),
+    );
+  }, CONFIG_DRIFT_INTERVAL_MS);
   const reclaimTimer = setInterval(() => {
     reclaimPendingMessages().catch((err) =>
       log.error({ err: (err as Error).message }, 'reclaim sweep failed'),
@@ -386,6 +411,7 @@ async function main() {
     stopHeartbeat();
     clearInterval(refreshTimer);
     clearInterval(driftTimer);
+    clearInterval(configDriftTimer);
     clearInterval(reclaimTimer);
     clearInterval(relayTimer);
     await bridge.close().catch(() => undefined);
