@@ -27,9 +27,10 @@ const METRIC_COLUMNS = {
 
 type Metric = keyof typeof METRIC_COLUMNS;
 
-const COMBAT_METRICS = new Set<Metric>(['kills', 'deaths', 'teamkills', 'revives', 'kd']);
 const ECONOMY_METRICS = new Set<Metric>(['bonus', 'boost']);
-const COMBAT_STATS_AVAILABLE = false;
+// DOSSIER-4 (#191): combat columns are materialised from match_players by the
+// leaderboard recompute, so combat metrics are served for real.
+const COMBAT_STATS_AVAILABLE = true;
 const CACHE_PREFIX = 'leaderboard:';
 const CACHE_TTL_SECONDS = 60;
 const MAX_LIMIT = 200;
@@ -246,7 +247,7 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
         period,
         period_start: periodStart,
         server_id: server_id === 'all' ? null : server_id,
-        available: !COMBAT_METRICS.has(metric),
+        available: true,
         combat_available: COMBAT_STATS_AVAILABLE,
         economy_enabled: economyEnabled,
         total_rows: total,

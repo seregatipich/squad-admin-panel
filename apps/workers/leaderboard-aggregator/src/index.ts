@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { periodsToRecompute, recomputeLeaderboardPeriods } from '@squad/db';
+import { backfillMonths, periodsToRecompute, recomputeLeaderboardPeriods } from '@squad/db';
 import { createDiag, type Diag } from '@squad/diag';
 import { startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
@@ -13,8 +13,27 @@ const log = pino({
 });
 
 const COMPONENT = 'worker-leaderboard-aggregator';
-const TICK_INTERVAL_MS = 15 * 60 * 1000;
+const DEFAULT_TICK_INTERVAL_MS = 15 * 60 * 1000;
 export const LEADERBOARD_CACHE_PREFIX = 'leaderboard:';
+
+/**
+ * Tick interval in milliseconds, from `LEADERBOARD_AGGREGATOR_INTERVAL_MS`.
+ * Falls back to 15 minutes when unset, non-numeric, or not positive.
+ */
+export function resolveTickIntervalMs(env: NodeJS.ProcessEnv = process.env): number {
+  const parsed = Number(env.LEADERBOARD_AGGREGATOR_INTERVAL_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TICK_INTERVAL_MS;
+}
+
+/**
+ * Startup backfill depth in months, from `LEADERBOARD_BACKFILL_MONTHS`
+ * (DOSSIER-4 #191 one-shot combat backfill). Defaults to 0 (disabled);
+ * non-numeric or negative values also disable it.
+ */
+export function resolveBackfillMonths(env: NodeJS.ProcessEnv = process.env): number {
+  const parsed = Number(env.LEADERBOARD_BACKFILL_MONTHS);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
 
 export async function invalidateLeaderboardCache(redis: Redis): Promise<number> {
   const keys: string[] = [];
@@ -62,6 +81,49 @@ export async function runLeaderboardAggregatorTick(deps: LeaderboardTickDeps): P
   }
 }
 
+export interface StartupBackfillDeps {
+  sql: postgres.Sql;
+  diag: Diag;
+}
+
+/**
+ * One-shot startup backfill: recomputes the last `months` month periods so
+ * historical combat data lands in `player_stat_periods` without waiting for
+ * the regular ticks. No-op when `months <= 0`; failures are reported via diag
+ * and never crash the worker.
+ *
+ * @returns number of rows written (0 when disabled or failed).
+ */
+export async function runStartupBackfill(
+  deps: StartupBackfillDeps,
+  months: number,
+): Promise<number> {
+  if (months <= 0) return 0;
+  try {
+    const rows = await backfillMonths(deps.sql, months);
+    log.info({ months, rows }, 'leaderboard backfill ok');
+    await deps.diag.emit({
+      component: COMPONENT,
+      kind: 'leaderboard_aggregator.backfill_ok',
+      severity: 'info',
+      message: `backfilled ${months} months (${rows} rows)`,
+      payload: { months, rows },
+    });
+    return rows;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ err: message }, 'leaderboard backfill failed');
+    await deps.diag.emit({
+      component: COMPONENT,
+      kind: 'leaderboard_aggregator.backfill_failed',
+      severity: 'error',
+      message: `backfill failed: ${message}`,
+      payload: { months },
+    });
+    return 0;
+  }
+}
+
 async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -93,12 +155,14 @@ async function main() {
     payload: { pid: process.pid },
   });
 
+  await runStartupBackfill({ sql, diag }, resolveBackfillMonths());
+
   await runLeaderboardAggregatorTick({ sql, diag, invalidateCache });
   const interval = setInterval(() => {
     runLeaderboardAggregatorTick({ sql, diag, invalidateCache }).catch((err) =>
       log.error({ err: (err as Error).message }, 'leaderboard tick failed'),
     );
-  }, TICK_INTERVAL_MS);
+  }, resolveTickIntervalMs());
 
   const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');

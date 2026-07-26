@@ -54,3 +54,5 @@ CREATE INDEX IF NOT EXISTS player_stat_periods_boost_idx
   ON player_stat_periods (period_type, period_start, server_id, boost_seconds DESC);
 CREATE INDEX IF NOT EXISTS player_stat_periods_bonus_idx
   ON player_stat_periods (period_type, period_start, server_id, bonus_points DESC);
+CREATE INDEX IF NOT EXISTS player_stat_periods_player_idx
+  ON player_stat_periods (player_id, period_type, period_start DESC);

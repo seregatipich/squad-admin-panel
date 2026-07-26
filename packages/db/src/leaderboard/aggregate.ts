@@ -182,20 +182,39 @@ export async function recomputeLeaderboardPeriod(
         ${matchesFilter}
         GROUP BY mp.player_id, m.server_id
       ),
+      combat_agg AS (
+        SELECT mp.player_id, m.server_id,
+               COALESCE(SUM(mp.kills), 0)::int AS kills,
+               COALESCE(SUM(mp.deaths), 0)::int AS deaths,
+               COALESCE(SUM(mp.teamkills), 0)::int AS teamkills,
+               COALESCE(SUM(mp.revives), 0)::int AS revives
+        FROM match_players mp
+        JOIN matches m ON m.id = mp.match_id
+        ${matchesFilter}
+        GROUP BY mp.player_id, m.server_id
+      ),
       combined AS (
         SELECT
-          COALESCE(p.player_id, mm.player_id) AS player_id,
-          COALESCE(p.server_id, mm.server_id) AS server_id,
+          COALESCE(p.player_id, mm.player_id, c.player_id) AS player_id,
+          COALESCE(p.server_id, mm.server_id, c.server_id) AS server_id,
           COALESCE(p.online_seconds, 0) AS online_seconds,
           COALESCE(p.boost_seconds, 0) AS boost_seconds,
           COALESCE(p.seed_seconds, 0) AS seed_seconds,
-          COALESCE(mm.matches_played, 0) AS matches_played
+          COALESCE(mm.matches_played, 0) AS matches_played,
+          COALESCE(c.kills, 0) AS kills,
+          COALESCE(c.deaths, 0) AS deaths,
+          COALESCE(c.teamkills, 0) AS teamkills,
+          COALESCE(c.revives, 0) AS revives
         FROM presence_agg p
         FULL OUTER JOIN matches_agg mm
           ON p.player_id = mm.player_id AND p.server_id = mm.server_id
+        FULL OUTER JOIN combat_agg c
+          ON COALESCE(p.player_id, mm.player_id) = c.player_id
+         AND COALESCE(p.server_id, mm.server_id) = c.server_id
       ),
       per_server AS (
-        SELECT player_id, server_id, online_seconds, boost_seconds, seed_seconds, matches_played
+        SELECT player_id, server_id, online_seconds, boost_seconds, seed_seconds,
+               matches_played, kills, deaths, teamkills, revives
         FROM combined
       ),
       rollup AS (
@@ -203,7 +222,11 @@ export async function recomputeLeaderboardPeriod(
                SUM(online_seconds)::int AS online_seconds,
                SUM(boost_seconds)::int AS boost_seconds,
                SUM(seed_seconds)::int AS seed_seconds,
-               SUM(matches_played)::int AS matches_played
+               SUM(matches_played)::int AS matches_played,
+               SUM(kills)::int AS kills,
+               SUM(deaths)::int AS deaths,
+               SUM(teamkills)::int AS teamkills,
+               SUM(revives)::int AS revives
         FROM combined
         GROUP BY player_id
       ),
@@ -223,11 +246,12 @@ export async function recomputeLeaderboardPeriod(
         ${periodStart}::date,
         all_rows.online_seconds,
         all_rows.seed_seconds,
-        0,
-        0,
-        0,
-        0,
-        0,
+        all_rows.kills,
+        all_rows.deaths,
+        all_rows.teamkills,
+        all_rows.revives,
+        CASE WHEN all_rows.deaths = 0 THEN all_rows.kills
+             ELSE all_rows.kills::numeric / all_rows.deaths END,
         all_rows.matches_played,
         all_rows.boost_seconds,
         (settings.k_online * all_rows.online_seconds
@@ -248,6 +272,33 @@ export async function recomputeLeaderboardPeriods(
   let total = 0;
   for (const period of periods) {
     total += await recomputeLeaderboardPeriod(sql, period);
+  }
+  return total;
+}
+
+/**
+ * One-shot combat backfill (DOSSIER-4 #191): recomputes the `month` stat
+ * periods for the last `months` calendar months (current UTC month included,
+ * counting backwards), so historical `match_players` combat data lands in
+ * `player_stat_periods` without waiting for the regular tick to walk past it.
+ *
+ * @param sql - postgres.js connection.
+ * @param months - how many months to recompute; `<= 0` is a no-op.
+ * @param now - clock override for tests; defaults to the current time.
+ * @returns total number of `player_stat_periods` rows written.
+ */
+export async function backfillMonths(
+  sql: postgres.Sql,
+  months: number,
+  now: Date = new Date(),
+): Promise<number> {
+  let total = 0;
+  for (let i = 0; i < months; i += 1) {
+    const monthDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    total += await recomputeLeaderboardPeriod(sql, {
+      periodType: 'month',
+      periodStart: utcDayKey(monthDate),
+    });
   }
   return total;
 }
