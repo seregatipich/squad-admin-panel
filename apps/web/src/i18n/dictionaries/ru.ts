@@ -20,6 +20,7 @@ export const ru = {
   'nav.players': 'Игроки',
   'nav.suspects': 'Метки',
   'nav.leaderboards': 'Лидерборды',
+  'nav.bonusLeaderboard': 'Бонусы',
   'nav.clans': 'Кланы',
   'nav.matches': 'Матчи',
   'nav.events': 'События',

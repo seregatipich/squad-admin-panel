@@ -26,6 +26,8 @@ export interface NavItem {
   permission?: string;
   /** When set, renders a live count badge of reports awaiting moderation. */
   showsPendingReports?: boolean;
+  /** When set, the item is visible only while the economy module is enabled. */
+  requiresEconomy?: boolean;
 }
 
 /** A labeled group of {@link NavItem}s as rendered in the sidebar. */
@@ -58,6 +60,12 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/players', label: 'Игроки', labelKey: 'nav.players' },
       { href: '/suspects', label: 'Метки', labelKey: 'nav.suspects' },
       { href: '/leaderboards', label: 'Лидерборды', labelKey: 'nav.leaderboards' },
+      {
+        href: '/leaderboards/bonuses',
+        label: 'Бонусы',
+        labelKey: 'nav.bonusLeaderboard',
+        requiresEconomy: true,
+      },
       { href: '/clans', label: 'Кланы', labelKey: 'nav.clans' },
       { href: '/matches', label: 'Матчи', labelKey: 'nav.matches' },
       { href: '/events', label: 'События', labelKey: 'nav.events' },
