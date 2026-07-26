@@ -1,5 +1,12 @@
 # Changelog — worker-config-sync
 
+## 2026-07-26 — CFG-2: generic config-drift sweep (#64)
+
+### Added
+
+- `src/config-drift.ts` — a second, independent sweep (every `CONFIG_DRIFT_INTERVAL_MS`, default 5 min) comparing each of the 16 non-managed config files' on-disk sha256 (via `bridge.fileRead`) against its `config_versions` tip, publishing per-file state to `config-drift:status:<server_id>` (TTL 24h). Excluded: `Admins.cfg` (SYNC-3/4 managed segment), `LayerRotation.cfg` (ROT-2), `License.cfg` (#45 panel-managed). Detect-only — resolution (accept / revert / reset-to-depot-default) happens through the API's drift routes and the config editor UI.
+- New env `CONFIG_DRIFT_INTERVAL_MS` (docker-compose + `.env.example`), separate from `ADMINS_CFG_DRIFT_INTERVAL_MS`.
+
 ## 2026-07-25 — SYNC-9: pull vs. push evaluated, push retained (#39)
 
 ### Decided
