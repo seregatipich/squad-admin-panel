@@ -43,10 +43,30 @@ export const serverPatch = z
     display_name: z.string().min(1).max(120).optional(),
     description: z.string().max(500).nullable().optional(),
     tags: z.array(z.string().min(1).max(50)).max(20).optional(),
-    license_id: z.string().max(200).nullable().optional(),
-    license_key: z.string().max(500).nullable().optional(),
+    license_id: z.string().trim().min(1).max(200).nullable().optional(),
+    license_key: z.string().trim().min(1).max(500).nullable().optional(),
   })
-  .strict();
+  .strict()
+  // SRV-6 (#45): the license is written to License.cfg as an id+key pair, so
+  // half-updates are rejected (route maps this issue to 422 license_incomplete):
+  // - setting the key requires the id in the same request;
+  // - clearing exactly one side would leave an orphaned half on record.
+  // Allowed shapes: {id,key} attach, {key:null[,id:null]} detach, {id} id-only
+  // edit (key stays as stored). No format regex: the real key format is not
+  // publicly specified, so only trim/min/max/pairing are enforced.
+  .superRefine((d, ctx) => {
+    const incomplete =
+      (typeof d.license_key === 'string' && typeof d.license_id !== 'string') ||
+      (d.license_key === null && typeof d.license_id === 'string') ||
+      (d.license_id === null && d.license_key === undefined);
+    if (incomplete) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'license_incomplete',
+        path: ['license_key'],
+      });
+    }
+  });
 export type ServerPatch = z.infer<typeof serverPatch>;
 
 export const a2sStatus = z

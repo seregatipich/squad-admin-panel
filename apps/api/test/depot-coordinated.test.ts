@@ -15,7 +15,7 @@ async function seedRunning(h: IntegrationHarness) {
   await h.db.insert(servers).values({
     id,
     displayName: `Server ${id.slice(0, 4)}`,
-    slug: `s-${id.slice(0, 8)}`,
+    slug: `s-${id}`,
     status: 'running',
     runtime: 'container',
   });

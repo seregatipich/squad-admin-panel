@@ -21,7 +21,7 @@ Squad v10 does not respond to A2S queries. Visibility depends on the EOS session
 - `Server.cfg` has `ShouldAdvertise=true` (default).
 - `IsLANMatch=false` (default).
 - UFW allows game/query/beacon ports — `ufw status` on the host.
-- `License.cfg` is populated. The panel does not ship a Squad license key — operators must drop it in manually after install (free, per-operator, from Offworld Industries). If empty, the server log shows `Warning: [LogEOSSessions] Session will be created, but user lacks permission to advertise presence`.
+- `License.cfg` is populated. The panel does not ship a Squad license key (free, per-operator, from Offworld Industries) — attach yours in **Настройки сервера → Лицензия** and the panel writes `License.cfg` for you (SRV-6, #45); it takes effect after a server restart (the settings page shows a «рестарт» badge until then). Do not edit the file by hand or through the config editor — it is panel-managed there (shown masked, writes rejected). If the license is empty, the server log shows `Warning: [LogEOSSessions] Session will be created, but user lacks permission to advertise presence`.
 - Give it 1–3 minutes after start; first registration with EOS takes a moment.
 
 ## Audit log shows a gap or hash mismatch
