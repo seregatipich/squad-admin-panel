@@ -100,6 +100,11 @@ export const playerStatPeriods = pgTable(
       table.serverId,
       table.bonusPoints.desc(),
     ),
+    playerIdx: index('player_stat_periods_player_idx').on(
+      table.playerId,
+      table.periodType,
+      table.periodStart.desc(),
+    ),
     periodTypeChk: check(
       'player_stat_periods_period_type_chk',
       sql`period_type IN ('day','week','month','season','alltime')`,
