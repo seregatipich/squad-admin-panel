@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-07-26 — DOSSIER-6 player dossier tabs
+
+### Added
+
+- `apps/web/src/app/(dashboard)/players/[id]/DossierSection.tsx` — «Досье» block on the player card, fed by exactly one `GET /api/v1/players/:playerId/dossier` request per (server, period) selection; switching tabs never refetches.
+- Four tabs render from that single payload: `DossierSkillTab.tsx` (eleven combat KPIs, period selector, kills-vs-deaths donut and stacked month trend), `DossierWeaponsTab.tsx` (top-N weapon table with kills/damage sorting), `DossierVehiclesTab.tsx` («На технике» and «Уничтожено» sub-tables) and `DossierKitsTab.tsx` (kit time, longest first).
+- The block self-hides on `401`/`403` because the route is gated on `combat:view`, which `GET /api/v1/me` does not report — there is no permission flag to gate on client-side.
+- `skill.damage_dealt` is permanently null upstream, so the «Урон» tile and every null damage cell render `—` titled «Источник не содержит данных об уроне»; a zero is never substituted.
+- Vehicle names are localised from the `vehicle_catalog` `name_ru`/`name_en` columns via `useLocale()`; an uncatalogued row shows its raw asset id titled «Нет в каталоге техники».
+- The server selector appears only on «Скилл» and «Киты»; «Оружие» and «Техника» state «Пожизненно, без разбивки по серверам», matching the route's own lifetime-only aggregates.
+- `apps/web/src/app/(dashboard)/players/[id]/dossier.ts` — response types, formatters, sorters and the client-side zero-fill for the months the API's `matches_played > 0` filter drops, with `dossier.test.ts` unit coverage; `DossierSection.test.tsx` covers all four tabs, the empty state, the 401/403 self-hide and the no-refetch rule.
+- `DossierSkillChart.tsx` is loaded through `next/dynamic`, keeping recharts out of the curated static import graphs.
+
 ## 2026-07-25 — WL-3 whitelist application portal
 
 ### Added
