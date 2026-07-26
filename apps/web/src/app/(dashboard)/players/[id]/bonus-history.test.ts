@@ -3,12 +3,14 @@ import {
   type BonusFilters,
   type BonusTransaction,
   buildBonusQuery,
+  canAfford,
   dateInputToIso,
   EMPTY_BONUS_FILTERS,
   formatAmount,
   isCredit,
   mergeBonusPage,
   prependTransaction,
+  purchaseErrorText,
   sourceLabel,
   typeLabel,
   validateAdjust,
@@ -143,5 +145,51 @@ describe('validateAdjust', () => {
 
   it('rejects a blank comment', () => {
     expect(validateAdjust('10', '   ')).toBe('Комментарий обязателен.');
+  });
+});
+
+describe('canAfford', () => {
+  it('affirms when the balance covers the price', () => {
+    expect(canAfford(100, 100)).toBe(true);
+    expect(canAfford(150, 100)).toBe(true);
+  });
+
+  it('denies when the balance is short', () => {
+    expect(canAfford(99, 100)).toBe(false);
+    expect(canAfford(0, 1)).toBe(false);
+  });
+
+  it('denies while the balance or price is unknown', () => {
+    expect(canAfford(null, 100)).toBe(false);
+    expect(canAfford(100, null)).toBe(false);
+    expect(canAfford(100, undefined)).toBe(false);
+  });
+});
+
+describe('purchaseErrorText', () => {
+  it('maps every purchase error code to Russian text', () => {
+    for (const code of [
+      'economy_disabled',
+      'tier_not_found',
+      'tier_not_purchasable',
+      'role_grants_panel_access',
+      'insufficient_balance',
+      'role_permanent',
+      'role_conflict',
+      'player_not_found',
+      'forbidden',
+    ]) {
+      const text = purchaseErrorText(code);
+      expect(text).not.toContain(code);
+      expect(text.length).toBeGreaterThan(0);
+    }
+    expect(purchaseErrorText('insufficient_balance')).toBe('Недостаточно бонусов для покупки.');
+    expect(purchaseErrorText('role_conflict')).toBe(
+      'У игрока уже есть другая роль. Сначала снимите её.',
+    );
+  });
+
+  it('falls back to the raw code for unknown errors', () => {
+    expect(purchaseErrorText('mystery_code')).toBe('Ошибка: mystery_code');
   });
 });
