@@ -145,9 +145,12 @@ Audit row at step 1 (`server.restore`), step 3 (`server.restore_configs`), and t
 
 Single source of truth: [`apps/api/src/routes/server-configs.ts`](../../../apps/api/src/routes/server-configs.ts) (`writeVersion` at line 403). Each edit pairs a host-filesystem write with a `config_versions` row — never one without the other.
 
+**Editor exception — `License.cfg` is panel-managed (SRV-6, #45).** The editor never touches it: `PUT` (and `POST …/restore/:vid`) return `400 {error:'panel_managed_file'}`, and `GET …/configs/License.cfg` re-renders a masked copy (`LicenseKey=********`) from `server_credentials` instead of reading the disk bytes. The file is written exclusively by the server-settings license flow ([`lib/license-cfg.ts`](../../../apps/api/src/lib/license-cfg.ts) `syncLicenseCfg`, called from `PATCH /api/v1/servers/:id`): it bypasses `writeVersion`, writes the plaintext id+key pair to disk via the same `fileAtomicWrite`, inserts a **masked** `config_versions` row, and never fires a reload — the license applies on the next container start, surfaced as `server.license.restart_required` on `GET /servers/:id`.
+
 ```
 PUT /api/v1/servers/:id/configs/:name   body={content, message?}
   ↓ name ∈ ALLOWED_CONFIG_FILES (19, in @squad/shared-config)
+  ↓ name != 'License.cfg' (panel-managed → 400 panel_managed_file, see above)
   ↓ content ≤ 1 MiB
   ↓
 writeVersion():
@@ -209,7 +212,9 @@ The behavior class also gates whether step 5 fires RCON at all: **only `hot_relo
 |---|---|---|
 | `hot_reload` | `Admins.cfg`, `Bans.cfg`, `RemoteAdminListHosts.cfg`, `RemoteBanListHosts.cfg` | The **only** class where step 5 sends RCON `AdminReloadServerConfig`, so Squad re-reads the file live. (Squad also re-reads some of these on its own when a relevant command fires, e.g. an admin runs `/admin`.) |
 | `rotation` | `LayerRotation.cfg`, `LevelRotation.cfg`, `Excluded{Layers,Levels,Factions}.cfg`, `LayerVoting{,LowPlayers,Night}.cfg`, `VoteConfig.cfg` | Applies from the next match. Step 5 sends **no** RCON (`reason:'not_hot_reload'`); the UI shows a "next match" hint. |
-| `requires_restart` | `CustomOptions.cfg`, `License.cfg`, `MOTD.cfg`, `Rcon.cfg`, `Server.cfg`, `ServerMessages.cfg` | File on disk is fresh, but Squad cached the old values at boot. Step 5 sends **no** RCON (`reason:'not_hot_reload'`); the operator must restart the container, which the config editor offers via a "Рестарт сервера" button (needs `server:restart`). |
+| `requires_restart` | `CustomOptions.cfg`, `License.cfg`\*, `MOTD.cfg`, `Rcon.cfg`, `Server.cfg`, `ServerMessages.cfg` | File on disk is fresh, but Squad cached the old values at boot. Step 5 sends **no** RCON (`reason:'not_hot_reload'`); the operator must restart the container, which the config editor offers via a "Рестарт сервера" button (needs `server:restart`). |
+
+\* `License.cfg` keeps its `requires_restart` class but is panel-managed (SRV-6, #45): the editor shows it masked and rejects writes/restores with `panel_managed_file`; it is written only by the server-settings license flow, which bypasses `writeVersion` entirely (see the editor exception above the flow).
 
 **Failure modes**:
 
