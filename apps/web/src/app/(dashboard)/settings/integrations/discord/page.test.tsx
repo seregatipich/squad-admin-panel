@@ -105,6 +105,32 @@ const WEBHOOK_ROW = {
   updated_at: '2026-01-01T00:00:00.000Z',
 };
 
+const TEMPLATE_ROW = {
+  event_type: 'ban_issued',
+  locale: 'en',
+  template: {
+    title: 'Player banned',
+    url: '{player_url}',
+    description: 'Игрок {player_name} забанен',
+    color: 15548997,
+    fields: [{ name: 'Player', value: '{player_name}', inline: true }],
+  },
+  is_default: true,
+  updated_at: '2026-01-01T00:00:00.000Z',
+};
+
+const PREVIEW_RESPONSE = {
+  event_type: 'ban_issued',
+  embed: {
+    title: 'Забанен игрок',
+    description: 'Тестовый Игрок забанен',
+    color: 15548997,
+    fields: [{ name: 'Player', value: 'Тестовый Игрок', inline: true }],
+    url: null,
+  },
+  missing_placeholders: [] as string[],
+};
+
 function mockFetch(overrides: { test?: () => Promise<Response> } = {}) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
@@ -118,6 +144,12 @@ function mockFetch(overrides: { test?: () => Promise<Response> } = {}) {
       return overrides.test
         ? overrides.test()
         : Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    }
+    if (url.endsWith('/api/v1/integrations/discord/templates') && init?.method === undefined) {
+      return Promise.resolve(new Response(JSON.stringify([TEMPLATE_ROW]), { status: 200 }));
+    }
+    if (url.endsWith('/preview') && init?.method === 'POST') {
+      return Promise.resolve(new Response(JSON.stringify(PREVIEW_RESPONSE), { status: 200 }));
     }
     return Promise.reject(new Error(`unexpected fetch: ${url} ${init?.method}`));
   });
@@ -173,5 +205,15 @@ describe('Тест button', () => {
     fireEvent.click(button);
 
     await waitFor(() => expect(screen.getByText('Вебхук недоступен')).toBeInTheDocument());
+  });
+});
+
+describe('Шаблоны сообщений', () => {
+  it('mounts the message-templates section', async () => {
+    vi.stubGlobal('fetch', mockFetch());
+    render(<DiscordIntegrationPage />);
+
+    expect(await screen.findByText('Шаблоны сообщений')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Заголовок')).toHaveValue('Player banned');
   });
 });

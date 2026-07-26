@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-07-26 — DISCORD-3 Discord message-template editor
+
+### Added
+
+- `apps/web/src/app/(dashboard)/settings/integrations/discord/DiscordTemplatesSection.tsx` — «Шаблоны сообщений» section on `/settings/integrations/discord`: per-event-type embed editor (title, url, description, colour, fields) over `GET/PUT /api/v1/integrations/discord/templates`, a «Сбросить к дефолту» button on `POST …/reset`, and a debounced server-rendered live preview on `POST …/preview` that names every placeholder the renderer could not substitute. Gated on `integration:manage`; the section renders nothing on a 403.
 ## 2026-07-26 — PLAYER-6 sortable player list (#27)
 
 ### Added
