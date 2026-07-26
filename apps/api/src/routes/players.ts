@@ -8,7 +8,7 @@ import {
   roles,
 } from '@squad/db/schema';
 import { normalizePlayerName } from '@squad/shared-config';
-import { and, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -22,7 +22,13 @@ const roleAssignBody = z.object({
   expires_at: z.string().datetime({ offset: true }).nullable().optional(),
   comment: z.string().trim().max(512).nullable().optional(),
 });
-const listQuery = z.object({ q: z.string().min(1).max(64).optional() });
+const PLAYER_SORTS = ['nickname', 'last_seen', 'created', 'total_time'] as const;
+const listQuery = z.object({
+  q: z.string().min(1).max(64).optional(),
+  sort: z.enum(PLAYER_SORTS).default('last_seen'),
+  dir: z.enum(['asc', 'desc']).default('desc'),
+  filter: z.enum(['new']).optional(),
+});
 const searchQuery = z.object({ q: z.string().trim().min(3).max(64) });
 
 interface PlayerSearchRow {
@@ -62,6 +68,14 @@ function dedupeCountries(rows: CountryRow[]): Array<{
   return [...seen.values()];
 }
 
+/** Maps a `?sort=` key from {@link PLAYER_SORTS} to the column it orders by. */
+function playerSortColumn(sort: (typeof PLAYER_SORTS)[number]) {
+  if (sort === 'nickname') return players.canonicalNameNormalized;
+  if (sort === 'created') return players.firstSeenAt;
+  if (sort === 'total_time') return players.totalTimePlayedSeconds;
+  return players.lastSeenAt;
+}
+
 const playerRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
@@ -73,7 +87,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
     },
     async (req) => {
       const q = req.query.q?.trim();
-      let whereClause: SQL | undefined;
+      const clauses: SQL[] = [];
       if (q) {
         const exactMatch = q.toLowerCase();
         const nameMatch = normalizePlayerName(q);
@@ -81,18 +95,24 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
           SELECT 1 FROM player_name_history h
           WHERE h.player_id = players.id AND h.name_normalized LIKE ${`%${nameMatch}%`}
         )`;
-        whereClause = or(
+        const searchClause = or(
           sql`canonical_name_normalized LIKE ${`%${nameMatch}%`}`,
           sql`steam_id64::text = ${exactMatch}`,
           sql`eos_id = ${exactMatch}`,
           nameHistoryMatch,
         );
+        if (searchClause) clauses.push(searchClause);
       }
+      if (req.query.filter === 'new') {
+        clauses.push(sql`first_seen_at >= now() - interval '7 days'`);
+      }
+      const whereClause = clauses.length > 0 ? and(...clauses) : undefined;
+      const sortedColumn = playerSortColumn(req.query.sort);
       const rows = await app.db
         .select()
         .from(players)
         .where(whereClause)
-        .orderBy(desc(players.lastSeenAt))
+        .orderBy(req.query.dir === 'asc' ? asc(sortedColumn) : desc(sortedColumn), asc(players.id))
         .limit(200);
       return {
         items: rows.map((r) => ({

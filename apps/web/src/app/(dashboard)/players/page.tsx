@@ -5,6 +5,14 @@ import { LiveIndicator } from '@/components/LiveIndicator';
 import { PlayerMarkBadge } from '@/components/PlayerMarkBadge';
 import { highestSeverityTone, type MarkTone, type MarkTypeMini } from '@/lib/marks';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import {
+  buildPlayersListQuery,
+  DEFAULT_SORT_STATE,
+  nextSortState,
+  type PlayerSortKey,
+  type PlayerSortState,
+  sortIndicator,
+} from './helpers';
 
 interface Player {
   id: string;
@@ -45,6 +53,8 @@ export default function PlayersPage() {
   const [q, setQ] = useState('');
   const [onlyOnline, setOnlyOnline] = useState(false);
   const [sortOnline, setSortOnline] = useState<OnlineSort>('none');
+  const [sortState, setSortState] = useState<PlayerSortState>(DEFAULT_SORT_STATE);
+  const [onlyNew, setOnlyNew] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [markSummary, setMarkSummary] = useState<Record<string, MarkTypeMini[]>>({});
   const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set());
@@ -83,11 +93,16 @@ export default function PlayersPage() {
     }
   }, []);
 
+  const listQuery = buildPlayersListQuery(sortState, onlyNew);
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const r = await fetch('/api/v1/players', { credentials: 'include', cache: 'no-store' });
+        const r = await fetch(`/api/v1/players?${listQuery}`, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         if (!cancelled) {
           setData((await r.json()) as PlayersResponse);
@@ -110,7 +125,7 @@ export default function PlayersPage() {
       cancelled = true;
       clearInterval(t);
     };
-  }, [loadMarkSummary, loadOnlineStatus]);
+  }, [loadMarkSummary, loadOnlineStatus, listQuery]);
 
   const onMarkChanged = useCallback(() => {
     void loadMarkSummary();
@@ -156,6 +171,10 @@ export default function PlayersPage() {
     setSortOnline((s) => (s === 'none' ? 'online' : s === 'online' ? 'offline' : 'none'));
   }, []);
 
+  const onSort = useCallback((column: PlayerSortKey) => {
+    setSortState((s) => nextSortState(s, column));
+  }, []);
+
   if (!data && !err) return <div className="text-neutral-500">Загрузка…</div>;
 
   return (
@@ -191,6 +210,15 @@ export default function PlayersPage() {
           />
           только онлайн
         </label>
+        <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={onlyNew}
+            onChange={(e) => setOnlyNew(e.target.checked)}
+            className="accent-emerald-500"
+          />
+          новые (&lt;7 дней)
+        </label>
       </div>
 
       {rows.length === 0 ? (
@@ -220,11 +248,22 @@ export default function PlayersPage() {
                     </span>
                   </button>
                 </th>
-                <th className="text-left p-2">Ник</th>
+                <SortHeader label="Ник" column="nickname" state={sortState} onSort={onSort} />
                 <th className="text-left p-2">SteamID64</th>
                 <th className="text-left p-2">EOS ID</th>
-                <th className="text-left p-2">Total playtime</th>
-                <th className="text-left p-2">Last seen</th>
+                <SortHeader
+                  label="Total playtime"
+                  column="total_time"
+                  state={sortState}
+                  onSort={onSort}
+                />
+                <SortHeader label="Created" column="created" state={sortState} onSort={onSort} />
+                <SortHeader
+                  label="Last seen"
+                  column="last_seen"
+                  state={sortState}
+                  onSort={onSort}
+                />
               </tr>
             </thead>
             <tbody>
@@ -282,6 +321,9 @@ export default function PlayersPage() {
                       {fmtDuration(p.total_time_played_seconds)}
                     </td>
                     <td className="p-2 text-xs text-neutral-500">
+                      {new Date(p.first_seen_at).toLocaleString()}
+                    </td>
+                    <td className="p-2 text-xs text-neutral-500">
                       {online ? (
                         <span className="text-emerald-400">сейчас на сервере</span>
                       ) : (
@@ -296,6 +338,37 @@ export default function PlayersPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function SortHeader({
+  label,
+  column,
+  state,
+  onSort,
+}: {
+  label: string;
+  column: PlayerSortKey;
+  state: PlayerSortState;
+  onSort: (column: PlayerSortKey) => void;
+}) {
+  return (
+    <th className="text-left p-2">
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        aria-label={`Сортировать по колонке ${label}`}
+        className="inline-flex items-center gap-1 uppercase tracking-widest hover:text-neutral-300"
+      >
+        {label}
+        <span
+          className={state.key === column ? 'text-sky-400' : 'text-neutral-600'}
+          aria-hidden="true"
+        >
+          {sortIndicator(state, column)}
+        </span>
+      </button>
+    </th>
   );
 }
 
