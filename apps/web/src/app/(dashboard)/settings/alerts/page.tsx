@@ -58,8 +58,19 @@ const SEVERITY_BADGE: Record<string, string> = {
   info: 'border-sky-800 bg-sky-950/50 text-sky-300',
 };
 
+// Read-only labels for rule types that exist but are not creatable through
+// the form (system-seeded, e.g. VIPSUB-4's role_expiring) — deliberately kept
+// out of TYPE_OPTIONS.
+const READONLY_TYPE_LABELS: Record<string, string> = {
+  role_expiring: 'Истечение VIP',
+};
+
 function typeLabel(type: string): string {
-  return TYPE_OPTIONS.find((option) => option.value === type)?.label ?? type;
+  return (
+    TYPE_OPTIONS.find((option) => option.value === type)?.label ??
+    READONLY_TYPE_LABELS[type] ??
+    type
+  );
 }
 
 function formatDate(iso: string): string {

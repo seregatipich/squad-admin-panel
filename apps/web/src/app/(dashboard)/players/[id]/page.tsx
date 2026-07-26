@@ -10,7 +10,9 @@ import { PlayerMarks } from '@/components/PlayerMarks';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import {
   buildRoleAssignPayload,
+  DEFAULT_VIP_EXPIRY_WINDOWS_DAYS,
   formatRoleExpiryLabel,
+  isRoleExpirySoon,
   toDatetimeLocalValue,
 } from '@/lib/role-expiry';
 import { AltsSection } from './AltsSection';
@@ -535,6 +537,11 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
               </span>
               <span className="mt-1 block text-xs text-neutral-500">
                 {formatRoleExpiryLabel(current.role_expires_at)}
+                {isRoleExpirySoon(current.role_expires_at, DEFAULT_VIP_EXPIRY_WINDOWS_DAYS) ? (
+                  <span className="ml-2 rounded bg-amber-950 px-2 py-0.5 text-[10px] uppercase text-amber-300">
+                    истекает
+                  </span>
+                ) : null}
                 {current.role_comment ? ` · ${current.role_comment}` : ''}
               </span>
             </span>

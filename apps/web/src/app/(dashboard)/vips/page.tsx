@@ -5,7 +5,11 @@ import { redirect } from 'next/navigation';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import { apiFetch } from '@/lib/api';
 import { requireSession, SESSION_COOKIE } from '@/lib/dal';
-import { formatVipExpiry } from '@/lib/role-expiry';
+import {
+  DEFAULT_VIP_EXPIRY_WINDOWS_DAYS,
+  formatVipExpiry,
+  isRoleExpirySoon,
+} from '@/lib/role-expiry';
 
 export const dynamic = 'force-dynamic';
 
@@ -70,6 +74,21 @@ export default async function VipsPage({ searchParams }: VipsPageProps) {
     roleOptions = await apiFetch<RoleOption[]>('/api/v1/roles', { cookie });
   } catch {
     roleOptions = [];
+  }
+
+  // Reminder windows drive the «истекает» badge (VIPSUB-4, #170); fall back
+  // to the server-side default when the settings endpoint is unavailable.
+  let expiryWindows: number[] = DEFAULT_VIP_EXPIRY_WINDOWS_DAYS;
+  try {
+    const economy = await apiFetch<{ vip_expiry_windows_days?: number[] }>(
+      '/api/v1/settings/economy',
+      { cookie },
+    );
+    if (Array.isArray(economy.vip_expiry_windows_days)) {
+      expiryWindows = economy.vip_expiry_windows_days;
+    }
+  } catch {
+    expiryWindows = DEFAULT_VIP_EXPIRY_WINDOWS_DAYS;
   }
 
   return (
@@ -143,7 +162,14 @@ export default async function VipsPage({ searchParams }: VipsPageProps) {
                   </Link>
                 </td>
                 <td className="p-2 font-mono text-xs">{r.steam_id64 ?? r.eos_id ?? '—'}</td>
-                <td className="p-2 text-neutral-300">{formatVipExpiry(r.role_expires_at)}</td>
+                <td className="p-2 text-neutral-300">
+                  {formatVipExpiry(r.role_expires_at)}
+                  {isRoleExpirySoon(r.role_expires_at, expiryWindows) ? (
+                    <span className="ml-2 rounded bg-amber-950 px-2 py-0.5 text-[10px] uppercase text-amber-300">
+                      истекает
+                    </span>
+                  ) : null}
+                </td>
                 <td className="p-2 text-neutral-500">
                   {r.role_comment ? (
                     <span className="block max-w-56 truncate" title={r.role_comment}>

@@ -43,6 +43,29 @@ export function formatVipExpiry(expiresAt: string | null | undefined): string {
   return `через ${diffDays} дн.`;
 }
 
+/** Server-side default for `vip_expiry_windows_days` (migration 0092, VIPSUB-4 #170). */
+export const DEFAULT_VIP_EXPIRY_WINDOWS_DAYS = [7, 3, 1];
+
+/**
+ * True when a time-limited grant is inside the largest configured reminder
+ * window: `0 < expiresAt - now <= max(windows)` days. Drives the «истекает»
+ * badges on `/vips` and the player card (VIPSUB-4, #170). Permanent grants
+ * (`null`), invalid timestamps, already-expired grants, and an empty windows
+ * list are all "not soon".
+ */
+export function isRoleExpirySoon(
+  expiresAt: string | null | undefined,
+  windows: number[],
+  now: Date = new Date(),
+): boolean {
+  if (!expiresAt || windows.length === 0) return false;
+  const date = new Date(expiresAt);
+  if (Number.isNaN(date.getTime())) return false;
+  const msLeft = date.getTime() - now.getTime();
+  if (msLeft <= 0) return false;
+  return msLeft <= Math.max(...windows) * 24 * 60 * 60 * 1000;
+}
+
 export function toDatetimeLocalValue(expiresAt: string | null | undefined): string {
   if (!expiresAt) return '';
   const date = new Date(expiresAt);

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildRoleAssignPayload, formatRoleExpiryLabel, formatVipExpiry } from './role-expiry';
+import {
+  buildRoleAssignPayload,
+  formatRoleExpiryLabel,
+  formatVipExpiry,
+  isRoleExpirySoon,
+} from './role-expiry';
 
 describe('role expiry helpers', () => {
   it('builds role assignment payload with optional expiry and trimmed comment', () => {
@@ -44,5 +49,38 @@ describe('role expiry helpers', () => {
 
   it('reports an invalid timestamp distinctly', () => {
     expect(formatVipExpiry('not-a-date')).toBe('Некорректный срок');
+  });
+});
+
+describe('isRoleExpirySoon', () => {
+  const now = new Date('2026-07-20T12:00:00.000Z');
+  const windows = [7, 3, 1];
+
+  it('is true inside the largest window', () => {
+    const inTwoDays = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    expect(isRoleExpirySoon(inTwoDays, windows, now)).toBe(true);
+    const inSevenDays = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    expect(isRoleExpirySoon(inSevenDays, windows, now)).toBe(true);
+  });
+
+  it('is false outside the largest window', () => {
+    const inTenDays = new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    expect(isRoleExpirySoon(inTenDays, windows, now)).toBe(false);
+  });
+
+  it('is false for a permanent grant', () => {
+    expect(isRoleExpirySoon(null, windows, now)).toBe(false);
+    expect(isRoleExpirySoon(undefined, windows, now)).toBe(false);
+  });
+
+  it('is false for an already-expired grant', () => {
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    expect(isRoleExpirySoon(yesterday, windows, now)).toBe(false);
+  });
+
+  it('is false for invalid input or empty windows', () => {
+    expect(isRoleExpirySoon('not-a-date', windows, now)).toBe(false);
+    const inTwoDays = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    expect(isRoleExpirySoon(inTwoDays, [], now)).toBe(false);
   });
 });
