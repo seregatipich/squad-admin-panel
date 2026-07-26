@@ -154,6 +154,7 @@ services:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       PANEL_BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
+      CONFIG_DRIFT_INTERVAL_MS: ${CONFIG_DRIFT_INTERVAL_MS:-300000}
     # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
     # this MUST be `user: "0:<panel-gid>"`, never `group_add: [<panel-gid>]`,
     # otherwise every RPC fails with `rejected untrusted peer`. See

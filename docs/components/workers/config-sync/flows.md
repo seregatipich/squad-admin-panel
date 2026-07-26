@@ -57,6 +57,16 @@ Active mutations (role.create/update/delete, player.role.assign/unassign, role.m
 
 The UI's `<AdminsCfgDriftBanner>` polls `/api/v1/admins-cfg/drift?server_id=...` every 30 s. When state ∈ {`drift`, `unreachable`}, the banner offers a "Force sync" button that POSTs to `/api/v1/admins-cfg/sync?server_id=...`. That endpoint enqueues a `force_sync` event onto the stream; the worker picks it up and overwrites unconditionally (`opts.forceWrite=true`).
 
+## Config drift detection flow (generic)
+
+CFG-2 (#64) adds a second, independent sweep (`src/config-drift.ts`, `setInterval` every `CONFIG_DRIFT_INTERVAL_MS`, default 5 min) covering the **16 non-managed config files** — the 19-file allowlist minus `Admins.cfg` (managed segment above), `LayerRotation.cfg` (ROT-2 managed segment) and `License.cfg` (panel-managed, #45). For each active server it:
+
+1. Reads each file's `config_versions` tip sha256 from Postgres (one `DISTINCT ON (filename)` query per server).
+2. Reads the file via `bridge.fileRead` and hashes the on-disk bytes.
+3. Publishes per-file state to `config-drift:status:<server_id>` (TTL 24h): `in_sync` | `drift` (shas differ — e.g. hand-edited over SSH) | `missing` (file absent) | `unreachable` (bridge read failed) | `unknown` (file never versioned).
+
+Like the Admins.cfg sweep, it **detects, never auto-corrects** — the worker only publishes status. Resolution is operator-driven on the config editor page (`/servers/:id/configs`): the drift banner offers «Принять» (`POST .../configs/:name/drift/accept` — records the disk bytes as a new version), «Откатить» (`POST .../configs/:name/drift/revert` — repairs the disk byte-for-byte back to the DB tip, no duplicate history row) and a unified diff (`GET .../configs/:name/drift/diff`). The API's `GET .../configs/drift` reads live via the bridge, so the UI works even before the first sweep.
+
 ## Error / retry flow
 
 | Failure mode | Outcome | Recovery |

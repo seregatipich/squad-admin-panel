@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { Suspense, useEffect, useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -168,11 +168,20 @@ interface FetchCall {
   body?: string;
 }
 
+interface DriftItemFixture {
+  name: string;
+  state: 'in_sync' | 'drift' | 'missing' | 'unreachable' | 'unknown';
+  disk_sha256: string | null;
+  version_sha256: string | null;
+  tip_version_id: string | null;
+}
+
 function installFetch(opts: {
   fileName: string;
   content: string;
   behavior: string;
   permissions?: string[];
+  drift?: DriftItemFixture[];
 }): FetchCall[] {
   const calls: FetchCall[] = [];
   vi.stubGlobal(
@@ -180,6 +189,29 @@ function installFetch(opts: {
     vi.fn((url: string, init?: RequestInit) => {
       const method = (init?.method ?? 'GET').toUpperCase();
       calls.push({ method, url, body: init?.body as string | undefined });
+      if (url.endsWith('/configs/drift')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ items: opts.drift ?? [], checked_at: '2026-07-26T00:00:00Z' }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (
+        method === 'POST' &&
+        (url.endsWith('/drift/accept') ||
+          url.endsWith('/drift/revert') ||
+          url.endsWith('/reset-default'))
+      ) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, unchanged: false }), { status: 200 }),
+        );
+      }
+      if (url.includes('/versions/')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ content: 'tip content\n' }), { status: 200 }),
+        );
+      }
       if (url.endsWith('/api/v1/me')) {
         return Promise.resolve(
           new Response(JSON.stringify({ permissions: opts.permissions ?? [] }), { status: 200 }),
@@ -462,5 +494,152 @@ describe('ConfigsPage — CRLF round-trip', () => {
     const sent = JSON.parse(put?.body ?? '{}') as { content: string };
     expect(sent.content).toContain('\r\n');
     expect(sent.content).toBe(edited);
+  });
+});
+
+describe('ConfigsPage — config drift (CFG-2 #64)', () => {
+  const DRIFT_ITEM: DriftItemFixture = {
+    name: 'MOTD.cfg',
+    state: 'drift',
+    disk_sha256: 'd15c0000',
+    version_sha256: 'aaaa0000',
+    tip_version_id: 'tip-0001',
+  };
+
+  it('renders config-drift-banner when drift reported', async () => {
+    installFetch({
+      fileName: 'MOTD.cfg',
+      content: 'panel text\n',
+      behavior: 'hot_reload',
+      drift: [DRIFT_ITEM],
+    });
+    await renderPage();
+    const banner = await screen.findByTestId('config-drift-banner');
+    expect(within(banner).getByText('MOTD.cfg')).toBeInTheDocument();
+    expect(within(banner).getByRole('button', { name: 'Принять' })).toBeInTheDocument();
+    expect(within(banner).getByRole('button', { name: 'Откатить' })).toBeInTheDocument();
+    // drifting files are marked in the file list
+    expect(await screen.findByTestId('file-drift-marker')).toBeInTheDocument();
+  });
+
+  it('does not render the banner when every file is in sync', async () => {
+    installFetch({
+      fileName: 'MOTD.cfg',
+      content: 'panel text\n',
+      behavior: 'hot_reload',
+      drift: [{ ...DRIFT_ITEM, state: 'in_sync', disk_sha256: 'aaaa0000' }],
+    });
+    await renderPage();
+    await act(async () => {});
+    expect(screen.queryByTestId('config-drift-banner')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('file-drift-marker')).not.toBeInTheDocument();
+  });
+
+  it('accept and revert buttons call their endpoints after confirm', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const calls = installFetch({
+      fileName: 'MOTD.cfg',
+      content: 'panel text\n',
+      behavior: 'hot_reload',
+      drift: [DRIFT_ITEM],
+    });
+    await renderPage();
+    const banner = await screen.findByTestId('config-drift-banner');
+
+    await act(async () => {
+      within(banner).getByRole('button', { name: 'Принять' }).click();
+    });
+    expect(
+      calls.some(
+        (c) =>
+          c.method === 'POST' &&
+          c.url.endsWith('/api/v1/servers/abc/configs/MOTD.cfg/drift/accept'),
+      ),
+    ).toBe(true);
+
+    await act(async () => {
+      within(banner).getByRole('button', { name: 'Откатить' }).click();
+    });
+    expect(
+      calls.some(
+        (c) =>
+          c.method === 'POST' &&
+          c.url.endsWith('/api/v1/servers/abc/configs/MOTD.cfg/drift/revert'),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not call accept/revert when the confirmation is declined', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const calls = installFetch({
+      fileName: 'MOTD.cfg',
+      content: 'panel text\n',
+      behavior: 'hot_reload',
+      drift: [DRIFT_ITEM],
+    });
+    await renderPage();
+    const banner = await screen.findByTestId('config-drift-banner');
+    await act(async () => {
+      within(banner).getByRole('button', { name: 'Принять' }).click();
+    });
+    await act(async () => {
+      within(banner).getByRole('button', { name: 'Откатить' }).click();
+    });
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
+  it('diff button opens the drift diff view (panel tip vs disk)', async () => {
+    const calls = installFetch({
+      fileName: 'MOTD.cfg',
+      content: 'disk content\n',
+      behavior: 'hot_reload',
+      drift: [DRIFT_ITEM],
+    });
+    await renderPage();
+    const banner = await screen.findByTestId('config-drift-banner');
+    await act(async () => {
+      within(banner).getByRole('button', { name: 'Diff' }).click();
+    });
+    expect(await screen.findByTestId('config-drift-diff')).toBeInTheDocument();
+    expect(
+      calls.some(
+        (c) =>
+          c.method === 'GET' &&
+          c.url.endsWith('/api/v1/servers/abc/configs/MOTD.cfg/versions/tip-0001'),
+      ),
+    ).toBe(true);
+  });
+
+  it('reset-default calls its endpoint', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const calls = installFetch({
+      fileName: 'Server.cfg',
+      content: SERVER_CRLF_CONTENT,
+      behavior: 'requires_restart',
+    });
+    await renderPage();
+    await openFile('Server.cfg');
+    const btn = await screen.findByRole('button', { name: 'Сброс к дефолту' });
+    await act(async () => {
+      btn.click();
+    });
+    expect(
+      calls.some(
+        (c) =>
+          c.method === 'POST' &&
+          c.url.endsWith('/api/v1/servers/abc/configs/Server.cfg/reset-default'),
+      ),
+    ).toBe(true);
+  });
+
+  it('hides the reset-default button for panel-managed and managed-segment files', async () => {
+    installFetch({
+      fileName: 'Admins.cfg',
+      content: MANAGED_ADMINS_CONTENT,
+      behavior: 'hot_reload',
+    });
+    await renderPage();
+    await openFile('Admins.cfg');
+    expect(screen.queryByRole('button', { name: 'Сброс к дефолту' })).not.toBeInTheDocument();
   });
 });

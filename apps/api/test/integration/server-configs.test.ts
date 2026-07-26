@@ -609,6 +609,49 @@ describe('POST /api/v1/servers/:id/configs/:name/restore/:vid', () => {
     await assertAuditRow(h, { action: 'server.config.restore', resource: 'server', targetId: id });
     void v2;
   });
+
+  it('restoring the tip version repairs an out-of-band disk edit byte-for-byte (CFG-2 #64)', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    const crlf = '[SquadName]\r\nServerName="Tip"\r\nMaxPlayers=80\r\n';
+    const put = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Server.cfg`,
+      headers: { cookie },
+      payload: { content: crlf },
+    });
+    expect(put.statusCode).toBe(200);
+    const vid = put.json<{ version_id: string }>().version_id;
+    // Out-of-band SSH edit while the DB tip stays put — restoring the tip
+    // version dedups by sha, but must still converge the disk.
+    h.bridge.files.set(
+      `${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/Server.cfg`,
+      Buffer.from('tampered over ssh\n', 'utf-8'),
+    );
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/configs/Server.cfg/restore/${vid}`,
+      headers: { cookie },
+      payload: {},
+    });
+    expect(resp.statusCode).toBe(200);
+    const body = resp.json<{ unchanged: boolean; disk_repaired?: boolean }>();
+    expect(body.unchanged).toBe(true);
+    expect(body.disk_repaired).toBe(true);
+
+    // Byte-for-byte, CRLF preserved — no newline normalization anywhere.
+    const disk = h.bridge.files.get(`${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/Server.cfg`);
+    expect(disk).toBeDefined();
+    expect(Buffer.from(crlf, 'utf-8').equals(disk as Buffer)).toBe(true);
+
+    // No duplicate history row on the unchanged path.
+    const versions = await h.db
+      .select({ id: configVersions.id })
+      .from(configVersions)
+      .where(and(eq(configVersions.serverId, id), eq(configVersions.filename, 'Server.cfg')));
+    expect(versions).toHaveLength(1);
+  });
 });
 
 describe('schema guardrails for config editor', () => {

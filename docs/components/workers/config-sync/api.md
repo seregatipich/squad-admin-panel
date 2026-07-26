@@ -75,6 +75,26 @@ interface AdminsCfgStatus {
 
 Consumed by `GET /api/v1/admins-cfg/drift?server_id=<uuid>` and the `<AdminsCfgDriftBanner>` component on the server detail page.
 
+### `config-drift:status:<server_id>`
+
+Per-server JSON document from the generic CFG-2 (#64) drift sweep (`src/config-drift.ts`) over the 16 non-managed config files (allowlist minus `Admins.cfg`, `LayerRotation.cfg`, `License.cfg`). TTL 24h, refreshed on every sweep (`CONFIG_DRIFT_INTERVAL_MS`, default 5 min).
+
+```ts
+interface ConfigDriftStatus {
+  checked_at: string; // ISO timestamp of the sweep
+  files: {
+    [name: string]: {
+      state: 'in_sync' | 'drift' | 'missing' | 'unreachable' | 'unknown';
+      disk_sha256: string | null;    // sha256 of the on-disk bytes; null if unreadable
+      version_sha256: string | null; // sha256 of the config_versions tip; null if never versioned
+      tip_version_id: string | null; // config_versions.id of the tip
+    };
+  };
+}
+```
+
+Informational/monitoring only — the config editor UI polls the API's live `GET /api/v1/servers/:id/configs/drift` instead, so drift resolution does not depend on the worker having run.
+
 ### `audit_log` rows (Postgres)
 
 On every successful write, the worker appends a chained-hash audit row using `appendWorkerAudit` (`apps/workers/config-sync/src/audit.ts`):
