@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { BanNickButton } from '@/components/BannedNameRuleModal';
+import { DirectMessageButton } from '@/components/DirectMessageModal';
 import { SquadMessageModal, type SquadMessageTarget } from '@/components/SquadMessageModal';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
@@ -197,7 +198,14 @@ function SquadGroupRows({
         </th>
       </tr>
       {group.players.map((player) => (
-        <RosterRow key={player.eos_id} player={player} now={now} canBan={canBan} />
+        <RosterRow
+          key={player.eos_id}
+          player={player}
+          now={now}
+          serverId={serverId}
+          canChat={canChat}
+          canBan={canBan}
+        />
       ))}
     </>
   );
@@ -206,10 +214,14 @@ function SquadGroupRows({
 function RosterRow({
   player,
   now,
+  serverId,
+  canChat,
   canBan,
 }: {
   player: RosterPlayer;
   now: number;
+  serverId: string;
+  canChat: boolean;
   canBan: boolean;
 }) {
   return (
@@ -228,6 +240,13 @@ function RosterRow({
           ) : (
             <span className="text-neutral-300">{player.name}</span>
           )}
+          <DirectMessageButton
+            playerId={player.player_id}
+            name={player.name}
+            canChat={canChat}
+            serverId={serverId}
+            className="rounded px-1 text-[10px] text-sky-400 hover:bg-neutral-800"
+          />
         </span>
       </td>
       <td className="py-1.5 pr-3 font-mono text-neutral-400">{player.steam_id64 ?? '—'}</td>

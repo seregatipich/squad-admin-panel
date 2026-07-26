@@ -194,6 +194,17 @@ Squad `changemap`; `broadcast` → Squad `chat` **and** `role:edit`, MSG-4 #187)
 | PATCH | `/api/v1/servers/:id/scheduled-tasks/:taskId` | Updates `name`/`params`/`scheduled_at`/`recurrence`/`enabled`. Setting `enabled:false` stops firing without deleting the rule. The 5-minute broadcast floor is re-checked. Audit `server.scheduled_task.update`. | per `task_type` |
 | DELETE | `/api/v1/servers/:id/scheduled-tasks/:taskId` | Deletes the task (cascades its run history). Audit `server.scheduled_task.delete`. | per `task_type` |
 
+## Direct player message
+
+MSG-2 (#185). One addressed in-game message to a single panel player, delivered
+as RCON `AdminWarn <target> <message>` through the worker-rcon command queue.
+The addressee is resolved from the `players` row — EOS id first, SteamID64 as
+fallback — so a row carrying neither is rejected rather than mis-addressed.
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| POST | `/api/v1/servers/:id/players/:playerId/message` | Sends one `AdminWarn` addressed to `:playerId` via the worker-rcon queue. Body: `{ message (2..300 after trim), log_to_card? (default false) }` — 300 is the worker's `BROADCAST_MAX_CHARS`, re-asserted when the command is built, so a longer body would be rejected at execution time. `log_to_card: true` also writes one `chat_messages` row keyed on the **addressee** (`player_id` = target, `scope: 'direct'`, `source: 'panel'`), which is what makes it appear in that player's card chat history via `GET /api/v1/chat/messages?playerId=…`; omitted, nothing is stored. Errors: 401 `unauthenticated`, 403 `{error:'forbidden', required_squad_permission:'chat'}`, 404 `player_not_found` (no such row) / `player_not_addressable` (row has neither eos id nor steam id), 400 from the body schema, 502 `{error:'message_failed', reason, detail}` when the worker is not connected (nothing is stored). Success: `{ ok: true, request_id, response }`. Audit `server.player_message` on target type `server`, with the addressee, resolved target, text and `log_to_card` in `after_snapshot`. | Squad `chat` |
+
 ## Live event bus (panel-wide)
 
 | Method | Path | Purpose | Permissions |

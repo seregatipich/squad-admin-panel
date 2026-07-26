@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { use, useCallback, useEffect, useState } from 'react';
 
 import { BannedNameRuleModal } from '@/components/BannedNameRuleModal';
+import { DirectMessageButton } from '@/components/DirectMessageModal';
 import { PlayerMarks } from '@/components/PlayerMarks';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import {
@@ -19,6 +20,7 @@ import { AltsSection } from './AltsSection';
 import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
 import { ClanWidget, type PlayerClan } from './ClanWidget';
+import { DossierSection } from './DossierSection';
 import { ExternalBansSection } from './ExternalBansSection';
 import { GeoAnomaliesSection } from './GeoAnomaliesSection';
 import { NickBanSection } from './NickBanSection';
@@ -141,6 +143,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   const canManageRoles = me?.permissions.includes('user:manage_roles') ?? false;
   const canEditWhitelist = me?.permissions.includes('whitelist:edit') ?? false;
   const canBan = me?.squad_permissions?.includes('ban') ?? false;
+  const canChat = me?.squad_permissions?.includes('chat') ?? false;
   const canViewIps = me?.permissions.includes('player:view_ips') ?? false;
   const canAccessPanel = me?.permissions.includes('player:view') ?? false;
 
@@ -170,6 +173,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
         )}
         <h1 className="text-2xl font-semibold">{player.canonical_name}</h1>
         <ClanWidget clan={clan} />
+        <DirectMessageButton playerId={playerId} name={player.canonical_name} canChat={canChat} />
       </div>
 
       <NickBanSection nick={player.canonical_name} refreshKey={nickBanRefreshKey} />
@@ -244,6 +248,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <PresenceSection playerId={playerId} />
 
       <NotesSection playerId={playerId} me={me} />
+
+      <DossierSection playerId={playerId} />
 
       <RecentMatchesSection playerId={playerId} />
 
