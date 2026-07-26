@@ -67,6 +67,7 @@ import playerBanAltWarningRoutes from '../../src/routes/player-ban-alt-warning.j
 import playerCombatTrendRoutes from '../../src/routes/player-combat-trend.js';
 import playerCompareOnlineRoutes from '../../src/routes/player-compare-online.js';
 import playerCoplayRoutes from '../../src/routes/player-coplay.js';
+import playerDossierRoutes from '../../src/routes/player-dossier.js';
 import playerDossierStatsRoutes from '../../src/routes/player-dossier-stats.js';
 import playerGeoAnomaliesRoutes from '../../src/routes/player-geo-anomalies.js';
 import playerLinksRoutes from '../../src/routes/player-links.js';
@@ -523,6 +524,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(playerAltCandidatesRoutes);
   await app.register(playerBanAltWarningRoutes);
   await app.register(playerLinksRoutes);
+  await app.register(playerDossierRoutes);
   await app.register(playerDossierStatsRoutes);
   await app.register(playerCombatTrendRoutes);
   await app.register(playerGeoAnomaliesRoutes);

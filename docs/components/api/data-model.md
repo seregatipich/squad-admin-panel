@@ -415,6 +415,9 @@ The `context` column in `audit_log` is a JSON object. Its contents depend on `ac
 | `action_type` | Context fields |
 |---|---|
 | `config.write` | `{before_sha256, after_sha256, file_name, server_id}` — content itself is never stored |
+| `config.drift_accept` | generic route envelope `{requestId, method, url, statusCode, userAgent}`; the accepted file is the `:name` URL segment, target is the server (CFG-2, #64) |
+| `config.drift_revert` | generic route envelope `{requestId, method, url, statusCode, userAgent}`; the reverted file is the `:name` URL segment, target is the server (CFG-2, #64) |
+| `config.reset_default` | generic route envelope `{requestId, method, url, statusCode, userAgent}`; the reset file is the `:name` URL segment, target is the server (CFG-2, #64) |
 | `server.create` | `{server_id, slug, display_name}` |
 | `server.delete` | `{server_id, slug, backup_marker_id, files_backed_up, files_attempted, container_removed, configs_dir_removed, saved_dir_removed, ufw_rules_removed, errors[]}` — full `DeleteResult` mirrored as audit context. |
 | `server.restore` | `{archive_id, new_server_id, slug, display_name}` |
