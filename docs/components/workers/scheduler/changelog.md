@@ -1,5 +1,18 @@
 # Changelog — worker-scheduler
 
+## 2026-07-26
+
+### Added
+
+- GAME-1 (#80): map auto-selection tick. Servers with
+  `server_settings.map_vote_enabled` get one `AdminSetNextLayer` per match,
+  picked from the `map_vote_candidates` pool by the shared
+  `selectNextLayer` rule (weighted-random / least-recently-played with
+  layer/map cooldowns; seed rounds ignored), recorded in `map_vote_picks`
+  (migration `0090`, unique per match) with a deterministic RCON request id
+  `map-vote:<matchId>`. Depot-update windows are skipped and audited.
+  `sendRconCommand` in `deps.ts` gained an optional `requestId` parameter.
+
 ## 2026-07-25
 
 ### Added
