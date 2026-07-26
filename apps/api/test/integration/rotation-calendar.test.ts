@@ -30,7 +30,7 @@ beforeAll(async () => {
   await h.db.insert(servers).values({
     id: SERVER_ID,
     displayName: 'Rotation Calendar Server',
-    slug: `rotation-calendar-${uuidv7().slice(0, 8)}`,
+    slug: `rotation-calendar-${uuidv7()}`,
     timezone: 'UTC',
   });
   await h.db.insert(matches).values({
@@ -67,7 +67,7 @@ async function asRoleWithoutChangeMap(): Promise<string> {
   const roleId = uuidv7();
   await h.db.insert(roles).values({
     id: roleId,
-    name: `RotationCalendarNoChange-${roleId.slice(0, 8)}`,
+    name: `RotationCalendarNoChange-${roleId}`,
     color: 'blue',
     panelAccess: true,
   });

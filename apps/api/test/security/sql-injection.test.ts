@@ -75,7 +75,7 @@ beforeAll(async () => {
   createdRoleId = uuidv7();
   await db.insert(roles).values({
     id: createdRoleId,
-    name: `sqli-test-role-${createdRoleId.slice(0, 8)}`,
+    name: `sqli-test-role-${createdRoleId}`,
     color: 'neutral',
     isSystemRole: false,
   });
@@ -159,7 +159,7 @@ describe('SQL injection — PUT /api/v1/roles/:id (name body)', () => {
       const freshId = uuidv7();
       await db.insert(roles).values({
         id: freshId,
-        name: `sqli-put-${freshId.slice(0, 8)}`,
+        name: `sqli-put-${freshId}`,
         color: 'neutral',
         isSystemRole: false,
       });
