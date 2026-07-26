@@ -14,6 +14,7 @@ vi.mock('@/components/RoleColorDot', () => ({ RoleColorDot: () => null }));
 vi.mock('@/components/PlayerMarks', () => ({ PlayerMarks: () => null }));
 vi.mock('./BonusSection', () => ({ BonusSection: () => null }));
 vi.mock('./ChatHistorySection', () => ({ ChatHistorySection: () => null }));
+vi.mock('./DossierSection', () => ({ DossierSection: () => null }));
 vi.mock('./GeoAnomaliesSection', () => ({ GeoAnomaliesSection: () => null }));
 vi.mock('./NotesSection', () => ({ NotesSection: () => null }));
 vi.mock('./PlayerTeamkillsSection', () => ({ PlayerTeamkillsSection: () => null }));
