@@ -59,6 +59,7 @@ import integrationsVipRoutes from './routes/integrations-vip.js';
 import issuesRoutes from './routes/issues.js';
 import layersRoutes from './routes/layers.js';
 import leaderboardsRoutes from './routes/leaderboards.js';
+import leaderboardsBonusesRoutes from './routes/leaderboards-bonuses.js';
 import liveRoutes from './routes/live.js';
 import logsRoutes from './routes/logs.js';
 import markTypesRoutes from './routes/mark-types.js';
@@ -247,6 +248,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(playerCombatTrendRoutes);
   await app.register(playerGeoAnomaliesRoutes);
   await app.register(leaderboardsRoutes);
+  await app.register(leaderboardsBonusesRoutes);
   await app.register(economyRoutes);
   await app.register(mediaRoutes);
   await app.register(settingsEconomyRoutes);
