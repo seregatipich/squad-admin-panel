@@ -8,6 +8,7 @@ export * from './discord-template.js';
 export * from './heartbeat.js';
 export * from './log-stream.js';
 export * from './log-stream-sink.js';
+export * from './map-vote-selection.js';
 export * from './metrics-pack.js';
 export * from './permissions.js';
 export * from './player-name.js';

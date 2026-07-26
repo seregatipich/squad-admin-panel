@@ -10,11 +10,13 @@ import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
 import {
+  createMapVoteDeps,
   createRotationProfileDeps,
   createRotationScheduleDeps,
   createScheduledTaskDeps,
   createSeedScheduleDeps,
 } from './deps.js';
+import { runMapVoteTick } from './map-vote-tick.js';
 import { runRotationProfileTick } from './rotation-profile-tick.js';
 import { runRotationScheduleTick } from './rotation-schedule-tick.js';
 import { runScheduledTaskTick } from './scheduled-task-tick.js';
@@ -77,6 +79,7 @@ async function main() {
   const rotationScheduleDeps = createRotationScheduleDeps(db, redis);
   const rotationProfileDeps = createRotationProfileDeps(db, bridge);
   const scheduledTaskDeps = createScheduledTaskDeps(db, redis, bridge);
+  const mapVoteDeps = createMapVoteDeps(db, redis);
   const profileApplyHour = rotationProfileApplyHour();
 
   await diag.emit({
@@ -88,14 +91,19 @@ async function main() {
   });
 
   async function tick(): Promise<void> {
-    const [seedResult, rotationResult, profileResult, scheduledTaskResult] = await Promise.all([
-      runSeedScheduleTick({ ...runtimeDeps, diag }),
-      runRotationScheduleTick({ ...rotationScheduleDeps, diag }),
-      runRotationProfileTick({ ...rotationProfileDeps, applyHour: profileApplyHour, diag }),
-      runScheduledTaskTick({ ...scheduledTaskDeps, diag }),
-    ]);
+    const [seedResult, rotationResult, profileResult, scheduledTaskResult, mapVoteResult] =
+      await Promise.all([
+        runSeedScheduleTick({ ...runtimeDeps, diag }),
+        runRotationScheduleTick({ ...rotationScheduleDeps, diag }),
+        runRotationProfileTick({ ...rotationProfileDeps, applyHour: profileApplyHour, diag }),
+        runScheduledTaskTick({ ...scheduledTaskDeps, diag }),
+        runMapVoteTick({ ...mapVoteDeps, diag }),
+      ]);
     lastTickAt = new Date().toISOString();
-    log.info({ seedResult, rotationResult, profileResult, scheduledTaskResult }, 'scheduler tick');
+    log.info(
+      { seedResult, rotationResult, profileResult, scheduledTaskResult, mapVoteResult },
+      'scheduler tick',
+    );
   }
 
   // Registered before the first tick (not after) so a SIGTERM/SIGINT that
