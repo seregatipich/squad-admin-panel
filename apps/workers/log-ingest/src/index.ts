@@ -26,6 +26,7 @@ import { publish } from './publish.js';
 import { handleReport } from './report/store.js';
 import { scheduleLogRetentionSweep } from './retention.js';
 import { tailContainerLogs } from './tail.js';
+import { handleVipExpiryWarnConnect } from './vip-expiry/warn.js';
 import { handleVote } from './vote/store.js';
 
 const requiredEnv = (name: string): string => {
@@ -216,6 +217,9 @@ async function main() {
                 handleExternalBanConnect(db, redis, externalBanCache, { serverId, event: e }).catch(
                   (err) =>
                     log.error({ err: (err as Error).message }, 'external-ban handling failed'),
+                );
+                handleVipExpiryWarnConnect(db, redis, { serverId, event: e }).catch((err) =>
+                  log.error({ err: (err as Error).message }, 'vip-expiry warn handling failed'),
                 );
               });
           }

@@ -5,6 +5,7 @@ export const ALERT_RULE_TYPES = [
   'unusual_activity',
   'admin_login_new_ip',
   'custom',
+  'role_expiring',
 ] as const;
 export type AlertRuleType = (typeof ALERT_RULE_TYPES)[number];
 
@@ -169,6 +170,10 @@ function evaluateRule(
       return evaluateAdminLoginNewIp(event, rule, context);
     case 'custom':
       return evaluateCustom(event, rule, context);
+    case 'role_expiring':
+      // Scheduled by worker-role-expirer's reminder tick (VIPSUB-4, #170),
+      // never fired from the event stream.
+      return null;
     default:
       return null;
   }

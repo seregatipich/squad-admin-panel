@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { CommandPalette } from '@/components/CommandPalette';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { ForcedLogout } from '@/components/ForcedLogout';
+import { RoleExpiryToast } from '@/components/RoleExpiryToast';
 import { SeedNotificationToast } from '@/components/SeedNotificationToast';
 import { SidebarNav } from '@/components/SidebarNav';
 import { apiFetch } from '@/lib/api';
@@ -26,6 +27,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <ConnectionBanner />
       <ForcedLogout />
       <SeedNotificationToast />
+      <RoleExpiryToast />
       <div className="flex flex-1">
         <SidebarNav
           permissions={me.permissions}

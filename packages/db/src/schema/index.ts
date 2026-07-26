@@ -18,6 +18,7 @@ export * from './diagnostic-events.js';
 export * from './discord.js';
 export * from './economy-settings.js';
 export * from './events.js';
+export * from './expiry-notifications.js';
 export * from './external-ban-sources.js';
 export * from './game-votes.js';
 export * from './geoip-settings.js';

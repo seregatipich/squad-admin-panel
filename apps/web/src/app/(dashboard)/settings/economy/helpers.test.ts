@@ -21,6 +21,8 @@ function makeSettings(overrides: Partial<EconomySettings> = {}): EconomySettings
     seed_threshold: overrides.seed_threshold ?? 40,
     economy_enabled: overrides.economy_enabled ?? false,
     privilege_costs: overrides.privilege_costs ?? {},
+    vip_expiry_windows_days: overrides.vip_expiry_windows_days,
+    vip_expiry_warn_in_game: overrides.vip_expiry_warn_in_game,
     updated_at: overrides.updated_at ?? null,
     updated_by_player_id: overrides.updated_by_player_id ?? null,
   };
@@ -33,6 +35,8 @@ function makeForm(overrides: Partial<EconomyFormState> = {}): EconomyFormState {
     kSeed: overrides.kSeed ?? '3',
     seedThreshold: overrides.seedThreshold ?? '40',
     economyEnabled: overrides.economyEnabled ?? false,
+    vipExpiryWindows: overrides.vipExpiryWindows ?? '7, 3, 1',
+    vipExpiryWarnInGame: overrides.vipExpiryWarnInGame ?? true,
   };
 }
 
@@ -47,7 +51,21 @@ describe('settingsToForm', () => {
       kSeed: '3',
       seedThreshold: '25',
       economyEnabled: true,
+      vipExpiryWindows: '7, 3, 1',
+      vipExpiryWarnInGame: true,
     });
+  });
+
+  it('maps configured reminder windows and defaults missing wire fields', () => {
+    const form = settingsToForm(
+      makeSettings({ vip_expiry_windows_days: [14, 5, 2], vip_expiry_warn_in_game: false }),
+    );
+    expect(form.vipExpiryWindows).toBe('14, 5, 2');
+    expect(form.vipExpiryWarnInGame).toBe(false);
+    // The base makeSettings() omits both wire fields — the form falls back.
+    const fallback = settingsToForm(makeSettings());
+    expect(fallback.vipExpiryWindows).toBe('7, 3, 1');
+    expect(fallback.vipExpiryWarnInGame).toBe(true);
   });
 });
 
@@ -64,8 +82,55 @@ describe('validateEconomyForm', () => {
     );
     expect(result).toEqual({
       ok: true,
-      value: { k_online: 1.5, k_boost: 4, k_seed: 6, seed_threshold: 30, economy_enabled: true },
+      value: {
+        k_online: 1.5,
+        k_boost: 4,
+        k_seed: 6,
+        seed_threshold: 30,
+        economy_enabled: true,
+        vip_expiry_windows_days: [7, 3, 1],
+        vip_expiry_warn_in_game: true,
+      },
     });
+  });
+
+  it('parses custom reminder windows and the in-game warn flag', () => {
+    const result = validateEconomyForm(
+      makeForm({ vipExpiryWindows: '14,5, 2', vipExpiryWarnInGame: false }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.vip_expiry_windows_days).toEqual([14, 5, 2]);
+      expect(result.value.vip_expiry_warn_in_game).toBe(false);
+    }
+  });
+
+  it('rejects out-of-range reminder windows', () => {
+    for (const raw of ['0', '91', '7, 0']) {
+      const result = validateEconomyForm(makeForm({ vipExpiryWindows: raw }));
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.vipExpiryWindows).toBeTruthy();
+    }
+  });
+
+  it('rejects empty or non-numeric reminder windows', () => {
+    for (const raw of ['', '  ', '7,abc', '3.5']) {
+      const result = validateEconomyForm(makeForm({ vipExpiryWindows: raw }));
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.vipExpiryWindows).toBeTruthy();
+    }
+  });
+
+  it('rejects more than ten reminder windows and collapses duplicates', () => {
+    const eleven = Array.from({ length: 11 }, (_, i) => i + 1).join(',');
+    const tooMany = validateEconomyForm(makeForm({ vipExpiryWindows: eleven }));
+    expect(tooMany.ok).toBe(false);
+
+    const withDuplicates = validateEconomyForm(makeForm({ vipExpiryWindows: '7,7,3' }));
+    expect(withDuplicates.ok).toBe(true);
+    if (withDuplicates.ok) {
+      expect(withDuplicates.value.vip_expiry_windows_days).toEqual([7, 3]);
+    }
   });
 
   it('rejects a negative coefficient', () => {

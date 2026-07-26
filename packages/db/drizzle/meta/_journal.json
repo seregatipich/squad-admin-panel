@@ -540,6 +540,13 @@
       "when": 1783402100000,
       "tag": "0091_bonus_accrual_window",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1783402200000,
+      "tag": "0092_vip_expiry_reminders",
+      "breakpoints": true
     }
   ]
 }

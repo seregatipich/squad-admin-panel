@@ -339,6 +339,55 @@ export default function EconomySettingsPage() {
         </div>
       </section>
 
+      <section
+        aria-label="Напоминания об истечении VIP"
+        className="rounded-lg border border-neutral-800 bg-neutral-950 p-5"
+      >
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-neutral-500">
+          Напоминания об истечении VIP
+        </h2>
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <label className="block text-xs">
+            <span className="mb-1 block text-neutral-400">
+              Окна напоминаний (дней, через запятую)
+            </span>
+            <input
+              type="text"
+              aria-label="Окна напоминаний (дней, через запятую)"
+              value={form.vipExpiryWindows}
+              disabled={!canManage}
+              onChange={(e) => updateField('vipExpiryWindows', e.target.value)}
+              className={`w-full rounded border bg-neutral-900 px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
+                errors.vipExpiryWindows ? 'border-red-800' : 'border-neutral-800'
+              }`}
+            />
+            <span className="mt-1 block text-[11px] text-neutral-500">
+              За сколько дней до истечения VIP напоминать. Каждое окно срабатывает один раз;
+              продление роли выдаёт напоминания заново.
+            </span>
+            {errors.vipExpiryWindows ? (
+              <span className="mt-1 block text-[11px] text-red-400">{errors.vipExpiryWindows}</span>
+            ) : null}
+          </label>
+          <label className="flex items-start gap-2 text-xs text-neutral-300">
+            <input
+              type="checkbox"
+              aria-label="Предупреждать игрока в игре"
+              checked={form.vipExpiryWarnInGame}
+              disabled={!canManage}
+              onChange={(e) => updateField('vipExpiryWarnInGame', e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-neutral-700 bg-neutral-900 text-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+            />
+            <span>
+              Предупреждать игрока в игре
+              <span className="mt-0.5 block text-[11px] text-neutral-500">
+                Разовый AdminWarn «VIP истекает через N дн.» при следующем заходе на сервер.
+              </span>
+            </span>
+          </label>
+        </div>
+      </section>
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="text-xs text-neutral-500">
           Последнее изменение: {formatUpdatedAt(settings.updated_at)}
