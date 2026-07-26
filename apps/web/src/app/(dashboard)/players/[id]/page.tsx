@@ -20,6 +20,7 @@ import { AltsSection } from './AltsSection';
 import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
 import { ClanWidget, type PlayerClan } from './ClanWidget';
+import { DossierSection } from './DossierSection';
 import { ExternalBansSection } from './ExternalBansSection';
 import { GeoAnomaliesSection } from './GeoAnomaliesSection';
 import { NickBanSection } from './NickBanSection';
@@ -247,6 +248,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <PresenceSection playerId={playerId} />
 
       <NotesSection playerId={playerId} me={me} />
+
+      <DossierSection playerId={playerId} />
 
       <RecentMatchesSection playerId={playerId} />
 
