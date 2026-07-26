@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { rolePermissions, roleSquadPermissions, roles } from '@squad/db/schema';
+import { rolePermissions, roleSquadPermissions, roles, vipTiers } from '@squad/db/schema';
 import { isRoleColor, isSquadPermissionKey, SQUAD_PERMISSIONS } from '@squad/shared-config';
 import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
@@ -301,19 +301,45 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: 'owner_role_immutable' };
       }
+      // A VIP tier maps to an RBAC role via vip_tiers.role_id (ON DELETE
+      // RESTRICT, migration 0035). Reject before any cache churn or delete work
+      // so a referenced role returns a clean 409 rather than a raw FK-violation
+      // 500 (VIPSUB-3, #169).
+      const referencingTier = await app.db
+        .select({ id: vipTiers.id })
+        .from(vipTiers)
+        .where(eq(vipTiers.roleId, req.params.id))
+        .limit(1);
+      if (referencingTier.length > 0) {
+        reply.code(409);
+        return { error: 'role_referenced_by_vip_tier' };
+      }
       // role_permissions/role_squad_permissions cascade; players.role_id is
       // SET NULL via FK. We invalidate per-role cache *first* so outstanding
       // requests see the new (NULL) effective role on next lookup.
       await invalidatePermissionCacheForRole(app.db, req.params.id);
-      await app.db.transaction(async (tx) => {
-        await tx.delete(roles).where(eq(roles.id, req.params.id));
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
-          reason: 'role.delete',
-          actor_player_id: req.user?.playerId ?? null,
-          enqueued_at: new Date().toISOString(),
-          request_id: req.id,
+      try {
+        await app.db.transaction(async (tx) => {
+          await tx.delete(roles).where(eq(roles.id, req.params.id));
+          await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+            reason: 'role.delete',
+            actor_player_id: req.user?.playerId ?? null,
+            enqueued_at: new Date().toISOString(),
+            request_id: req.id,
+          });
         });
-      });
+      } catch (err) {
+        // Backstop for any other ON DELETE RESTRICT referrer added in future:
+        // a foreign-key violation maps to a clean 409, never a 500.
+        if (
+          (err as { code?: string }).code === '23503' ||
+          (err as { cause?: { code?: string } }).cause?.code === '23503'
+        ) {
+          reply.code(409);
+          return { error: 'role_in_use' };
+        }
+        throw err;
+      }
       // Players who lost their role no longer have panel_access; sweep
       // caches because we don't know exactly which sessions remain valid.
       invalidateAllPermissionCaches();
