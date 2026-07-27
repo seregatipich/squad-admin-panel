@@ -24,6 +24,8 @@ vi.mock('@squad/db/schema', () => ({
   playerIpHistory: {},
   playerNameHistory: {},
   playerDiscordLinks: { playerId: 'playerId', discordUserId: 'discordUserId' },
+  // issues.ts dereferences this at module scope to build its zod enum.
+  ISSUE_LINK_ENTITY_TYPES: ['player', 'server', 'moderation_action', 'media_file'],
 }));
 
 vi.mock('@squad/bridge-client', () => ({

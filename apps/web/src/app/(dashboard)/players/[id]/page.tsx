@@ -25,6 +25,7 @@ import { DossierSection } from './DossierSection';
 import { EvidenceSection } from './EvidenceSection';
 import { ExternalBansSection } from './ExternalBansSection';
 import { GeoAnomaliesSection } from './GeoAnomaliesSection';
+import { IssueLinksSection } from './IssueLinksSection';
 import { ModerationHistorySection } from './ModerationHistorySection';
 import { NickBanSection } from './NickBanSection';
 import { NotesSection } from './NotesSection';
@@ -276,6 +277,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <ReportsSection playerId={playerId} />
 
       <ModerationHistorySection playerId={playerId} viewerPlayerId={me?.player_id ?? null} />
+      <IssueLinksSection playerId={playerId} />
 
       <EvidenceSection playerId={playerId} />
 

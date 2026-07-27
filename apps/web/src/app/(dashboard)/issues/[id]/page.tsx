@@ -13,9 +13,12 @@ import {
   STATE_LABELS,
 } from '../helpers';
 import { type PickedPlayer, PlayerSearchSelect } from '../PlayerSearchSelect';
+import { IssueLinksBlock } from './IssueLinksBlock';
+import type { IssueLinkView } from './issue-links';
 
 interface IssueDetail extends IssueView {
   comments: IssueComment[];
+  links: IssueLinkView[];
 }
 
 interface Me {
@@ -242,6 +245,13 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
           ) : null}
         </section>
       ) : null}
+
+      <IssueLinksBlock
+        issueId={id}
+        links={issue.links ?? []}
+        viewer={me ? { player_id: me.player_id, can_manage_issues: canManage } : null}
+        onChanged={() => void load()}
+      />
 
       <CommentFeed
         issueId={id}
