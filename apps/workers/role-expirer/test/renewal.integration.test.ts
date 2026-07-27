@@ -47,6 +47,12 @@ const diag = { emit: vi.fn(async () => undefined) };
 
 beforeAll(async () => {
   if (!db) return;
+  // afterAll cleans these up, but a run killed mid-way (CI cancellation, a sibling
+  // dropping the shared template) leaves the player rows behind, and the next run
+  // then dies on players_steam_id64_unique_idx before reaching its first assertion.
+  // Make setup idempotent so a crashed predecessor cannot wedge the suite.
+  await db.delete(players).where(eq(players.steamId64, RICH_STEAM));
+  await db.delete(players).where(eq(players.steamId64, POOR_STEAM));
   await db.insert(roles).values({ id: vipRoleId, name: `RenewalVip-${vipRoleId}` });
   await db.insert(vipTiers).values({
     id: tierId,

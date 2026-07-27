@@ -20,6 +20,7 @@ export * from './config-versions.js';
 export * from './coplay-settings.js';
 export * from './diagnostic-events.js';
 export * from './discord.js';
+export * from './discord-role-mappings.js';
 export * from './economy-settings.js';
 export * from './events.js';
 export * from './expiry-notifications.js';

@@ -6,6 +6,22 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ## 2026-07-27
 
+### DISCORD-5 — discord_role_mappings (migration 0099)
+
+**Files:** `packages/db/drizzle/0099_discord_role_mappings.sql`, `packages/db/src/schema/discord-role-mappings.ts`, `packages/db/src/schema/index.ts`, `packages/db/test/schema.test.ts`
+
+New table `discord_role_mappings` (#152) — the panel role → Discord guild role mapping that `apps/workers/discord` drives every linked player's Discord roles from.
+
+#### Added
+
+- `discord_role_mappings(id, role_id, discord_role_id, enabled, created_at, updated_at)`. `role_id REFERENCES roles(id) ON DELETE CASCADE` — deleting a panel role takes its mapping with it.
+- Unique index `discord_role_mappings_role_id_key` on `role_id`: one panel role maps to at most one Discord role, the cardinality SQSTAT's `vip_sync`/`moderator_sync` uses. Widening to N Discord roles per panel role means moving the index onto `(role_id, discord_role_id)`; the worker already computes over a set, so only the constraint would change.
+- Index `discord_role_mappings_discord_role_id_idx` for the reconcile walk.
+- The set of `discord_role_id`s in this table is exactly the set of Discord roles the panel manages — the worker never adds or removes anything outside it, so operators keep manual control of every other guild role.
+- No `source` column: only `panel_role` exists today and the API synthesises it. Leaderboard-driven roles are a post-STATS-3 extension that will need their own columns.
+
+**Journal note:** the entry is `idx: 84`, `when: 1783402900000`, inserted between `0098_player_discord_links` and `0101_server_daily_stats`. Its `when` is *lower* than the already-present `0101`–`0106` entries, so a database already migrated past `1783403100000` will not pick `0099` up from `pnpm --filter @squad/db migrate` — apply it by hand there. A fresh database (CI, new deployments) applies the whole journal in array order and is unaffected.
+
 ### DISCORD-4 — player_discord_links (migration 0098)
 
 **Files:** `packages/db/drizzle/0098_player_discord_links.sql`, `packages/db/src/schema/player-discord-links.ts`, `packages/db/src/schema/index.ts`, `packages/db/test/schema.test.ts`

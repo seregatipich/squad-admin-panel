@@ -32,8 +32,13 @@ describe('players pages', () => {
     expect(mod.default).toBeDefined();
   });
 
+  // The player card mounts 27 sections, so this dynamic import transforms a large
+  // module graph. It finishes in well under a second alone, but exceeds vitest's 5s
+  // default under a full parallel run. The assertion is unchanged — only the
+  // allowance for transform cost, matching the 15s used by this package's heavier
+  // component suites.
   it('players/[id]/page exports default', async () => {
     const mod = await import('../../src/app/(dashboard)/players/[id]/page');
     expect(mod.default).toBeDefined();
-  });
+  }, 15_000);
 });

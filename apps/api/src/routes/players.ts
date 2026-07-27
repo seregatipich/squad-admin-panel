@@ -13,6 +13,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
+import { publishDiscordRoleSync } from '../lib/discord-role-sync.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
 
@@ -416,6 +417,15 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         });
       });
       invalidatePermissionCache(playerId);
+      // DISCORD-5 (#152): published after the commit so worker-discord re-derives
+      // this player's Discord roles within seconds. Best-effort — the worker's
+      // hourly reconcile is the durability backstop.
+      await publishDiscordRoleSync(
+        app.redis,
+        playerId,
+        newRoleId === null ? 'player.role.unassign' : 'player.role.assign',
+        app.log,
+      );
 
       if (!newRolePanelAccess) {
         await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
@@ -474,6 +484,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         });
       });
       invalidatePermissionCache(playerId);
+      await publishDiscordRoleSync(app.redis, playerId, 'player.role.unassign', app.log);
       await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
       return { ok: true };
     },

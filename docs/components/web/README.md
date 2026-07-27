@@ -5,20 +5,20 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 ## Responsibilities
 
 - Dashboard, server detail, install wizard, config editor, players, audit, panel-wide log console, account.
-- Auth screens: Steam login button → OpenID redirect, `/no-access` for players without a role.
+- Auth screens: Steam login button → OpenID redirect, `/me` self-service page for players whose role has no `panel_access`.
 - Live indicators: connection state, polling staleness, WS reconnect with exponential backoff.
 
 ## What this component does NOT do
 
 - It does not call the bridge directly — it goes through `api`.
-- Next.js middleware never authorises. The real gate is server-side `requireSession()` inside `src/app/(dashboard)/layout.tsx`, deduped via `react.cache()`. This is intentional after CVE-2025-29927.
+- Next.js middleware never authorises. The real gate is server-side `requireSession()` inside `src/app/(dashboard)/layout.tsx`, deduped via `react.cache()`. This is intentional after CVE-2025-29927. Since VIPSUB-5 (#171) a session alone no longer implies panel access, so the same layout also redirects a session with an empty `permissions` array to `/me`.
 
 ## App Router pages
 
 | Route | File | What it does |
 |---|---|---|
 | `/login` | `src/app/login/page.tsx` | "Войти через Steam" button. Redirects to Steam OpenID 2.0. Immediately redirects to `/dashboard` if already authenticated. |
-| `/no-access` | `src/app/no-access/page.tsx` | Shown after successful Steam login when the player has no panel role. Displays their Steam ID so an Owner can look them up. |
+| `/me` | `src/app/(me)/me/page.tsx` | «Мой VIP» self-service page (VIPSUB-5, #171). Where a successful Steam login lands when the player's role has no `panel_access` — including a player with no role at all: the API issues a `self_service`-scoped session and redirects here instead of into the panel. Shows the player's own bonus balance, VIP expiry, tariff list («Купить разово» / «Подписаться»), active subscription with «Отменить подписку», and a paginated bonus history — all over `/api/v1/me/*`, which take no player id. Lives in the `(me)` route group, whose layout requires a session but no panel access and deliberately renders no sidebar or live-bus widgets. |
 | `/dashboard` | `src/app/(dashboard)/dashboard/page.tsx` | Hub: bridge status, host metrics tile (live), per-worker heartbeats, server count summary. The metrics tile opens the `MetricHistoryModal` for 24 h history. |
 | `/servers` | `src/app/(dashboard)/servers/page.tsx` | List with live `rcon_state` / `player_count` / `last_poll_at`. |
 | `/servers/new` | `src/app/(dashboard)/servers/new/page.tsx` | Install wizard: collects display name + ports, `POST /servers`, then `POST /servers/:id/install`, subscribes to `/install/ws`. |

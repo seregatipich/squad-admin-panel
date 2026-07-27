@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-07-27 — VIPSUB-5 removal of `/no-access`, panel guard on `(dashboard)` (#171)
+
+### Added
+
+- Panel-access guard in `apps/web/src/app/(dashboard)/layout.tsx` — a session whose `me.permissions` array is empty is redirected to `/me` instead of rendering the admin shell. `GET /api/v1/me` is a `selfService` route, so `requireSession()` succeeds for a `self_service` session too; `/` already sent such a player to `/me` (`apps/web/src/app/page.tsx`), but that covered only the post-login hop — typing a `(dashboard)` URL by hand would otherwise render the sidebar around content every panel-gated route answers `401` for. The check is the same one the root page makes: `derivePanelPermissions` hands the whole non-gated catalogue to anyone with `panel_access`, so an empty set proves its absence. It sits deliberately **outside** the `GET /api/v1/setup/status` try/catch, because `redirect()` aborts by throwing and that bare `catch` would swallow it.
+- `apps/web/src/app/(dashboard)/layout.test.tsx` — two cases pinning the guard: a session with `permissions: []` throws `NEXT_REDIRECT` and calls `redirect('/me')`, a session holding `servers.view` renders. The `next/navigation` mock now throws like the real `redirect`, otherwise the guard would fall through and the assertion would pass for the wrong reason.
+
+### Removed
+
+- `apps/web/src/app/no-access/page.tsx` and `page.test.tsx` — the page became unreachable with VIPSUB-5 (#171): every successful Steam login now gets a session, `panel`-scoped with a redirect to `/` when the role has `panel_access` and `self_service`-scoped with a redirect to `/me` when it does not (a player with no role at all included). Nothing produces `/no-access?steam_id64=…&reason=no_role|role_no_access` any more.
+- All `noAccess.*` keys from `apps/web/src/i18n/dictionaries/ru.ts` and `en.ts` — «Доступ запрещён», «Steam ID {steamId} не имеет роли в этой панели.», both `reason` variants with their hints, the `.first-owner-claimed` Owner hint and the «Вернуться на страницу входа» link had no consumer left. `i18n.test.ts` interpolates `login.error.notAuthorized` instead, which carries the surviving `{steamId}` placeholder.
+- `apps/web/e2e/no-access.spec.ts`, plus the route's cases in `apps/web/test/pages-graph.test.ts` and `apps/web/test/pages/auth.test.ts`.
+## 2026-07-27 — DISCORD-5 секция «Синхронизация ролей» (#152)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/settings/integrations/discord/DiscordRoleMappingsSection.tsx` — «Синхронизация ролей» on `/settings/integrations/discord`, over `GET/POST/PATCH/DELETE /api/v1/integrations/discord/role-mappings`. A table of panel role → Discord role id with an inline enabled/disabled toggle and «Удалить», a create form (role `<select>` from `GET /api/v1/roles` × a snowflake field), and «Синхронизировать сейчас» on `POST …/role-mappings/reconcile`. The role select hides the system `Owner` role and any role that already has a mapping, since the API enforces one mapping per role.
+- A red banner rendered from the `status` the list route returns: `roleSyncStatusText` (exported for tests) gives the missing-`Manage Roles` case its own Russian wording because it is the one failure an operator can fix, and falls back to the worker's message for anything else. This is the UI half of DISCORD-5's "no silent failure" criterion.
+- The section self-hides on `403` — `GET /api/v1/me` exposes no `can_manage_integrations` boolean, so the permission rule is not duplicated client-side.
+
 ## 2026-07-27 — MOD-3 moderation history with evidence on the player card (#60)
 
 ### Added

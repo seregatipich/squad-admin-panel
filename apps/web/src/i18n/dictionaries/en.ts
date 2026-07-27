@@ -65,20 +65,6 @@ export const en: Record<TranslationKey, string> = {
   'login.steamButton': 'Sign in with Steam',
   'login.steamOnly': 'Steam OpenID 2.0 is the only way to sign in.',
 
-  'noAccess.heading': 'Access denied',
-  'noAccess.withId': 'Steam ID {steamId} does not have a role in this panel.',
-  'noAccess.withoutId': 'Your Steam account does not have a role in this panel.',
-  'noAccess.noRole': 'You do not have access to the panel',
-  'noAccess.roleNoAccess': 'Your role does not have access to the panel',
-  'noAccess.noRoleHint':
-    'Ask an administrator to assign you a role, then sign in again with Steam.',
-  'noAccess.roleNoAccessHint': 'Ask an administrator to grant your role access to the panel.',
-  'noAccess.steamIdLabel': 'Steam ID',
-  'noAccess.instructions':
-    'Contact an administrator to be assigned a role. Once assigned, sign in again with Steam.',
-  'noAccess.backToLogin': 'Back to the sign-in page',
-  'noAccess.ownerHint': 'If you are the Owner of a freshly installed panel, check the journal',
-
   'connection.unavailable': 'The panel is temporarily unavailable.',
   'connection.retry': 'Retry',
   'connection.dismiss': 'Dismiss',

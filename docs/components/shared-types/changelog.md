@@ -1,5 +1,10 @@
 # `shared-types` — changelog
 
+## 2026-07-27
+
+### Added
+- `events.ts` (`DISCORD-5`, #152): `DISCORD_ROLE_SYNC_STREAM` (`discord:role-sync`), `DISCORD_ROLE_SYNC_GROUP` (`discord-role-sync:v1`), `DISCORD_ROLE_SYNC_MAXLEN`, `DISCORD_ROLE_SYNC_STATUS_KEY` (`discord:role-sync:status`), and the `discordRoleSyncRequest` / `discordRoleSyncStatus` Zod schemas. Deliberately a stream of its own rather than an `EventEnvelope` on `events:*`: the payload is a work item ("re-derive this player's Discord roles"), not a domain event, and worker-discord's notify loop must not see it. `player_id: null` means "reconcile every linked player".
+
 ## 2026-07-09
 
 ### Added

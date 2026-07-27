@@ -41,7 +41,7 @@ Steam callback handler
 
 The advisory lock prevents a race where two simultaneous first-logins both see `first_owner_claimed = false` and both try to claim the role. Only one transaction wins the lock; the other sees `first_owner_claimed = true` when it reads and skips.
 
-After the trick runs once, `first_owner_claimed` stays `true` forever. Subsequent logins proceed directly to the panel access check: role set → session cookie → redirect `/`; role NULL → redirect `/no-access?steam_id64=…`.
+After the trick runs once, `first_owner_claimed` stays `true` forever. Subsequent logins proceed directly to the panel access check: role with `panel_access` → `panel`-scoped session cookie → redirect `/`; no `panel_access` (or no role) → `self_service`-scoped session cookie → redirect `/me`.
 
 ### Sentinel file is informational only
 
@@ -60,16 +60,19 @@ Steam callback ──validates OpenID──► UPSERT players
                                       claimFirstOwner  (no-op after first run)
                                              │
                                              ▼
-                                      load role_id from players
+                                      loadUserPermissions → panelAccess
                                              │
                               ┌──────────────┴──────────────┐
                               │                             │
-                           role_id IS NULL           role_id set
+                           no panel_access            panel_access
                               │                             │
                               ▼                             ▼
-                    redirect /no-access           set __Host-sid cookie
-                                                  redirect /
+                    set __Host-sid cookie         set __Host-sid cookie
+                    scope self_service            scope panel
+                    redirect /me                  redirect /
 ```
+
+Both branches issue a session — VIPSUB-5 (#171) needs a player without `panel_access` authenticated so they can manage their own VIP subscription on `/me`. The `self_service` scope is what keeps the panel closed to them: `apps/api/src/plugins/auth.ts` downgrades such a request to anonymous on every route that does not declare `config.selfService`, so a panel-gated route answers exactly the same 401 it did when no cookie was set at all. The downgrade stops applying as soon as the player actually holds `panel_access` — no re-login needed.
 
 Once inside the panel, `auth.ts` calls `loadUserPermissions(steam_id64)` on every request:
 

@@ -58,6 +58,7 @@ import hostActionsRoutes from './routes/host-actions.js';
 import hostBackupRoutes from './routes/host-backup.js';
 import integrationsBalancerRoutes from './routes/integrations-balancer.js';
 import integrationsDiscordRoutes from './routes/integrations-discord.js';
+import integrationsDiscordRoleMappingsRoutes from './routes/integrations-discord-role-mappings.js';
 import integrationsGeoipRoutes from './routes/integrations-geoip.js';
 import integrationsVipRoutes from './routes/integrations-vip.js';
 import issuesRoutes from './routes/issues.js';
@@ -302,6 +303,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(auditRoutes);
   await app.register(logsRoutes);
   await app.register(integrationsDiscordRoutes);
+  await app.register(integrationsDiscordRoleMappingsRoutes);
   await app.register(integrationsGeoipRoutes);
   await app.register(liveRoutes);
   await app.register(analyticsRoutes);

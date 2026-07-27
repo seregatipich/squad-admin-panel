@@ -53,7 +53,6 @@ PLAYWRIGHT_BASE_URL=https://squad-panel.lan \
 |---|---|
 | `_fixtures.ts` | `ownerPage` / `unauthedPage` fixtures — DB-seeds a player with Owner role + creates a session token directly in Postgres + Redis, no Steam OAuth required. |
 | `login.spec.ts` | Steam button render, `auth_failed` error param, `not_authorized` + steam_id64 display. |
-| `no-access.spec.ts` | Heading render, steam_id64 query param display, absent-param fallback. |
 | `dashboard.spec.ts` | Owner sees full sidebar nav, heading visible, unauthed redirects to /login. |
 | `servers-new.spec.ts` | Cyrillic→latin slug auto-gen, form field render, API error message display. |
 | `roles.spec.ts` | All 5 roles listed, Owner Системная badge, Owner has no delete button. |
