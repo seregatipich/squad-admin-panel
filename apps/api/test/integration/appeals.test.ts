@@ -1,5 +1,6 @@
 import {
   banAppeals,
+  discordWebhooks,
   events,
   moderationActions,
   players,
@@ -8,10 +9,17 @@ import {
   servers,
 } from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
-import { STREAM_NAME } from '@squad/shared-types';
+import { moderationActionPayload, STREAM_NAME } from '@squad/shared-types';
 import { and, eq } from 'drizzle-orm';
+import pino from 'pino';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  ensureConsumerGroup,
+  NOTIFY_CONSUMER_GROUP,
+  runNotifyLoop,
+} from '../../../workers/discord/src/consume.js';
+import { encrypt, serialize } from '../../src/lib/crypto.js';
 import { invalidateAllPermissionCaches, invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -40,6 +48,10 @@ const KICKER_ONLY_STEAM = testSteamId(987002);
 /** Mirrors the daily Redis caps enforced by `public-appeals.ts`. */
 const IP_DAILY_MAX = 10;
 const STEAM_DAILY_MAX = 3;
+
+/** Self-contained key for the discord-notify leg: it encrypts and decrypts with the same one. */
+const DISCORD_TEST_KEY = Buffer.alloc(32, 0x42);
+const silentLog = pino({ enabled: false });
 
 let h: IntegrationHarness;
 let serverId: string;
@@ -149,6 +161,26 @@ async function submitAppeal(payload: Record<string, unknown>) {
     url: '/api/v1/public/appeals',
     headers: { 'content-type': 'application/json' },
     payload: JSON.stringify(payload),
+  });
+}
+
+/** Drains the given stream through one discord-notify pass, then stops. */
+async function consumeAvailableEvent(stream: string, fetchImpl: typeof fetch): Promise<void> {
+  let stop = false;
+  await runNotifyLoop({
+    redis: h.redis,
+    db: h.db,
+    encryptionKey: DISCORD_TEST_KEY,
+    fetchImpl,
+    sleep: async () => undefined,
+    log: silentLog,
+    panelBaseUrl: 'https://panel.test',
+    blockMs: 50,
+    shouldStop: () => stop,
+    discoverStreams: async () => {
+      stop = true;
+      return [stream];
+    },
   });
 }
 
@@ -820,5 +852,67 @@ describeIfDb('approve removes the player from the published banlist', () => {
     });
     expect(afterRes.statusCode).toBe(200);
     expect(afterRes.body).not.toContain(String(steamId64));
+  });
+});
+
+describeIfDb('approve notifies Discord through the existing unban template', () => {
+  it('renders the moderation.unban envelope into the enabled unban webhook', async () => {
+    const steamId64 = testSteamId(987210);
+    await seedBannedPlayer(steamId64, 'AppealTarget210');
+    const created = await submitAppeal({
+      steam_id64: String(steamId64),
+      body: 'Апелляция, решение по которой уходит в Discord существующим шаблоном.',
+    });
+    const appealId = (created.json() as { id: string }).id;
+
+    const webhookUrl = 'https://discord.test/webhooks/appeal-unban';
+    await h.db.insert(discordWebhooks).values({
+      id: uuidv7(),
+      eventType: 'unban',
+      webhookUrlEncrypted: serialize(encrypt(DISCORD_TEST_KEY, webhookUrl)),
+      channelLabel: 'appeal-unban',
+      enabled: true,
+      mentionEveryone: false,
+      serverId,
+    });
+
+    const stream = STREAM_NAME.eventsServer(serverId);
+    await ensureConsumerGroup(h.redis, stream, NOTIFY_CONSUMER_GROUP);
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+
+    const patched = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/appeals/${appealId}`,
+      headers: { cookie: unbannerCookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({ status: 'approved', decision_note: 'бан снят' }),
+    });
+    expect(patched.statusCode).toBe(200);
+
+    // The envelope must satisfy the EVT-1 contract before discord-notify sees it.
+    const entries = await h.redis.xrange(stream, '-', '+');
+    const envelopes = entries
+      .map(([, fields]) => JSON.parse(String(fields[1])) as { type: string; payload: unknown })
+      .filter((envelope) => envelope.type === 'moderation.unban');
+    const mine = envelopes.find(
+      (envelope) =>
+        moderationActionPayload.parse(envelope.payload).steam_id64 === String(steamId64),
+    );
+    expect(mine).toBeTruthy();
+
+    await consumeAvailableEvent(stream, fetchMock as unknown as typeof fetch);
+
+    // Earlier approvals in this file left their own envelopes on the shared
+    // stream, so match on this appellant rather than on call order.
+    const delivered = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)
+      .map(([url, init]) => ({
+        url,
+        payload: JSON.parse(String(init.body)) as {
+          embeds: Array<{ title: string; description: string }>;
+        },
+      }))
+      .find((call) => call.payload.embeds[0]?.description?.includes('AppealTarget210'));
+
+    expect(delivered, 'no unban embed was delivered for the appellant').toBeTruthy();
+    expect(delivered?.url).toBe(webhookUrl);
   });
 });
