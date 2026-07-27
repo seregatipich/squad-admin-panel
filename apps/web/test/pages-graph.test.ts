@@ -92,6 +92,7 @@ import settingsGroupMembersPage from '../src/app/(dashboard)/settings/groups/[id
 import settingsGroupsPage from '../src/app/(dashboard)/settings/groups/page';
 import settingsTokensPage from '../src/app/(dashboard)/settings/tokens/page';
 import usersPage from '../src/app/(dashboard)/users/page';
+import publicUploadPage from '../src/app/(public)/upload/[token]/page';
 import loginPage from '../src/app/login/page';
 import noAccessPage from '../src/app/no-access/page';
 import rootPage from '../src/app/page';
@@ -191,5 +192,9 @@ describe('pages static import graph', () => {
 
   it('users page exports default', () => {
     expect(usersPage).toBeDefined();
+  });
+
+  it('public one-time upload page exports default', () => {
+    expect(publicUploadPage).toBeDefined();
   });
 });
