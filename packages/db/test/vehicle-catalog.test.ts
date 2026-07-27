@@ -23,6 +23,20 @@ beforeAll(async () => {
   await sql.unsafe(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
   await sql.unsafe(`CREATE SCHEMA ${SCHEMA}`);
   await sql.unsafe(`SET search_path TO ${SCHEMA}, public`);
+  // Keep every FK target inside the throwaway schema. Falling back to
+  // public.servers/public.players makes DROP SCHEMA take locks on shared tables
+  // while worker suites mutate them in another process, which can deadlock the
+  // pre-push and coverage runs.
+  await sql.unsafe(`
+    CREATE TABLE servers (
+      id uuid PRIMARY KEY,
+      display_name text NOT NULL,
+      slug text NOT NULL
+    );
+    CREATE TABLE players (
+      id uuid PRIMARY KEY
+    );
+  `);
   await sql.unsafe(COMBAT_SQL);
   await sql.unsafe(CATALOG_SQL);
 
@@ -44,7 +58,6 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!sql) return;
   await sql.unsafe(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
-  await sql`DELETE FROM servers WHERE id = ${SERVER_ID}`;
   await sql.end({ timeout: 5 });
 });
 
