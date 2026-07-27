@@ -138,6 +138,12 @@ export const NAV_GROUPS: NavGroup[] = [
         permission: 'role:edit',
       },
       {
+        href: '/settings/seasons',
+        label: 'Сезоны',
+        labelKey: 'nav.seasons',
+        permission: 'role:edit',
+      },
+      {
         href: '/settings/alt-detection',
         label: 'Альт-детект',
         labelKey: 'nav.altDetection',

@@ -90,6 +90,7 @@ import serversPage from '../src/app/(dashboard)/servers/page';
 import settingsAccountPage from '../src/app/(dashboard)/settings/account/page';
 import settingsGroupMembersPage from '../src/app/(dashboard)/settings/groups/[id]/members/page';
 import settingsGroupsPage from '../src/app/(dashboard)/settings/groups/page';
+import settingsSeasonsPage from '../src/app/(dashboard)/settings/seasons/page';
 import settingsTokensPage from '../src/app/(dashboard)/settings/tokens/page';
 import statisticsPage from '../src/app/(dashboard)/statistics/page';
 import usersPage from '../src/app/(dashboard)/users/page';
@@ -191,6 +192,10 @@ describe('pages static import graph', () => {
 
   it('settings tokens page exports default', () => {
     expect(settingsTokensPage).toBeDefined();
+  });
+
+  it('settings seasons page exports default', () => {
+    expect(settingsSeasonsPage).toBeDefined();
   });
 
   it('settings groups page exports default', () => {
