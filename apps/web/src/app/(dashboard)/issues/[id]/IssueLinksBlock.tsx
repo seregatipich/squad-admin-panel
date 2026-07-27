@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 
 import { type PickedPlayer, PlayerSearchSelect } from '../PlayerSearchSelect';
 import {
@@ -40,6 +40,7 @@ export function IssueLinksBlock({
   viewer: IssueLinkViewer | null;
   onChanged: () => void;
 }) {
+  const entityTypeSelectId = useId();
   const [servers, setServers] = useState<ServerOption[]>([]);
   const [entityType, setEntityType] = useState<IssueLinkEntityType>('player');
   const [busy, setBusy] = useState(false);
@@ -146,11 +147,11 @@ export function IssueLinksBlock({
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <label className="text-xs text-neutral-500" htmlFor="issue-link-entity-type">
+        <label className="text-xs text-neutral-500" htmlFor={entityTypeSelectId}>
           Тип объекта
         </label>
         <select
-          id="issue-link-entity-type"
+          id={entityTypeSelectId}
           value={entityType}
           disabled={busy}
           onChange={(e) => {

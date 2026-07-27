@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 
 interface Subscription {
   id: string;
@@ -41,6 +41,7 @@ function formatDate(value: string): string {
  * role, mirroring the ECON-6 privilege-shop guard).
  */
 export function SubscriptionGrantSection({ playerId }: { playerId: string }) {
+  const tierSelectId = useId();
   const [rows, setRows] = useState<Subscription[]>([]);
   const [tiers, setTiers] = useState<ShopTier[]>([]);
   const [selected, setSelected] = useState('');
@@ -157,11 +158,11 @@ export function SubscriptionGrantSection({ playerId }: { playerId: string }) {
 
       {canGrant ? (
         <div className="flex flex-wrap items-center gap-2">
-          <label className="text-xs text-neutral-500" htmlFor="subscription-tier">
+          <label className="text-xs text-neutral-500" htmlFor={tierSelectId}>
             Тариф
           </label>
           <select
-            id="subscription-tier"
+            id={tierSelectId}
             value={selected}
             onChange={(e) => setSelected(e.target.value)}
             className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm text-neutral-200"
