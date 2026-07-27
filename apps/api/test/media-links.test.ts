@@ -94,6 +94,54 @@ async function insertModerationAction(targetPlayerId: string): Promise<string> {
   return id;
 }
 
+type ConflictingLink = { mediaId: string; entityType: string; entityId: string };
+
+/**
+ * Runs `body` with the `media_links` race window forced open: the conflicting row
+ * is committed after the route's pre-check SELECT has already reported "no existing
+ * link", but before the route's own INSERT executes. That is the interleaving two
+ * concurrent attach requests produce, and the only way to reach the route's
+ * unique-violation handler — the pre-check swallows every non-racing duplicate.
+ *
+ * Only the timing is simulated. The database, the drizzle client, the unique index
+ * and the thrown `DrizzleQueryError` are all real, so the route's `23505` handling
+ * is exercised exactly as it would be under a live race.
+ */
+async function withRacingDuplicateInsert<T>(
+  conflicting: ConflictingLink,
+  body: () => Promise<T>,
+): Promise<T> {
+  type InsertBuilder = { values: (v: unknown) => { returning: () => Promise<unknown> } };
+  const db = h.app.db as unknown as { insert: (table: unknown) => InsertBuilder };
+  const realInsert = db.insert.bind(db);
+  let fired = false;
+
+  db.insert = (table: unknown): InsertBuilder => {
+    const builder = realInsert(table);
+    if (fired || table !== mediaLinks) return builder;
+    fired = true;
+    return {
+      values: (v: unknown) => {
+        const routeInsert = builder.values(v);
+        return {
+          returning: async () => {
+            await realInsert(mediaLinks)
+              .values({ id: randomUUID(), ...conflicting, linkedByPlayerId: null })
+              .returning();
+            return routeInsert.returning();
+          },
+        };
+      },
+    };
+  };
+
+  try {
+    return await body();
+  } finally {
+    db.insert = realInsert;
+  }
+}
+
 beforeEach(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM, canonicalName: 'MediaLinkOwner' },
@@ -179,6 +227,35 @@ describe('POST /api/v1/media/:id/links', () => {
     });
     expect(second.statusCode).toBe(409);
     expect(second.json()).toEqual({ error: 'already_linked' });
+  });
+
+  it('returns 409 when a concurrent writer wins the race past the pre-check', async () => {
+    const targetPlayerId = await insertPlayer({
+      steamId64: testSteamId(978012),
+      canonicalName: 'MediaLinksTarget3',
+    });
+    const actionId = await insertModerationAction(targetPlayerId);
+    const mediaId = await insertMediaFile(h.seed.ownerPlayerId ?? null);
+
+    const res = await withRacingDuplicateInsert(
+      { mediaId, entityType: 'moderation_action', entityId: actionId },
+      () =>
+        h.app.inject({
+          method: 'POST',
+          url: `/api/v1/media/${mediaId}/links`,
+          headers: { cookie: ownerCookie },
+          payload: { entity_type: 'moderation_action', entity_id: actionId },
+        }),
+    );
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'already_linked' });
+
+    const rows = await h.db
+      .select({ id: mediaLinks.id })
+      .from(mediaLinks)
+      .where(eq(mediaLinks.mediaId, mediaId));
+    expect(rows).toHaveLength(1);
   });
 
   it('returns 404 when the target entity does not exist', async () => {
