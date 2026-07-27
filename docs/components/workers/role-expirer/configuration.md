@@ -6,4 +6,5 @@
 | `REDIS_URL` | yes | none | Redis connection for session revocation, Admins.cfg sync streams, heartbeat, and diagnostics. |
 | `ROLE_EXPIRER_INTERVAL_MS` | no | `60000` | Tick interval in milliseconds. |
 | `ROLE_EXPIRY_REMINDER_INTERVAL_MS` | no | `86400000` | VIPSUB-4 expiry-reminder tick interval in milliseconds (daily). |
+| `VIP_RENEWAL_INTERVAL_MS` | no | `3600000` | VIPSUB-5 subscription renewal tick interval in milliseconds (hourly). |
 | `LOG_LEVEL` | no | `info` | Pino log level. |

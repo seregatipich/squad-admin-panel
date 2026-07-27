@@ -7,6 +7,7 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 - **Authentication**: cookie `__Host-sid` (`Secure; HttpOnly; SameSite=lax; Path=/`). Set on `GET /api/v1/auth/steam/callback`. Cleared on `POST /api/v1/auth/logout`. As an alternative for programmatic access, requests may carry `Authorization: Bearer sqp_…` (an API token minted via `/api/v1/me/tokens`) — the cookie path takes precedence when both are present. Token-managing routes (`/api/v1/me/tokens*`) reject Bearer auth.
 - **Identity anchor**: `players.steam_id64` (bigint). There are no email/password accounts. All sessions and permissions are keyed on Steam ID.
 - **Authorisation**: every authed route declares `config.permissions: PermissionKey[]`. Anonymous → 401. Missing permission → 403.
+- **Session scope** (VIPSUB-5): a Steam login whose role has no `panel_access` receives a session with `sessions.scope = 'self_service'`. Such a session is honoured only on routes that declare `config.selfService: true`; on every other route [`plugins/auth.ts`](../../../apps/api/src/plugins/auth.ts) drops `req.user`/`req.session`, so the request is treated as anonymous and answers 401. The gate lifts automatically as soon as the player actually holds `panel_access`. Self-service routes take **no** player id — the subject is always `req.user.playerId`.
 - **Audit**: every mutation must declare `config.audit: { action, resource }`. The CI gate [`audit-coverage.test.ts`](../../../apps/api/test/audit-coverage.test.ts) fails the build otherwise.
 - **bigserial IDs**: `audit_log.id` is serialized as a string to survive `JSON.stringify`.
 
@@ -15,7 +16,7 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
 | GET | `/api/v1/auth/steam/login` | Generates a random nonce (base64url, 16 bytes), stores it in Redis (`steam-nonce:{nonce}`, TTL 300 s) and a `__Host-steam-nonce` cookie, then redirects to `steamcommunity.com/openid/login`. | none |
-| GET | `/api/v1/auth/steam/callback` | Validates nonce cookie↔query match, single-use Redis nonce, `return_to` host-binding to `PANEL_PUBLIC_URL`, Steam `check_authentication`, and `openid.response_nonce` replay guard (`steam-response-nonce:{nonce}`, TTL 3600 s, NX). On success: upserts `players` row, runs `claimFirstOwner`, checks permissions; redirects to `/` with `__Host-sid` cookie on success or `/no-access?steam_id64=…` when no role is assigned. | none |
+| GET | `/api/v1/auth/steam/callback` | Validates nonce cookie↔query match, single-use Redis nonce, `return_to` host-binding to `PANEL_PUBLIC_URL`, Steam `check_authentication`, and `openid.response_nonce` replay guard (`steam-response-nonce:{nonce}`, TTL 3600 s, NX). On success: upserts `players` row, runs `claimFirstOwner`, checks permissions; sets the `__Host-sid` cookie and redirects to `/` for a role with `panel_access`, or to `/me` with a `self_service`-scoped session otherwise. | none |
 | POST | `/api/v1/auth/logout` | Revoke current session, clear `__Host-sid` cookie. | session |
 | GET | `/api/v1/me` | Current player, permissions array, clearance. Returns `{ steam_id64, canonical_name, avatar_url, permissions, clearance }`. | session |
 | GET | `/api/v1/me/sessions` | List own active sessions; `current: true` on the request's session. | session |
@@ -24,6 +25,24 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 | GET | `/api/v1/me/tokens` | List own API tokens (id, name, scopes, created_at, last_used_at, revoked_at). Never returns plaintext or hash. | session |
 | POST | `/api/v1/me/tokens` | Mint a new API token. Body: `{ name: string (1..100), scopes: string[] }`. `scopes ⊆ caller.permissions` (422 `invalid_scopes` otherwise). Hard cap of 25 active tokens per user (409 `too_many_active_tokens`). Returns `{ id, name, scopes, created_at, plaintext: 'sqp_<uuid>_<random>' }` — plaintext appears **once**. | session |
 | DELETE | `/api/v1/me/tokens/:id` | Soft-revoke own token (sets `revoked_at`). Idempotent — second call returns `{ ok: true, already_revoked: true }`. 404 for foreign token. | session |
+
+## VIP self-service (VIPSUB-5)
+
+Implemented in [`apps/api/src/routes/vip-subscriptions.ts`](../../../apps/api/src/routes/vip-subscriptions.ts). Every route below declares `config.selfService: true`, so it is the only surface a session without `panel_access` can reach. Currency is internal ECON bonus points only — there is no payment provider, and integrating one is out of scope.
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/me/tiers` | Purchasable tiers: active, priced, with `default_days`, and whose role neither opens the panel nor is a system role. `{ rows: [{ tier_id, name, description, role_id, days, price_bonuses }] }`. | session (self-service) |
+| GET | `/api/v1/me/bonus-balance` | Own `{ player_id, balance, role_id, role_expires_at }`. | session (self-service) |
+| GET | `/api/v1/me/bonus-transactions` | Own ledger, cursor-paginated (`limit`, `before`). | session (self-service) |
+| GET | `/api/v1/me/subscriptions` | Own subscriptions, newest first, with `tier_name`. | session (self-service) |
+| POST | `/api/v1/me/purchases` | One-off tier purchase for bonus points. Body `{ tier_id }`. Charges the price, grants the timed role (extending from the later of now and the current expiry) and enqueues the Admins.cfg sync. 409 `insufficient_balance` / `role_conflict` / `role_permanent` / `tier_not_purchasable` / `economy_disabled`, 403 `role_grants_panel_access`, 404 `tier_not_found`. | session (self-service) |
+| POST | `/api/v1/me/subscriptions` | Recurring subscription. Body `{ tier_id }`. Charges the first period, then records `price_bonuses`/`renews_every_days` as a **snapshot** and schedules `next_renewal_at`. 409 `already_subscribed` (one active subscription per player, enforced by a partial unique index). | session (self-service) |
+| DELETE | `/api/v1/me/subscriptions/:id` | Cancel own subscription: `status = 'cancelled'`, `cancelled_at = now`. **The paid period is kept** — `role_id`/`role_expires_at` are untouched. 404 for a foreign or already-inactive subscription. | session (self-service) |
+| GET | `/api/v1/players/:playerId/subscriptions` | A player's subscriptions. | `panel_access` |
+| POST | `/api/v1/players/:playerId/subscriptions` | Admin grant from the player card. Body `{ tier_id, renews_every_days?, price_bonuses? }`. Requires **both** `can_manage_economy` and `can_assign_roles`, mirroring the ECON-6 privilege-shop guard: the operation spends the ledger *and* grants a role. | `can_manage_economy` + `can_assign_roles` |
+
+The spend-and-grant transaction itself lives in [`packages/db/src/economy/vip-grant.ts`](../../../packages/db/src/economy/vip-grant.ts) (`planVipGrant` / `applyVipGrant`) and is shared by the privilege shop, these routes and the `role-expirer` renewal tick — the worker cannot import `apps/api/src/lib/`.
 
 Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/totp/*`, `GET /api/v1/auth/discord/*`, `POST /api/v1/setup/{org,owner,finalize}`, `GET /api/v1/setup/check-env`, `POST /api/v1/setup/init`.
 

@@ -28,6 +28,7 @@ All tables live in the `public` schema of a PostgreSQL 16+ database. The Drizzle
 | [`server_settings`](#server_settings) | `server-settings.ts` | Per-server panel configuration |
 | [`servers`](#servers) | `servers.ts` | One row per managed Squad server instance |
 | [`sessions`](#sessions) | `sessions.ts` | Browser session tokens keyed on SteamID64 |
+| [`vip_subscriptions`](#vip_subscriptions) | `vip-subscriptions.ts` | VIPSUB-5 recurring VIP subscriptions billed in ECON bonus points |
 
 ---
 
@@ -658,6 +659,7 @@ Browser session tokens. The `id` column is an opaque string (UUID or prefixed ra
 | `last_activity_at` | `timestamptz` | NO | `now()` | Sliding-window updated on activity |
 | `ip` | `inet` | YES | NULL | IP at session creation |
 | `user_agent` | `text` | YES | NULL | Browser User-Agent header |
+| `scope` | `text` | NO | `'panel'` | VIPSUB-5 authority scope; `sessions_scope_chk` allows `panel` / `self_service`. A `self_service` session is minted for a Steam login whose role has no `panel_access` and is honoured only on routes declaring `config.selfService` |
 | `created_at` | `timestamptz` | NO | `now()` | |
 
 **Indexes**
@@ -667,6 +669,36 @@ Browser session tokens. The `id` column is an opaque string (UUID or prefixed ra
 | `sessions_steam_id64_idx` | `steam_id64` |
 | `sessions_expires_at_idx` | `expires_at` |
 | `sessions_last_activity_idx` | `last_activity_at` |
+
+---
+
+## `vip_subscriptions`
+
+Recurring VIP subscriptions (VIPSUB-5, #171). Currency is internal ECON bonus points only — there is no payment provider, and integrating one is explicitly out of scope; a provider webhook remains a future seam.
+
+`price_bonuses` and `renews_every_days` are **snapshots** taken when the subscription is created and are never re-read from `vip_tiers`: editing the catalog must not reprice a live subscription. The `role-expirer` renewal tick charges the snapshot each period and pushes `players.role_expires_at` forward; when the balance falls short the row flips to `expired` and the existing role-expiry tick removes the role once the paid period runs out. Cancelling sets `status`/`cancelled_at` only — the paid period is never clawed back.
+
+**Columns**
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | `uuid` | NO | — | Primary key; app-side uuidv7 |
+| `player_id` | `uuid` | NO | — | FK → `players.id` ON DELETE CASCADE |
+| `tier_id` | `uuid` | NO | — | FK → `vip_tiers.id` ON DELETE RESTRICT |
+| `status` | `text` | NO | `'active'` | `vip_subscriptions_status_chk`: `active` / `cancelled` / `expired` |
+| `renews_every_days` | `integer` | NO | — | `vip_subscriptions_renews_every_days_chk`: `> 0` |
+| `price_bonuses` | `integer` | NO | — | `vip_subscriptions_price_bonuses_chk`: `>= 0` |
+| `next_renewal_at` | `timestamptz` | NO | — | Advanced by one period from the date that was due, not from the wall clock |
+| `created_at` | `timestamptz` | NO | `now()` | |
+| `cancelled_at` | `timestamptz` | YES | NULL | Set on cancel and on expiry |
+
+**Indexes**
+
+| Name | Columns | Notes |
+|---|---|---|
+| `vip_subscriptions_due_idx` | `status, next_renewal_at` | Renewal scan |
+| `vip_subscriptions_player_idx` | `player_id` | |
+| `vip_subscriptions_one_active_idx` | `player_id` WHERE `status = 'active'` | UNIQUE — one live subscription per player; a duplicate purchase answers 409 `already_subscribed` |
 
 ---
 
@@ -769,3 +801,4 @@ Applied in order by `pnpm db:migrate`. Journal: [`packages/db/drizzle/meta/_jour
 | 0038 | `0038_dossier_weapon_vehicle_stats` | 2026-07 | DOSSIER-2: creates the three dossier aggregate tables (`player_weapon_stats`, `player_vehicle_stats`, `player_vehicle_kills`), uuid-keyed with nullable `damage` (see [Dossier aggregates](#dossier-aggregates-dossier-2)) |
 | 0077 | `0077_seed4_notifications` | 2026-07-14 | Adds `seed_subscriptions`, schedule notification lead time, built-in AUTO-3 seed-call rules, and the Discord `seed_needed` template |
 | 0087 | `0087_whitelist_applications` | 2026-07-25 | WL-3: creates `whitelist_applications` (status/source CHECKs, partial-unique pending index, FKs to `players`/`roles`) and adds `panel_meta.whitelist_applications_enabled` / `whitelist_application_default_days` |
+| 0104 | `0104_vip_subscriptions` | 2026-07-27 | VIPSUB-5: creates `vip_subscriptions` (status/period/price CHECKs, due + player indexes, partial-unique one-active index) and adds `sessions.scope` (`panel` / `self_service`, default `panel`) |

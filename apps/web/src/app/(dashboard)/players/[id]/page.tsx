@@ -33,6 +33,7 @@ import { RecentMatchesSection } from './RecentMatchesSection';
 import { ReportPlayerSection } from './ReportPlayerSection';
 import { ReportsSection } from './ReportsSection';
 import { SeedContributionSection } from './SeedContributionSection';
+import { SubscriptionGrantSection } from './SubscriptionGrantSection';
 import { VotesSection } from './VotesSection';
 
 interface Player {
@@ -234,6 +235,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <PanelAccessSection playerId={playerId} canManage={canManageRoles} />
 
       <BonusSection playerId={playerId} />
+
+      <SubscriptionGrantSection playerId={playerId} />
 
       <div className="flex justify-end">
         <Link

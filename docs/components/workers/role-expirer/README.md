@@ -28,6 +28,31 @@ before the main tick removes them. Each reminder tick:
    in-game `AdminWarn` on the player's next connect (disabled via
    `economy_settings.vip_expiry_warn_in_game`).
 
+A third, hourly job (VIPSUB-5, #171) bills recurring VIP subscriptions. Each
+renewal tick:
+
+1. Selects `vip_subscriptions` rows with `status = 'active'` and
+   `next_renewal_at <= now` (index `vip_subscriptions_due_idx`).
+2. For each, charges the row's **snapshot** `price_bonuses` via the shared
+   `applyVipGrant` helper in `@squad/db`: one `bonus_transactions` `spend` row,
+   the new balance, and `players.role_expires_at` pushed forward by
+   `renews_every_days` from the later of now and the current expiry.
+3. Advances `next_renewal_at` by one period **from the date that was due**, not
+   from the wall clock, so an outage does not shift the billing schedule.
+4. If the balance cannot cover the price (or the tier's role can no longer be
+   granted), flips the row to `expired`, writes a `player.subscription.expire`
+   audit row, records a broadcast `alert_events` row on the seeded
+   `role_expiring` rule with `event_kind: 'subscription_expired'`, and publishes
+   the matching `alert.triggered` live-bus frame. The role itself is **not**
+   removed here — the already-paid period runs out first and the main tick
+   removes it on schedule.
+5. Enqueues one Admins.cfg sync for the whole run, not one per subscription.
+
+A subscription cancelled between the scan and the charge is skipped and nothing
+is billed. One failing subscription never aborts the batch.
+
 The worker publishes `worker:heartbeat:role-expirer` and `role_expirer.*`
 diagnostic events (including `role_expirer.reminders_ok` /
-`role_expirer.reminders_failed` for the reminder job).
+`role_expirer.reminders_failed` for the reminder job and
+`role_expirer.renewals_ok` / `role_expirer.renewals_failed` for the renewal
+job).

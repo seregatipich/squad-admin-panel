@@ -242,6 +242,7 @@ services:
       REDIS_URL: redis://redis:6379
       ROLE_EXPIRER_INTERVAL_MS: ${ROLE_EXPIRER_INTERVAL_MS:-60000}
       ROLE_EXPIRY_REMINDER_INTERVAL_MS: ${ROLE_EXPIRY_REMINDER_INTERVAL_MS:-86400000}
+      VIP_RENEWAL_INTERVAL_MS: ${VIP_RENEWAL_INTERVAL_MS:-3600000}
     depends_on:
       postgres:
         condition: service_healthy
