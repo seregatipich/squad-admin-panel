@@ -4,7 +4,7 @@ import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
 import { createDiag } from '@squad/diag';
-import { startHeartbeat } from '@squad/shared-config';
+import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
@@ -101,6 +101,29 @@ async function main() {
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
 
+  let stopped = false;
+  let interval: NodeJS.Timeout | null = null;
+  let manualLoop: Promise<void> = Promise.resolve();
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      log.info({ sig }, 'shutdown');
+      stopped = true;
+      if (interval) clearInterval(interval);
+      await diag.emit({
+        component: 'worker-ban-sync',
+        kind: 'ban_sync.stopped',
+        severity: 'info',
+        message: `ban-sync received ${sig}`,
+        payload: { sig },
+      });
+      stopHeartbeat();
+      await manualLoop;
+      await sql.end({ timeout: 5 });
+      await redis.quit().catch(() => undefined);
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
+
   await diag.emit({
     component: 'worker-ban-sync',
     kind: 'ban_sync.started',
@@ -120,7 +143,6 @@ async function main() {
 
   await ensureManualGroup(redis);
   const consumerName = `ban-sync-${process.pid}`;
-  let stopped = false;
 
   async function processManualQueue(): Promise<void> {
     while (!stopped) {
@@ -187,33 +209,15 @@ async function main() {
   }
 
   await tick();
-  const interval = setInterval(() => {
+  await shutdown.markReady();
+  if (shutdown.isShutdownRequested()) return;
+  interval = setInterval(() => {
     tick().catch((err) => log.error({ err: (err as Error).message }, 'ban-sync tick failed'));
   }, TICK_INTERVAL_MS);
 
-  const manualLoop = processManualQueue().catch((err) => {
+  manualLoop = processManualQueue().catch((err) => {
     log.error({ err: (err as Error).message }, 'manual-queue loop crashed');
   });
-
-  const shutdown = async (sig: NodeJS.Signals) => {
-    log.info({ sig }, 'shutdown');
-    stopped = true;
-    clearInterval(interval);
-    await diag.emit({
-      component: 'worker-ban-sync',
-      kind: 'ban_sync.stopped',
-      severity: 'info',
-      message: `ban-sync received ${sig}`,
-      payload: { sig },
-    });
-    stopHeartbeat();
-    await manualLoop;
-    await sql.end({ timeout: 5 });
-    await redis.quit().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
 }
 
 function isMainEntrypoint(): boolean {

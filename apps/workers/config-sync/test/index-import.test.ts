@@ -50,14 +50,18 @@ vi.mock('@squad/bridge-client', () => ({
   })),
 }));
 
-vi.mock('@squad/shared-config', () => ({
-  redisSinkStream: vi.fn(() => ({ write: vi.fn() })),
-  startHeartbeat: vi.fn(() => vi.fn()),
-  // Consumed by src/config-drift.ts (CFG-2 #64); the sweep itself only runs on
-  // its interval (default 5 min), so it never fires within this test's window.
-  ALLOWED_CONFIG_FILES: ['Admins.cfg', 'LayerRotation.cfg', 'License.cfg', 'Server.cfg'],
-  PANEL_CONFIGS_ROOT: '/var/lib/squad-panel/configs',
-}));
+vi.mock('@squad/shared-config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@squad/shared-config')>();
+  return {
+    ...actual,
+    redisSinkStream: vi.fn(() => ({ write: vi.fn() })),
+    startHeartbeat: vi.fn(() => vi.fn()),
+    // Consumed by src/config-drift.ts (CFG-2 #64); the sweep itself only runs on
+    // its interval (default 5 min), so it never fires within this test's window.
+    ALLOWED_CONFIG_FILES: ['Admins.cfg', 'LayerRotation.cfg', 'License.cfg', 'Server.cfg'],
+    PANEL_CONFIGS_ROOT: '/var/lib/squad-panel/configs',
+  };
+});
 
 vi.mock('drizzle-orm', () => ({
   isNull: vi.fn(() => ({})),

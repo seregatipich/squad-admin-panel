@@ -7,7 +7,7 @@ import {
   recomputeLeaderboardPeriods,
 } from '@squad/db';
 import { createDiag, type Diag } from '@squad/diag';
-import { startHeartbeat } from '@squad/shared-config';
+import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
@@ -174,6 +174,25 @@ async function main() {
   const diag: Diag = redis ? createDiag({ redis, log }) : { async emit() {} };
   const invalidateCache = redis ? () => invalidateLeaderboardCache(redis) : undefined;
 
+  let interval: NodeJS.Timeout | null = null;
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      log.info({ sig }, 'shutdown');
+      if (interval) clearInterval(interval);
+      await diag.emit({
+        component: COMPONENT,
+        kind: 'leaderboard_aggregator.stopped',
+        severity: 'info',
+        message: `leaderboard-aggregator received ${sig}`,
+        payload: { sig },
+      });
+      stopHeartbeat();
+      await sql.end({ timeout: 5 });
+      await redis?.quit().catch(() => undefined);
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
+
   await diag.emit({
     component: COMPONENT,
     kind: 'leaderboard_aggregator.started',
@@ -185,29 +204,13 @@ async function main() {
   await runStartupBackfill({ sql, diag }, resolveBackfillMonths());
 
   await runLeaderboardAggregatorTick({ sql, diag, invalidateCache });
-  const interval = setInterval(() => {
+  await shutdown.markReady();
+  if (shutdown.isShutdownRequested()) return;
+  interval = setInterval(() => {
     runLeaderboardAggregatorTick({ sql, diag, invalidateCache }).catch((err) =>
       log.error({ err: (err as Error).message }, 'leaderboard tick failed'),
     );
   }, resolveTickIntervalMs());
-
-  const shutdown = async (sig: NodeJS.Signals) => {
-    log.info({ sig }, 'shutdown');
-    clearInterval(interval);
-    await diag.emit({
-      component: COMPONENT,
-      kind: 'leaderboard_aggregator.stopped',
-      severity: 'info',
-      message: `leaderboard-aggregator received ${sig}`,
-      payload: { sig },
-    });
-    stopHeartbeat();
-    await sql.end({ timeout: 5 });
-    await redis?.quit().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
 }
 
 function isMainEntrypoint(): boolean {

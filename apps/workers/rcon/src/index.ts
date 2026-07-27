@@ -129,8 +129,8 @@ async function main() {
     clearTimeout(forceExit);
     process.exit(0);
   };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 
   await reconcile();
   interval = setInterval(() => {

@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createDiag, type Diag } from '@squad/diag';
-import { startHeartbeat } from '@squad/shared-config';
+import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino from 'pino';
 
@@ -60,6 +60,26 @@ async function main() {
 
   const diag: Diag = redis ? createDiag({ redis, log }) : { async emit() {} };
 
+  log.info('worker-audit-archiver idle — Phase 1 functionality deferred');
+
+  let interval: NodeJS.Timeout | null = null;
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      log.info({ sig }, 'shutdown');
+      if (interval) clearInterval(interval);
+      await diag.emit({
+        component: COMPONENT,
+        kind: 'audit_archiver.stopped',
+        severity: 'info',
+        message: `audit-archiver received ${sig}`,
+        payload: { sig },
+      });
+      stopHeartbeat();
+      await redis?.quit().catch(() => undefined);
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
+
   await diag.emit({
     component: COMPONENT,
     kind: 'audit_archiver.started',
@@ -67,30 +87,12 @@ async function main() {
     message: 'audit-archiver started',
     payload: { pid: process.pid },
   });
-
-  log.info('worker-audit-archiver idle — Phase 1 functionality deferred');
-
   await runArchiverCycle({ diag });
-  const interval = setInterval(() => {
+  await shutdown.markReady();
+  if (shutdown.isShutdownRequested()) return;
+  interval = setInterval(() => {
     void runArchiverCycle({ diag });
   }, RUN_INTERVAL_MS);
-
-  const shutdown = async (sig: NodeJS.Signals) => {
-    log.info({ sig }, 'shutdown');
-    clearInterval(interval);
-    await diag.emit({
-      component: COMPONENT,
-      kind: 'audit_archiver.stopped',
-      severity: 'info',
-      message: `audit-archiver received ${sig}`,
-      payload: { sig },
-    });
-    stopHeartbeat();
-    await redis?.quit().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
 }
 
 function isMainEntrypoint(): boolean {

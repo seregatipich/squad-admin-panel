@@ -3,11 +3,8 @@ import Redis from 'ioredis';
 import { workerContract } from '../../_test-shared/contract.js';
 
 workerContract({
-  name: 'metrics-sampler',
+  name: 'presence-daily',
   entryPath: path.resolve(import.meta.dirname, '../dist/index.js'),
-  expectedHeartbeatKey: 'worker:heartbeat:metrics-sampler',
+  expectedHeartbeatKey: 'worker:heartbeat:presence-daily',
   createRedis: (url) => new Redis(url, { maxRetriesPerRequest: null }),
-  envOverrides: {
-    BRIDGE_SOCKET: process.env.BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
-  },
 });

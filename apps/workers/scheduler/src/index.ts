@@ -4,7 +4,7 @@ import { BridgeClient } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { createDiag, type Diag } from '@squad/diag';
-import { startHeartbeat } from '@squad/shared-config';
+import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -67,7 +67,6 @@ async function main() {
     socketPath: process.env.PANEL_BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
     onLog: (message, meta) => log.info({ ...meta }, message),
   });
-  await bridge.connect();
   let lastTickAt: string | null = null;
   const stopHeartbeat = startHeartbeat({
     redis,
@@ -81,14 +80,6 @@ async function main() {
   const scheduledTaskDeps = createScheduledTaskDeps(db, redis, bridge);
   const mapVoteDeps = createMapVoteDeps(db, redis);
   const profileApplyHour = rotationProfileApplyHour();
-
-  await diag.emit({
-    component: 'worker-scheduler',
-    kind: 'scheduler.started',
-    severity: 'info',
-    message: 'worker-scheduler started',
-    payload: { pid: process.pid },
-  });
 
   async function tick(): Promise<void> {
     const [seedResult, rotationResult, profileResult, scheduledTaskResult, mapVoteResult] =
@@ -106,31 +97,37 @@ async function main() {
     );
   }
 
-  // Registered before the first tick (not after) so a SIGTERM/SIGINT that
-  // arrives while that first tick is still in flight (e.g. a slow initial
-  // DB connection) is still handled gracefully instead of falling through to
-  // the platform default (immediate, non-zero-exit termination).
   let interval: NodeJS.Timeout | null = null;
-  const shutdown = async (sig: NodeJS.Signals) => {
-    log.info({ sig }, 'shutdown');
-    if (interval) clearInterval(interval);
-    await diag.emit({
-      component: 'worker-scheduler',
-      kind: 'scheduler.stopped',
-      severity: 'info',
-      message: `worker-scheduler received ${sig}`,
-      payload: { sig },
-    });
-    stopHeartbeat();
-    await bridge.close();
-    await sql.end({ timeout: 5 });
-    await redis.quit().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      log.info({ sig }, 'shutdown');
+      if (interval) clearInterval(interval);
+      await diag.emit({
+        component: 'worker-scheduler',
+        kind: 'scheduler.stopped',
+        severity: 'info',
+        message: `worker-scheduler received ${sig}`,
+        payload: { sig },
+      });
+      stopHeartbeat();
+      await bridge.close();
+      await sql.end({ timeout: 5 });
+      await redis.quit().catch(() => undefined);
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
 
+  await bridge.connect();
+  await diag.emit({
+    component: 'worker-scheduler',
+    kind: 'scheduler.started',
+    severity: 'info',
+    message: 'worker-scheduler started',
+    payload: { pid: process.pid },
+  });
   await tick();
+  await shutdown.markReady();
+  if (shutdown.isShutdownRequested()) return;
   interval = setInterval(() => {
     tick().catch((err) => log.error({ err: (err as Error).message }, 'seed-schedule tick failed'));
   }, TICK_INTERVAL_MS);
