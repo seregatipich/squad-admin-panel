@@ -1,4 +1,5 @@
 import { getTableColumns } from 'drizzle-orm';
+import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import * as schema from '../src/schema/index.js';
 
@@ -67,5 +68,24 @@ describe('schema surface', () => {
     const cols = getTableColumns(schema.vipTiers);
     expect(cols.priceBonuses).toBeDefined();
     expect(cols.priceBonuses.notNull).toBe(false);
+  });
+
+  it('media_links carries the entity-type check and the uniqueness key', () => {
+    const config = getTableConfig(schema.mediaLinks);
+    const entityTypeCheck = config.checks.find(
+      (check) => check.name === 'media_links_entity_type_check',
+    );
+    expect(entityTypeCheck).toBeDefined();
+
+    const mediaEntityKey = config.indexes.find(
+      (index) => index.config.name === 'media_links_media_entity_key',
+    );
+    expect(mediaEntityKey).toBeDefined();
+    expect(mediaEntityKey?.config.unique).toBe(true);
+    expect(mediaEntityKey?.config.columns.map((c) => (c as { name?: string }).name)).toEqual([
+      'media_id',
+      'entity_type',
+      'entity_id',
+    ]);
   });
 });
