@@ -436,8 +436,23 @@ One row per Steam account that has ever been seen on any managed server. The `st
 | `first_seen_at` | `timestamptz` | NO | `now()` | |
 | `last_seen_at` | `timestamptz` | NO | `now()` | |
 | `total_time_played_seconds` | `bigint` | NO | `0` | Cumulative playtime across all servers |
+| `avatar_url` | `text` | YES | NULL | INT-1: `GetPlayerSummaries.avatarfull` |
+| `persona_name` | `text` | YES | NULL | INT-1: `GetPlayerSummaries.personaname` |
+| `profile_visibility` | `smallint` | YES | NULL | INT-1: `communityvisibilitystate` — 1 = private, 3 = public |
+| `steam_account_created_at` | `timestamptz` | YES | NULL | INT-1: `timecreated`; Steam only returns it for public profiles |
+| `vac_banned` | `boolean` | NO | `false` | INT-1: `GetPlayerBans.VACBanned` |
+| `vac_ban_count` | `integer` | NO | `0` | INT-1: `NumberOfVACBans` |
+| `game_ban_count` | `integer` | NO | `0` | INT-1: `NumberOfGameBans` |
+| `days_since_last_ban` | `integer` | YES | NULL | INT-1: `DaysSinceLastBan`; NULL when the account has no ban at all (Steam reports 0 for both "never" and "today") |
+| `owns_squad` | `boolean` | YES | NULL | INT-1: appid `393380` present in `GetOwnedGames`. **NULL = Steam withheld the library** (private profile), not "does not own" |
+| `steam_playtime_minutes` | `integer` | YES | NULL | INT-1: `playtime_forever` for appid `393380` |
+| `steam_checked_at` | `timestamptz` | YES | NULL | INT-1: last successful Steam poll; NULL = never refreshed |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `updated_at` | `timestamptz` | NO | `now()` | |
+
+The INT-1 (#76) Steam columns are written only by
+`POST /api/v1/players/:playerId/steam-refresh`; nothing backfills them, so a
+panel that has never run a refresh reads them all as NULL/`false`/`0`.
 
 **Indexes**
 
@@ -447,6 +462,7 @@ One row per Steam account that has ever been seen on any managed server. The `st
 | `players_canonical_name_normalized_idx` | `canonical_name_normalized` | — |
 | `players_last_seen_at_idx` | `last_seen_at` | — |
 | `players_role_id_idx` | `role_id` | `role_id IS NOT NULL` |
+| `players_steam_checked_at_idx` | `steam_checked_at NULLS FIRST` | `steam_id64 IS NOT NULL` |
 
 **Example row:**
 

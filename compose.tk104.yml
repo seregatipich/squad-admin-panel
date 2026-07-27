@@ -72,7 +72,6 @@ services:
       PANEL_PUBLIC_URL: https://tk104.duckdns.org
       COOKIE_SECURE: 'true'
       STEAM_API_KEY: ${STEAM_API_KEY:-}
-      STEAM_WEB_API_KEY: ${STEAM_WEB_API_KEY:-}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-21600}
       SESSION_TOUCH_THROTTLE_SECONDS: ${SESSION_TOUCH_THROTTLE_SECONDS:-60}
       BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock

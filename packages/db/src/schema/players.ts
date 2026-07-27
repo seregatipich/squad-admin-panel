@@ -7,6 +7,7 @@ import {
   inet,
   integer,
   pgTable,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -38,6 +39,25 @@ export const players = pgTable(
       .notNull()
       .default(0),
     bonusBalance: integer('bonus_balance').notNull().default(0),
+    // INT-1 (#76): durable Steam Web API snapshot. `null` means "Steam did not
+    // tell us", never "false" — a private profile hides ownership and the
+    // account creation date, so those stay nullable on purpose.
+    avatarUrl: text('avatar_url'),
+    personaName: text('persona_name'),
+    /** GetPlayerSummaries.communityvisibilitystate: 1 = private, 3 = public. */
+    profileVisibility: smallint('profile_visibility'),
+    steamAccountCreatedAt: timestamp('steam_account_created_at', {
+      withTimezone: true,
+      mode: 'date',
+    }),
+    vacBanned: boolean('vac_banned').notNull().default(false),
+    vacBanCount: integer('vac_ban_count').notNull().default(0),
+    gameBanCount: integer('game_ban_count').notNull().default(0),
+    /** Steam reports 0 both for "banned today" and "never banned"; NULL = no ban. */
+    daysSinceLastBan: integer('days_since_last_ban'),
+    ownsSquad: boolean('owns_squad'),
+    steamPlaytimeMinutes: integer('steam_playtime_minutes'),
+    steamCheckedAt: timestamp('steam_checked_at', { withTimezone: true, mode: 'date' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),
   },
@@ -54,6 +74,9 @@ export const players = pgTable(
     roleExpiresAtIdx: index('players_role_expires_at_idx')
       .on(table.roleExpiresAt)
       .where(sql`role_id IS NOT NULL AND role_expires_at IS NOT NULL`),
+    steamCheckedAtIdx: index('players_steam_checked_at_idx')
+      .on(sql`${table.steamCheckedAt} NULLS FIRST`)
+      .where(sql`steam_id64 IS NOT NULL`),
     bonusBalanceChk: check('players_bonus_balance_nonneg_chk', sql`bonus_balance >= 0`),
   }),
 );
