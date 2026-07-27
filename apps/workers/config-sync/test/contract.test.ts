@@ -5,10 +5,17 @@ import Redis from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const TEST_REDIS_URL = 'redis://127.0.0.1:6379/14';
-const PASS = 'g3rlRkR6QTfGoN4svPLjEA7dCDbS553C';
 const ENTRY = path.resolve(import.meta.dirname, '../dist/index.js');
 const WORKER = 'config-sync';
 const HB_KEY = `worker:heartbeat:${WORKER}`;
+
+// The panel's Postgres password is per-install (POSTGRES_PASSWORD in .env), so a literal
+// here only ever worked on the machine it was copied from — and committed a credential
+// besides. Prefer the caller's DATABASE_URL, exactly as the shared workerContract helper
+// (apps/workers/_test-shared/contract.ts) does by forwarding process.env.
+const DB_URL =
+  process.env.DATABASE_URL ??
+  `postgres://admin:${process.env.POSTGRES_PASSWORD ?? 'admin'}@127.0.0.1:5432/admin`;
 
 let child: ChildProcess | null = null;
 let redis: Redis | null = null;
@@ -29,7 +36,7 @@ describe(`${WORKER} worker contract`, () => {
       env: {
         ...process.env,
         REDIS_URL: TEST_REDIS_URL,
-        DATABASE_URL: `postgres://admin:${PASS}@127.0.0.1:5432/admin`,
+        DATABASE_URL: DB_URL,
         PANEL_BRIDGE_SOCKET:
           process.env.PANEL_BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
         NODE_ENV: 'test',
@@ -55,7 +62,7 @@ describe(`${WORKER} worker contract`, () => {
       env: {
         ...process.env,
         REDIS_URL: TEST_REDIS_URL,
-        DATABASE_URL: `postgres://admin:${PASS}@127.0.0.1:5432/admin`,
+        DATABASE_URL: DB_URL,
         PANEL_BRIDGE_SOCKET:
           process.env.PANEL_BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
         NODE_ENV: 'test',
