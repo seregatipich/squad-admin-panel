@@ -1,5 +1,16 @@
 # `api` — changelog
 
+## 2026-07-27 — LEAD-5 серверный стат-дашборд (#176)
+
+### Added
+
+- `GET /api/v1/statistics` ([`routes/statistics.ts`](../../../apps/api/src/routes/statistics.ts)) — the server-wide statistics slice behind `/statistics`. Querystring `{ from?, to?, servers?, format? }`: `from`/`to` are ISO datetimes resolved through AN-1's `resolveWindow` (default 7 days, clamped to `MAX_WINDOW_DAYS = 92`), `servers` is a CSV of server UUIDs (absent or empty means every server; malformed entries are dropped rather than rejected), `format` is `json` (default) or `csv`.
+- Response sections `population` (`avg_online`, `peak_online`, `avg_queue`, `by_hour`, `by_weekday`), `matches` (`by_day`, `modes[]`, `maps[]`), `community` (`new_players`, `chat_messages`, `teamkills`) and `moderation` (`punishments`, `avg_admins`, `peak_admins`), plus `days[]` (the dense UTC-day axis) and `servers[]`. Every metric is a `{ by_server[], totals[], kpi{avg,max,total} }` series whose `kpi.total` is exactly the sum of its per-server points, so a stacked bar chart and its KPI cannot disagree. All metric values are numbers; the payload carries no profiling fields.
+- Reads come from the materialised `server_daily_stats` (see `docs/components/db/changelog.md`, migration 0101) — no live scan of `events`/`combat_events`. Hour-of-day buckets are the sole live computation: one windowed pass over `player_sessions`, not AN-1's per-tick correlated subquery. Weekday buckets are a regrouping of the daily rows.
+- `format=csv` emits RFC-4180 long format `section,metric,server_id,key,value` with `text/csv; charset=utf-8` and `attachment; filename="statistics.csv"`.
+- Gate: the file-local `panelGuard` copied from `analytics.ts` — `401 { error: 'unauthenticated' }` without a session, `403 { error: 'forbidden' }` without the `panel_access` role capability. Read-only, so `config: { audit: false }` and no `audit-coverage` entry. No `schema.response` is declared (that would enable Zod serialization and strip undeclared fields), matching every other analytics route.
+- Measured on a seeded window of 180 rollup rows and 36 000 sessions, 30 days × 6 servers responds in **137 ms median** (min 137 / max 142 over five samples after one warm-up) — inside the 500 ms acceptance criterion.
+
 ## 2026-07-27 — MOD-2 действия модерации (#59)
 
 ### Added
