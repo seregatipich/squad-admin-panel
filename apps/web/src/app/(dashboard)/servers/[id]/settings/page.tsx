@@ -2,7 +2,12 @@
 
 import { use, useCallback, useEffect, useState } from 'react';
 import { TagInput } from '@/components/TagInput';
-import { licenseRestartRequired } from './helpers';
+import {
+  licenseRestartRequired,
+  type RnsquadjsIntegration,
+  rnsquadjsModeLabel,
+  rnsquadjsStatusPill,
+} from './helpers';
 
 interface Settings {
   server_id: string;
@@ -28,6 +33,12 @@ interface Settings {
 }
 
 const RULES_TEXT_MAX = 300;
+
+const RNSQUADJS_PILL_TONE: Record<'green' | 'amber' | 'neutral', string> = {
+  green: 'bg-emerald-900/60 text-emerald-300',
+  amber: 'bg-amber-900/60 text-amber-300',
+  neutral: 'bg-neutral-800 text-neutral-400',
+};
 
 interface ServerInfo {
   status: string;
@@ -61,6 +72,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   } | null>(null);
 
   const [canManageServer, setCanManageServer] = useState(false);
+  const [rnsquadjs, setRnsquadjs] = useState<RnsquadjsIntegration | null>(null);
   const [seedingDraft, setSeedingDraft] = useState<{
     seed_live_at?: number;
     seed_hysteresis?: number;
@@ -119,6 +131,30 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
       cancelled = true;
     };
   }, []);
+
+  // STATS-4 (#71). Read-only sidecar status, gated on `server:view`; the
+  // section self-hides on 403 rather than rendering an error, matching
+  // SeedContributionSection. Cutover/rollback stays on the server detail page's
+  // controls (POST .../rnsquadjs, `server:stop`) — this section only reports.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/v1/servers/${id}/rnsquadjs`, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as RnsquadjsIntegration;
+        if (!cancelled) setRnsquadjs(data);
+      } catch {
+        // best-effort: the section simply stays hidden
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   const isRunning = serverInfo && !['stopped', 'ready', 'pending'].includes(serverInfo.status);
 
@@ -373,6 +409,45 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
           />
         </label>
       </section>
+
+      {rnsquadjs && (
+        <section className="mb-6">
+          <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
+            Интеграция RNSquadJS
+          </h2>
+          <p className="mb-2 text-xs text-neutral-500">{rnsquadjsModeLabel(rnsquadjs.mode).hint}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-xs text-neutral-200">
+              {rnsquadjsModeLabel(rnsquadjs.mode).title}
+            </span>
+            <span
+              className={`rounded px-2 py-0.5 text-xs ${
+                RNSQUADJS_PILL_TONE[rnsquadjsStatusPill(rnsquadjs.status).tone]
+              }`}
+            >
+              {rnsquadjsStatusPill(rnsquadjs.status).text}
+            </span>
+          </div>
+          <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
+            <div>
+              <dt className="text-neutral-500">Переключён на сайдкар</dt>
+              <dd className="mt-0.5 text-neutral-200">{rnsquadjs.cutover ? 'Да' : 'Нет'}</dd>
+            </div>
+            <div>
+              <dt className="text-neutral-500">Последнее изменение связи</dt>
+              <dd className="mt-0.5 text-neutral-200">
+                {rnsquadjs.status
+                  ? new Date(rnsquadjs.status.last_change).toLocaleString('ru-RU')
+                  : '—'}
+              </dd>
+            </div>
+          </dl>
+          <p className="mt-2 text-xs text-neutral-500">
+            Переключение и откат сайдкара выполняются отдельным правом <code>server:stop</code>; эта
+            секция только показывает состояние.
+          </p>
+        </section>
+      )}
 
       <section className="mb-6">
         <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">

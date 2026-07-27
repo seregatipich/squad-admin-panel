@@ -52,6 +52,14 @@ function mockFetch(overrides: { putSettings?: (body: unknown) => Response } = {}
         new Response(JSON.stringify({ squad_permissions: [] }), { status: 200 }),
       );
     }
+    if (url === '/api/v1/servers/srv-1/rnsquadjs') {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ server_id: 'srv-1', mode: 'legacy', cutover: false, status: null }),
+          { status: 200 },
+        ),
+      );
+    }
     if (url === '/api/v1/servers/srv-1/settings' && init?.method === 'PUT') {
       const body = JSON.parse(init.body as string);
       if (overrides.putSettings) return Promise.resolve(overrides.putSettings(body));

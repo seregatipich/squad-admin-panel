@@ -15,7 +15,10 @@ vi.mock('../src/lib/rnsquadjs.js', async (importOriginal) => ({
 }));
 
 import { writeSidecarConfig } from '../src/lib/rnsquadjs.js';
-import serverRnsquadjsRoutes, { CUTOVER_TICK_MS } from '../src/routes/server-rnsquadjs.js';
+import serverRnsquadjsRoutes, {
+  CUTOVER_TICK_MS,
+  sidecarStatusKey,
+} from '../src/routes/server-rnsquadjs.js';
 
 const SERVER_ID = '0190a000-0000-7000-8000-000000000001';
 const CUTOVER_URL = `/api/v1/servers/${SERVER_ID}/rnsquadjs`;
@@ -24,6 +27,8 @@ interface RedisStub {
   sadd: Mock;
   srem: Mock;
   sismember: Mock;
+  /** Only the status route reads keys; the cutover route never calls it. */
+  mget?: Mock;
 }
 
 interface BridgeStub {
@@ -64,6 +69,33 @@ async function buildApp(opts: {
   await app.register(serverRnsquadjsRoutes);
   await app.ready();
   return { app, errorLog: error };
+}
+
+interface CapturedRoute {
+  url: string;
+  method: string;
+  config?: Record<string, unknown>;
+}
+
+/**
+ * Registers the module against a bare Fastify instance and returns every route
+ * it declared. `method` is captured alongside `url` because this module now
+ * registers two routes on the same URL.
+ */
+async function captureRoutes(): Promise<CapturedRoute[]> {
+  const captured: CapturedRoute[] = [];
+  const app = Fastify({ logger: false });
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
+  app.addHook('onRoute', (route) => {
+    for (const method of Array.isArray(route.method) ? route.method : [route.method]) {
+      captured.push({ url: route.url, method, config: route.config as Record<string, unknown> });
+    }
+  });
+  await app.register(serverRnsquadjsRoutes);
+  await app.ready();
+  await app.close();
+  return captured;
 }
 
 function inject(app: FastifyInstance, mode: 'production' | 'shadow', url = CUTOVER_URL) {
@@ -405,24 +437,226 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
 
   describe('permission + audit parity with the stop route', () => {
     it('declares server:stop and the rnsquadjs cutover audit entry', async () => {
-      const captured: Array<{ url: string; config?: Record<string, unknown> }> = [];
-      const app = Fastify({ logger: false });
-      app.setValidatorCompiler(validatorCompiler);
-      app.setSerializerCompiler(serializerCompiler);
-      app.addHook('onRoute', (route) => {
-        captured.push({ url: route.url, config: route.config as Record<string, unknown> });
-      });
-      await app.register(serverRnsquadjsRoutes);
-      await app.ready();
+      const captured = await captureRoutes();
 
-      const route = captured.find((r) => r.url === '/api/v1/servers/:id/rnsquadjs');
+      // GET and POST share this URL, so the method is part of the match:
+      // a URL-only `find` would return whichever registered first.
+      const route = captured.find(
+        (r) => r.url === '/api/v1/servers/:id/rnsquadjs' && r.method === 'POST',
+      );
+      expect(route).toBeDefined();
       expect(route?.config?.permissions).toEqual(['server:stop']);
       expect(route?.config?.audit).toEqual({
         action: 'server.rnsquadjs.cutover',
         resource: 'server',
       });
-
-      await app.close();
     });
+  });
+});
+
+describe('GET /api/v1/servers/:id/rnsquadjs', () => {
+  const STATUS_JSON = JSON.stringify({
+    state: 'connected',
+    lastChange: '2026-07-27T10:00:00.000Z',
+  });
+
+  function getStatus(app: FastifyInstance, url = CUTOVER_URL) {
+    return app.inject({ method: 'GET', url });
+  }
+
+  it('reports production mode from the unsuffixed key for a cutover member', async () => {
+    const findFirst = vi.fn().mockResolvedValue({ id: SERVER_ID });
+    const sismember = vi.fn().mockResolvedValue(1);
+    const mget = vi.fn().mockResolvedValue([STATUS_JSON, null]);
+    const { app } = await buildApp({
+      findFirst,
+      redis: { sadd: vi.fn(), srem: vi.fn(), sismember, mget },
+      bridge: { containerRm: vi.fn(), containerRunRnsquadjs: vi.fn() },
+    });
+
+    const res = await getStatus(app);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      server_id: SERVER_ID,
+      mode: 'production',
+      cutover: true,
+      status: { state: 'connected', last_change: '2026-07-27T10:00:00.000Z' },
+    });
+    expect(sismember).toHaveBeenCalledWith(RNSQUADJS_CUTOVER_SET, SERVER_ID);
+    // Both keys are fetched in one round trip; the shadow key is never skipped.
+    expect(mget).toHaveBeenCalledWith(
+      sidecarStatusKey(SERVER_ID, 'production'),
+      sidecarStatusKey(SERVER_ID, 'shadow'),
+    );
+
+    await app.close();
+  });
+
+  it('reports shadow mode from the :shadow key for a non-member with a live sidecar', async () => {
+    const shadowJson = JSON.stringify({
+      state: 'disconnected',
+      lastChange: '2026-07-27T11:30:00.000Z',
+    });
+    const { app } = await buildApp({
+      findFirst: vi.fn().mockResolvedValue({ id: SERVER_ID }),
+      redis: {
+        sadd: vi.fn(),
+        srem: vi.fn(),
+        sismember: vi.fn().mockResolvedValue(0),
+        mget: vi.fn().mockResolvedValue([null, shadowJson]),
+      },
+      bridge: { containerRm: vi.fn(), containerRunRnsquadjs: vi.fn() },
+    });
+
+    const res = await getStatus(app);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      server_id: SERVER_ID,
+      mode: 'shadow',
+      cutover: false,
+      status: { state: 'disconnected', last_change: '2026-07-27T11:30:00.000Z' },
+    });
+
+    await app.close();
+  });
+
+  it('reports legacy mode with status=null when neither key is set', async () => {
+    const { app } = await buildApp({
+      findFirst: vi.fn().mockResolvedValue({ id: SERVER_ID }),
+      redis: {
+        sadd: vi.fn(),
+        srem: vi.fn(),
+        sismember: vi.fn().mockResolvedValue(0),
+        mget: vi.fn().mockResolvedValue([null, null]),
+      },
+      bridge: { containerRm: vi.fn(), containerRunRnsquadjs: vi.fn() },
+    });
+
+    const res = await getStatus(app);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      server_id: SERVER_ID,
+      mode: 'legacy',
+      cutover: false,
+      status: null,
+    });
+
+    await app.close();
+  });
+
+  it('keeps mode=production with status=null when the heartbeat has expired', async () => {
+    const { app } = await buildApp({
+      findFirst: vi.fn().mockResolvedValue({ id: SERVER_ID }),
+      redis: {
+        sadd: vi.fn(),
+        srem: vi.fn(),
+        sismember: vi.fn().mockResolvedValue(1),
+        mget: vi.fn().mockResolvedValue([null, null]),
+      },
+      bridge: { containerRm: vi.fn(), containerRunRnsquadjs: vi.fn() },
+    });
+
+    const res = await getStatus(app);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      server_id: SERVER_ID,
+      mode: 'production',
+      cutover: true,
+      status: null,
+    });
+
+    await app.close();
+  });
+
+  it('ignores a stale shadow heartbeat once the server is a cutover member', async () => {
+    const { app } = await buildApp({
+      findFirst: vi.fn().mockResolvedValue({ id: SERVER_ID }),
+      redis: {
+        sadd: vi.fn(),
+        srem: vi.fn(),
+        sismember: vi.fn().mockResolvedValue(1),
+        mget: vi.fn().mockResolvedValue([null, STATUS_JSON]),
+      },
+      bridge: { containerRm: vi.fn(), containerRunRnsquadjs: vi.fn() },
+    });
+
+    expect((await getStatus(app)).json()).toEqual({
+      server_id: SERVER_ID,
+      mode: 'production',
+      cutover: true,
+      status: null,
+    });
+
+    await app.close();
+  });
+
+  it('degrades to status=null on an unparseable or malformed heartbeat', async () => {
+    for (const raw of ['not json', JSON.stringify({ state: 'exploded' })]) {
+      const { app } = await buildApp({
+        findFirst: vi.fn().mockResolvedValue({ id: SERVER_ID }),
+        redis: {
+          sadd: vi.fn(),
+          srem: vi.fn(),
+          sismember: vi.fn().mockResolvedValue(1),
+          mget: vi.fn().mockResolvedValue([raw, null]),
+        },
+        bridge: { containerRm: vi.fn(), containerRunRnsquadjs: vi.fn() },
+      });
+      const res = await getStatus(app);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().status).toBeNull();
+      await app.close();
+    }
+  });
+
+  it('404s for an unknown server without reading redis', async () => {
+    const sismember = vi.fn();
+    const mget = vi.fn();
+    const { app } = await buildApp({
+      findFirst: vi.fn().mockResolvedValue(undefined),
+      redis: { sadd: vi.fn(), srem: vi.fn(), sismember, mget },
+      bridge: { containerRm: vi.fn(), containerRunRnsquadjs: vi.fn() },
+    });
+
+    const res = await getStatus(app);
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'not_found' });
+    expect(sismember).not.toHaveBeenCalled();
+    expect(mget).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('rejects a non-uuid id with 400', async () => {
+    const findFirst = vi.fn();
+    const { app } = await buildApp({
+      findFirst,
+      redis: { sadd: vi.fn(), srem: vi.fn(), sismember: vi.fn(), mget: vi.fn() },
+      bridge: { containerRm: vi.fn(), containerRunRnsquadjs: vi.fn() },
+    });
+
+    const res = await getStatus(app, '/api/v1/servers/not-a-uuid/rnsquadjs');
+    expect(res.statusCode).toBe(400);
+    expect(findFirst).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('declares server:view and no audit entry', async () => {
+    const captured = await captureRoutes();
+
+    const route = captured.find(
+      (r) => r.url === '/api/v1/servers/:id/rnsquadjs' && r.method === 'GET',
+    );
+    expect(route).toBeDefined();
+    expect(route?.config?.permissions).toEqual(['server:view']);
+    expect(route?.config?.audit).toBe(false);
+  });
+});
+
+describe('sidecarStatusKey', () => {
+  it('mirrors the sidecar RedisPublisher key layout for both modes', () => {
+    expect(sidecarStatusKey(SERVER_ID, 'production')).toBe(`rnsquadjs:status:${SERVER_ID}`);
+    expect(sidecarStatusKey(SERVER_ID, 'shadow')).toBe(`rnsquadjs:status:${SERVER_ID}:shadow`);
   });
 });
