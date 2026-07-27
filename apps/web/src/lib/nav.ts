@@ -68,6 +68,12 @@ export const NAV_GROUPS: NavGroup[] = [
       },
       { href: '/clans', label: 'Кланы', labelKey: 'nav.clans' },
       { href: '/matches', label: 'Матчи', labelKey: 'nav.matches' },
+      {
+        href: '/balancer',
+        label: 'Балансировщик',
+        labelKey: 'nav.balancer',
+        permission: 'balancer:view',
+      },
       { href: '/events', label: 'События', labelKey: 'nav.events' },
       { href: '/combat-log', label: 'Боевой лог', labelKey: 'nav.combatLog' },
       { href: '/votes', label: 'Голосования', labelKey: 'nav.votes' },

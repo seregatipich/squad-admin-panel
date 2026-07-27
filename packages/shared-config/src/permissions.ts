@@ -15,6 +15,7 @@ export const PERMISSION_CATEGORIES = [
   'discord',
   'triggers',
   'scheduler',
+  'balancer',
 ] as const;
 export type PermissionCategory = (typeof PERMISSION_CATEGORIES)[number];
 
@@ -167,6 +168,12 @@ export const PERMISSIONS = [
     category: 'scheduler',
     label: 'Редактировать расписание',
     unimplemented: true,
+  },
+  { key: 'balancer:view', category: 'balancer', label: 'Видеть балансировщик команд' },
+  {
+    key: 'balancer:edit',
+    category: 'balancer',
+    label: 'Менять правила и решать по предложениям балансировщика',
   },
 ] as const satisfies readonly PermissionDef[];
 

@@ -34,6 +34,7 @@ import auditRoutes from '../../src/routes/audit.js';
 import authRoutes from '../../src/routes/auth.js';
 import discordAuthRoutes from '../../src/routes/auth-discord.js';
 import automationRulesRoutes from '../../src/routes/automation-rules.js';
+import balancerRoutes from '../../src/routes/balancer.js';
 import banSourcesRoutes from '../../src/routes/ban-sources.js';
 import bannedNamesRoutes from '../../src/routes/banned-names.js';
 import chatRoutes from '../../src/routes/chat.js';
@@ -46,6 +47,7 @@ import externalBansRoutes from '../../src/routes/external-bans.js';
 import hostRoutes from '../../src/routes/host.js';
 import hostActionsRoutes from '../../src/routes/host-actions.js';
 import hostBackupRoutes from '../../src/routes/host-backup.js';
+import integrationsBalancerRoutes from '../../src/routes/integrations-balancer.js';
 import integrationsDiscordRoutes from '../../src/routes/integrations-discord.js';
 import integrationsGeoipRoutes from '../../src/routes/integrations-geoip.js';
 import integrationsVipRoutes from '../../src/routes/integrations-vip.js';
@@ -579,6 +581,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(logsRoutes);
   await app.register(integrationsDiscordRoutes);
   await app.register(integrationsGeoipRoutes);
+  await app.register(integrationsBalancerRoutes);
   await app.register(integrationsVipRoutes);
   await app.register(liveRoutes);
   await app.register(adminsCfgRoutes);
@@ -592,6 +595,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(externalBansRoutes);
   await app.register(alertRulesRoutes);
   await app.register(automationRulesRoutes);
+  await app.register(balancerRoutes);
   await app.register(whitelistRoutes);
   await app.register(whitelistApplicationsRoutes);
 

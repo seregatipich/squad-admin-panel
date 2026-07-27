@@ -23,6 +23,7 @@ export const ru = {
   'nav.bonusLeaderboard': 'Бонусы',
   'nav.clans': 'Кланы',
   'nav.matches': 'Матчи',
+  'nav.balancer': 'Балансировщик',
   'nav.events': 'События',
   'nav.combatLog': 'Боевой лог',
   'nav.votes': 'Голосования',

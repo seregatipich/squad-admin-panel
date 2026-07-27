@@ -22,6 +22,7 @@ export const en: Record<TranslationKey, string> = {
   'nav.bonusLeaderboard': 'Bonuses',
   'nav.clans': 'Clans',
   'nav.matches': 'Matches',
+  'nav.balancer': 'Team balancer',
   'nav.events': 'Events',
   'nav.combatLog': 'Combat log',
   'nav.votes': 'Votes',
