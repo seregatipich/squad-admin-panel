@@ -1,5 +1,12 @@
 # `api` — changelog
 
+## 2026-07-27 — MOD-4 массовые операции модерации (#61)
+
+### Added
+
+- `POST /api/v1/moderation-actions/bulk` ([`routes/moderation-bulk.ts`](../../../apps/api/src/routes/moderation-bulk.ts)): applies one warn/kick/ban to up to 50 players in a single request, enforcing each target through MOD-2's [`lib/moderation-enforce.ts`](../../../apps/api/src/lib/moderation-enforce.ts). Body `{ server_id, action_type, player_ids, reason, ban_length?, confirm_bulk: true }`; `confirm_bulk` must be the literal `true` (server half of the UI's double confirmation) and repeated ids are deduplicated. **The operation is deliberately non-transactional**: each target's ledger row is written immediately after its RCON command is confirmed, a failure is reported in `results[]` and the loop continues, and the response stays `200` — see the "Bulk moderation" section of [`api.md`](./api.md) for the full semantics, the per-target error codes, and the 25 s time budget. RBAC uses the existing catalog keys only (`mod:warn`/`mod:kick`/`mod:ban_temp`/`mod:ban_perm`, themselves gated on the role's Squad `kick`/`ban` permission by `derivePanelPermissions`); no new permission key was introduced. New audit action `moderation.bulk_action` — one row per target reached through RCON (`target_type='player'`) plus a summary row naming every target (`target_type='server'`), all sharing the request's `bulk_group` in `context`. No migration: the grouping lives in `moderation_actions.context`.
+- Web: `apps/web/src/components/BulkModerationModal.tsx` (two-step confirmation — a form, then a target list where a ban additionally requires typing the target count back — plus an `applied`/`failed` result screen with per-target reasons) and multi-select in the live-roster table (`servers/[id]/live-players.tsx`), gated on the caller's `mod:*` keys from `GET /api/v1/me`.
+
 ## 2026-07-27 — MOD-2 действия модерации (#59)
 
 ### Added

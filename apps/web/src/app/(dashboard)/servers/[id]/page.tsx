@@ -101,6 +101,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const [canChangeMap, setCanChangeMap] = useState(false);
   const [canBan, setCanBan] = useState(false);
   const [canDownloadLogs, setCanDownloadLogs] = useState(false);
+  const [modPermissions, setModPermissions] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -160,6 +161,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           setCanChangeMap(me.squad_permissions?.includes('changemap') ?? false);
           setCanBan(me.squad_permissions?.includes('ban') ?? false);
           setCanDownloadLogs(me.permissions?.includes('server:download_logs') ?? false);
+          setModPermissions((me.permissions ?? []).filter((key) => key.startsWith('mod:')));
         }
       } catch {
         // permission fetch is best-effort; chat UI simply stays hidden
@@ -546,7 +548,12 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
 
       <SeedCallButton serverId={server.id} canCall={canChat || canManageServer} />
 
-      <LivePlayers serverId={server.id} canChat={canChat} canBan={canBan} />
+      <LivePlayers
+        serverId={server.id}
+        canChat={canChat}
+        canBan={canBan}
+        modPermissions={modPermissions}
+      />
 
       <section className="flex flex-wrap items-center gap-2">
         <ActionButton

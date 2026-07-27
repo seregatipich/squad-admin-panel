@@ -228,6 +228,41 @@ fallback — so a row carrying neither is rejected rather than mis-addressed.
 | GET | `/api/v1/players/:steamId/role` | Returns current role or `{role: null}`. Single-role model — each player has at most one panel role. | `user:view` |
 | PUT | `/api/v1/players/:steamId/role` | Assign or clear a role. Body: `{role_id: uuid \| null}`. 404 `role_not_found` if the role UUID doesn't exist. 409 `cannot_remove_last_owner` when the change would leave zero Owners. Invalidates the player's permission cache. Audit: `player.role.assign`. | `user:manage_roles` |
 
+## Bulk moderation
+
+MOD-4 (#61) applies one warn/kick/ban to a set of players picked from the live
+roster in a single request, reusing MOD-2's
+[`lib/moderation-enforce.ts`](../../../apps/api/src/lib/moderation-enforce.ts)
+pipeline per target.
+
+**Partial failure is the normal case, and the semantics are fixed as
+non-transactional.** Half of each target's effect leaves the process (an RCON
+command executed on the game server) and Squad exposes no inverse command, so a
+rollback could only ever undo the ledger rows — leaving players banned in game
+with no record. Instead:
+
+- Each target's `moderation_actions` row is written immediately after its RCON
+  command is confirmed, before the loop advances — an action applied in game is
+  never left without a ledger row.
+- A failed target is recorded in `results[]` and the loop continues; the
+  response stays `200` and is never a whole-request `502`.
+- Every row of one request shares a `bulk_group` uuidv7 in
+  `moderation_actions.context` (alongside `bulk_size` and `bulk_index`) and in
+  the audit rows' `context`.
+- Time budget: 25 s wall clock for the whole loop, because each target costs one
+  worker-rcon round trip with a 4 s default timeout. Targets not reached inside
+  the budget come back as `bulk_deadline_exceeded` without being attempted, and
+  the partial result is still returned.
+
+Per-target `results[].error` values: `player_not_found`,
+`target_identity_missing`, `target_offline` (warn/kick only — `AdminBan` accepts
+an offline SteamID64), `rcon_failed` (with the worker outcome in `detail`),
+`bulk_deadline_exceeded`.
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| POST | `/api/v1/moderation-actions/bulk` | Bulk warn/kick/ban. Body: `{ server_id, action_type: 'warn'\|'kick'\|'ban', player_ids (1..50 uuid, deduplicated), reason (1..300), ban_length? (default `'0'` = permanent), confirm_bulk: true }`. `confirm_bulk` must be the literal `true` — the server half of the UI's double confirmation. Returns `{ bulk_group, action_type, server_id, requested, applied, failed, results: [{ player_id, status, moderation_action_id?, error?, detail? }] }`. Audit `moderation.bulk_action`: one row per target reached through RCON (`target_type='player'`) plus one summary row naming every target (`target_type='server'`). 404 `server_not_found`. | panel access + `mod:warn` / `mod:kick` / `mod:ban_temp` / `mod:ban_perm` (the key is chosen from `action_type` and `ban_length`, so it is checked in the handler rather than declaratively) |
+
 ## Whitelist applications
 
 WL-3 (#67) public application portal + panel approval. The public half is

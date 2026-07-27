@@ -70,6 +70,7 @@ import mediaRoutes from './routes/media.js';
 import mediaLinksRoutes from './routes/media-links.js';
 import messageTemplatesRoutes from './routes/message-templates.js';
 import moderationActionsRoutes from './routes/moderation-actions.js';
+import moderationBulkRoutes from './routes/moderation-bulk.js';
 import notesFeedRoutes from './routes/notes-feed.js';
 import permissionsRoutes from './routes/permissions.js';
 import playerAltCandidatesRoutes from './routes/player-alt-candidates.js';
@@ -246,6 +247,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(playerBanAltWarningRoutes);
   await app.register(playerLinksRoutes);
   await app.register(moderationActionsRoutes);
+  await app.register(moderationBulkRoutes);
   await app.register(playerDossierRoutes);
   await app.register(playerDossierStatsRoutes);
   await app.register(playerCombatTrendRoutes);
