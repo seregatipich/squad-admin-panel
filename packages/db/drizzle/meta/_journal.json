@@ -556,6 +556,13 @@
       "breakpoints": true
     },
     {
+      "idx": 79,
+      "version": "7",
+      "when": 1783402400000,
+      "tag": "0094_player_steam_profile",
+      "breakpoints": true
+    },
+    {
       "idx": 80,
       "version": "7",
       "when": 1783402500000,
