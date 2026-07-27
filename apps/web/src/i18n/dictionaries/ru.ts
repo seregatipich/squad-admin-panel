@@ -31,6 +31,7 @@ export const ru = {
   'nav.bannedNames': 'Забаненные ники',
   'nav.externalBans': 'Внешние баны',
   'nav.reports': 'Жалобы',
+  'nav.appeals': 'Апелляции',
   'nav.issues': 'Тикеты',
   'nav.vips': 'VIP',
   'nav.groups': 'Группы',
