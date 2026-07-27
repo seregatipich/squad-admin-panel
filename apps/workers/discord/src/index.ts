@@ -5,7 +5,11 @@ import Redis from 'ioredis';
 import pino from 'pino';
 import { runNotifyLoop } from './consume.js';
 import { loadEncryptionKey } from './crypto.js';
+import { runRoleSyncLoop } from './role-sync-consume.js';
 import type { DeliveryResult, SenderDeps } from './sender.js';
+
+/** DISCORD-5 (#152): how often the role-sync drift repair runs, in ms. */
+const DEFAULT_ROLE_SYNC_RECONCILE_MS = 3_600_000;
 
 const log = pino(
   { level: process.env.LOG_LEVEL ?? 'info', base: { service: 'worker-discord' } },
@@ -13,9 +17,15 @@ const log = pino(
 );
 
 /**
- * discord-notify worker (DISCORD-2): consumes the shared events stream
- * (EVT-1) and delivers matching envelopes to enabled `discord_webhooks` as
- * rendered embeds — see `mapping.ts`/`sender.ts`/`consume.ts`.
+ * discord worker. Two independent loops share one process:
+ *
+ * - **notify** (DISCORD-2) — consumes the shared events stream (EVT-1) and
+ *   delivers matching envelopes to enabled `discord_webhooks` as rendered
+ *   embeds; see `mapping.ts`/`sender.ts`/`consume.ts`.
+ * - **role sync** (DISCORD-5) — consumes `discord:role-sync` requests and
+ *   drives every linked player's Discord guild roles from `players.role_id`
+ *   through `discord_role_mappings`, plus an hourly reconcile that repairs
+ *   drift in both directions; see `role-sync.ts`/`role-sync-consume.ts`.
  *
  * `DATABASE_URL` and `APP_ENCRYPTION_KEY` are required to actually decrypt
  * webhook URLs and deliver anything; without either, the worker stays idle
@@ -34,6 +44,7 @@ async function main() {
   const counters: DeliveryResult = { sent: 0, failed: 0, rateLimited: 0 };
   let stopped = false;
   let notifyLoop: Promise<void> = Promise.resolve();
+  let roleSyncLoop: Promise<void> = Promise.resolve();
 
   const databaseUrl = process.env.DATABASE_URL;
   const encryptionKeyRaw = process.env.APP_ENCRYPTION_KEY;
@@ -58,7 +69,7 @@ async function main() {
       panelBaseUrl: process.env.PANEL_PUBLIC_URL ?? null,
     };
 
-    log.info('worker-discord started — notify loop active');
+    log.info('worker-discord started — notify and role-sync loops active');
     const reclaimMinIdleMs = process.env.DISCORD_NOTIFY_RECLAIM_MIN_IDLE_MS
       ? Number(process.env.DISCORD_NOTIFY_RECLAIM_MIN_IDLE_MS)
       : undefined;
@@ -75,8 +86,31 @@ async function main() {
     }).catch((err) => {
       log.error({ err: (err as Error).message }, 'notify loop crashed');
     });
+
+    // DISCORD-5 (#152): the role-sync loop shares this worker's DB/Redis/key
+    // rather than getting its own service — it needs the same bot credentials
+    // and the same encryption key, and adding a container buys nothing.
+    // `loadDiscordBotContext` gates it: until an operator stores a guild id and
+    // a bot token it consumes requests and does nothing.
+    const reconcileIntervalMs = process.env.DISCORD_ROLE_SYNC_RECONCILE_MS
+      ? Number(process.env.DISCORD_ROLE_SYNC_RECONCILE_MS)
+      : DEFAULT_ROLE_SYNC_RECONCILE_MS;
+    roleSyncLoop = runRoleSyncLoop({
+      redis,
+      db: deps.db,
+      encryptionKey,
+      fetchImpl: fetch,
+      sleep,
+      log,
+      shouldStop: () => stopped,
+      reconcileIntervalMs,
+    }).catch((err) => {
+      log.error({ err: (err as Error).message }, 'role-sync loop crashed');
+    });
   } else {
-    log.info('worker-discord idle — DATABASE_URL/APP_ENCRYPTION_KEY unset, notify loop disabled');
+    log.info(
+      'worker-discord idle — DATABASE_URL/APP_ENCRYPTION_KEY unset, notify and role-sync loops disabled',
+    );
   }
 
   const stopHeartbeat = redis
@@ -93,7 +127,7 @@ async function main() {
     log.info({ sig }, 'shutdown');
     stopped = true;
     stopHeartbeat();
-    await notifyLoop;
+    await Promise.all([notifyLoop, roleSyncLoop]);
     await redis?.quit().catch(() => undefined);
     process.exit(0);
   };
