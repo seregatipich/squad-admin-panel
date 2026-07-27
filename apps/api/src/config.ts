@@ -21,6 +21,7 @@ const envSchema = z.object({
   DISCORD_CLIENT_SECRET: z.string().optional(),
   GLITCHTIP_DSN: z.string().optional(),
   VIP_LIFECYCLE_WEBHOOK_SECRET: z.string().min(32).optional(),
+  BALANCER_WEBHOOK_SECRET: z.string().min(32).optional(),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   MEDIA_STORAGE_DIR: z.string().default('./media'),
 });

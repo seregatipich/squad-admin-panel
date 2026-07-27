@@ -9,6 +9,9 @@ All tables live in the `public` schema of a PostgreSQL 16+ database. The Drizzle
 | Table | Source file | Purpose |
 |---|---|---|
 | [`audit_log`](#audit_log) | `audit-log.ts` | Append-only, hash-chained action log |
+| [`balancer_settings`](#balancer-tables-game-2) | `balancer-settings.ts` | GAME-2 singleton team-balancer rules/thresholds |
+| [`balancer_proposals`](#balancer-tables-game-2) | `balancer-proposals.ts` | GAME-2 cache of dry-run balance snapshots from the SquadJS exporter |
+| [`balancer_decisions`](#balancer-tables-game-2) | `balancer-decisions.ts` | GAME-2 append-only operator decisions on a snapshot |
 | [`config_versions`](#config_versions) | `config-versions.ts` | Append-only history of every cfg file edit |
 | [`diagnostic_events`](#diagnostic_events) | `diagnostic-events.ts` | Per-day-partitioned panel-internal diagnostic feed (24h retention) |
 | [`events`](#events) | `events.ts` | Monthly-partitioned Squad event feed |
@@ -744,6 +747,71 @@ WL-3 (#67) public whitelist/VIP application queue. Anyone may submit one **pendi
 - `whitelist_applications_steam_id64_idx` on `(steam_id64)`
 - `whitelist_applications_pending_unique_idx` UNIQUE on `(steam_id64) WHERE status = 'pending'` — one open application per SteamID64
 
+---
+## Balancer tables (GAME-2)
+
+GAME-2 (#81) team balancer, migration `0103_balancer`. The panel is a **review
+and configuration surface only** — it stores proposals and decisions and never
+executes a team change (`RCON_OPERATOR_COMMANDS` carries no team-change verb).
+
+### `balancer_settings`
+
+Singleton (`id smallint PK DEFAULT 1`, CHECK `id = 1`), modelled on
+`economy_settings`. Columns: `enabled boolean NOT NULL DEFAULT false`,
+`win_streak_threshold int NOT NULL DEFAULT 3` (CHECK `>= 1`),
+`ticket_diff_threshold int NOT NULL DEFAULT 150` (CHECK `>= 0`),
+`one_sided_rounds_threshold int NOT NULL DEFAULT 2` (CHECK `>= 1`),
+`quorum int NOT NULL DEFAULT 5` (CHECK `>= 0`),
+`pass_threshold_pct int NOT NULL DEFAULT 60` (CHECK `0..100`),
+`require_moderator_veto boolean NOT NULL DEFAULT false`,
+`prefer_squad_grouping boolean NOT NULL DEFAULT true`,
+`player_level_enabled boolean NOT NULL DEFAULT false`,
+`updated_by_player_id uuid` → `players.id` ON DELETE SET NULL, `updated_at timestamptz`.
+
+The three `*_threshold` values feed `evaluateBalancerSignals` in
+`@squad/shared-types`; `quorum` / `pass_threshold_pct` /
+`require_moderator_veto` describe the runtime vote model SquadJS owns and are
+stored here so operators configure one place.
+
+### `balancer_proposals`
+
+One row per dry-run snapshot delivered by
+`POST /api/v1/integrations/balancer/proposals`. Columns: `id uuid PK`,
+`source_snapshot_id text NOT NULL` (exporter idempotency key),
+`server_id uuid NOT NULL` → `servers.id` ON DELETE CASCADE,
+`match_id uuid` → `matches.id` ON DELETE SET NULL, `layer text`, `gamemode text`,
+`mode text NOT NULL` (CHECK IN `squad`,`player`),
+`schema_version int NOT NULL DEFAULT 1` (CHECK `>= 1`),
+`generated_at timestamptz NOT NULL`, `signals jsonb NOT NULL DEFAULT '{}'`,
+`proposal jsonb NOT NULL DEFAULT '[]'`,
+`status text NOT NULL DEFAULT 'open'` (CHECK IN `open`,`reviewed`,`dismissed`,`superseded`),
+`received_at`, `created_at`.
+
+`signals` and `proposal` are stored verbatim and versioned by `schema_version`,
+so a change in the exporter's payload is a value change rather than a
+migration. `proposal` entries are
+`{subject_type, subject_id, label, current_team, target_team, state}` with
+`state ∈ {on_target, no_change, should_move}` — the only input to the review
+UI's green/gray/red colouring.
+
+**Indexes**
+
+- `balancer_proposals_source_snapshot_key` UNIQUE on `(source_snapshot_id)` — makes redelivery idempotent
+- `balancer_proposals_server_generated_idx` on `(server_id, generated_at DESC)`
+- `balancer_proposals_status_idx` on `(status, generated_at DESC)`
+
+### `balancer_decisions`
+
+Append-only operator decisions. Columns: `id uuid PK`,
+`proposal_id uuid NOT NULL` → `balancer_proposals.id` ON DELETE CASCADE,
+`decision text NOT NULL` (CHECK IN `acknowledge`,`veto`,`dismiss`),
+`veto_reason_kind text` (CHECK NULL or IN `seeding`,`event`,`clan_match`,`other`),
+`veto_reason text`, `decided_by_player_id uuid` → `players.id` ON DELETE SET NULL,
+`created_at timestamptz`. CHECK `balancer_decisions_veto_reason_required`
+(`decision <> 'veto' OR veto_reason IS NOT NULL`) enforces the veto-reason rule
+at the storage layer, not only in the route. Index
+`balancer_decisions_proposal_idx` on `(proposal_id, created_at DESC)`.
+
 ## Migration history
 
 Applied in order by `pnpm db:migrate`. Journal: [`packages/db/drizzle/meta/_journal.json`](../../../packages/db/drizzle/meta/_journal.json).
@@ -769,3 +837,4 @@ Applied in order by `pnpm db:migrate`. Journal: [`packages/db/drizzle/meta/_jour
 | 0038 | `0038_dossier_weapon_vehicle_stats` | 2026-07 | DOSSIER-2: creates the three dossier aggregate tables (`player_weapon_stats`, `player_vehicle_stats`, `player_vehicle_kills`), uuid-keyed with nullable `damage` (see [Dossier aggregates](#dossier-aggregates-dossier-2)) |
 | 0077 | `0077_seed4_notifications` | 2026-07-14 | Adds `seed_subscriptions`, schedule notification lead time, built-in AUTO-3 seed-call rules, and the Discord `seed_needed` template |
 | 0087 | `0087_whitelist_applications` | 2026-07-25 | WL-3: creates `whitelist_applications` (status/source CHECKs, partial-unique pending index, FKs to `players`/`roles`) and adds `panel_meta.whitelist_applications_enabled` / `whitelist_application_default_days` |
+| 0103 | `0103_balancer` | 2026-07-27 | GAME-2: creates `balancer_settings`, `balancer_proposals` and `balancer_decisions` in one slot (see [Balancer tables](#balancer-tables-game-2)) |

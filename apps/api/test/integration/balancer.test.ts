@@ -1,4 +1,5 @@
 import {
+  auditLog,
   balancerDecisions,
   balancerProposals,
   balancerSettings,
@@ -6,7 +7,7 @@ import {
   roles,
   servers,
 } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createBalancerProposalSignature } from '../../src/lib/balancer-proposal-signature.js';
@@ -130,6 +131,32 @@ function postSnapshot(payload: Record<string, unknown>, signature?: string) {
     },
     payload: JSON.stringify(payload),
   });
+}
+
+/**
+ * Polls for the `balancer.settings.update` audit row of a request that ended
+ * with `statusCode`. `assertAuditRow` returns the newest matching row, which is
+ * ambiguous here because the audit hook also records the rejected attempts made
+ * by the sibling tests and writes them asynchronously.
+ */
+async function waitForSettingsAudit(statusCode: number) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const rows = await h.db
+      .select()
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.actionType, 'balancer.settings.update'),
+          eq(auditLog.statusCode, statusCode),
+        ),
+      )
+      .limit(1);
+    const first = rows[0];
+    if (first) return first;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`no balancer.settings.update audit row with statusCode=${statusCode}`);
 }
 
 async function loginAsSteam(steamId64: bigint): Promise<string> {
@@ -299,7 +326,12 @@ describeIfDb('GET/PUT /api/v1/balancer/settings', () => {
       action: 'balancer.settings.update',
       resource: 'balancer_settings',
     });
-    expect(audit.statusCode).toBe(200);
+    expect(audit.actionType).toBe('balancer.settings.update');
+    // The declarative audit hook records rejected attempts too, and it runs
+    // fire-and-forget after inject() resolves — so "newest row" is not
+    // necessarily this request's. Assert the accepted write explicitly.
+    const accepted = await waitForSettingsAudit(200);
+    expect(accepted.actorPlayerId).toBe(h.seed.ownerPlayerId);
 
     const second = await h.app.inject({
       method: 'PUT',

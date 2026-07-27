@@ -75,6 +75,10 @@ services:
       STEAM_WEB_API_KEY: ${STEAM_WEB_API_KEY:-}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-21600}
       SESSION_TOUCH_THROTTLE_SECONDS: ${SESSION_TOUCH_THROTTLE_SECONDS:-60}
+      # Shared secret for the inbound team-balancer proposal webhook (GAME-2,
+      # #81). Unset leaves POST /api/v1/integrations/balancer/proposals
+      # disabled (503).
+      BALANCER_WEBHOOK_SECRET: ${BALANCER_WEBHOOK_SECRET:-}
       BRIDGE_SOCKET: /run/panel-host-bridge/bridge.sock
       # Must match the bind-mount source used by install-host-bridge.sh AND the
       # Environment= line in /etc/systemd/system/panel-host-bridge.service.d/install.conf.

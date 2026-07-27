@@ -13,6 +13,7 @@
 | `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64 AES-256-GCM key. Decrypts `server_credentials.*_encrypted`. **Losing it is unrecoverable.** | yes |
 | `SESSION_SECRET` | yes | — | all | Cookie-signing secret. Rotation invalidates existing sessions. | yes |
 | `VIP_LIFECYCLE_WEBHOOK_SECRET` | no | — | api | Enables the signed VIP lifecycle endpoint used by `vip-user-service` to assign, extend and revoke panel roles. Leave unset to disable the endpoint. | yes |
+| `BALANCER_WEBHOOK_SECRET` | no | — | api | Enables the signed team-balancer endpoint the SquadJS exporter pushes dry-run proposal snapshots to. Leave unset to disable the endpoint (it then returns 503). | yes |
 | `DATABASE_URL` | yes | `postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin` | all | Defaults are fine inside compose. | yes |
 | `REDIS_URL` | yes | `redis://redis:6379` | all | Defaults are fine inside compose. | no |
 | `BRIDGE_SOCKET` | yes | `/run/panel-host-bridge/bridge.sock` | all | Path to the bridge unix socket inside containers. | no |

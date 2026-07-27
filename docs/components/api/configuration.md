@@ -12,6 +12,7 @@
 | `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64. AES-256-GCM key for `server_credentials.*_encrypted`. | yes |
 | `SESSION_SECRET` | yes | — | all | Cookie-signing secret. | yes |
 | `VIP_LIFECYCLE_WEBHOOK_SECRET` | no | — | all | HMAC secret for the disabled-by-default VIP lifecycle endpoint. Used only by `vip-user-service`; panel does not own wallet ledger or refunds. | yes |
+| `BALANCER_WEBHOOK_SECRET` | no | — | all | HMAC secret for the disabled-by-default team-balancer proposal endpoint. Shared with the SquadJS balancer exporter. Ingestion only — the panel never executes a team change. | yes |
 | `STEAM_API_KEY` | no | — | all | Steam Web API key for persona/avatar enrichment. Without it, persona falls back to `Player <last 4 of steam_id64>`. Get from https://steamcommunity.com/dev/apikey | yes |
 | `SESSION_TTL_SECONDS` | no | `21600` (6 h) | all | Sliding session lifetime in seconds. | no |
 | `SESSION_TOUCH_THROTTLE_SECONDS` | no | `60` | all | Minimum interval between DB session-touch writes per session (Redis `SETNX session-touch:{id}`). | no |

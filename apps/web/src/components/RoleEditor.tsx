@@ -30,7 +30,16 @@ interface RoleEditorProps {
   submitLabel: string;
 }
 
-const CATEGORY_ORDER: ReadonlyArray<{ id: string; label: string }> = [
+/**
+ * Russian labels for every `PERMISSION_CATEGORIES` member, in display order.
+ *
+ * This is a hand-maintained mirror of the closed tuple in
+ * `@squad/shared-config`: a permission key whose category is missing here
+ * silently disappears from the role editor. `RoleEditor.test.ts` asserts the
+ * two stay in lockstep — add the category here in the same change that adds it
+ * to the catalog.
+ */
+export const CATEGORY_ORDER: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'servers', label: 'Серверы' },
   { id: 'configs', label: 'Конфиги' },
   { id: 'players', label: 'Игроки' },
@@ -47,6 +56,7 @@ const CATEGORY_ORDER: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'discord', label: 'Discord' },
   { id: 'triggers', label: 'Триггеры' },
   { id: 'scheduler', label: 'Расписание' },
+  { id: 'balancer', label: 'Балансировщик' },
 ];
 
 export function RoleEditor({ initial, onSubmit, onCancel, submitLabel }: RoleEditorProps) {

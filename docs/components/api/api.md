@@ -65,6 +65,56 @@ Body:
 
 Ownership boundary: `vip-user-service` owns wallet ledger, purchase idempotency and economic rollback. This panel owns role membership, `role_expires_at` and Admins.cfg sync. Discord role sync is handled outside this API.
 
+### Team balancer proposals
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| POST | `/api/v1/integrations/balancer/proposals` | Signed service endpoint the SquadJS team-balancer exporter pushes one dry-run proposal snapshot to. Disabled (503 `balancer_webhook_disabled`) unless `BALANCER_WEBHOOK_SECRET` is set. | HMAC only |
+
+Required headers:
+
+- `x-balancer-timestamp`: ISO timestamp used in the signature payload.
+- `x-balancer-signature`: `sha256=<hex>` HMAC-SHA256 of `<x-balancer-timestamp>.<canonical-json-body>` using `BALANCER_WEBHOOK_SECRET`.
+
+Body:
+
+```json
+{
+  "source_snapshot_id": "balancer-snapshot-001",
+  "server_id": "0190abcd-0000-7000-8000-0000000000a1",
+  "mode": "squad",
+  "generated_at": "2026-07-27T08:55:00.000Z",
+  "layer": "Yehorivka_RAAS_v1",
+  "gamemode": "RAAS",
+  "schema_version": 1,
+  "signals": { "win_streak": 4, "ticket_diff": -320, "one_sided_rounds": 3 },
+  "proposal": [
+    {
+      "subject_type": "squad",
+      "subject_id": "sq-alpha",
+      "label": "Alpha",
+      "current_team": 1,
+      "target_team": 2,
+      "state": "should_move"
+    }
+  ]
+}
+```
+
+`mode` is `squad` or `player`; `state` is `on_target`, `no_change` or `should_move` and is the only thing the review UI derives its green/gray/red colouring from. `signals` and `proposal` are stored verbatim as `jsonb` and versioned by `schema_version`, so an exporter payload change needs no migration; unknown extra fields inside a proposal entry are preserved. `source_snapshot_id` is the idempotency key: redelivering the same id refreshes the stored row and returns `200 { ok: true, duplicate: true }`, while a new snapshot returns `202` and flips the previous still-`open` snapshot for the same `(server_id, mode)` pair to `superseded`. Unknown `server_id` → 404 `server_not_found`; bad signature → 401 `invalid_signature`.
+
+Ownership boundary: SquadJS owns the planner, the ELO/history weighting and any runtime chat vote. This panel owns the review surface, the threshold rules and the operator decision history. **The panel never executes a team change** — `RCON_OPERATOR_COMMANDS` contains no team-change verb and this slice adds none.
+
+### Team balancer review and rules
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/balancer/settings` | Singleton threshold/rules row (snake_case) under `{ settings }`. Returns the column defaults when no row exists yet. | `balancer:view` |
+| PUT | `/api/v1/balancer/settings` | Partial upsert of the singleton. Body accepts any subset of `enabled`, `win_streak_threshold` (≥1), `ticket_diff_threshold` (≥0), `one_sided_rounds_threshold` (≥1), `quorum` (≥0), `pass_threshold_pct` (0–100), `require_moderator_veto`, `prefer_squad_grouping`, `player_level_enabled`; an empty body is 400. Audit: `balancer.settings.update`. | `balancer:edit` |
+| GET | `/api/v1/balancer/proposals` | Cursor page of stored snapshots, newest `generated_at` first. Query: `server_id` (uuid or `all`), `status`, `mode`, `cursor`, `limit` (≤100). Each item carries the raw `signals`/`proposal` blobs plus an `evaluation` verdict (`{triggered, reasons[]}`) computed from the current thresholds. Returns `{ items: [], next_cursor: null }` with HTTP 200 when no snapshot has ever arrived. Malformed cursor → 400 `invalid_cursor`. | `balancer:view` |
+| GET | `/api/v1/balancer/proposals/:id` | One snapshot plus its `decisions[]` history, newest first. 404 `proposal_not_found`. | `balancer:view` |
+| POST | `/api/v1/balancer/proposals/:id/decision` | Records an operator verdict: `{ decision: 'acknowledge'\|'veto'\|'dismiss', veto_reason_kind?, veto_reason? }`. A `veto` without `veto_reason` is 400 `veto_reason_required`. `acknowledge`/`veto` set the snapshot to `reviewed`, `dismiss` to `dismissed`. Returns 201. Audit: `balancer.proposal.decision`. | `balancer:edit` |
+
 ## RBAC reference
 
 ### Permissions
