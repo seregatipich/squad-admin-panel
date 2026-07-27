@@ -184,6 +184,12 @@ export const NAV_GROUPS: NavGroup[] = [
         labelKey: 'nav.geoip',
         permission: 'integration:manage',
       },
+      {
+        href: '/settings/integrations/media',
+        label: 'Публикация медиа',
+        labelKey: 'nav.mediaPublishing',
+        permission: 'integration:manage',
+      },
     ],
   },
 ];

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { MediaPublishControl } from './MediaPublishControl';
 
 interface EvidenceLink {
   id: string;
@@ -220,6 +221,7 @@ export function EvidenceSection({ playerId }: { playerId: string }) {
                   className="mt-2 max-h-64 w-full rounded"
                 />
               )}
+              <MediaPublishControl mediaId={media.id} mediaKind={media.kind} />
             </li>
           ))}
         </ul>

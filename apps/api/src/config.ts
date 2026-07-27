@@ -24,6 +24,15 @@ const envSchema = z.object({
   BALANCER_WEBHOOK_SECRET: z.string().min(32).optional(),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   MEDIA_STORAGE_DIR: z.string().default('./media'),
+  // VIDEO-4 (#160) media publishing. Optional on both sides: the API only ever
+  // reports whether a destination is configured, and `worker-media-publisher`
+  // defers publications for a destination whose credentials are missing instead
+  // of failing them. Blank values therefore disable a destination cleanly.
+  YOUTUBE_CLIENT_ID: z.string().optional(),
+  YOUTUBE_CLIENT_SECRET: z.string().optional(),
+  YOUTUBE_REFRESH_TOKEN: z.string().optional(),
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_CHAT_ID: z.string().optional(),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

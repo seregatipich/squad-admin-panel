@@ -58,6 +58,7 @@ export const ru = {
   'nav.banSources': 'Источники банов',
   'nav.discord': 'Discord',
   'nav.geoip': 'GeoIP (MaxMind)',
+  'nav.mediaPublishing': 'Публикация медиа',
   'nav.logout': 'Выйти',
 
   'login.heading': 'Squad Admin Panel',

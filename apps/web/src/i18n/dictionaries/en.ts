@@ -57,6 +57,7 @@ export const en: Record<TranslationKey, string> = {
   'nav.banSources': 'Ban sources',
   'nav.discord': 'Discord',
   'nav.geoip': 'GeoIP (MaxMind)',
+  'nav.mediaPublishing': 'Media publishing',
   'nav.logout': 'Log out',
 
   'login.heading': 'Squad Admin Panel',

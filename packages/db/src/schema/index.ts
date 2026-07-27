@@ -39,6 +39,8 @@ export * from './match-players.js';
 export * from './matches.js';
 export * from './media-files.js';
 export * from './media-links.js';
+export * from './media-publications.js';
+export * from './media-publish-settings.js';
 export * from './media-upload-tokens.js';
 export * from './message-templates.js';
 export * from './moderation-actions.js';
