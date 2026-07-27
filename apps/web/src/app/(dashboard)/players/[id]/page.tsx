@@ -33,15 +33,14 @@ import { RecentMatchesSection } from './RecentMatchesSection';
 import { ReportPlayerSection } from './ReportPlayerSection';
 import { ReportsSection } from './ReportsSection';
 import { SeedContributionSection } from './SeedContributionSection';
+import { SteamProfileSection, type SteamSnapshot } from './SteamProfileSection';
 import { VotesSection } from './VotesSection';
 
-interface Player {
+interface Player extends SteamSnapshot {
   id: string;
   steam_id64: string | null;
   canonical_name: string;
   eos_id: string | null;
-  /** Extension point for INT-1 (#76); the API never populates it yet. */
-  avatar_url?: string | null;
   first_seen_at: string;
   last_seen_at: string;
   total_time_played_seconds: number;
@@ -164,7 +163,16 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
         <Link href="/players" className="text-sky-400 hover:text-sky-300 text-xs font-mono">
           ← игроки
         </Link>
-        {!player.avatar_url && (
+        {player.avatar_url ? (
+          // INT-1 (#76): real Steam avatar replaces the initials placeholder
+          // once POST /players/:id/steam-refresh has stored one.
+          <img
+            data-testid="player-avatar"
+            src={player.avatar_url}
+            alt={`Аватар ${player.canonical_name}`}
+            className="h-10 w-10 shrink-0 rounded-full bg-neutral-800 object-cover"
+          />
+        ) : (
           <div
             data-testid="player-avatar"
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral-800 text-sm font-semibold text-neutral-300"
@@ -230,6 +238,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
           <dd className="font-mono">{fmtDuration(player.total_time_played_seconds)}</dd>
         </dl>
       </section>
+
+      <SteamProfileSection playerId={playerId} steamId64={player.steam_id64} snapshot={player} />
 
       <PanelAccessSection playerId={playerId} canManage={canManageRoles} />
 
