@@ -96,6 +96,22 @@ async function seedSeedingTransition(
   `;
 }
 
+async function clearTestRows() {
+  await sql`
+    DELETE FROM bonus_transactions
+    WHERE player_id = ANY(${[PLAYER_STEAM, PLAYER_EOS]})
+  `;
+  await sql`
+    DELETE FROM player_daily_presence
+    WHERE player_id = ANY(${[PLAYER_STEAM, PLAYER_EOS]})
+  `;
+  await sql`
+    DELETE FROM player_sessions
+    WHERE player_id = ANY(${[PLAYER_STEAM, PLAYER_EOS]})
+  `;
+  await sql`DELETE FROM events WHERE server_id = ANY(${[SERVER_1, SERVER_2]})`;
+}
+
 beforeAll(async () => {
   if (!DATABASE_URL) return;
   sql = postgres(DATABASE_URL, { max: 1, onnotice: () => undefined });
@@ -123,10 +139,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!sql) return;
-  await sql`TRUNCATE bonus_transactions`;
-  await sql`TRUNCATE player_daily_presence`;
-  await sql`TRUNCATE player_sessions`;
-  await sql`DELETE FROM events WHERE server_id = ANY(${[SERVER_1, SERVER_2]})`;
+  await clearTestRows();
   await sql`DELETE FROM servers WHERE id = ANY(${[SERVER_1, SERVER_2]})`;
   await sql`DELETE FROM players WHERE id = ANY(${[PLAYER_STEAM, PLAYER_EOS]})`;
   await sql`UPDATE economy_settings SET economy_enabled = false WHERE id = 1`;
@@ -135,11 +148,12 @@ afterAll(async () => {
 
 beforeEach(async () => {
   if (!sql) return;
-  await sql`TRUNCATE bonus_transactions`;
-  await sql`TRUNCATE player_daily_presence`;
-  await sql`TRUNCATE player_sessions`;
-  await sql`DELETE FROM events WHERE server_id = ANY(${[SERVER_1, SERVER_2]})`;
-  await sql`UPDATE players SET bonus_balance = 0`;
+  await clearTestRows();
+  await sql`
+    UPDATE players
+    SET bonus_balance = 0
+    WHERE id = ANY(${[PLAYER_STEAM, PLAYER_EOS]})
+  `;
 });
 
 describeIfDb('accrueDailyBonuses', () => {

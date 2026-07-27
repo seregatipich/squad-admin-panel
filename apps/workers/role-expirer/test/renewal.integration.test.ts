@@ -22,8 +22,8 @@ const TIER_PRICE = 100;
 const TIER_DAYS = 30;
 
 /** Reserved test SteamID block for #171 (see the batch plan). */
-const RICH_STEAM = 76561198900985800n;
-const POOR_STEAM = 76561198900985801n;
+const RICH_STEAM = 76561197999985800n;
+const POOR_STEAM = 76561197999985801n;
 
 const db = DATABASE_URL ? createDatabaseClient(DATABASE_URL) : null;
 
