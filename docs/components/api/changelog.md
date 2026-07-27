@@ -1,5 +1,20 @@
 # `api` — changelog
 
+## 2026-07-27 — MOD-3 доказательства для действий модерации (#60)
+
+### Added
+
+- `POST /api/v1/players/:playerId/moderation-actions` body gains optional `evidence_media_ids` — up to 10 ids of existing, non-deleted `media_files` rows. Each becomes a `media_links` row with `entity_type='moderation_action'`, `entity_id` = the new action's id, and `linked_by_player_id` = the caller. Duplicates in the array are deduplicated. `moderation_actions` itself gains no column: `media_links` (VIDEO-2, #158) is the canonical evidence store, so this task ships **no migration**.
+- The ids are validated **before** the RCON command is sent — an unknown or soft-deleted id returns `400 { error: 'evidence_media_not_found', media_id }` and nothing is enforced, so a bad id can never leave a player banned in-game with no ledger row to revert. More than 10 ids is a `400` from the body schema.
+- Every moderation-action read gains `evidence[]` and `evidence_count`. Each item carries `{ id, kind, external_url, original_filename, mime_type, size_bytes, title, linked_by_player_id, linked_at }`. Applies to `GET /api/v1/players/:playerId/moderation-actions` and to the action returned by the `POST` route.
+- Evidence for a whole history page is loaded in **one** query (`media_links` ⋈ `media_files`, `inArray` over the page's action ids, `isNull(media_files.deleted_at)`) — the shape of `reports.ts`'s `loadEvidenceForReports`, not a per-action lookup.
+
+### Changed
+
+- A `media_links` row pointing at a soft-deleted `media_files` row is omitted from `evidence[]` but is **not** deleted — detaching stays an explicit operator action through `DELETE /api/v1/media/:id/links` (VIDEO-2, #158), and restoring the file restores its evidence.
+
+Route gating, error codes and audit configuration are unchanged: `panel_access` plus the live-Squad `kick`/`ban` permission on the write path, `config: { audit: false }` on the history read.
+
 ## 2026-07-27 — MOD-2 действия модерации (#59)
 
 ### Added
