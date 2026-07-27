@@ -391,7 +391,7 @@ export async function notifySubscriptionExpired(
 ): Promise<void> {
   await db
     .insert(alertEvents)
-    .values({ ruleId: ROLE_EXPIRY_ALERT_RULE_ID, severity: 'warn', payload });
+    .values({ ruleId: ROLE_EXPIRY_ALERT_RULE_ID, severity: 'warning', payload });
   await redis.publish(
     LIVE_BUS_CHANNEL,
     JSON.stringify({ type: 'alert.triggered', ts: new Date().toISOString(), data: payload }),
