@@ -88,4 +88,34 @@ describe('schema surface', () => {
       'entity_id',
     ]);
   });
+
+  it('media_upload_tokens hashes its credential and pairs its target both-or-neither', () => {
+    const config = getTableConfig(schema.mediaUploadTokens);
+    const cols = getTableColumns(schema.mediaUploadTokens);
+
+    // The raw token is never a column — only its digest is storable.
+    expect(cols.tokenHash).toBeDefined();
+    expect(cols.tokenHash.notNull).toBe(true);
+    expect(Object.keys(cols)).not.toContain('token');
+    expect(cols.usedAt.notNull).toBe(false);
+    expect(cols.expiresAt.notNull).toBe(true);
+
+    const tokenHashKey = config.indexes.find(
+      (index) => index.config.name === 'media_upload_tokens_token_hash_key',
+    );
+    expect(tokenHashKey?.config.unique).toBe(true);
+
+    expect(
+      config.checks.find((check) => check.name === 'media_upload_tokens_target_pair_check'),
+    ).toBeDefined();
+    expect(
+      config.checks.find((check) => check.name === 'media_upload_tokens_target_type_check'),
+    ).toBeDefined();
+  });
+
+  it('media_files carries the nullable upload_token_id provenance column', () => {
+    const cols = getTableColumns(schema.mediaFiles);
+    expect(cols.uploadTokenId).toBeDefined();
+    expect(cols.uploadTokenId.notNull).toBe(false);
+  });
 });
