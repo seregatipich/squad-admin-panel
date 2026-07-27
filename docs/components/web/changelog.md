@@ -28,6 +28,18 @@
 - Nav entry «Статистика» → `/statistics` with `nav.statistics` added to both `ru.ts` and `en.ts`.
 
 Gating is self-hide-on-403: `GET /api/v1/me` does not expose `panelAccess`, so the page surfaces the API's refusal rather than pre-checking a capability, matching `dashboard/analytics-panel.tsx`. The clock is read in a post-mount `useEffect`, never during render, so the CSV href cannot cause a hydration mismatch.
+## 2026-07-27 — VIDEO-3 публичная страница загрузки по одноразовой ссылке (#159)
+
+### Added
+
+- `apps/web/src/app/(public)/upload/[token]/page.tsx` + `UploadClient.tsx` — session-less upload page under the `(public)` route group (the `middleware.ts` matcher does not cover `/upload`, so no session gate applies). Drag-and-drop plus a file picker over the four allowlisted formats, a progress bar with transferred megabytes and speed via `XMLHttpRequest` (the only browser API that reports upload progress), and Russian status/error copy mapped from the public endpoint's `410`/`413`/`415`/`429`/`400`. The token is never validated client-side, so an invalid link fails at upload time with the same `410` as a spent one.
+- `apps/web/src/app/(public)/upload/[token]/upload-progress.ts` — pure helpers (`formatMegabytes`, `formatSpeed`, `computeProgress`, `isAcceptedUploadType`, `uploadErrorMessage`) unit-tested independently of the component.
+- `apps/web/e2e/public-upload.spec.ts` — Playwright confirmation that the page renders and uploads from a browser context carrying no `__Host-sid` cookie, and that the same link then fails. Runs only via `pnpm --filter @squad/web test:e2e`; the vitest config excludes `e2e/**`.
+
+### Changed
+
+- `EvidenceSection.tsx` gains «Получить ссылку для загрузки» (`POST /api/v1/media/upload-tokens`, pre-bound to the player being viewed), which renders the one-time URL exactly once in a read-only field because the API never returns it again. Evidence delivered through a link is labelled «загружено по ссылке, аноним», and the section refreshes itself on the `media.uploaded` live event (ignoring events bound to a different player's card).
+- `apps/web/src/lib/live-bus.ts` — client `LiveEvent` union gains `media.uploaded`, kept in lockstep with `apps/api/src/plugins/live-bus.ts`.
 
 ## 2026-07-27 — VIDEO-2 evidence section on the player card (#158)
 

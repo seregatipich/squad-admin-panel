@@ -63,6 +63,7 @@ import matchesRoutes from '../../src/routes/matches.js';
 import meTokensRoutes from '../../src/routes/me-tokens.js';
 import mediaRoutes from '../../src/routes/media.js';
 import mediaLinksRoutes from '../../src/routes/media-links.js';
+import mediaUploadTokensRoutes from '../../src/routes/media-upload-tokens.js';
 import messageTemplatesRoutes from '../../src/routes/message-templates.js';
 import moderationActionsRoutes from '../../src/routes/moderation-actions.js';
 import moderationBulkRoutes from '../../src/routes/moderation-bulk.js';
@@ -87,6 +88,7 @@ import playerRoutes from '../../src/routes/players.js';
 import publicAppealsRoutes from '../../src/routes/public-appeals.js';
 import publicBanlistRoutes from '../../src/routes/public-banlist.js';
 import publicClansRoutes from '../../src/routes/public-clans.js';
+import publicMediaRoutes from '../../src/routes/public-media.js';
 import publicStatsRoutes from '../../src/routes/public-stats.js';
 import reportActionsRoutes from '../../src/routes/report-actions.js';
 import reportAnalyticsRoutes from '../../src/routes/report-analytics.js';
@@ -444,9 +446,10 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     SESSION_TTL_SECONDS: 21600,
     SESSION_TOUCH_THROTTLE_SECONDS: 60,
     MEDIA_STORAGE_DIR: mediaDir,
-    // OAuth round-trip config (DISCORD-4): the Discord link routes need a
-    // public origin and client credentials to build their redirects. The
-    // values are inert — every outbound call is faked by the test.
+    // OAuth round-trip config (DISCORD-4) and the origin the delegated-upload
+    // link is built against (VIDEO-3): both need a public origin, and the
+    // Discord routes also need client credentials to build their redirects.
+    // The values are inert — every outbound call is faked by the test.
     PANEL_PUBLIC_URL: 'https://panel.test',
     DISCORD_CLIENT_ID: 'test-discord-client-id',
     DISCORD_CLIENT_SECRET: 'test-discord-client-secret',
@@ -553,6 +556,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(economyRoutes);
   await app.register(mediaRoutes);
   await app.register(mediaLinksRoutes);
+  await app.register(mediaUploadTokensRoutes);
   await app.register(settingsEconomyRoutes);
   await app.register(settingsChatFlagsRoutes);
   await app.register(settingsClanGuardRoutes);
@@ -591,6 +595,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(publicStatsRoutes);
   await app.register(publicClansRoutes);
   await app.register(publicAppealsRoutes);
+  await app.register(publicMediaRoutes);
   await app.register(publicBanlistRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(banSourcesRoutes);

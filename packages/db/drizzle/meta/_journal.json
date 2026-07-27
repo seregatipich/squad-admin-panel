@@ -570,6 +570,13 @@
       "breakpoints": true
     },
     {
+      "idx": 81,
+      "version": "7",
+      "when": 1783402600000,
+      "tag": "0096_media_upload_tokens",
+      "breakpoints": true
+    },
+    {
       "idx": 83,
       "version": "7",
       "when": 1783402800000,

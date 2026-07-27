@@ -85,6 +85,11 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
         ) {
           return;
         }
+        // Delegated-upload notifications are private to the admin who minted
+        // the link; nobody else learns that an anonymous upload happened.
+        if (event.type === 'media.uploaded' && event.data.player_id !== connectionPlayerId) {
+          return;
+        }
         if (event.type === 'combat.event' && !canViewCombat) return;
         safeSend(event);
       });

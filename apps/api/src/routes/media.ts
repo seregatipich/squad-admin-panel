@@ -54,6 +54,7 @@ export function serializeMediaFile(row: MediaFileRow): MediaFileResponse {
   return {
     id: row.id,
     uploader_player_id: row.uploaderPlayerId,
+    upload_token_id: row.uploadTokenId,
     kind: row.kind as MediaFileResponse['kind'],
     original_filename: row.originalFilename,
     mime_type: row.mimeType,

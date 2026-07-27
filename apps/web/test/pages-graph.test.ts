@@ -95,6 +95,7 @@ import statisticsPage from '../src/app/(dashboard)/statistics/page';
 import usersPage from '../src/app/(dashboard)/users/page';
 import meLayout from '../src/app/(me)/layout';
 import mePage from '../src/app/(me)/me/page';
+import publicUploadPage from '../src/app/(public)/upload/[token]/page';
 import loginPage from '../src/app/login/page';
 import noAccessPage from '../src/app/no-access/page';
 import rootPage from '../src/app/page';
@@ -206,5 +207,9 @@ describe('pages static import graph', () => {
 
   it('statistics page exports default', () => {
     expect(statisticsPage).toBeDefined();
+  });
+
+  it('public one-time upload page exports default', () => {
+    expect(publicUploadPage).toBeDefined();
   });
 });

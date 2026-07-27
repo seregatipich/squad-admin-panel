@@ -54,7 +54,7 @@ function serializeMediaLink(row: typeof mediaLinks.$inferSelect): MediaLinkRespo
 }
 
 /** Checks whether the polymorphic target of a `media_links` row exists, per `entity_type`. */
-async function entityExists(
+export async function entityExists(
   db: DatabaseClient,
   entityType: MediaLinkEntityType,
   entityId: string,
