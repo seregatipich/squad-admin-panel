@@ -81,4 +81,18 @@ describe('createGracefulShutdownController', () => {
     expect(exit).toHaveBeenCalledWith(1);
     controller.dispose();
   });
+
+  it('uses process defaults and normalizes a non-Error cleanup rejection', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const controller = createGracefulShutdownController({
+      cleanup: () => Promise.reject('cleanup failed'),
+    });
+
+    await controller.markReady();
+    await expect(controller.request('SIGINT')).resolves.toBe(1);
+    expect(exit).toHaveBeenCalledWith(1);
+
+    controller.dispose();
+    exit.mockRestore();
+  });
 });
