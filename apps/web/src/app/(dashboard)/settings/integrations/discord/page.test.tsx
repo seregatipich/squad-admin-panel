@@ -151,6 +151,16 @@ function mockFetch(overrides: { test?: () => Promise<Response> } = {}) {
     if (url.endsWith('/preview') && init?.method === 'POST') {
       return Promise.resolve(new Response(JSON.stringify(PREVIEW_RESPONSE), { status: 200 }));
     }
+    // DISCORD-5 (#152): the role-mappings section mounted by the page loads its
+    // own data; without these branches every page test would reject here.
+    if (url.endsWith('/api/v1/integrations/discord/role-mappings') && init?.method === undefined) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ items: [], status: null }), { status: 200 }),
+      );
+    }
+    if (url.endsWith('/api/v1/roles') && init?.method === undefined) {
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    }
     return Promise.reject(new Error(`unexpected fetch: ${url} ${init?.method}`));
   });
 }
@@ -215,5 +225,15 @@ describe('Шаблоны сообщений', () => {
 
     expect(await screen.findByText('Шаблоны сообщений')).toBeInTheDocument();
     expect(await screen.findByLabelText('Заголовок')).toHaveValue('Player banned');
+  });
+});
+
+describe('Синхронизация ролей', () => {
+  it('mounts the role-mappings section', async () => {
+    vi.stubGlobal('fetch', mockFetch());
+    render(<DiscordIntegrationPage />);
+
+    expect(await screen.findByText('Синхронизация ролей')).toBeInTheDocument();
+    expect(await screen.findByText('Маппингов пока нет')).toBeInTheDocument();
   });
 });

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-07-27 — DISCORD-5 секция «Синхронизация ролей» (#152)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/settings/integrations/discord/DiscordRoleMappingsSection.tsx` — «Синхронизация ролей» on `/settings/integrations/discord`, over `GET/POST/PATCH/DELETE /api/v1/integrations/discord/role-mappings`. A table of panel role → Discord role id with an inline enabled/disabled toggle and «Удалить», a create form (role `<select>` from `GET /api/v1/roles` × a snowflake field), and «Синхронизировать сейчас» on `POST …/role-mappings/reconcile`. The role select hides the system `Owner` role and any role that already has a mapping, since the API enforces one mapping per role.
+- A red banner rendered from the `status` the list route returns: `roleSyncStatusText` (exported for tests) gives the missing-`Manage Roles` case its own Russian wording because it is the one failure an operator can fix, and falls back to the worker's message for anything else. This is the UI half of DISCORD-5's "no silent failure" criterion.
+- The section self-hides on `403` — `GET /api/v1/me` exposes no `can_manage_integrations` boolean, so the permission rule is not duplicated client-side.
+
 ## 2026-07-27 — MOD-3 moderation history with evidence on the player card (#60)
 
 ### Added
