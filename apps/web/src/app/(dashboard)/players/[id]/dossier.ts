@@ -22,7 +22,12 @@ export const VEHICLE_UNCATALOGUED_HINT = 'Нет в каталоге техни�
 /** Replaces the server selector on the tabs whose aggregates carry no server dimension. */
 export const LIFETIME_ONLY_NOTE = 'Пожизненно, без разбивки по серверам';
 
-/** Body of the RNSquadJS sub-section: STATS-4 (#71) ships no route to read. */
+/**
+ * Body of the RNSquadJS sub-section. STATS-4 (#71) shipped
+ * `GET /api/v1/servers/:id/rnsquadjs`, but that route is per-server sidecar
+ * status; no per-player RNSquadJS aggregate exists, so this tab still has
+ * nothing to read.
+ */
 export const RNSQUADJS_UNAVAILABLE = 'Данные RNSquadJS недоступны';
 
 export interface DossierSkill {
