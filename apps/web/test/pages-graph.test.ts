@@ -90,6 +90,7 @@ import serversPage from '../src/app/(dashboard)/servers/page';
 import settingsAccountPage from '../src/app/(dashboard)/settings/account/page';
 import settingsGroupMembersPage from '../src/app/(dashboard)/settings/groups/[id]/members/page';
 import settingsGroupsPage from '../src/app/(dashboard)/settings/groups/page';
+import mediaPublishingPage from '../src/app/(dashboard)/settings/integrations/media/page';
 import settingsTokensPage from '../src/app/(dashboard)/settings/tokens/page';
 import statisticsPage from '../src/app/(dashboard)/statistics/page';
 import usersPage from '../src/app/(dashboard)/users/page';
@@ -211,5 +212,9 @@ describe('pages static import graph', () => {
 
   it('public one-time upload page exports default', () => {
     expect(publicUploadPage).toBeDefined();
+  });
+
+  it('media publishing integration page exports default', () => {
+    expect(mediaPublishingPage).toBeDefined();
   });
 });
