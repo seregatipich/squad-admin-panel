@@ -46,8 +46,28 @@ const PANEL_PERMS_GATED_BY_INTEGRATIONS: ReadonlySet<PermissionKey> = new Set<Pe
 const PANEL_PERMS_GATED_BY_VIEW_IPS: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
   'player:view_ips',
 ]);
+const PANEL_PERMS_GATED_BY_SQUAD_KICK: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'mod:kick',
+  'mod:warn',
+]);
+const PANEL_PERMS_GATED_BY_SQUAD_BAN: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
+  'mod:ban_temp',
+  'mod:ban_perm',
+  'mod:unban',
+]);
 const ALL_PANEL_PERMS: ReadonlySet<PermissionKey> = new Set<PermissionKey>(PERMISSION_KEYS);
 
+/**
+ * Derives the panel permission keys a role grants, gating certain catalogue
+ * keys on the role's finer-grained sub-permissions.
+ *
+ * `squadPermissions` closes the RBAC gap where `mod:kick`/`mod:warn`/
+ * `mod:ban_temp`/`mod:ban_perm`/`mod:unban` would otherwise be handed to
+ * every `panel_access` user: those five keys additionally require the
+ * role's live-Squad `kick`/`ban` permission (`role_squad_permissions`),
+ * mirroring the enforcement already applied to `POST
+ * /api/v1/external-bans` (`localBanGuard` in `external-bans.ts`).
+ */
 function derivePanelPermissions(
   panelAccess: boolean,
   canAssignRoles: boolean,
@@ -55,6 +75,7 @@ function derivePanelPermissions(
   canManageIntegrations: boolean,
   canViewIps: boolean,
   isOwner: boolean,
+  squadPermissions: ReadonlySet<string>,
 ): Set<PermissionKey> {
   if (isOwner) return new Set(ALL_PANEL_PERMS);
   if (!panelAccess) return new Set();
@@ -64,6 +85,8 @@ function derivePanelPermissions(
     if (PANEL_PERMS_GATED_BY_EDIT.has(key) && !canEditRoles) continue;
     if (PANEL_PERMS_GATED_BY_INTEGRATIONS.has(key) && !canManageIntegrations) continue;
     if (PANEL_PERMS_GATED_BY_VIEW_IPS.has(key) && !canViewIps) continue;
+    if (PANEL_PERMS_GATED_BY_SQUAD_KICK.has(key) && !squadPermissions.has('kick')) continue;
+    if (PANEL_PERMS_GATED_BY_SQUAD_BAN.has(key) && !squadPermissions.has('ban')) continue;
     out.add(key);
   }
   return out;
@@ -179,6 +202,7 @@ export async function loadUserPermissions(
     canManageIntegrations,
     canViewIps,
     isOwner,
+    squadPermissions,
   );
   for (const entry of explicit) {
     if (isPermissionKey(entry.key)) permissions.add(entry.key);
