@@ -300,3 +300,44 @@ export const CONSUMER_GROUP = {
 export const XAUTOCLAIM_IDLE_MS = 120_000;
 export const XAUTOCLAIM_TICK_MS = 30_000;
 export const DLQ_DELIVER_THRESHOLD = 5;
+
+/**
+ * DISCORD-5 (#152): panel-role → Discord-role sync requests. Deliberately a
+ * stream of its own rather than an `EventEnvelope` on `events:*`: the payload
+ * is a work item ("re-derive this player's Discord roles"), not a domain event,
+ * and worker-discord's notify loop must not see it. Delivery is best-effort —
+ * the hourly reconcile tick re-derives everything, so a lost XADD self-heals
+ * within an hour instead of needing a transactional outbox.
+ */
+export const DISCORD_ROLE_SYNC_STREAM = 'discord:role-sync';
+export const DISCORD_ROLE_SYNC_GROUP = 'discord-role-sync:v1';
+/** Cap on retained role-sync requests; `XADD … MAXLEN ~` keeps the stream bounded. */
+export const DISCORD_ROLE_SYNC_MAXLEN = 10_000;
+
+/**
+ * Redis key holding the worker's last role-sync outcome. Read by
+ * `GET /api/v1/integrations/discord/role-mappings` so the settings UI can show
+ * a failure (a bot without Manage Roles, most commonly) instead of letting the
+ * sync fail silently.
+ */
+export const DISCORD_ROLE_SYNC_STATUS_KEY = 'discord:role-sync:status';
+
+/**
+ * One role-sync request. `player_id === null` means "reconcile every linked
+ * player" — used by the hourly tick and by the settings page's manual button.
+ */
+export const discordRoleSyncRequest = z.object({
+  player_id: z.string().uuid().nullable(),
+  reason: z.string().min(1).max(64),
+});
+
+export type DiscordRoleSyncRequest = z.infer<typeof discordRoleSyncRequest>;
+
+export const discordRoleSyncStatus = z.object({
+  state: z.enum(['ok', 'error']),
+  reason: z.string().nullable(),
+  message: z.string().nullable(),
+  checked_at: z.string(),
+});
+
+export type DiscordRoleSyncStatus = z.infer<typeof discordRoleSyncStatus>;
