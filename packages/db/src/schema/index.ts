@@ -40,6 +40,7 @@ export * from './player-api-tokens.js';
 export * from './player-bonus-accruals.js';
 export * from './player-coplay.js';
 export * from './player-daily-presence.js';
+export * from './player-discord-links.js';
 export * from './player-ip-history.js';
 export * from './player-kit-time.js';
 export * from './player-links.js';
