@@ -343,6 +343,38 @@ describeIfDb('issue links API — attach, detach, expansion (ISSUE-3 #156)', () 
     expect((detail.comments as unknown[]).length).toBe(1);
   });
 
+  it('treats soft-deleted servers and media files as gone, on read and on link', async () => {
+    const author = await seedPlayer(h.db, { name: 'SoftDeleteAuthor' });
+    const cookie = await loginAs(h, author);
+    const issue = await createIssue(h, cookie, { title: 'soft deleted targets', body: 'b' });
+    const serverId = await seedServer(h.db, 'Archived Server');
+    const mediaId = await seedMediaFile(h.db, 'Archived clip');
+
+    expect((await addLink(h, cookie, issue.id, 'server', serverId)).statusCode).toBe(201);
+    expect((await addLink(h, cookie, issue.id, 'media_file', mediaId)).statusCode).toBe(201);
+
+    await h.db.update(servers).set({ deletedAt: new Date() }).where(eq(servers.id, serverId));
+    await h.db.update(mediaFiles).set({ deletedAt: new Date() }).where(eq(mediaFiles.id, mediaId));
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/issues/${issue.id}`,
+      headers: { cookie },
+    });
+    const links = (res.json() as { links: LinkView[] }).links;
+    expect(links).toHaveLength(2);
+    for (const link of links) {
+      expect(link.exists, `${link.entity_type} link must read as gone`).toBe(false);
+      expect(link.label).toBe('Удалённый объект');
+      expect(link.ref).toBeNull();
+    }
+
+    // A soft-deleted target is not linkable at all — its detail route 404s.
+    const other = await createIssue(h, cookie, { title: 'no soft-deleted links', body: 'b' });
+    expect((await addLink(h, cookie, other.id, 'server', serverId)).statusCode).toBe(422);
+    expect((await addLink(h, cookie, other.id, 'media_file', mediaId)).statusCode).toBe(422);
+  });
+
   it('degrades a link whose target row is gone to a deleted-object label (AC6)', async () => {
     const author = await seedPlayer(h.db, { name: 'GhostAuthor' });
     const cookie = await loginAs(h, author);

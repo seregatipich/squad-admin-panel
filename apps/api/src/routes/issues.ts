@@ -12,7 +12,7 @@ import {
   players,
   servers,
 } from '@squad/db/schema';
-import { and, desc, eq, inArray, ne, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -288,7 +288,9 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       const rows = await app.db
         .select({ id: servers.id, name: servers.displayName })
         .from(servers)
-        .where(inArray(servers.id, serverIds));
+        // Soft-deleted servers 404 on `/servers/:id`, so a link to one must
+        // read as gone rather than hand out a dead ref.
+        .where(and(inArray(servers.id, serverIds), isNull(servers.deletedAt)));
       for (const row of rows) {
         resolved.set(`server:${row.id}`, { label: row.name, ref: `/servers/${row.id}` });
       }
@@ -324,7 +326,8 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
           originalFilename: mediaFiles.originalFilename,
         })
         .from(mediaFiles)
-        .where(inArray(mediaFiles.id, mediaIds));
+        // Same reasoning as servers: the stream route only serves live rows.
+        .where(and(inArray(mediaFiles.id, mediaIds), isNull(mediaFiles.deletedAt)));
       for (const row of rows) {
         resolved.set(`media_file:${row.id}`, {
           label: row.title ?? row.originalFilename,
