@@ -6,6 +6,26 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ## 2026-07-27
 
+### VIDEO-4 — media_publications + media_publish_settings (migration 0097)
+
+**Files:** `packages/db/drizzle/0097_media_publications.sql`, `packages/db/src/schema/media-publications.ts`, `packages/db/src/schema/media-publish-settings.ts`, `packages/db/src/schema/index.ts`
+
+Two new tables (#160) backing the fan-out of stored media to YouTube/Telegram.
+
+#### Added
+
+- `media_publications(id, media_id, destination, status, external_id, external_url, error, attempts, next_attempt_at, requested_by_player_id, created_at, updated_at)`. `media_id` `REFERENCES media_files(id) ON DELETE CASCADE`; `requested_by_player_id` `REFERENCES players(id) ON DELETE SET NULL` so provenance survives the requester's deletion.
+- CHECKs `media_publications_destination_check` (`youtube`/`telegram`), `media_publications_status_check` (`queued`/`uploading`/`published`/`failed`) and `media_publications_attempts_nonneg`.
+- Unique index `media_publications_media_destination_key` on `(media_id, destination)` — one publication per direction, so a repeat request is a `409` rather than a duplicate upload.
+- Index `media_publications_due_idx` on `(status, next_attempt_at)` — the worker's claim predicate.
+- **The table is the queue.** `worker-media-publisher` claims rows with `... WHERE status='queued' AND next_attempt_at <= now() FOR UPDATE OF p SKIP LOCKED` inside a CTE, then flips them to `uploading` in the same statement, so two replicas cannot take the same row. `attempts`/`next_attempt_at` are what make retry and backoff fall out of the schema instead of needing a stream.
+- `status` deliberately does **not** distinguish "waiting on a YouTube daily quota" from "waiting on a backoff": both stay `queued`, and only `error`/`next_attempt_at` differ. A quota wall leaves `attempts` untouched, so an outage outside our control can never exhaust the retry budget and drive a row to `failed`.
+- `external_url` is nullable **on success**: a Telegram message is only publicly addressable for an `@username` channel or a `-100…` supergroup. Storing a fabricated URL would later be used to justify deleting the local file.
+- `media_publish_settings(id, release_local_file, updated_by_player_id, updated_at)` — singleton (`CHECK id = 1`, seeded by the migration), mirroring `banlist_publication_settings`. `release_local_file` defaults to **false**: primary storage is ours, and a deploy must not start discarding local evidence because a feature shipped. When enabled, a successful publish swaps `media_files.storage_path` for `external_url` in a single `UPDATE` — `media_files_exactly_one_location_check` forbids a row holding both or neither, so the swap cannot be two statements.
+- No credential column anywhere: YouTube/Telegram secrets live only in the worker's environment.
+
+**Journal note:** this migration's reserved `when` (`1783402700000`) was below the journal tip at merge time, which would have made Drizzle skip it on any database already migrated past `0106`. The entry uses `when: 1783403697000` instead — greater than the tip, keyed to the migration number so it cannot collide with a sibling making the same correction. The filename and `idx: 82` are unchanged.
+
 ### DISCORD-4 — player_discord_links (migration 0098)
 
 **Files:** `packages/db/drizzle/0098_player_discord_links.sql`, `packages/db/src/schema/player-discord-links.ts`, `packages/db/src/schema/index.ts`, `packages/db/test/schema.test.ts`

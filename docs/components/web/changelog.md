@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-07-27 — VIDEO-4 публикация медиа в YouTube/Telegram (#160)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/players/[id]/MediaPublishControl.tsx` — «Опубликовать» on each evidence item: pick the destinations, `POST /api/v1/media/:id/publications`, then per-destination status and the external link once published. `can_manage_media` is not exposed by `GET /api/v1/me`, so the control **self-hides on a 403** from the publications endpoint instead of reading a capability flag. It renders nothing for an `external_link` — there is no local file to upload, and the API would answer `not_a_stored_file`. Mounted from `EvidenceSection.tsx`.
+- `apps/web/src/app/(dashboard)/players/[id]/media-publications.ts` — pure helpers with their own unit tests: `destinationLabel`, `publicationsUrl`, `isPublishable`, `statusLabel`, `publicationErrorLabel`. `statusLabel` splits the API's single `queued` state three ways («ждёт квоту YouTube» / «повтор запланирован» / «нет настроек интеграции»); an operator watching «в очереди» for six hours otherwise cannot tell which is happening. An unrecognised error code is shown verbatim rather than swallowed.
+- `apps/web/src/app/(dashboard)/settings/integrations/media/page.tsx` — «Публикация медиа» settings page: connection status for both destinations (presence only, since the API returns booleans and never values) and the «освобождать локальный файл» switch, which keeps showing its stored value if the `PATCH` is rejected rather than pretending it moved. Registered in `nav.ts`, both i18n dictionaries, `test/pages-graph.test.ts` and `test/pages/settings.test.ts`.
+
 ## 2026-07-27 — MOD-3 moderation history with evidence on the player card (#60)
 
 ### Added

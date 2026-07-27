@@ -1,5 +1,21 @@
 # `api` — changelog
 
+## 2026-07-27 — VIDEO-4 внешняя публикация медиа (#160)
+
+### Added
+
+- `POST /api/v1/media/:id/publications` ([`routes/media-publications.ts`](../../../apps/api/src/routes/media-publications.ts)): queues a stored media file for fan-out. Body `{ destinations: ('youtube'|'telegram')[] }`. Gated on `can_manage_media` (`403 { error: 'forbidden', required: 'can_manage_media' }`). `404 media_not_found` for an unknown/soft-deleted file; `400 not_a_stored_file` for an `external_link` row, which has no bytes of ours to upload; `409 { error: 'already_queued', destinations }` when any requested direction already has a row — **all-or-nothing**, so a caller's retry is never ambiguous. The 409 path pre-checks *and* catches the unique violation, walking the error `cause` chain: drizzle-orm 0.45 wraps SQLSTATE `23505` where a flat `err.code === '23505'` check misses it and would 500 on the race.
+- `GET /api/v1/media/:id/publications`: per-destination status for any panel user. A quota-blocked job appears here as `status: 'queued'` with `error: 'quota_exceeded'` and a future `next_attempt_at` — never `failed`.
+- `DELETE /api/v1/media/:id/publications/:destination`: removes a publication (`can_manage_media`; `404 publication_not_found`).
+- `GET /api/v1/integrations/media-publishing`: `{ youtube_configured, telegram_configured, release_local_file }`. Reports credential **presence only** — no value, not even masked. YouTube counts as configured only with the full OAuth triple; a partially filled app reads as unconfigured, because a two-of-three refresh only produces a confusing auth failure.
+- `PATCH /api/v1/integrations/media-publishing`: flips `release_local_file` (`can_manage_media`).
+- Config ([`config.ts`](../../../apps/api/src/config.ts)): optional `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`. The API never calls either service — it only reports whether the worker could.
+- Audit: `media.publish`, `media.publish.delete`, `media.publish.settings.update`, all written by hand (`config: { audit: false }`, matching the rest of the media modules). `apps/api/test/media-publications.test.ts` asserts no publishing secret reaches an audit row.
+
+### Changed
+
+- `worker-media-publisher` added to both compose files, and `api` now shares a persistent `media_data` volume with it at `/var/lib/squad-panel/media` (`MEDIA_STORAGE_DIR`). The two containers have different WORKDIRs, so the previous relative `./media` default resolved to two separate ephemeral directories — the publisher would have found nothing to upload.
+
 ## 2026-07-27 — MOD-4 массовые операции модерации (#61)
 
 ### Added

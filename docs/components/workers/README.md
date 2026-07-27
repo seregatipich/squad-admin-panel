@@ -21,6 +21,7 @@ Heartbeat keys are aggregated by the API at `/api/v1/health/workers`.
 | leaderboard-aggregator | Recomputes `player_stat_periods` leaderboard aggregates every 15 min; also rebuilds the rolling 30-day bonus accrual window `player_bonus_accruals` (ECON-5) | [`apps/workers/leaderboard-aggregator/`](../../../apps/workers/leaderboard-aggregator/) |
 | [metrics-sampler](./metrics-sampler/README.md) | Polls `bridge.host_metrics` every 15 s, writes packed 8-int tuple to `host:metrics` Redis Stream | [`apps/workers/metrics-sampler/`](../../../apps/workers/metrics-sampler/) |
 | [worker-diag-flush](./worker-diag-flush/README.md) | Reads `diag:queue` Redis Stream via `XREADGROUP`, batches inserts into `diagnostic_events` Postgres table | [`apps/workers/diag-flush/`](../../../apps/workers/diag-flush/) |
+| [media-publisher](./media-publisher/README.md) | Publishes stored media to YouTube/Telegram from the `media_publications` queue, with backoff and YouTube daily-quota deferral | [`apps/workers/media-publisher/`](../../../apps/workers/media-publisher/) |
 
 ## Stub workers (P2, not implemented)
 
