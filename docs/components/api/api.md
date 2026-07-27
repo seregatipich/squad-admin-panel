@@ -284,6 +284,37 @@ outbox. WL-3 adds no new expiry mechanic.
 | PUT | `/api/v1/whitelist/applications/settings` | Set `{ enabled, default_days (1..3650 \| null) }` (null = permanent grants). Audit `whitelist.application.settings.update`. | `whitelist:edit` |
 | PATCH | `/api/v1/whitelist/applications/:id` | Approve or reject. Body: `{ status:'approved'\|'rejected', review_note?, role_id?, expires_at? }`. Approve resolves the role as `role_id ?? requested_role_id ?? whitelist_role_id`, computes the term as `expires_at ?? now+default_days` (null = permanent), grants + fans out in one transaction, and invalidates the permission cache. Errors: `404 application_not_found`/`player_not_found`/`role_not_found`, `409 application_not_pending`/`whitelist_role_not_configured`, `400 role_expiry_must_be_future`, `403 self_approval_forbidden`. Both branches audit `whitelist.application.review`. | `whitelist:edit` |
 
+## Ban appeals (MOD-5, #62)
+
+Public appeal portal plus the panel review queue. A banned player has no panel
+session by definition, so the two `/api/v1/public/appeals*` routes are
+**anonymous** (`config.audit: false` + a declarative rate limit, self-auditing
+through an explicit `writeAuditEntry` with a `system`/`http-anonymous` actor —
+the same shape as the public whitelist portal above).
+
+Both public routes are deliberately blind oracles: submitting answers `201` for
+a banned player, an unbanned player and an unknown SteamID64 alike, so the
+portal cannot be walked to discover who is banned, and the status route answers
+one `404 appeal_not_found` for both an unknown and somebody else's token.
+
+Approving an appeal **is an unban**: it reuses the MOD-2 (#59) revert path
+(`unbanPlayerOnServer` in `routes/moderation-actions.ts`) once per server the
+appellant is banned on — `Bans.cfg` line removal, `moderation_actions.reverted_at`
+/`reverted_by`, an `unban` ledger row and the `moderation.unban` EVT-1 envelope
+that `discord-notify` renders with the existing `unban` template. Because
+`GET /api/v1/public/banlist` reads that ledger, an approved appeal also drops the
+player out of outbound ban federation. The `mod:unban` gate is the catalogue key
+MOD-2 put behind the role's live-Squad `ban` permission, so a panel user who may
+not ban may not lift a ban through an appeal either.
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| POST | `/api/v1/public/appeals` | Submit an appeal. Body: `{ steam_id64 (17 digits), body (20..4000), contact? (≤200), moderation_action_id? }`. `201 {id, number, status:'pending', tracking_token}` — the token is returned **once** and is the applicant's only handle. `409 appeal_already_open` (partial-unique index on `steam_id64` while `pending`/`in_review`), `429 rate_limited`. Anti-abuse: `@fastify/rate-limit` 5/hour plus daily Redis counters `appeal-rl:ip:<ip>` (10/day) and `appeal-rl:steam:<id>` (3/day). Audit `appeal.create` (anonymous `actor_kind='system'`, label `http-anonymous`). | none (public) |
+| GET | `/api/v1/public/appeals/:token` | Applicant status page data. Returns exactly `{ number, status, created_at, decided_at, decision_note }` — never `internal_note`, `contact`, `player_id`, `steam_id64`, `moderation_action_id` or `submitter_ip`. `404 appeal_not_found`. Rate limit 60/min. | none (public) |
+| GET | `/api/v1/appeals?status=&player_id=&page=&page_size=` | Paginated review queue (newest first), joined to the appellant, the appealed ban and the handler. | `mod:unban` |
+| GET | `/api/v1/appeals/:id` | One appeal card. `404 appeal_not_found`. | `mod:unban` |
+| PATCH | `/api/v1/appeals/:id` | Move status. Body: `{ status:'in_review'\|'approved'\|'rejected', decision_note? (≤2000), internal_note? (≤2000) }`. Transitions: `pending → in_review\|approved\|rejected`, `in_review → approved\|rejected`. Approving reverts every active ban of the appellant, one unban per server. Returns `{ appeal, revert: { reverted_action_ids, unban_action_ids, removed_lines } \| null }`. Errors: `404 appeal_not_found`, `409 appeal_already_decided`, `400 invalid_transition`, `409 bans_cfg_conflict`. Every transition audits `appeal.status_change` with before/after snapshots; approving additionally audits `appeal.unban`. | `mod:unban` |
+
 ## Audit
 
 | Method | Path | Purpose | Permissions |

@@ -29,6 +29,7 @@ import statusReconcilerPlugin from '../../src/plugins/status-reconciler.js';
 import adminsCfgRoutes from '../../src/routes/admins-cfg.js';
 import alertRulesRoutes from '../../src/routes/alert-rules.js';
 import analyticsRoutes from '../../src/routes/analytics.js';
+import appealsRoutes from '../../src/routes/appeals.js';
 import auditRoutes from '../../src/routes/audit.js';
 import authRoutes from '../../src/routes/auth.js';
 import automationRulesRoutes from '../../src/routes/automation-rules.js';
@@ -80,6 +81,7 @@ import playerSeedContributionRoutes from '../../src/routes/player-seed-contribut
 import playerSteamFriendCheckRoutes from '../../src/routes/player-steam-friend-check.js';
 import playerSteamRefreshRoutes from '../../src/routes/player-steam-refresh.js';
 import playerRoutes from '../../src/routes/players.js';
+import publicAppealsRoutes from '../../src/routes/public-appeals.js';
 import publicBanlistRoutes from '../../src/routes/public-banlist.js';
 import publicClansRoutes from '../../src/routes/public-clans.js';
 import publicStatsRoutes from '../../src/routes/public-stats.js';
@@ -557,6 +559,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(reportsRoutes);
   await app.register(reportActionsRoutes);
   await app.register(reportAnalyticsRoutes);
+  await app.register(appealsRoutes);
   await app.register(moderationActionsRoutes);
   await app.register(moderationBulkRoutes);
   await app.register(eventsRoutes);
@@ -572,6 +575,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(analyticsRoutes);
   await app.register(publicStatsRoutes);
   await app.register(publicClansRoutes);
+  await app.register(publicAppealsRoutes);
   await app.register(publicBanlistRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(banSourcesRoutes);

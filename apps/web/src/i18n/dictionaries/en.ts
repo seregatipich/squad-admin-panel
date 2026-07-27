@@ -30,6 +30,7 @@ export const en: Record<TranslationKey, string> = {
   'nav.bannedNames': 'Banned names',
   'nav.externalBans': 'External bans',
   'nav.reports': 'Reports',
+  'nav.appeals': 'Ban appeals',
   'nav.issues': 'Tickets',
   'nav.vips': 'VIP',
   'nav.groups': 'Groups',

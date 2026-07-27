@@ -81,6 +81,12 @@ export const NAV_GROUPS: NavGroup[] = [
         labelKey: 'nav.reports',
         showsPendingReports: true,
       },
+      {
+        href: '/appeals',
+        label: 'Апелляции',
+        labelKey: 'nav.appeals',
+        permission: 'mod:unban',
+      },
       { href: '/issues', label: 'Тикеты', labelKey: 'nav.issues' },
       { href: '/vips', label: 'VIP', labelKey: 'nav.vips', permission: 'user:view' },
       {
