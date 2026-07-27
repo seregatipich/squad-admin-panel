@@ -216,6 +216,22 @@ export type LiveEvent =
       };
     }
   | {
+      /**
+       * A file arrived through a one-time delegated-upload link (VIDEO-3,
+       * #159). `player_id` is the admin who minted the token, and `live.ts`
+       * delivers the frame only to that admin's own sockets.
+       */
+      type: 'media.uploaded';
+      ts: string;
+      data: {
+        player_id: string | null;
+        media_id: string;
+        token_id: string;
+        target_entity_type: 'player' | 'moderation_action' | 'match' | 'issue' | null;
+        target_entity_id: string | null;
+      };
+    }
+  | {
       type: 'alert.triggered';
       ts: string;
       data: Record<string, unknown>;

@@ -68,6 +68,7 @@ import matchesRoutes from './routes/matches.js';
 import meTokensRoutes from './routes/me-tokens.js';
 import mediaRoutes from './routes/media.js';
 import mediaLinksRoutes from './routes/media-links.js';
+import mediaUploadTokensRoutes from './routes/media-upload-tokens.js';
 import messageTemplatesRoutes from './routes/message-templates.js';
 import moderationActionsRoutes from './routes/moderation-actions.js';
 import notesFeedRoutes from './routes/notes-feed.js';
@@ -89,6 +90,7 @@ import playerSteamFriendCheckRoutes from './routes/player-steam-friend-check.js'
 import playerRoutes from './routes/players.js';
 import publicBanlistRoutes from './routes/public-banlist.js';
 import publicClansRoutes from './routes/public-clans.js';
+import publicMediaRoutes from './routes/public-media.js';
 import publicStatsRoutes from './routes/public-stats.js';
 import reportActionsRoutes from './routes/report-actions.js';
 import reportAnalyticsRoutes from './routes/report-analytics.js';
@@ -255,6 +257,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(economyRoutes);
   await app.register(mediaRoutes);
   await app.register(mediaLinksRoutes);
+  await app.register(mediaUploadTokensRoutes);
   await app.register(settingsEconomyRoutes);
   await app.register(settingsChatFlagsRoutes);
   await app.register(settingsClanGuardRoutes);
@@ -290,6 +293,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(analyticsRoutes);
   await app.register(publicStatsRoutes);
   await app.register(publicClansRoutes);
+  await app.register(publicMediaRoutes);
   await app.register(publicBanlistRoutes);
   await app.register(steamRoutes);
   await app.register(setupRoutes);

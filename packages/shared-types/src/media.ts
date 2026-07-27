@@ -31,11 +31,19 @@ export const mediaLinkInput = z
   .strict();
 export type MediaLinkInput = z.infer<typeof mediaLinkInput>;
 
-/** Response shape for a single media file/link row. */
+/**
+ * Response shape for a single media file/link row.
+ *
+ * `upload_token_id` is non-null only for files delivered through a one-time
+ * delegated-upload link (VIDEO-3, #159); together with a null
+ * `uploader_player_id` it is what marks evidence as anonymous/untrusted in the
+ * UI. It is nullable so every pre-#159 caller keeps parsing unchanged.
+ */
 export const mediaFileResponse = z
   .object({
     id: z.string().uuid(),
     uploader_player_id: z.string().uuid().nullable(),
+    upload_token_id: z.string().uuid().nullable(),
     kind: mediaKind,
     original_filename: z.string(),
     mime_type: z.string(),
@@ -80,3 +88,54 @@ export const mediaLinkedFileResponse = z
   .object({ link: mediaLinkResponse, media: mediaFileResponse })
   .strict();
 export type MediaLinkedFileResponse = z.infer<typeof mediaLinkedFileResponse>;
+
+/** Default lifetime of a delegated upload token — two hours (VIDEO-3, #159). */
+export const MEDIA_UPLOAD_TOKEN_DEFAULT_TTL_SECONDS = 7200;
+/** Hard ceiling on a mint-time `expires_in_seconds` — seven days. */
+export const MEDIA_UPLOAD_TOKEN_MAX_TTL_SECONDS = 604_800;
+
+/**
+ * Request body for `POST /api/v1/media/upload-tokens`.
+ *
+ * `target_entity_type` and `target_entity_id` must be supplied together or not
+ * at all; the pairing is rejected with `400 invalid_target` by the route (and
+ * backed by a CHECK constraint on `media_upload_tokens`) rather than encoded
+ * here, so the caller gets a stable error code instead of a schema dump.
+ * `max_size_bytes` is a request, not a grant — the route clamps it to the
+ * server-wide upload cap.
+ */
+export const mintUploadTokenInput = z
+  .object({
+    target_entity_type: mediaLinkEntityType.optional(),
+    target_entity_id: z.string().uuid().optional(),
+    expires_in_seconds: z
+      .number()
+      .int()
+      .min(60)
+      .max(MEDIA_UPLOAD_TOKEN_MAX_TTL_SECONDS)
+      .default(MEDIA_UPLOAD_TOKEN_DEFAULT_TTL_SECONDS),
+    max_size_bytes: z.number().int().positive().optional(),
+  })
+  .strict();
+export type MintUploadTokenInput = z.infer<typeof mintUploadTokenInput>;
+
+/**
+ * Response of a successful mint. `token` and the `upload_url` embedding it are
+ * returned exactly once — neither is stored, logged, or auditable afterwards.
+ */
+export const uploadTokenResponse = z
+  .object({
+    id: z.string().uuid(),
+    token: z.string(),
+    upload_url: z.string().url(),
+    expires_at: z.string().datetime(),
+    max_size_bytes: z.number().int().positive(),
+    target_entity_type: mediaLinkEntityType.nullable(),
+    target_entity_id: z.string().uuid().nullable(),
+  })
+  .strict();
+export type UploadTokenResponse = z.infer<typeof uploadTokenResponse>;
+
+/** Query string of the public, session-less `POST /api/v1/public/media`. */
+export const publicMediaUploadQuery = z.object({ token: z.string().min(1).max(512) }).strict();
+export type PublicMediaUploadQuery = z.infer<typeof publicMediaUploadQuery>;

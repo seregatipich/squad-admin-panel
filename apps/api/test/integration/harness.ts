@@ -59,6 +59,7 @@ import matchesRoutes from '../../src/routes/matches.js';
 import meTokensRoutes from '../../src/routes/me-tokens.js';
 import mediaRoutes from '../../src/routes/media.js';
 import mediaLinksRoutes from '../../src/routes/media-links.js';
+import mediaUploadTokensRoutes from '../../src/routes/media-upload-tokens.js';
 import messageTemplatesRoutes from '../../src/routes/message-templates.js';
 import moderationActionsRoutes from '../../src/routes/moderation-actions.js';
 import notesFeedRoutes from '../../src/routes/notes-feed.js';
@@ -80,6 +81,7 @@ import playerSteamFriendCheckRoutes from '../../src/routes/player-steam-friend-c
 import playerRoutes from '../../src/routes/players.js';
 import publicBanlistRoutes from '../../src/routes/public-banlist.js';
 import publicClansRoutes from '../../src/routes/public-clans.js';
+import publicMediaRoutes from '../../src/routes/public-media.js';
 import publicStatsRoutes from '../../src/routes/public-stats.js';
 import reportActionsRoutes from '../../src/routes/report-actions.js';
 import reportAnalyticsRoutes from '../../src/routes/report-analytics.js';
@@ -434,6 +436,8 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     SESSION_TTL_SECONDS: 21600,
     SESSION_TOUCH_THROTTLE_SECONDS: 60,
     MEDIA_STORAGE_DIR: mediaDir,
+    // Origin the delegated-upload link is built against (VIDEO-3, #159).
+    PANEL_PUBLIC_URL: 'https://panel.test',
   });
   app.decorate('encryptionKey', Buffer.from(TEST_ENCRYPTION_KEY, 'base64'));
   app.decorate('db', db);
@@ -534,6 +538,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(economyRoutes);
   await app.register(mediaRoutes);
   await app.register(mediaLinksRoutes);
+  await app.register(mediaUploadTokensRoutes);
   await app.register(settingsEconomyRoutes);
   await app.register(settingsChatFlagsRoutes);
   await app.register(settingsClanGuardRoutes);
@@ -566,6 +571,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(analyticsRoutes);
   await app.register(publicStatsRoutes);
   await app.register(publicClansRoutes);
+  await app.register(publicMediaRoutes);
   await app.register(publicBanlistRoutes);
   await app.register(bannedNamesRoutes);
   await app.register(banSourcesRoutes);
