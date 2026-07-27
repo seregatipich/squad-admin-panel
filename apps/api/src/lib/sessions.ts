@@ -33,10 +33,16 @@ export interface SessionRevokePublisher {
 }
 
 /**
- * Fails closed: a row or cache entry written before the scope column existed
- * (or carrying an unknown value) is treated as the restrictive scope only if
- * it is explicitly `self_service`. Everything else keeps the historical
- * `panel` behaviour, so no live session is downgraded by a deploy.
+ * Only an explicit `self_service` yields the restricted scope; anything else
+ * resolves to `panel`.
+ *
+ * That direction is deliberate and safe: the column is `NOT NULL DEFAULT
+ * 'panel'` under `sessions_scope_chk`, so an unknown value cannot exist in the
+ * database. The only source of a missing value is a Redis cache entry written
+ * by a process from before this migration — and every session that existed
+ * then was a panel session, because a player without `panel_access` was never
+ * issued one. Defaulting those to `self_service` would lock every admin out
+ * mid-deploy for no security gain.
  */
 function normalizeScope(value: string | null | undefined): SessionScope {
   return value === 'self_service' ? 'self_service' : 'panel';
