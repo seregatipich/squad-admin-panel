@@ -6,6 +6,25 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ## 2026-07-27
 
+### VIDEO-3 — media_upload_tokens (migration 0096)
+
+**Files:** `packages/db/drizzle/0096_media_upload_tokens.sql`, `packages/db/src/schema/media-upload-tokens.ts`, `packages/db/src/schema/media-files.ts`, `packages/db/src/schema/index.ts`
+
+New table `media_upload_tokens` (#159) — one-time delegated-upload credentials that let an outside player upload a single file with no panel session, optionally pre-bound to the evidence target so the file files itself into the right case via `media_links`.
+
+#### Added
+
+- `media_upload_tokens(id, token_hash, issued_by_player_id, target_entity_type, target_entity_id, expires_at, used_at, max_size_bytes, created_at)`. `issued_by_player_id` `REFERENCES players(id) ON DELETE SET NULL` so the provenance of already-uploaded evidence survives the minter's deletion.
+- `token_hash` stores **only** the hex sha-256 of the raw token, never the token itself — a database leak cannot be replayed into upload capability. `text` rather than `bytea`, matching the existing `player_api_tokens.token_hash` precedent. Unique index `media_upload_tokens_token_hash_key`.
+- CHECK `media_upload_tokens_target_type_check` — `target_entity_type IS NULL OR target_entity_type IN ('player','moderation_action','match','issue')`, mirroring `media_links`.
+- CHECK `media_upload_tokens_target_pair_check` — `(target_entity_type IS NULL) = (target_entity_id IS NULL)`, so a token is either fully pre-bound or not bound at all.
+- Index `media_upload_tokens_expires_at_idx` for optional purge of expired rows.
+- `media_files.upload_token_id uuid NULL REFERENCES media_upload_tokens(id) ON DELETE SET NULL` — both the provenance record and the anonymous/untrusted marker; such a row always has `uploader_player_id = NULL`.
+
+#### Notes
+
+- Single use is a database property. Redemption is the conditional `UPDATE media_upload_tokens SET used_at = now() WHERE id = $1 AND used_at IS NULL AND expires_at > now() RETURNING id`, which takes a row lock — of two concurrent uploads racing the same token exactly one can observe a returned row. `expires_at` is compared against the **database** clock, not the application's.
+
 ### VIDEO-2 — media_links (migration 0095)
 
 **Files:** `packages/db/drizzle/0095_media_links.sql`, `packages/db/src/schema/media-links.ts`, `packages/db/src/schema/index.ts`, `packages/db/test/schema.test.ts`
