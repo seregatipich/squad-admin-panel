@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { bigint, check, index, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { mediaUploadTokens } from './media-upload-tokens.js';
 import { players } from './players.js';
 
 export const MEDIA_KINDS = ['video', 'image', 'external_link'] as const;
@@ -14,12 +15,20 @@ export type MediaKind = (typeof MEDIA_KINDS)[number];
  * configured media base dir, see `apps/api/src/lib/media-storage.ts`) and
  * deduplicated by `sha256` — re-uploading identical bytes reuses the
  * existing row's `storagePath` instead of writing the file twice.
+ *
+ * `uploadTokenId` is set only for files delivered through a one-time
+ * delegated-upload link (VIDEO-3, #159). It is both the provenance record and
+ * the untrusted marker: such a row always has `uploaderPlayerId = NULL`
+ * because the uploader had no panel session at all.
  */
 export const mediaFiles = pgTable(
   'media_files',
   {
     id: uuid('id').primaryKey().notNull(),
     uploaderPlayerId: uuid('uploader_player_id').references(() => players.id, {
+      onDelete: 'set null',
+    }),
+    uploadTokenId: uuid('upload_token_id').references(() => mediaUploadTokens.id, {
       onDelete: 'set null',
     }),
     kind: text('kind').notNull(),
