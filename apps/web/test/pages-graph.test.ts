@@ -91,6 +91,7 @@ import settingsAccountPage from '../src/app/(dashboard)/settings/account/page';
 import settingsGroupMembersPage from '../src/app/(dashboard)/settings/groups/[id]/members/page';
 import settingsGroupsPage from '../src/app/(dashboard)/settings/groups/page';
 import settingsTokensPage from '../src/app/(dashboard)/settings/tokens/page';
+import statisticsPage from '../src/app/(dashboard)/statistics/page';
 import usersPage from '../src/app/(dashboard)/users/page';
 import loginPage from '../src/app/login/page';
 import noAccessPage from '../src/app/no-access/page';
@@ -191,5 +192,9 @@ describe('pages static import graph', () => {
 
   it('users page exports default', () => {
     expect(usersPage).toBeDefined();
+  });
+
+  it('statistics page exports default', () => {
+    expect(statisticsPage).toBeDefined();
   });
 });

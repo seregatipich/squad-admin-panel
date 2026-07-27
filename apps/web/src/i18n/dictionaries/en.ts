@@ -20,6 +20,7 @@ export const en: Record<TranslationKey, string> = {
   'nav.suspects': 'Marks',
   'nav.leaderboards': 'Leaderboards',
   'nav.bonusLeaderboard': 'Bonuses',
+  'nav.statistics': 'Statistics',
   'nav.clans': 'Clans',
   'nav.matches': 'Matches',
   'nav.events': 'Events',
