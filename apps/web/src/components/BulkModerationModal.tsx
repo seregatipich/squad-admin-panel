@@ -98,43 +98,59 @@ export function BulkModerationModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BulkResponse | null>(null);
+  /**
+   * The batch as it was at submit time. The caller clears its selection from
+   * `onApplied`, so `targets` is already empty when the result screen renders
+   * — without this snapshot the failure list would show bare uuids.
+   */
+  const [batch, setBatch] = useState<BulkModerationTarget[]>([]);
   const titleId = useId();
   const actionId = useId();
   const reasonId = useId();
   const lengthId = useId();
   const challengeId = useId();
 
+  // Keyed on open/closed, never on the `targets` array identity: the caller
+  // rebuilds that array on every render (the live-roster table re-renders once
+  // a second), and resetting on identity would wipe whatever is being typed.
+  const open = targets !== null;
   useEffect(() => {
-    if (!targets) return;
+    if (!open) return;
     setStep('form');
     setReason('');
     setChallenge('');
     setError(null);
     setResult(null);
-  }, [targets]);
+    setBatch([]);
+  }, [open]);
 
   useEffect(() => {
-    if (!targets) return;
+    if (!open) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onOpenChange(false);
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [targets, onOpenChange]);
+  }, [open, onOpenChange]);
 
   if (!targets) return null;
 
   const trimmedReason = reason.trim();
-  const targetCount = targets.length;
+  // On the result screen the live selection is already gone — report on the
+  // batch that was actually submitted.
+  const shown = step === 'result' ? batch : targets;
+  const targetCount = shown.length;
   // A ban is the only irreversible-in-practice action, so it carries the
   // extra "type the number back" challenge on top of the confirmation step.
   const challengeSatisfied = actionType !== 'ban' || challenge.trim() === String(targetCount);
-  const nameById = new Map(targets.map((target) => [target.playerId, target.name]));
+  const nameById = new Map(shown.map((target) => [target.playerId, target.name]));
 
   async function submit() {
-    if (busy) return;
+    if (busy || !targets) return;
+    const submitting = targets;
     setBusy(true);
     setError(null);
+    setBatch(submitting);
     try {
       const res = await fetch('/api/v1/moderation-actions/bulk', {
         method: 'POST',
@@ -143,7 +159,7 @@ export function BulkModerationModal({
         body: JSON.stringify({
           server_id: serverId,
           action_type: actionType,
-          player_ids: (targets ?? []).map((target) => target.playerId),
+          player_ids: submitting.map((target) => target.playerId),
           reason: trimmedReason,
           ban_length: banLength,
           confirm_bulk: true,

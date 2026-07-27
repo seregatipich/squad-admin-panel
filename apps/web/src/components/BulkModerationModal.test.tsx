@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BulkModerationModal, type BulkModerationTarget } from './BulkModerationModal';
 
@@ -228,6 +229,81 @@ describe('BulkModerationModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
     fireEvent.click(screen.getByRole('button', { name: 'Назад' }));
     expect(screen.getByLabelText('Причина')).toBeInTheDocument();
+  });
+
+  // Regression: LivePlayers rebuilds the targets array on every render (its
+  // "time on server" column re-renders once a second), so a reset keyed on the
+  // array identity wiped whatever the operator was typing.
+  it('keeps the typed reason when the parent re-renders with an equal targets array', () => {
+    const { rerender } = render(
+      <BulkModerationModal
+        serverId="srv-1"
+        targets={TARGETS}
+        permissions={ALL_PERMS}
+        onOpenChange={() => undefined}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText('Причина'), { target: { value: 'Читы' } });
+
+    rerender(
+      <BulkModerationModal
+        serverId="srv-1"
+        targets={TARGETS.map((target) => ({ ...target }))}
+        permissions={[...ALL_PERMS]}
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    expect((screen.getByLabelText('Причина') as HTMLTextAreaElement).value).toBe('Читы');
+    expect(screen.getByRole('button', { name: 'Далее' })).toBeEnabled();
+  });
+
+  // Regression: LivePlayers clears its selection from `onApplied`, so `targets`
+  // is already empty by the time the result screen renders. Names have to come
+  // from the batch that was submitted, not from the live selection.
+  it('names failed targets on the result screen after the parent cleared the selection', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          bulkResponse({
+            bulk_group: '019e2000-0000-7000-8000-00000000cccc',
+            action_type: 'kick',
+            server_id: 'srv-1',
+            requested: 3,
+            applied: 2,
+            failed: 1,
+            results: [
+              { player_id: TARGETS[0].playerId, status: 'applied' },
+              { player_id: TARGETS[1].playerId, status: 'applied' },
+              { player_id: TARGETS[2].playerId, status: 'failed', error: 'rcon_failed' },
+            ],
+          }),
+        ),
+      ),
+    );
+
+    function Harness() {
+      const [targets, setTargets] = useState<BulkModerationTarget[] | null>(TARGETS);
+      return (
+        <BulkModerationModal
+          serverId="srv-1"
+          targets={targets}
+          permissions={['mod:kick']}
+          onOpenChange={() => undefined}
+          onApplied={() => setTargets([])}
+        />
+      );
+    }
+
+    render(<Harness />);
+    fireEvent.change(screen.getByLabelText('Причина'), { target: { value: 'Мешает' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Подтвердить' }));
+
+    await screen.findByText('Применено: 2 · Ошибок: 1');
+    expect(screen.getByText(/Charlie/)).toBeInTheDocument();
+    expect(screen.getByText('Выбрано игроков: 3')).toBeInTheDocument();
   });
 
   it('renders no action form when the user holds no moderation key', () => {
