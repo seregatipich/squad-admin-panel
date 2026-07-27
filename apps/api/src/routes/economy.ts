@@ -1,3 +1,4 @@
+import { applyVipGrant } from '@squad/db';
 import {
   BONUS_TX_TYPES,
   type BonusTransactionRow,
@@ -343,65 +344,25 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'role_grants_panel_access' };
       }
 
+      // Bound outside the transaction callback: property narrowing from the
+      // guard above does not survive into a closure.
       const price = tier.priceBonuses;
       const grantDays = tier.defaultDays;
 
+      // Ledger + timed grant live in `@squad/db` (`applyVipGrant`) so the
+      // privilege shop, VIPSUB-5 self-service and the subscription renewal tick
+      // share one implementation of the balance floor, the role-collision rules
+      // and the "extend from the later of now and the current expiry" rule.
+      // The worker cannot import `apps/api/src/lib/`, hence `packages/db`.
       const outcome = await app.db.transaction(async (tx) => {
-        const locked = await tx
-          .select({
-            balance: players.bonusBalance,
-            roleId: players.roleId,
-            roleExpiresAt: players.roleExpiresAt,
-          })
-          .from(players)
-          .where(eq(players.id, playerId))
-          .for('update')
-          .limit(1);
-        const current = locked[0];
-        if (!current) return { status: 'not_found' as const };
-
-        const nextBalance = current.balance - price;
-        if (nextBalance < 0) {
-          return { status: 'insufficient' as const, balance: current.balance };
-        }
-        const sameRole = current.roleId === tier.roleId;
-        if (current.roleId !== null && !sameRole) {
-          return { status: 'role_conflict' as const };
-        }
-        if (sameRole && current.roleExpiresAt === null) {
-          return { status: 'role_permanent' as const };
-        }
-
-        const now = new Date();
-        const base =
-          sameRole && current.roleExpiresAt !== null && current.roleExpiresAt > now
-            ? current.roleExpiresAt
-            : now;
-        const roleExpiresAt = new Date(base.getTime() + grantDays * 86_400_000);
-
-        const inserted = await tx
-          .insert(bonusTransactions)
-          .values({
-            playerId,
-            amount: -price,
-            type: 'spend',
-            referenceType: 'purchase',
-            referenceId: tierId,
-            actorPlayerId: actorId,
-          })
-          .returning();
-        const ledgerRow = inserted[0];
-        if (!ledgerRow) throw new Error('bonus_transactions insert returned no row');
-
-        await tx
-          .update(players)
-          .set({
-            bonusBalance: nextBalance,
-            roleId: tier.roleId,
-            roleExpiresAt,
-            updatedAt: now,
-          })
-          .where(eq(players.id, playerId));
+        const applied = await applyVipGrant(tx, {
+          playerId,
+          tier: { roleId: tier.roleId, days: grantDays, price },
+          actorPlayerId: actorId,
+          referenceType: 'purchase',
+          referenceId: tierId,
+        });
+        if (applied.status !== 'ok') return applied;
 
         await publishAdminsCfgSyncForAllServers(tx, app.redis, {
           reason: 'player.role.assign',
@@ -410,24 +371,20 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
           request_id: req.id,
         });
 
-        return { status: 'ok' as const, balance: nextBalance, roleExpiresAt };
+        return applied;
       });
 
-      if (outcome.status === 'not_found') {
+      if (outcome.status === 'player_not_found') {
         reply.code(404);
         return { error: 'player_not_found' };
       }
-      if (outcome.status === 'insufficient') {
+      if (outcome.status === 'insufficient_balance') {
         reply.code(409);
         return { error: 'insufficient_balance', balance: outcome.balance };
       }
-      if (outcome.status === 'role_conflict') {
+      if (outcome.status !== 'ok') {
         reply.code(409);
-        return { error: 'role_conflict' };
-      }
-      if (outcome.status === 'role_permanent') {
-        reply.code(409);
-        return { error: 'role_permanent' };
+        return { error: outcome.status };
       }
 
       invalidatePermissionCache(playerId);
@@ -436,7 +393,7 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
       return {
         ok: true,
         balance: outcome.balance,
-        role_id: tier.roleId,
+        role_id: outcome.roleId,
         role_expires_at: outcome.roleExpiresAt.toISOString(),
       };
     },

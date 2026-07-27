@@ -577,6 +577,13 @@
       "breakpoints": true
     },
     {
+      "idx": 89,
+      "version": "7",
+      "when": 1783403400000,
+      "tag": "0104_vip_subscriptions",
+      "breakpoints": true
+    },
+    {
       "idx": 91,
       "version": "7",
       "when": 1783403600000,

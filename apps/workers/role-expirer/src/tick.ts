@@ -31,7 +31,8 @@ export interface RoleExpiryAuditEntry {
 }
 
 export interface AdminsCfgSyncEvent {
-  reason: 'player.role.expire';
+  /** `player.role.assign` is emitted by the VIPSUB-5 renewal tick. */
+  reason: 'player.role.expire' | 'player.role.assign';
   actor_player_id: null;
   enqueued_at: string;
   request_id: string;

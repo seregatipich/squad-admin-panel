@@ -92,6 +92,8 @@ import settingsGroupMembersPage from '../src/app/(dashboard)/settings/groups/[id
 import settingsGroupsPage from '../src/app/(dashboard)/settings/groups/page';
 import settingsTokensPage from '../src/app/(dashboard)/settings/tokens/page';
 import usersPage from '../src/app/(dashboard)/users/page';
+import meLayout from '../src/app/(me)/layout';
+import mePage from '../src/app/(me)/me/page';
 import loginPage from '../src/app/login/page';
 import noAccessPage from '../src/app/no-access/page';
 import rootPage from '../src/app/page';
@@ -103,6 +105,14 @@ describe('pages static import graph', () => {
 
   it('login page exports default', () => {
     expect(loginPage).toBeDefined();
+  });
+
+  it('self-service me page exports default', () => {
+    expect(mePage).toBeDefined();
+  });
+
+  it('self-service (me) layout exports default', () => {
+    expect(meLayout).toBeDefined();
   });
 
   it('no-access page exports default', () => {

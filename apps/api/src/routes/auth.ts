@@ -11,7 +11,10 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/auth/logout',
-    { config: { audit: { action: 'user.logout', resource: 'session' } } },
+    {
+      // VIPSUB-5 (#171): a self-service session must always be able to end itself.
+      config: { audit: { action: 'user.logout', resource: 'session' }, selfService: true },
+    },
     async (req, reply) => {
       const token = req.cookies[SESSION_COOKIE];
       if (token) {
@@ -30,7 +33,11 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  fast.get('/api/v1/me', { config: { audit: false } }, async (req, reply) => {
+  // VIPSUB-5 (#171): `selfService` because the web DAL's `requireSession()`
+  // reads this route on every render, including the `(me)` self-service layout.
+  // The response is entirely self-scoped and its capability set is frozen for
+  // this batch — a self-service player simply sees their (empty) permissions.
+  fast.get('/api/v1/me', { config: { audit: false, selfService: true } }, async (req, reply) => {
     if (!req.user) {
       reply.code(401);
       return { error: 'unauthenticated' };

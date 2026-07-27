@@ -9,6 +9,7 @@ import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
 import { createRoleExpiryReminderDeps, runRoleExpiryReminderTick } from './reminders.js';
+import { createSubscriptionRenewalDeps, runSubscriptionRenewalTick } from './renewal.js';
 import { createRoleExpiryDeps, runRoleExpiryTick } from './tick.js';
 
 const log = pino({
@@ -19,6 +20,12 @@ const log = pino({
 const TICK_INTERVAL_MS = Number(process.env.ROLE_EXPIRER_INTERVAL_MS ?? 60_000);
 /** Daily VIPSUB-4 reminder pass — window crossings fire at most once, so once a day is enough. */
 const REMINDER_INTERVAL_MS = Number(process.env.ROLE_EXPIRY_REMINDER_INTERVAL_MS ?? 86_400_000);
+/**
+ * VIPSUB-5 subscription renewal pass. Hourly: a renewal is due on a date, not
+ * at a second, and each pass charges real bonus points — an hour keeps the
+ * billing punctual without hammering the ledger.
+ */
+const RENEWAL_INTERVAL_MS = Number(process.env.VIP_RENEWAL_INTERVAL_MS ?? 3_600_000);
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -68,6 +75,12 @@ async function main() {
     log.info(result, 'role-expirer reminder tick');
   }
 
+  const renewalDeps = createSubscriptionRenewalDeps(db, redis);
+  async function renewalTick(): Promise<void> {
+    const result = await runSubscriptionRenewalTick({ ...renewalDeps, diag });
+    log.info(result, 'role-expirer subscription renewal tick');
+  }
+
   await tick();
   const interval = setInterval(() => {
     tick().catch((err) => log.error({ err: (err as Error).message }, 'role-expirer tick failed'));
@@ -82,10 +95,20 @@ async function main() {
     );
   }, REMINDER_INTERVAL_MS);
 
+  await renewalTick().catch((err) =>
+    log.error({ err: (err as Error).message }, 'role-expirer renewal tick failed'),
+  );
+  const renewalInterval = setInterval(() => {
+    renewalTick().catch((err) =>
+      log.error({ err: (err as Error).message }, 'role-expirer renewal tick failed'),
+    );
+  }, RENEWAL_INTERVAL_MS);
+
   const shutdown = async (sig: NodeJS.Signals) => {
     log.info({ sig }, 'shutdown');
     clearInterval(interval);
     clearInterval(reminderInterval);
+    clearInterval(renewalInterval);
     await diag.emit({
       component: 'worker-role-expirer',
       kind: 'role_expirer.stopped',

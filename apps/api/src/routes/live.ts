@@ -77,7 +77,10 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
         }
         if (
           event.type === 'alert.triggered' &&
-          event.data.event_kind === 'role_expiring' &&
+          (event.data.event_kind === 'role_expiring' ||
+            // VIPSUB-5 (#171): a failed subscription renewal names the player,
+            // so it goes to the same audience as an expiry reminder.
+            event.data.event_kind === 'subscription_expired') &&
           !canAssignRoles
         ) {
           return;

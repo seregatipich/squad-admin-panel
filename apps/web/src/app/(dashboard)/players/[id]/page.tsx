@@ -36,6 +36,7 @@ import { ReportPlayerSection } from './ReportPlayerSection';
 import { ReportsSection } from './ReportsSection';
 import { SeedContributionSection } from './SeedContributionSection';
 import { SteamProfileSection, type SteamSnapshot } from './SteamProfileSection';
+import { SubscriptionGrantSection } from './SubscriptionGrantSection';
 import { VotesSection } from './VotesSection';
 
 interface Player extends SteamSnapshot {
@@ -248,6 +249,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <DiscordLinkSection playerId={playerId} me={me} />
 
       <BonusSection playerId={playerId} />
+
+      <SubscriptionGrantSection playerId={playerId} />
 
       <div className="flex justify-end">
         <Link
