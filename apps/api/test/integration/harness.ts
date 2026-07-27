@@ -115,6 +115,7 @@ import settingsClanGuardRoutes from '../../src/routes/settings-clan-guard.js';
 import settingsCoplayRoutes from '../../src/routes/settings-coplay.js';
 import settingsEconomyRoutes from '../../src/routes/settings-economy.js';
 import setupRoutes from '../../src/routes/setup.js';
+import statisticsRoutes from '../../src/routes/statistics.js';
 import suspectsRoutes from '../../src/routes/suspects.js';
 import teamkillsRoutes from '../../src/routes/teamkills.js';
 import usersRoutes from '../../src/routes/users.js';
@@ -564,6 +565,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(liveRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(analyticsRoutes);
+  await app.register(statisticsRoutes);
   await app.register(publicStatsRoutes);
   await app.register(publicClansRoutes);
   await app.register(publicBanlistRoutes);
