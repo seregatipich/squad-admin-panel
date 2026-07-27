@@ -25,6 +25,16 @@ describe('NAV_GROUPS', () => {
     }
   });
 
+  it('exposes the team balancer under «Управление», gated on balancer:view (GAME-2, #81)', () => {
+    const management = NAV_GROUPS.find((group) => group.label === 'Управление');
+    expect(management?.items).toContainEqual({
+      href: '/balancer',
+      label: 'Балансировщик',
+      labelKey: 'nav.balancer',
+      permission: 'balancer:view',
+    });
+  });
+
   it('keeps the Russian dictionary in sync with the legacy `label` (drift guard)', () => {
     for (const group of NAV_GROUPS) {
       if (group.label && group.labelKey) expect(ru[group.labelKey]).toBe(group.label);

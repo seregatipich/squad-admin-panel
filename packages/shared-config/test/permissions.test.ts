@@ -59,6 +59,16 @@ describe('PERMISSIONS registry', () => {
     expect(byKey.get('mod:unban')?.unimplemented).toBeUndefined();
   });
 
+  it('exposes the balancer category with a production-active view/edit pair (GAME-2, #81)', () => {
+    const byKey = new Map(PERMISSIONS.map((p) => [p.key, p]));
+
+    expect(PERMISSION_CATEGORIES).toContain('balancer');
+    expect(byKey.get('balancer:view')?.category).toBe('balancer');
+    expect(byKey.get('balancer:edit')?.category).toBe('balancer');
+    expect(byKey.get('balancer:view')?.unimplemented).toBeUndefined();
+    expect(byKey.get('balancer:edit')?.unimplemented).toBeUndefined();
+  });
+
   it('PERMISSION_KEYS matches PERMISSIONS', () => {
     expect(PERMISSION_KEYS).toEqual(PERMISSIONS.map((p) => p.key));
   });
