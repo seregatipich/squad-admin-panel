@@ -9,7 +9,7 @@ import {
   servers,
   sessions,
 } from '@squad/db';
-import { and, asc, desc, eq, gt, inArray, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -129,17 +129,20 @@ afterAll(async () => {
 
 /**
  * `publishAdminsCfgSyncForAllServers` enqueues one outbox row per *active server
- * in the database*, not per server this test created. Asserting a literal 1 tied
- * the expectation to global DB state, so the test failed whenever it ran after a
- * suite that left a server behind — which the local pre-push checklist does, by
- * running every affected package against one shared DATABASE_URL. Counting the
- * servers the tick actually fans out to keeps the assertion exact and makes it
- * independent of test order.
+ * in the database*, not per server this test created, so a literal 1 tied the
+ * expectation to global DB state. Re-counting the servers afterwards fixed the
+ * ordering dependency but not a concurrency one: the affected-package sweep runs
+ * every package against one shared DATABASE_URL, and suites that create and drop
+ * servers (log-ingest's, for instance) move the count between the tick and the
+ * re-count — observed as `expected "spy" to be called 5 times, but got 6 times`.
+ *
+ * Read the fan-out off the tick itself instead. The streams it published are the
+ * servers it saw, so `enqueued` is checked against the side effect it reports on
+ * with no second look at the table, and this test's own server is still asserted
+ * exactly.
  */
-async function activeServerCount(): Promise<number> {
-  if (!db) throw new Error('database not configured');
-  const rows = await db.select({ id: servers.id }).from(servers).where(isNull(servers.deletedAt));
-  return rows.length;
+function syncedStreams(xadd: ReturnType<typeof vi.fn>): string[] {
+  return xadd.mock.calls.map(([stream]) => stream as string);
 }
 
 /**
@@ -196,12 +199,14 @@ describeIfDb('seed reward worker integration', () => {
     });
 
     const grantChanges = await seedRewardAuditSince(grantWatermark);
+    const grantStreams = syncedStreams(firstRedis.xadd);
     expect(granted).toEqual({
       skipped: false,
       granted: grantChanges.filter((row) => row.actionType === 'seed.reward_granted').length,
       revoked: grantChanges.filter((row) => row.actionType === 'seed.reward_revoked').length,
-      enqueued: await activeServerCount(),
+      enqueued: grantStreams.length,
     });
+    expect(grantStreams).toContain(`events:admins-cfg-sync:${SERVER_ID}`);
     expect(
       grantChanges.filter((row) => row.targetId === PLAYER_ID).map((row) => row.actionType),
     ).toEqual(['seed.reward_granted']);
@@ -211,8 +216,6 @@ describeIfDb('seed reward worker integration', () => {
       .where(eq(players.steamId64, PLAYER_STEAM_ID));
     expect(afterGrant?.roleId).toBe(REWARD_ROLE_ID);
     expect(firstRedis.del).toHaveBeenCalledWith(`session:${SESSION_ID}`);
-    // One stream publish per active server, for the same reason as `enqueued` above.
-    expect(firstRedis.xadd).toHaveBeenCalledTimes(await activeServerCount());
     expect(revokedFor(firstRedis.publish)).toContainEqual({
       playerId: PLAYER_ID,
       sessionId: SESSION_ID,
@@ -237,12 +240,14 @@ describeIfDb('seed reward worker integration', () => {
     });
 
     const revokeChanges = await seedRewardAuditSince(revokeWatermark);
+    const revokeStreams = syncedStreams(secondRedis.xadd);
     expect(revoked).toEqual({
       skipped: false,
       granted: revokeChanges.filter((row) => row.actionType === 'seed.reward_granted').length,
       revoked: revokeChanges.filter((row) => row.actionType === 'seed.reward_revoked').length,
-      enqueued: await activeServerCount(),
+      enqueued: revokeStreams.length,
     });
+    expect(revokeStreams).toContain(`events:admins-cfg-sync:${SERVER_ID}`);
     expect(
       revokeChanges.filter((row) => row.targetId === PLAYER_ID).map((row) => row.actionType),
     ).toEqual(['seed.reward_revoked']);
