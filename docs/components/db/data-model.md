@@ -9,6 +9,7 @@ All tables live in the `public` schema of a PostgreSQL 16+ database. The Drizzle
 | Table | Source file | Purpose |
 |---|---|---|
 | [`audit_log`](#audit_log) | `audit-log.ts` | Append-only, hash-chained action log |
+| [`ban_appeals`](#ban_appeals) | `ban-appeals.ts` | MOD-5 anonymous ban-appeal portal queue |
 | [`config_versions`](#config_versions) | `config-versions.ts` | Append-only history of every cfg file edit |
 | [`diagnostic_events`](#diagnostic_events) | `diagnostic-events.ts` | Per-day-partitioned panel-internal diagnostic feed (24h retention) |
 | [`events`](#events) | `events.ts` | Monthly-partitioned Squad event feed |
@@ -744,6 +745,43 @@ WL-3 (#67) public whitelist/VIP application queue. Anyone may submit one **pendi
 - `whitelist_applications_steam_id64_idx` on `(steam_id64)`
 - `whitelist_applications_pending_unique_idx` UNIQUE on `(steam_id64) WHERE status = 'pending'` — one open application per SteamID64
 
+---
+## `ban_appeals`
+
+MOD-5 (#62) ban-appeal portal queue. A banned player has no panel session, so rows are created by the **anonymous** `POST /api/v1/public/appeals` and worked through the panel queue gated on `mod:unban`. Approving an appeal is an unban: it runs the MOD-2 (#59) revert path (`Bans.cfg` line removal, `moderation_actions.reverted_at`/`reverted_by`, an `unban` ledger row and the `moderation.unban` EVT-1 envelope), so no ban state is stored here.
+
+`player_id` is **nullable on purpose**: the portal accepts a submission for any SteamID64, including one the panel has never seen, so its response cannot be walked to discover who is banned. The anti-spam partial unique index therefore keys on `steam_id64`, which is always present — a `player_id` index would not collide on NULLs.
+
+**Columns**
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | `uuid` | NO | `gen_random_uuid()` | Primary key |
+| `number` | `bigserial` | NO | `nextval(...)` | Human-readable queue number (as `issues.number`) |
+| `player_id` | `uuid` | YES | `null` | FK → `players.id` ON DELETE CASCADE; best-effort resolution at submit |
+| `moderation_action_id` | `uuid` | YES | `null` | FK → `moderation_actions.id` ON DELETE SET NULL; the appealed ban, resolved best-effort |
+| `steam_id64` | `bigint` | NO | | SteamID64 exactly as submitted |
+| `body` | `text` | NO | | Appeal text; CHECK `char_length(body) <= 4000` |
+| `contact` | `text` | YES | `null` | Optional contact string; CHECK `<= 200` |
+| `status` | `text` | NO | `'pending'` | CHECK IN (`pending`,`in_review`,`approved`,`rejected`) |
+| `handler_player_id` | `uuid` | YES | `null` | FK → `players.id` ON DELETE SET NULL; who took/decided it |
+| `decision_note` | `text` | YES | `null` | **Public** reply, shown on `/appeal/<token>`; CHECK `<= 2000` |
+| `internal_note` | `text` | YES | `null` | Never leaves the panel; CHECK `<= 2000` |
+| `tracking_token` | `text` | NO | | `randomBytes(24).toString('base64url')`; returned once, the applicant's only handle |
+| `submitter_ip` | `inet` | YES | `null` | Abuse forensics |
+| `created_at` | `timestamptz` | NO | `now()` | |
+| `updated_at` | `timestamptz` | NO | `now()` | |
+| `decided_at` | `timestamptz` | YES | `null` | Set on `approved`/`rejected` |
+
+**Indexes**
+
+- `ban_appeals_number_key` UNIQUE on `(number)`
+- `ban_appeals_tracking_token_key` UNIQUE on `(tracking_token)`
+- `ban_appeals_status_created_idx` on `(status, created_at)`
+- `ban_appeals_player_idx` on `(player_id)`
+- `ban_appeals_action_idx` on `(moderation_action_id)`
+- `ban_appeals_open_steam_unique_idx` UNIQUE on `(steam_id64) WHERE status IN ('pending','in_review')` — one open appeal per SteamID64
+
 ## Migration history
 
 Applied in order by `pnpm db:migrate`. Journal: [`packages/db/drizzle/meta/_journal.json`](../../../packages/db/drizzle/meta/_journal.json).
@@ -769,3 +807,4 @@ Applied in order by `pnpm db:migrate`. Journal: [`packages/db/drizzle/meta/_jour
 | 0038 | `0038_dossier_weapon_vehicle_stats` | 2026-07 | DOSSIER-2: creates the three dossier aggregate tables (`player_weapon_stats`, `player_vehicle_stats`, `player_vehicle_kills`), uuid-keyed with nullable `damage` (see [Dossier aggregates](#dossier-aggregates-dossier-2)) |
 | 0077 | `0077_seed4_notifications` | 2026-07-14 | Adds `seed_subscriptions`, schedule notification lead time, built-in AUTO-3 seed-call rules, and the Discord `seed_needed` template |
 | 0087 | `0087_whitelist_applications` | 2026-07-25 | WL-3: creates `whitelist_applications` (status/source CHECKs, partial-unique pending index, FKs to `players`/`roles`) and adds `panel_meta.whitelist_applications_enabled` / `whitelist_application_default_days` |
+| 0106 | `0106_ban_appeals` | 2026-07-27 | MOD-5: creates `ban_appeals` (status CHECK, body/contact/note length CHECKs, partial-unique open-appeal index on `steam_id64`, FKs to `players`/`moderation_actions`) |
