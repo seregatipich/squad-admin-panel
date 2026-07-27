@@ -16,6 +16,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { loadActiveSeasonTarget } from '../src/leaderboard/season.js';
 import { seasons } from '../src/schema/seasons.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -290,5 +291,66 @@ describeIfDb('seasons table constraints', () => {
     );
     expect(err.code).toBe(UNIQUE_VIOLATION);
     expect(err.constraint_name).toBe('seasons_name_key');
+  });
+});
+
+describeIfDb('loadActiveSeasonTarget', () => {
+  beforeEach(async () => {
+    await cleanup();
+  });
+
+  async function insertSeason(
+    name: string,
+    status: 'upcoming' | 'active' | 'closed',
+    startsAt: string,
+    endsAt: string,
+    finalized = false,
+  ): Promise<string> {
+    const id = uuidv7();
+    await db.insert(seasons).values({
+      id,
+      name: `${NAME_PREFIX}${name}`,
+      startsAt: new Date(startsAt),
+      endsAt: new Date(endsAt),
+      status,
+      finalized,
+    });
+    return id;
+  }
+
+  it('returns null when nothing is active', async () => {
+    await insertSeason('idle-upcoming', 'upcoming', '2026-01-01T00:00:00Z', '2026-02-01T00:00:00Z');
+    await insertSeason('idle-closed', 'closed', '2025-01-01T00:00:00Z', '2025-02-01T00:00:00Z');
+
+    expect(await loadActiveSeasonTarget(pgsql)).toBeNull();
+  });
+
+  it('returns the active season as a recompute target with a UTC day window', async () => {
+    const id = await insertSeason('live', 'active', '2026-06-10T00:00:00Z', '2026-07-20T00:00:00Z');
+
+    const target = await loadActiveSeasonTarget(pgsql);
+    expect(target).toEqual({
+      id,
+      name: `${NAME_PREFIX}live`,
+      periodType: 'season',
+      periodStart: '2026-06-10',
+      range: { fromDay: '2026-06-10', toDay: '2026-07-20' },
+    });
+  });
+
+  it('derives the window in UTC, not in the session time zone', async () => {
+    // 23:30Z on 2026-06-10 is already 2026-06-11 in a UTC+2 session; the target
+    // must still report the UTC day.
+    await insertSeason('utc-edge', 'active', '2026-06-10T23:30:00Z', '2026-07-20T23:30:00Z');
+
+    const target = await loadActiveSeasonTarget(pgsql);
+    expect(target?.periodStart).toBe('2026-06-10');
+    expect(target?.range).toEqual({ fromDay: '2026-06-10', toDay: '2026-07-20' });
+  });
+
+  it('skips a finalized season so its materialised rows stay frozen', async () => {
+    await insertSeason('frozen', 'active', '2026-06-10T00:00:00Z', '2026-07-20T00:00:00Z', true);
+
+    expect(await loadActiveSeasonTarget(pgsql)).toBeNull();
   });
 });
