@@ -110,6 +110,36 @@ describe('schema surface', () => {
     expect(config.foreignKeys[0]?.onDelete).toBe('cascade');
   });
 
+  it('discord_role_mappings maps one panel role to at most one Discord role (DISCORD-5)', () => {
+    const config = getTableConfig(schema.discordRoleMappings);
+    expect(config.name).toBe('discord_role_mappings');
+
+    expect(config.columns.find((c) => c.name === 'role_id')?.notNull).toBe(true);
+    expect(config.columns.find((c) => c.name === 'discord_role_id')?.notNull).toBe(true);
+    expect(config.columns.find((c) => c.name === 'enabled')?.notNull).toBe(true);
+
+    // One panel role ↔ one Discord role.
+    const roleIdKey = config.indexes.find(
+      (index) => index.config.name === 'discord_role_mappings_role_id_key',
+    );
+    expect(roleIdKey?.config.unique).toBe(true);
+    expect(roleIdKey?.config.columns.map((c) => (c as { name?: string }).name)).toEqual([
+      'role_id',
+    ]);
+
+    // Reconcile walks mappings by Discord role id.
+    expect(
+      config.indexes.find(
+        (index) => index.config.name === 'discord_role_mappings_discord_role_id_idx',
+      ),
+    ).toBeDefined();
+
+    // Deleting a panel role takes its mapping with it.
+    const fk = config.foreignKeys.map((k) => k.reference())[0];
+    expect(fk?.foreignTable).toBe(schema.roles);
+    expect(config.foreignKeys[0]?.onDelete).toBe('cascade');
+  });
+
   it('issue_links carries the entity-type check, the uniqueness key and a cascading issue_id', () => {
     const config = getTableConfig(schema.issueLinks);
     const entityTypeCheck = config.checks.find(

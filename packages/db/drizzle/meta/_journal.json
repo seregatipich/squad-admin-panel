@@ -584,6 +584,13 @@
       "breakpoints": true
     },
     {
+      "idx": 84,
+      "version": "7",
+      "when": 1783402900000,
+      "tag": "0099_discord_role_mappings",
+      "breakpoints": true
+    },
+    {
       "idx": 86,
       "version": "7",
       "when": 1783403100000,
