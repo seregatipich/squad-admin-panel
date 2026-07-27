@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import {
   auditLog,
   createDatabaseClient,
@@ -8,7 +9,7 @@ import {
   servers,
   sessions,
 } from '@squad/db';
-import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -18,7 +19,10 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
 const NOW = new Date('2026-07-14T04:00:00.000Z');
 const PLAYER_ID = uuidv7();
-const PLAYER_STEAM_ID = 76561198914100001n;
+// Per run, not a constant: `steam_id64` is unique, so a run whose `afterAll` never
+// completed (crash, watch-mode interrupt) would otherwise leave a row that makes
+// every later run's `beforeAll` insert fail with 23505 until someone cleans the DB.
+const PLAYER_STEAM_ID = 76561198914100000n + BigInt(randomInt(1, 1_000_000));
 const REWARD_ROLE_ID = uuidv7();
 const SERVER_ID = uuidv7();
 const SESSION_ID = `seed-reward-${PLAYER_ID}`;
@@ -138,6 +142,41 @@ async function activeServerCount(): Promise<number> {
   return rows.length;
 }
 
+/**
+ * `reconcileSeedRewardAssignments` scans every player in the database, so the
+ * `granted`/`revoked` counts a tick returns cover leftover players from other
+ * suites too — asserting a literal 1 tied the test to global DB state exactly
+ * like the `enqueued` count did. These two helpers bracket a tick instead: the
+ * audit rows written above the watermark are precisely the changes that tick
+ * made, which pins the returned counts to a real side effect and lets the test
+ * assert its own player's transition exactly, whoever else is in the table.
+ */
+async function auditWatermark(): Promise<bigint> {
+  if (!db) throw new Error('database not configured');
+  const [row] = await db
+    .select({ id: auditLog.id })
+    .from(auditLog)
+    .orderBy(desc(auditLog.id))
+    .limit(1);
+  return row?.id ?? 0n;
+}
+
+async function seedRewardAuditSince(
+  watermark: bigint,
+): Promise<Array<{ actionType: string; targetId: string | null }>> {
+  if (!db) throw new Error('database not configured');
+  return db
+    .select({ actionType: auditLog.actionType, targetId: auditLog.targetId })
+    .from(auditLog)
+    .where(
+      and(
+        gt(auditLog.id, watermark),
+        inArray(auditLog.actionType, ['seed.reward_granted', 'seed.reward_revoked']),
+      ),
+    )
+    .orderBy(asc(auditLog.id));
+}
+
 describeIfDb('seed reward worker integration', () => {
   it('grants at the rolling threshold, then revokes below it, with system audits', async () => {
     if (!db) throw new Error('database not configured');
@@ -149,18 +188,23 @@ describeIfDb('seed reward worker integration', () => {
     const firstRedis = makeRedis();
     const diag = { emit: vi.fn().mockResolvedValue(undefined) };
 
+    const grantWatermark = await auditWatermark();
     const granted = await runSeedRewardTick({
       ...createSeedRewardDeps(db, firstRedis.redis),
       now: NOW,
       diag,
     });
 
+    const grantChanges = await seedRewardAuditSince(grantWatermark);
     expect(granted).toEqual({
       skipped: false,
-      granted: 1,
-      revoked: 0,
+      granted: grantChanges.filter((row) => row.actionType === 'seed.reward_granted').length,
+      revoked: grantChanges.filter((row) => row.actionType === 'seed.reward_revoked').length,
       enqueued: await activeServerCount(),
     });
+    expect(
+      grantChanges.filter((row) => row.targetId === PLAYER_ID).map((row) => row.actionType),
+    ).toEqual(['seed.reward_granted']);
     const [afterGrant] = await db
       .select({ roleId: players.roleId })
       .from(players)
@@ -185,18 +229,23 @@ describeIfDb('seed reward worker integration', () => {
     });
     const secondRedis = makeRedis();
 
+    const revokeWatermark = await auditWatermark();
     const revoked = await runSeedRewardTick({
       ...createSeedRewardDeps(db, secondRedis.redis),
       now: NOW,
       diag,
     });
 
+    const revokeChanges = await seedRewardAuditSince(revokeWatermark);
     expect(revoked).toEqual({
       skipped: false,
-      granted: 0,
-      revoked: 1,
+      granted: revokeChanges.filter((row) => row.actionType === 'seed.reward_granted').length,
+      revoked: revokeChanges.filter((row) => row.actionType === 'seed.reward_revoked').length,
       enqueued: await activeServerCount(),
     });
+    expect(
+      revokeChanges.filter((row) => row.targetId === PLAYER_ID).map((row) => row.actionType),
+    ).toEqual(['seed.reward_revoked']);
     const [afterRevoke] = await db
       .select({ roleId: players.roleId })
       .from(players)
