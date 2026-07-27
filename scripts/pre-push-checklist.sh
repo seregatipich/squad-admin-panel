@@ -66,6 +66,23 @@ if [ -z "${DATABASE_URL:-}" ] && [ -f .env ] && docker ps >/dev/null 2>&1; then
   eval "$(bash scripts/new-test-db.sh prepush 2>/dev/null)" || true
 fi
 
+# scripts/new-test-db.sh drives `docker exec`, so the block above only fires when
+# the stack runs in Docker. A native Postgres on 127.0.0.1:5432 serves the gate
+# equally well, so fall back to it rather than declaring the tests unrunnable.
+if [ -z "${DATABASE_URL:-}" ] && [ -f .env ] && command -v psql >/dev/null 2>&1; then
+  _pw="$(sed -n 's/^POSTGRES_PASSWORD=//p' .env | head -n1)"
+  if [ -n "$_pw" ] && PGPASSWORD="$_pw" psql -h 127.0.0.1 -U admin -d postgres -tAc 'SELECT 1' >/dev/null 2>&1; then
+    _db="test_prepush_$$"
+    echo "… provisioning an isolated test DB on the native Postgres ($_db)"
+    if PGPASSWORD="$_pw" psql -h 127.0.0.1 -U admin -d postgres -q -c "CREATE DATABASE \"$_db\"" >/dev/null 2>&1; then
+      export DATABASE_URL="postgres://admin:${_pw}@127.0.0.1:5432/${_db}"
+      export TEST_DATABASE_URL="$DATABASE_URL"
+      pnpm --filter @squad/db migrate >/dev/null 2>&1 || true
+      trap 'PGPASSWORD="$_pw" psql -h 127.0.0.1 -U admin -d postgres -q -c "DROP DATABASE IF EXISTS \"$_db\" WITH (FORCE)" >/dev/null 2>&1 || true' EXIT
+    fi
+  fi
+fi
+
 if [ -n "${DATABASE_URL:-}" ]; then
   if [ "${FULL:-0}" = "1" ]; then
     run_step "tests (full coverage)" pnpm test:cov
@@ -74,7 +91,8 @@ if [ -n "${DATABASE_URL:-}" ]; then
   fi
 else
   printf '\n\033[31m✗ [checklist] tests — no DATABASE_URL and could not auto-provision\033[0m\n'
-  echo "   Start the local stack (docker compose up -d postgres redis) and/or set DATABASE_URL,"
+  echo "   Start the local stack (docker compose up -d postgres redis), run a native Postgres"
+  echo "   on 127.0.0.1:5432 with the .env password, and/or set DATABASE_URL,"
   echo "   or run: eval \"\$(bash scripts/new-test-db.sh <slug>)\"  then push again."
   echo "   (Bypass in an emergency with: git push --no-verify)"
   failed+=("tests"); fail=1
