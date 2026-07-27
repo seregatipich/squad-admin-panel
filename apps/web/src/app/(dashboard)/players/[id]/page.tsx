@@ -21,6 +21,7 @@ import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
 import { ClanWidget, type PlayerClan } from './ClanWidget';
 import { DossierSection } from './DossierSection';
+import { EvidenceSection } from './EvidenceSection';
 import { ExternalBansSection } from './ExternalBansSection';
 import { GeoAnomaliesSection } from './GeoAnomaliesSection';
 import { NickBanSection } from './NickBanSection';
@@ -256,6 +257,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <PlayerTeamkillsSection playerId={playerId} />
 
       <ReportsSection playerId={playerId} />
+
+      <EvidenceSection playerId={playerId} />
 
       <ExternalBansSection playerId={playerId} canBan={canBan} />
 
