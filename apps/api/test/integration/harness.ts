@@ -58,6 +58,7 @@ import marksRoutes from '../../src/routes/marks.js';
 import matchesRoutes from '../../src/routes/matches.js';
 import meTokensRoutes from '../../src/routes/me-tokens.js';
 import mediaRoutes from '../../src/routes/media.js';
+import mediaLinksRoutes from '../../src/routes/media-links.js';
 import messageTemplatesRoutes from '../../src/routes/message-templates.js';
 import moderationActionsRoutes from '../../src/routes/moderation-actions.js';
 import notesFeedRoutes from '../../src/routes/notes-feed.js';
@@ -532,6 +533,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(leaderboardsBonusesRoutes);
   await app.register(economyRoutes);
   await app.register(mediaRoutes);
+  await app.register(mediaLinksRoutes);
   await app.register(settingsEconomyRoutes);
   await app.register(settingsChatFlagsRoutes);
   await app.register(settingsClanGuardRoutes);

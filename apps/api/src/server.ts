@@ -67,6 +67,7 @@ import marksRoutes from './routes/marks.js';
 import matchesRoutes from './routes/matches.js';
 import meTokensRoutes from './routes/me-tokens.js';
 import mediaRoutes from './routes/media.js';
+import mediaLinksRoutes from './routes/media-links.js';
 import messageTemplatesRoutes from './routes/message-templates.js';
 import moderationActionsRoutes from './routes/moderation-actions.js';
 import notesFeedRoutes from './routes/notes-feed.js';
@@ -253,6 +254,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(leaderboardsBonusesRoutes);
   await app.register(economyRoutes);
   await app.register(mediaRoutes);
+  await app.register(mediaLinksRoutes);
   await app.register(settingsEconomyRoutes);
   await app.register(settingsChatFlagsRoutes);
   await app.register(settingsClanGuardRoutes);
