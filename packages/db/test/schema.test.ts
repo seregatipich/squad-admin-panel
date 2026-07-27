@@ -88,4 +88,34 @@ describe('schema surface', () => {
       'entity_id',
     ]);
   });
+
+  it('issue_links carries the entity-type check, the uniqueness key and a cascading issue_id', () => {
+    const config = getTableConfig(schema.issueLinks);
+    const entityTypeCheck = config.checks.find(
+      (check) => check.name === 'issue_links_entity_type_check',
+    );
+    expect(entityTypeCheck).toBeDefined();
+
+    const issueEntityKey = config.indexes.find(
+      (index) => index.config.name === 'issue_links_issue_entity_key',
+    );
+    expect(issueEntityKey).toBeDefined();
+    expect(issueEntityKey?.config.unique).toBe(true);
+    expect(issueEntityKey?.config.columns.map((c) => (c as { name?: string }).name)).toEqual([
+      'issue_id',
+      'entity_type',
+      'entity_id',
+    ]);
+
+    // entity_id is polymorphic across four tables, so issue_id is the only
+    // cascading foreign key; created_by nulls out instead.
+    const issueFk = config.foreignKeys.find((fk) =>
+      fk.reference().columns.some((c) => (c as { name?: string }).name === 'issue_id'),
+    );
+    expect(issueFk?.onDelete).toBe('cascade');
+    const createdByFk = config.foreignKeys.find((fk) =>
+      fk.reference().columns.some((c) => (c as { name?: string }).name === 'created_by'),
+    );
+    expect(createdByFk?.onDelete).toBe('set null');
+  });
 });

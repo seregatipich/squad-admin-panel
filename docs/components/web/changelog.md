@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-07-27 — ISSUE-3 связанные объекты у тикета и связанные тикеты у игрока (#156)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/issues/[id]/IssueLinksBlock.tsx` — «Связанные объекты» on the ticket card: the expanded `links[]` from `GET /api/v1/issues/:id`, each row a type badge plus a link to `/players/{id}`, `/servers/{id}` or the media stream. A target that no longer exists renders struck-through and non-clickable. Adding a link uses the existing `PlayerSearchSelect` autocomplete for players and a plain `<select>` for servers; the server option is offered only when `GET /api/v1/servers` succeeds, because that route needs `server:view` which a tracker user need not hold. The remove button appears only for links the viewer may detach (own link, or `can_manage_issues`), mirroring the API gate.
+- `apps/web/src/app/(dashboard)/issues/[id]/issue-links.ts` — pure helpers behind that block: `entityTypeLabel`, `canRemoveLink`, `linkErrorMessage` (Russian text for 403/404/409/422), `sortLinks`.
+- `apps/web/src/app/(dashboard)/players/[id]/IssueLinksSection.tsx` — «Связанные тикеты» on `/players/{id}`: the counter and list of unclosed tickets naming the player (`GET /api/v1/players/:playerId/issues`), each linking to `/issues/{id}`. Self-hides on `401`/`403` and when the player has no linked ticket, matching the other player-card sections.
+
 ## 2026-07-27 — VIDEO-2 evidence section on the player card (#158)
 
 ### Added

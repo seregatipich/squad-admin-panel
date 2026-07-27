@@ -1,5 +1,22 @@
 # `api` — changelog
 
+## 2026-07-27 — ISSUE-3 связь тикетов с сущностями панели (#156)
+
+All four routes live in the existing [`routes/issues.ts`](../../../apps/api/src/routes/issues.ts) and inherit that module's gate — authentication only, no `config.permissions` — except the player-card endpoint, which is hand-guarded on `panel_access` because every other section of the player card is. Audit rows are written manually with `writeAuditEntry`, as everywhere else in the module.
+
+### Added
+
+- `POST /api/v1/issues/:id/links` — links a ticket to a `player`, `server`, `moderation_action`, or `media_file` (`{ entity_type, entity_id }` body). `201` with the expanded link; `404 issue_not_found`; `422 unknown_entity` (with the offending pairs in `unknown`) when the polymorphic target does not exist; `409 link_exists` on a duplicate `(issue_id, entity_type, entity_id)`. Audit action `issue.link.create` (target type `issue`).
+- `DELETE /api/v1/issues/:id/links/:linkId` — `200 { ok: true }`; `404 link_not_found`; `403 { error: 'forbidden', required: 'can_manage_issues' }` when the caller neither created the link nor holds `can_manage_issues`. Audit action `issue.link.delete`.
+- `GET /api/v1/players/:playerId/issues` — reverse lookup for the player card: `{ open_count, items }` over the linked tickets that are not `closed`, newest ticket number first, capped at 50. Gated on `panel_access`.
+- `POST /api/v1/issues` accepts an optional `links: [{ entity_type, entity_id }]` (max 20, deduplicated) applied inside the route's **existing transaction**, so "create a ticket from a moderation action" lands the ticket and both links (`moderation_action` + `player`) atomically or not at all. An unknown target rejects the whole request with `422 unknown_entity` and creates nothing. The `issue.create` audit row's `after` snapshot carries the links.
+- New table `issue_links` backing these routes — see `docs/components/db/changelog.md` (migration 0105).
+
+### Changed
+
+- `GET /api/v1/issues/:id` gains a `links[]` field: `{ id, issue_id, entity_type, entity_id, label, ref, exists, created_by, created_at }`. `label` is the target's human name (player canonical name, server display name, `<action_type> · <YYYY-MM-DD>`, media title or original filename) and `ref` is where a click goes (`/players/:id`, `/servers/:id`, the offender's card for a moderation action, `/api/v1/media/:id/stream`). A target whose row is gone reads back as `exists: false`, `label: "Удалённый объект"`, `ref: null` — `entity_id` carries no foreign key, so that is a normal state. No `schema.response` was added to the route, so every pre-existing field is untouched.
+- `POST /api/v1/issues` and `GET /api/v1/issues/:id` responses are supersets of their previous shapes; the `issue.created`/`issue.updated` live-bus payloads are unchanged (no new event types).
+
 ## 2026-07-27 — MOD-2 действия модерации (#59)
 
 ### Added

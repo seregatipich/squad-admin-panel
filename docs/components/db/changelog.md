@@ -6,6 +6,22 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ## 2026-07-27
 
+### ISSUE-3 — issue_links (migration 0105)
+
+**Files:** `packages/db/drizzle/0105_issue_links.sql`, `packages/db/src/schema/issue-links.ts`, `packages/db/src/schema/index.ts`, `packages/db/test/schema.test.ts`
+
+New table `issue_links` (#156) — the structural link between a tracker ticket and a panel entity (`player`, `server`, `moderation_action`, `media_file`). It is what lets the player card count the tickets that name a player, and what an auto-ticket created from a moderation action writes alongside the `issues` row.
+
+#### Added
+
+- `issue_links(id, issue_id, entity_type, entity_id, created_by, created_at)`. `issue_id` `REFERENCES issues(id) ON DELETE CASCADE`; `created_by` `REFERENCES players(id) ON DELETE SET NULL` (drives the detach ownership check).
+- CHECK `issue_links_entity_type_check` — `entity_type IN ('player','server','moderation_action','media_file')`.
+- `entity_id` is deliberately **not** a foreign key, exactly as in `media_links`: it is polymorphic across four target tables, so existence is verified by the API route layer before insert and a vanished target reads back as «Удалённый объект» instead of breaking the ticket.
+- Unique index `issue_links_issue_entity_key` on `(issue_id, entity_type, entity_id)` — one link per ticket/target pair; a duplicate surfaces as `409 link_exists`.
+- Indexes `issue_links_entity_idx` on `(entity_type, entity_id)` (reverse lookup for the player card) and `issue_links_issue_idx` on `(issue_id)`.
+
+**Deletion strategy** (the acceptance criteria required one to be fixed in the migration): cascade on `issue_id`, no constraint on `entity_id`. "Нельзя удалить игрока при живых ссылках" is unreachable on a polymorphic column — `RESTRICT` needs a foreign key — and the panel exposes no hard player-delete route, so the read path degrading gracefully is the whole mitigation.
+
 ### VIDEO-2 — media_links (migration 0095)
 
 **Files:** `packages/db/drizzle/0095_media_links.sql`, `packages/db/src/schema/media-links.ts`, `packages/db/src/schema/index.ts`, `packages/db/test/schema.test.ts`
