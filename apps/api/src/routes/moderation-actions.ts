@@ -1,7 +1,7 @@
 import { moderationActions, players, servers } from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { and, eq, isNull, type SQL, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { removeBanLines } from '../lib/bans-cfg.js';
@@ -147,6 +147,158 @@ async function fetchActionRows(
   `)) as unknown as ModerationActionApiRow[];
 }
 
+/** Input for {@link unbanPlayerOnServer}. */
+export interface UnbanPlayerParams {
+  playerId: string;
+  serverId: string;
+  identity: PlayerIdentity;
+  actorPlayerId: string;
+  actorName: string;
+  /** The requesting client's IP, threaded into the `Bans.cfg` config version. */
+  actorIp: string | null;
+  /** Free-form reason recorded on the `unban` ledger row and the config version. */
+  reason: string;
+  /**
+   * The specific ban row the unban is invoked from. Always included in the
+   * revert set, so calling this twice for the same action stays idempotent.
+   */
+  targetActionId: string;
+  /** Extra `context` jsonb keys for the `unban` row (e.g. `appeal_id`). */
+  extraContext?: Record<string, unknown>;
+}
+
+/** Outcome of {@link unbanPlayerOnServer}. */
+export type UnbanPlayerResult =
+  | { ok: false; error: 'bans_cfg_conflict' }
+  | {
+      ok: true;
+      unbanActionId: string;
+      revertedActionIds: string[];
+      removedLines: string[];
+      reload: ReloadOutcome;
+    };
+
+/**
+ * Unbans a player on one server: removes their `Banned:` line(s) from that
+ * server's `Bans.cfg` (read-verify-write, retried up to
+ * {@link MAX_BANS_CFG_ATTEMPTS} times against a racing concurrent edit before
+ * giving up), marks every active ban row for that player+server reverted,
+ * inserts an `unban` ledger row and publishes its EVT-1 envelope.
+ *
+ * A file with no matching line is left untouched — no write is attempted —
+ * but the ledger is still updated, since the database, not the file, is the
+ * source of truth for whether a player is banned. A player with no SteamID64
+ * has no representable `Bans.cfg` line at all, so only the ledger is updated.
+ *
+ * Shared by the player-card revert route below and the appeal-approval path
+ * (MOD-5, `appeals.ts`) — an approved appeal *is* an unban, and there must be
+ * exactly one implementation of this `Bans.cfg` surgery.
+ *
+ * @param app - The Fastify instance (`app.db`, `app.redis`, `app.bridge`).
+ * @param params - The player, server, actor and reason for the unban.
+ * @returns `{ ok: false, error: 'bans_cfg_conflict' }` when a concurrent
+ *   editor kept winning the read-verify-write race (nothing is persisted);
+ *   otherwise the ids of the new `unban` row and every reverted ban row.
+ */
+export async function unbanPlayerOnServer(
+  app: FastifyInstance,
+  params: UnbanPlayerParams,
+): Promise<UnbanPlayerResult> {
+  const { serverId, identity } = params;
+  const steamId64 = identity.steamId64;
+
+  let removed: string[] = [];
+  let reload: ReloadOutcome = { applied: false, reason: 'not_hot_reload' };
+
+  if (steamId64 !== null) {
+    const path = bansCfgPath(serverId);
+    let conflict = true;
+    for (let attempt = 1; attempt <= MAX_BANS_CFG_ATTEMPTS; attempt++) {
+      let current: string;
+      try {
+        current = (await app.bridge.fileRead({ path })).content;
+      } catch {
+        current = '';
+      }
+      const result = removeBanLines(current, steamId64);
+      if (result.removed.length === 0) {
+        removed = [];
+        conflict = false;
+        break;
+      }
+
+      const writeResult = await writeVersion(
+        app,
+        serverId,
+        'Bans.cfg',
+        result.content,
+        `Unban ${steamId64}: ${params.reason}`,
+        params.actorPlayerId,
+        params.actorIp,
+      );
+
+      let verify: string;
+      try {
+        verify = (await app.bridge.fileRead({ path })).content;
+      } catch {
+        verify = '';
+      }
+      if (verify === result.content) {
+        removed = result.removed;
+        if ('reload' in writeResult && writeResult.reload) reload = writeResult.reload;
+        conflict = false;
+        break;
+      }
+    }
+    if (conflict) return { ok: false, error: 'bans_cfg_conflict' };
+  }
+
+  const revertedActionIds = await markBansReverted(app, {
+    playerId: params.playerId,
+    serverId,
+    actorPlayerId: params.actorPlayerId,
+    targetActionId: params.targetActionId,
+  });
+
+  const [inserted] = await app.db
+    .insert(moderationActions)
+    .values({
+      playerId: params.playerId,
+      serverId,
+      actionType: 'unban',
+      authorPlayerId: params.actorPlayerId,
+      reason: params.reason,
+      context: {
+        removed_ban_lines: removed,
+        reverted_action_ids: revertedActionIds,
+        ...params.extraContext,
+      },
+    })
+    .returning({ id: moderationActions.id });
+  if (!inserted) throw new Error('unban moderation action insert returned no row');
+
+  await publishModerationEvent(app, {
+    actionId: inserted.id,
+    actionType: 'unban',
+    actorPlayerId: params.actorPlayerId,
+    actorName: params.actorName,
+    playerId: params.playerId,
+    player: identity,
+    serverId,
+    reportId: null,
+    reason: params.reason,
+    duration: null,
+  });
+
+  return {
+    ok: true,
+    unbanActionId: inserted.id,
+    revertedActionIds,
+    removedLines: removed,
+    reload,
+  };
+}
+
 /**
  * Moderation history and enforcement routes: the per-player ledger
  * (`moderation_actions`) that backs the "moderation history" block on the
@@ -271,14 +423,10 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
   );
 
   /**
-   * Unbans a player: removes their `Banned:` line(s) from `Bans.cfg`
-   * (read-verify-write, retried up to {@link MAX_BANS_CFG_ATTEMPTS} times
-   * against a racing concurrent edit before giving up with `409
-   * bans_cfg_conflict`), marks every active ban row for that player+server
-   * reverted, inserts an `unban` ledger row, and publishes its EVT-1
-   * envelope. A file with no matching line is left untouched — no write is
-   * attempted — but the ledger is still updated, since the database, not
-   * the file, is the source of truth for whether a player is banned.
+   * Unbans a player from the player card, delegating the whole operation to
+   * {@link unbanPlayerOnServer}: `Bans.cfg` line removal, ledger revert,
+   * `unban` row and EVT-1 publish. Answers `409 bans_cfg_conflict` when a
+   * concurrent editor kept winning the read-verify-write race.
    */
   fast.post(
     '/api/v1/moderation-actions/:id/revert',
@@ -328,98 +476,30 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
       // biome-ignore lint/style/noNonNullAssertion: moderationWriteGuard rejects unauthenticated callers
       const actor = req.user!;
 
-      let removed: string[] = [];
-      let reload: ReloadOutcome = { applied: false, reason: 'not_hot_reload' };
-      let conflict = false;
-
-      if (steamId64 !== null) {
-        const path = bansCfgPath(serverId);
-        conflict = true;
-        for (let attempt = 1; attempt <= MAX_BANS_CFG_ATTEMPTS; attempt++) {
-          let current: string;
-          try {
-            current = (await app.bridge.fileRead({ path })).content;
-          } catch {
-            current = '';
-          }
-          const result = removeBanLines(current, steamId64);
-          if (result.removed.length === 0) {
-            removed = [];
-            conflict = false;
-            break;
-          }
-
-          const writeResult = await writeVersion(
-            app,
-            serverId,
-            'Bans.cfg',
-            result.content,
-            `Unban ${steamId64}: ${req.body.reason}`,
-            actor.playerId,
-            req.ip ?? null,
-          );
-
-          let verify: string;
-          try {
-            verify = (await app.bridge.fileRead({ path })).content;
-          } catch {
-            verify = '';
-          }
-          if (verify === result.content) {
-            removed = result.removed;
-            if ('reload' in writeResult && writeResult.reload) reload = writeResult.reload;
-            conflict = false;
-            break;
-          }
-        }
-        if (conflict) {
-          reply.code(409);
-          return { error: 'bans_cfg_conflict' };
-        }
-      }
-
-      const revertedActionIds = await markBansReverted(app, {
+      const identity: PlayerIdentity = { eosId: player.eosId, steamId64, name: player.name };
+      const result = await unbanPlayerOnServer(app, {
         playerId: target.playerId,
         serverId,
-        actorPlayerId: actor.playerId,
-        targetActionId: target.id,
-      });
-
-      const identity: PlayerIdentity = { eosId: player.eosId, steamId64, name: player.name };
-      const [inserted] = await app.db
-        .insert(moderationActions)
-        .values({
-          playerId: target.playerId,
-          serverId,
-          actionType: 'unban',
-          authorPlayerId: actor.playerId,
-          reason: req.body.reason,
-          context: { removed_ban_lines: removed, reverted_action_ids: revertedActionIds },
-        })
-        .returning({ id: moderationActions.id });
-      if (!inserted) throw new Error('unban moderation action insert returned no row');
-
-      await publishModerationEvent(app, {
-        actionId: inserted.id,
-        actionType: 'unban',
+        identity,
         actorPlayerId: actor.playerId,
         actorName: actor.canonicalName,
-        playerId: target.playerId,
-        player: identity,
-        serverId,
-        reportId: null,
+        actorIp: req.ip ?? null,
         reason: req.body.reason,
-        duration: null,
+        targetActionId: target.id,
       });
+      if (!result.ok) {
+        reply.code(409);
+        return { error: result.error };
+      }
 
-      const rows = await fetchActionRows(app, sql`ma.id = ${inserted.id}`, 1);
+      const rows = await fetchActionRows(app, sql`ma.id = ${result.unbanActionId}`, 1);
       const row = rows[0];
       if (!row) throw new Error('unban moderation action row missing immediately after insert');
 
       return {
         action: serializeActionRow(row),
-        removed_lines: removed.length,
-        reload,
+        removed_lines: result.removedLines.length,
+        reload: result.reload,
       };
     },
   );

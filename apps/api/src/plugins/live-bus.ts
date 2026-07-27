@@ -194,6 +194,16 @@ export type LiveEvent =
       data: { report: ReportLiveView };
     }
   | {
+      type: 'appeal.created';
+      ts: string;
+      data: { appeal_id: string; number: number; status: string };
+    }
+  | {
+      type: 'appeal.updated';
+      ts: string;
+      data: { appeal_id: string; number: number; status: string };
+    }
+  | {
       type: 'server.map.changed';
       ts: string;
       data: { server_id: string; action: string; layer: string | null };
