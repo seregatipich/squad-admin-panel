@@ -135,6 +135,19 @@ export function periodsToRecompute(now: Date = new Date()): PeriodDescriptor[] {
 export interface RecomputePeriodInput {
   periodType: StatPeriodType;
   periodStart: string;
+  /**
+   * Explicit day window, overriding `periodDayRange(periodType, periodStart)`.
+   *
+   * Required for `period_type = 'season'` (LEAD-7, #178): a season is an
+   * arbitrary named interval, so its bounds cannot be derived from
+   * `periodStart` the way day/week/month can. `periodDayRange` returns `null`
+   * for `'season'`, which would otherwise widen the slice to all time and pull
+   * in events from outside the season.
+   *
+   * Both ends are inclusive: presence is matched on `day`, and matches on
+   * `started_at < toDay + 1 day`, so an event at 23:30 on `toDay` counts.
+   */
+  range?: DayRange;
 }
 
 export async function recomputeLeaderboardPeriod(
@@ -142,14 +155,20 @@ export async function recomputeLeaderboardPeriod(
   input: RecomputePeriodInput,
 ): Promise<number> {
   const { periodType, periodStart } = input;
-  const range = periodDayRange(periodType, periodStart);
+  const range = input.range ?? periodDayRange(periodType, periodStart);
 
   const presenceFilter = range
     ? sql`WHERE day >= ${range.fromDay}::date AND day <= ${range.toDay}::date`
     : sql``;
+  // The day bounds are UTC days everywhere else in this file (`utcDayKey`, and
+  // `player_daily_presence.day`), so the match window must be anchored to UTC
+  // too. Writing it as `${toDay}::date + INTERVAL '1 day'` yields a *local*
+  // timestamp, which on a non-UTC Postgres session slides the window by the
+  // offset and makes the presence and match halves of one period cover
+  // different spans. `AT TIME ZONE 'UTC'` pins both edges.
   const matchesFilter = range
-    ? sql`WHERE m.started_at >= ${range.fromDay}::date
-        AND m.started_at < (${range.toDay}::date + INTERVAL '1 day')`
+    ? sql`WHERE m.started_at >= (${range.fromDay}::date)::timestamp AT TIME ZONE 'UTC'
+        AND m.started_at < (${range.toDay}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'UTC'`
     : sql``;
 
   return sql.begin(async (tx) => {
@@ -265,9 +284,18 @@ export async function recomputeLeaderboardPeriod(
   });
 }
 
+/**
+ * Recomputes several periods in sequence.
+ *
+ * Accepts `RecomputePeriodInput[]` rather than `PeriodDescriptor[]` so a
+ * caller can mix the derived day/week/month/alltime descriptors from
+ * `periodsToRecompute` with a season descriptor carrying an explicit `range`
+ * (LEAD-7, #178). `PeriodDescriptor` is structurally assignable, so existing
+ * callers are unaffected.
+ */
 export async function recomputeLeaderboardPeriods(
   sql: postgres.Sql,
-  periods: PeriodDescriptor[],
+  periods: RecomputePeriodInput[],
 ): Promise<number> {
   let total = 0;
   for (const period of periods) {

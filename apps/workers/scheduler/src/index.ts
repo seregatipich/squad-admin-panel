@@ -14,12 +14,14 @@ import {
   createRotationProfileDeps,
   createRotationScheduleDeps,
   createScheduledTaskDeps,
+  createSeasonFinalizeDeps,
   createSeedScheduleDeps,
 } from './deps.js';
 import { runMapVoteTick } from './map-vote-tick.js';
 import { runRotationProfileTick } from './rotation-profile-tick.js';
 import { runRotationScheduleTick } from './rotation-schedule-tick.js';
 import { runScheduledTaskTick } from './scheduled-task-tick.js';
+import { runSeasonFinalizeTick } from './season-finalize-tick.js';
 import { runSeedScheduleTick } from './seed-schedule-tick.js';
 
 const log = pino({
@@ -80,6 +82,7 @@ async function main() {
   const rotationProfileDeps = createRotationProfileDeps(db, bridge);
   const scheduledTaskDeps = createScheduledTaskDeps(db, redis, bridge);
   const mapVoteDeps = createMapVoteDeps(db, redis);
+  const seasonFinalizeDeps = createSeasonFinalizeDeps(db, redis);
   const profileApplyHour = rotationProfileApplyHour();
 
   await diag.emit({
@@ -91,17 +94,31 @@ async function main() {
   });
 
   async function tick(): Promise<void> {
-    const [seedResult, rotationResult, profileResult, scheduledTaskResult, mapVoteResult] =
-      await Promise.all([
-        runSeedScheduleTick({ ...runtimeDeps, diag }),
-        runRotationScheduleTick({ ...rotationScheduleDeps, diag }),
-        runRotationProfileTick({ ...rotationProfileDeps, applyHour: profileApplyHour, diag }),
-        runScheduledTaskTick({ ...scheduledTaskDeps, diag }),
-        runMapVoteTick({ ...mapVoteDeps, diag }),
-      ]);
+    const [
+      seedResult,
+      rotationResult,
+      profileResult,
+      scheduledTaskResult,
+      mapVoteResult,
+      seasonFinalizeResult,
+    ] = await Promise.all([
+      runSeedScheduleTick({ ...runtimeDeps, diag }),
+      runRotationScheduleTick({ ...rotationScheduleDeps, diag }),
+      runRotationProfileTick({ ...rotationProfileDeps, applyHour: profileApplyHour, diag }),
+      runScheduledTaskTick({ ...scheduledTaskDeps, diag }),
+      runMapVoteTick({ ...mapVoteDeps, diag }),
+      runSeasonFinalizeTick({ ...seasonFinalizeDeps, diag }),
+    ]);
     lastTickAt = new Date().toISOString();
     log.info(
-      { seedResult, rotationResult, profileResult, scheduledTaskResult, mapVoteResult },
+      {
+        seedResult,
+        rotationResult,
+        profileResult,
+        scheduledTaskResult,
+        mapVoteResult,
+        seasonFinalizeResult,
+      },
       'scheduler tick',
     );
   }

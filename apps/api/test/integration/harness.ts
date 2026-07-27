@@ -97,6 +97,7 @@ import reportsRoutes from '../../src/routes/reports.js';
 import roleAssignmentsRoutes from '../../src/routes/role-assignments.js';
 import roleMembersRoutes from '../../src/routes/role-members.js';
 import rolesRoutes from '../../src/routes/roles.js';
+import seasonsRoutes from '../../src/routes/seasons.js';
 import archiveRoutes from '../../src/routes/server-archive.js';
 import serverChatCommandsRoutes from '../../src/routes/server-chat-commands.js';
 import serverConfigRoutes from '../../src/routes/server-configs.js';
@@ -570,6 +571,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(teamkillsRoutes);
   await app.register(vehicleCatalogRoutes);
   await app.register(layersRoutes);
+  await app.register(seasonsRoutes);
   await app.register(vipTiersRoutes);
   await app.register(vipSubscriptionRoutes);
   await app.register(votesRoutes);

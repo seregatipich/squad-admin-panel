@@ -18,7 +18,7 @@ Heartbeat keys are aggregated by the API at `/api/v1/health/workers`.
 | [event-partition](./event-partition/README.md) | Monthly Postgres partition rotation for the `events` table | [`apps/workers/event-partition/`](../../../apps/workers/event-partition/) |
 | [role-expirer](./role-expirer/README.md) | Clears expired player roles, revokes sessions, audits the change, and enqueues Admins.cfg sync | [`apps/workers/role-expirer/`](../../../apps/workers/role-expirer/) |
 | [seed-reward](./seed-reward/README.md) | Reconciles rolling 30-day seed totals with the configured reward role | [`apps/workers/seed-reward/`](../../../apps/workers/seed-reward/) |
-| leaderboard-aggregator | Recomputes `player_stat_periods` leaderboard aggregates every 15 min; also rebuilds the rolling 30-day bonus accrual window `player_bonus_accruals` (ECON-5) | [`apps/workers/leaderboard-aggregator/`](../../../apps/workers/leaderboard-aggregator/) |
+| leaderboard-aggregator | Recomputes `player_stat_periods` leaderboard aggregates every 15 min; also rebuilds the rolling 30-day bonus accrual window `player_bonus_accruals` (ECON-5) and materialises the running named season over its explicit window (LEAD-7) | [`apps/workers/leaderboard-aggregator/`](../../../apps/workers/leaderboard-aggregator/) |
 | [metrics-sampler](./metrics-sampler/README.md) | Polls `bridge.host_metrics` every 15 s, writes packed 8-int tuple to `host:metrics` Redis Stream | [`apps/workers/metrics-sampler/`](../../../apps/workers/metrics-sampler/) |
 | [worker-diag-flush](./worker-diag-flush/README.md) | Reads `diag:queue` Redis Stream via `XREADGROUP`, batches inserts into `diagnostic_events` Postgres table | [`apps/workers/diag-flush/`](../../../apps/workers/diag-flush/) |
 
@@ -29,7 +29,7 @@ Heartbeat keys are aggregated by the API at `/api/v1/health/workers`.
 | [automation](./automation/README.md) | User-defined rules ("on event X, do Y") | [`apps/workers/automation/`](../../../apps/workers/automation/) |
 | [backup](./backup/README.md) | restic-based DB + config snapshots | [`apps/workers/backup/`](../../../apps/workers/backup/) |
 | [discord](./discord/README.md) | Webhook + bot relay | [`apps/workers/discord/`](../../../apps/workers/discord/) |
-| [scheduler](./scheduler/README.md) | Cron-style server restarts, layer rotations | [`apps/workers/scheduler/`](../../../apps/workers/scheduler/) |
+| [scheduler](./scheduler/README.md) | Cron-style server restarts, layer rotations, season finalisation (LEAD-7) | [`apps/workers/scheduler/`](../../../apps/workers/scheduler/) |
 | [stats](./stats/README.md) | Player-stats projector for the future stats UI | [`apps/workers/stats/`](../../../apps/workers/stats/) |
 
 ## Adding a worker

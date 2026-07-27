@@ -19,6 +19,19 @@
 
 - `GET /api/v1/me` is unchanged — no capability boolean was added. The UI gates by self-hiding on `403`.
 - `isUniqueViolation` here walks the `err.cause` chain: drizzle-orm 0.45 wraps the driver error, so the flat `err.code === '23505'` check used in `routes/marks.ts` does not match.
+## 2026-07-27 — LEAD-7 сезоны лидербордов (#178)
+
+### Added
+
+- `GET /api/v1/seasons` ([`routes/seasons.ts`](../../../apps/api/src/routes/seasons.ts)): lists named leaderboard seasons behind `panel_access`, optional `?status=upcoming|active|closed`. Returns `{ items: Season[] }`, `Season = { id, name, starts_at, ends_at, status, finalized }`.
+- `POST /api/v1/seasons` and `PATCH /api/v1/seasons/:id`: gated on the **`can_edit_roles` capability flag** (Owner short-circuits it in `lib/rbac.ts`), matching the VIP tier catalogue. The flag is *not* exposed by `GET /api/v1/me`, so the UI hides its management surface on a 403 rather than reading a boolean. Errors: `400 invalid_bounds`, `409 active_season_exists`, `409 season_name_taken`, `404 season_not_found`, `422 season_finalized` (a frozen season's window and lifecycle stop moving, so the stored slice keeps describing the season it belongs to). A season cannot be created directly in the `closed` state.
+- Both conflicts are SQLSTATE **23505**, so the handler distinguishes "second active season" from "duplicate name" by the violated constraint name. drizzle-orm 0.45.2 wraps driver errors — the thrown error's message is only `Failed query: …`, and the SQLSTATE plus `constraint_name` sit on `err.cause` — so the route walks the cause chain rather than matching on the message.
+- New audit actions `season.create` / `season.update`, both carrying before/after snapshots.
+
+### Changed
+
+- `GET /api/v1/leaderboards` no longer fails for `period=season`. `resolvePeriodStart` used to throw when `period_start` was omitted; the route now resolves the **active** season (`400 no_active_season` when there is none), looks up the named season when `period_start` *is* supplied (the archive view), and reports it as a new `season` payload field (`null` for every other period). `period_start` is derived as the season's start day in **UTC**, matching the day convention the aggregator materialises rows under.
+- [`plugins/audit.ts`](../../../apps/api/src/plugins/audit.ts) gains an opt-in `req.auditSnapshots = { before?, after?, targetId? }` channel. The declarative `config.audit` hook previously wrote no before/after, so a route needing them had to opt out with `audit: false` — which `test/audit-coverage.test.ts` allows for only three allowlisted URLs. Routes that do not set the field behave exactly as before.
 
 ## 2026-07-27 — MOD-4 массовые операции модерации (#61)
 

@@ -21,6 +21,23 @@ New table `discord_role_mappings` (#152) — the panel role → Discord guild ro
 - No `source` column: only `panel_role` exists today and the API synthesises it. Leaderboard-driven roles are a post-STATS-3 extension that will need their own columns.
 
 **Journal note:** the entry is `idx: 84`, `when: 1783402900000`, inserted between `0098_player_discord_links` and `0101_server_daily_stats`. Its `when` is *lower* than the already-present `0101`–`0106` entries, so a database already migrated past `1783403100000` will not pick `0099` up from `pnpm --filter @squad/db migrate` — apply it by hand there. A fresh database (CI, new deployments) applies the whole journal in array order and is unaffected.
+### LEAD-7 — seasons (migration 0102)
+
+**Files:** `packages/db/drizzle/0102_seasons.sql`, `packages/db/sql/seasons.sql`, `packages/db/src/schema/seasons.ts`, `packages/db/src/leaderboard/season.ts`, `packages/db/src/leaderboard/aggregate.ts`, `packages/db/src/schema/index.ts`, `packages/db/src/index.ts`, `packages/db/test/seasons.test.ts`, `packages/db/test/leaderboard-aggregate.test.ts`
+
+New table `seasons` (#178) — named leaderboard seasons. A season is an **arbitrary named interval**, not a calendar year: the aggregator materialises `player_stat_periods` rows with `period_type='season'` and `period_start = starts_at` (UTC day) over the explicit `[starts_at, ends_at]` window of the single active season. `player_stat_periods` is unchanged — `'season'` was already permitted by `player_stat_periods_period_type_chk`.
+
+#### Added
+
+- `seasons(id, name, starts_at, ends_at, status, finalized, created_at, updated_at)`. `status` is `upcoming|active|closed` (CHECK `seasons_status_chk`), `finalized` defaults to `false`.
+- **`seasons_one_active`** — a partial unique index over a constant, `ON seasons ((status)) WHERE status = 'active'`. This is the storage-level enforcement of "at most one active season", and it is why the aggregator and the API resolve the active season with a bare `LIMIT 1` instead of defensively ordering. Drizzle expresses it as `uniqueIndex(...).on(sql\`(status)\`).where(...)`.
+- CHECK `seasons_bounds_chk` — `ends_at > starts_at`. Unique index `seasons_name_key` on `name`; lookup index `seasons_status_idx` on `(status, starts_at)`.
+- `loadActiveSeasonTarget(sql)` (`src/leaderboard/season.ts`) — returns the one season the aggregator should recompute, as a ready-made `RecomputePeriodInput`, or `null`. Only an **active, non-finalized** season qualifies, which is the whole mechanism behind "a finalized season is never recomputed again". The day bounds are formatted in SQL as `AT TIME ZONE 'UTC'` strings: they must be UTC days to line up with `player_daily_presence.day`, and the JS type of a `timestamptz` is not stable across callers — `drizzle()` replaces the postgres.js type parsers on the client it wraps, so the same tagged-template query yields a `Date` on a bare client but a session-local string on a wrapped one.
+- `RecomputePeriodInput.range?: DayRange` — an explicit window overriding `periodDayRange()`. Required for `'season'`, for which `periodDayRange` returns `null`, which would otherwise widen the slice to all time. `recomputeLeaderboardPeriods` now takes `RecomputePeriodInput[]`; `PeriodDescriptor` stays structurally assignable, so existing callers are unaffected.
+
+#### Fixed
+
+- `recomputeLeaderboardPeriod`'s match window was built as `started_at < toDay::date + INTERVAL '1 day'`, whose result is a **local-time** timestamp. Presence is filtered on a `date` column holding UTC days, so on any deployment whose Postgres session `TimeZone` is not UTC the presence and match halves of the same period covered different spans — a match late on a period's last day fell outside its own period. Both edges are now pinned with `AT TIME ZONE 'UTC'`. Affects `day`/`week`/`month` as well as seasons.
 
 ### DISCORD-4 — player_discord_links (migration 0098)
 

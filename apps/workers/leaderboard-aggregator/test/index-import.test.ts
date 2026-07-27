@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
+// Whole-module replacement: every @squad/db symbol src/index.ts imports must
+// appear here, or the import under test fails to resolve.
 vi.mock('@squad/db', () => ({
+  loadActiveSeasonTarget: vi.fn(async () => null),
   periodsToRecompute: vi.fn(() => []),
   recomputeLeaderboardPeriods: vi.fn(),
 }));
