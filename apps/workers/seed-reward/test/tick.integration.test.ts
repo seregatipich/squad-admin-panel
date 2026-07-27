@@ -8,7 +8,7 @@ import {
   servers,
   sessions,
 } from '@squad/db';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -123,6 +123,21 @@ afterAll(async () => {
   await db.$client.end();
 });
 
+/**
+ * `publishAdminsCfgSyncForAllServers` enqueues one outbox row per *active server
+ * in the database*, not per server this test created. Asserting a literal 1 tied
+ * the expectation to global DB state, so the test failed whenever it ran after a
+ * suite that left a server behind — which the local pre-push checklist does, by
+ * running every affected package against one shared DATABASE_URL. Counting the
+ * servers the tick actually fans out to keeps the assertion exact and makes it
+ * independent of test order.
+ */
+async function activeServerCount(): Promise<number> {
+  if (!db) throw new Error('database not configured');
+  const rows = await db.select({ id: servers.id }).from(servers).where(isNull(servers.deletedAt));
+  return rows.length;
+}
+
 describeIfDb('seed reward worker integration', () => {
   it('grants at the rolling threshold, then revokes below it, with system audits', async () => {
     if (!db) throw new Error('database not configured');
@@ -140,14 +155,20 @@ describeIfDb('seed reward worker integration', () => {
       diag,
     });
 
-    expect(granted).toEqual({ skipped: false, granted: 1, revoked: 0, enqueued: 1 });
+    expect(granted).toEqual({
+      skipped: false,
+      granted: 1,
+      revoked: 0,
+      enqueued: await activeServerCount(),
+    });
     const [afterGrant] = await db
       .select({ roleId: players.roleId })
       .from(players)
       .where(eq(players.steamId64, PLAYER_STEAM_ID));
     expect(afterGrant?.roleId).toBe(REWARD_ROLE_ID);
     expect(firstRedis.del).toHaveBeenCalledWith(`session:${SESSION_ID}`);
-    expect(firstRedis.xadd).toHaveBeenCalledTimes(1);
+    // One stream publish per active server, for the same reason as `enqueued` above.
+    expect(firstRedis.xadd).toHaveBeenCalledTimes(await activeServerCount());
     expect(revokedFor(firstRedis.publish)).toContainEqual({
       playerId: PLAYER_ID,
       sessionId: SESSION_ID,
@@ -170,7 +191,12 @@ describeIfDb('seed reward worker integration', () => {
       diag,
     });
 
-    expect(revoked).toEqual({ skipped: false, granted: 0, revoked: 1, enqueued: 1 });
+    expect(revoked).toEqual({
+      skipped: false,
+      granted: 0,
+      revoked: 1,
+      enqueued: await activeServerCount(),
+    });
     const [afterRevoke] = await db
       .select({ roleId: players.roleId })
       .from(players)
