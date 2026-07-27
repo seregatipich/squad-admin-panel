@@ -5,7 +5,9 @@ useDefault = true
 description = "Synthetic fixtures live in test files and e2e helpers (fake tokens/keys/ids used to exercise parsing and redaction); they are not real secrets."
 paths = [
   '''.*\.test\.ts$''',
+  '''.*\.test\.tsx$''',
   '''.*\.spec\.ts$''',
+  '''.*\.spec\.tsx$''',
   '''(^|/)test/''',
   '''(^|/)e2e/''',
   '''\.env\.example$''',
