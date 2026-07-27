@@ -4,6 +4,22 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-07-27
+
+### VIDEO-2 — media_links (migration 0095)
+
+**Files:** `packages/db/drizzle/0095_media_links.sql`, `packages/db/src/schema/media-links.ts`, `packages/db/src/schema/index.ts`, `packages/db/test/schema.test.ts`
+
+New table `media_links` (#158) — the canonical polymorphic evidence store linking a `media_files` row to a `player`, `moderation_action`, `match`, or `issue`. It is the schema root for the media chain: #159 and #160 build on it, and #60 (MOD-3) attaches moderation-action evidence through it rather than a new `evidence[]` column.
+
+#### Added
+
+- `media_links(id, media_id, entity_type, entity_id, linked_by_player_id, created_at)`. `media_id` `REFERENCES media_files(id) ON DELETE CASCADE`; `linked_by_player_id` `REFERENCES players(id) ON DELETE SET NULL` (drives the attach/detach ownership check).
+- CHECK `media_links_entity_type_check` — `entity_type IN ('player','moderation_action','match','issue')`.
+- `entity_id` is deliberately **not** a foreign key: it is polymorphic across four target tables depending on `entity_type`, so existence is verified by the API route layer before insert, not by the database.
+- Unique index `media_links_media_entity_key` on `(media_id, entity_type, entity_id)` — one link per media/target pair; a duplicate attach attempt surfaces as `409 already_linked`.
+- Indexes `media_links_entity_idx` on `(entity_type, entity_id)` and `media_links_media_idx` on `(media_id)`.
+
 ## 2026-07-26
 
 ### DOSSIER-4 — materialize `player_stat_periods` combat columns (migration 0089)

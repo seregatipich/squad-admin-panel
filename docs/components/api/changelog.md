@@ -1,5 +1,16 @@
 # `api` — changelog
 
+## 2026-07-27 — VIDEO-2 привязка медиа к сущностям (#158)
+
+### Added
+
+- `POST /api/v1/media/:id/links` — attaches a `media_files` row to a `player`, `moderation_action`, `match`, or `issue` (`entity_type`/`entity_id` body, Zod-validated). `201` with the created link; `404 media_not_found`/`404 entity_not_found` when the media file or the polymorphic target doesn't exist; `409 already_linked` on a duplicate `(media_id, entity_type, entity_id)`.
+- `DELETE /api/v1/media/:id/links?entity_type=&entity_id=` — detaches a link. `200 { ok: true }`; `404 link_not_found`; `403 { error: 'forbidden', required: 'can_manage_media' }` when the caller neither created the link nor holds `can_manage_media`.
+- `GET /api/v1/players/:playerId/media` — evidence for a player card: the union of direct `entity_type='player'` links and `entity_type='moderation_action'` links whose action belongs to the player. Works for EOS-only players (no `steam_id64`) via `players.id`.
+- `GET /api/v1/moderation-actions/:id/media` — evidence attached directly to one moderation action.
+- All four routes carry `config: { audit: false }` with audit rows written manually via `writeAuditEntry`: `media.link.attach` and `media.link.detach`, both `targetType: 'media_link'`.
+- New table `media_links` backing these routes — see `docs/components/db/changelog.md` (migration 0095).
+
 ## 2026-07-26 — PLAYER-6 player list sorting and filters (#27)
 
 ### Changed

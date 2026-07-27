@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-07-27 — VIDEO-2 evidence section on the player card (#158)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/players/[id]/EvidenceSection.tsx` — «Доказательства» section on `/players/{id}`, listing media evidence attached to the player directly or via a moderation action against them (`GET /api/v1/players/:playerId/media`). Video and image files play/render inline through the existing Range-streaming route (`/api/v1/media/:id/stream`, VIDEO-1 #157); external links open in a new tab. The section self-hides on `401`/`403`, matching the other player-card sections.
+
 ## 2026-07-26 — DISCORD-3 Discord message-template editor
 
 ### Added
