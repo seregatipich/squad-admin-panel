@@ -45,6 +45,7 @@ export const en: Record<TranslationKey, string> = {
   'nav.markTypes': 'Mark types',
   'nav.chatFlags': 'Chat flags',
   'nav.altDetection': 'Alt detection',
+  'nav.seasons': 'Seasons',
   'nav.alerts': 'Alerts',
   'nav.automation': 'Automation',
   'nav.seedNotifications': 'Seeding notifications',
@@ -56,6 +57,7 @@ export const en: Record<TranslationKey, string> = {
   'nav.banSources': 'Ban sources',
   'nav.discord': 'Discord',
   'nav.geoip': 'GeoIP (MaxMind)',
+  'nav.mediaPublishing': 'Media publishing',
   'nav.logout': 'Log out',
 
   'login.heading': 'Squad Admin Panel',

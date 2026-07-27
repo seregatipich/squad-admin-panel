@@ -1,18 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { backfillMonths, periodsToRecompute, recomputeBonusAccruals, recomputeLeaderboardPeriods } =
-  vi.hoisted(() => ({
-    backfillMonths: vi.fn(),
-    periodsToRecompute: vi.fn(() => [
-      { periodType: 'day', periodStart: '2026-07-05' },
-      { periodType: 'week', periodStart: '2026-06-29' },
-    ]),
-    recomputeBonusAccruals: vi.fn(),
-    recomputeLeaderboardPeriods: vi.fn(),
-  }));
+const {
+  backfillMonths,
+  loadActiveSeasonTarget,
+  periodsToRecompute,
+  recomputeBonusAccruals,
+  recomputeLeaderboardPeriods,
+} = vi.hoisted(() => ({
+  backfillMonths: vi.fn(),
+  loadActiveSeasonTarget: vi.fn(),
+  periodsToRecompute: vi.fn(() => [
+    { periodType: 'day', periodStart: '2026-07-05' },
+    { periodType: 'week', periodStart: '2026-06-29' },
+  ]),
+  recomputeBonusAccruals: vi.fn(),
+  recomputeLeaderboardPeriods: vi.fn(),
+}));
 
 vi.mock('@squad/db', () => ({
   backfillMonths,
+  loadActiveSeasonTarget,
   periodsToRecompute,
   recomputeBonusAccruals,
   recomputeLeaderboardPeriods,
@@ -38,6 +45,8 @@ describe('runLeaderboardAggregatorTick', () => {
     recomputeLeaderboardPeriods.mockReset();
     recomputeBonusAccruals.mockReset();
     recomputeBonusAccruals.mockResolvedValue(0);
+    loadActiveSeasonTarget.mockReset();
+    loadActiveSeasonTarget.mockResolvedValue(null);
     periodsToRecompute.mockClear();
   });
 
@@ -111,6 +120,97 @@ describe('runLeaderboardAggregatorTick', () => {
         severity: 'error',
       }),
     );
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'leaderboard_aggregator.run_ok', severity: 'info' }),
+    );
+    expect(diag.emit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'leaderboard_aggregator.run_failed' }),
+    );
+  });
+
+  // LEAD-7 (#178). periodsToRecompute is pure and never emits a season, so the
+  // tick appends the season descriptor itself after resolving the active season.
+  it('appends the active season with its explicit window (LEAD-7)', async () => {
+    recomputeLeaderboardPeriods.mockResolvedValue(9);
+    loadActiveSeasonTarget.mockResolvedValue({
+      id: 'season-1',
+      name: 'Summer 2026',
+      periodType: 'season',
+      periodStart: '2026-06-10',
+      range: { fromDay: '2026-06-10', toDay: '2026-07-20' },
+    });
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+    const now = new Date('2026-07-05T02:00:00.000Z');
+    const sql = {} as never;
+
+    await runLeaderboardAggregatorTick({ sql, diag, now });
+
+    expect(loadActiveSeasonTarget).toHaveBeenCalledWith(sql);
+    expect(recomputeLeaderboardPeriods).toHaveBeenCalledWith(sql, [
+      { periodType: 'day', periodStart: '2026-07-05' },
+      { periodType: 'week', periodStart: '2026-06-29' },
+      {
+        periodType: 'season',
+        periodStart: '2026-06-10',
+        range: { fromDay: '2026-06-10', toDay: '2026-07-20' },
+      },
+    ]);
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'leaderboard_aggregator.run_ok',
+        payload: expect.objectContaining({ season: 'Summer 2026' }),
+      }),
+    );
+  });
+
+  it('recomputes only the derived periods when no season is active', async () => {
+    recomputeLeaderboardPeriods.mockResolvedValue(4);
+    loadActiveSeasonTarget.mockResolvedValue(null);
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+    const sql = {} as never;
+
+    await runLeaderboardAggregatorTick({
+      sql,
+      diag,
+      now: new Date('2026-07-05T02:00:00.000Z'),
+    });
+
+    expect(recomputeLeaderboardPeriods).toHaveBeenCalledWith(sql, [
+      { periodType: 'day', periodStart: '2026-07-05' },
+      { periodType: 'week', periodStart: '2026-06-29' },
+    ]);
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'leaderboard_aggregator.run_ok',
+        payload: expect.objectContaining({ season: null }),
+      }),
+    );
+  });
+
+  // A finalized or closed season is not returned by loadActiveSeasonTarget, so
+  // the tick simply never recomputes it — that is what makes finalisation stick.
+  it('keeps the tick alive and still recomputes when the season lookup fails', async () => {
+    recomputeLeaderboardPeriods.mockResolvedValue(4);
+    loadActiveSeasonTarget.mockRejectedValue(new Error('season boom'));
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+    const sql = {} as never;
+
+    await runLeaderboardAggregatorTick({
+      sql,
+      diag,
+      now: new Date('2026-07-05T02:00:00.000Z'),
+    });
+
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'leaderboard_aggregator.season_window_failed',
+        severity: 'error',
+      }),
+    );
+    expect(recomputeLeaderboardPeriods).toHaveBeenCalledWith(sql, [
+      { periodType: 'day', periodStart: '2026-07-05' },
+      { periodType: 'week', periodStart: '2026-06-29' },
+    ]);
     expect(diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'leaderboard_aggregator.run_ok', severity: 'info' }),
     );

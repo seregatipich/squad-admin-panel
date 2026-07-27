@@ -139,3 +139,73 @@ export type UploadTokenResponse = z.infer<typeof uploadTokenResponse>;
 /** Query string of the public, session-less `POST /api/v1/public/media`. */
 export const publicMediaUploadQuery = z.object({ token: z.string().min(1).max(512) }).strict();
 export type PublicMediaUploadQuery = z.infer<typeof publicMediaUploadQuery>;
+
+/** Community channels a stored media file can be fanned out to (VIDEO-4, #160). */
+export const MEDIA_PUBLICATION_DESTINATIONS = ['youtube', 'telegram'] as const;
+export const mediaPublicationDestination = z.enum(MEDIA_PUBLICATION_DESTINATIONS);
+export type MediaPublicationDestination = z.infer<typeof mediaPublicationDestination>;
+
+/**
+ * Lifecycle of one publication. `queued` covers both "never tried" and
+ * "waiting out a backoff or a YouTube quota window" — a job blocked on quota
+ * stays here rather than moving to `failed`, which is the whole point of
+ * separating `next_attempt_at` from the status.
+ */
+export const MEDIA_PUBLICATION_STATUSES = ['queued', 'uploading', 'published', 'failed'] as const;
+export const mediaPublicationStatus = z.enum(MEDIA_PUBLICATION_STATUSES);
+export type MediaPublicationStatus = z.infer<typeof mediaPublicationStatus>;
+
+/** Request body for `POST /api/v1/media/:id/publications`. */
+export const mediaPublishInput = z
+  .object({
+    destinations: z
+      .array(mediaPublicationDestination)
+      .min(1)
+      .max(MEDIA_PUBLICATION_DESTINATIONS.length),
+  })
+  .strict();
+export type MediaPublishInput = z.infer<typeof mediaPublishInput>;
+
+/**
+ * Response shape for one `media_publications` row.
+ *
+ * `external_url` stays null on a successful Telegram publish whenever the
+ * configured chat has no publicly addressable message URL (neither an
+ * `@username` channel nor a `-100…` supergroup); `external_id` is still set.
+ * `error` carries a stable machine code — never a provider message, which
+ * could echo a credential back at us.
+ */
+export const mediaPublicationResponse = z
+  .object({
+    id: z.string().uuid(),
+    media_id: z.string().uuid(),
+    destination: mediaPublicationDestination,
+    status: mediaPublicationStatus,
+    external_id: z.string().nullable(),
+    external_url: z.string().nullable(),
+    error: z.string().nullable(),
+    attempts: z.number().int().nonnegative(),
+    next_attempt_at: z.string().datetime().nullable(),
+    requested_by_player_id: z.string().uuid().nullable(),
+    created_at: z.string().datetime(),
+    updated_at: z.string().datetime(),
+  })
+  .strict();
+export type MediaPublicationResponse = z.infer<typeof mediaPublicationResponse>;
+
+/**
+ * Connection status of the publishing integrations. Reports only *whether*
+ * each destination's credentials are present — never a value, not even masked.
+ */
+export const mediaPublishingIntegrationResponse = z
+  .object({
+    youtube_configured: z.boolean(),
+    telegram_configured: z.boolean(),
+    release_local_file: z.boolean(),
+  })
+  .strict();
+export type MediaPublishingIntegrationResponse = z.infer<typeof mediaPublishingIntegrationResponse>;
+
+/** Request body for `PATCH /api/v1/integrations/media-publishing`. */
+export const mediaPublishingSettingsInput = z.object({ release_local_file: z.boolean() }).strict();
+export type MediaPublishingSettingsInput = z.infer<typeof mediaPublishingSettingsInput>;

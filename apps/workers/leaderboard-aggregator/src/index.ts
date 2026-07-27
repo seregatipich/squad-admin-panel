@@ -2,7 +2,9 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   backfillMonths,
+  loadActiveSeasonTarget,
   periodsToRecompute,
+  type RecomputePeriodInput,
   recomputeBonusAccruals,
   recomputeLeaderboardPeriods,
 } from '@squad/db';
@@ -61,7 +63,37 @@ export interface LeaderboardTickDeps {
 export async function runLeaderboardAggregatorTick(deps: LeaderboardTickDeps): Promise<void> {
   const { sql, diag } = deps;
   const now = deps.now ?? new Date();
-  const periods = periodsToRecompute(now);
+  const periods: RecomputePeriodInput[] = periodsToRecompute(now);
+
+  // LEAD-7 (#178): the tick's third responsibility — materialise the running
+  // season. `periodsToRecompute` is pure and cannot emit a season descriptor,
+  // because a season's window lives in the database rather than in the clock.
+  // A season that is closed or finalized is not returned, so its rows stop
+  // changing the moment it is frozen. A lookup failure must not cost us the
+  // ordinary day/week/month recompute, so it is guarded on its own.
+  let seasonName: string | null = null;
+  try {
+    const season = await loadActiveSeasonTarget(sql);
+    if (season) {
+      seasonName = season.name;
+      periods.push({
+        periodType: season.periodType,
+        periodStart: season.periodStart,
+        range: season.range,
+      });
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ err: message }, 'active season lookup failed');
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'leaderboard_aggregator.season_window_failed',
+      severity: 'error',
+      message: `active season lookup failed: ${message}`,
+      payload: {},
+    });
+  }
+
   try {
     const rows = await recomputeLeaderboardPeriods(sql, periods);
 
@@ -85,7 +117,7 @@ export async function runLeaderboardAggregatorTick(deps: LeaderboardTickDeps): P
 
     const invalidated = deps.invalidateCache ? await deps.invalidateCache() : 0;
     log.info(
-      { periods: periods.length, rows, bonusAccrualRows, invalidated },
+      { periods: periods.length, rows, bonusAccrualRows, invalidated, season: seasonName },
       'leaderboard recompute ok',
     );
     await diag.emit({
@@ -93,7 +125,7 @@ export async function runLeaderboardAggregatorTick(deps: LeaderboardTickDeps): P
       kind: 'leaderboard_aggregator.run_ok',
       severity: 'info',
       message: `recomputed ${periods.length} periods (${rows} rows)`,
-      payload: { periods: periods.length, rows, bonusAccrualRows, invalidated },
+      payload: { periods: periods.length, rows, bonusAccrualRows, invalidated, season: seasonName },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

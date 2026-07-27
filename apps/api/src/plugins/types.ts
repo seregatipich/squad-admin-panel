@@ -41,5 +41,20 @@ declare module 'fastify' {
     };
     apiTokenId?: string;
     requestId: string;
+    /**
+     * Optional before/after snapshots for the declarative audit hook
+     * (`plugins/audit.ts`). A route that declares `config.audit` may set this
+     * during the handler; the hook then persists the snapshots alongside the
+     * entry it was already going to write, instead of leaving them null.
+     *
+     * This exists so a route can satisfy "the change is visible in audit_log
+     * with before/after" without opting out of `config.audit` — the CI guard in
+     * `test/audit-coverage.test.ts` only accepts `audit: false` for a short
+     * allowlist of auth callbacks and self-audited service endpoints.
+     *
+     * `targetId` overrides the id the hook derives from route params, which is
+     * how a POST (no `:id` param) can still name the row it created.
+     */
+    auditSnapshots?: { before?: unknown; after?: unknown; targetId?: string | null };
   }
 }

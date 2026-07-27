@@ -21,6 +21,42 @@ New table `discord_role_mappings` (#152) — the panel role → Discord guild ro
 - No `source` column: only `panel_role` exists today and the API synthesises it. Leaderboard-driven roles are a post-STATS-3 extension that will need their own columns.
 
 **Journal note:** the entry is `idx: 84`, `when: 1783402900000`, inserted between `0098_player_discord_links` and `0101_server_daily_stats`. Its `when` is *lower* than the already-present `0101`–`0106` entries, so a database already migrated past `1783403100000` will not pick `0099` up from `pnpm --filter @squad/db migrate` — apply it by hand there. A fresh database (CI, new deployments) applies the whole journal in array order and is unaffected.
+### LEAD-7 — seasons (migration 0102)
+
+**Files:** `packages/db/drizzle/0102_seasons.sql`, `packages/db/sql/seasons.sql`, `packages/db/src/schema/seasons.ts`, `packages/db/src/leaderboard/season.ts`, `packages/db/src/leaderboard/aggregate.ts`, `packages/db/src/schema/index.ts`, `packages/db/src/index.ts`, `packages/db/test/seasons.test.ts`, `packages/db/test/leaderboard-aggregate.test.ts`
+
+New table `seasons` (#178) — named leaderboard seasons. A season is an **arbitrary named interval**, not a calendar year: the aggregator materialises `player_stat_periods` rows with `period_type='season'` and `period_start = starts_at` (UTC day) over the explicit `[starts_at, ends_at]` window of the single active season. `player_stat_periods` is unchanged — `'season'` was already permitted by `player_stat_periods_period_type_chk`.
+
+#### Added
+
+- `seasons(id, name, starts_at, ends_at, status, finalized, created_at, updated_at)`. `status` is `upcoming|active|closed` (CHECK `seasons_status_chk`), `finalized` defaults to `false`.
+- **`seasons_one_active`** — a partial unique index over a constant, `ON seasons ((status)) WHERE status = 'active'`. This is the storage-level enforcement of "at most one active season", and it is why the aggregator and the API resolve the active season with a bare `LIMIT 1` instead of defensively ordering. Drizzle expresses it as `uniqueIndex(...).on(sql\`(status)\`).where(...)`.
+- CHECK `seasons_bounds_chk` — `ends_at > starts_at`. Unique index `seasons_name_key` on `name`; lookup index `seasons_status_idx` on `(status, starts_at)`.
+- `loadActiveSeasonTarget(sql)` (`src/leaderboard/season.ts`) — returns the one season the aggregator should recompute, as a ready-made `RecomputePeriodInput`, or `null`. Only an **active, non-finalized** season qualifies, which is the whole mechanism behind "a finalized season is never recomputed again". The day bounds are formatted in SQL as `AT TIME ZONE 'UTC'` strings: they must be UTC days to line up with `player_daily_presence.day`, and the JS type of a `timestamptz` is not stable across callers — `drizzle()` replaces the postgres.js type parsers on the client it wraps, so the same tagged-template query yields a `Date` on a bare client but a session-local string on a wrapped one.
+- `RecomputePeriodInput.range?: DayRange` — an explicit window overriding `periodDayRange()`. Required for `'season'`, for which `periodDayRange` returns `null`, which would otherwise widen the slice to all time. `recomputeLeaderboardPeriods` now takes `RecomputePeriodInput[]`; `PeriodDescriptor` stays structurally assignable, so existing callers are unaffected.
+
+#### Fixed
+
+- `recomputeLeaderboardPeriod`'s match window was built as `started_at < toDay::date + INTERVAL '1 day'`, whose result is a **local-time** timestamp. Presence is filtered on a `date` column holding UTC days, so on any deployment whose Postgres session `TimeZone` is not UTC the presence and match halves of the same period covered different spans — a match late on a period's last day fell outside its own period. Both edges are now pinned with `AT TIME ZONE 'UTC'`. Affects `day`/`week`/`month` as well as seasons.
+### VIDEO-4 — media_publications + media_publish_settings (migration 0097)
+
+**Files:** `packages/db/drizzle/0097_media_publications.sql`, `packages/db/src/schema/media-publications.ts`, `packages/db/src/schema/media-publish-settings.ts`, `packages/db/src/schema/index.ts`
+
+Two new tables (#160) backing the fan-out of stored media to YouTube/Telegram.
+
+#### Added
+
+- `media_publications(id, media_id, destination, status, external_id, external_url, error, attempts, next_attempt_at, requested_by_player_id, created_at, updated_at)`. `media_id` `REFERENCES media_files(id) ON DELETE CASCADE`; `requested_by_player_id` `REFERENCES players(id) ON DELETE SET NULL` so provenance survives the requester's deletion.
+- CHECKs `media_publications_destination_check` (`youtube`/`telegram`), `media_publications_status_check` (`queued`/`uploading`/`published`/`failed`) and `media_publications_attempts_nonneg`.
+- Unique index `media_publications_media_destination_key` on `(media_id, destination)` — one publication per direction, so a repeat request is a `409` rather than a duplicate upload.
+- Index `media_publications_due_idx` on `(status, next_attempt_at)` — the worker's claim predicate.
+- **The table is the queue.** `worker-media-publisher` claims rows with `... WHERE status='queued' AND next_attempt_at <= now() FOR UPDATE OF p SKIP LOCKED` inside a CTE, then flips them to `uploading` in the same statement, so two replicas cannot take the same row. `attempts`/`next_attempt_at` are what make retry and backoff fall out of the schema instead of needing a stream.
+- `status` deliberately does **not** distinguish "waiting on a YouTube daily quota" from "waiting on a backoff": both stay `queued`, and only `error`/`next_attempt_at` differ. A quota wall leaves `attempts` untouched, so an outage outside our control can never exhaust the retry budget and drive a row to `failed`.
+- `external_url` is nullable **on success**: a Telegram message is only publicly addressable for an `@username` channel or a `-100…` supergroup. Storing a fabricated URL would later be used to justify deleting the local file.
+- `media_publish_settings(id, release_local_file, updated_by_player_id, updated_at)` — singleton (`CHECK id = 1`, seeded by the migration), mirroring `banlist_publication_settings`. `release_local_file` defaults to **false**: primary storage is ours, and a deploy must not start discarding local evidence because a feature shipped. When enabled, a successful publish swaps `media_files.storage_path` for `external_url` in a single `UPDATE` — `media_files_exactly_one_location_check` forbids a row holding both or neither, so the swap cannot be two statements.
+- No credential column anywhere: YouTube/Telegram secrets live only in the worker's environment.
+
+**Journal note:** this migration's reserved `when` (`1783402700000`) was below the journal tip at merge time, which would have made Drizzle skip it on any database already migrated past `0106`. The entry uses `when: 1783403697000` instead — greater than the tip, keyed to the migration number so it cannot collide with a sibling making the same correction. The filename and `idx: 82` are unchanged.
 
 ### DISCORD-4 — player_discord_links (migration 0098)
 

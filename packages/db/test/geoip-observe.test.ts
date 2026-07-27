@@ -52,7 +52,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (sql) await sql.end();
+  if (!sql) return;
+  // `beforeEach` inserts this fixture player, so without this the suite leaves a
+  // `geoip-*` row behind in whatever database it ran against. `player_ip_history`
+  // cascades on the player delete.
+  await sql`DELETE FROM players WHERE id = ${PLAYER_ID}`;
+  await sql.end();
 });
 
 beforeEach(async () => {

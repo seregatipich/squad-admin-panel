@@ -15,7 +15,12 @@ export default fp(async (app) => {
         actorIp: req.ip ?? null,
         actionType: auditCfg.action,
         targetType: auditCfg.resource,
-        targetId: extractTargetId(req.params),
+        targetId: req.auditSnapshots?.targetId ?? extractTargetId(req.params),
+        // Routes opt in by assigning `req.auditSnapshots` in the handler; when
+        // they don't, these stay undefined and writeAuditEntry stores null,
+        // exactly as before.
+        before: req.auditSnapshots?.before,
+        after: req.auditSnapshots?.after,
         context: {
           requestId: req.id,
           method: req.method,

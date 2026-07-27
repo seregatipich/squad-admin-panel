@@ -624,6 +624,20 @@
       "when": 1783403650000,
       "tag": "0099_discord_role_mappings",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1783403652000,
+      "tag": "0102_seasons",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1783403697000,
+      "tag": "0097_media_publications",
+      "breakpoints": true
     }
   ]
 }

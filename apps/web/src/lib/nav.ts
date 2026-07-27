@@ -138,6 +138,12 @@ export const NAV_GROUPS: NavGroup[] = [
         permission: 'role:edit',
       },
       {
+        href: '/settings/seasons',
+        label: 'Сезоны',
+        labelKey: 'nav.seasons',
+        permission: 'role:edit',
+      },
+      {
         href: '/settings/alt-detection',
         label: 'Альт-детект',
         labelKey: 'nav.altDetection',
@@ -176,6 +182,12 @@ export const NAV_GROUPS: NavGroup[] = [
         href: '/settings/integrations/geoip',
         label: 'GeoIP (MaxMind)',
         labelKey: 'nav.geoip',
+        permission: 'integration:manage',
+      },
+      {
+        href: '/settings/integrations/media',
+        label: 'Публикация медиа',
+        labelKey: 'nav.mediaPublishing',
         permission: 'integration:manage',
       },
     ],

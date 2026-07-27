@@ -575,3 +575,157 @@ describeIfDb('top-N query uses the metric index', () => {
     }
   }, 30_000);
 });
+
+// LEAD-7 (#178). A season is an arbitrary named interval, so its window cannot
+// be derived from `period_start` the way day/week/month can — `periodDayRange`
+// returns null for 'season', which would silently widen the slice to all time.
+// The caller therefore passes the window explicitly via `range`.
+describeIfDb('season periods recompute over an explicit range (LEAD-7)', () => {
+  const SEASON_START = '2026-06-10';
+  const SEASON_RANGE = { fromDay: '2026-06-10', toDay: '2026-06-20' };
+
+  it('counts only presence inside [fromDay, toDay]', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-09', 1000); // day before
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-10', 2000); // first day
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-15', 3000); // middle
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-20', 4000); // last day
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-21', 5000); // day after
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+
+    const rows = await statRows('season', SEASON_START);
+    const rollup = rows.find((row) => row.server_id === null);
+    // 2000 + 3000 + 4000 — both boundary days included, neither neighbour is.
+    expect(rollup?.online_seconds).toBe(9000);
+  });
+
+  it('counts only matches inside the window, for both matches and combat', async () => {
+    await seedMatch(SERVER_1, '2026-06-09T12:00:00Z', [
+      { playerId: PLAYER_A, kills: 100, deaths: 1, revives: 7 },
+    ]);
+    await seedMatch(SERVER_1, '2026-06-15T12:00:00Z', [
+      { playerId: PLAYER_A, kills: 5, deaths: 2, revives: 1 },
+    ]);
+    await seedMatch(SERVER_1, '2026-06-20T23:30:00Z', [
+      { playerId: PLAYER_A, kills: 3, deaths: 2, revives: 2 },
+    ]);
+    await seedMatch(SERVER_1, '2026-06-21T00:30:00Z', [
+      { playerId: PLAYER_A, kills: 200, deaths: 1, revives: 9 },
+    ]);
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+
+    const rows = await statRows('season', SEASON_START);
+    const rollup = rows.find((row) => row.server_id === null);
+    expect(rollup?.matches_played).toBe(2);
+    expect(rollup?.kills).toBe(8);
+    expect(rollup?.deaths).toBe(4);
+    expect(rollup?.revives).toBe(3);
+    // toDay is inclusive to the end of the day, so 23:30 on the last day counts
+    // while 00:30 on the following day does not.
+    expect(rollup?.kd_ratio).toBeCloseTo(2, 5);
+  });
+
+  // Regression: the match window was built as `started_at < toDay::date + 1 day`,
+  // whose result is a *local-time* timestamp. On any deployment whose Postgres
+  // session TimeZone is not UTC the window silently slid by the UTC offset,
+  // while presence (a `date` column filled from UTC days) did not — so the two
+  // halves of the same period covered different spans. Pinned in UTC here.
+  it('anchors the match window to UTC days regardless of the session TimeZone', async () => {
+    // Both of these are inside the UTC window [2026-06-10, 2026-06-20].
+    await seedMatch(SERVER_1, '2026-06-10T00:15:00Z', [{ playerId: PLAYER_A, kills: 1 }]);
+    await seedMatch(SERVER_1, '2026-06-20T23:45:00Z', [{ playerId: PLAYER_A, kills: 1 }]);
+    // Both of these are outside it.
+    await seedMatch(SERVER_1, '2026-06-09T23:45:00Z', [{ playerId: PLAYER_A, kills: 50 }]);
+    await seedMatch(SERVER_1, '2026-06-21T00:15:00Z', [{ playerId: PLAYER_A, kills: 50 }]);
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+
+    const rollup = (await statRows('season', SEASON_START)).find((row) => row.server_id === null);
+    expect(rollup?.matches_played).toBe(2);
+    expect(rollup?.kills).toBe(2);
+  });
+
+  it('writes both the per-server rows and the server_id IS NULL rollup', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-15', 600);
+    await seedPresence(PLAYER_A, SERVER_2, '2026-06-15', 400);
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+
+    const rows = await statRows('season', SEASON_START);
+    expect(rows.filter((row) => row.server_id !== null)).toHaveLength(2);
+    const rollup = rows.find((row) => row.server_id === null);
+    expect(rollup?.online_seconds).toBe(1000);
+  });
+
+  it('is idempotent — recomputing the same window rewrites identical rows', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-15', 1234, 10, 20);
+    await seedMatch(SERVER_1, '2026-06-16T12:00:00Z', [
+      { playerId: PLAYER_A, kills: 4, deaths: 2, revives: 1 },
+    ]);
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+    const first = await statRows('season', SEASON_START);
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+    const second = await statRows('season', SEASON_START);
+
+    expect(second).toEqual(first);
+  });
+
+  it('does not disturb other period types sharing the same source rows', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-15', 777);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-06-15' });
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+
+    const dayRows = await statRows('day', '2026-06-15');
+    expect(dayRows.find((row) => row.server_id === null)?.online_seconds).toBe(777);
+    const seasonRows = await statRows('season', SEASON_START);
+    expect(seasonRows.find((row) => row.server_id === null)?.online_seconds).toBe(777);
+  });
+
+  it('without an explicit range a season slice would span all time (why range is required)', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2020-01-01', 111);
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-15', 222);
+
+    // periodDayRange('season', ...) returns null, so the recompute falls back to
+    // an unbounded window. This is exactly the bug the `range` option exists to
+    // prevent, pinned here so the fallback cannot be mistaken for correct.
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+    });
+
+    const rows = await statRows('season', SEASON_START);
+    expect(rows.find((row) => row.server_id === null)?.online_seconds).toBe(333);
+  });
+});

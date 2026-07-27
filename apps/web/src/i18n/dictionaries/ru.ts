@@ -46,6 +46,7 @@ export const ru = {
   'nav.markTypes': 'Типы меток',
   'nav.chatFlags': 'Флаги чата',
   'nav.altDetection': 'Альт-детект',
+  'nav.seasons': 'Сезоны',
   'nav.alerts': 'Оповещения',
   'nav.automation': 'Автоматизация',
   'nav.seedNotifications': 'Уведомления о сидинге',
@@ -57,6 +58,7 @@ export const ru = {
   'nav.banSources': 'Источники банов',
   'nav.discord': 'Discord',
   'nav.geoip': 'GeoIP (MaxMind)',
+  'nav.mediaPublishing': 'Публикация медиа',
   'nav.logout': 'Выйти',
 
   'login.heading': 'Squad Admin Panel',

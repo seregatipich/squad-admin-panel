@@ -1,10 +1,11 @@
-import type { StatPeriodType } from '@squad/db';
+import type { SeasonRow, StatPeriodType } from '@squad/db';
 import {
   ALLTIME_PERIOD_START,
   economySettings,
   periodStartFor,
   playerStatPeriods,
   players,
+  seasons,
 } from '@squad/db';
 import { normalizePlayerName } from '@squad/shared-config';
 import { and, asc, desc, eq, isNull, or, type SQL, sql } from 'drizzle-orm';
@@ -76,13 +77,46 @@ function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string }
   return null;
 }
 
-function resolvePeriodStart(period: StatPeriodType, explicit: string | undefined): string {
+/**
+ * Resolves `period_start` for every period whose window is derivable from the
+ * clock. Returns `null` for `season`, whose start is a stored property of the
+ * season row and therefore needs a database lookup (LEAD-7, #178).
+ */
+function resolvePeriodStart(period: StatPeriodType, explicit: string | undefined): string | null {
   if (explicit) return explicit;
   if (period === 'alltime') return ALLTIME_PERIOD_START;
-  if (period === 'season') {
-    throw new Error('period_start is required for season');
-  }
+  if (period === 'season') return null;
   return periodStartFor(period, new Date().toISOString().slice(0, 10));
+}
+
+interface SeasonMeta {
+  id: string;
+  name: string;
+  starts_at: string;
+  ends_at: string;
+  status: string;
+  finalized: boolean;
+}
+
+/**
+ * A season's `period_start` is its start day in **UTC**, matching the UTC-day
+ * convention the aggregator materialises rows under. Deriving it in JS rather
+ * than with `starts_at::date` avoids the session-timezone dependency that cast
+ * would introduce.
+ */
+export function seasonPeriodStart(row: Pick<SeasonRow, 'startsAt'>): string {
+  return row.startsAt.toISOString().slice(0, 10);
+}
+
+function serializeSeason(row: SeasonRow): SeasonMeta {
+  return {
+    id: row.id,
+    name: row.name,
+    starts_at: row.startsAt.toISOString(),
+    ends_at: row.endsAt.toISOString(),
+    status: row.status,
+    finalized: row.finalized,
+  };
 }
 
 function buildSearchFilter(search: string): SQL {
@@ -120,10 +154,35 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
       if (denied) return denied;
 
       const { metric, period, server_id, order, search } = req.query;
-      let periodStart: string;
-      try {
-        periodStart = resolvePeriodStart(period, req.query.period_start);
-      } catch {
+      let periodStart = resolvePeriodStart(period, req.query.period_start);
+      let seasonMeta: SeasonMeta | null = null;
+
+      if (period === 'season') {
+        // Explicit period_start selects a specific (possibly closed) season —
+        // that is how the UI browses the archive. Omitting it means "the season
+        // running right now", which the `seasons_one_active` index guarantees is
+        // at most one row.
+        const [row] = periodStart
+          ? await app.db
+              .select()
+              .from(seasons)
+              .where(sql`(${seasons.startsAt} AT TIME ZONE 'UTC')::date = ${periodStart}::date`)
+              .limit(1)
+          : await app.db.select().from(seasons).where(eq(seasons.status, 'active')).limit(1);
+
+        if (!periodStart) {
+          if (!row) {
+            reply.code(400);
+            return {
+              error: { code: 'no_active_season', message: 'Активный сезон не задан.' },
+            };
+          }
+          periodStart = seasonPeriodStart(row);
+        }
+        seasonMeta = row ? serializeSeason(row) : null;
+      }
+
+      if (periodStart === null) {
         reply.code(400);
         return { error: { code: 'invalid_period', message: 'period_start is required' } };
       }
@@ -139,6 +198,7 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
           metric,
           period,
           period_start: periodStart,
+          season: seasonMeta,
           server_id: server_id === 'all' ? null : server_id,
           available: false,
           combat_available: COMBAT_STATS_AVAILABLE,
@@ -246,6 +306,7 @@ const leaderboardsRoutes: FastifyPluginAsync = async (app) => {
         metric,
         period,
         period_start: periodStart,
+        season: seasonMeta,
         server_id: server_id === 'all' ? null : server_id,
         available: true,
         combat_available: COMBAT_STATS_AVAILABLE,

@@ -11,6 +11,7 @@ import {
   rotationSchedule,
   scheduledTaskRuns,
   scheduledTasks,
+  seasons,
   seedSchedule,
   serverSettings,
   servers,
@@ -49,6 +50,11 @@ import type {
   ScheduledTaskRunRecord,
   ScheduledTaskTickDeps,
 } from './scheduled-task-tick.js';
+import type {
+  ActiveSeason,
+  SeasonFinalizeAuditEntry,
+  SeasonFinalizeTickDeps,
+} from './season-finalize-tick.js';
 import type {
   SeedingLiveness,
   SeedScheduleAuditEntry,
@@ -699,5 +705,82 @@ export function createScheduledTaskDeps(
     echoBroadcastToChat: (echo) => echoScheduledBroadcast(db, echo),
     recordRun: (run) => recordScheduledTaskRun(db, run),
     writeAuditEntry: (entry) => writeScheduledTaskAuditEntry(db, entry),
+  };
+}
+
+// LEAD-7 (#178) — season finalisation.
+
+/** Mirrors CACHE_PREFIX in apps/api/src/routes/leaderboards.ts. */
+const LEADERBOARD_CACHE_PREFIX = 'leaderboard:';
+
+/** Active, not-yet-frozen seasons — the only ones the finalize tick may close. */
+export async function loadActiveSeasons(db: DatabaseClient): Promise<ActiveSeason[]> {
+  const rows = await db
+    .select({
+      id: seasons.id,
+      name: seasons.name,
+      startsAt: seasons.startsAt,
+      endsAt: seasons.endsAt,
+    })
+    .from(seasons)
+    .where(and(eq(seasons.status, 'active'), eq(seasons.finalized, false)));
+  return rows;
+}
+
+/**
+ * Closes a season and freezes its materialised slice in one statement, so the
+ * two can never drift apart. `loadActiveSeasonTarget` in @squad/db skips
+ * finalized rows, which is what stops the aggregator recomputing it.
+ */
+export async function finalizeSeason(db: DatabaseClient, seasonId: string): Promise<void> {
+  await db
+    .update(seasons)
+    .set({ status: 'closed', finalized: true, updatedAt: new Date() })
+    .where(eq(seasons.id, seasonId));
+}
+
+export async function invalidateLeaderboardCache(
+  redis: Pick<Redis, 'scanStream' | 'del'>,
+): Promise<number> {
+  const keys: string[] = [];
+  const stream = redis.scanStream({ match: `${LEADERBOARD_CACHE_PREFIX}*`, count: 200 });
+  for await (const batch of stream) {
+    for (const key of batch as string[]) keys.push(key);
+  }
+  if (keys.length === 0) return 0;
+  await redis.del(...keys);
+  return keys.length;
+}
+
+export async function writeSeasonFinalizeAuditEntry(
+  db: DatabaseClient,
+  entry: SeasonFinalizeAuditEntry,
+): Promise<void> {
+  await db.insert(auditLog).values({
+    actorKind: entry.actor.kind,
+    actorPlayerId: null,
+    actorTokenId: null,
+    actorSystemLabel: entry.actor.label,
+    actorIp: null,
+    actionType: entry.actionType,
+    targetType: entry.targetType,
+    targetId: entry.targetId,
+    beforeSnapshot: null,
+    afterSnapshot: null,
+    context: entry.context,
+    statusCode: null,
+    rowHash: Buffer.from([]),
+  });
+}
+
+export function createSeasonFinalizeDeps(
+  db: DatabaseClient,
+  redis: Pick<Redis, 'scanStream' | 'del'>,
+): Omit<SeasonFinalizeTickDeps, 'now' | 'diag'> {
+  return {
+    loadActiveSeasons: () => loadActiveSeasons(db),
+    finalizeSeason: (seasonId) => finalizeSeason(db, seasonId),
+    invalidateLeaderboardCache: () => invalidateLeaderboardCache(redis),
+    writeAuditEntry: (entry) => writeSeasonFinalizeAuditEntry(db, entry),
   };
 }
