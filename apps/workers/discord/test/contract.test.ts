@@ -4,7 +4,17 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import Redis from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
 
-const TEST_REDIS_URL = 'redis://127.0.0.1:6379/14';
+// Derive the redis endpoint the way apps/workers/_test-shared/contract.ts does.
+// CI maps redis to a dynamic host port, so a hardcoded 127.0.0.1:6379 makes the
+// spawned worker ECONNREFUSED there while passing on a developer machine that
+// happens to run redis on the default port (the #203 contract-test flake).
+const TEST_REDIS_DB = process.env.TEST_REDIS_DB ?? '14';
+const TEST_REDIS_BASE = (
+  process.env.TEST_REDIS_URL ??
+  process.env.REDIS_URL ??
+  'redis://127.0.0.1:6379'
+).replace(/\/\d+$/, '');
+const TEST_REDIS_URL = `${TEST_REDIS_BASE}/${TEST_REDIS_DB}`;
 const ENTRY = path.resolve(import.meta.dirname, '../dist/index.js');
 const WORKER = 'discord';
 const HB_KEY = `worker:heartbeat:${WORKER}`;
