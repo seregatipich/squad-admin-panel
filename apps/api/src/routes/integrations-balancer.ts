@@ -1,4 +1,4 @@
-import { balancerProposals, servers } from '@squad/db/schema';
+import { type BalancerProposalEntry, balancerProposals, servers } from '@squad/db/schema';
 import {
   BALANCER_PROPOSAL_MODES,
   BALANCER_PROPOSAL_STATES,
@@ -15,33 +15,39 @@ const SNAPSHOT_ID_MAX = 160;
 const LABEL_MAX = 160;
 
 /**
- * One diff row. Only the fields the panel renders and colours are validated;
- * `.passthrough()` keeps any extra field the exporter adds, so the stored blob
- * stays a faithful copy of what was signed.
+ * The signature is verified against `req.body`, which Fastify has already
+ * replaced with this schema's *output*. Every schema below is therefore
+ * strictly non-transforming — no `.trim()`, no `.default()`, `.passthrough()`
+ * at every level — so the parsed body is byte-equivalent to what the exporter
+ * signed. A transform anywhere here would silently 401 every delivery that
+ * relies on it, and would also drop payload the exporter is free to add.
+ * Normalisation (absent team → `null`) happens at storage time instead.
  */
 const proposalEntry = z
   .object({
     subject_type: z.enum(BALANCER_SUBJECT_TYPES),
-    subject_id: z.string().trim().min(1).max(SNAPSHOT_ID_MAX),
-    label: z.string().trim().min(1).max(LABEL_MAX),
-    current_team: z.number().int().nullable().default(null),
-    target_team: z.number().int().nullable().default(null),
+    subject_id: z.string().min(1).max(SNAPSHOT_ID_MAX),
+    label: z.string().min(1).max(LABEL_MAX),
+    current_team: z.number().int().nullable().optional(),
+    target_team: z.number().int().nullable().optional(),
     state: z.enum(BALANCER_PROPOSAL_STATES),
   })
   .passthrough();
 
-const snapshotBody = z.object({
-  source_snapshot_id: z.string().trim().min(1).max(SNAPSHOT_ID_MAX),
-  server_id: z.string().uuid(),
-  match_id: z.string().uuid().nullable().optional(),
-  layer: z.string().trim().min(1).max(LABEL_MAX).nullable().optional(),
-  gamemode: z.string().trim().min(1).max(LABEL_MAX).nullable().optional(),
-  mode: z.enum(BALANCER_PROPOSAL_MODES),
-  schema_version: z.number().int().min(1).max(1000).optional(),
-  generated_at: z.string().datetime({ offset: true }),
-  signals: z.record(z.unknown()).default({}),
-  proposal: z.array(proposalEntry).max(200).default([]),
-});
+const snapshotBody = z
+  .object({
+    source_snapshot_id: z.string().min(1).max(SNAPSHOT_ID_MAX),
+    server_id: z.string().uuid(),
+    match_id: z.string().uuid().nullable().optional(),
+    layer: z.string().min(1).max(LABEL_MAX).nullable().optional(),
+    gamemode: z.string().min(1).max(LABEL_MAX).nullable().optional(),
+    mode: z.enum(BALANCER_PROPOSAL_MODES),
+    schema_version: z.number().int().min(1).max(1000).optional(),
+    generated_at: z.string().datetime({ offset: true }),
+    signals: z.record(z.unknown()).optional(),
+    proposal: z.array(proposalEntry).max(200).optional(),
+  })
+  .passthrough();
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -103,6 +109,15 @@ const integrationsBalancerRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const now = new Date();
+      const proposal: BalancerProposalEntry[] = (body.proposal ?? []).map((entry) => ({
+        ...entry,
+        subject_type: entry.subject_type,
+        subject_id: entry.subject_id,
+        label: entry.label,
+        current_team: entry.current_team ?? null,
+        target_team: entry.target_team ?? null,
+        state: entry.state,
+      }));
       const values = {
         sourceSnapshotId: body.source_snapshot_id,
         serverId: body.server_id,
@@ -112,8 +127,8 @@ const integrationsBalancerRoutes: FastifyPluginAsync = async (app) => {
         mode: body.mode,
         schemaVersion: body.schema_version ?? BALANCER_SCHEMA_VERSION,
         generatedAt: new Date(body.generated_at),
-        signals: body.signals,
-        proposal: body.proposal,
+        signals: body.signals ?? {},
+        proposal,
         receivedAt: now,
       };
 

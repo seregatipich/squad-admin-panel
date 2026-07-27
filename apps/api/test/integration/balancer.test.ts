@@ -412,6 +412,88 @@ describeIfDb('POST /api/v1/integrations/balancer/proposals', () => {
     expect(byKey.get('balancer-snapshot-player')?.status).toBe('open');
   });
 
+  it('accepts a snapshot that omits the optional team fields', async () => {
+    // Regression: a Zod `.default(null)` on current_team/target_team rewrites
+    // req.body, so the HMAC would be checked against a value the exporter never
+    // signed and every such delivery would 401.
+    const payload = snapshotPayload({
+      source_snapshot_id: 'balancer-snapshot-no-teams',
+      proposal: [
+        {
+          subject_type: 'squad',
+          subject_id: 'sq-alpha',
+          label: 'Alpha',
+          state: 'should_move',
+        },
+      ],
+    });
+
+    const res = await postSnapshot(payload);
+
+    expect(res.statusCode).toBe(202);
+    const [row] = await h.db
+      .select()
+      .from(balancerProposals)
+      .where(eq(balancerProposals.sourceSnapshotId, 'balancer-snapshot-no-teams'));
+    expect(row?.proposal[0]).toMatchObject({
+      subject_id: 'sq-alpha',
+      current_team: null,
+      target_team: null,
+    });
+  });
+
+  it('accepts and stores exporter fields the panel does not model', async () => {
+    // Regression: Zod strips unknown keys by default, which both breaks the
+    // signature and silently drops payload the exporter is free to add.
+    const payload = snapshotPayload({
+      source_snapshot_id: 'balancer-snapshot-extra',
+      composition_key: 'abc123',
+      proposal: [
+        {
+          subject_type: 'squad',
+          subject_id: 'sq-alpha',
+          label: 'Alpha',
+          current_team: 1,
+          target_team: 2,
+          state: 'should_move',
+          seed_weight: 0.42,
+        },
+      ],
+    });
+
+    const res = await postSnapshot(payload);
+
+    expect(res.statusCode).toBe(202);
+    const [row] = await h.db
+      .select()
+      .from(balancerProposals)
+      .where(eq(balancerProposals.sourceSnapshotId, 'balancer-snapshot-extra'));
+    expect(row?.proposal[0]).toMatchObject({ seed_weight: 0.42 });
+  });
+
+  it('accepts a label the exporter did not trim', async () => {
+    // Regression: `z.string().trim()` is a transform — it rewrites req.body and
+    // invalidates the signature the exporter computed over the untrimmed value.
+    const payload = snapshotPayload({
+      source_snapshot_id: 'balancer-snapshot-untrimmed',
+      layer: '  Yehorivka_RAAS_v1  ',
+      proposal: [
+        {
+          subject_type: 'squad',
+          subject_id: 'sq-alpha',
+          label: '  Alpha  ',
+          current_team: 1,
+          target_team: 2,
+          state: 'should_move',
+        },
+      ],
+    });
+
+    const res = await postSnapshot(payload);
+
+    expect(res.statusCode).toBe(202);
+  });
+
   it('rejects a proposal entry with an unknown diff state with 400', async () => {
     const payload = snapshotPayload({
       proposal: [
