@@ -122,4 +122,68 @@ describe('LivePlayers', () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it(
+    'hides the bulk selection column without any mod:* catalog key',
+    async () => {
+      render(<LivePlayers serverId="srv-1" modPermissions={[]} />);
+      await screen.findByText('Leader');
+      expect(screen.queryByLabelText('Выделить всех')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Выбрать игрока: Leader')).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'offers a checkbox only for roster rows with a resolved player id',
+    async () => {
+      render(<LivePlayers serverId="srv-1" modPermissions={['mod:kick']} />);
+      await screen.findByText('Leader');
+      expect(screen.getByLabelText('Выбрать игрока: Leader')).toBeEnabled();
+      expect(screen.getByLabelText('Выбрать игрока: Mate')).toBeDisabled();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'reveals the bulk action bar once a player is selected and clears it again',
+    async () => {
+      render(<LivePlayers serverId="srv-1" modPermissions={['mod:kick']} />);
+      await screen.findByText('Leader');
+      expect(screen.queryByRole('button', { name: 'Массовое действие' })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByLabelText('Выбрать игрока: Leader'));
+      expect(screen.getByText('Выбрано: 1')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Массовое действие' })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Снять выделение' }));
+      expect(screen.queryByRole('button', { name: 'Массовое действие' })).not.toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'selects every selectable player at once',
+    async () => {
+      render(<LivePlayers serverId="srv-1" modPermissions={['mod:kick', 'mod:ban_perm']} />);
+      await screen.findByText('Leader');
+      fireEvent.click(screen.getByLabelText('Выделить всех'));
+      // Only `Leader` carries a resolved player_id; `Mate` cannot be targeted.
+      expect(screen.getByText('Выбрано: 1')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'opens the bulk moderation modal with the selected targets',
+    async () => {
+      render(<LivePlayers serverId="srv-1" modPermissions={['mod:kick']} />);
+      await screen.findByText('Leader');
+      fireEvent.click(screen.getByLabelText('Выбрать игрока: Leader'));
+      fireEvent.click(screen.getByRole('button', { name: 'Массовое действие' }));
+      expect(await screen.findByText('Выбрано игроков: 1')).toBeInTheDocument();
+      expect(screen.getByLabelText('Действие')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
 });
