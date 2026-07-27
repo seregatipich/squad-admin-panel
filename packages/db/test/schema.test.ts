@@ -88,4 +88,25 @@ describe('schema surface', () => {
       'entity_id',
     ]);
   });
+
+  it('player_discord_links enforces 1:1 in both directions (DISCORD-4)', () => {
+    const config = getTableConfig(schema.playerDiscordLinks);
+    expect(config.name).toBe('player_discord_links');
+
+    // One link per player: player_id is the primary key.
+    expect(config.columns.find((c) => c.name === 'player_id')?.primary).toBe(true);
+
+    // One player per Discord account: discord_user_id is unique.
+    const discordUserId = config.columns.find((c) => c.name === 'discord_user_id');
+    expect(discordUserId?.isUnique).toBe(true);
+    expect(discordUserId?.notNull).toBe(true);
+
+    expect(config.columns.find((c) => c.name === 'discord_username')?.notNull).toBe(true);
+    expect(config.columns.find((c) => c.name === 'linked_at')?.notNull).toBe(true);
+
+    // Deleting a player takes its Discord link with it.
+    const fk = config.foreignKeys.map((k) => k.reference())[0];
+    expect(fk?.foreignTable).toBe(schema.players);
+    expect(config.foreignKeys[0]?.onDelete).toBe('cascade');
+  });
 });

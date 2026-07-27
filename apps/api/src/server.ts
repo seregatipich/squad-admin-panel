@@ -40,6 +40,7 @@ import analyticsRoutes from './routes/analytics.js';
 import appealsRoutes from './routes/appeals.js';
 import auditRoutes from './routes/audit.js';
 import authRoutes from './routes/auth.js';
+import discordAuthRoutes from './routes/auth-discord.js';
 import steamRoutes from './routes/auth-steam.js';
 import automationRulesRoutes from './routes/automation-rules.js';
 import banSourcesRoutes from './routes/ban-sources.js';
@@ -300,6 +301,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(publicAppealsRoutes);
   await app.register(publicBanlistRoutes);
   await app.register(steamRoutes);
+  await app.register(discordAuthRoutes);
   await app.register(setupRoutes);
   await app.register(integrationsVipRoutes);
   await app.register(whitelistRoutes);

@@ -6,6 +6,19 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ## 2026-07-27
 
+### DISCORD-4 — player_discord_links (migration 0098)
+
+**Files:** `packages/db/drizzle/0098_player_discord_links.sql`, `packages/db/src/schema/player-discord-links.ts`, `packages/db/src/schema/index.ts`, `packages/db/test/schema.test.ts`
+
+New table `player_discord_links` (#151) — the Discord identity bound to a panel player by the OAuth2 `identify` flow. It is the schema root for the rest of the Discord chain: DISCORD-5 (#152, role sync) and DISCORD-6 (#153, bot command gating) both resolve a player through it.
+
+#### Added
+
+- `player_discord_links(player_id, discord_user_id, discord_username, linked_at)`. `player_id` is the **primary key** and `REFERENCES players(id) ON DELETE CASCADE` — one link per player, and deleting a player takes the link with it.
+- Unique constraint `player_discord_links_discord_user_id_unique` on `discord_user_id` — one player per Discord account. Together with the primary key this makes the relationship strictly 1:1 in both directions; `apps/api/src/routes/auth-discord.ts` translates the resulting unique violation (SQLSTATE 23505) into `409 already_linked_other` instead of pre-checking and racing.
+- `discord_username` is a **snapshot** taken at link time. Discord display names change, and refreshing them requires a bot session (DISCORD-6), so nothing auto-updates this column.
+- Panel-only data: no `public-*` route may select this table. `apps/api/test/security/discord-link-public-leak.test.ts` enforces that at runtime and statically.
+
 ### VIDEO-2 — media_links (migration 0095)
 
 **Files:** `packages/db/drizzle/0095_media_links.sql`, `packages/db/src/schema/media-links.ts`, `packages/db/src/schema/index.ts`, `packages/db/test/schema.test.ts`

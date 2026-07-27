@@ -23,6 +23,7 @@ vi.mock('@squad/db/schema', () => ({
   vipLifecycleEvents: { eventId: 'eventId' },
   playerIpHistory: {},
   playerNameHistory: {},
+  playerDiscordLinks: { playerId: 'playerId', discordUserId: 'discordUserId' },
 }));
 
 vi.mock('@squad/bridge-client', () => ({
@@ -180,6 +181,7 @@ vi.mock('../src/lib/logger.js', () => ({
 import adminsCfgRoutes from '../src/routes/admins-cfg.js';
 import auditRoutes from '../src/routes/audit.js';
 import authRoutes from '../src/routes/auth.js';
+import authDiscordRoutes from '../src/routes/auth-discord.js';
 import authSteamRoutes from '../src/routes/auth-steam.js';
 import depotRoutes from '../src/routes/depot.js';
 import hostRoutes from '../src/routes/host.js';
@@ -207,6 +209,10 @@ describe('routes import graph', () => {
 
   it('audit exports a Fastify plugin', () => {
     expect(typeof auditRoutes).toBe('function');
+  });
+
+  it('auth-discord exports a Fastify plugin', () => {
+    expect(typeof authDiscordRoutes).toBe('function');
   });
 
   it('auth-steam exports a Fastify plugin', () => {

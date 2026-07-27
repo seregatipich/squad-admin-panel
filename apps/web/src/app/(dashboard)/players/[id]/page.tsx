@@ -20,6 +20,7 @@ import { AltsSection } from './AltsSection';
 import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
 import { ClanWidget, type PlayerClan } from './ClanWidget';
+import { DiscordLinkSection } from './DiscordLinkSection';
 import { DossierSection } from './DossierSection';
 import { EvidenceSection } from './EvidenceSection';
 import { ExternalBansSection } from './ExternalBansSection';
@@ -243,6 +244,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <SteamProfileSection playerId={playerId} steamId64={player.steam_id64} snapshot={player} />
 
       <PanelAccessSection playerId={playerId} canManage={canManageRoles} />
+
+      <DiscordLinkSection playerId={playerId} me={me} />
 
       <BonusSection playerId={playerId} />
 

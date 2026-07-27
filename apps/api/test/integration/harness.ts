@@ -32,6 +32,7 @@ import analyticsRoutes from '../../src/routes/analytics.js';
 import appealsRoutes from '../../src/routes/appeals.js';
 import auditRoutes from '../../src/routes/audit.js';
 import authRoutes from '../../src/routes/auth.js';
+import discordAuthRoutes from '../../src/routes/auth-discord.js';
 import automationRulesRoutes from '../../src/routes/automation-rules.js';
 import banSourcesRoutes from '../../src/routes/ban-sources.js';
 import bannedNamesRoutes from '../../src/routes/banned-names.js';
@@ -439,6 +440,12 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     SESSION_TTL_SECONDS: 21600,
     SESSION_TOUCH_THROTTLE_SECONDS: 60,
     MEDIA_STORAGE_DIR: mediaDir,
+    // OAuth round-trip config (DISCORD-4): the Discord link routes need a
+    // public origin and client credentials to build their redirects. The
+    // values are inert — every outbound call is faked by the test.
+    PANEL_PUBLIC_URL: 'https://panel.test',
+    DISCORD_CLIENT_ID: 'test-discord-client-id',
+    DISCORD_CLIENT_SECRET: 'test-discord-client-secret',
   });
   app.decorate('encryptionKey', Buffer.from(TEST_ENCRYPTION_KEY, 'base64'));
   app.decorate('db', db);
@@ -482,6 +489,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   }
 
   await app.register(authRoutes);
+  await app.register(discordAuthRoutes);
   await app.register(setupRoutes);
   await app.register(meTokensRoutes);
   await app.register(messageTemplatesRoutes);
