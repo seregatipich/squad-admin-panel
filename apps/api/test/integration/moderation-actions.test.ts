@@ -1,4 +1,12 @@
-import { moderationActions, players, roleSquadPermissions, roles, servers } from '@squad/db/schema';
+import {
+  mediaFiles,
+  mediaLinks,
+  moderationActions,
+  players,
+  roleSquadPermissions,
+  roles,
+  servers,
+} from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
@@ -104,6 +112,26 @@ async function loginAsPlayerId(playerIdValue: string): Promise<string> {
 
 function bansCfgPath(serverId: string): string {
   return `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig/Bans.cfg`;
+}
+
+/** Inserts a bare `media_files` row (external-link kind) without going through the upload route. */
+async function seedMediaFile(opts: { title?: string; deleted?: boolean } = {}): Promise<string> {
+  const id = uuidv7();
+  await h.db.insert(mediaFiles).values({
+    id,
+    uploaderPlayerId: null,
+    kind: 'external_link',
+    originalFilename: `clip-${id}.mp4`,
+    mimeType: 'text/uri-list',
+    sizeBytes: 0,
+    sha256: id.replace(/-/g, ''),
+    storagePath: null,
+    externalUrl: `https://clips.example.com/${id}`,
+    title: opts.title ?? null,
+    description: null,
+    deletedAt: opts.deleted ? new Date() : null,
+  });
+  return id;
 }
 
 function okOutcome(overrides: Partial<WorkerRconCommandOutcome> = {}): WorkerRconCommandOutcome {
@@ -543,5 +571,356 @@ describe('GET /api/v1/players/:playerId/moderation-actions history filters', () 
       server: { id: serverA },
       reason: 'r1',
     });
+  });
+});
+
+interface EvidenceApiItem {
+  id: string;
+  kind: string;
+  external_url: string | null;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  title: string | null;
+  linked_by_player_id: string | null;
+  linked_at: string;
+}
+
+interface ActionWithEvidence {
+  id: string;
+  action_type: string;
+  evidence: EvidenceApiItem[];
+  evidence_count: number;
+}
+
+describe('MOD-3 evidence on moderation actions', () => {
+  let serverId: string;
+  let actorId: string;
+  let cookie: string;
+
+  beforeEach(async () => {
+    h = await buildIntegrationApp({ bridge: makeFakeBridge() });
+    vi.mocked(sendRconCommandViaWorker).mockReset().mockResolvedValue(okOutcome());
+    serverId = await seedServer('Evidence Test Server');
+    actorId = await seedActorWithSquadPermissions({
+      steamId64: testSteamId(988000),
+      squadPermissionKeys: ['ban', 'kick'],
+    });
+    cookie = await loginAsPlayerId(actorId);
+  });
+
+  afterEach(() => {
+    invalidateAllPermissionCaches();
+  });
+
+  it('attaching two evidence_media_ids creates exactly two moderation_action media_links', async () => {
+    const targetId = await seedPlayer(testSteamId(988001), 'EvidenceTarget1');
+    const mediaA = await seedMediaFile({ title: 'Клип с аимботом' });
+    const mediaB = await seedMediaFile();
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${targetId}/moderation-actions`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        server_id: serverId,
+        action_type: 'ban',
+        reason: 'aimbot',
+        ban_length: '0',
+        evidence_media_ids: [mediaA, mediaB],
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { action: ActionWithEvidence };
+    expect(body.action.evidence_count).toBe(2);
+
+    const links = await h.db
+      .select()
+      .from(mediaLinks)
+      .where(
+        and(
+          eq(mediaLinks.entityType, 'moderation_action'),
+          eq(mediaLinks.entityId, body.action.id),
+        ),
+      );
+    expect(links).toHaveLength(2);
+    expect(links.map((row) => row.mediaId).sort()).toEqual([mediaA, mediaB].sort());
+    for (const link of links) {
+      expect(link.linkedByPlayerId).toBe(actorId);
+    }
+  });
+
+  it('history returns evidence_count and both evidence items with kind, external_url and title', async () => {
+    const targetId = await seedPlayer(testSteamId(988002), 'EvidenceTarget2');
+    const mediaA = await seedMediaFile({ title: 'Клип с аимботом' });
+    const mediaB = await seedMediaFile();
+
+    const created = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${targetId}/moderation-actions`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        server_id: serverId,
+        action_type: 'kick',
+        reason: 'toxicity',
+        evidence_media_ids: [mediaA, mediaB],
+      }),
+    });
+    expect(created.statusCode).toBe(200);
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetId}/moderation-actions`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { actions: ActionWithEvidence[] };
+    expect(body.actions).toHaveLength(1);
+    const action = body.actions[0];
+    if (!action) throw new Error('expected one moderation action');
+    expect(action.evidence_count).toBe(2);
+    expect(action.evidence).toHaveLength(2);
+
+    const withTitle = action.evidence.find((item) => item.id === mediaA);
+    expect(withTitle).toMatchObject({
+      kind: 'external_link',
+      title: 'Клип с аимботом',
+      mime_type: 'text/uri-list',
+      size_bytes: 0,
+      linked_by_player_id: actorId,
+    });
+    expect(withTitle?.external_url).toMatch(/^https:\/\/clips\.example\.com\//);
+    expect(typeof withTitle?.linked_at).toBe('string');
+    expect(action.evidence.some((item) => item.id === mediaB)).toBe(true);
+  });
+
+  it('soft-deleted media disappears from evidence but its media_links row survives', async () => {
+    const targetId = await seedPlayer(testSteamId(988003), 'EvidenceTarget3');
+    const keptMedia = await seedMediaFile({ title: 'kept' });
+    const doomedMedia = await seedMediaFile({ title: 'doomed' });
+
+    const created = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${targetId}/moderation-actions`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        server_id: serverId,
+        action_type: 'warn',
+        reason: 'first warning',
+        evidence_media_ids: [keptMedia, doomedMedia],
+      }),
+    });
+    expect(created.statusCode).toBe(200);
+    const actionId = (created.json() as { action: ActionWithEvidence }).action.id;
+
+    await h.db
+      .update(mediaFiles)
+      .set({ deletedAt: new Date() })
+      .where(eq(mediaFiles.id, doomedMedia));
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetId}/moderation-actions`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const action = (res.json() as { actions: ActionWithEvidence[] }).actions[0];
+    if (!action) throw new Error('expected one moderation action');
+    expect(action.evidence_count).toBe(1);
+    expect(action.evidence.map((item) => item.id)).toEqual([keptMedia]);
+
+    const links = await h.db
+      .select()
+      .from(mediaLinks)
+      .where(
+        and(eq(mediaLinks.entityType, 'moderation_action'), eq(mediaLinks.entityId, actionId)),
+      );
+    expect(links).toHaveLength(2);
+  });
+
+  it('an unknown evidence media id is rejected with 400 before the action is enforced', async () => {
+    const targetId = await seedPlayer(testSteamId(988004), 'EvidenceTarget4');
+    const goodMedia = await seedMediaFile();
+    const unknownMedia = uuidv7();
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${targetId}/moderation-actions`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        server_id: serverId,
+        action_type: 'ban',
+        reason: 'aimbot',
+        evidence_media_ids: [goodMedia, unknownMedia],
+      }),
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'evidence_media_not_found', media_id: unknownMedia });
+    expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
+
+    const rows = await h.db
+      .select({ id: moderationActions.id })
+      .from(moderationActions)
+      .where(eq(moderationActions.playerId, targetId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('a soft-deleted evidence media id is rejected with 400', async () => {
+    const targetId = await seedPlayer(testSteamId(988005), 'EvidenceTarget5');
+    const deletedMedia = await seedMediaFile({ deleted: true });
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${targetId}/moderation-actions`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        server_id: serverId,
+        action_type: 'ban',
+        reason: 'aimbot',
+        evidence_media_ids: [deletedMedia],
+      }),
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'evidence_media_not_found', media_id: deletedMedia });
+    expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
+  });
+
+  it('rejects more than ten evidence_media_ids with a 400 from the body schema', async () => {
+    const targetId = await seedPlayer(testSteamId(988006), 'EvidenceTarget6');
+    const eleven = Array.from({ length: 11 }, () => uuidv7());
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${targetId}/moderation-actions`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        server_id: serverId,
+        action_type: 'ban',
+        reason: 'aimbot',
+        evidence_media_ids: eleven,
+      }),
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
+  });
+
+  it('duplicate ids in evidence_media_ids are deduplicated into a single link', async () => {
+    const targetId = await seedPlayer(testSteamId(988007), 'EvidenceTarget7');
+    const mediaA = await seedMediaFile();
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/players/${targetId}/moderation-actions`,
+      headers: { cookie, 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        server_id: serverId,
+        action_type: 'warn',
+        reason: 'dup evidence',
+        evidence_media_ids: [mediaA, mediaA],
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { action: ActionWithEvidence };
+    expect(body.action.evidence_count).toBe(1);
+
+    const links = await h.db
+      .select()
+      .from(mediaLinks)
+      .where(
+        and(
+          eq(mediaLinks.entityType, 'moderation_action'),
+          eq(mediaLinks.entityId, body.action.id),
+        ),
+      );
+    expect(links).toHaveLength(1);
+  });
+
+  it('loads evidence for a whole history page in one query, not one per action', async () => {
+    const emptyTargetId = await seedPlayer(testSteamId(988008), 'EvidenceEmptyTarget');
+    const targetId = await seedPlayer(testSteamId(988009), 'EvidenceBatchTarget');
+
+    for (let i = 0; i < 5; i++) {
+      const mediaId = await seedMediaFile();
+      const created = await h.app.inject({
+        method: 'POST',
+        url: `/api/v1/players/${targetId}/moderation-actions`,
+        headers: { cookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({
+          server_id: serverId,
+          action_type: 'warn',
+          reason: `warning ${i}`,
+          evidence_media_ids: [mediaId],
+        }),
+      });
+      expect(created.statusCode).toBe(200);
+    }
+
+    const get = (playerId: string) =>
+      h.app.inject({
+        method: 'GET',
+        url: `/api/v1/players/${playerId}/moderation-actions`,
+        headers: { cookie },
+      });
+
+    // Warm the session/permission caches so the measured deltas differ only
+    // by the evidence query itself.
+    await get(emptyTargetId);
+    await get(targetId);
+
+    const selectSpy = vi.spyOn(h.db, 'select');
+    await get(emptyTargetId);
+    const baseline = selectSpy.mock.calls.length;
+    selectSpy.mockClear();
+    const withEvidence = await get(targetId);
+    const loaded = selectSpy.mock.calls.length;
+    selectSpy.mockRestore();
+
+    const body = withEvidence.json() as { actions: ActionWithEvidence[] };
+    expect(body.actions).toHaveLength(5);
+    for (const action of body.actions) {
+      expect(action.evidence_count).toBe(1);
+    }
+    // Five actions, five attached files, exactly one extra SELECT over the
+    // zero-action baseline — a per-action loop would have cost five.
+    expect(loaded).toBe(baseline + 1);
+  });
+
+  it('rejects a history read from a user without panel access with 403', async () => {
+    const targetId = await seedPlayer(testSteamId(988010), 'EvidenceTarget10');
+    const [noPanelRole] = await h.db
+      .insert(roles)
+      .values({
+        id: uuidv7(),
+        name: `NoPanel-${uuidv7()}`,
+        color: 'blue',
+        isSystemRole: false,
+        panelAccess: false,
+      })
+      .returning({ id: roles.id });
+    const [outsider] = await h.db
+      .insert(players)
+      .values({
+        steamId64: testSteamId(988011),
+        canonicalName: 'EvidenceOutsider',
+        canonicalNameNormalized: 'evidenceoutsider',
+        eosId: 'eos-evidenceoutsider',
+        roleId: noPanelRole?.id ?? null,
+      })
+      .returning({ id: players.id });
+    if (!outsider) throw new Error('failed to seed outsider');
+    const outsiderCookie = await loginAsPlayerId(outsider.id);
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${targetId}/moderation-actions`,
+      headers: { cookie: outsiderCookie },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: 'forbidden' });
   });
 });

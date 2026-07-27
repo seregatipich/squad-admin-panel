@@ -7,6 +7,21 @@
 - `POST /api/v1/moderation-actions/bulk` ([`routes/moderation-bulk.ts`](../../../apps/api/src/routes/moderation-bulk.ts)): applies one warn/kick/ban to up to 50 players in a single request, enforcing each target through MOD-2's [`lib/moderation-enforce.ts`](../../../apps/api/src/lib/moderation-enforce.ts). Body `{ server_id, action_type, player_ids, reason, ban_length?, confirm_bulk: true }`; `confirm_bulk` must be the literal `true` (server half of the UI's double confirmation) and repeated ids are deduplicated. **The operation is deliberately non-transactional**: each target's ledger row is written immediately after its RCON command is confirmed, a failure is reported in `results[]` and the loop continues, and the response stays `200` — see the "Bulk moderation" section of [`api.md`](./api.md) for the full semantics, the per-target error codes, and the 25 s time budget. RBAC uses the existing catalog keys only (`mod:warn`/`mod:kick`/`mod:ban_temp`/`mod:ban_perm`, themselves gated on the role's Squad `kick`/`ban` permission by `derivePanelPermissions`); no new permission key was introduced. New audit action `moderation.bulk_action` — one row per target reached through RCON (`target_type='player'`) plus a summary row naming every target (`target_type='server'`), all sharing the request's `bulk_group` in `context`. No migration: the grouping lives in `moderation_actions.context`.
 - Web: `apps/web/src/components/BulkModerationModal.tsx` (two-step confirmation — a form, then a target list where a ban additionally requires typing the target count back — plus an `applied`/`failed` result screen with per-target reasons) and multi-select in the live-roster table (`servers/[id]/live-players.tsx`), gated on the caller's `mod:*` keys from `GET /api/v1/me`.
 
+## 2026-07-27 — MOD-3 доказательства для действий модерации (#60)
+
+### Added
+
+- `POST /api/v1/players/:playerId/moderation-actions` body gains optional `evidence_media_ids` — up to 10 ids of existing, non-deleted `media_files` rows. Each becomes a `media_links` row with `entity_type='moderation_action'`, `entity_id` = the new action's id, and `linked_by_player_id` = the caller. Duplicates in the array are deduplicated. `moderation_actions` itself gains no column: `media_links` (VIDEO-2, #158) is the canonical evidence store, so this task ships **no migration**.
+- The ids are validated **before** the RCON command is sent — an unknown or soft-deleted id returns `400 { error: 'evidence_media_not_found', media_id }` and nothing is enforced, so a bad id can never leave a player banned in-game with no ledger row to revert. More than 10 ids is a `400` from the body schema.
+- Every moderation-action read gains `evidence[]` and `evidence_count`. Each item carries `{ id, kind, external_url, original_filename, mime_type, size_bytes, title, linked_by_player_id, linked_at }`. Applies to `GET /api/v1/players/:playerId/moderation-actions` and to the action returned by the `POST` route.
+- Evidence for a whole history page is loaded in **one** query (`media_links` ⋈ `media_files`, `inArray` over the page's action ids, `isNull(media_files.deleted_at)`) — the shape of `reports.ts`'s `loadEvidenceForReports`, not a per-action lookup.
+
+### Changed
+
+- A `media_links` row pointing at a soft-deleted `media_files` row is omitted from `evidence[]` but is **not** deleted — detaching stays an explicit operator action through `DELETE /api/v1/media/:id/links` (VIDEO-2, #158), and restoring the file restores its evidence.
+
+Route gating, error codes and audit configuration are unchanged: `panel_access` plus the live-Squad `kick`/`ban` permission on the write path, `config: { audit: false }` on the history read.
+
 ## 2026-07-27 — MOD-2 действия модерации (#59)
 
 ### Added

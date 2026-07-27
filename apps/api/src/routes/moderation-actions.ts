@@ -1,8 +1,9 @@
-import { moderationActions, players, servers } from '@squad/db/schema';
+import { mediaFiles, mediaLinks, moderationActions, players, servers } from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
-import { and, eq, isNull, type SQL, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { removeBanLines } from '../lib/bans-cfg.js';
 import {
@@ -17,6 +18,8 @@ const LIMIT_MAX = 200;
 const LIMIT_DEFAULT = 50;
 /** Read-verify-write attempts before giving up on a racing Bans.cfg edit. */
 const MAX_BANS_CFG_ATTEMPTS = 3;
+/** Evidence files attachable to a single action, mirroring `reports.ts`'s per-report cap. */
+const EVIDENCE_MAX = 10;
 
 const playerIdParams = z.object({ playerId: z.string().uuid() });
 const actionIdParams = z.object({ id: z.string().uuid() });
@@ -38,6 +41,13 @@ const actionBody = z.object({
     .regex(/^\d+[smhdwMy]?$/, 'invalid ban_length')
     .default('0'),
   source: z.enum(['player_card', 'live_players']).default('player_card'),
+  /**
+   * Evidence (MOD-3, #60): ids of existing, non-deleted `media_files` rows to
+   * attach to the resulting ledger row. Stored as `media_links` — the
+   * canonical polymorphic evidence store (VIDEO-2, #158) — never as a column
+   * on `moderation_actions`.
+   */
+  evidence_media_ids: z.array(z.string().uuid()).max(EVIDENCE_MAX).default([]),
 });
 
 const revertBody = z.object({
@@ -57,6 +67,19 @@ interface ModerationActionApiRow {
   author_player_id: string | null;
   author_name: string | null;
   author_system_label: string | null;
+}
+
+/** One `media_files` row attached to a moderation action, as serialized into `evidence[]`. */
+interface EvidenceItem {
+  id: string;
+  kind: string;
+  external_url: string | null;
+  original_filename: string;
+  mime_type: string;
+  size_bytes: number;
+  title: string | null;
+  linked_by_player_id: string | null;
+  linked_at: string;
 }
 
 function bansCfgPath(serverId: string): string {
@@ -103,7 +126,7 @@ function toIso(value: Date | string | null): string | null {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
-function serializeActionRow(row: ModerationActionApiRow) {
+function serializeActionRow(row: ModerationActionApiRow, evidence: EvidenceItem[] = []) {
   return {
     id: row.id,
     action_type: row.action_type,
@@ -116,7 +139,69 @@ function serializeActionRow(row: ModerationActionApiRow) {
     author: row.author_player_id
       ? { kind: 'player' as const, id: row.author_player_id, name: row.author_name }
       : { kind: 'system' as const, label: row.author_system_label },
+    evidence,
+    evidence_count: evidence.length,
   };
+}
+
+/**
+ * Loads the active (non-soft-deleted) media evidence attached to the given
+ * moderation actions, keyed by action id. One query for the whole page, in the
+ * shape of `reports.ts`'s `loadEvidenceForReports` — a per-action lookup would
+ * be an N+1 on every history read.
+ *
+ * A `media_links` row pointing at a soft-deleted `media_files` row is skipped
+ * rather than removed: detaching is an explicit operator action, and undeleting
+ * the file must bring its evidence back.
+ */
+async function loadEvidenceForActions(
+  app: Parameters<FastifyPluginAsync>[0],
+  actionIds: string[],
+): Promise<Map<string, EvidenceItem[]>> {
+  const byAction = new Map<string, EvidenceItem[]>();
+  if (actionIds.length === 0) return byAction;
+
+  const rows = await app.db
+    .select({
+      actionId: mediaLinks.entityId,
+      linkedByPlayerId: mediaLinks.linkedByPlayerId,
+      linkedAt: mediaLinks.createdAt,
+      id: mediaFiles.id,
+      kind: mediaFiles.kind,
+      externalUrl: mediaFiles.externalUrl,
+      originalFilename: mediaFiles.originalFilename,
+      mimeType: mediaFiles.mimeType,
+      sizeBytes: mediaFiles.sizeBytes,
+      title: mediaFiles.title,
+    })
+    .from(mediaLinks)
+    .innerJoin(mediaFiles, eq(mediaFiles.id, mediaLinks.mediaId))
+    .where(
+      and(
+        eq(mediaLinks.entityType, 'moderation_action'),
+        inArray(mediaLinks.entityId, actionIds),
+        isNull(mediaFiles.deletedAt),
+      ),
+    )
+    .orderBy(mediaLinks.createdAt);
+
+  for (const row of rows) {
+    const item: EvidenceItem = {
+      id: row.id,
+      kind: row.kind,
+      external_url: row.externalUrl,
+      original_filename: row.originalFilename,
+      mime_type: row.mimeType,
+      size_bytes: row.sizeBytes,
+      title: row.title,
+      linked_by_player_id: row.linkedByPlayerId,
+      linked_at: row.linkedAt.toISOString(),
+    };
+    const existing = byAction.get(row.actionId);
+    if (existing) existing.push(item);
+    else byAction.set(row.actionId, [item]);
+  }
+  return byAction;
 }
 
 async function fetchActionRows(
@@ -155,6 +240,12 @@ async function fetchActionRows(
  * removing their line(s) from `Bans.cfg` and marking their ban rows
  * reverted. Gated on `panel_access`; the write and revert routes
  * additionally require the role's live-Squad `kick`/`ban` permission.
+ *
+ * Evidence (MOD-3, #60) rides along on the write path — `evidence_media_ids`
+ * in the body becomes `media_links` rows with `entity_type='moderation_action'`
+ * — and comes back out on every read as `evidence[]`/`evidence_count`. The
+ * link table is the canonical store (VIDEO-2, #158); `moderation_actions`
+ * itself carries no evidence column.
  */
 const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -179,8 +270,14 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const rows = await fetchActionRows(app, sql.join(conditions, sql` AND `), limit);
+      const evidenceByAction = await loadEvidenceForActions(
+        app,
+        rows.map((row) => row.id),
+      );
 
-      return { actions: rows.map(serializeActionRow) };
+      return {
+        actions: rows.map((row) => serializeActionRow(row, evidenceByAction.get(row.id) ?? [])),
+      };
     },
   );
 
@@ -231,6 +328,22 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'target_identity_missing' };
       }
 
+      // Evidence is validated *before* enforcement on purpose: a bad media id
+      // must not leave a player banned in-game with no ledger row to revert.
+      const evidenceIds = Array.from(new Set(req.body.evidence_media_ids));
+      if (evidenceIds.length > 0) {
+        const activeMedia = await app.db
+          .select({ id: mediaFiles.id })
+          .from(mediaFiles)
+          .where(and(inArray(mediaFiles.id, evidenceIds), isNull(mediaFiles.deletedAt)));
+        const activeIds = new Set(activeMedia.map((row) => row.id));
+        const missing = evidenceIds.find((id) => !activeIds.has(id));
+        if (missing) {
+          reply.code(400);
+          return { error: 'evidence_media_not_found', media_id: missing };
+        }
+      }
+
       // biome-ignore lint/style/noNonNullAssertion: moderationWriteGuard rejects unauthenticated callers
       const actor = req.user!;
       const result = await enforceModerationAction(app, {
@@ -262,11 +375,24 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'action_failed' };
       }
 
+      if (evidenceIds.length > 0) {
+        await app.db.insert(mediaLinks).values(
+          evidenceIds.map((mediaId) => ({
+            id: uuidv7(),
+            mediaId,
+            entityType: 'moderation_action',
+            entityId: result.actionId,
+            linkedByPlayerId: actor.playerId,
+          })),
+        );
+      }
+
       const rows = await fetchActionRows(app, sql`ma.id = ${result.actionId}`, 1);
       const row = rows[0];
       if (!row) throw new Error('moderation action row missing immediately after insert');
+      const evidenceByAction = await loadEvidenceForActions(app, [row.id]);
 
-      return { action: serializeActionRow(row) };
+      return { action: serializeActionRow(row, evidenceByAction.get(row.id) ?? []) };
     },
   );
 
@@ -416,6 +542,8 @@ const moderationActionsRoutes: FastifyPluginAsync = async (app) => {
       const row = rows[0];
       if (!row) throw new Error('unban moderation action row missing immediately after insert');
 
+      // A just-inserted `unban` row cannot have evidence attached yet, so the
+      // serializer's empty default is exact — no evidence query is issued.
       return {
         action: serializeActionRow(row),
         removed_lines: removed.length,
