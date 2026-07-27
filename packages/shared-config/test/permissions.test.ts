@@ -49,6 +49,16 @@ describe('PERMISSIONS registry', () => {
     expect(def?.dangerous).toBeUndefined();
   });
 
+  it('marks every mod:* key as implemented', () => {
+    const byKey = new Map(PERMISSIONS.map((p) => [p.key, p]));
+
+    expect(byKey.get('mod:kick')?.unimplemented).toBeUndefined();
+    expect(byKey.get('mod:warn')?.unimplemented).toBeUndefined();
+    expect(byKey.get('mod:ban_temp')?.unimplemented).toBeUndefined();
+    expect(byKey.get('mod:ban_perm')?.unimplemented).toBeUndefined();
+    expect(byKey.get('mod:unban')?.unimplemented).toBeUndefined();
+  });
+
   it('PERMISSION_KEYS matches PERMISSIONS', () => {
     expect(PERMISSION_KEYS).toEqual(PERMISSIONS.map((p) => p.key));
   });

@@ -1,5 +1,14 @@
 # `api` — changelog
 
+## 2026-07-27 — MOD-2 действия модерации (#59)
+
+### Added
+
+- The five `mod:*` permission keys (`mod:kick`, `mod:warn`, `mod:ban_temp`, `mod:ban_perm`, `mod:unban`) lose `unimplemented: true` in `@squad/shared-config`'s `PERMISSIONS`. `derivePanelPermissions` ([`lib/rbac.ts`](../../../apps/api/src/lib/rbac.ts)) gains a seventh `squadPermissions` parameter and two gates — `mod:kick`/`mod:warn` require the role's live-Squad `kick` permission, `mod:ban_temp`/`mod:ban_perm`/`mod:unban` require `ban` — closing the gap where every `panel_access` user previously received all five keys regardless of their Squad permissions.
+- `POST /api/v1/players/:playerId/moderation-actions` (`routes/moderation-actions.ts`): enforces a warn/kick/ban through the new [`lib/moderation-enforce.ts`](../../../apps/api/src/lib/moderation-enforce.ts) helper (RCON via worker-rcon, then the `moderation_actions` ledger row and EVT-1 publish, only once the command is confirmed applied). Body `{ server_id, action_type, reason, ban_length?, source? }`; guarded the same way as `external-bans.ts`'s local-ban route (squad `kick` for warn/kick, `ban` for ban). Audit action `moderation.action` (target type `player`).
+- `POST /api/v1/moderation-actions/:id/revert`: unbans a player — removes their `Banned:` line(s) from the panel's `Bans.cfg` copy via the new pure [`lib/bans-cfg.ts`](../../../apps/api/src/lib/bans-cfg.ts) (`removeBanLines`, read-verify-write retried up to 3 times against a racing edit before `409 bans_cfg_conflict`), marks every active ban row for that player+server reverted, and inserts an `unban` ledger row. Audit action `moderation.revert` (target type `player`).
+- `GET /api/v1/players/:playerId/moderation-actions` querystring gains `action_type`, `server_id`, and `cursor` filters alongside the existing `limit`; the response shape is unchanged.
+
 ## 2026-07-26 — PLAYER-6 player list sorting and filters (#27)
 
 ### Changed
