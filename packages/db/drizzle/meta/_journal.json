@@ -617,6 +617,13 @@
       "when": 1783403600000,
       "tag": "0106_ban_appeals",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1783403650000,
+      "tag": "0099_discord_role_mappings",
+      "breakpoints": true
     }
   ]
 }

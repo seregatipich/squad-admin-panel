@@ -12,6 +12,13 @@
 - `apps/web/src/app/no-access/page.tsx` and `page.test.tsx` — the page became unreachable with VIPSUB-5 (#171): every successful Steam login now gets a session, `panel`-scoped with a redirect to `/` when the role has `panel_access` and `self_service`-scoped with a redirect to `/me` when it does not (a player with no role at all included). Nothing produces `/no-access?steam_id64=…&reason=no_role|role_no_access` any more.
 - All `noAccess.*` keys from `apps/web/src/i18n/dictionaries/ru.ts` and `en.ts` — «Доступ запрещён», «Steam ID {steamId} не имеет роли в этой панели.», both `reason` variants with their hints, the `.first-owner-claimed` Owner hint and the «Вернуться на страницу входа» link had no consumer left. `i18n.test.ts` interpolates `login.error.notAuthorized` instead, which carries the surviving `{steamId}` placeholder.
 - `apps/web/e2e/no-access.spec.ts`, plus the route's cases in `apps/web/test/pages-graph.test.ts` and `apps/web/test/pages/auth.test.ts`.
+## 2026-07-27 — DISCORD-5 секция «Синхронизация ролей» (#152)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/settings/integrations/discord/DiscordRoleMappingsSection.tsx` — «Синхронизация ролей» on `/settings/integrations/discord`, over `GET/POST/PATCH/DELETE /api/v1/integrations/discord/role-mappings`. A table of panel role → Discord role id with an inline enabled/disabled toggle and «Удалить», a create form (role `<select>` from `GET /api/v1/roles` × a snowflake field), and «Синхронизировать сейчас» on `POST …/role-mappings/reconcile`. The role select hides the system `Owner` role and any role that already has a mapping, since the API enforces one mapping per role.
+- A red banner rendered from the `status` the list route returns: `roleSyncStatusText` (exported for tests) gives the missing-`Manage Roles` case its own Russian wording because it is the one failure an operator can fix, and falls back to the worker's message for anything else. This is the UI half of DISCORD-5's "no silent failure" criterion.
+- The section self-hides on `403` — `GET /api/v1/me` exposes no `can_manage_integrations` boolean, so the permission rule is not duplicated client-side.
 
 ## 2026-07-27 — MOD-3 moderation history with evidence on the player card (#60)
 

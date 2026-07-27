@@ -35,6 +35,7 @@ import hostRoutes from '../src/routes/host.js';
 import hostActionsRoutes from '../src/routes/host-actions.js';
 import hostBackupRoutes from '../src/routes/host-backup.js';
 import integrationsBalancerRoutes from '../src/routes/integrations-balancer.js';
+import integrationsDiscordRoleMappingsRoutes from '../src/routes/integrations-discord-role-mappings.js';
 import integrationsVipRoutes from '../src/routes/integrations-vip.js';
 import meTokensRoutes from '../src/routes/me-tokens.js';
 import permissionsRoutes from '../src/routes/permissions.js';
@@ -110,6 +111,7 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   await app.register(integrationsVipRoutes);
   await app.register(balancerRoutes);
   await app.register(integrationsBalancerRoutes);
+  await app.register(integrationsDiscordRoleMappingsRoutes);
   await app.register(auditRoutes);
   await app.register(steamRoutes);
   await app.register(discordAuthRoutes);
