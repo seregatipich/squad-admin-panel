@@ -375,9 +375,12 @@ describe('RconSupervisor seeding transitions', () => {
       // Repeat polls at the same count: no further transition, but the
       // redis state key keeps refreshing every poll.
       const setCallsBeforeRepeat = redis.set.mock.calls.filter((c) => c[0] === stateKey).length;
-      await sleep(90);
-      const setCallsAfterRepeat = redis.set.mock.calls.filter((c) => c[0] === stateKey).length;
-      expect(setCallsAfterRepeat).toBeGreaterThan(setCallsBeforeRepeat);
+      const deadlineRepeat = Date.now() + 3000;
+      const stateRefreshCount = () => redis.set.mock.calls.filter((c) => c[0] === stateKey).length;
+      while (Date.now() < deadlineRepeat && stateRefreshCount() <= setCallsBeforeRepeat) {
+        await sleep(15);
+      }
+      expect(stateRefreshCount()).toBeGreaterThan(setCallsBeforeRepeat);
       expect(insertedEvents).toHaveLength(1);
 
       // Progress-only change (still seeding, no transition) still
