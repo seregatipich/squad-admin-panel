@@ -237,6 +237,19 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
           first_seen_at: row.firstSeenAt,
           last_seen_at: row.lastSeenAt,
           total_time_played_seconds: Number(row.totalTimePlayedSeconds),
+          // INT-1 (#76): stored Steam Web API snapshot. Everything here stays
+          // null/zero until POST /api/v1/players/:playerId/steam-refresh runs.
+          avatar_url: row.avatarUrl,
+          persona_name: row.personaName,
+          profile_visibility: row.profileVisibility,
+          steam_account_created_at: row.steamAccountCreatedAt,
+          vac_banned: row.vacBanned,
+          vac_ban_count: row.vacBanCount,
+          game_ban_count: row.gameBanCount,
+          days_since_last_ban: row.daysSinceLastBan,
+          owns_squad: row.ownsSquad,
+          steam_playtime_minutes: row.steamPlaytimeMinutes,
+          steam_checked_at: row.steamCheckedAt,
         },
         clan: clanMembership
           ? {
