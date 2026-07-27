@@ -91,6 +91,7 @@ describe('BulkModerationModal', () => {
         onOpenChange={() => undefined}
       />,
     );
+    fireEvent.change(screen.getByLabelText('Действие'), { target: { value: 'ban' } });
     fireEvent.change(screen.getByLabelText('Причина'), { target: { value: 'Читы' } });
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
 
@@ -125,7 +126,7 @@ describe('BulkModerationModal', () => {
   });
 
   it('posts the bulk body and renders the applied/failed summary with per-target reasons', async () => {
-    const fetchMock = vi.fn(() =>
+    const fetchMock = vi.fn((_url: string, _init: RequestInit) =>
       Promise.resolve(
         bulkResponse({
           bulk_group: '019e2000-0000-7000-8000-00000000bbbb',
@@ -154,6 +155,7 @@ describe('BulkModerationModal', () => {
         onApplied={onApplied}
       />,
     );
+    fireEvent.change(screen.getByLabelText('Действие'), { target: { value: 'ban' } });
     fireEvent.change(screen.getByLabelText('Причина'), { target: { value: 'Читы' } });
     fireEvent.change(screen.getByLabelText('Срок бана'), { target: { value: '7d' } });
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
@@ -167,7 +169,7 @@ describe('BulkModerationModal', () => {
     expect(screen.getByText(/Игрок не в сети/)).toBeInTheDocument();
     await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('/api/v1/moderation-actions/bulk');
     expect(JSON.parse(init.body as string)).toEqual({
       server_id: 'srv-1',
