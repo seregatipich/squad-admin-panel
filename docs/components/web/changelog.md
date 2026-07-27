@@ -14,6 +14,20 @@
 - `apps/web/src/app/(dashboard)/issues/[id]/IssueLinksBlock.tsx` — «Связанные объекты» on the ticket card: the expanded `links[]` from `GET /api/v1/issues/:id`, each row a type badge plus a link to `/players/{id}`, `/servers/{id}` or the media stream. A target that no longer exists renders struck-through and non-clickable. Adding a link uses the existing `PlayerSearchSelect` autocomplete for players and a plain `<select>` for servers; the server option is offered only when `GET /api/v1/servers` succeeds, because that route needs `server:view` which a tracker user need not hold. The remove button appears only for links the viewer may detach (own link, or `can_manage_issues`), mirroring the API gate.
 - `apps/web/src/app/(dashboard)/issues/[id]/issue-links.ts` — pure helpers behind that block: `entityTypeLabel`, `canRemoveLink`, `linkErrorMessage` (Russian text for 403/404/409/422), `sortLinks`.
 - `apps/web/src/app/(dashboard)/players/[id]/IssueLinksSection.tsx` — «Связанные тикеты» on `/players/{id}`: the counter and list of unclosed tickets naming the player (`GET /api/v1/players/:playerId/issues`), each linking to `/issues/{id}`. Self-hides on `401`/`403` and when the player has no linked ticket, matching the other player-card sections.
+## 2026-07-27 — LEAD-5 стат-дашборд `/statistics` (#176)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/statistics/` — the `/statistics` server statistics dashboard: a thin `'use client'` page over `StatisticsBrowser`, which owns a single fetch, a single `loading` state and a single `data` state, so changing the date range or the server selection redraws every chart atomically.
+- Controls: date-range presets (Сегодня / Вчера / Неделя / Месяц / 30 дней / Произвольно, with two `YYYY-MM-DD` inputs for the custom range) and a server multiselect defaulting to every server. The selection is committed when the dropdown closes and then debounced by 300 ms, so a burst of checkbox clicks collapses into one request.
+- Blocks: население (средний онлайн, пик онлайна, средняя очередь, онлайн по часам суток, онлайн по дням недели), матчи (матчей за день, doughnut по режимам, топ боевых карт), сообщество (новых игроков, сообщений чата, тимкиллов) and модерация (наказаний, средний/пик онлайна админов). Each time-series prints a «Среднее / Максимум / Всего» KPI line computed from the same stacked values the chart draws.
+- Export: a CSV link carrying the loaded window and a JSON blob download of the exact payload.
+- Drill-down: clicking a bar segment offers a link into `/events`, `/chat`, `/combat-log` or `/external-bans` pre-filtered to that server and, where the destination supports it, that day (`preset=custom&from=D&to=D`). `/external-bans` parses neither filter today, so its link is deliberately bare.
+- `apps/web/src/lib/server-color.ts` — deterministic `serverId → colour`, assigned by position in the **sorted** list of known server ids so a server keeps one colour across every chart and every refetch.
+- `apps/web/src/app/(dashboard)/statistics/StatisticsCharts.tsx` — the recharts surface, loaded through `next/dynamic` so recharts stays out of the page's first-load bundle.
+- Nav entry «Статистика» → `/statistics` with `nav.statistics` added to both `ru.ts` and `en.ts`.
+
+Gating is self-hide-on-403: `GET /api/v1/me` does not expose `panelAccess`, so the page surfaces the API's refusal rather than pre-checking a capability, matching `dashboard/analytics-panel.tsx`. The clock is read in a post-mount `useEffect`, never during render, so the CSV href cannot cause a hydration mismatch.
 
 ## 2026-07-27 — VIDEO-2 evidence section on the player card (#158)
 

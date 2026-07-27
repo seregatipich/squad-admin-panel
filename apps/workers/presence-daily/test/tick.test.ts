@@ -6,6 +6,7 @@ const {
   recomputeCoplayWindow,
   recentCoplayWindow,
   recomputeCoplayForAllSessions,
+  recomputeServerDailyStats,
   accrueDailyBonuses,
   daysInWindow,
 } = vi.hoisted(() => ({
@@ -14,6 +15,7 @@ const {
   recomputeCoplayWindow: vi.fn(),
   recentCoplayWindow: vi.fn(() => ({ fromDay: '2026-07-04', toDay: '2026-07-05' })),
   recomputeCoplayForAllSessions: vi.fn(),
+  recomputeServerDailyStats: vi.fn(),
   accrueDailyBonuses: vi.fn(),
   daysInWindow: vi.fn((from: string, to: string) => (from === to ? [from] : [from, to])),
 }));
@@ -24,6 +26,7 @@ vi.mock('@squad/db', () => ({
   recomputeCoplayWindow,
   recentCoplayWindow,
   recomputeCoplayForAllSessions,
+  recomputeServerDailyStats,
   accrueDailyBonuses,
   daysInWindow,
 }));
@@ -54,6 +57,8 @@ describe('runPresenceDailyTick', () => {
     recomputeCoplayWindow.mockResolvedValue(0);
     recentCoplayWindow.mockClear();
     recomputeCoplayForAllSessions.mockReset();
+    recomputeServerDailyStats.mockReset();
+    recomputeServerDailyStats.mockResolvedValue(0);
     accrueDailyBonuses.mockReset();
     accrueDailyBonuses.mockResolvedValue(ACCRUAL_OK);
     daysInWindow.mockClear();
@@ -96,6 +101,46 @@ describe('runPresenceDailyTick', () => {
     expect(diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'coplay.run_ok', severity: 'info' }),
     );
+  });
+
+  it('rolls up server_daily_stats over the same window and emits server_daily_stats.run_ok', async () => {
+    recomputeDailyPresence.mockResolvedValue(3);
+    recomputeServerDailyStats.mockResolvedValue(12);
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+    const now = new Date('2026-07-05T02:00:00.000Z');
+    const sql = {} as never;
+
+    await runPresenceDailyTick({ sql, diag, now });
+
+    expect(recomputeServerDailyStats).toHaveBeenCalledWith(sql, {
+      fromDay: '2026-07-04',
+      toDay: '2026-07-05',
+      now,
+    });
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'server_daily_stats.run_ok',
+        severity: 'info',
+        payload: expect.objectContaining({ rows: 12 }),
+      }),
+    );
+  });
+
+  it('emits server_daily_stats.run_failed and still accrues economy when the rollup throws', async () => {
+    recomputeDailyPresence.mockResolvedValue(0);
+    recomputeServerDailyStats.mockRejectedValue(new Error('rollup boom'));
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+
+    await runPresenceDailyTick({
+      sql: {} as never,
+      diag,
+      now: new Date('2026-07-05T02:00:00.000Z'),
+    });
+
+    expect(diag.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'server_daily_stats.run_failed', severity: 'error' }),
+    );
+    expect(accrueDailyBonuses).toHaveBeenCalled();
   });
 
   it('emits run_failed when the recompute throws', async () => {

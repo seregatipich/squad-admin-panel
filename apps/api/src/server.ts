@@ -132,6 +132,7 @@ import settingsClanGuardRoutes from './routes/settings-clan-guard.js';
 import settingsCoplayRoutes from './routes/settings-coplay.js';
 import settingsEconomyRoutes from './routes/settings-economy.js';
 import setupRoutes from './routes/setup.js';
+import statisticsRoutes from './routes/statistics.js';
 import suspectsRoutes from './routes/suspects.js';
 import teamkillsRoutes from './routes/teamkills.js';
 import usersRoutes from './routes/users.js';
@@ -301,6 +302,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(integrationsGeoipRoutes);
   await app.register(liveRoutes);
   await app.register(analyticsRoutes);
+  await app.register(statisticsRoutes);
   await app.register(publicStatsRoutes);
   await app.register(publicClansRoutes);
   await app.register(publicAppealsRoutes);

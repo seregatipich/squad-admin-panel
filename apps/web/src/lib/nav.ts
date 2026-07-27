@@ -66,6 +66,7 @@ export const NAV_GROUPS: NavGroup[] = [
         labelKey: 'nav.bonusLeaderboard',
         requiresEconomy: true,
       },
+      { href: '/statistics', label: 'Статистика', labelKey: 'nav.statistics' },
       { href: '/clans', label: 'Кланы', labelKey: 'nav.clans' },
       { href: '/matches', label: 'Матчи', labelKey: 'nav.matches' },
       {

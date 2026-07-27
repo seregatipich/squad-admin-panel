@@ -21,6 +21,7 @@ export const ru = {
   'nav.suspects': 'Метки',
   'nav.leaderboards': 'Лидерборды',
   'nav.bonusLeaderboard': 'Бонусы',
+  'nav.statistics': 'Статистика',
   'nav.clans': 'Кланы',
   'nav.matches': 'Матчи',
   'nav.balancer': 'Балансировщик',

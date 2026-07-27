@@ -33,6 +33,27 @@ New table `issue_links` (#156) — the structural link between a tracker ticket 
 - Indexes `issue_links_entity_idx` on `(entity_type, entity_id)` (reverse lookup for the player card) and `issue_links_issue_idx` on `(issue_id)`.
 
 **Deletion strategy** (the acceptance criteria required one to be fixed in the migration): cascade on `issue_id`, no constraint on `entity_id`. "Нельзя удалить игрока при живых ссылках" is unreachable on a polymorphic column — `RESTRICT` needs a foreign key — and the panel exposes no hard player-delete route, so the read path degrading gracefully is the whole mitigation.
+### LEAD-5 — server_daily_stats (migration 0101)
+
+**Files:** `packages/db/drizzle/0101_server_daily_stats.sql`, `packages/db/src/schema/server-daily-stats.ts`, `packages/db/src/statistics/daily.ts`, `packages/db/src/schema/index.ts`, `packages/db/src/index.ts`, `packages/db/test/statistics-daily.test.ts`
+
+New table `server_daily_stats` (#176) — the materialised per-server, per-UTC-day rollup behind `GET /api/v1/statistics`. One row per `(server_id, day)`: population (`avg_online`, `peak_online`, `avg_queue`, `online_seconds`), matches (`matches`, `modes` and `maps` as `{key: count}` jsonb), community (`new_players`, `chat_messages`, `teamkills`) and moderation (`punishments`, `avg_admins`, `peak_admins`). PK `(server_id, day)`, index `server_daily_stats_day_idx`, `server_daily_stats_nonneg_chk` on every counter, `ON DELETE CASCADE` from `servers`.
+
+`recomputeServerDailyStats(sql, { fromDay, toDay, now })` is the table's **only** writer, invoked once per hour by `runPresenceDailyTick` (`apps/workers/presence-daily`) over the same yesterday+today window presence already recomputes. It deletes and rewrites the window in one transaction, so it is idempotent; days outside the window are never touched.
+
+Data-source notes:
+
+- Population comes from `player_sessions` alone. `player_daily_presence` stores only summed seconds and no instantaneous values, so peaks cannot be derived from it. `peak_online`/`peak_admins` are exact maxima from an interval sweep (+1 at each session start, −1 at each end, running sum), with ends ordered before starts at an identical instant so a same-second reconnect is not double-counted.
+- Averages are time-weighted over the *elapsed* part of the day (`seconds / (min(day_end, now) − day_start)`), so the day in progress is not diluted by hours that have not happened yet.
+- `matches` counts every round of the day; `modes` breaks all of them down; `maps` excludes `is_seed = true` and `game_mode = 'Skirmish'` (combat layers only).
+- New players are attributed to the server of their earliest session on the day `players.first_seen_at` falls on. A player first seen without a session that day is counted nowhere, since no server can be attributed.
+- `punishments` counts `moderation_actions` rows with a non-NULL `server_id`; coverage grows on its own as MOD-2 (#59) routes more enforcement paths into that table.
+
+The migration is hand-written and its journal entry (`idx: 86`) appended by hand — `packages/db/drizzle/meta/` holds only `0008_snapshot.json`, so `drizzle-kit generate` cannot produce a correct diff for this repo.
+
+---
+
+## 2026-07-27
 
 ### VIDEO-2 — media_links (migration 0095)
 
