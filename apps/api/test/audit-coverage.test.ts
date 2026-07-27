@@ -28,6 +28,7 @@ import requestContextPlugin from '../src/plugins/request-context.js';
 import adminsCfgRoutes from '../src/routes/admins-cfg.js';
 import auditRoutes from '../src/routes/audit.js';
 import authRoutes from '../src/routes/auth.js';
+import discordAuthRoutes from '../src/routes/auth-discord.js';
 import steamRoutes from '../src/routes/auth-steam.js';
 import hostRoutes from '../src/routes/host.js';
 import hostActionsRoutes from '../src/routes/host-actions.js';
@@ -104,6 +105,7 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   await app.register(integrationsVipRoutes);
   await app.register(auditRoutes);
   await app.register(steamRoutes);
+  await app.register(discordAuthRoutes);
 
   // suppress 'unused imports' — plugins are referenced here defensively
   // so a future refactor that pulls them into the route registration
