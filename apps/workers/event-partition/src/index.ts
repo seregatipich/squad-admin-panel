@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createDiag, type Diag } from '@squad/diag';
-import { startHeartbeat } from '@squad/shared-config';
+import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
@@ -160,6 +160,25 @@ async function main() {
 
   const diag: Diag = redis ? createDiag({ redis, log }) : { async emit() {} };
 
+  let interval: NodeJS.Timeout | null = null;
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      log.info({ sig }, 'shutdown');
+      if (interval) clearInterval(interval);
+      await diag.emit({
+        component: COMPONENT,
+        kind: 'event_partition.stopped',
+        severity: 'info',
+        message: `event-partition received ${sig}`,
+        payload: { sig },
+      });
+      stopHeartbeat();
+      await sql.end({ timeout: 5 });
+      await redis?.quit().catch(() => undefined);
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
+
   await diag.emit({
     component: COMPONENT,
     kind: 'event_partition.started',
@@ -169,7 +188,9 @@ async function main() {
   });
 
   await runPartitionTick({ sql, diag });
-  const interval = setInterval(
+  await shutdown.markReady();
+  if (shutdown.isShutdownRequested()) return;
+  interval = setInterval(
     () => {
       runPartitionTick({ sql, diag }).catch((err) =>
         log.error({ err: (err as Error).message }, 'partition failed'),
@@ -177,24 +198,6 @@ async function main() {
     },
     60 * 60 * 1000,
   );
-
-  const shutdown = async (sig: NodeJS.Signals) => {
-    log.info({ sig }, 'shutdown');
-    clearInterval(interval);
-    await diag.emit({
-      component: COMPONENT,
-      kind: 'event_partition.stopped',
-      severity: 'info',
-      message: `event-partition received ${sig}`,
-      payload: { sig },
-    });
-    stopHeartbeat();
-    await sql.end({ timeout: 5 });
-    await redis?.quit().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
 }
 
 function isMainEntrypoint(): boolean {

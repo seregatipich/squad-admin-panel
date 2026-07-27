@@ -14,13 +14,17 @@ vi.mock('@squad/bridge-client', () => ({
   })),
 }));
 
-vi.mock('@squad/shared-config', () => ({
-  redisSinkStream: vi.fn(() => ({ write: vi.fn() })),
-  startHeartbeat: vi.fn(() => vi.fn()),
-  HOST_METRICS_STREAM: 'host:metrics',
-  HOST_METRICS_MAXLEN: 8640,
-  packHostMetrics: vi.fn(() => []),
-}));
+vi.mock('@squad/shared-config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@squad/shared-config')>();
+  return {
+    ...actual,
+    redisSinkStream: vi.fn(() => ({ write: vi.fn() })),
+    startHeartbeat: vi.fn(() => vi.fn()),
+    HOST_METRICS_STREAM: 'host:metrics',
+    HOST_METRICS_MAXLEN: 8640,
+    packHostMetrics: vi.fn(() => []),
+  };
+});
 
 vi.mock('@squad/diag', () => ({
   createDiag: vi.fn(() => ({ emit: vi.fn().mockResolvedValue(undefined) })),

@@ -1,86 +1,18 @@
-import { type ChildProcess, spawn } from 'node:child_process';
 import path from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 import Redis from 'ioredis';
-import { afterEach, describe, expect, it } from 'vitest';
+import { workerContract } from '../../_test-shared/contract.js';
 
-const TEST_REDIS_URL =
-  process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? 'redis://127.0.0.1:6379/14';
-const DATABASE_URL =
+const databaseUrl =
   process.env.DATABASE_URL ??
-  'postgres://admin:g3rlRkR6QTfGoN4svPLjEA7dCDbS553C@127.0.0.1:5432/admin';
-const ENTRY = path.resolve(import.meta.dirname, '../dist/index.js');
-const WORKER = 'rcon';
-const HB_KEY = `worker:heartbeat:${WORKER}`;
+  `postgres://admin:${process.env.POSTGRES_PASSWORD ?? 'admin'}@127.0.0.1:5432/admin`;
 
-let child: ChildProcess | null = null;
-let redis: Redis | null = null;
-
-afterEach(async () => {
-  if (child && child.exitCode === null && child.signalCode === null) {
-    child.kill('SIGTERM');
-    await new Promise((r) => child?.once('exit', r));
-  }
-  if (redis) await redis.quit();
-  child = null;
-  redis = null;
-});
-
-describe(`${WORKER} worker contract`, () => {
-  it('publishes heartbeat within 30s of start', async () => {
-    child = spawn('node', [ENTRY], {
-      env: {
-        ...process.env,
-        REDIS_URL: TEST_REDIS_URL,
-        DATABASE_URL,
-        APP_ENCRYPTION_KEY:
-          process.env.APP_ENCRYPTION_KEY ?? 'JZ+czYvm792m4UTGt7lpJHVh8b+0Xwe91BukCl1WU/U=',
-        NODE_ENV: 'test',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    redis = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: null });
-    await redis.del(HB_KEY);
-
-    for (let i = 0; i < 30; i++) {
-      const ttl = await redis.ttl(HB_KEY);
-      if (ttl > 0) {
-        expect(ttl).toBeLessThanOrEqual(30);
-        return;
-      }
-      await sleep(1000);
-    }
-    throw new Error(`heartbeat key ${HB_KEY} never appeared`);
-  }, 35_000);
-
-  it('exits 0 on SIGTERM within 5s', async () => {
-    child = spawn('node', [ENTRY], {
-      env: {
-        ...process.env,
-        REDIS_URL: TEST_REDIS_URL,
-        DATABASE_URL,
-        APP_ENCRYPTION_KEY:
-          process.env.APP_ENCRYPTION_KEY ?? 'JZ+czYvm792m4UTGt7lpJHVh8b+0Xwe91BukCl1WU/U=',
-        NODE_ENV: 'test',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    redis = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: null });
-    await redis.del(HB_KEY);
-    let ready = false;
-    for (let i = 0; i < 40; i++) {
-      if ((await redis.ttl(HB_KEY)) > 0) {
-        ready = true;
-        break;
-      }
-      await sleep(500);
-    }
-    expect(ready).toBe(true);
-    const exitPromise = new Promise<number>((resolve) =>
-      child?.once('exit', (code) => resolve(code ?? -1)),
-    );
-    child.kill('SIGTERM');
-    const code = await Promise.race([exitPromise, sleep(5000).then(() => -1 as number)]);
-    expect(code).toBe(0);
-  }, 35_000);
+workerContract({
+  name: 'rcon',
+  entryPath: path.resolve(import.meta.dirname, '../dist/index.js'),
+  expectedHeartbeatKey: 'worker:heartbeat:rcon',
+  createRedis: (url) => new Redis(url, { maxRetriesPerRequest: null }),
+  envOverrides: {
+    DATABASE_URL: databaseUrl,
+    APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
+  },
 });

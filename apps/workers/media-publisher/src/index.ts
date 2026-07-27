@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { createDiag, type Diag } from '@squad/diag';
-import { startHeartbeat } from '@squad/shared-config';
+import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -82,32 +82,35 @@ async function main() {
     if (result.claimed > 0) log.info(result, 'media-publisher tick');
   }
 
+  let interval: NodeJS.Timeout | null = null;
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      log.info({ sig }, 'shutdown');
+      if (interval) clearInterval(interval);
+      await diag.emit({
+        component: 'worker-media-publisher',
+        kind: 'media_publisher.stopped',
+        severity: 'info',
+        message: `media-publisher received ${sig}`,
+        payload: { sig },
+      });
+      stopHeartbeat();
+      await sql.end({ timeout: 5 });
+      await redis.quit().catch(() => undefined);
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
+
   await tick().catch((err) =>
     log.error({ err: (err as Error).message }, 'media-publisher tick failed'),
   );
-  const interval = setInterval(() => {
+  await shutdown.markReady();
+  if (shutdown.isShutdownRequested()) return;
+  interval = setInterval(() => {
     tick().catch((err) =>
       log.error({ err: (err as Error).message }, 'media-publisher tick failed'),
     );
   }, TICK_INTERVAL_MS);
-
-  const shutdown = async (sig: NodeJS.Signals) => {
-    log.info({ sig }, 'shutdown');
-    clearInterval(interval);
-    await diag.emit({
-      component: 'worker-media-publisher',
-      kind: 'media_publisher.stopped',
-      severity: 'info',
-      message: `media-publisher received ${sig}`,
-      payload: { sig },
-    });
-    stopHeartbeat();
-    await sql.end({ timeout: 5 });
-    await redis.quit().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
 }
 
 function isMainEntrypoint(): boolean {

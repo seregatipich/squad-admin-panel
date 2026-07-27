@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { createDiag, type Diag } from '@squad/diag';
-import { startHeartbeat } from '@squad/shared-config';
+import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -48,6 +48,30 @@ async function main() {
   });
   const runtimeDeps = createSeedRewardDeps(db, redis);
 
+  async function tick(): Promise<void> {
+    const result = await runSeedRewardTick({ ...runtimeDeps, diag });
+    log.info(result, 'seed-reward tick');
+  }
+
+  let interval: NodeJS.Timeout | null = null;
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (signal) => {
+      log.info({ signal }, 'shutdown');
+      if (interval) clearInterval(interval);
+      await diag.emit({
+        component: 'worker-seed-reward',
+        kind: 'seed_reward.stopped',
+        severity: 'info',
+        message: `seed-reward received ${signal}`,
+        payload: { signal },
+      });
+      stopHeartbeat();
+      await sql.end({ timeout: 5 });
+      await redis.quit().catch(() => undefined);
+    },
+    onError: (error) => log.error({ error: error.message }, 'shutdown failed'),
+  });
+
   await diag.emit({
     component: 'worker-seed-reward',
     kind: 'seed_reward.started',
@@ -55,36 +79,14 @@ async function main() {
     message: 'seed-reward started',
     payload: { pid: process.pid },
   });
-
-  async function tick(): Promise<void> {
-    const result = await runSeedRewardTick({ ...runtimeDeps, diag });
-    log.info(result, 'seed-reward tick');
-  }
-
   await tick();
-  const interval = setInterval(() => {
+  await shutdown.markReady();
+  if (shutdown.isShutdownRequested()) return;
+  interval = setInterval(() => {
     tick().catch((error) =>
       log.error({ error: (error as Error).message }, 'seed-reward tick failed'),
     );
   }, TICK_INTERVAL_MS);
-
-  const shutdown = async (signal: NodeJS.Signals) => {
-    log.info({ signal }, 'shutdown');
-    clearInterval(interval);
-    await diag.emit({
-      component: 'worker-seed-reward',
-      kind: 'seed_reward.stopped',
-      severity: 'info',
-      message: `seed-reward received ${signal}`,
-      payload: { signal },
-    });
-    stopHeartbeat();
-    await sql.end({ timeout: 5 });
-    await redis.quit().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
 }
 
 function isMainEntrypoint(): boolean {

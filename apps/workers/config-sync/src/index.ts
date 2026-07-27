@@ -1,6 +1,10 @@
 import { BridgeClient } from '@squad/bridge-client';
 import { createDatabaseClient, relayAdminsCfgSyncOutbox, servers } from '@squad/db';
-import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
+import {
+  createGracefulShutdownController,
+  redisSinkStream,
+  startHeartbeat,
+} from '@squad/shared-config';
 import { isNull } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
@@ -84,7 +88,6 @@ async function main() {
     socketPath: process.env.PANEL_BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
     onLog: (msg, meta) => log.info({ ...meta }, msg),
   });
-  await bridge.connect();
 
   let activeServerIds = new Set<string>();
   const backoffByServer = new Map<string, { delayMs: number; nextAttemptAt: number }>();
@@ -363,6 +366,30 @@ async function main() {
     }
   }
 
+  let stopped = false;
+  let refreshTimer: NodeJS.Timeout | null = null;
+  let driftTimer: NodeJS.Timeout | null = null;
+  let configDriftTimer: NodeJS.Timeout | null = null;
+  let reclaimTimer: NodeJS.Timeout | null = null;
+  let relayTimer: NodeJS.Timeout | null = null;
+  let stopHeartbeat = () => {};
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      stopped = true;
+      log.info({ sig }, 'shutdown');
+      stopHeartbeat();
+      if (refreshTimer) clearInterval(refreshTimer);
+      if (driftTimer) clearInterval(driftTimer);
+      if (configDriftTimer) clearInterval(configDriftTimer);
+      if (reclaimTimer) clearInterval(reclaimTimer);
+      if (relayTimer) clearInterval(relayTimer);
+      await bridge.close().catch(() => undefined);
+      await redis.quit().catch(() => undefined);
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
+
+  await bridge.connect();
   await refreshServerList();
   // Boot-time reclaim pass — picks up anything orphaned by a prior
   // process restart (consumer name regenerates each boot).
@@ -372,54 +399,38 @@ async function main() {
   // Boot-time relay pass — drain any outbox rows whose immediate publish never
   // reached Redis (e.g. Redis was down when the mutation committed).
   await relayOutbox();
-  const refreshTimer = setInterval(() => {
-    refreshServerList().catch((err) =>
-      log.error({ err: (err as Error).message }, 'server-list refresh failed'),
-    );
-  }, SERVERS_REFRESH_MS);
-  const driftTimer = setInterval(() => {
-    driftSweep().catch((err) => log.error({ err: (err as Error).message }, 'drift sweep failed'));
-  }, DRIFT_INTERVAL_MS);
-  const configDriftTimer = setInterval(() => {
-    configDriftSweep().catch((err) =>
-      log.error({ err: (err as Error).message }, 'config drift sweep failed'),
-    );
-  }, CONFIG_DRIFT_INTERVAL_MS);
-  const reclaimTimer = setInterval(() => {
-    reclaimPendingMessages().catch((err) =>
-      log.error({ err: (err as Error).message }, 'reclaim sweep failed'),
-    );
-  }, RECLAIM_INTERVAL_MS);
-  const relayTimer = setInterval(() => {
-    relayOutbox().catch((err) =>
-      log.error({ err: (err as Error).message }, 'outbox relay sweep failed'),
-    );
-  }, RELAY_INTERVAL_MS);
-
-  const stopHeartbeat = startHeartbeat({
+  stopHeartbeat = startHeartbeat({
     redis,
     name: 'config-sync',
     statusFn: () => `servers=${activeServerIds.size}`,
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
+  await shutdown.markReady();
+  if (shutdown.isShutdownRequested()) return;
 
-  let stopped = false;
-  const shutdown = async (sig: NodeJS.Signals) => {
-    if (stopped) return;
-    stopped = true;
-    log.info({ sig }, 'shutdown');
-    stopHeartbeat();
-    clearInterval(refreshTimer);
-    clearInterval(driftTimer);
-    clearInterval(configDriftTimer);
-    clearInterval(reclaimTimer);
-    clearInterval(relayTimer);
-    await bridge.close().catch(() => undefined);
-    await redis.quit().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  refreshTimer = setInterval(() => {
+    refreshServerList().catch((err) =>
+      log.error({ err: (err as Error).message }, 'server-list refresh failed'),
+    );
+  }, SERVERS_REFRESH_MS);
+  driftTimer = setInterval(() => {
+    driftSweep().catch((err) => log.error({ err: (err as Error).message }, 'drift sweep failed'));
+  }, DRIFT_INTERVAL_MS);
+  configDriftTimer = setInterval(() => {
+    configDriftSweep().catch((err) =>
+      log.error({ err: (err as Error).message }, 'config drift sweep failed'),
+    );
+  }, CONFIG_DRIFT_INTERVAL_MS);
+  reclaimTimer = setInterval(() => {
+    reclaimPendingMessages().catch((err) =>
+      log.error({ err: (err as Error).message }, 'reclaim sweep failed'),
+    );
+  }, RECLAIM_INTERVAL_MS);
+  relayTimer = setInterval(() => {
+    relayOutbox().catch((err) =>
+      log.error({ err: (err as Error).message }, 'outbox relay sweep failed'),
+    );
+  }, RELAY_INTERVAL_MS);
 
   log.info({ consumer: CONSUMER_NAME }, 'worker-config-sync ready');
   while (!stopped) {

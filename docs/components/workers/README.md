@@ -3,9 +3,22 @@
 All workers live under [`apps/workers/`](../../../apps/workers/). Each is a standalone Node 22 process that:
 
 - reports liveness via `worker:heartbeat:{name}` (TTL 30 s) using [`packages/shared-config/src/heartbeat.ts`](../../../packages/shared-config/src/heartbeat.ts),
-- gracefully drains on `SIGTERM`.
+- корректно завершает работу по `SIGINT`/`SIGTERM`, включая сигнал во время первого обращения к базе, Redis или мосту.
 
 Heartbeat keys are aggregated by the API at `/api/v1/health/workers`.
+
+## Startup and shutdown contract
+
+Workers with asynchronous startup must create
+`createGracefulShutdownController()` before the first `await`. After the
+initial pass has completed, call `markReady()` before scheduling intervals or
+entering the main loop. The controller buffers a signal received during
+startup and runs cleanup once; a repeated signal joins the same cleanup.
+
+Every worker contract test uses
+[`apps/workers/_test-shared/contract.ts`](../../../apps/workers/_test-shared/contract.ts).
+The shared test clears the heartbeat key, waits for a newly published
+heartbeat, sends `SIGTERM` twice and requires a clean exit with code `0`.
 
 ## Implemented workers
 
@@ -37,5 +50,7 @@ Heartbeat keys are aggregated by the API at `/api/v1/health/workers`.
 
 1. Create `apps/workers/<name>/` with `package.json`, `tsconfig.json`, `src/index.ts`.
 2. Use [`shared-config`](../shared-config/README.md)'s `startHeartbeat` util.
-3. Add it to `compose.yml`. If the worker needs the bridge socket, set `user: "0:${PANEL_GID:-987}"` (primary GID `panel`) — the bridge's `SO_PEERCRED` check looks at the peer's primary GID; supplementary groups added via `group_add` are not visible to the bridge across the user-namespace boundary.
-4. Create a `docs/components/workers/<name>/` directory with the standard 8-file set and add a row to the table above.
+3. Register `createGracefulShutdownController()` before asynchronous startup and call `markReady()` before the worker reports readiness.
+4. Cover heartbeat and repeated `SIGTERM` through the shared worker contract test.
+5. Add it to `compose.yml`. If the worker needs the bridge socket, set `user: "0:${PANEL_GID:-987}"` (primary GID `panel`) — the bridge's `SO_PEERCRED` check looks at the peer's primary GID; supplementary groups added via `group_add` are not visible to the bridge across the user-namespace boundary.
+6. Create a `docs/components/workers/<name>/` directory with the standard 8-file set and add a row to the table above.

@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import type { DatabaseClient } from '@squad/db';
 import * as schema from '@squad/db/schema';
 import { createDiag, type Diag } from '@squad/diag';
-import { startHeartbeat } from '@squad/shared-config';
+import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Redis from 'ioredis';
 import pino from 'pino';
@@ -56,14 +56,6 @@ async function main() {
   });
   const runtimeDeps = createRoleExpiryDeps(db, redis);
 
-  await diag.emit({
-    component: 'worker-role-expirer',
-    kind: 'role_expirer.started',
-    severity: 'info',
-    message: 'role-expirer started',
-    payload: { pid: process.pid },
-  });
-
   async function tick(): Promise<void> {
     const result = await runRoleExpiryTick({ ...runtimeDeps, diag });
     log.info(result, 'role-expirer tick');
@@ -81,48 +73,59 @@ async function main() {
     log.info(result, 'role-expirer subscription renewal tick');
   }
 
-  await tick();
-  const interval = setInterval(() => {
-    tick().catch((err) => log.error({ err: (err as Error).message }, 'role-expirer tick failed'));
-  }, TICK_INTERVAL_MS);
+  let interval: NodeJS.Timeout | null = null;
+  let reminderInterval: NodeJS.Timeout | null = null;
+  let renewalInterval: NodeJS.Timeout | null = null;
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      log.info({ sig }, 'shutdown');
+      if (interval) clearInterval(interval);
+      if (reminderInterval) clearInterval(reminderInterval);
+      if (renewalInterval) clearInterval(renewalInterval);
+      await diag.emit({
+        component: 'worker-role-expirer',
+        kind: 'role_expirer.stopped',
+        severity: 'info',
+        message: `role-expirer received ${sig}`,
+        payload: { sig },
+      });
+      stopHeartbeat();
+      await sql.end({ timeout: 5 });
+      await redis.quit().catch(() => undefined);
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
 
+  await diag.emit({
+    component: 'worker-role-expirer',
+    kind: 'role_expirer.started',
+    severity: 'info',
+    message: 'role-expirer started',
+    payload: { pid: process.pid },
+  });
+  await tick();
   await reminderTick().catch((err) =>
     log.error({ err: (err as Error).message }, 'role-expirer reminder tick failed'),
   );
-  const reminderInterval = setInterval(() => {
+  await renewalTick().catch((err) =>
+    log.error({ err: (err as Error).message }, 'role-expirer renewal tick failed'),
+  );
+  await shutdown.markReady();
+  if (shutdown.isShutdownRequested()) return;
+
+  interval = setInterval(() => {
+    tick().catch((err) => log.error({ err: (err as Error).message }, 'role-expirer tick failed'));
+  }, TICK_INTERVAL_MS);
+  reminderInterval = setInterval(() => {
     reminderTick().catch((err) =>
       log.error({ err: (err as Error).message }, 'role-expirer reminder tick failed'),
     );
   }, REMINDER_INTERVAL_MS);
-
-  await renewalTick().catch((err) =>
-    log.error({ err: (err as Error).message }, 'role-expirer renewal tick failed'),
-  );
-  const renewalInterval = setInterval(() => {
+  renewalInterval = setInterval(() => {
     renewalTick().catch((err) =>
       log.error({ err: (err as Error).message }, 'role-expirer renewal tick failed'),
     );
   }, RENEWAL_INTERVAL_MS);
-
-  const shutdown = async (sig: NodeJS.Signals) => {
-    log.info({ sig }, 'shutdown');
-    clearInterval(interval);
-    clearInterval(reminderInterval);
-    clearInterval(renewalInterval);
-    await diag.emit({
-      component: 'worker-role-expirer',
-      kind: 'role_expirer.stopped',
-      severity: 'info',
-      message: `role-expirer received ${sig}`,
-      payload: { sig },
-    });
-    stopHeartbeat();
-    await sql.end({ timeout: 5 });
-    await redis.quit().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
 }
 
 function isMainEntrypoint(): boolean {

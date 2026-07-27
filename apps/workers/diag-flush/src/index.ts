@@ -1,7 +1,11 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createDiag, type Diag } from '@squad/diag';
-import { DIAG_STREAM_KEY, startHeartbeat } from '@squad/shared-config';
+import {
+  createGracefulShutdownController,
+  DIAG_STREAM_KEY,
+  startHeartbeat,
+} from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
@@ -150,10 +154,6 @@ async function main(): Promise<void> {
   redis.on('error', (err: Error) => log.warn({ err: err.message }, 'redis error (will retry)'));
   redis.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
 
-  await redis.xgroup('CREATE', DIAG_STREAM_KEY, GROUP, '$', 'MKSTREAM').catch((err: Error) => {
-    if (!String(err.message).includes('BUSYGROUP')) throw err;
-  });
-
   const stopHeartbeat = startHeartbeat({
     redis,
     name: 'diag-flush',
@@ -162,37 +162,42 @@ async function main(): Promise<void> {
   });
 
   const diag = createDiag({ redis, log });
-  await emitStarted(diag);
-
-  const journaldEnabled = process.env.DIAG_JOURNALD_FORWARD !== 'false';
-  const journald = journaldEnabled
-    ? startJournaldForwarder({
-        redis,
-        log,
-        unitName: process.env.DIAG_JOURNALD_UNIT,
-        since: process.env.DIAG_JOURNALD_SINCE,
-      })
-    : null;
-
   let stopped = false;
   let inflight: Promise<void> | null = null;
-  const shutdown = async (sig: NodeJS.Signals) => {
-    log.info({ sig }, 'shutdown');
-    stopped = true;
-    await emitStopped(diag, sig);
-    stopHeartbeat();
-    journald?.stop();
-    await journald?.drain();
-    if (inflight) {
-      log.info('awaiting in-flight batch before teardown');
-      await inflight.catch(() => undefined);
-    }
-    await sql.end({ timeout: 5 });
-    await redis.quit().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  let journald: ReturnType<typeof startJournaldForwarder> | null = null;
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      stopped = true;
+      log.info({ sig }, 'shutdown');
+      await emitStopped(diag, sig);
+      stopHeartbeat();
+      journald?.stop();
+      await journald?.drain();
+      if (inflight) {
+        log.info('awaiting in-flight batch before teardown');
+        await inflight.catch(() => undefined);
+      }
+      await sql.end({ timeout: 5 });
+      await redis.quit().catch(() => undefined);
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
+
+  await redis.xgroup('CREATE', DIAG_STREAM_KEY, GROUP, '$', 'MKSTREAM').catch((err: Error) => {
+    if (!String(err.message).includes('BUSYGROUP')) throw err;
+  });
+  await emitStarted(diag);
+
+  if (process.env.DIAG_JOURNALD_FORWARD !== 'false') {
+    journald = startJournaldForwarder({
+      redis,
+      log,
+      unitName: process.env.DIAG_JOURNALD_UNIT,
+      since: process.env.DIAG_JOURNALD_SINCE,
+    });
+  }
+  await shutdown.markReady();
+  if (shutdown.isShutdownRequested()) return;
 
   log.info({ group: GROUP, consumer: CONSUMER, batchSize: BATCH_SIZE }, 'worker-diag-flush ready');
 

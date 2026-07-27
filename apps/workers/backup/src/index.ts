@@ -19,14 +19,17 @@ async function main() {
       })
     : () => {};
 
+  let shuttingDown = false;
   const shutdown = async (sig: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     log.info({ sig }, 'shutdown');
     stopHeartbeat();
     await redis?.quit().catch(() => undefined);
     process.exit(0);
   };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 main().catch((err) => {

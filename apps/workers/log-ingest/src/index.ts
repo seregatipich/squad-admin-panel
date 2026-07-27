@@ -1,7 +1,11 @@
 import { BridgeClient } from '@squad/bridge-client';
 import { createDatabaseClient, serverSettings, servers } from '@squad/db';
 import { createDiag } from '@squad/diag';
-import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
+import {
+  createGracefulShutdownController,
+  redisSinkStream,
+  startHeartbeat,
+} from '@squad/shared-config';
 import { and, eq, isNull } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
@@ -278,11 +282,6 @@ async function main() {
     manager.reconcile(active);
   }
 
-  await reconcile();
-  const interval = setInterval(() => {
-    reconcile().catch((err) => log.error({ err: (err as Error).message }, 'reconcile failed'));
-  }, 15_000);
-
   const stopHeartbeat = startHeartbeat({
     redis,
     name: 'log-ingest',
@@ -290,18 +289,26 @@ async function main() {
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
 
-  const shutdown = async (sig: NodeJS.Signals) => {
-    log.info({ sig }, 'shutdown');
-    stopHeartbeat();
-    stopLogRetentionSweep();
-    clearInterval(interval);
-    manager.stopAll();
-    await redis.quit().catch(() => undefined);
-    await bridge.close();
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  let interval: NodeJS.Timeout | null = null;
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      log.info({ sig }, 'shutdown');
+      stopHeartbeat();
+      stopLogRetentionSweep();
+      if (interval) clearInterval(interval);
+      manager.stopAll();
+      await redis.quit().catch(() => undefined);
+      await bridge.close();
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
+
+  await reconcile();
+  await shutdown.markReady();
+  if (shutdown.isShutdownRequested()) return;
+  interval = setInterval(() => {
+    reconcile().catch((err) => log.error({ err: (err as Error).message }, 'reconcile failed'));
+  }, 15_000);
 
   log.info('worker-log-ingest ready');
 }

@@ -2,7 +2,7 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { reconcileDossierAggregates } from '@squad/db';
 import { createDiag, type Diag } from '@squad/diag';
-import { startHeartbeat } from '@squad/shared-config';
+import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
@@ -87,10 +87,22 @@ async function main() {
   const url = process.env.DATABASE_URL;
   const sql = url ? postgres(url, { max: 1 }) : null;
   let interval: NodeJS.Timeout | null = null;
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      log.info({ sig }, 'shutdown');
+      if (interval) clearInterval(interval);
+      stopHeartbeat();
+      await sql?.end({ timeout: 5 }).catch(() => undefined);
+      await redis?.quit().catch(() => undefined);
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
 
   if (sql) {
     log.info('worker-stats started — dossier reconcile guard active');
     await runStatsReconcileTick({ sql, diag });
+    await shutdown.markReady();
+    if (shutdown.isShutdownRequested()) return;
     interval = setInterval(() => {
       runStatsReconcileTick({ sql, diag }).catch((err) =>
         log.error({ err: (err as Error).message }, 'dossier reconcile tick failed'),
@@ -98,18 +110,8 @@ async function main() {
     }, RECONCILE_INTERVAL_MS);
   } else {
     log.info('worker-stats idle — DATABASE_URL unset, dossier reconcile disabled');
+    await shutdown.markReady();
   }
-
-  const shutdown = async (sig: NodeJS.Signals) => {
-    log.info({ sig }, 'shutdown');
-    if (interval) clearInterval(interval);
-    stopHeartbeat();
-    await sql?.end({ timeout: 5 }).catch(() => undefined);
-    await redis?.quit().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
 }
 
 function isMainEntrypoint(): boolean {
