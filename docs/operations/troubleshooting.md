@@ -69,13 +69,13 @@ If restarts don't help, capture `docker compose logs worker-rcon` and open an is
 
 ## Steam login
 
-### "Доступ запрещён" on `/no-access` after Steam login
+### Steam login lands on «Мой VIP» (`/me`) instead of the panel
 
-The Steam ID has no panel role. An admin needs to assign one:
+The Steam ID has no role with `panel_access`. The login itself succeeded — since VIPSUB-5 (#171) the callback always issues a session, but one scoped `self_service`, which every panel route treats as anonymous. An admin needs to assign a panel role:
 
 1. Owner opens `/players/<their_steam_id64>` in the panel.
 2. Section "Доступ к панели" → "Назначить роль" dropdown → pick role → "Назначить".
-3. The user logs in via Steam again. Their next callback now resolves to a player with non-empty permissions and they are redirected to `/`.
+3. The user reloads `/`. The `self_service` downgrade stops applying as soon as the player holds `panel_access`, so they land on the dashboard without logging in again.
 
 ### `owner_role_missing` 500 on first login
 

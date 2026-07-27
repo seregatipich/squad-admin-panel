@@ -66,21 +66,6 @@ export const ru = {
   'login.steamButton': 'Войти через Steam',
   'login.steamOnly': 'Steam OpenID 2.0 — единственный способ входа.',
 
-  'noAccess.heading': 'Доступ запрещён',
-  'noAccess.withId': 'Steam ID {steamId} не имеет роли в этой панели.',
-  'noAccess.withoutId': 'Ваш Steam-аккаунт не имеет роли в этой панели.',
-  'noAccess.noRole': 'У вас нет доступа к панели',
-  'noAccess.roleNoAccess': 'Ваша роль не имеет доступа к панели',
-  'noAccess.noRoleHint':
-    'Обратитесь к администратору, чтобы вам назначили роль. После назначения войдите снова через Steam.',
-  'noAccess.roleNoAccessHint':
-    'Обратитесь к администратору, чтобы вашей роли выдали доступ к панели.',
-  'noAccess.steamIdLabel': 'Steam ID',
-  'noAccess.instructions':
-    'Обратитесь к администратору, чтобы вам назначили роль. После назначения войдите снова через Steam.',
-  'noAccess.backToLogin': 'Вернуться на страницу входа',
-  'noAccess.ownerHint': 'Если вы Owner свежеустановленной панели, проверьте журнал',
-
   'connection.unavailable': 'Панель временно недоступна.',
   'connection.retry': 'Повторить',
   'connection.dismiss': 'Скрыть',

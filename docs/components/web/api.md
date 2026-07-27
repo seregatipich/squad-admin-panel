@@ -2,16 +2,23 @@
 
 ## App Router pages
 
-All pages live under `apps/web/src/app/`. The `(dashboard)` route group requires an active session cookie (`__Host-sid`); the layout at `apps/web/src/app/(dashboard)/layout.tsx` calls `requireSession()` and renders the sidebar.
+All pages live under `apps/web/src/app/`. The `(dashboard)` route group requires an active session cookie (`__Host-sid`) **and** panel access; the layout at `apps/web/src/app/(dashboard)/layout.tsx` calls `requireSession()`, redirects a session with an empty `permissions` array to `/me`, and otherwise renders the sidebar.
 
 ### Unauthenticated pages
 
 | Route | File | What it does |
 |---|---|---|
-| `/` | `app/page.tsx` | Reads `__Host-sid` cookie server-side; redirects to `/dashboard` when present, otherwise to `/login`. |
+| `/` | `app/page.tsx` | Reads `__Host-sid` cookie server-side; redirects to `/login` when absent, to `/me` when the session carries no panel permissions, otherwise to `/dashboard`. |
 | `/login` | `app/login/page.tsx` | Steam OpenID sign-in entry point. Redirects to `/dashboard` if already authenticated. Shows errors for `?error=auth_failed` and `?error=not_authorized`. |
 | `/setup` | `app/setup/page.tsx` | First-time panel finalization. Before the first Owner claim it shows the Steam login CTA; after the first Owner login it asks for the organization name and calls `POST /api/v1/setup/complete`. Completed panels redirect back to `/`. |
-| `/no-access` | `app/no-access/page.tsx` | Landing for authenticated Steam users who have no panel role. Shows optional `?steam_id64=` in the URL. |
+
+### Self-service pages
+
+The `(me)` route group requires a session cookie but **not** panel access — its layout (`app/(me)/layout.tsx`) calls `requireSession()` and renders only a header with the display name and a logout button, no sidebar and no live-bus widgets.
+
+| Route | File | What it does |
+|---|---|---|
+| `/me` | `app/(me)/me/page.tsx` | «Мой VIP». Landing for a Steam login whose role has no `panel_access` (including a player with no role): the callback issues a `self_service`-scoped session and redirects here. Sections: Баланс (bonus balance + VIP expiry), Подписка (active subscription, «Отменить подписку»), Тарифы («Купить разово» / «Подписаться»), История бонусов (cursor-paginated, «Показать ещё»). Every call goes to `/api/v1/me/*`, which take no player id — the subject is always the session's own player. |
 
 ### Dashboard pages
 

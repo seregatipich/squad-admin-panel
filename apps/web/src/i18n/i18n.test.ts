@@ -77,8 +77,8 @@ describe('translator', () => {
 
   it('interpolates params into the resolved string', () => {
     const t = createTranslatorForLocale('en');
-    expect(t('noAccess.withId', { steamId: '765611' })).toBe(
-      'Steam ID 765611 does not have a role in this panel.',
+    expect(t('login.error.notAuthorized', { steamId: '765611' })).toBe(
+      'Steam ID 765611 does not have access to the panel. Contact an administrator.',
     );
   });
 

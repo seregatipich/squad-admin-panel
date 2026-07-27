@@ -13,7 +13,7 @@
 9. `/setup` asks the Owner for the organization name and calls `POST /api/v1/setup/complete`.
 10. After setup completion the browser returns to `/dashboard`; the dashboard starts polling its data sources every 4 s.
 
-If the first-owner claim already happened and the user has no role, the API redirects to `/no-access?steam_id64=<id>` and does not set a session cookie.
+If the first-owner claim already happened and the user's role has no `panel_access` (including a user with no role), the API still sets a `__Host-sid` cookie — the session is scoped `self_service` — and redirects to `/me` instead of `/`.
 
 ---
 
@@ -22,8 +22,8 @@ If the first-owner claim already happened and the user has no role, the API redi
 1. User opens `/` (or any protected path); root page redirects to `/login`.
 2. Login page fires `GET /api/v1/me` silently; if a valid session already exists (cookie in another tab was set) the page redirects to `/dashboard` immediately.
 3. Otherwise user clicks "Войти через Steam"; Steam OpenID flow runs.
-4. On callback the API verifies Steam identity, checks the `players` table for a `role_id`, sets the `__Host-sid` cookie, and redirects to `/dashboard`.
-5. If `role_id IS NULL` the API redirects to `/no-access?steam_id64=<id>`.
+4. On callback the API verifies Steam identity, resolves the player's permissions, sets the `__Host-sid` cookie on a `panel`-scoped session, and redirects to `/`; the root page forwards to `/dashboard`.
+5. If the player's role has no `panel_access` (or there is no role), the session is created with scope `self_service` and the API redirects to `/me`. That scope is honoured only on routes declaring `config.selfService`, so every panel route treats the request as anonymous.
 
 ---
 
@@ -33,6 +33,7 @@ If the first-owner claim already happened and the user has no role, the API redi
 2. `DashboardLayout` server component calls `requireSession()`.
 3. `requireSession` reads `__Host-sid`, calls `GET /api/v1/me`; if the session is still valid the Me object is returned and the layout renders.
 4. If the cookie is expired or invalid, `getSession()` returns null → `requireSession()` calls `redirect('/login')`.
+5. `GET /api/v1/me` is a `selfService` route, so a `self_service` session also gets past step 3. The layout therefore checks `me.permissions.length === 0` and redirects such a session to `/me` before rendering the admin shell — otherwise a direct `(dashboard)` URL would render the sidebar around widgets that every panel-gated route answers 401 for.
 
 ---
 

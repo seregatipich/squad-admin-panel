@@ -97,7 +97,6 @@ import meLayout from '../src/app/(me)/layout';
 import mePage from '../src/app/(me)/me/page';
 import publicUploadPage from '../src/app/(public)/upload/[token]/page';
 import loginPage from '../src/app/login/page';
-import noAccessPage from '../src/app/no-access/page';
 import rootPage from '../src/app/page';
 
 describe('pages static import graph', () => {
@@ -115,10 +114,6 @@ describe('pages static import graph', () => {
 
   it('self-service (me) layout exports default', () => {
     expect(meLayout).toBeDefined();
-  });
-
-  it('no-access page exports default', () => {
-    expect(noAccessPage).toBeDefined();
   });
 
   it('dashboard page exports default', () => {
