@@ -129,6 +129,7 @@ import suspectsRoutes from './routes/suspects.js';
 import teamkillsRoutes from './routes/teamkills.js';
 import usersRoutes from './routes/users.js';
 import vehicleCatalogRoutes from './routes/vehicle-catalog.js';
+import vipSubscriptionRoutes from './routes/vip-subscriptions.js';
 import vipTiersRoutes from './routes/vip-tiers.js';
 import voteAnalyticsRoutes from './routes/vote-analytics.js';
 import votesRoutes from './routes/votes.js';
@@ -268,6 +269,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(vehicleCatalogRoutes);
   await app.register(layersRoutes);
   await app.register(vipTiersRoutes);
+  await app.register(vipSubscriptionRoutes);
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);
   await app.register(reportsRoutes);

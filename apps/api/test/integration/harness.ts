@@ -119,6 +119,7 @@ import suspectsRoutes from '../../src/routes/suspects.js';
 import teamkillsRoutes from '../../src/routes/teamkills.js';
 import usersRoutes from '../../src/routes/users.js';
 import vehicleCatalogRoutes from '../../src/routes/vehicle-catalog.js';
+import vipSubscriptionRoutes from '../../src/routes/vip-subscriptions.js';
 import vipTiersRoutes from '../../src/routes/vip-tiers.js';
 import voteAnalyticsRoutes from '../../src/routes/vote-analytics.js';
 import votesRoutes from '../../src/routes/votes.js';
@@ -547,6 +548,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(vehicleCatalogRoutes);
   await app.register(layersRoutes);
   await app.register(vipTiersRoutes);
+  await app.register(vipSubscriptionRoutes);
   await app.register(votesRoutes);
   await app.register(voteAnalyticsRoutes);
   await app.register(reportsRoutes);

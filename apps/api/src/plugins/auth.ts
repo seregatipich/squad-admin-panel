@@ -34,7 +34,7 @@ export default fp(async (app) => {
           .limit(1);
         const player = playerRows[0];
         if (player) {
-          req.session = { id: session.id, playerId: player.id };
+          req.session = { id: session.id, playerId: player.id, scope: session.scope };
           req.user = {
             playerId: player.id,
             steamId64: player.steamId64,
@@ -109,6 +109,32 @@ export default fp(async (app) => {
           }
         }
       }
+    }
+
+    // VIPSUB-5 (#171) — self-service session scope.
+    //
+    // `auth-steam.ts` now mints a session for a player whose role has no
+    // `panel_access` so they can manage their own VIP on `/me`. That session is
+    // scoped `self_service` and is honoured ONLY on routes that opt in with
+    // `config.selfService`; anywhere else the request is downgraded to
+    // anonymous. Deny-by-default is required here rather than trusting the
+    // permission set, because `loadUserPermissions` adds explicit
+    // `role_permissions` rows on top of the derived set, and because ~30 routes
+    // authorise on `req.user` alone (`issues.ts`, `message-templates.ts`,
+    // `banned-names.ts`) or on `squadPermissions`, which `rbac.ts` does not gate
+    // on `panel_access`. Downgrading instead of answering 403 keeps genuinely
+    // public routes public and leaks nothing about the caller.
+    //
+    // The scope never over-restricts a real admin: once the player actually
+    // holds `panel_access` the gate lifts without re-login.
+    if (
+      req.session?.scope === 'self_service' &&
+      !req.user?.permissions.panelAccess &&
+      req.routeOptions?.config?.selfService !== true
+    ) {
+      req.user = undefined;
+      req.session = undefined;
+      req.apiTokenId = undefined;
     }
 
     const required = req.routeOptions?.config?.permissions;

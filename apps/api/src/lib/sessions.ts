@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { DatabaseClient } from '@squad/db';
-import { sessions } from '@squad/db/schema';
+import { type SessionScope, sessions } from '@squad/db/schema';
 import { and, eq, gt, lt } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
@@ -12,6 +12,8 @@ export interface SessionRecord {
   lastActivityAt: Date;
   ip: string | null;
   userAgent: string | null;
+  /** Authority the session carries; see `SESSION_SCOPES` in `@squad/db/schema`. */
+  scope: SessionScope;
 }
 
 const REDIS_PREFIX = 'session:';
@@ -30,6 +32,16 @@ export interface SessionRevokePublisher {
   }): void;
 }
 
+/**
+ * Fails closed: a row or cache entry written before the scope column existed
+ * (or carrying an unknown value) is treated as the restrictive scope only if
+ * it is explicitly `self_service`. Everything else keeps the historical
+ * `panel` behaviour, so no live session is downgraded by a deploy.
+ */
+function normalizeScope(value: string | null | undefined): SessionScope {
+  return value === 'self_service' ? 'self_service' : 'panel';
+}
+
 export function mintSessionToken(): { token: string; tokenId: string } {
   const raw = randomBytes(24).toString('base64url');
   const token = `s_${uuidv7()}_${raw}`;
@@ -44,11 +56,19 @@ export function tokenIdFromToken(token: string): string {
 export async function createSession(
   db: DatabaseClient,
   redis: Redis,
-  params: { playerId: string; ip: string | null; userAgent: string | null; ttlMs: number },
+  params: {
+    playerId: string;
+    ip: string | null;
+    userAgent: string | null;
+    ttlMs: number;
+    /** Defaults to `panel`; pass `self_service` for a login without panel access. */
+    scope?: SessionScope;
+  },
 ): Promise<{ token: string; session: SessionRecord }> {
   const { token, tokenId } = mintSessionToken();
   const now = new Date();
   const expiresAt = new Date(now.getTime() + params.ttlMs);
+  const scope = params.scope ?? 'panel';
   await db.insert(sessions).values({
     id: tokenId,
     playerId: params.playerId,
@@ -56,6 +76,7 @@ export async function createSession(
     lastActivityAt: now,
     ip: params.ip,
     userAgent: params.userAgent,
+    scope,
   });
   const record: SessionRecord = {
     id: tokenId,
@@ -64,6 +85,7 @@ export async function createSession(
     lastActivityAt: now,
     ip: params.ip,
     userAgent: params.userAgent,
+    scope,
   };
   await cachePut(redis, record);
   return { token, session: record };
@@ -98,6 +120,7 @@ export async function resolveSession(
     lastActivityAt: row.lastActivityAt,
     ip: row.ip ?? null,
     userAgent: row.userAgent ?? null,
+    scope: normalizeScope(row.scope),
   };
   await cachePut(redis, record);
   return record;
@@ -183,6 +206,7 @@ async function cachePut(redis: Redis, record: SessionRecord): Promise<void> {
       lastActivityAt: record.lastActivityAt.toISOString(),
       ip: record.ip,
       userAgent: record.userAgent,
+      scope: record.scope,
     }),
     'EX',
     REDIS_TTL_SECONDS,
@@ -199,6 +223,7 @@ async function cacheGet(redis: Redis, tokenId: string): Promise<SessionRecord | 
       lastActivityAt: string;
       ip: string | null;
       userAgent: string | null;
+      scope?: string;
     };
     return {
       id: tokenId,
@@ -207,6 +232,7 @@ async function cacheGet(redis: Redis, tokenId: string): Promise<SessionRecord | 
       lastActivityAt: new Date(obj.lastActivityAt),
       ip: obj.ip,
       userAgent: obj.userAgent,
+      scope: normalizeScope(obj.scope),
     };
   } catch {
     return null;

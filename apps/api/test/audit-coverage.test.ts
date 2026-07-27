@@ -42,6 +42,7 @@ import archiveRoutes from '../src/routes/server-archive.js';
 import serverInstallRoutes from '../src/routes/server-install.js';
 import serverRoutes from '../src/routes/servers.js';
 import usersRoutes from '../src/routes/users.js';
+import vipSubscriptionRoutes from '../src/routes/vip-subscriptions.js';
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const SWAGGER_PREFIX = '/api/docs';
@@ -104,6 +105,7 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   await app.register(integrationsVipRoutes);
   await app.register(auditRoutes);
   await app.register(steamRoutes);
+  await app.register(vipSubscriptionRoutes);
 
   // suppress 'unused imports' — plugins are referenced here defensively
   // so a future refactor that pulls them into the route registration
