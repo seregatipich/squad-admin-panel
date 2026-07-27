@@ -13,6 +13,8 @@ interface UserRow {
   role: { id: string; name: string; color: RoleColor; is_system_role: boolean };
   role_expires_at: string | null;
   role_comment: string | null;
+  /** DISCORD-4 (#151): boolean only — the raw Discord id never reaches this list. */
+  discord_linked?: boolean;
 }
 interface RoleOption {
   id: string;
@@ -155,6 +157,14 @@ export default function UsersPage() {
                   <Link href={`/players/${u.id}`} className="text-sky-400 hover:text-sky-300">
                     {u.canonical_name}
                   </Link>
+                  {u.discord_linked ? (
+                    <span
+                      className="ml-2 rounded bg-indigo-950 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-indigo-300"
+                      title="Discord-аккаунт привязан"
+                    >
+                      Discord
+                    </span>
+                  ) : null}
                 </td>
                 <td className="p-2 font-mono text-xs">{u.steam_id64 ?? '—'}</td>
                 <td className="p-2">
