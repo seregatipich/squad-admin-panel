@@ -1,5 +1,25 @@
 # `api` — changelog
 
+## 2026-07-27 — DISCORD-5 роль-синк: роль панели → роль Discord (#152)
+
+### Added
+
+- Five routes in the new [`routes/integrations-discord-role-mappings.ts`](../../../apps/api/src/routes/integrations-discord-role-mappings.ts), all gated on the existing catalogue key `integration:manage` (declarative `config.permissions`; `app.requirePermission(...)` does not exist):
+  - `GET /api/v1/integrations/discord/role-mappings` → `{ items[], status }`. Each item is `{ id, role_id, role_name, discord_role_id, source, enabled, created_at, updated_at }`; `role_name` comes from an inner join on `roles`. `source` is the constant `panel_role` and is **synthesised, not stored** — leaderboard-driven roles (top-kills, playtime tiers) are a post-STATS-3 extension that will bring their own columns.
+  - `POST …/role-mappings` — `{ role_id, discord_role_id, enabled? }` → `201`. `404 role_not_found` for an unknown panel role, `409 role_mapping_exists` when the role is already mapped (unique `role_id`), `400` for a `discord_role_id` that is not a snowflake.
+  - `PATCH …/role-mappings/:id` — `{ discord_role_id?, enabled? }`; `404 mapping_not_found`.
+  - `DELETE …/role-mappings/:id` → `{ ok: true }`; `404 mapping_not_found`. Deleting a mapping deliberately does **not** revoke the Discord role — once the mapping is gone the panel no longer manages that role, so reconcile leaves every holder alone instead of mass-revoking.
+  - `POST …/role-mappings/reconcile` → `{ enqueued: true }` — asks worker-discord for a full drift repair now.
+  All four mutations declare `config.audit`, so `plugins/audit.ts` persists `discord.role_mapping.create` / `.update` / `.delete` / `.reconcile` against `discord_role_mapping`.
+- [`lib/discord-role-sync.ts`](../../../apps/api/src/lib/discord-role-sync.ts) — `publishDiscordRoleSync(redis, playerId|null, reason, log?)` (`XADD discord:role-sync MAXLEN ~ 10000`) and `readDiscordRoleSyncStatus(redis)`. The publish is deliberately best-effort and never throws: it runs *after* the role transaction commits, so a Redis blip must not turn a successful role change into a 500, and worker-discord's hourly reconcile re-derives everything anyway. There is no outbox table for the same reason.
+- `PUT` and `DELETE /api/v1/players/:playerId/role` ([`routes/players.ts`](../../../apps/api/src/routes/players.ts)) publish a per-player sync request after their transaction commits, with `reason` `player.role.assign` / `player.role.unassign`. This is the ≤60 s reaction path.
+- The `status` field on the list route is the worker's last role-sync outcome, read from the Redis key `discord:role-sync:status` (`{ state, reason, message, checked_at }`, or `null` when the worker never reported). It exists so a bot missing **Manage Roles** surfaces in the settings UI instead of failing silently; an unreachable Redis or an unparseable value degrades to `null` rather than failing the request.
+
+### Notes
+
+- `GET /api/v1/me` is unchanged — no capability boolean was added. The UI gates by self-hiding on `403`.
+- `isUniqueViolation` here walks the `err.cause` chain: drizzle-orm 0.45 wraps the driver error, so the flat `err.code === '23505'` check used in `routes/marks.ts` does not match.
+
 ## 2026-07-27 — MOD-4 массовые операции модерации (#61)
 
 ### Added
