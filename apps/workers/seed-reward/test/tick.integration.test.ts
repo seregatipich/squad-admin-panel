@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import {
   auditLog,
   createDatabaseClient,
@@ -8,7 +9,7 @@ import {
   servers,
   sessions,
 } from '@squad/db';
-import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -18,7 +19,10 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
 const NOW = new Date('2026-07-14T04:00:00.000Z');
 const PLAYER_ID = uuidv7();
-const PLAYER_STEAM_ID = 76561198914100001n;
+// Per run, not a constant: `steam_id64` is unique, so a run whose `afterAll` never
+// completed (crash, watch-mode interrupt) would otherwise leave a row that makes
+// every later run's `beforeAll` insert fail with 23505 until someone cleans the DB.
+const PLAYER_STEAM_ID = 76561198914100000n + BigInt(randomInt(1, 1_000_000));
 const REWARD_ROLE_ID = uuidv7();
 const SERVER_ID = uuidv7();
 const SESSION_ID = `seed-reward-${PLAYER_ID}`;
@@ -125,17 +129,55 @@ afterAll(async () => {
 
 /**
  * `publishAdminsCfgSyncForAllServers` enqueues one outbox row per *active server
- * in the database*, not per server this test created. Asserting a literal 1 tied
- * the expectation to global DB state, so the test failed whenever it ran after a
- * suite that left a server behind — which the local pre-push checklist does, by
- * running every affected package against one shared DATABASE_URL. Counting the
- * servers the tick actually fans out to keeps the assertion exact and makes it
- * independent of test order.
+ * in the database*, not per server this test created, so a literal 1 tied the
+ * expectation to global DB state. Re-counting the servers afterwards fixed the
+ * ordering dependency but not a concurrency one: the affected-package sweep runs
+ * every package against one shared DATABASE_URL, and suites that create and drop
+ * servers (log-ingest's, for instance) move the count between the tick and the
+ * re-count — observed as `expected "spy" to be called 5 times, but got 6 times`.
+ *
+ * Read the fan-out off the tick itself instead. The streams it published are the
+ * servers it saw, so `enqueued` is checked against the side effect it reports on
+ * with no second look at the table, and this test's own server is still asserted
+ * exactly.
  */
-async function activeServerCount(): Promise<number> {
+function syncedStreams(xadd: ReturnType<typeof vi.fn>): string[] {
+  return xadd.mock.calls.map(([stream]) => stream as string);
+}
+
+/**
+ * `reconcileSeedRewardAssignments` scans every player in the database, so the
+ * `granted`/`revoked` counts a tick returns cover leftover players from other
+ * suites too — asserting a literal 1 tied the test to global DB state exactly
+ * like the `enqueued` count did. These two helpers bracket a tick instead: the
+ * audit rows written above the watermark are precisely the changes that tick
+ * made, which pins the returned counts to a real side effect and lets the test
+ * assert its own player's transition exactly, whoever else is in the table.
+ */
+async function auditWatermark(): Promise<bigint> {
   if (!db) throw new Error('database not configured');
-  const rows = await db.select({ id: servers.id }).from(servers).where(isNull(servers.deletedAt));
-  return rows.length;
+  const [row] = await db
+    .select({ id: auditLog.id })
+    .from(auditLog)
+    .orderBy(desc(auditLog.id))
+    .limit(1);
+  return row?.id ?? 0n;
+}
+
+async function seedRewardAuditSince(
+  watermark: bigint,
+): Promise<Array<{ actionType: string; targetId: string | null }>> {
+  if (!db) throw new Error('database not configured');
+  return db
+    .select({ actionType: auditLog.actionType, targetId: auditLog.targetId })
+    .from(auditLog)
+    .where(
+      and(
+        gt(auditLog.id, watermark),
+        inArray(auditLog.actionType, ['seed.reward_granted', 'seed.reward_revoked']),
+      ),
+    )
+    .orderBy(asc(auditLog.id));
 }
 
 describeIfDb('seed reward worker integration', () => {
@@ -149,26 +191,31 @@ describeIfDb('seed reward worker integration', () => {
     const firstRedis = makeRedis();
     const diag = { emit: vi.fn().mockResolvedValue(undefined) };
 
+    const grantWatermark = await auditWatermark();
     const granted = await runSeedRewardTick({
       ...createSeedRewardDeps(db, firstRedis.redis),
       now: NOW,
       diag,
     });
 
+    const grantChanges = await seedRewardAuditSince(grantWatermark);
+    const grantStreams = syncedStreams(firstRedis.xadd);
     expect(granted).toEqual({
       skipped: false,
-      granted: 1,
-      revoked: 0,
-      enqueued: await activeServerCount(),
+      granted: grantChanges.filter((row) => row.actionType === 'seed.reward_granted').length,
+      revoked: grantChanges.filter((row) => row.actionType === 'seed.reward_revoked').length,
+      enqueued: grantStreams.length,
     });
+    expect(grantStreams).toContain(`events:admins-cfg-sync:${SERVER_ID}`);
+    expect(
+      grantChanges.filter((row) => row.targetId === PLAYER_ID).map((row) => row.actionType),
+    ).toEqual(['seed.reward_granted']);
     const [afterGrant] = await db
       .select({ roleId: players.roleId })
       .from(players)
       .where(eq(players.steamId64, PLAYER_STEAM_ID));
     expect(afterGrant?.roleId).toBe(REWARD_ROLE_ID);
     expect(firstRedis.del).toHaveBeenCalledWith(`session:${SESSION_ID}`);
-    // One stream publish per active server, for the same reason as `enqueued` above.
-    expect(firstRedis.xadd).toHaveBeenCalledTimes(await activeServerCount());
     expect(revokedFor(firstRedis.publish)).toContainEqual({
       playerId: PLAYER_ID,
       sessionId: SESSION_ID,
@@ -185,18 +232,25 @@ describeIfDb('seed reward worker integration', () => {
     });
     const secondRedis = makeRedis();
 
+    const revokeWatermark = await auditWatermark();
     const revoked = await runSeedRewardTick({
       ...createSeedRewardDeps(db, secondRedis.redis),
       now: NOW,
       diag,
     });
 
+    const revokeChanges = await seedRewardAuditSince(revokeWatermark);
+    const revokeStreams = syncedStreams(secondRedis.xadd);
     expect(revoked).toEqual({
       skipped: false,
-      granted: 0,
-      revoked: 1,
-      enqueued: await activeServerCount(),
+      granted: revokeChanges.filter((row) => row.actionType === 'seed.reward_granted').length,
+      revoked: revokeChanges.filter((row) => row.actionType === 'seed.reward_revoked').length,
+      enqueued: revokeStreams.length,
     });
+    expect(revokeStreams).toContain(`events:admins-cfg-sync:${SERVER_ID}`);
+    expect(
+      revokeChanges.filter((row) => row.targetId === PLAYER_ID).map((row) => row.actionType),
+    ).toEqual(['seed.reward_revoked']);
     const [afterRevoke] = await db
       .select({ roleId: players.roleId })
       .from(players)
