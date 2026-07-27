@@ -61,6 +61,7 @@ import mediaRoutes from '../../src/routes/media.js';
 import mediaLinksRoutes from '../../src/routes/media-links.js';
 import messageTemplatesRoutes from '../../src/routes/message-templates.js';
 import moderationActionsRoutes from '../../src/routes/moderation-actions.js';
+import moderationBulkRoutes from '../../src/routes/moderation-bulk.js';
 import notesFeedRoutes from '../../src/routes/notes-feed.js';
 import permissionsRoutes from '../../src/routes/permissions.js';
 import playerAltCandidatesRoutes from '../../src/routes/player-alt-candidates.js';
@@ -553,6 +554,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(reportActionsRoutes);
   await app.register(reportAnalyticsRoutes);
   await app.register(moderationActionsRoutes);
+  await app.register(moderationBulkRoutes);
   await app.register(eventsRoutes);
   await app.register(playerNotesRoutes);
   await app.register(notesFeedRoutes);
