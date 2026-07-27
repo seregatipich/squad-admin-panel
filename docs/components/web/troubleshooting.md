@@ -140,16 +140,20 @@ sudo systemctl restart panel-host-bridge
 
 **Fix:** there is no fallback — re-edit configs by hand at `/servers/<newId>/configs`.
 
-## `/no-access` page hint about `.first-owner-claimed`
+## Steam login lands on `/me` instead of the panel
 
-**Symptom:** Fresh installation: you authenticated via Steam but landed on `/no-access`.
+**Symptom:** Fresh installation: you authenticated via Steam but landed on the «Мой VIP» self-service page (`/me`) rather than the dashboard. Since VIPSUB-5 (#171) every successful Steam login gets a session; a player whose role has no `panel_access` — including a player with no role at all — gets a `self_service`-scoped one and is redirected to `/me`. Typing a `(dashboard)` URL by hand bounces back to `/me` as well: the layout redirects any session whose `permissions` array is empty.
 
-**Cause:** The first-owner auto-claim did not fire because the sentinel file `/var/lib/squad-panel/.first-owner-claimed` was already present (e.g., from a previous installation), or there is already at least one Owner in the database.
+**Cause:** The first-owner auto-claim did not fire, so your player has no panel role. `claimFirstOwner` skips when `panel_meta.first_owner_claimed` is already `true` or when some player already holds the Owner role — typically because someone else logged in first. The host sentinel `/var/lib/squad-panel/.first-owner-claimed` is written after a successful claim but is never consulted; the DB is the only source of truth.
 
 **Diagnostics:**
 ```bash
-ls -la /var/lib/squad-panel/.first-owner-claimed
-docker compose exec api node -e "require('./dist/scripts/check-owners.js')"
+docker compose exec -T postgres psql -U admin admin -c "SELECT * FROM panel_meta;"
+docker compose exec -T postgres psql -U admin admin -c \
+  "SELECT p.steam_id64, p.canonical_name FROM players p
+   JOIN roles r ON r.id = p.role_id WHERE r.name = 'Owner';"
+# who the sentinel says claimed it (informational only)
+sudo cat /var/lib/squad-panel/.first-owner-claimed
 ```
 
-**Fix:** An existing Owner must assign the Owner role manually via the `/users` page or directly in the database.
+**Fix:** An existing Owner must assign you a role with `panel_access` via the `/users` page or directly in the database. Re-login is not required: the `self_service` downgrade stops applying the moment the player actually holds `panel_access`, so a refresh of `/` moves you into the dashboard (allow up to the 30 s permission-cache TTL after a direct DB edit). If the panel has no Owner at all, follow "Owner lockout" in [`docs/components/rbac/troubleshooting.md`](../rbac/troubleshooting.md).
