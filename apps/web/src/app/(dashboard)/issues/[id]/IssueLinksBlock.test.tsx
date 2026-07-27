@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { IssueLinksBlock } from './IssueLinksBlock';
@@ -86,8 +86,10 @@ describe('IssueLinksBlock', () => {
       );
 
       await screen.findByText('Связанные объекты');
-      expect(screen.getByText('Игрок')).toBeInTheDocument();
-      expect(screen.getByText('Сервер')).toBeInTheDocument();
+      // Scoped to the list: the same Russian words also label the picker's options.
+      const list = within(screen.getByRole('list'));
+      expect(list.getByText('Игрок')).toBeInTheDocument();
+      expect(list.getByText('Сервер')).toBeInTheDocument();
       expect(screen.getByRole('link', { name: 'Vasya' })).toHaveAttribute(
         'href',
         '/players/player-1',

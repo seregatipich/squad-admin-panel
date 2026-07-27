@@ -71,7 +71,7 @@ async function seedServer(db: DatabaseClient, displayName: string): Promise<stri
   await db.insert(servers).values({
     id,
     displayName,
-    slug: `srv-${id.slice(0, 8)}`,
+    slug: `srv-${id}`,
   });
   return id;
 }

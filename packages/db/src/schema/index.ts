@@ -25,6 +25,7 @@ export * from './geoip-settings.js';
 export * from './issue-comments.js';
 export * from './issue-label-links.js';
 export * from './issue-labels.js';
+export * from './issue-links.js';
 export * from './issues.js';
 export * from './layers.js';
 export * from './map-vote.js';
