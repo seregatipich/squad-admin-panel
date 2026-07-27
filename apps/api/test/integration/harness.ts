@@ -63,6 +63,7 @@ import matchesRoutes from '../../src/routes/matches.js';
 import meTokensRoutes from '../../src/routes/me-tokens.js';
 import mediaRoutes from '../../src/routes/media.js';
 import mediaLinksRoutes from '../../src/routes/media-links.js';
+import mediaPublicationsRoutes from '../../src/routes/media-publications.js';
 import mediaUploadTokensRoutes from '../../src/routes/media-upload-tokens.js';
 import messageTemplatesRoutes from '../../src/routes/message-templates.js';
 import moderationActionsRoutes from '../../src/routes/moderation-actions.js';
@@ -556,6 +557,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(economyRoutes);
   await app.register(mediaRoutes);
   await app.register(mediaLinksRoutes);
+  await app.register(mediaPublicationsRoutes);
   await app.register(mediaUploadTokensRoutes);
   await app.register(settingsEconomyRoutes);
   await app.register(settingsChatFlagsRoutes);

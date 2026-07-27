@@ -617,6 +617,13 @@
       "when": 1783403600000,
       "tag": "0106_ban_appeals",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1783403697000,
+      "tag": "0097_media_publications",
+      "breakpoints": true
     }
   ]
 }

@@ -85,6 +85,11 @@ services:
       # Squad servers run with --network host on 127.0.0.1:{rcon_port} of the
       # host; from inside this container 127.0.0.1 is the api container itself.
       RCON_HOST_DEFAULT: host.docker.internal
+      # VIDEO-1/VIDEO-4: uploaded media lives here, on a persistent volume shared
+      # with worker-media-publisher. Both containers have different WORKDIRs, so
+      # the relative default (./media) would resolve to two different, ephemeral
+      # directories and the publisher would find nothing to upload.
+      MEDIA_STORAGE_DIR: /var/lib/squad-panel/media
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Bridge SO_PEERCRED checks the primary GID, not supplementary groups —
@@ -94,6 +99,7 @@ services:
     volumes:
       - /run/panel-host-bridge:/run/panel-host-bridge
       - /run/squad-panel/rnsquadjs:/run/squad-panel/rnsquadjs:rw
+      - media_data:/var/lib/squad-panel/media
     depends_on:
       postgres:
         condition: service_healthy
@@ -241,6 +247,36 @@ services:
       DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
       REDIS_URL: redis://redis:6379
       SEED_REWARD_INTERVAL_MS: ${SEED_REWARD_INTERVAL_MS:-86400000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  # VIDEO-4 (#160): fans published media out to YouTube/Telegram. Both
+  # destinations are optional — with no credentials the worker simply defers
+  # every publication instead of failing it, so it is safe to run unconfigured.
+  worker-media-publisher:
+    build: { context: ., dockerfile: docker/worker.Dockerfile, args: { WORKER: media-publisher } }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://admin:${POSTGRES_PASSWORD}@postgres:5432/admin
+      REDIS_URL: redis://redis:6379
+      MEDIA_STORAGE_DIR: /var/lib/squad-panel/media
+      MEDIA_PUBLISHER_INTERVAL_MS: ${MEDIA_PUBLISHER_INTERVAL_MS:-60000}
+      MEDIA_PUBLISHER_BATCH_SIZE: ${MEDIA_PUBLISHER_BATCH_SIZE:-3}
+      # YouTube Data API v3 OAuth (all three required, or YouTube stays off).
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
+      YOUTUBE_REFRESH_TOKEN: ${YOUTUBE_REFRESH_TOKEN:-}
+      # Telegram bot (both required, or Telegram stays off).
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - media_data:/var/lib/squad-panel/media
     depends_on:
       postgres:
         condition: service_healthy
@@ -484,6 +520,7 @@ services:
     restart: 'no'
 
 volumes:
+  media_data:
   pgdata:
   redisdata:
   caddy_data:
