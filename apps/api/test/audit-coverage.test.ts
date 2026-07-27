@@ -42,6 +42,7 @@ import playerSteamRefreshRoutes from '../src/routes/player-steam-refresh.js';
 import playerRoutes from '../src/routes/players.js';
 import roleMembersRoutes from '../src/routes/role-members.js';
 import rolesRoutes from '../src/routes/roles.js';
+import seasonsRoutes from '../src/routes/seasons.js';
 import archiveRoutes from '../src/routes/server-archive.js';
 import serverInstallRoutes from '../src/routes/server-install.js';
 import serverRoutes from '../src/routes/servers.js';
@@ -114,6 +115,7 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   await app.register(steamRoutes);
   await app.register(discordAuthRoutes);
   await app.register(vipSubscriptionRoutes);
+  await app.register(seasonsRoutes);
 
   // suppress 'unused imports' — plugins are referenced here defensively
   // so a future refactor that pulls them into the route registration
