@@ -561,6 +561,13 @@
       "when": 1783402500000,
       "tag": "0095_media_links",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1783403600000,
+      "tag": "0106_ban_appeals",
+      "breakpoints": true
     }
   ]
 }
