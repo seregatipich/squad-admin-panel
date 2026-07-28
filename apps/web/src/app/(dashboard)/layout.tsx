@@ -29,12 +29,19 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // and that bare `catch` would swallow it.
   if (me.permissions.length === 0) redirect('/me');
 
+  // #225: only the fetch is guarded. `redirect()` signals by throwing, so
+  // calling it inside the `try` fed its own control-flow error to the `catch`
+  // and an unfinished panel silently rendered the dashboard instead of going to
+  // `/setup`. The `catch` keeps its original job — a setup-status outage must
+  // not lock everyone out — so an unreachable endpoint still lets the user
+  // through.
+  let setupCompleted = true;
   try {
-    const status = await apiFetch<SetupStatus>('/api/v1/setup/status');
-    if (!status.setup_completed) redirect('/setup');
+    setupCompleted = (await apiFetch<SetupStatus>('/api/v1/setup/status')).setup_completed;
   } catch {
     // if the endpoint fails, let the user through
   }
+  if (!setupCompleted) redirect('/setup');
 
   return (
     <div className="flex min-h-screen flex-col">

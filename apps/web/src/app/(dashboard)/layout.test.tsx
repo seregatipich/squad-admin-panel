@@ -77,4 +77,22 @@ describe('DashboardLayout', () => {
     await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
     expect(redirectMock).not.toHaveBeenCalled();
   });
+
+  // #225: `redirect()` aborts by throwing, so calling it inside the
+  // setup-status `try` let the bare `catch` swallow it — an unfinished panel
+  // rendered the dashboard instead of being sent to `/setup`.
+  it('sends a session to /setup while setup is incomplete', async () => {
+    requireSessionMock.mockResolvedValue(session(['servers.view']));
+    apiFetchMock.mockResolvedValue({ setup_completed: false });
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(/NEXT_REDIRECT/);
+    expect(redirectMock).toHaveBeenCalledWith('/setup');
+  });
+
+  // The `catch` still has a job: a setup-status outage must not lock the panel.
+  it('renders the shell when the setup-status endpoint fails', async () => {
+    requireSessionMock.mockResolvedValue(session(['servers.view']));
+    apiFetchMock.mockRejectedValue(new Error('api down'));
+    await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
+    expect(redirectMock).not.toHaveBeenCalled();
+  });
 });

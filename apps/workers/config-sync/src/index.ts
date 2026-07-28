@@ -389,7 +389,16 @@ async function main() {
     onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
   });
 
-  await bridge.connect();
+  // Connect eagerly for the log line, but do NOT die if the bridge is not up:
+  // `BridgeClient` dials on demand (`packages/bridge-client/src/client.ts`), so
+  // the per-server sync reconnects on its own. Nothing else on this boot path
+  // needs it — `refreshServerList` is DB+Redis and `relayOutbox` guards itself —
+  // and exiting here meant `startHeartbeat` below never ran, so the worker read
+  // as dead rather than degraded. Matches `metrics-sampler`, `log-ingest` and
+  // `scheduler`.
+  await bridge
+    .connect()
+    .catch((err: Error) => log.warn({ err: err.message }, 'bridge not reachable at startup'));
   await refreshServerList();
   // Boot-time reclaim pass — picks up anything orphaned by a prior
   // process restart (consumer name regenerates each boot).

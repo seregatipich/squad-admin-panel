@@ -60,6 +60,8 @@ gh run view <run-id> --log-failed   # logs of the failing step
 
 The `ci` workflow runs on the org's self-hosted runner (a Multipass VM registered under the default `self-hosted` label) — see the "Self-hosted runner" section in `docs/development/agent-harness.md` for its setup and operating details.
 
+**Adding a package? Add it to `test:cov`.** CI's only JS test step is `pnpm test:cov`, which carries an explicit `--filter` list. A package missing from that list never runs in CI — it can be merged with a red suite while `dev` stays green (#229: 16 of 28 suites were invisible this way, and two workers sat broken behind a green dashboard). [`scripts/test-cov-complete.sh`](scripts/test-cov-complete.sh) now fails CI when a workspace package whose `test` script runs vitest is not in the list; run it locally any time with `bash scripts/test-cov-complete.sh`. The Go bridge is deliberately excluded — it has its own `go` job.
+
 ### Local pre-check
 
 The lefthook `pre-push` hook runs [`scripts/pre-push-checklist.sh`](scripts/pre-push-checklist.sh) automatically before every push, as a fast local pre-check ahead of the cloud run. Any failed item blocks the push (bypass in an emergency with `git push --no-verify`).
