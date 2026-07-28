@@ -14,6 +14,16 @@ const REDIS_BASE = (
   'redis://127.0.0.1:6379'
 ).replace(/\/\d+$/, '');
 const REDIS_URL = `${REDIS_BASE}/${TEST_REDIS_DB}`;
+// Same reasoning as REDIS_URL, for the other hard requirement: most workers call
+// `requiredEnv('DATABASE_URL')` and exit 1 before publishing a heartbeat when
+// the runner has no ambient one, which reads as "exited before heartbeat:
+// code=1" rather than anything about the database. Supplying it here keeps the
+// contract self-contained instead of leaving 15 suites to each remember it.
+// Applied before `envOverrides` so a suite can still point at its own database.
+const DATABASE_URL =
+  process.env.DATABASE_URL ??
+  process.env.TEST_DATABASE_URL ??
+  `postgres://admin:${process.env.POSTGRES_PASSWORD ?? 'admin'}@127.0.0.1:5432/admin`;
 const HEARTBEAT_TIMEOUT_MS = 30_000;
 const SHUTDOWN_TIMEOUT_MS = 8_000;
 
@@ -64,7 +74,7 @@ export function workerContract(opts: ContractOpts) {
   const spawnWorker = (): ChildProcess => {
     stderr = '';
     const spawned = spawn('node', [opts.entryPath], {
-      env: { ...process.env, ...opts.envOverrides, REDIS_URL, NODE_ENV: 'test' },
+      env: { ...process.env, DATABASE_URL, ...opts.envOverrides, REDIS_URL, NODE_ENV: 'test' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     spawned.stderr?.on('data', (chunk: Buffer | string) => {
