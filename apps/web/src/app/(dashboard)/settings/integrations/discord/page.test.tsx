@@ -158,6 +158,14 @@ function mockFetch(overrides: { test?: () => Promise<Response> } = {}) {
         new Response(JSON.stringify({ items: [], status: null }), { status: 200 }),
       );
     }
+    // DISCORD-6 (#153): the page now mounts DiscordStatusChannelsSection, which
+    // fetches on mount. This router rejects anything unstubbed, so it needs the route.
+    if (
+      url.endsWith('/api/v1/integrations/discord/status-channels') &&
+      init?.method === undefined
+    ) {
+      return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+    }
     if (url.endsWith('/api/v1/roles') && init?.method === undefined) {
       return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
     }
