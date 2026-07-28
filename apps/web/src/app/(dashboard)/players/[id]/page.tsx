@@ -168,8 +168,8 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
           ← игроки
         </Link>
         {player.avatar_url ? (
-          // INT-1 (#76): real Steam avatar replaces the initials placeholder
-          // once POST /players/:id/steam-refresh has stored one.
+          // INT-1 (#76): the manual route or periodic worker replaces the
+          // initials placeholder once a Steam avatar has been stored.
           <img
             data-testid="player-avatar"
             src={player.avatar_url}

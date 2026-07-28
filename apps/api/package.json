@@ -35,6 +35,7 @@
     "@squad/diag": "workspace:*",
     "@squad/shared-config": "workspace:*",
     "@squad/shared-types": "workspace:*",
+    "@squad/steam-api": "workspace:*",
     "@types/diff": "^8.0.0",
     "arctic": "^3.1.4",
     "diff": "^9.0.0",

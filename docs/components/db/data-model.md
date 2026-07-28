@@ -455,9 +455,11 @@ One row per Steam account that has ever been seen on any managed server. The `st
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `updated_at` | `timestamptz` | NO | `now()` | |
 
-The INT-1 (#76) Steam columns are written only by
-`POST /api/v1/players/:playerId/steam-refresh`; nothing backfills them, so a
-panel that has never run a refresh reads them all as NULL/`false`/`0`.
+The INT-1 (#76) Steam columns are written on demand by
+`POST /api/v1/players/:playerId/steam-refresh` and in the background by
+`worker-steam-refresh`. The worker checks never-refreshed and seven-day-stale
+Steam players in batches of at most 100. Until the first complete refresh, the
+nullable fields remain NULL and the non-null ban counters keep their defaults.
 
 **Indexes**
 

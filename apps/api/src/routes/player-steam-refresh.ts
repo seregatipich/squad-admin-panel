@@ -16,13 +16,12 @@ const playerIdParams = z.object({ playerId: z.string().uuid() });
  * card may also refresh it, because the call changes no game state, only the
  * panel's copy of public Steam data.
  *
- * The three Steam reads go through the shared Redis caches owned by
- * `steam-profile.ts` (1 h), `steam-bans.ts` (6 h) and `steam-owned-games.ts`
- * (24 h). That is deliberate: repeated clicks persist the cached snapshot
- * instead of burning the operator's daily Steam quota. The write is
- * all-or-nothing — if any of the three reads fails the route answers 502 and
- * leaves the stored snapshot untouched, so a partial outage never produces a
- * half-updated row.
+ * The three Steam reads go through the `@squad/steam-api` Redis caches shared
+ * with the background refresh worker: profile 1 h, bans 6 h, owned games 24 h.
+ * That is deliberate: repeated clicks persist the cached snapshot instead of
+ * burning the operator's daily Steam quota. The write is all-or-nothing — if
+ * any of the three reads fails the route answers 502 and leaves the stored
+ * snapshot untouched, so a partial outage never produces a half-updated row.
  */
 const playerSteamRefreshRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();

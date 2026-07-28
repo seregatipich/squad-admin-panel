@@ -238,8 +238,8 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
           first_seen_at: row.firstSeenAt,
           last_seen_at: row.lastSeenAt,
           total_time_played_seconds: Number(row.totalTimePlayedSeconds),
-          // INT-1 (#76): stored Steam Web API snapshot. Everything here stays
-          // null/zero until POST /api/v1/players/:playerId/steam-refresh runs.
+          // INT-1 (#76): stored Steam Web API snapshot. It is filled by the
+          // manual refresh route or the periodic steam-refresh worker.
           avatar_url: row.avatarUrl,
           persona_name: row.personaName,
           profile_visibility: row.profileVisibility,
