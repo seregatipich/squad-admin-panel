@@ -26,6 +26,14 @@ export const servers = pgTable(
     tags: text('tags').array().notNull().default([]),
     timezone: text('timezone').notNull().default('UTC'),
     isCanary: boolean('is_canary').notNull().default(false),
+    /**
+     * Discord channel whose name `apps/workers/discord` rewrites into this
+     * server's live status (DISCORD-6, #153). `null` — not configured, and the
+     * status-channel tick skips the server entirely. Stored as `text` because a
+     * Discord snowflake is an unsigned 64-bit id that does not fit `bigint`,
+     * matching `discord_role_mappings.discord_role_id`.
+     */
+    statusChannelId: text('status_channel_id'),
     deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'date' }),
     deletedByPlayerId: uuid('deleted_by_player_id').references(() => players.id, {
       onDelete: 'set null',
