@@ -93,6 +93,9 @@ importers:
       '@squad/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      '@squad/steam-api':
+        specifier: workspace:*
+        version: link:../../packages/steam-api
       '@types/diff':
         specifier: ^8.0.0
         version: 8.0.0
@@ -973,6 +976,46 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@22.19.17)(jiti@2.6.1)(jsdom@29.1.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
 
+  apps/workers/steam-refresh:
+    dependencies:
+      '@squad/db':
+        specifier: workspace:*
+        version: link:../../../packages/db
+      '@squad/diag':
+        specifier: workspace:*
+        version: link:../../../packages/diag
+      '@squad/shared-config':
+        specifier: workspace:*
+        version: link:../../../packages/shared-config
+      '@squad/steam-api':
+        specifier: workspace:*
+        version: link:../../../packages/steam-api
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@opentelemetry/api@1.9.1)(gel@2.2.0)(postgres@3.4.9)
+      ioredis:
+        specifier: ^5.4.1
+        version: 5.10.1
+      pino:
+        specifier: ^9.5.0
+        version: 9.14.0
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.9
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.1
+        version: 22.19.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/node@22.19.17)(jiti@2.6.1)(jsdom@29.1.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
+
   docker/rnsquadjs/plugins/panelBridge:
     dependencies:
       ioredis:
@@ -1106,6 +1149,22 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@26.1.1)(jiti@2.6.1)(jsdom@29.1.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
+
+  packages/steam-api:
+    dependencies:
+      ioredis:
+        specifier: ^5.4.1
+        version: 5.10.1
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.1
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/node@22.19.17)(jiti@2.6.1)(jsdom@29.1.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
 
 packages:
 

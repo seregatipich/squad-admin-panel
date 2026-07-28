@@ -275,12 +275,11 @@ describe('GET /api/v1/players/:playerId/compare-online', () => {
     const idA = await seedPlayer(PLAYER_A_STEAM, 'PlayerA');
     const idB = await seedPlayer(PLAYER_B_STEAM, 'PlayerB');
     const now = new Date();
-    const today = now.toISOString().slice(0, 10);
-    const startOfToday = new Date(`${today}T00:00:00.000Z`);
+    const twoHoursAgo = new Date(now.getTime() - 7_200_000);
     const oneHourAgo = new Date(now.getTime() - 3_600_000);
 
     await h.db.insert(playerSessions).values([
-      { playerId: idA, serverId, mode: 'online', connectedAt: startOfToday, disconnectedAt: null },
+      { playerId: idA, serverId, mode: 'online', connectedAt: twoHoursAgo, disconnectedAt: null },
       { playerId: idB, serverId, mode: 'online', connectedAt: oneHourAgo, disconnectedAt: null },
     ]);
 
