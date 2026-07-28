@@ -68,6 +68,7 @@ function makePollingRconServer(): Promise<{ server: Server; port: number; comman
       MapName_s: 'Gorodok_RAAS_v1',
       GameMode_s: 'RAAS',
       ServerTickRate: 49.7,
+      PublicQueue_I: '7',
     }),
     ShowNextMap: 'Next level is Fallujah, layer is Fallujah_RAAS_v1',
   };
@@ -164,8 +165,12 @@ describe('RconSupervisor polling', () => {
       const deadline = Date.now() + 3000;
       let squadsPayload: { squads: Array<{ name: string; team_id: number; size: number }> } | null =
         null;
-      let statusPayload: { state?: string; next_layer?: string; squad_count?: number } | null =
-        null;
+      let statusPayload: {
+        state?: string;
+        next_layer?: string;
+        squad_count?: number;
+        public_queue?: number;
+      } | null = null;
 
       while (Date.now() < deadline && (!squadsPayload || !statusPayload?.squad_count)) {
         await sleep(25);
@@ -192,6 +197,9 @@ describe('RconSupervisor polling', () => {
       expect(statusPayload).toMatchObject({
         next_layer: 'Fallujah_RAAS_v1',
         squad_count: 1,
+        // DISCORD-6 (#153): the Discord status channel renders {players}x{queue},
+        // so the parsed PublicQueue_I has to reach the rcon:status cache.
+        public_queue: 7,
       });
     } finally {
       await supervisor.stop();

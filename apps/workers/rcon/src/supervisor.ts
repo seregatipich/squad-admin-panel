@@ -666,6 +666,10 @@ class PerServerSupervisor {
           next_layer: nextMap?.layer ?? info?.next_layer ?? undefined,
           game_mode: info?.game_mode ?? undefined,
           squad_count: squads.length,
+          // DISCORD-6 (#153): the Discord status channel renders
+          // {players}x{queue}, and this cache is its only source for the queue —
+          // ShowServerInfo already parses PublicQueue_I, it just was not stored.
+          public_queue: info?.public_queue ?? undefined,
         });
 
         if (typeof info?.tickrate === 'number') {
