@@ -2,6 +2,7 @@
 import { useEffect, useId, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import DiscordRoleMappingsSection from './DiscordRoleMappingsSection';
+import DiscordStatusChannelsSection from './DiscordStatusChannelsSection';
 import DiscordTemplatesSection from './DiscordTemplatesSection';
 import {
   DISCORD_EVENT_TYPES,
@@ -484,6 +485,8 @@ export default function DiscordIntegrationPage() {
       </section>
       <DiscordTemplatesSection />
       <DiscordRoleMappingsSection />
+
+      <DiscordStatusChannelsSection />
     </div>
   );
 }

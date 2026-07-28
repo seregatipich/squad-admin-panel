@@ -19,6 +19,7 @@ const envSchema = z.object({
   STEAM_API_KEY: z.string().optional(),
   DISCORD_CLIENT_ID: z.string().optional(),
   DISCORD_CLIENT_SECRET: z.string().optional(),
+  DISCORD_PUBLIC_KEY: z.string().optional(),
   GLITCHTIP_DSN: z.string().optional(),
   VIP_LIFECYCLE_WEBHOOK_SECRET: z.string().min(32).optional(),
   BALANCER_WEBHOOK_SECRET: z.string().min(32).optional(),
