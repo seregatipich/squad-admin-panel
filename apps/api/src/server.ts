@@ -50,6 +50,7 @@ import chatRoutes from './routes/chat.js';
 import clansRoutes from './routes/clans.js';
 import combatEventsRoutes from './routes/combat-events.js';
 import depotRoutes from './routes/depot.js';
+import discordInteractionsRoutes from './routes/discord-interactions.js';
 import economyRoutes from './routes/economy.js';
 import eventsRoutes from './routes/events.js';
 import externalBansRoutes from './routes/external-bans.js';
@@ -307,6 +308,7 @@ export async function buildServer(config: AppConfig) {
   await app.register(auditRoutes);
   await app.register(logsRoutes);
   await app.register(integrationsDiscordRoutes);
+  await app.register(discordInteractionsRoutes);
   await app.register(integrationsDiscordRoleMappingsRoutes);
   await app.register(integrationsGeoipRoutes);
   await app.register(liveRoutes);

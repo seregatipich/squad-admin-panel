@@ -154,6 +154,74 @@ export function removeGuildMemberRole(
   return roleCall(deps, 'DELETE', discordUserId, discordRoleId);
 }
 
+/**
+ * Renames one channel (DISCORD-6, #153).
+ *
+ * `PATCH /channels/{id}` carries its own, unusually harsh bucket: Discord
+ * allows **two** channel updates per ten minutes per channel, and going over it
+ * costs a multi-minute lockout rather than the usual sub-second `Retry-After`.
+ * The caller (`status-channel.ts`) is therefore responsible for the budget; the
+ * 429 handling here is only a backstop for a bucket shared with another client.
+ */
+export async function patchChannelName(
+  deps: DiscordRestDeps,
+  channelId: string,
+  name: string,
+): Promise<RoleCallResult> {
+  const url = `${DISCORD_API_BASE}/channels/${channelId}`;
+  let rateLimitRetries = 0;
+  for (;;) {
+    let res: Response;
+    try {
+      res = await deps.fetchImpl(url, {
+        method: 'PATCH',
+        headers: authHeaders(deps),
+        body: JSON.stringify({ name }),
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        failure: {
+          reason: 'network_error',
+          message: `Discord недоступен: ${(err as Error).message}`,
+        },
+      };
+    }
+
+    if (res.status === 429) {
+      rateLimitRetries++;
+      if (rateLimitRetries > MAX_RATE_LIMIT_RETRIES) {
+        return {
+          ok: false,
+          failure: {
+            reason: 'rate_limited',
+            message: 'Discord ограничивает переименование канала — попробуем на следующем тике.',
+          },
+        };
+      }
+      await deps.sleep(await readRetryAfterMs(res));
+      continue;
+    }
+
+    if (res.ok) return { ok: true };
+
+    if (res.status === 403) {
+      deps.log.error({ channelId }, 'discord rejected a channel rename (Missing Permissions)');
+      return {
+        ok: false,
+        failure: {
+          reason: 'missing_permissions',
+          message: 'У бота нет права Manage Channels для статус-канала.',
+        },
+      };
+    }
+    return {
+      ok: false,
+      failure: { reason: 'http_error', message: `Discord вернул ${res.status}` },
+    };
+  }
+}
+
 export type GuildMemberResult =
   | { ok: true; roles: string[] }
   | { ok: false; notAMember: true }

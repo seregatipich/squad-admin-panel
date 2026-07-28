@@ -41,6 +41,7 @@ import chatRoutes from '../../src/routes/chat.js';
 import clansRoutes from '../../src/routes/clans.js';
 import combatEventsRoutes from '../../src/routes/combat-events.js';
 import depotRoutes from '../../src/routes/depot.js';
+import discordInteractionsRoutes from '../../src/routes/discord-interactions.js';
 import economyRoutes from '../../src/routes/economy.js';
 import eventsRoutes from '../../src/routes/events.js';
 import externalBansRoutes from '../../src/routes/external-bans.js';
@@ -400,6 +401,8 @@ export interface BuildAppOptions {
    * isolated schema. Isolate such suites with their own dedicated database.
    */
   reusePublicSchema?: boolean;
+  /** DISCORD-6 (#153): raw Ed25519 public key the interactions route verifies against. */
+  discordInteractionsPublicKey?: string;
 }
 
 export interface IntegrationHarness {
@@ -454,6 +457,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     // Discord routes also need client credentials to build their redirects.
     // The values are inert — every outbound call is faked by the test.
     PANEL_PUBLIC_URL: 'https://panel.test',
+    DISCORD_PUBLIC_KEY: opts.discordInteractionsPublicKey,
     DISCORD_CLIENT_ID: 'test-discord-client-id',
     DISCORD_CLIENT_SECRET: 'test-discord-client-secret',
   });
@@ -590,6 +594,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
   await app.register(auditRoutes);
   await app.register(logsRoutes);
   await app.register(integrationsDiscordRoutes);
+  await app.register(discordInteractionsRoutes);
   await app.register(integrationsDiscordRoleMappingsRoutes);
   await app.register(integrationsGeoipRoutes);
   await app.register(integrationsBalancerRoutes);
