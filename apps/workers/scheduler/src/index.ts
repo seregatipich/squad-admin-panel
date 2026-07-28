@@ -134,7 +134,18 @@ async function main() {
     onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
   });
 
-  await bridge.connect();
+  // Connect eagerly for the log line and early failure signal, but do NOT die if
+  // the bridge is not up: `BridgeClient` dials on demand (`packages/bridge-client
+  // /src/client.ts` — `if (!this.socket) await this.connect()`), so every later
+  // call reconnects on its own. Only the rotation-profile and scheduled-task
+  // ticks need it; seed schedule, rotation schedule, map votes and season
+  // finalize do not, and refusing to boot took those down too — the heartbeat
+  // above never got published, so the worker looked dead rather than degraded.
+  // `metrics-sampler` and `log-ingest` (the other bridge consumers) already boot
+  // this way.
+  await bridge
+    .connect()
+    .catch((err: Error) => log.warn({ err: err.message }, 'bridge not reachable at startup'));
   await diag.emit({
     component: 'worker-scheduler',
     kind: 'scheduler.started',

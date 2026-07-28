@@ -1,5 +1,17 @@
 # Changelog — worker-config-sync
 
+## 2026-07-28 — boot no longer requires the host bridge (#229)
+
+### Changed
+
+- `src/index.ts` no longer dies when `PANEL_BRIDGE_SOCKET` is unreachable at
+  startup. `await bridge.connect()` rejected into the top-level handler and the
+  process exited 1 before `startHeartbeat` ran. Nothing else on the boot path
+  needs the bridge — `refreshServerList` is DB+Redis and `relayOutbox` already
+  guards itself — so the failure is now warned and swallowed; `BridgeClient`
+  dials on demand and the per-server sync reconnects on its own. Both contract
+  cases (heartbeat, clean SIGTERM) failed on this before.
+
 ## 2026-07-26 — CFG-2: generic config-drift sweep (#64)
 
 ### Added

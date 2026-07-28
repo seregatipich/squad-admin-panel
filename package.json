@@ -15,7 +15,7 @@
     "format": "biome format --write .",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "test:cov": "pnpm --workspace-concurrency=${PNPM_WORKSPACE_CONCURRENCY:-4} --filter @squad/api --filter @squad/web --filter @squad/db --filter @squad/shared-config --filter @squad/shared-types --filter @squad/bridge-client --filter @squad/worker-rcon --filter @squad/worker-log-ingest --filter @squad/worker-metrics-sampler --filter @squad/worker-role-expirer --filter @squad/worker-discord exec vitest run --coverage",
+    "test:cov": "pnpm --workspace-concurrency=${PNPM_WORKSPACE_CONCURRENCY:-4} --filter @squad/api --filter @squad/web --filter @squad/db --filter @squad/diag --filter @squad/shared-config --filter @squad/shared-types --filter @squad/steam-api --filter @squad/bridge-client --filter @squad/worker-audit-archiver --filter @squad/worker-automation --filter @squad/worker-backup --filter @squad/worker-ban-sync --filter @squad/worker-clan-guard --filter @squad/worker-clan-priority-expirer --filter @squad/worker-config-sync --filter @squad/worker-diag-flush --filter @squad/worker-discord --filter @squad/worker-event-partition --filter @squad/worker-leaderboard-aggregator --filter @squad/worker-log-ingest --filter @squad/worker-media-publisher --filter @squad/worker-metrics-sampler --filter @squad/worker-presence-daily --filter @squad/worker-rcon --filter @squad/worker-role-expirer --filter @squad/worker-scheduler --filter @squad/worker-seed-reward --filter @squad/worker-stats --filter @squad/worker-steam-refresh exec vitest run --coverage",
     "test:unit": "turbo run test:unit",
     "test:integration": "turbo run test:integration",
     "test:e2e": "turbo run test:e2e",
