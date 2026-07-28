@@ -7,7 +7,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ensureConsumerGroup, runDispatchLoop } from '../src/dispatch.js';
 import { PluginRegistry } from '../src/registry.js';
 
-const TEST_REDIS_URL = 'redis://127.0.0.1:6379/14';
+// Derive the endpoint instead of hardcoding it: the self-hosted CI runner maps
+// redis to a dynamic host port, so `127.0.0.1:6379` is ECONNREFUSED there and
+// every test in this file times out. Same fix the worker contract harness
+// carries for #203 (`apps/workers/_test-shared/contract.ts`). Isolated on db 14;
+// the literal is only a developer-machine fallback.
+const TEST_REDIS_DB = process.env.TEST_REDIS_DB ?? '14';
+const TEST_REDIS_URL = `${(
+  process.env.TEST_REDIS_URL ?? process.env.REDIS_URL ?? 'redis://127.0.0.1:6379'
+).replace(/\/\d+$/, '')}/${TEST_REDIS_DB}`;
 
 /**
  * Real Redis, real registry, real dispatch loop — this suite exercises the
