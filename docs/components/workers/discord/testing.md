@@ -57,6 +57,34 @@ full-reconcile dispatch, acking a malformed entry, acking without syncing while
 the bot is unconfigured, the consumer group created on `discord:role-sync`, and
 the ok/error status written to `discord:role-sync:status`.
 
+### `status-channel.test.ts` (DISCORD-6)
+
+`buildStatusChannelName`, `countOnlineAdmins`, and `parseStatusCache` as pure
+functions: the SQSTAT §16.3 name template from a connected snapshot, the
+offline marker and zeroed counters when disconnected or the status cache is
+missing, a missing `public_queue` read as zero rather than dropped, and the
+100-character Discord channel-name limit enforced. `renameStatusChannel`
+against a fake Redis and fake Discord REST: PATCHes and records the new name on
+first run, issues no request when the name is unchanged, never exceeds two
+renames per ten minutes on one channel, renames again once the window has
+rolled past, and does not consume budget when Discord rejects the rename.
+`runStatusChannelTick` against a fake DB/Redis: skips servers with no status
+channel configured, renames the configured channel to the live status of its
+server, and reports a server whose status cache has expired as offline instead
+of skipping it.
+
+### `status-channel-loop.test.ts` (DISCORD-6)
+
+`runStatusChannelLoop`: does nothing while the bot is not configured, ticks
+once the guild id and bot token are stored, keeps running when one tick
+throws, registers slash commands once when `DISCORD_APPLICATION_ID` is
+configured, does not touch the commands API without an application id, and
+retries command registration on the next tick after a failure.
+`registerApplicationCommands`: `DISCORD_COMMAND_DEFINITIONS` declares exactly
+the three read-only commands (`status`, `player`, `online-admins`) and never
+`ban`/`kick`; `PUT`s the definitions with the bot authorization header; and
+reports a rejection or a network failure instead of throwing.
+
 ## Not covered
 
 The live Discord REST call. It needs a real bot token and a real guild, which

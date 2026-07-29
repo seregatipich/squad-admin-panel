@@ -1,7 +1,7 @@
 # worker-discord — Flows
 
-Two independent loops run in one process; either can be idle without affecting
-the other.
+Three independent loops run in one process; any one can be idle without
+affecting the others.
 
 ## Notify (DISCORD-2)
 
@@ -46,3 +46,36 @@ outbox.
 **Failure reporting.** Every outcome is written to `discord:role-sync:status`;
 a `403` from Discord becomes `state: "error", reason: "missing_permissions"`,
 which the settings page renders as a banner. Nothing fails silently.
+
+## Status channel (DISCORD-6)
+
+**Tick (default 10 min, `DISCORD_STATUS_CHANNEL_MS`).** Resolve the Discord bot
+credentials via `loadDiscordBotContext` — until an operator stores a guild id
+and a bot token the tick runs, finds nothing to do, and sleeps. If a
+`DISCORD_APPLICATION_ID` is configured and slash commands have not yet been
+registered this boot, `registerApplicationCommands` `PUT`s the `/status`,
+`/player`, `/online-admins` definitions to Discord (`DISCORD_COMMAND_DEFINITIONS`
+in `command-registration.ts`); a full-replace `PUT` is idempotent, so retrying
+on a later tick after a failure is safe.
+
+**Per-server rename.** Load every server with a `status_channel_id` set (and not
+deleted), plus the panel-access admin `steam_id64` set (`players` joined to
+`roles`, `panel_access` or the system `Owner` role) once for the whole tick.
+For each target server: read `rcon:status:{serverId}` and
+`rcon:roster:{serverId}` from Redis, build the channel name
+(`{emoji}{map}_{players}x{queue}_👮{admins}`, offline/zeroed when the status
+cache is absent or not `connected`), and call `renameStatusChannel`.
+
+**Rate limiting.** `renameStatusChannel` skips the Discord call entirely when
+the desired name matches the last applied name (a no-op rename still spends
+budget). Otherwise it enforces Discord's own **two renames per ten minutes per
+channel** (`STATUS_CHANNEL_RENAME_WINDOW_MS` = 600 000 ms,
+`STATUS_CHANNEL_MAX_RENAMES_PER_WINDOW` = 2), tracked in the
+`discord:status-channel:{channelId}` Redis key so the budget survives a worker
+restart. A rename attempted over budget is reported as rate-limited rather than
+sent, since Discord locks the channel out for minutes if the caller goes over
+it.
+
+**Admin count.** `👮N` counts online roster players (from `rcon:roster:*`)
+whose SteamID is in the panel-access set — the same rule the slash-command gate
+uses, so the number matches who could actually act through the panel.

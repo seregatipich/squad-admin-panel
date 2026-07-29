@@ -1,5 +1,18 @@
 # Changelog — worker-stats
 
+## 2026-07-29 — docs reconciliation (#216)
+
+### Changed
+
+- Rewrote `api.md` — the one file the 2026-07-25 doc rewrite below missed. It still
+  described a "P2 stub" with no public surface and a planned `stats:v1` consumer
+  group; it now documents the real `worker:heartbeat:stats` heartbeat key and the
+  `dossier_reconcile.{run_ok,drift_detected,run_failed}` diagnostic events emitted
+  by the reconcile guard, and notes that `CONSUMER_GROUP.stats` (`'stats:v1'`) is
+  unused by this worker.
+- `README.md`, `data-model.md`, `flows.md`, `configuration.md`, `troubleshooting.md`,
+  and `testing.md` were already accurate as of 2026-07-25 and are unchanged.
+
 ## 2026-07-25
 
 ### Changed
