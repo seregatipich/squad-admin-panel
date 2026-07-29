@@ -61,7 +61,6 @@ async function collectProtectedRoutes(): Promise<RouteSpec[]> {
     const methods = Array.isArray(route.method) ? route.method : [route.method];
     const required = (route.config as Record<string, unknown>)?.permissions as string[] | undefined;
     if (!required || required.length === 0) return;
-    if (route.url.startsWith('/api/docs')) return;
     if ((route as unknown as Record<string, unknown>).websocket === true) return;
     for (const m of methods) {
       result.push({ method: String(m).toUpperCase(), url: route.url, required });

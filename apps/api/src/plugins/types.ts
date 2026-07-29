@@ -20,6 +20,15 @@ declare module 'fastify' {
      * of its data to `req.user.playerId` and never accept a foreign id.
      */
     selfService?: boolean;
+    /**
+     * Explicitly opts a route out of authentication (#246). The global
+     * `onRequest` hook in `apps/api/src/plugins/auth.ts` is fail-closed: any
+     * route without this flag requires `req.user` to be set, even if it also
+     * declares no `permissions`. Set this only for routes that are
+     * deliberately public (health probes, signature-gated webhooks, public
+     * data portals) — never as a default.
+     */
+    public?: boolean;
   }
   interface FastifyInstance {
     db: DatabaseClient;

@@ -69,7 +69,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/vip/lifecycle',
     {
       schema: { body: vipLifecycleBody },
-      config: { audit: false },
+      config: { audit: false, public: true },
     },
     async (req, reply) => {
       const secret = app.config.VIP_LIFECYCLE_WEBHOOK_SECRET;

@@ -66,7 +66,7 @@ const discordInteractionsRoutes: FastifyPluginAsync = async (app) => {
 
   app.post(
     '/api/v1/integrations/discord/interactions',
-    { config: { audit: false } },
+    { config: { audit: false, public: true } },
     async (req, reply) => {
       const publicKeyHex = (app.config as { DISCORD_PUBLIC_KEY?: string }).DISCORD_PUBLIC_KEY;
       if (!publicKeyHex) {

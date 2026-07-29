@@ -101,7 +101,11 @@ const publicBanlistRoutes: FastifyPluginAsync = async (app) => {
           '`format=json` returns the same data with `eos_id`/`nickname`/`issued_at` included. ' +
           'Never includes IP addresses or admin notes. Supports `ETag`/`If-None-Match` caching.',
       },
-      config: { audit: false, rateLimit: { max: RATE_LIMIT_MAX, timeWindow: '1 minute' } },
+      config: {
+        audit: false,
+        permissions: ['banlist:read'],
+        rateLimit: { max: RATE_LIMIT_MAX, timeWindow: '1 minute' },
+      },
     },
     async (req, reply) => {
       if (!req.user) {

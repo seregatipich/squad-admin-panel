@@ -81,7 +81,7 @@ const integrationsBalancerRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/balancer/proposals',
     {
       schema: { body: snapshotBody },
-      config: { audit: false },
+      config: { audit: false, public: true },
     },
     async (req, reply) => {
       const secret = app.config.BALANCER_WEBHOOK_SECRET;

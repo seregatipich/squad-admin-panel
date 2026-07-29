@@ -115,6 +115,7 @@ const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
       schema: { body: submitBody },
       config: {
         audit: false,
+        public: true,
         rateLimit: { max: PUBLIC_SUBMIT_RATE_MAX, timeWindow: '1 hour' },
       },
     },
@@ -214,6 +215,7 @@ const publicAppealsRoutes: FastifyPluginAsync = async (app) => {
       schema: { params: tokenParams },
       config: {
         audit: false,
+        public: true,
         rateLimit: { max: PUBLIC_STATUS_RATE_MAX, timeWindow: '1 minute' },
       },
     },

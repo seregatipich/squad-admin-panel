@@ -432,6 +432,9 @@ describe('reconciler — fail-safe behavior', () => {
 
 describe('GET /api/v1/health/reconciler', () => {
   it('returns stats including stuck servers and a healthy flag', async () => {
+    // #246: this route now requires host:view (previously unguarded under the
+    // fail-open default), so requests need the owner cookie.
+    const cookie = await loginAsOwner(h);
     const id = await createServer();
     const oldUpdate = new Date(Date.now() - 5 * 60_000);
     await h.db
@@ -441,7 +444,11 @@ describe('GET /api/v1/health/reconciler', () => {
 
     await h.app.statusReconciler.tickNow();
 
-    const resp = await h.app.inject({ method: 'GET', url: '/api/v1/health/reconciler' });
+    const resp = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/health/reconciler',
+      headers: { cookie },
+    });
     expect(resp.statusCode).toBe(200);
     const body = resp.json<{
       last_tick_at: string | null;
@@ -469,7 +476,11 @@ describe('GET /api/v1/health/reconciler', () => {
       labels: {},
     });
     await h.app.statusReconciler.tickNow();
-    const stuckResp = await h.app.inject({ method: 'GET', url: '/api/v1/health/reconciler' });
+    const stuckResp = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/health/reconciler',
+      headers: { cookie },
+    });
     const stuckBody = stuckResp.json<{
       stuck_servers: Array<{ id: string; status: string; age_ms: number }>;
       healthy: boolean;
