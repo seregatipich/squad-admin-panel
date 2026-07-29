@@ -22,6 +22,7 @@ FROM base AS runtime
 ENV NODE_ENV=production
 ENV PORT=3000
 COPY --from=builder /app /app
+RUN pnpm install --frozen-lockfile --prod
 WORKDIR /app/apps/web
 EXPOSE 3000
 CMD ["pnpm", "start"]
