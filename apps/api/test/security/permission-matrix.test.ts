@@ -23,7 +23,7 @@ interface RouteSpec {
   required: string[];
 }
 
-async function collectProtectedRoutes(): Promise<RouteSpec[]> {
+async function collectProtectedRoutes(): Promise<{ routes: RouteSpec[]; wsRoutes: RouteSpec[] }> {
   const Fastify = (await import('fastify')).default;
   const { serializerCompiler, validatorCompiler } = await import('fastify-type-provider-zod');
   const { default: authRoutes } = await import('../../src/routes/auth.js');
@@ -41,6 +41,8 @@ async function collectProtectedRoutes(): Promise<RouteSpec[]> {
   const { default: auditRoutes } = await import('../../src/routes/audit.js');
   const { default: logsRoutes } = await import('../../src/routes/logs.js');
   const { default: adminsCfgRoutes } = await import('../../src/routes/admins-cfg.js');
+  const { default: liveRoutes } = await import('../../src/routes/live.js');
+  const { default: serverLogsRoutes } = await import('../../src/routes/server-logs.js');
 
   const app = Fastify({ logger: false });
   app.setValidatorCompiler(validatorCompiler);
@@ -53,15 +55,27 @@ async function collectProtectedRoutes(): Promise<RouteSpec[]> {
   (app as any).decorate('bridge', {});
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
   (app as any).decorate('encryptionKey', Buffer.alloc(32));
+  // biome-ignore lint/suspicious/noExplicitAny: test fixture — live.ts calls app.liveBus.subscribe(...) at plugin registration time
+  (app as any).decorate('liveBus', { subscribe: () => () => undefined });
   // biome-ignore lint/suspicious/noExplicitAny: test fixture
   (app as any).setErrorHandler(() => undefined);
 
   const result: RouteSpec[] = [];
+  const wsRoutesSeen: RouteSpec[] = [];
   app.addHook('onRoute', (route) => {
     const methods = Array.isArray(route.method) ? route.method : [route.method];
     const required = (route.config as Record<string, unknown>)?.permissions as string[] | undefined;
     if (!required || required.length === 0) return;
-    if ((route as unknown as Record<string, unknown>).websocket === true) return;
+    if ((route as unknown as Record<string, unknown>).websocket === true) {
+      for (const m of methods) {
+        // Fastify's default exposeHeadRoutes mirrors every GET registration with a
+        // synthetic HEAD route; a WS upgrade only ever happens over GET, so the
+        // auto-generated HEAD duplicate is not a real websocket route to track.
+        if (String(m).toUpperCase() === 'HEAD') continue;
+        wsRoutesSeen.push({ method: String(m).toUpperCase(), url: route.url, required });
+      }
+      return;
+    }
     for (const m of methods) {
       result.push({ method: String(m).toUpperCase(), url: route.url, required });
     }
@@ -82,10 +96,12 @@ async function collectProtectedRoutes(): Promise<RouteSpec[]> {
   await app.register(auditRoutes);
   await app.register(logsRoutes);
   await app.register(adminsCfgRoutes);
+  await app.register(liveRoutes);
+  await app.register(serverLogsRoutes);
 
   await app.ready();
   await app.close();
-  return result;
+  return { routes: result, wsRoutes: wsRoutesSeen };
 }
 
 function canonicalUrl(url: string): string {
@@ -100,7 +116,7 @@ function canonicalUrl(url: string): string {
 
 const ALL_PERM_KEYS = PERMISSIONS.map((p) => p.key) as PermissionKey[];
 
-const protectedRoutes = await collectProtectedRoutes();
+const { routes: protectedRoutes, wsRoutes } = await collectProtectedRoutes();
 
 describe('permission matrix coverage', () => {
   it('includes Admins.cfg drift and force-sync routes', () => {
@@ -123,6 +139,18 @@ describe('permission matrix coverage', () => {
         }),
       ]),
     );
+  });
+
+  it('tracks exactly the four currently-permissioned websocket routes (#250) — update deliberately if this list changes', () => {
+    const sorted = wsRoutes
+      .slice()
+      .sort((a, b) => `${a.method} ${a.url}`.localeCompare(`${b.method} ${b.url}`));
+    expect(sorted).toEqual([
+      { method: 'GET', url: '/api/v1/depot/progress/ws', required: ['server:view'] },
+      { method: 'GET', url: '/api/v1/servers/:id/install/ws', required: ['server:view'] },
+      { method: 'GET', url: '/api/v1/servers/:id/logs/ws', required: ['server:view'] },
+      { method: 'GET', url: '/api/v1/ws/live', required: ['server:view'] },
+    ]);
   });
 });
 
