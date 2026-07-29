@@ -64,17 +64,21 @@ Important: all `ORDER BY` clauses use the table-qualified form `ORDER BY audit_l
 
 ## Security test suite
 
-[`test/security/`](../../../apps/api/test/security/) contains four regression test files:
+[`test/security/`](../../../apps/api/test/security/) contains five regression test files:
 
-### permission-matrix.test.ts — 3100 tests
+### permission-matrix.test.ts — 3101 tests
 
-Programmatic permission boundary matrix. `collectProtectedRoutes()` builds a minimal Fastify app, walks `onRoute` hooks, and returns every route that declares `config.permissions` (WebSocket routes excluded — HTTP inject is incompatible with the upgrade protocol). For each route, three test categories run:
+Programmatic permission boundary matrix. `collectProtectedRoutes()` builds a minimal Fastify app, walks `onRoute` hooks, and returns every route that declares `config.permissions` (WebSocket routes excluded from the `.inject()`-based HTTP sweep — HTTP inject is incompatible with the upgrade protocol — but still tagged into a separate `wsRoutes` set instead of being silently discarded; see #250). For each REST route, three test categories run:
 
 1. `returns 403 to a user with no permissions` — asserts status 403.
 2. `returns not-403 to a user with all required permissions` — asserts status ≠ 403.
 3. `with only <perm>: allowed|403` — one test per permission key; asserts `allowed` if that key is the exact required set, `403` otherwise.
 
-All ~70 test users (1 no-perms, 48 single-perm, ~21 unique required-set combos) are pre-created in `beforeAll` via `Promise.all` to keep setup under 5 seconds.
+All ~70 test users (1 no-perms, 48 single-perm, ~21 unique required-set combos) are pre-created in `beforeAll` via `Promise.all` to keep setup under 5 seconds. A `permission matrix coverage` canary test asserts `wsRoutes` equals exactly the four currently-permissioned websocket routes (`/api/v1/ws/live`, `/api/v1/servers/:id/logs/ws`, `/api/v1/servers/:id/install/ws`, `/api/v1/depot/progress/ws`), each requiring `['server:view']`, so a route silently added or dropped from that set fails CI; the actual unauthenticated-rejection proof for those four routes lives in `ws-auth-boundary.test.ts` below.
+
+### ws-auth-boundary.test.ts — 4 tests
+
+Real-socket regression for the four `websocket: true` routes tracked by the `permission-matrix.test.ts` canary above (#250). Builds the real `buildIntegrationApp()` harness, calls `h.app.listen(...)` for a real TCP port, and opens a real `ws` `WebSocket` upgrade to each route with no session cookie attached. Asserts the upgrade is rejected before the socket opens: `ws`'s `'unexpected-response'` event fires with `statusCode === 401` (the same fail-closed `onRequest` gate in `plugins/auth.ts` that guards every other route), and `'open'` never fires. Proven load-bearing by scratch-testing with `config.public: true` on `/api/v1/ws/live`, which flips the assertion to `opened: true` as expected.
 
 ### sql-injection.test.ts — 63 tests
 
@@ -111,7 +115,7 @@ Verifies `__Host-sid` cookie on session touch has `HttpOnly`, `Secure`, `SameSit
 - The actual bridge over the actual socket — that's e2e.
 - Steam OpenID real-network handshake — `check_authentication` is mocked with `vi.spyOn(globalThis, 'fetch')`; the live Steam endpoint is exercised only in e2e.
 - Discord OAuth — the stub routes were removed; no Discord integration exists.
-- WebSocket routes in the permission matrix (HTTP inject cannot complete a WebSocket upgrade; those routes are excluded from the matrix). The auth hook on WebSocket routes is covered by separate integration tests.
+- WebSocket routes' per-permission 403 sweep (HTTP inject cannot complete a WebSocket upgrade; those routes are excluded from the `permission-matrix.test.ts` `.inject()`-based sweep). Their unauthenticated-rejection behavior IS covered — see [`ws-auth-boundary.test.ts`](../../../apps/api/test/security/ws-auth-boundary.test.ts) (#250), which connects a real socket with no session cookie to all four `websocket: true` routes and asserts each upgrade is rejected 401.
 
 ## Mocks and stubs
 

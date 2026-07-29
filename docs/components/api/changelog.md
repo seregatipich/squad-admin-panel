@@ -1,5 +1,13 @@
 # `api` — changelog
 
+## 2026-07-29 — WS routes added to the permission-matrix auth-boundary sweep (#250)
+
+### Added
+
+- `test/security/permission-matrix.test.ts`'s `collectProtectedRoutes()` no longer silently drops `websocket: true` routes before generating test cases. `live.ts`'s and `server-logs.ts`'s route plugins are now registered in the bare route-collection app (a `liveBus.subscribe(...)` stub was added since `live.ts` calls it at plugin registration time), and the `onRoute` hook tags `websocket === true` routes into a new `wsRoutes` set instead of returning early — still excluded from the `.inject()`-based REST sweep, which cannot complete a WebSocket upgrade. A new `permission matrix coverage` canary asserts `wsRoutes` equals exactly the four currently-permissioned websocket routes (`/api/v1/ws/live`, `/api/v1/servers/:id/logs/ws`, `/api/v1/servers/:id/install/ws`, `/api/v1/depot/progress/ws`), each requiring `['server:view']`.
+- New `test/security/ws-auth-boundary.test.ts`: connects a real `ws` client, with no session cookie, to all four routes above against the real `buildIntegrationApp()` harness and asserts each upgrade is rejected 401 (via `ws`'s `'unexpected-response'` event) before the socket opens — the actual regression proof that a future route addition or accidental permission removal on a websocket route fails CI instead of relying on manual source review.
+- No production code changed: `plugins/auth.ts`'s fail-closed `onRequest` gate already rejected these unauthenticated upgrades correctly; this closes a test-coverage gap (#230), not a behavior bug.
+
 ## 2026-07-29 — Fail-open permission default flipped to fail-closed (#246)
 
 ### Fixed

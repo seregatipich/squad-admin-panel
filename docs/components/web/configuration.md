@@ -25,3 +25,7 @@ UI strings are Russian. Don't machine-translate when editing copy unless asked.
 ## Live-bus WebSocket
 
 The dashboard opens a single `wss://${origin}/api/v1/ws/live` socket (singleton in [`apps/web/src/lib/live-bus.ts`](../../../apps/web/src/lib/live-bus.ts)). No env var configures it — the URL is derived from `window.location`. Caddy already forwards the upgrade headers; no proxy change required.
+
+## Security headers
+
+`headers()` in [`apps/web/next.config.mjs`](../../../apps/web/next.config.mjs) sets `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, and `X-Frame-Options: DENY` on every route. The base policy (`default-src 'self'`) needs `script-src 'self' 'unsafe-inline'` and `style-src 'self' 'unsafe-inline'` because Next's App Router injects inline hydration `<script>` tags and the app uses React inline `style={{...}}` attributes in places — a stricter policy without `'unsafe-inline'` blanks the page. `/servers/:id/configs` gets a widened `Content-Security-Policy` that additionally allow-lists `https://cdn.jsdelivr.net` for `script-src`, `style-src`, `worker-src`, and `connect-src`, matching the CDN the Monaco editor (`@monaco-editor/loader`) fetches from on that page only. No env var is involved; both policies are static in `next.config.mjs`.
