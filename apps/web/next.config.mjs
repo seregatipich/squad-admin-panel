@@ -16,5 +16,4 @@ export default {
       { source: '/players/:path*', destination: '/all-players/:path*', permanent: true },
     ];
   },
-  output: 'standalone',
 };
