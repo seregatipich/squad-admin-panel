@@ -36,7 +36,7 @@ This mirrors the pattern used by `apps/api/test/server-logs.test.ts` and `apps/a
 
 - Cross-process Redis pub/sub fan-out (would need a real Redis or `ioredis-mock`; e2e suite in Bundle H will exercise this against the live stack).
 - The 30-second pong timeout path (would lengthen the suite by 30 s; covered by code review and manual smoke).
-- Authentication + RBAC enforcement on the route — covered upstream by the `audit-coverage` and `permission-matrix` suites.
+- Authentication + RBAC enforcement on the route — `/api/v1/ws/live`'s unauthenticated-upgrade rejection (401 before the socket opens) is proven by [`apps/api/test/security/ws-auth-boundary.test.ts`](../../../apps/api/test/security/ws-auth-boundary.test.ts) (#250); `permission-matrix.test.ts` tracks the route's required permission via its `wsRoutes` canary but cannot itself complete a WebSocket upgrade.
 - Producer wiring (status-reconciler, bridge-heartbeat, worker-rcon) — those producers' own suites assert on the original behavior; the publish call is a one-liner and visible in the diff.
 
 ## Mocks / stubs / fakes
