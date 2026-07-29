@@ -98,6 +98,15 @@ else
   failed+=("tests"); fail=1
 fi
 
+# 6. Mutation testing (packages/shared-config's Stryker suite). No DB needed,
+#    so this runs unconditionally rather than gating on DATABASE_URL like the
+#    tests step above.
+if [ "${FULL:-0}" = "1" ]; then
+  run_step "mutation tests (full)" pnpm turbo run test:mutation
+else
+  run_step "mutation tests (affected since origin/dev)" pnpm turbo run test:mutation --filter='...[origin/dev]'
+fi
+
 printf '\n\033[1m=== pre-push checklist summary ===\033[0m\n'
 [ ${#passed[@]}  -gt 0 ] && printf '  passed:  %s\n' "${passed[*]}"
 [ ${#skipped[@]} -gt 0 ] && printf '  skipped: %s\n' "${skipped[*]}"
