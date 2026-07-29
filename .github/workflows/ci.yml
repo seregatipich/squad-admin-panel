@@ -205,10 +205,16 @@ jobs:
       # e.g. the old squad-admin-panel/api:ci image superseded by this run's build —
       # while keeping named base images (golang:1.25.11-bookworm, postgres:16-alpine,
       # redis:7-alpine) cached so they aren't re-pulled from the network every run.
-      - name: Reclaim disk (dangling images + build cache)
+      # `docker volume prune -f` is a safety net, not the primary fix: it only
+      # catches volumes with no container reference left at all, which is what a
+      # bare `docker rm -f` (missing `-v`) on a script-managed container leaves
+      # behind — see scripts/test-backup-restore.sh, which leaked ~7.5 GB of
+      # these before its `docker rm -f` calls were fixed to `-fv`.
+      - name: Reclaim disk (dangling images, build cache, orphaned volumes)
         if: always()
         run: |
           docker image prune -f
           docker builder prune -f --filter "unused-for=72h" || docker builder prune -f
           docker container prune -f
+          docker volume prune -f
           df -h / || true
