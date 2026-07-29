@@ -56,6 +56,8 @@ jobs:
         run: bash scripts/test-git-guard.sh
       - name: Run verify-done test suite
         run: bash scripts/test-verify-done.sh
+      - name: Run check-runner-health test suite
+        run: bash scripts/test-check-runner-health.sh
       - name: Run codeql-default-setup test suite
         run: bash scripts/test-codeql-default-setup.sh
 
