@@ -12,6 +12,7 @@
 | Container escape into other servers | Each Squad container runs `--user 1001:1001 --read-only` with two RW bind mounts (its own `ServerConfig/` and `Saved/`). The depot volume is shared but mounted `:ro`. Containers do not share `/run`, `/tmp`, or volumes other than the bridge socket. |
 | Steam-CDN-as-backdoor | The bridge `depot_update` call uses a transient `squad-panel/depot-init` container with steamcmd args composed inside the bridge — callers can't inject arbitrary tokens. The container is removed on completion. |
 | Lateral movement to RCON | RCON ports are only on `127.0.0.1`; ufw rules opened by `bridge.ufw_rule` are for game/query/beacon. RCON traffic stays on the loopback, reachable only from the host (and `worker-rcon` via `--network host`). |
+| Untrusted/PR code executing on the self-hosted CI runner | `.github/workflows/ci.yml` triggers only on trusted `push` (`master`/`dev`) and `workflow_dispatch` events — never `pull_request` or `pull_request_target` — so no job with `runs-on: self-hosted` ever checks out and executes a pull request's head before human review. `scripts/test-workflow-security.sh` statically rejects any workflow file that combines a `pull_request`/`pull_request_target` trigger with `runs-on: self-hosted`, and runs as a `branch-guard` step on every push (#217). |
 
 ## Trust boundaries
 
