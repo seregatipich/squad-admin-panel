@@ -8,8 +8,6 @@ name: ci
 on:
   push:
     branches: [master, dev]
-  pull_request:
-    branches: [master, dev]
   workflow_dispatch:
 
 concurrency:
@@ -19,10 +17,13 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/dev' && github.ref != 'refs/heads/master' }}
 
 jobs:
-  # Enforces the branch model (see AGENTS.md): pull requests may only target
-  # master from dev. On push events the job always succeeds so the dev tip SHA
-  # carries a passing branch-guard check — required by the protect-master
-  # ruleset for the fast-forward promotion push (.github/rulesets/).
+  # Enforces the branch model (see AGENTS.md). Runs only on trusted push
+  # (master/dev) and workflow_dispatch events — never pull_request or
+  # pull_request_target — so no untrusted or merely review-stage PR head
+  # ever executes on this shared self-hosted runner (#217). On push events
+  # the job always succeeds so the dev tip SHA carries a passing
+  # branch-guard check — required by the protect-master ruleset for the
+  # fast-forward promotion push (.github/rulesets/).
   branch-guard:
     runs-on: self-hosted
     # Single shared self-hosted runner: a wedged job with no timeout could block every subsequent CI run indefinitely, so every job below gets a timeout-minutes.
@@ -31,17 +32,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Enforce master-only-from-dev
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.base_ref }}
-          HEAD: ${{ github.head_ref }}
-        run: |
-          if [ "$EVENT" = "pull_request" ] && [ "$BASE" = "master" ] && [ "$HEAD" != "dev" ]; then
-            echo "::error::Pull requests must not target master from '$HEAD'. master only receives promotions from dev (git push origin origin/dev:master). Retarget this PR to dev."
-            exit 1
-          fi
-          echo "branch model OK ($EVENT ${BASE:+base=$BASE }${HEAD:+head=$HEAD})"
       - name: Audit master ancestry
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         run: |
@@ -56,6 +46,8 @@ jobs:
         run: bash scripts/test-git-guard.sh
       - name: Run verify-done test suite
         run: bash scripts/test-verify-done.sh
+      - name: Run workflow security test suite
+        run: bash scripts/test-workflow-security.sh
       - name: Run check-runner-health test suite
         run: bash scripts/test-check-runner-health.sh
       - name: Run codeql-default-setup test suite
