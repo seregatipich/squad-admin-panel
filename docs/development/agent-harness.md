@@ -93,6 +93,8 @@ Unlike GitHub-hosted runners, this VM is **not ephemeral**: it has no auto-refre
 
 The box is also small enough that test/build parallelism is deliberately capped rather than left at each tool's default: the `node` job sets the `VITEST_MAX_FORKS` and `PNPM_WORKSPACE_CONCURRENCY` env vars (read by [`apps/api/vitest.config.ts`](../../apps/api/vitest.config.ts) and root [`package.json`](../../package.json)'s `test:cov` script respectively) and passes `--concurrency=2` to `turbo`, so parallel work fits 2 vCPU / 4 GB instead of thrashing or getting OOM-killed.
 
+Because this runner is shared and non-ephemeral (Docker access, state persisting across runs), `.github/workflows/ci.yml` accepts only trusted `push` (`master`/`dev`) and explicit `workflow_dispatch` events — never `pull_request` or `pull_request_target` — so no untrusted or merely review-stage pull-request head ever executes here before human review; this repo's real merge workflow is direct work-branch merges into `dev` anyway (see AGENTS.md), never PR merges. Test suite: [`scripts/test-workflow-security.sh`](../../scripts/test-workflow-security.sh) (runs in CI as part of the `branch-guard` job) statically rejects any workflow file that combines a `pull_request`/`pull_request_target` trigger with `runs-on: self-hosted`. Run it locally with `bash scripts/test-workflow-security.sh` (#217).
+
 Not solved yet: the operator described the VM as cloud-init-based and may later add automatic environment cleanup and/or periodic VM recreation. The open design questions there — dynamic naming for the replacement VM, and gracefully draining/stopping the previous one before swapping — are unaddressed for now.
 
 ## Runner recovery runbook
