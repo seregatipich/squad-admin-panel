@@ -8,7 +8,7 @@
 ARG RNSQUADJS_REPO=https://github.com/lACTEPUKCl/RNSquadJS.git
 ARG RNSQUADJS_SHA=d76fb4a84bc64ae09b654d4dc17ab06ef308d295
 
-FROM node:18.18-bookworm-slim AS upstream
+FROM node:22-bookworm-slim AS upstream
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
@@ -31,7 +31,7 @@ COPY docker/rnsquadjs/upstream.patch /tmp/upstream.patch
 RUN git apply --check /tmp/upstream.patch && git apply /tmp/upstream.patch
 RUN yarn build
 
-FROM node:18.18-bookworm-slim AS runtime
+FROM node:22-bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
