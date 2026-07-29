@@ -59,6 +59,7 @@ An entry added to `pnpm.overrides` to close a Dependabot alert that a parent pac
 
 - `postcss: ^8.5.23` — `next@15.5.x` pins `postcss` to an exact `8.4.31` in every published release including `latest`; `vite@6.4.2` / `@tailwindcss/postcss@4.2.4` independently resolve `8.5.10`. Both are below the fix for GHSA-6g55-p6wh-862q, GHSA-r28c-9q8g-f849 and GHSA-qx2v-qp2m-jg93 (Dependabot alerts #9, #88, #90 — see #237). Remove once `next`'s own `dependencies.postcss` moves past `8.5.23` on its own (check with `npm view next dependencies.postcss`).
 - `sharp: ^0.35.3` — forces `next`'s `optionalDependencies: sharp ^0.34.3` past GHSA-f88m-g3jw-g9cj (alert #78 — see #236). Remove under the same condition once `next` bundles a fixed `sharp` on its own.
+- `shell-quote: ^1.9.0` — `drizzle-orm@0.45.2`'s and `drizzle-kit@0.30.6`'s optional `gel@2.2.0` peer dependency resolves `shell-quote@1.8.3`, below the fix for GHSA-w7jw-789q-3m8p (critical, alert #51) and GHSA-395f-4hp3-45gv (high, alert #75) (see #231). Remove once `drizzle-kit` moves to `^0.31.0`, which drops the `gel` dependency entirely.
 
 ## Build orchestration
 
