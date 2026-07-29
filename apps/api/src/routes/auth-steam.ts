@@ -19,7 +19,7 @@ const RESPONSE_NONCE_TTL_SECONDS = 3600;
 const steamRoutes: FastifyPluginAsync = async (app) => {
   app.get(
     '/api/v1/auth/steam/login',
-    { config: { audit: false, rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    { config: { audit: false, public: true, rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (req, reply) => {
       const nonce = randomBytes(16).toString('base64url');
       await app.redis.set(
@@ -45,7 +45,7 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
 
   app.get(
     '/api/v1/auth/steam/callback',
-    { config: { audit: false, rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    { config: { audit: false, public: true, rateLimit: { max: 10, timeWindow: '1 minute' } } },
     async (req, reply) => {
       const q = req.query as Record<string, string | undefined>;
       const queryNonce = q.n;

@@ -74,6 +74,13 @@ export async function buildServer(config: AppConfig) {
     },
     transform: jsonSchemaTransform,
   });
+  // No `config`/`uiHooks` needed here (#246): `authPlugin`'s `onRequest` hook is
+  // registered with `fastify-plugin` (`fp()`), so it is NOT encapsulated to its
+  // registration point — Fastify applies it at the root scope to every route on
+  // this instance, including these swagger-ui routes, regardless of the order
+  // `register()` calls happen in. The routes carry no `config.public`/
+  // `config.permissions`, so they fall through to the fail-closed default and
+  // require a session like the rest of the API.
   await app.register(swaggerUi, { routePrefix: '/api/docs' });
   await app.register(websocket);
   await app.register(multipart, { limits: { fileSize: MEDIA_MAX_UPLOAD_BYTES, files: 1 } });
