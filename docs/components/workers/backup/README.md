@@ -4,9 +4,9 @@
 
 Will create restic-based snapshots of the Postgres database and all server config files on a configurable schedule.
 
-## Current status — P2 stub
+## Current status — heartbeat active, restic logic deferred
 
-No-op process. Logs `"worker-backup idle — deferred to later phase"` and loops with a 60 s internal heartbeat log. Does not publish a Redis heartbeat.
+The process logs `"worker-backup idle — deferred to later phase"` once at startup, then publishes an active `worker:heartbeat:backup` heartbeat (via `startHeartbeat`, `status: "idle (P2)"`) whenever `REDIS_URL` is set — every 5 s, TTL 30 s. No `REDIS_URL` means no Redis client is created and no heartbeat is published. There is no periodic idle loop beyond the heartbeat interval; the process just waits on `SIGINT`/`SIGTERM`. Restic snapshot/domain logic is still deferred to a later phase.
 
 ## Backup is already live via the restic service (INFRA-8)
 
@@ -24,7 +24,7 @@ The scheduled backups the panel actually relies on today are **not** produced by
 ```
 apps/workers/backup/
   src/
-    index.ts    — P2 stub
+    index.ts    — active heartbeat lifecycle (worker:heartbeat:backup); restic/domain logic deferred
 ```
 
 ## Related docs
