@@ -84,7 +84,7 @@ Every polling surface uses `LiveIndicator` + the same shape: poll every N second
 
 ## Dependencies
 
-- `next` 15.1, `react` 19, `react-dom` 19
+- `next` 15.5, `react` 19, `react-dom` 19
 - `tailwindcss` 4 + `@tailwindcss/postcss`
 - `@monaco-editor/react` 4.7
 - `recharts` 3 — used only inside `MetricHistoryChart`, split into its own JS chunk via `next/dynamic`
