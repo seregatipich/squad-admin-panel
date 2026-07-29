@@ -6,8 +6,12 @@
 # PRE_COMMANDS, backs them up with restic, simulates `docker compose down -v` by
 # destroying the databases, then restores from the latest snapshot into a fresh
 # Postgres + Redis and asserts the seeded data survived. Prints PASS/FAIL and
-# exits non-zero on any mismatch. All containers, the network, and the temp dir
-# are removed on exit.
+# exits non-zero on any mismatch. All containers (and their anonymous volumes),
+# the network, and the temp dir are removed on exit — `docker rm -fv`, not
+# `-f` alone, since postgres/redis declare a VOLUME for their data dir and a
+# bare `-f` orphans it. The script asserts this itself (see the two
+# "leaked its anonymous volume" checks below) after a prior run silently
+# leaked ~7.5 GB of these across the self-hosted CI runner's disk.
 #
 # Usage: bash scripts/test-backup-restore.sh
 
@@ -43,7 +47,7 @@ fail() { printf '\n%bFAIL:%b %s\n' "${C_RED}${C_BOLD}" "${C_RST}" "$1" >&2; exit
 
 cleanup() {
   local code=$?
-  docker rm -f "$PG1" "$PG2" "$RD1" "$RD2" >/dev/null 2>&1 || true
+  docker rm -fv "$PG1" "$PG2" "$RD1" "$RD2" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
   rm -rf "$TMP" >/dev/null 2>&1 || true
   return "$code"
@@ -97,6 +101,11 @@ docker run -d --name "$PG1" --network "$NET" --network-alias postgres \
   -e POSTGRES_USER=admin -e POSTGRES_PASSWORD=admin -e POSTGRES_DB=admin "$PG_IMG" >/dev/null
 docker run -d --name "$RD1" --network "$NET" --network-alias redis \
   "$RD_IMG" redis-server --appendonly yes --save 60 1000 >/dev/null
+# Neither container is given an explicit -v, so each gets an anonymous volume
+# for its image's declared VOLUME (postgres: /var/lib/postgresql/data, redis:
+# /data). Captured here so the removals below can assert they didn't leak.
+PG1_VOL="$(docker inspect "$PG1" --format '{{(index .Mounts 0).Name}}')"
+RD1_VOL="$(docker inspect "$RD1" --format '{{(index .Mounts 0).Name}}')"
 wait_pg "$PG1"; wait_redis "$RD1"
 
 docker exec "$PG1" psql -U admin -d admin -v ON_ERROR_STOP=1 \
@@ -130,13 +139,16 @@ ok "snapshot created and retention accepted"
 
 # ── simulate `docker compose down -v` ───────────────────────────────────────
 step "Destroying the source databases (simulating down -v)"
-docker rm -f "$PG1" "$RD1" >/dev/null
-ok "source postgres + redis removed"
+docker rm -fv "$PG1" "$RD1" >/dev/null
+docker volume inspect "$PG1_VOL" >/dev/null 2>&1 && fail "docker rm -fv leaked PG1's anonymous volume ($PG1_VOL)"
+docker volume inspect "$RD1_VOL" >/dev/null 2>&1 && fail "docker rm -fv leaked RD1's anonymous volume ($RD1_VOL)"
+ok "source postgres + redis removed (including anonymous volumes)"
 
 # ── restore into a FRESH stack ──────────────────────────────────────────────
 step "Starting fresh empty Postgres + Redis"
 docker run -d --name "$PG2" --network "$NET" --network-alias postgres \
   -e POSTGRES_USER=admin -e POSTGRES_PASSWORD=admin -e POSTGRES_DB=admin "$PG_IMG" >/dev/null
+PG2_VOL="$(docker inspect "$PG2" --format '{{(index .Mounts 0).Name}}')"
 wait_pg "$PG2"
 
 step "Restoring Postgres from the latest snapshot"
@@ -190,6 +202,13 @@ got_log3="$(tr -d '[:space:]' < "$log3_restored")"
 [ "$got_log3" = "$LOG3_VALUE" ] \
   || fail "archived log content not restored (got '${got_log3}', want '${LOG3_VALUE}')"
 ok "LOG-3 archived log restored from snapshot"
+
+# ── reclaim the restored stack up front (the EXIT trap below is now a no-op
+# for containers, and still handles the network + temp dir) ─────────────────
+step "Reclaiming the restored stack and asserting no anonymous volumes leaked"
+docker rm -fv "$PG2" "$RD2" >/dev/null
+docker volume inspect "$PG2_VOL" >/dev/null 2>&1 && fail "docker rm -fv leaked PG2's anonymous volume ($PG2_VOL)"
+ok "restored postgres + redis removed (including anonymous volumes)"
 
 printf '\n%bPASS%b — backup → down -v → restore round-trip verified for Postgres, Redis, and LOG-3 archived logs.\n' \
   "${C_GREEN}${C_BOLD}" "${C_RST}"
