@@ -40,6 +40,22 @@ before the worker finishes its first asynchronous startup pass. Process-level
 worker contracts additionally wait for a fresh heartbeat, send `SIGTERM`
 twice and require exit code `0`.
 
+## Mutation testing
+
+```bash
+pnpm --filter @squad/shared-config test:mutation
+```
+
+Or from the root:
+
+```bash
+pnpm turbo run test:mutation --filter=@squad/shared-config
+```
+
+This runs Stryker (`stryker.config.json`) against `src/**/*.ts` using the vitest test runner (`vitest.stryker.config.ts`) and writes an HTML report to `packages/shared-config/reports/mutation/mutation.html`. It now runs in three automated places, the same as every other test script in this repo: the `test:mutation` task in the root `turbo.json`, the "Run shared-config mutation tests (Stryker)" step in `.github/workflows/ci.yml`'s `node` job, and the mutation-testing step in `scripts/pre-push-checklist.sh`.
+
+`stryker.config.json`'s `thresholds.break` is `0`, so this gate currently only fails on a Stryker crash or a config/dependency error (e.g. in the `ajv`/`fast-uri` chain underneath `@stryker-mutator/core`) — it does not yet fail the build on a low mutation score. The actual mutation score (currently 64.72%) is below the configured `low`/`high` thresholds (75/90); raising `break` to gate on score is a deliberate follow-up, not automatic.
+
 ## What is not covered
 
 - `configFileClass` — return values are trivially derived from the two `includes()` checks; covered implicitly by callers in integration tests.
