@@ -52,9 +52,12 @@ else
   run_step "build" pnpm turbo run build
 fi
 
-# 4. Secret scan (best-effort — only if gitleaks is installed)
+# 4. Secret scan (best-effort — only if gitleaks is installed). Scoped to
+#    origin/dev..HEAD: this local pre-push check only needs to catch a leak
+#    in the commits actually being pushed — the CI `node` job's unscoped
+#    invocation remains the full-history, authoritative audit.
 if command -v gitleaks >/dev/null 2>&1; then
-  run_step "gitleaks" gitleaks detect --config .gitleaks.toml --no-banner --redact --exit-code 1
+  run_step "gitleaks" gitleaks detect --config .gitleaks.toml --no-banner --redact --exit-code 1 --log-opts "origin/dev..HEAD"
 else
   skip_step "gitleaks" "not installed"
 fi
