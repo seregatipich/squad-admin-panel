@@ -53,7 +53,7 @@ export function PlaysWithSection({ playerId }: { playerId: string }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xs uppercase tracking-widest text-neutral-400">Часто играет с</h2>
         <Link
-          href={`/players/${playerId}/compare`}
+          href={`/all-players/${playerId}/compare`}
           className="text-xs text-sky-400 hover:text-sky-300"
         >
           Сравнить онлайн →
@@ -77,7 +77,7 @@ export function PlaysWithSection({ playerId }: { playerId: string }) {
               className="flex flex-wrap items-center gap-2 rounded border border-neutral-800 bg-neutral-900/40 px-2 py-1.5 text-sm"
             >
               <Link
-                href={`/players/${partner.player_id}`}
+                href={`/all-players/${partner.player_id}`}
                 className="font-medium text-sky-400 hover:text-sky-300"
               >
                 {partner.player_name ?? '—'}
@@ -89,7 +89,7 @@ export function PlaysWithSection({ playerId }: { playerId: string }) {
                 {partner.shared_session_count} сессий
               </span>
               <Link
-                href={`/players/${playerId}/compare?other=${encodeURIComponent(partner.player_id)}`}
+                href={`/all-players/${playerId}/compare?other=${encodeURIComponent(partner.player_id)}`}
                 className="ml-auto text-xs text-sky-400 hover:text-sky-300"
               >
                 Сравнить онлайн

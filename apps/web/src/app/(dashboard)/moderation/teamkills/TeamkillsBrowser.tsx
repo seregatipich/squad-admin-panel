@@ -262,7 +262,7 @@ function TeamkillTable({
               >
                 <td className="px-3 py-2">
                   <Link
-                    href={`/players/${row.player_id}`}
+                    href={`/all-players/${row.player_id}`}
                     className="font-medium text-sky-300 no-underline hover:text-sky-200"
                   >
                     {row.current_name ?? row.player_id.slice(0, 8)}
@@ -308,7 +308,7 @@ function TeamkillTable({
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <Link
-                  href={`/players/${row.player_id}`}
+                  href={`/all-players/${row.player_id}`}
                   className="font-medium text-sky-300 no-underline hover:text-sky-200"
                 >
                   {row.current_name ?? row.player_id.slice(0, 8)}

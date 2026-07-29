@@ -18,6 +18,7 @@ export const ru = {
   'nav.dashboard': 'Дашборд',
   'nav.serversArchive': 'Архив',
   'nav.players': 'Игроки',
+  'nav.allPlayers': 'Все игроки',
   'nav.suspects': 'Метки',
   'nav.leaderboards': 'Лидерборды',
   'nav.bonusLeaderboard': 'Бонусы',
@@ -37,7 +38,7 @@ export const ru = {
   'nav.issues': 'Тикеты',
   'nav.vips': 'VIP',
   'nav.groups': 'Группы',
-  'nav.users': 'Пользователи',
+  'nav.administration': 'Администрация',
   'nav.teamkills': 'Тимкиллы',
   'nav.audit': 'Журнал действий',
   'nav.logs': 'Логи',
@@ -66,7 +67,6 @@ export const ru = {
   'login.error.notAuthorized':
     'Steam ID {steamId} не имеет доступа к панели. Обратитесь к администратору.',
   'login.steamButton': 'Войти через Steam',
-  'login.steamOnly': 'Steam OpenID 2.0 — единственный способ входа.',
 
   'connection.unavailable': 'Панель временно недоступна.',
   'connection.retry': 'Повторить',

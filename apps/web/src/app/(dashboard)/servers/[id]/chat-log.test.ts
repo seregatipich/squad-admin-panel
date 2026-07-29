@@ -76,12 +76,12 @@ describe('channelMeta', () => {
 
 describe('playerHref', () => {
   it('links to the player detail page when a uuid is resolved', () => {
-    expect(playerHref(message({ player_id: 'uuid-1' }))).toBe('/players/uuid-1');
+    expect(playerHref(message({ player_id: 'uuid-1' }))).toBe('/all-players/uuid-1');
   });
 
   it('falls back to a steam-scoped players search when only steam id is known', () => {
     expect(playerHref(message({ player_id: null, steam_id64: '76561198012345678' }))).toBe(
-      '/players?q=76561198012345678',
+      '/all-players?q=76561198012345678',
     );
   });
 

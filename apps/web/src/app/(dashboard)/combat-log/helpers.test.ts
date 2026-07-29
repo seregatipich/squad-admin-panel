@@ -244,8 +244,8 @@ describe('buildExportApiQuery', () => {
 describe('row rendering helpers', () => {
   it('links both attacker and victim to their player cards', () => {
     const row = makeRow();
-    expect(playerHref(row.attacker)).toBe('/players/attacker-1');
-    expect(playerHref(row.victim)).toBe('/players/victim-1');
+    expect(playerHref(row.attacker)).toBe('/all-players/attacker-1');
+    expect(playerHref(row.victim)).toBe('/all-players/victim-1');
   });
 
   it('returns null href when the attacker is unknown', () => {

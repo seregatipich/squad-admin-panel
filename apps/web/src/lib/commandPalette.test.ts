@@ -16,7 +16,7 @@ const GROUPS: NavGroup[] = [
   {
     label: 'Управление',
     items: [
-      { href: '/players', label: 'Игроки' },
+      { href: '/all-players', label: 'Игроки' },
       { href: '/users', label: 'Пользователи', permission: 'user:view' },
     ],
   },
@@ -25,7 +25,7 @@ const GROUPS: NavGroup[] = [
 describe('filterPageResults', () => {
   it('returns every visible page when the query is empty', () => {
     const result = filterPageResults(GROUPS, [], '');
-    expect(result.map((r) => r.href)).toEqual(['/dashboard', '/players']);
+    expect(result.map((r) => r.href)).toEqual(['/dashboard', '/all-players']);
   });
 
   it('hides permission-gated pages when the permission is absent', () => {
@@ -40,7 +40,7 @@ describe('filterPageResults', () => {
 
   it('filters by case-insensitive label match', () => {
     const result = filterPageResults(GROUPS, [], 'игр');
-    expect(result.map((r) => r.href)).toEqual(['/players']);
+    expect(result.map((r) => r.href)).toEqual(['/all-players']);
   });
 
   it('filters by href match', () => {
@@ -111,8 +111,8 @@ describe('isPaletteHotkey', () => {
 
 describe('resultHref / resultLabel', () => {
   it('resolves a page result to its own href and label', () => {
-    const result: PaletteResult = { kind: 'page', href: '/players', label: 'Игроки' };
-    expect(resultHref(result)).toBe('/players');
+    const result: PaletteResult = { kind: 'page', href: '/all-players', label: 'Игроки' };
+    expect(resultHref(result)).toBe('/all-players');
     expect(resultLabel(result)).toBe('Игроки');
   });
 
@@ -125,7 +125,7 @@ describe('resultHref / resultLabel', () => {
       eos_id: null,
       clan_name: null,
     };
-    expect(resultHref(result)).toBe('/players/p1');
+    expect(resultHref(result)).toBe('/all-players/p1');
     expect(resultLabel(result)).toBe('Alice');
   });
 

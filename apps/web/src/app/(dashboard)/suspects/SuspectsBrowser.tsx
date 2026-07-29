@@ -256,7 +256,7 @@ export function SuspectsBrowser() {
                   <tr key={suspect.id} className="border-t border-neutral-900 align-top">
                     <td className="py-2 pr-3 whitespace-nowrap">
                       <Link
-                        href={`/players/${suspect.id}`}
+                        href={`/all-players/${suspect.id}`}
                         className="text-sky-400 hover:text-sky-300"
                       >
                         {suspect.canonical_name}

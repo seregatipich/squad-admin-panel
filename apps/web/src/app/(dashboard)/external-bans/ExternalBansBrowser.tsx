@@ -200,7 +200,7 @@ export function ExternalBansBrowser() {
                   <div className="flex items-center gap-2">
                     {row.player_id ? (
                       <Link
-                        href={`/players/${row.player_id}`}
+                        href={`/all-players/${row.player_id}`}
                         className="font-medium text-sky-400 hover:text-sky-300"
                       >
                         {identityLabel(row)}

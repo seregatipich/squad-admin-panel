@@ -132,7 +132,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   if (err) {
     return (
       <div>
-        <Link href="/players" className="text-sky-400 text-xs">
+        <Link href="/all-players" className="text-sky-400 text-xs">
           ← игроки
         </Link>
         <div className="mt-3 rounded border border-red-900 bg-red-950 p-3 text-sm">
@@ -164,7 +164,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
-        <Link href="/players" className="text-sky-400 hover:text-sky-300 text-xs font-mono">
+        <Link href="/all-players" className="text-sky-400 hover:text-sky-300 text-xs font-mono">
           ← игроки
         </Link>
         {player.avatar_url ? (
@@ -255,7 +255,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
       <div className="flex justify-end">
         <Link
-          href={`/players/${playerId}/compare`}
+          href={`/all-players/${playerId}/compare`}
           className="text-sky-400 hover:text-sky-300 text-xs"
         >
           Сравнить онлайн →

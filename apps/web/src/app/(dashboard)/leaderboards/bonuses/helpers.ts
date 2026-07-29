@@ -60,5 +60,5 @@ export function valueColumnLabel(period: BonusPeriod): string {
 
 /** Player-card target for a leaderboard row. */
 export function playerHref(row: Pick<BonusLeaderboardRow, 'player_id'>): string {
-  return `/players/${row.player_id}`;
+  return `/all-players/${row.player_id}`;
 }

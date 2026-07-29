@@ -180,7 +180,7 @@ export default function PlayersPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Игроки</h1>
+        <h1 className="text-2xl font-semibold">Все игроки</h1>
         <div className="flex items-center gap-3">
           <div className="text-xs text-neutral-500">
             всего: {data?.total ?? 0} • онлайн сейчас: {onlineCount}
@@ -292,7 +292,7 @@ export default function PlayersPage() {
                     <td className="p-2">
                       <span className="inline-flex items-center gap-2">
                         <Link
-                          href={`/players/${p.id}`}
+                          href={`/all-players/${p.id}`}
                           className="text-sky-400 hover:text-sky-300 font-medium"
                         >
                           {p.canonical_name}

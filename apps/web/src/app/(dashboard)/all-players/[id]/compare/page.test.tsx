@@ -66,7 +66,7 @@ describe('ComparePlayerOnlinePage', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /К игроку/ })).toHaveAttribute(
       'href',
-      '/players/player-a',
+      '/all-players/player-a',
     );
   });
 

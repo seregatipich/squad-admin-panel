@@ -157,7 +157,7 @@ export default async function VipsPage({ searchParams }: VipsPageProps) {
                   </span>
                 </td>
                 <td className="p-2">
-                  <Link href={`/players/${r.id}`} className="text-sky-400 hover:text-sky-300">
+                  <Link href={`/all-players/${r.id}`} className="text-sky-400 hover:text-sky-300">
                     {r.canonical_name}
                   </Link>
                 </td>

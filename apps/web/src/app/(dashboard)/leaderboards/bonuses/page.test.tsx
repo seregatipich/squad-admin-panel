@@ -66,7 +66,7 @@ describe('BonusLeaderboardPage', () => {
     await renderPage();
 
     const rich = await screen.findByRole('link', { name: 'BonusRich' });
-    expect(rich).toHaveAttribute('href', '/players/p-rich');
+    expect(rich).toHaveAttribute('href', '/all-players/p-rich');
     expect(screen.getByRole('link', { name: 'BonusEosOnly' })).toBeInTheDocument();
     expect(screen.getByText('500')).toBeInTheDocument();
     expect(screen.getByText('300')).toBeInTheDocument();
@@ -90,7 +90,7 @@ describe('BonusLeaderboardPage', () => {
     await act(async () => {
       cell.click();
     });
-    expect(push).toHaveBeenCalledWith('/players/p-rich');
+    expect(push).toHaveBeenCalledWith('/all-players/p-rich');
   });
 
   it('renders degrade state when available:false', async () => {

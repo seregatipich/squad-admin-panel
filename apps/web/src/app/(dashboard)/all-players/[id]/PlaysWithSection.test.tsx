@@ -38,7 +38,7 @@ describe('PlaysWithSection', () => {
     const compareLink = screen
       .getAllByRole('link')
       .find((link) => link.textContent === 'Сравнить онлайн');
-    expect(compareLink).toHaveAttribute('href', '/players/player-1/compare?other=partner-1');
+    expect(compareLink).toHaveAttribute('href', '/all-players/player-1/compare?other=partner-1');
   });
 
   it('hides on a panel-access denial', async () => {

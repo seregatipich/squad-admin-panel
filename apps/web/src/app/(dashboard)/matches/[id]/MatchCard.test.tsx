@@ -140,7 +140,7 @@ describe('MatchCard', () => {
     async () => {
       render(<MatchCard matchId="match-1" />);
       const earlyLink = await screen.findByText('EarlyLeaver');
-      expect(earlyLink.closest('a')).toHaveAttribute('href', '/players/player-left-early');
+      expect(earlyLink.closest('a')).toHaveAttribute('href', '/all-players/player-left-early');
     },
     TEST_TIMEOUT_MS,
   );

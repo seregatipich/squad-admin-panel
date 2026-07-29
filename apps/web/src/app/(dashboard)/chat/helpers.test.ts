@@ -315,7 +315,7 @@ describe('formatting helpers', () => {
   });
 
   it('builds player hrefs only when a player id exists', () => {
-    expect(playerHref(apiItemToRow(apiItem()))).toBe('/players/player-1');
+    expect(playerHref(apiItemToRow(apiItem()))).toBe('/all-players/player-1');
     expect(playerHref(liveMessageToRow(liveMessage({ player_id: null })))).toBeNull();
   });
 

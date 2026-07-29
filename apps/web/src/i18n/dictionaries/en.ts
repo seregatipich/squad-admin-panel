@@ -17,6 +17,7 @@ export const en: Record<TranslationKey, string> = {
   'nav.dashboard': 'Dashboard',
   'nav.serversArchive': 'Archive',
   'nav.players': 'Players',
+  'nav.allPlayers': 'All players',
   'nav.suspects': 'Marks',
   'nav.leaderboards': 'Leaderboards',
   'nav.bonusLeaderboard': 'Bonuses',
@@ -36,7 +37,7 @@ export const en: Record<TranslationKey, string> = {
   'nav.issues': 'Tickets',
   'nav.vips': 'VIP',
   'nav.groups': 'Groups',
-  'nav.users': 'Users',
+  'nav.administration': 'Administration',
   'nav.teamkills': 'Teamkills',
   'nav.audit': 'Action log',
   'nav.logs': 'Logs',
@@ -65,7 +66,6 @@ export const en: Record<TranslationKey, string> = {
   'login.error.notAuthorized':
     'Steam ID {steamId} does not have access to the panel. Contact an administrator.',
   'login.steamButton': 'Sign in with Steam',
-  'login.steamOnly': 'Steam OpenID 2.0 is the only way to sign in.',
 
   'connection.unavailable': 'The panel is temporarily unavailable.',
   'connection.retry': 'Retry',

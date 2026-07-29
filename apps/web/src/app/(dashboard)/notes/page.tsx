@@ -327,7 +327,7 @@ export default function NotesFeedPage() {
                       </td>
                       <td className="py-2 pr-3 whitespace-nowrap">
                         <Link
-                          href={`/players/${note.player_id}#notes`}
+                          href={`/all-players/${note.player_id}#notes`}
                           className="text-sky-400 hover:text-sky-300"
                         >
                           {note.target.name}

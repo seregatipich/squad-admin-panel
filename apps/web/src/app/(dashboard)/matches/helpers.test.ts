@@ -270,8 +270,8 @@ describe('match detail links', () => {
   it('rejects unsafe return targets', () => {
     expect(safeMatchBackHref('https://example.com/matches')).toBe('/matches');
     expect(safeMatchBackHref('//example.com/matches')).toBe('/matches');
-    expect(safeMatchBackHref('/players/p1')).toBe('/matches');
-    expect(safeMatchBackHref(['/matches?player=p1', '/players/p1'])).toBe('/matches?player=p1');
+    expect(safeMatchBackHref('/all-players/p1')).toBe('/matches');
+    expect(safeMatchBackHref(['/matches?player=p1', '/all-players/p1'])).toBe('/matches?player=p1');
   });
 });
 

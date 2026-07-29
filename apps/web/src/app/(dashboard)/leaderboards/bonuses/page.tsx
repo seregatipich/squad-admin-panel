@@ -79,7 +79,7 @@ function BonusLeaderboardBrowser() {
         hasSelection: Boolean(selection),
       });
       if (!allowed) return;
-      router.push(`/players/${playerId}`);
+      router.push(`/all-players/${playerId}`);
     },
     [router],
   );

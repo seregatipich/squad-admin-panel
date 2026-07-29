@@ -129,7 +129,7 @@ describe('AltsSection', () => {
     fireEvent.click(screen.getByText('Возможные альты'));
     expect(await screen.findByRole('link', { name: '—' })).toHaveAttribute(
       'href',
-      '/players/NoName-1',
+      '/all-players/NoName-1',
     );
     expect(screen.getByText(/Δ: 10 с/)).toBeInTheDocument();
     expect(screen.getByText(/Δ: 1 ч 0 мин/)).toBeInTheDocument();

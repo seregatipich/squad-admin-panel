@@ -208,7 +208,7 @@ export function CommandPalette({
                   const active = rowIndex === selectedIndex;
                   return (
                     <button
-                      key={`${result.kind}-${'href' in result ? result.href : result.id}`}
+                      key={`${result.kind}-${result.kind === 'page' ? result.href : result.id}`}
                       type="button"
                       onClick={() => select(result)}
                       onMouseEnter={() => setSelectedIndex(rowIndex)}

@@ -272,7 +272,7 @@ export function combineRows(liveRows: ChatRow[], pageRows: ChatRow[]): ChatRow[]
 }
 
 export function playerHref(row: ChatRow): string | null {
-  return row.playerId ? `/players/${row.playerId}` : null;
+  return row.playerId ? `/all-players/${row.playerId}` : null;
 }
 
 export function formatArchiveTime(iso: string): string {
