@@ -41,7 +41,6 @@ export default function LoginPage() {
       >
         {t('login.steamButton')}
       </a>
-      <p className="text-center text-xs text-neutral-500">{t('login.steamOnly')}</p>
     </main>
   );
 }

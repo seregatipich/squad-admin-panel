@@ -19,7 +19,7 @@ export default function ComparePlayerOnlinePage({
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
-        <Link href={`/players/${playerId}`} className="text-sm text-sky-400 hover:text-sky-300">
+        <Link href={`/all-players/${playerId}`} className="text-sm text-sky-400 hover:text-sky-300">
           ← К игроку
         </Link>
         <h1 className="text-2xl font-semibold">Сравнение онлайна</h1>

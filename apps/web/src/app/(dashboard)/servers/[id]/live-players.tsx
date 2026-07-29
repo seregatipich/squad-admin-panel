@@ -373,7 +373,10 @@ function RosterRow({
             </span>
           ) : null}
           {player.player_id ? (
-            <Link href={`/players/${player.player_id}`} className="text-sky-400 hover:text-sky-300">
+            <Link
+              href={`/all-players/${player.player_id}`}
+              className="text-sky-400 hover:text-sky-300"
+            >
               {player.name}
             </Link>
           ) : (

@@ -319,7 +319,7 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
                 </td>
               ) : null}
               <td className="px-2 py-2">
-                <Link href={`/players/${m.id}`} className="text-sky-400 hover:text-sky-300">
+                <Link href={`/all-players/${m.id}`} className="text-sky-400 hover:text-sky-300">
                   {m.canonical_name}
                 </Link>
               </td>

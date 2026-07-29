@@ -478,7 +478,7 @@ export function RosterRow({
   return (
     <tr className="border-t border-neutral-900">
       <td className="p-2">
-        <Link href={`/players/${member.player_id}`} className="text-sky-400 hover:text-sky-300">
+        <Link href={`/all-players/${member.player_id}`} className="text-sky-400 hover:text-sky-300">
           {member.canonical_name}
         </Link>
       </td>

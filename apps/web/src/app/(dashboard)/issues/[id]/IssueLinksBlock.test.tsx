@@ -15,7 +15,7 @@ function link(overrides: Partial<IssueLinkView> = {}): IssueLinkView {
     entity_type: 'player',
     entity_id: 'player-1',
     label: 'Vasya',
-    ref: '/players/player-1',
+    ref: '/all-players/player-1',
     exists: true,
     created_by: 'author-1',
     created_at: '2026-07-20T10:00:00.000Z',
@@ -92,7 +92,7 @@ describe('IssueLinksBlock', () => {
       expect(list.getByText('Сервер')).toBeInTheDocument();
       expect(screen.getByRole('link', { name: 'Vasya' })).toHaveAttribute(
         'href',
-        '/players/player-1',
+        '/all-players/player-1',
       );
       expect(screen.getByRole('link', { name: 'Alpha Server' })).toHaveAttribute(
         'href',

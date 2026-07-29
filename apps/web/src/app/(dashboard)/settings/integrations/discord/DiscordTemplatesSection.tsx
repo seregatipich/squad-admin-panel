@@ -18,7 +18,7 @@ type TemplateLocale = (typeof LOCALES)[number];
 const PREVIEW_CONTEXT: Record<string, string> = {
   player_name: 'Тестовый Игрок',
   player_id: '00000000-0000-0000-0000-000000000000',
-  player_url: '/players/00000000-0000-0000-0000-000000000000',
+  player_url: '/all-players/00000000-0000-0000-0000-000000000000',
   steam_id64: '76561198000000000',
   eos_id: '00000000000000000000000000000000',
   server_name: 'Тестовый сервер',

@@ -166,7 +166,7 @@ export function LeaderboardsBrowser() {
         hasSelection: Boolean(selection),
       });
       if (!allowed) return;
-      router.push(`/players/${playerId}`);
+      router.push(`/all-players/${playerId}`);
     },
     [router],
   );
@@ -510,7 +510,7 @@ function CellContent({
   if (column === 'player') {
     return (
       <a
-        href={`/players/${row.player_id}`}
+        href={`/all-players/${row.player_id}`}
         className="font-medium text-sky-400 hover:text-sky-300"
         onClick={(event) => event.stopPropagation()}
       >

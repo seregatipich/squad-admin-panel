@@ -371,7 +371,7 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
                       <tr key={member.player_id} className="border-t border-neutral-900">
                         <td className="p-2">
                           <Link
-                            href={`/players/${member.player_id}`}
+                            href={`/all-players/${member.player_id}`}
                             className="text-sky-400 hover:text-sky-300"
                           >
                             {member.name}
@@ -580,7 +580,7 @@ function MatchHistoryRow({
               {match.participants.map((participant) => (
                 <Link
                   key={participant.player_id}
-                  href={`/players/${participant.player_id}`}
+                  href={`/all-players/${participant.player_id}`}
                   className="rounded-full border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-xs text-sky-300 hover:bg-neutral-800"
                 >
                   {participant.name}

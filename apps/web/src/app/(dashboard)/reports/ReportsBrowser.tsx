@@ -991,7 +991,7 @@ function PlayerRef({
 }) {
   if (id) {
     return (
-      <Link href={`/players/${id}`} className="text-sky-400 hover:text-sky-300">
+      <Link href={`/all-players/${id}`} className="text-sky-400 hover:text-sky-300">
         {playerLabel(id, name)}
       </Link>
     );

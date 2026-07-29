@@ -66,8 +66,8 @@ describe('ChatMessageList render', () => {
     expect(html).toContain('Команда');
     expect(html).toContain('Админ');
 
-    expect(html).toContain('href="/players/player-uuid-1"');
-    expect(html).toContain('href="/players?q=76561198087654321"');
+    expect(html).toContain('href="/all-players/player-uuid-1"');
+    expect(html).toContain('href="/all-players?q=76561198087654321"');
     expect(html).toContain('>Ghost<');
   });
 

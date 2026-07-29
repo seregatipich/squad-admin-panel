@@ -42,7 +42,9 @@ export function filterPageResults(
   const needle = query.trim().toLowerCase();
   if (!needle) return visible;
   return visible.filter(
-    (item) => item.label.toLowerCase().includes(needle) || item.href.toLowerCase().includes(needle),
+    (item) =>
+      item.label.toLowerCase().includes(needle) ||
+      (item.href?.toLowerCase().includes(needle) ?? false),
   );
 }
 
@@ -73,9 +75,9 @@ export function isPaletteHotkey(
 export function resultHref(result: PaletteResult): string {
   switch (result.kind) {
     case 'page':
-      return result.href;
+      return result.href ?? '';
     case 'player':
-      return `/players/${result.id}`;
+      return `/all-players/${result.id}`;
     case 'server':
       return `/servers/${result.id}`;
   }

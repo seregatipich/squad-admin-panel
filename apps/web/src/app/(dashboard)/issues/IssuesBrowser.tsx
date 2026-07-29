@@ -318,7 +318,7 @@ export function IssuesBrowser() {
                     </td>
                     <td className="py-2 pr-2 text-xs">
                       <Link
-                        href={`/players/${issue.author_player_id}`}
+                        href={`/all-players/${issue.author_player_id}`}
                         className="text-neutral-300 hover:text-neutral-100"
                       >
                         {authorLabel(issue.author, issue.author_player_id)}
@@ -327,7 +327,7 @@ export function IssuesBrowser() {
                     <td className="py-2 pr-2 text-xs text-neutral-400">
                       {issue.assignee ? (
                         <Link
-                          href={`/players/${issue.assignee.id}`}
+                          href={`/all-players/${issue.assignee.id}`}
                           className="hover:text-neutral-100"
                         >
                           {issue.assignee.name}

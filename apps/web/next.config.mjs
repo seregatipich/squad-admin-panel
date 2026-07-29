@@ -10,5 +10,11 @@ export default {
       { source: '/ready', destination: `${apiUrl}/ready` },
     ];
   },
+  async redirects() {
+    return [
+      { source: '/players', destination: '/all-players', permanent: true },
+      { source: '/players/:path*', destination: '/all-players/:path*', permanent: true },
+    ];
+  },
   output: 'standalone',
 };

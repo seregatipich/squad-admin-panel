@@ -71,11 +71,11 @@ vi.mock('../src/lib/live-bus', () => ({
   })),
 }));
 
+import playerDetailPage from '../src/app/(dashboard)/all-players/[id]/page';
+import playersPage from '../src/app/(dashboard)/all-players/page';
 import auditPage from '../src/app/(dashboard)/audit/page';
 import dashboardPage from '../src/app/(dashboard)/dashboard/page';
 import logsPage from '../src/app/(dashboard)/logs/page';
-import playerDetailPage from '../src/app/(dashboard)/players/[id]/page';
-import playersPage from '../src/app/(dashboard)/players/page';
 import rolesEditPage from '../src/app/(dashboard)/roles/[id]/page';
 import rolesNewPage from '../src/app/(dashboard)/roles/new/page';
 import rolesPage from '../src/app/(dashboard)/roles/page';

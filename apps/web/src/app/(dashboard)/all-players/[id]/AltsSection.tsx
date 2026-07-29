@@ -180,7 +180,7 @@ export function AltsSection({ playerId }: { playerId: string }) {
                       </span>
                       {link.other_player ? (
                         <Link
-                          href={`/players/${link.other_player.id}`}
+                          href={`/all-players/${link.other_player.id}`}
                           className="font-medium text-sky-400 hover:text-sky-300"
                         >
                           {link.other_player.current_name}
@@ -219,7 +219,7 @@ export function AltsSection({ playerId }: { playerId: string }) {
                           {CONFIDENCE_LABELS_RU[candidate.confidence]} ({candidate.score})
                         </span>
                         <Link
-                          href={`/players/${candidate.player_id}`}
+                          href={`/all-players/${candidate.player_id}`}
                           className="font-medium text-sky-400 hover:text-sky-300"
                         >
                           {candidate.current_name ?? '—'}

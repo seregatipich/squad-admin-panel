@@ -154,7 +154,7 @@ export default function UsersPage() {
             {users.map((u) => (
               <tr key={u.id} className="border-t border-neutral-900">
                 <td className="p-2">
-                  <Link href={`/players/${u.id}`} className="text-sky-400 hover:text-sky-300">
+                  <Link href={`/all-players/${u.id}`} className="text-sky-400 hover:text-sky-300">
                     {u.canonical_name}
                   </Link>
                   {u.discord_linked ? (

@@ -147,7 +147,7 @@ function RecentEvent({ event, playerId }: { event: TeamkillPlayerEvent; playerId
           </span>
           {other?.player_id ? (
             <Link
-              href={`/players/${other.player_id}`}
+              href={`/all-players/${other.player_id}`}
               className="truncate text-sky-300 no-underline hover:text-sky-200"
             >
               {other.current_name ?? other.player_id.slice(0, 8)}

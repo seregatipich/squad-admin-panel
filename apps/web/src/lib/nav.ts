@@ -12,7 +12,8 @@ import type { TranslationKey } from '@/i18n/translate';
 export type NavLabelKey = Extract<TranslationKey, `nav.${string}`>;
 
 /**
- * A single navigable page. `permission`, when set, gates visibility.
+ * A single navigable page, or a collapsible group header when `children` is
+ * set. `permission`, when set, gates visibility.
  *
  * `label` is the Russian source label (also the CommandPalette search/display
  * text). `labelKey`, when set, is the i18n key the localized sidebar renders
@@ -20,7 +21,8 @@ export type NavLabelKey = Extract<TranslationKey, `nav.${string}`>;
  * Russian dictionary (guarded by a test in `nav.test.ts`).
  */
 export interface NavItem {
-  href: string;
+  /** Omitted for a group header rendered via `children` — it has no page of its own. */
+  href?: string;
   label: string;
   labelKey?: NavLabelKey;
   permission?: string;
@@ -28,6 +30,8 @@ export interface NavItem {
   showsPendingReports?: boolean;
   /** When set, the item is visible only while the economy module is enabled. */
   requiresEconomy?: boolean;
+  /** When set, the sidebar renders this item as a collapsible group of sub-items instead of a link. */
+  children?: NavItem[];
 }
 
 /** A labeled group of {@link NavItem}s as rendered in the sidebar. */
@@ -57,8 +61,23 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Управление',
     labelKey: 'nav.group.management',
     items: [
-      { href: '/players', label: 'Игроки', labelKey: 'nav.players' },
-      { href: '/suspects', label: 'Метки', labelKey: 'nav.suspects' },
+      {
+        label: 'Игроки',
+        labelKey: 'nav.players',
+        children: [
+          { href: '/all-players', label: 'Все игроки', labelKey: 'nav.allPlayers' },
+          { href: '/suspects', label: 'Метки', labelKey: 'nav.suspects' },
+          { href: '/banned-names', label: 'Забаненные ники', labelKey: 'nav.bannedNames' },
+          { href: '/external-bans', label: 'Внешние баны', labelKey: 'nav.externalBans' },
+          { href: '/vips', label: 'VIP', labelKey: 'nav.vips', permission: 'user:view' },
+          {
+            href: '/users',
+            label: 'Администрация',
+            labelKey: 'nav.administration',
+            permission: 'user:view',
+          },
+        ],
+      },
       { href: '/leaderboards', label: 'Лидерборды', labelKey: 'nav.leaderboards' },
       {
         href: '/leaderboards/bonuses',
@@ -80,8 +99,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/votes', label: 'Голосования', labelKey: 'nav.votes' },
       { href: '/chat', label: 'Чат', labelKey: 'nav.chat' },
       { href: '/notes', label: 'Заметки', labelKey: 'nav.notes' },
-      { href: '/banned-names', label: 'Забаненные ники', labelKey: 'nav.bannedNames' },
-      { href: '/external-bans', label: 'Внешние баны', labelKey: 'nav.externalBans' },
       {
         href: '/reports',
         label: 'Жалобы',
@@ -95,14 +112,12 @@ export const NAV_GROUPS: NavGroup[] = [
         permission: 'mod:unban',
       },
       { href: '/issues', label: 'Тикеты', labelKey: 'nav.issues' },
-      { href: '/vips', label: 'VIP', labelKey: 'nav.vips', permission: 'user:view' },
       {
         href: '/settings/groups',
         label: 'Группы',
         labelKey: 'nav.groups',
         permission: 'role:view',
       },
-      { href: '/users', label: 'Пользователи', labelKey: 'nav.users', permission: 'user:view' },
     ],
   },
   {
@@ -194,7 +209,13 @@ export const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
-/** Flattens grouped nav items into a single list, dropping group labels. */
+/**
+ * Flattens grouped nav items into a single list of navigable pages, dropping
+ * group labels and expanding `children` groups into their sub-items (the
+ * group header itself has no page of its own, so it is not included).
+ */
 export function flattenNavItems(groups: NavGroup[]): NavItem[] {
-  return groups.flatMap((group) => group.items);
+  return groups.flatMap((group) =>
+    group.items.flatMap((item) => (item.children ? item.children : [item])),
+  );
 }

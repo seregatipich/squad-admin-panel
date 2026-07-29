@@ -53,6 +53,6 @@ describe('valueColumnLabel', () => {
 
 describe('playerHref', () => {
   it('links to the player card', () => {
-    expect(playerHref({ player_id: 'p-1' })).toBe('/players/p-1');
+    expect(playerHref({ player_id: 'p-1' })).toBe('/all-players/p-1');
   });
 });
