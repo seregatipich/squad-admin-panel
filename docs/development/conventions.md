@@ -53,6 +53,13 @@ Type errors are blockers. Do not use `// @ts-ignore` or `as unknown as T` casts 
 
 pnpm 9.15 (pinned via `packageManager` in `package.json`). Never use npm or yarn in this repo. Workspace protocol: `workspace:*` for cross-package dependencies.
 
+### Security overrides (`pnpm.overrides`)
+
+An entry added to `pnpm.overrides` to close a Dependabot alert that a parent package won't move on its own must name the alert(s) it closes and the condition under which it can be removed:
+
+- `postcss: ^8.5.23` — `next@15.5.x` pins `postcss` to an exact `8.4.31` in every published release including `latest`; `vite@6.4.2` / `@tailwindcss/postcss@4.2.4` independently resolve `8.5.10`. Both are below the fix for GHSA-6g55-p6wh-862q, GHSA-r28c-9q8g-f849 and GHSA-qx2v-qp2m-jg93 (Dependabot alerts #9, #88, #90 — see #237). Remove once `next`'s own `dependencies.postcss` moves past `8.5.23` on its own (check with `npm view next dependencies.postcss`).
+- `sharp: ^0.35.3` — forces `next`'s `optionalDependencies: sharp ^0.34.3` past GHSA-f88m-g3jw-g9cj (alert #78 — see #236). Remove under the same condition once `next` bundles a fixed `sharp` on its own.
+
 ## Build orchestration
 
 Turbo (`turbo.json`) orchestrates builds, type checks, and tests across all packages. Common commands:
