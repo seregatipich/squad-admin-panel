@@ -12,15 +12,15 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
-    "ioredis": "^5.4.1",
-    "pino": "^9.5.0",
     "@squad/diag": "workspace:*",
-    "@squad/shared-config": "workspace:*"
+    "@squad/shared-config": "workspace:*",
+    "ioredis": "^5.4.1",
+    "pino": "^9.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.7"
   }
 }
