@@ -56,6 +56,8 @@ jobs:
         run: bash scripts/test-git-guard.sh
       - name: Run verify-done test suite
         run: bash scripts/test-verify-done.sh
+      - name: Run codeql-default-setup test suite
+        run: bash scripts/test-codeql-default-setup.sh
 
   node:
     runs-on: self-hosted
