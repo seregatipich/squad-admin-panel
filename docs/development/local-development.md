@@ -57,6 +57,16 @@ issues in `@fastify/static` below 10.1.0. Drop this override once `apps/api`
 deliberately upgrades `@fastify/swagger-ui` to `^6.1.1` or later — those
 releases already declare `@fastify/static: ^10.1.0` on their own.
 
+`"dompurify": "3.4.12"` pins the transitive `dompurify` copy that
+`monaco-editor` resolves internally, closing Dependabot alerts 1-8, 53-59,
+63, and 77. Nothing in this repo or in `monaco-editor`'s shipped output
+imports the npm `dompurify` package — `monaco-editor` vendors its own
+DOMPurify inside its bundled `esm/vs/base/browser/dompurify/dompurify.js`
+rather than depending on the npm package at runtime — so this override
+changes zero executed bytes; it only satisfies lockfile-scanning tools.
+The browser-executed DOMPurify copy only moves forward when
+`monaco-editor` itself is bumped (see `apps/web/package.json`).
+
 ## Bridge development
 
 ```bash
