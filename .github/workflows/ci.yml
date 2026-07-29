@@ -29,7 +29,7 @@ jobs:
     # Single shared self-hosted runner: a wedged job with no timeout could block every subsequent CI run indefinitely, so every job below gets a timeout-minutes.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Audit master ancestry
@@ -46,6 +46,8 @@ jobs:
         run: bash scripts/test-git-guard.sh
       - name: Run verify-done test suite
         run: bash scripts/test-verify-done.sh
+      - name: Run workflow-pin test suite
+        run: bash scripts/test-workflow-pins.sh
       - name: Run workflow security test suite
         run: bash scripts/test-workflow-security.sh
       - name: Run check-runner-health test suite
@@ -103,12 +105,12 @@ jobs:
             echo "REDIS_URL=$RD"
             echo "TEST_REDIS_URL=$RD/15"
           } >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with: { version: 9.15.0 }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
@@ -129,7 +131,7 @@ jobs:
         run: pnpm test:cov
       - name: Upload coverage artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-${{ github.sha }}
           path: '**/coverage/lcov.info'
@@ -165,7 +167,7 @@ jobs:
       - name: Prepare writable Go dirs
         run: mkdir -p "$GOPATH/bin" "$GOCACHE"
         working-directory: /
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: go vet ./...
       - run: go test -race -count=1 ./...
       - name: govulncheck
@@ -184,8 +186,8 @@ jobs:
     needs: [node, go]
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: build api image
         run: docker build -f docker/api.Dockerfile -t squad-admin-panel/api:ci .
       - name: build worker-log-ingest image
