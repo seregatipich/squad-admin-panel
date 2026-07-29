@@ -59,7 +59,7 @@ const publicMediaRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/public/media',
-    { schema: { querystring: publicMediaUploadQuery }, config: { audit: false } },
+    { schema: { querystring: publicMediaUploadQuery }, config: { audit: false, public: true } },
     async (req, reply) => {
       const rateKey = `${PUBLIC_MEDIA_RATE_LIMIT_PREFIX}${req.ip}`;
       const hits = await app.redis.incr(rateKey).catch(() => 0);

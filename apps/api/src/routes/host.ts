@@ -42,7 +42,7 @@ const hostRoutes: FastifyPluginAsync = async (app) => {
   app.get(
     '/api/v1/host/bridge-status',
     {
-      config: { audit: false },
+      config: { permissions: ['host:view'], audit: false },
     },
     async () => {
       try {

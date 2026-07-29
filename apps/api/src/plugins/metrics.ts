@@ -52,7 +52,7 @@ export default fp(async (app) => {
   });
 
   app.get('/metrics', {
-    config: { audit: false },
+    config: { public: true, audit: false },
     schema: { hide: true },
     handler: async (_, reply) => {
       reply.header('Content-Type', registry.contentType);

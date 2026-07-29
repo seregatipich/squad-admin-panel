@@ -19,7 +19,7 @@ const setupRoutes: FastifyPluginAsync = async (app) => {
   // whole lifecycle (before and after completion); the wizard becomes unreachable
   // by reading `setup_completed: true` here and redirecting to `/`. Only the
   // mutating `/setup/complete` returns 410 after completion (see below).
-  fast.get('/api/v1/setup/status', { config: { audit: false } }, async () => {
+  fast.get('/api/v1/setup/status', { config: { audit: false, public: true } }, async () => {
     const meta = await app.db.select().from(panelMeta).where(eq(panelMeta.id, 1)).limit(1);
     const row = meta[0];
     return {

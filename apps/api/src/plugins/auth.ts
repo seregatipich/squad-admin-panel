@@ -137,12 +137,18 @@ export default fp(async (app) => {
       req.apiTokenId = undefined;
     }
 
-    const required = req.routeOptions?.config?.permissions;
-    if (!required || required.length === 0) return;
+    // #246 — fail-closed default. A route is authenticated-required unless it
+    // explicitly opts out with `config.public: true`; declaring
+    // `config.permissions` further narrows it to specific permission holders.
+    // Before this hook was inverted, a route with neither `public` nor
+    // `permissions` was silently served to anonymous callers (`/api/docs*`,
+    // `GET /api/v1/host/bridge-status`, and others) — see #230 for the audit.
+    if (req.routeOptions?.config?.public === true) return;
     if (!req.user) {
       reply.code(401).send({ error: 'unauthenticated' });
       return;
     }
+    const required = req.routeOptions?.config?.permissions ?? [];
     for (const perm of required) {
       if (!req.user.permissions.permissions.has(perm)) {
         reply.code(403).send({ error: 'forbidden', required });

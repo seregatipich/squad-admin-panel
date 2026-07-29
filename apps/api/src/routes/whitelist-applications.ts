@@ -180,7 +180,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
   // --- Public: portal status ------------------------------------------------
   fast.get(
     '/api/v1/public/whitelist/settings',
-    { config: { audit: false, rateLimit: { max: 60, timeWindow: '1 minute' } } },
+    { config: { audit: false, public: true, rateLimit: { max: 60, timeWindow: '1 minute' } } },
     async () => {
       const settings = await loadSettings();
       return { enabled: settings.enabled };
@@ -194,6 +194,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
       schema: { body: submitBody },
       config: {
         audit: false,
+        public: true,
         rateLimit: { max: PUBLIC_SUBMIT_RATE_MAX, timeWindow: '1 hour' },
       },
     },

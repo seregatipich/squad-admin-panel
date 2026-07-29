@@ -1,5 +1,15 @@
 # `api` — changelog
 
+## 2026-07-29 — Fail-open permission default flipped to fail-closed (#246)
+
+### Fixed
+
+- **Security:** `plugins/auth.ts`'s global `onRequest` hook used to return early — no session required — whenever a route declared no `config.permissions`, treating "nobody added permissions" as "public". `GET /api/docs*` (the full OpenAPI schema and Swagger UI) and `GET /api/v1/host/bridge-status` shipped to production unauthenticated this way. Auditing every route/plugin file found three more live instances: `GET /api/v1/health/workers`, `GET /api/v1/health/reconciler`, and the `integrations-balancer.ts`/`integrations-vip.ts` webhook routes.
+- The hook is now **fail-closed**: a route requires `req.user` unless it declares the new `config.public: true` (`plugins/types.ts`). `config.permissions` still narrows further as before. `GET /api/v1/host/bridge-status`, `GET /api/v1/health/workers`, and `GET /api/v1/health/reconciler` now require `host:view`, matching the sibling `GET /api/v1/host/info`. `public-banlist.ts`'s `GET /api/v1/public/banlist` gets `config.permissions: ['banlist:read']` declared (a drift correction — the in-handler check already enforced it).
+- `config.public: true` is now explicit on every route that was already intentionally anonymous: `GET /health`, `GET /ready`, `GET /metrics`, the signature-gated webhooks (`integrations-balancer.ts`, `integrations-vip.ts`, `discord-interactions.ts`), the public data portals (`public-stats.ts`, `public-clans.ts`, `public-appeals.ts`, `public-media.ts`), the Steam OAuth entry points (`auth-steam.ts`), and `setup.ts`'s `GET /status` probe. `POST /api/v1/setup/complete` is unchanged — its in-handler `if (!req.user)` check already matched the new default.
+- `GET /api/docs*` needed no route-level change: `authPlugin` is registered via `fastify-plugin`, so its hook applies at Fastify's root scope to every descendant route regardless of registration order.
+- See the "#246: invert the auth hook to fail-closed" entry in [`architecture/decisions.md`](../../architecture/decisions.md) and the "Fail-closed default" section of [`architecture/rbac.md`](../../architecture/rbac.md#enforcement).
+
 ## 2026-07-29 — isolated-db fails loudly instead of guessing a Postgres password (#221)
 
 ### Fixed
