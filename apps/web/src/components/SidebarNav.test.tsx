@@ -97,6 +97,47 @@ describe('SidebarNav', () => {
     expect(screen.queryByRole('link', { name: 'Администрация' })).not.toBeInTheDocument();
   });
 
+  it('renders "Инструменты" as a toggle button, not a link, and expands/collapses its children on click', () => {
+    render(
+      <LocaleProvider locale="ru">
+        <SidebarNav permissions={[]} displayName="Alice" />
+      </LocaleProvider>,
+    );
+    expect(screen.queryByRole('link', { name: 'Инструменты' })).not.toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: 'Инструменты' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', { name: 'Статистика' })).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('link', { name: 'Статистика' })).toHaveAttribute('href', '/statistics');
+    expect(screen.getByRole('link', { name: 'Тимкиллы' })).toHaveAttribute(
+      'href',
+      '/moderation/teamkills',
+    );
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', { name: 'Статистика' })).not.toBeInTheDocument();
+  });
+
+  it('auto-expands "Инструменты" when the active route is one of its children', () => {
+    mockUsePathname.mockReturnValue('/balancer');
+    render(
+      <LocaleProvider locale="ru">
+        <SidebarNav permissions={['balancer:view']} displayName="Alice" />
+      </LocaleProvider>,
+    );
+    expect(screen.getByRole('button', { name: 'Инструменты' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(screen.getByRole('link', { name: 'Балансировщик' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+  });
+
   it('hides economy-gated items when economy is disabled', () => {
     render(
       <LocaleProvider locale="ru">
@@ -104,7 +145,8 @@ describe('SidebarNav', () => {
       </LocaleProvider>,
     );
     expect(screen.queryByRole('link', { name: 'Бонусы' })).not.toBeInTheDocument();
-    // The regular leaderboards item stays visible either way.
+    // The regular leaderboards item (nested under "Инструменты") stays visible either way.
+    fireEvent.click(screen.getByRole('button', { name: 'Инструменты' }));
     expect(screen.getByRole('link', { name: 'Лидерборды' })).toBeInTheDocument();
   });
 

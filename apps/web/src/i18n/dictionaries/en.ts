@@ -18,6 +18,7 @@ export const en: Record<TranslationKey, string> = {
   'nav.serversArchive': 'Archive',
   'nav.players': 'Players',
   'nav.allPlayers': 'All players',
+  'nav.tools': 'Tools',
   'nav.suspects': 'Marks',
   'nav.leaderboards': 'Leaderboards',
   'nav.bonusLeaderboard': 'Bonuses',

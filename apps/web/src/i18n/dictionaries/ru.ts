@@ -19,6 +19,7 @@ export const ru = {
   'nav.serversArchive': 'Архив',
   'nav.players': 'Игроки',
   'nav.allPlayers': 'Все игроки',
+  'nav.tools': 'Инструменты',
   'nav.suspects': 'Метки',
   'nav.leaderboards': 'Лидерборды',
   'nav.bonusLeaderboard': 'Бонусы',
