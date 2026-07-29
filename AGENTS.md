@@ -62,6 +62,8 @@ The `ci` workflow runs on the org's self-hosted runner (a Multipass VM registere
 
 **Adding a package? Add it to `test:cov`.** CI's only JS test step is `pnpm test:cov`, which carries an explicit `--filter` list. A package missing from that list never runs in CI — it can be merged with a red suite while `dev` stays green (#229: 16 of 28 suites were invisible this way, and two workers sat broken behind a green dashboard). [`scripts/test-cov-complete.sh`](scripts/test-cov-complete.sh) now fails CI when a workspace package whose `test` script runs vitest is not in the list; run it locally any time with `bash scripts/test-cov-complete.sh`. The Go bridge is deliberately excluded — it has its own `go` job.
 
+**Every `uses:` line under `.github/workflows/` must be SHA-pinned.** `ci.yml` and `deploy-tk104.yml` run on the org's single, non-ephemeral self-hosted runner, and `deploy-tk104.yml`'s `deploy` job checks out code and then, in the same job, writes the production SSH deploy key to disk — a mutable version tag (e.g. `@v4`) on any referenced action could be repointed to execute arbitrary code with the runner's privileges (#248). [`scripts/test-workflow-pins.sh`](scripts/test-workflow-pins.sh) fails CI when any `uses:` line resolves to something other than a 40-hex-char commit SHA; run it locally any time with `bash scripts/test-workflow-pins.sh`.
+
 ### Local pre-check
 
 The lefthook `pre-push` hook runs [`scripts/pre-push-checklist.sh`](scripts/pre-push-checklist.sh) automatically before every push, as a fast local pre-check ahead of the cloud run. Any failed item blocks the push (bypass in an emergency with `git push --no-verify`).
