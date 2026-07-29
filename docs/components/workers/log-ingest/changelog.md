@@ -1,5 +1,22 @@
 # Changelog — worker-log-ingest
 
+## 2026-07-29
+
+### Fixed
+
+- #228: `test/vote-store.test.ts` / `test/match-roster-store.test.ts` moved their
+  hardcoded `players.eos_id`/`players.steam_id64` fixture literals to disjoint
+  per-file ranges — they previously shared `0002aaaa…`/`0002bbbb…`/`0002cccc…`
+  eos_ids and `76561198000000001`/`…004` steam_id64s with `test/combat-store.test.ts`,
+  so a persistent (non-recreated) database that still held one file's rows made
+  the next file's `beforeAll` insert fail on `players_eos_id_unique_idx` /
+  `players_steam_id64_unique_idx`. Invisible in CI, which provisions a fresh
+  database per run.
+- `test/fixture-isolation.regression.test.ts`: new static guard (mirrors
+  `apps/api/test/test-isolation.regression.test.ts`) asserting `combat-store`,
+  `vote-store` and `match-roster-store` never declare the same eos_id/steam_id64
+  fixture literal.
+
 ## 2026-07-25
 
 ### Added
