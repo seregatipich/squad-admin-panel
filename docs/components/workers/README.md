@@ -36,16 +36,16 @@ heartbeat, sends `SIGTERM` twice and requires a clean exit with code `0`.
 | [metrics-sampler](./metrics-sampler/README.md) | Polls `bridge.host_metrics` every 15 s, writes packed 8-int tuple to `host:metrics` Redis Stream | [`apps/workers/metrics-sampler/`](../../../apps/workers/metrics-sampler/) |
 | [worker-diag-flush](./worker-diag-flush/README.md) | Reads `diag:queue` Redis Stream via `XREADGROUP`, batches inserts into `diagnostic_events` Postgres table | [`apps/workers/diag-flush/`](../../../apps/workers/diag-flush/) |
 | [media-publisher](./media-publisher/README.md) | Publishes stored media to YouTube/Telegram from the `media_publications` queue, with backoff and YouTube daily-quota deferral | [`apps/workers/media-publisher/`](../../../apps/workers/media-publisher/) |
+| [discord](./discord/README.md) | Three loops: relays Squad server events to Discord webhooks (DISCORD-2), syncs panel roles to a Discord guild (DISCORD-5), and renames a live status channel plus registers read-only slash commands (DISCORD-6) | [`apps/workers/discord/`](../../../apps/workers/discord/) |
+| [stats](./stats/README.md) | Nightly dossier-aggregate reconcile guard (DOSSIER-2): recomputes per-weapon/per-vehicle stats from recent `combat_events` and alerts on drift, report-only | [`apps/workers/stats/`](../../../apps/workers/stats/) |
 
 ## Stub workers (P2, not implemented)
 
 | Worker | Eventual purpose | Directory |
 |---|---|---|
 | [automation](./automation/README.md) | User-defined rules ("on event X, do Y") | [`apps/workers/automation/`](../../../apps/workers/automation/) |
-| [backup](./backup/README.md) | restic-based DB + config snapshots | [`apps/workers/backup/`](../../../apps/workers/backup/) |
-| [discord](./discord/README.md) | Webhook + bot relay | [`apps/workers/discord/`](../../../apps/workers/discord/) |
+| [backup](./backup/README.md) | restic-based DB + config snapshots (heartbeat lifecycle is active; the restic/domain logic itself is still deferred) | [`apps/workers/backup/`](../../../apps/workers/backup/) |
 | [scheduler](./scheduler/README.md) | Cron-style server restarts, layer rotations, season finalisation (LEAD-7) | [`apps/workers/scheduler/`](../../../apps/workers/scheduler/) |
-| [stats](./stats/README.md) | Player-stats projector for the future stats UI | [`apps/workers/stats/`](../../../apps/workers/stats/) |
 
 ## Adding a worker
 

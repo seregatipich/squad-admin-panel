@@ -12,7 +12,9 @@
 | `worker-audit-archiver` | `apps/workers/audit-archiver` | Cold-archives `audit_log` rows older than 90 days. |
 | `worker-event-partition` | `apps/workers/event-partition` | Monthly partition rotation for the `events` table. |
 | `worker-metrics-sampler` | `apps/workers/metrics-sampler` | Polls `bridge.host_metrics` and writes packed samples into the `host:metrics` Redis Stream. Powers the dashboard's 24 h history chart. |
-| Other workers | `apps/workers/{automation,backup,config-sync,discord,scheduler,stats}` | Stubs for post-P0 features. Not wired into the install flow. |
+| `worker-discord` | `apps/workers/discord` | Three loops: relays Squad server events to Discord webhooks, syncs panel roles to a Discord guild, and renames a live status channel plus serves read-only slash commands. |
+| `worker-stats` | `apps/workers/stats` | Nightly dossier-aggregate reconcile guard: recomputes per-weapon/per-vehicle stats from recent `combat_events` and alerts on drift, report-only. |
+| Other workers | `apps/workers/{automation,backup,config-sync,scheduler}` | Stubs for post-P0 features. Not wired into the install flow. |
 | `packages/db` | Drizzle schema + SQL migrations + seed data. |
 | `packages/shared-types` | Zod schemas, including the canonical [EventEnvelope](../components/shared-types/data-model.md). |
 | `packages/shared-config` | Permission keys, bridge-method allowlist, heartbeat util. |
