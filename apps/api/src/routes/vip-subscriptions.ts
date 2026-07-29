@@ -593,7 +593,12 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
  * uuidv7 reference id.
  */
 function isUniqueViolation(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
+  let current: unknown = err;
+  for (let depth = 0; current !== null && current !== undefined && depth < 5; depth += 1) {
+    if (typeof current === 'object' && (current as { code?: string }).code === '23505') return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 export default vipSubscriptionRoutes;

@@ -1,4 +1,5 @@
-import { auditLog, players, roles } from '@squad/db/schema';
+import { randomUUID } from 'node:crypto';
+import { auditLog, playerMarks, players, roles } from '@squad/db/schema';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -39,6 +40,58 @@ async function loginAsSteam(steamId64: bigint): Promise<string> {
     ttlMs: 21_600_000,
   });
   return `__Host-sid=${token}`;
+}
+
+/**
+ * Runs `body` with the `player_marks` race window forced open: the conflicting row
+ * is committed after the route's pre-check SELECT has already reported "no existing
+ * mark", but before the route's own INSERT executes. That is the interleaving two
+ * concurrent set requests produce, and the only way to reach the route's
+ * unique-violation handler — the pre-check swallows every non-racing duplicate.
+ *
+ * Only the timing is simulated. The database, the drizzle client, the unique index
+ * and the thrown `DrizzleQueryError` are all real, so the route's `23505` handling
+ * is exercised exactly as it would be under a live race.
+ */
+async function withRacingDuplicateInsert<T>(
+  conflicting: { playerId: string; markTypeId: number },
+  body: () => Promise<T>,
+): Promise<T> {
+  type InsertBuilder = { values: (v: unknown) => { returning: () => Promise<unknown> } };
+  const db = h.app.db as unknown as { insert: (table: unknown) => InsertBuilder };
+  const realInsert = db.insert.bind(db);
+  let fired = false;
+
+  db.insert = (table: unknown): InsertBuilder => {
+    const builder = realInsert(table);
+    if (fired || table !== playerMarks) return builder;
+    fired = true;
+    return {
+      values: (v: unknown) => {
+        const routeInsert = builder.values(v);
+        return {
+          returning: async () => {
+            await realInsert(playerMarks)
+              .values({
+                id: randomUUID(),
+                playerId: conflicting.playerId,
+                markTypeId: conflicting.markTypeId,
+                comment: null,
+                createdBy: h.seed.ownerPlayerId ?? conflicting.playerId,
+              })
+              .returning();
+            return routeInsert.returning();
+          },
+        };
+      },
+    };
+  };
+
+  try {
+    return await body();
+  } finally {
+    db.insert = realInsert;
+  }
 }
 
 beforeAll(async () => {
@@ -206,6 +259,25 @@ describeIfDb('POST /api/v1/players/:id/marks', () => {
     });
     expect(res.statusCode).toBe(403);
     expect(res.json()).toEqual({ error: 'forbidden' });
+  });
+
+  it('returns 409 when a concurrent writer wins the race past the pre-check', async () => {
+    const res = await withRacingDuplicateInsert({ playerId: targetPlayerId, markTypeId: 4 }, () =>
+      h.app.inject({
+        method: 'POST',
+        url: `/api/v1/players/${targetPlayerId}/marks`,
+        headers: { cookie: ownerCookie, 'content-type': 'application/json' },
+        payload: JSON.stringify({ mark_type_id: 4 }),
+      }),
+    );
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'mark_already_active' });
+
+    const rows = await h.db
+      .select({ id: playerMarks.id })
+      .from(playerMarks)
+      .where(and(eq(playerMarks.playerId, targetPlayerId), eq(playerMarks.markTypeId, 4)));
+    expect(rows).toHaveLength(1);
   });
 });
 

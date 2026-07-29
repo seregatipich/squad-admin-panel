@@ -134,6 +134,90 @@ function expectCloseTo(actual: Date | null | undefined, expectedMs: number, tole
   expect(Math.abs((actual as Date).getTime() - expectedMs)).toBeLessThan(tolerance);
 }
 
+/**
+ * Wraps `real` in a Proxy that recursively re-wraps the result of every method
+ * call, so no matter which link of a fluent, thenable query-builder chain the
+ * caller finally `await`s, that `await` is the one intercepted: `onSettled`
+ * runs after the real query resolves and before the value reaches the caller.
+ */
+function wrapThenable(real: unknown, onSettled: () => Promise<void>): unknown {
+  if (real === null || typeof real !== 'object') return real;
+  return new Proxy(real as object, {
+    get(target, prop) {
+      if (prop === 'then') {
+        return (
+          onFulfilled?: (value: unknown) => unknown,
+          onRejected?: (err: unknown) => unknown,
+        ) =>
+          Promise.resolve(target as PromiseLike<unknown>).then(async (value: unknown) => {
+            await onSettled();
+            return onFulfilled ? onFulfilled(value) : value;
+          }, onRejected);
+      }
+      const value = Reflect.get(target, prop, target);
+      if (typeof value === 'function') {
+        return (...args: unknown[]) =>
+          wrapThenable((value as (...a: unknown[]) => unknown).apply(target, args), onSettled);
+      }
+      return value;
+    },
+  });
+}
+
+/**
+ * Runs `body` with the `vip_subscriptions` race window forced open, from inside
+ * `createSubscription`'s own `app.db.transaction(async (tx) => {...})`.
+ *
+ * The naive port of the insert-hook pattern used by `marks.test.ts` and
+ * `mark-types.test.ts` — commit the conflicting row from inside the route's own
+ * `tx.insert(vipSubscriptions)` call, right before it executes — deadlocks here
+ * (verified: the test hangs to its 10s timeout). `createSubscription` calls
+ * `applyVipGrant(tx, ...)` before its own insert, which takes `SELECT ... FOR
+ * UPDATE` on the player row; `vip_subscriptions_player_id_fkey` makes any insert
+ * referencing that player (including the conflicting one, wherever it runs)
+ * acquire a `FOR KEY SHARE` lock on the same row, which conflicts with the
+ * already-held `FOR UPDATE` and blocks until that transaction ends — which it
+ * never does, because it is itself awaiting the (blocked) conflicting insert.
+ *
+ * Hooking the pre-check `SELECT` instead of the `INSERT` sidesteps this: the
+ * conflicting row is committed, on its own connection, immediately after the
+ * route's pre-check reports "no active subscription" but strictly before
+ * `applyVipGrant` takes its lock, so there is no lock held yet to conflict
+ * with. By the time the route reaches its own `tx.insert(vipSubscriptions)`,
+ * the conflicting row is already committed, so that insert raises a real
+ * `23505` — the same outcome the mirror pattern targets, reached via a hook
+ * point this route's own locking makes safe.
+ */
+async function withRacingDuplicateInsert<T>(
+  insertConflictingRow: () => Promise<unknown>,
+  body: () => Promise<T>,
+): Promise<T> {
+  type TxLike = { select: (...args: unknown[]) => unknown };
+  const db = h.app.db as unknown as {
+    transaction: <R>(fn: (tx: TxLike) => Promise<R>) => Promise<R>;
+  };
+  const realTransaction = db.transaction.bind(db);
+  let fired = false;
+
+  db.transaction = (async (fn: (tx: TxLike) => Promise<unknown>) =>
+    realTransaction(async (tx) => {
+      const realTxSelect = tx.select.bind(tx);
+      tx.select = (...args: unknown[]): unknown => {
+        const result = realTxSelect(...args);
+        if (fired) return result;
+        fired = true;
+        return wrapThenable(result, insertConflictingRow);
+      };
+      return fn(tx);
+    })) as typeof db.transaction;
+
+  try {
+    return await body();
+  } finally {
+    db.transaction = realTransaction;
+  }
+}
+
 beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM, canonicalName: 'SubsOwner' },
@@ -600,6 +684,37 @@ describeIfDb('VIPSUB-5 self-service subscriptions', () => {
         .set({ economyEnabled: true })
         .where(eq(economySettings.id, 1));
     }
+  });
+
+  it('returns 409 when a concurrent writer wins the race past the pre-check inside the transaction', async () => {
+    const playerId = await seedPlayer('SubsRaceCondition');
+    await credit(playerId, 500);
+    const cookie = await loginSelfService(playerId);
+
+    const res = await withRacingDuplicateInsert(
+      () =>
+        h.db.insert(vipSubscriptions).values({
+          id: randomUUID(),
+          playerId,
+          tierId,
+          status: 'active',
+          renewsEveryDays: TIER_DAYS,
+          priceBonuses: TIER_PRICE,
+          nextRenewalAt: new Date(Date.now() + TIER_DAYS * DAY_MS),
+        }),
+      () =>
+        h.app.inject({
+          method: 'POST',
+          url: '/api/v1/me/subscriptions',
+          headers: { cookie, 'content-type': 'application/json' },
+          payload: JSON.stringify({ tier_id: tierId }),
+        }),
+    );
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'already_subscribed' });
+    expect((await storedPlayer(playerId)).balance).toBe(500);
+    expect(await storedSubscriptions(playerId)).toHaveLength(1);
   });
 });
 
