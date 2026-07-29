@@ -21,6 +21,7 @@
     "test:e2e": "turbo run test:e2e",
     "db:generate": "pnpm --filter @squad/db generate",
     "db:migrate": "pnpm --filter @squad/db migrate",
+    "db:seed-demo": "pnpm --filter @squad/db seed:demo",
     "db:studio": "pnpm --filter @squad/db studio",
     "bridge:build": "pnpm --filter @squad/bridge build",
     "bridge:test": "pnpm --filter @squad/bridge test",

@@ -20,6 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "generate": "drizzle-kit generate",
     "migrate": "tsx src/migrate.ts",
+    "seed:demo": "tsx src/seed-demo.ts",
     "studio": "drizzle-kit studio",
     "test": "vitest run",
     "test:unit": "vitest run",
