@@ -1,5 +1,11 @@
 # `api` — changelog
 
+## 2026-07-29 — isolated-db fails loudly instead of guessing a Postgres password (#221)
+
+### Fixed
+
+- `test/integration/isolated-db.ts`'s `hostDbUrl()`/`testDbUrl` no longer fall back to the literal password `admin` when `POSTGRES_PASSWORD`, `DATABASE_URL`, and the repo `.env` all fail to resolve one — that silent default masked a genuinely misconfigured environment as a connection that happened to work. The password resolution (`resolveDbPassword()`) and the default URL it feeds (`defaultDbUrl()`) are now lazy functions, evaluated only inside the `process.env.TEST_DATABASE_URL ?? …` short-circuits in `hostDbUrl()` and the `testDbUrl` export, so a run with `TEST_DATABASE_URL` already set never evaluates them and never throws. When none of the three sources resolves a password, they throw an `Error` whose message contains `Postgres password` instead of connecting as `admin`.
+
 ## 2026-07-29 — Run-id-scoped test-db sweep (#212)
 
 ### Fixed
