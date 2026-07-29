@@ -109,6 +109,7 @@ async function applyMigrations(sql: SqlClient): Promise<void> {
 
 let injectedTemplate: string | null = null;
 let templateDatabase: Promise<string> | null = null;
+let runId: string | null = null;
 
 /**
  * Registers the shared template built once by `global-setup.ts` and passed to
@@ -121,11 +122,30 @@ export function useSharedTemplate(name: string): void {
 }
 
 /**
+ * Registers the per-run id generated once by `global-setup.ts` and passed to
+ * each worker via Vitest's `inject`. Embedded into every database name this
+ * module constructs so a concurrently-running session's own `dropTestDatabases`
+ * sweep — which is cluster-wide by nature — never touches this run's databases.
+ */
+export function useRunId(id: string): void {
+  runId = id;
+}
+
+/**
+ * Resolves the active run id, falling back to a per-process id for callers
+ * running without `global-setup.ts` (e.g. a lone worker started outside the
+ * suite's normal `globalSetup`/`inject` wiring).
+ */
+function currentRunId(): string {
+  return runId ?? `p${process.pid}`;
+}
+
+/**
  * Builds a fresh template database migrated exactly once. Called by
  * `global-setup.ts` to produce the single shared template for the run.
  */
 export function buildSharedTemplate(): Promise<string> {
-  return buildTemplateDatabase(`sqtmpl_shared_${randomBytes(6).toString('hex')}`);
+  return buildTemplateDatabase(`sqtmpl_${currentRunId()}_shared_${randomBytes(6).toString('hex')}`);
 }
 
 /**
@@ -139,7 +159,7 @@ function ensureTemplateDatabase(): Promise<string> {
   if (injectedTemplate) return Promise.resolve(injectedTemplate);
   if (!templateDatabase) {
     templateDatabase = buildTemplateDatabase(
-      `sqtmpl_${process.pid}_${randomBytes(4).toString('hex')}`,
+      `sqtmpl_${currentRunId()}_${process.pid}_${randomBytes(4).toString('hex')}`,
     );
   }
   return templateDatabase;
@@ -190,7 +210,7 @@ async function cloneTemplate(target: string, template: string): Promise<void> {
  */
 export async function createIsolatedSchema(): Promise<CreatedSchema> {
   const template = await ensureTemplateDatabase();
-  const name = `sqtest_${randomBytes(6).toString('hex')}`;
+  const name = `sqtest_${currentRunId()}_${randomBytes(6).toString('hex')}`;
   await cloneTemplate(name, template);
   return {
     schema: name,
@@ -235,7 +255,7 @@ async function doProvisionWorkerResources(): Promise<void> {
   process.env.TEST_REDIS_URL = redisTarget;
 
   const template = await ensureTemplateDatabase();
-  const name = `sqworker_${process.pid}_${randomBytes(4).toString('hex')}`;
+  const name = `sqworker_${currentRunId()}_${process.pid}_${randomBytes(4).toString('hex')}`;
   await cloneTemplate(name, template);
   const url = databaseUrl(name);
   process.env.DATABASE_URL = url;
