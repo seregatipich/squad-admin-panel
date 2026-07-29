@@ -14,9 +14,9 @@ FROM deps AS builder
 COPY packages packages
 COPY apps/web apps/web
 COPY tsconfig.base.json biome.json turbo.json ./
-RUN pnpm --filter @squad/shared-config build || true
-RUN pnpm --filter @squad/shared-types build || true
-RUN pnpm --filter @squad/web build || echo "web not yet built (Phase 0 static stub)"
+RUN pnpm --filter @squad/shared-config build
+RUN pnpm --filter @squad/shared-types build
+RUN pnpm --filter @squad/web build
 
 FROM base AS runtime
 ENV NODE_ENV=production
