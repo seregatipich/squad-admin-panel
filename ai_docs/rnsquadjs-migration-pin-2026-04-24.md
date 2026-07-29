@@ -14,6 +14,10 @@
 | `rnsdb.ts` new mongo-coupled plugins | Mitigated by config renderer | `apps/api/src/routes/internal/rnsquadjs-config.ts` marks `autoUpdateMods`, `chatCommands`, `voteMap`, `warnings`, `broadcasts`, `autoKick`, `squadLeader` as `enabled: false` — no mongo plugin ever starts. |
 | Node version >18.18 required | No | Upstream `package.json` at `d76fb4a` targets `<=18.18`. Dockerfile base is `node:18.18-bookworm-slim`. |
 
+## Addendum — 2026-07-29 (issue #251)
+
+`docker/rnsquadjs.Dockerfile:11` and `:34` were bumped from `node:18.18-bookworm-slim` to `node:22-bookworm-slim` on both the `upstream` and `runtime` stages, closing the gap the §7 checklist row above recorded at pin time. That row is left unmodified as the historical record of the original migration decision (Node 18.18 matched upstream's own `<=18.18` engine constraint at SHA `d76fb4a` on 2026-04-24); it no longer describes the current Dockerfile.
+
 ## Full-stack green (prerequisites for Phase-3 handoff)
 
 - `pnpm turbo run typecheck` → 20 packages (web not built; not in migration scope), all green.
