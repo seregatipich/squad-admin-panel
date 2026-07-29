@@ -95,6 +95,16 @@ The box is also small enough that test/build parallelism is deliberately capped 
 
 Not solved yet: the operator described the VM as cloud-init-based and may later add automatic environment cleanup and/or periodic VM recreation. The open design questions there — dynamic naming for the replacement VM, and gracefully draining/stopping the previous one before swapping — are unaddressed for now.
 
+## Runner recovery runbook
+
+If a `ci` run stays `queued` and never starts, run [`scripts/check-runner-health.sh`](../../scripts/check-runner-health.sh) before waiting further — it queries `gh api repos/<owner>/<repo>/actions/runners` and, best-effort, the org-level endpoint, prints each runner's `status`/`busy`, and exits non-zero unless at least one reports `online`. Test suite: [`scripts/test-check-runner-health.sh`](../../scripts/test-check-runner-health.sh) (runs in CI as part of the `branch-guard` job) stubs `gh` and covers the online, offline, disabled/zero-runners, and org-level-403 cases.
+
+Per [`docs/operations/deployment.md`](../operations/deployment.md#cicd-on-self-hosted-runners) ("Runner ownership"), this org has disabled repository-level self-hosted runners, so the repository-level query above always reports `total_count: 0` by design — the runner `ci` actually depends on is the org-level Multipass VM described above, reachable only via the org-level endpoint (needs `admin:org`, which a repository-scoped session does not have).
+
+**Historical incident (issue #215, 2026-07-15 to 2026-07-18):** GitHub reported the two *repository-level* runners `tk104-runner-1` (id 21) and `tk104-runner-2` (id 22) as `offline`. Host-level diagnosis on `tk104` found their registration artifacts (`.runner`, `.credentials`, `.credentials_rsaparams`) missing — both `actions.runner.breaking-squad-squad-admin-panel.tk104-runner-{1,2}.service` units were loaded but `inactive/dead`, failing since 2026-07-09 with `Not configured. Run config.(sh/cmd) to configure the runner.` Per `docs/operations/deployment.md`, `tk104-runner-1`/`-2` are an earlier, now-deprecated repository-level setup that this org's policy no longer routes jobs to — CI runs on the separate org-level runner instead, so their outage did not block `dev`/`master` CI. Restarting the existing systemd units cannot restore them; re-registering them as **org-level** runners (not repository-level, which is disabled) would need an org-admin `admin:org` credential to mint a registration token, then `config.sh --unattended --replace` in each existing runner directory and a service restart — host and org-admin access a repository-scoped session does not have.
+
+**Live re-verification (2026-07-29):** `dev` CI is green at the current tip and a runner picked up a fresh push within about a minute of it landing — the org-level runner is online. Run `bash scripts/check-runner-health.sh` for a quick check before assuming otherwise.
+
 ## Completion verification
 
 The harness also enforces *how tasks end*: AGENTS.md's **Completion verification** checklist (part of the definition of done) requires agents to verify a finished task from every angle — requirements coverage, tests that provably exercise the change, real runtime evidence, a full local gate, a diff self-review, docs, and mechanical state. The mechanical angles are automated:
