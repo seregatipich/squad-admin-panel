@@ -35,14 +35,38 @@ describe('NAV_GROUPS', () => {
     expect(players?.children?.length).toBeGreaterThan(0);
   });
 
-  it('exposes the team balancer under «Управление», gated on balancer:view (GAME-2, #81)', () => {
+  it('exposes the team balancer under «Инструменты», gated on balancer:view (GAME-2, #81)', () => {
     const management = NAV_GROUPS.find((group) => group.label === 'Управление');
-    expect(management?.items).toContainEqual({
+    const tools = management?.items.find((item) => item.label === 'Инструменты');
+    expect(tools?.children).toContainEqual({
       href: '/balancer',
       label: 'Балансировщик',
       labelKey: 'nav.balancer',
       permission: 'balancer:view',
     });
+  });
+
+  it('gives "Инструменты" a children group with the stats/moderation-tool pages and no href of its own', () => {
+    const management = NAV_GROUPS.find((group) => group.label === 'Управление');
+    const tools = management?.items.find((item) => item.label === 'Инструменты');
+    expect(tools?.href).toBeUndefined();
+    expect(tools?.children?.map((c) => c.label)).toEqual([
+      'Статистика',
+      'Лидерборды',
+      'Матчи',
+      'Балансировщик',
+      'Боевой лог',
+      'Тимкиллы',
+      'Голосования',
+      'Жалобы',
+      'Апелляции',
+      'Тикеты',
+    ]);
+  });
+
+  it('leaves only «Журнал действий» and «Логи» under «Аудит» now that teamkills moved into «Инструменты»', () => {
+    const audit = NAV_GROUPS.find((group) => group.label === 'Аудит');
+    expect(audit?.items.map((item) => item.label)).toEqual(['Журнал действий', 'Логи']);
   });
 
   it('keeps the Russian dictionary in sync with the legacy `label` (drift guard)', () => {
