@@ -21,6 +21,12 @@ describe('integration harness', () => {
     expect([200, 401]).toContain(meRes.statusCode);
   }, 30_000);
 
+  it('GET /api/v1/auth/steam/login resolves through the shared registerRoutes() (regression, #207)', async () => {
+    current = await buildIntegrationApp();
+    const res = await current.app.inject({ method: 'GET', url: '/api/v1/auth/steam/login' });
+    expect(res.statusCode).toBe(302);
+  }, 30_000);
+
   it('cleanup drops the database', async () => {
     const h = await buildIntegrationApp();
     const database = h.schema;
