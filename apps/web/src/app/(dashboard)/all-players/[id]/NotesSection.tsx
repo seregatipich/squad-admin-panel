@@ -126,7 +126,7 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
   }
 
   return (
-    // biome-ignore lint/correctness/useUniqueElementIds: stable anchor for /players/{id}#notes deep-links
+    // biome-ignore lint/correctness/useUniqueElementIds: stable anchor for /all-players/{id}#notes deep-links
     <section
       id="notes"
       className="scroll-mt-6 rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4"
