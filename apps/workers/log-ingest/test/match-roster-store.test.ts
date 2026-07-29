@@ -23,13 +23,13 @@ const PLAYER_B = uuidv7();
 const PLAYER_C = uuidv7();
 const PLAYER_D = uuidv7();
 
-const STEAM_A = 76561198000000001n;
-const STEAM_B = 76561198000000002n;
-const STEAM_D = 76561198000000004n;
-const EOS_A = 'a'.repeat(32);
-const EOS_B = 'b'.repeat(32);
-const EOS_C = 'c'.repeat(32);
-const EOS_D = 'd'.repeat(32);
+const STEAM_A = 76561198000600001n;
+const STEAM_B = 76561198000600002n;
+const STEAM_D = 76561198000600004n;
+const EOS_A = '0006aaaa0006aaaa0006aaaa0006aaaa';
+const EOS_B = '0006bbbb0006bbbb0006bbbb0006bbbb';
+const EOS_C = '0006cccc0006cccc0006cccc0006cccc';
+const EOS_D = '0006dddd0006dddd0006dddd0006dddd';
 
 const START = new Date('2026-07-05T18:00:00.000Z');
 const END = new Date(START.getTime() + 3600_000);
