@@ -1,5 +1,6 @@
 'use client';
 import type { OnMount } from '@monaco-editor/react';
+import { loader } from '@monaco-editor/react';
 import { BEGIN_MARKER } from '@squad/shared-config/admins-config';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
@@ -11,6 +12,11 @@ const POLL_MS = 8000;
 
 type EditorInstance = Parameters<OnMount>[0];
 type MonacoInstance = Parameters<OnMount>[1];
+
+// Pin the AMD loader to the exact vendored monaco-editor build (#242) so the
+// browser always fetches the same DOMPurify copy this repo's dependency
+// pins were audited against, instead of whatever "latest" CDN resolves to.
+loader.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.56.0/min/vs' } });
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 const MonacoDiff = dynamic(
@@ -108,7 +114,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   }, [serverSha]);
 
   // Admins.cfg managed-segment read-only enforcement (CFG-1, #63). monaco
-  // 0.55.1 has no read-only-range API, so the segment is guarded by a
+  // 0.56.0 has no read-only-range API, so the segment is guarded by a
   // decorations overlay plus an undo of any edit that touches it — the rest
   // of the file stays editable.
   const editorRef = useRef<EditorInstance | null>(null);
