@@ -1,5 +1,49 @@
 # Changelog — worker-discord
 
+## 2026-07-29 — docs reconciliation (#216)
+
+### Changed
+
+- Rewrote the standard component docs (`README.md`, `api.md`, `configuration.md`,
+  `data-model.md`, `flows.md`, `testing.md`, `troubleshooting.md`) to cover the
+  status-channel/slash-command loop (DISCORD-6, #153) shipped on 2026-07-28
+  below, which had gone entirely undocumented, and to describe "two loops" as
+  "three loops" throughout.
+- `api.md` went from "P2 stub, no public surface" to documenting the
+  `worker:heartbeat:discord` heartbeat, the outbound Discord REST call list, and
+  the inbound slash-command route the API (not this worker) answers.
+
+## 2026-07-28 — DISCORD-6 (#153)
+
+### Added
+
+- `src/status-channel.ts` — `buildStatusChannelName` (SQSTAT §16.3 template:
+  `{emoji}{map}_{players}x{queue}_👮{admins}`), `renameStatusChannel` (a
+  Redis-backed two-renames-per-ten-minutes budget per channel, keyed
+  `discord:status-channel:{channelId}`, that survives a worker restart), and
+  `runStatusChannelTick` (one pass over every server with a
+  `status_channel_id`, reading `rcon:status:*`/`rcon:roster:*` and the
+  panel-access admin set).
+- `src/status-channel-loop.ts` — `runStatusChannelLoop`, ticking on
+  `DISCORD_STATUS_CHANNEL_MS` (default 10 min) behind the same
+  `loadDiscordBotContext` gate role sync uses, plus one-time slash-command
+  registration when `DISCORD_APPLICATION_ID` is set.
+- `src/command-registration.ts` — `DISCORD_COMMAND_DEFINITIONS`
+  (`/status`, `/player`, `/online-admins`, all read-only) and
+  `registerApplicationCommands` (`PUT /applications/{id}/commands`, idempotent
+  full-replace).
+- `src/discord-rest.ts` — `patchChannelName` (`PATCH /channels/{id}`, its own
+  429/`Missing Permissions` handling for the Manage-Channels-gated rename call).
+- `apps/api/src/routes/discord-interactions.ts` — the inbound
+  `POST /api/v1/integrations/discord/interactions` route that answers the
+  registered slash commands (Ed25519-signature-verified, ephemeral replies).
+- `test/status-channel.test.ts`, `test/status-channel-loop.test.ts`.
+
+### Changed
+
+- `src/index.ts` starts the status-channel loop alongside notify and role sync,
+  and awaits all three on shutdown.
+
 ## 2026-07-27 — DISCORD-5 (#152)
 
 ### Added
