@@ -47,7 +47,8 @@
       "vite": "^6.4.2",
       "esbuild": "^0.25.0",
       "postcss": "^8.5.23",
-      "sharp": "^0.35.3"
+      "sharp": "^0.35.3",
+      "@fastify/swagger-ui>@fastify/static": "^10.1.2"
     }
   }
 }
