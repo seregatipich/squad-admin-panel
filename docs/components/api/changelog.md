@@ -1,5 +1,11 @@
 # `api` — changelog
 
+## 2026-07-29 — Run-id-scoped test-db sweep (#212)
+
+### Fixed
+
+- `test/integration/global-setup.ts`'s `dropTestDatabases()` no longer sweeps every `sqtest_*`/`sqtmpl_*`/`sqworker_*` database in the cluster — `pg_database`/`DROP DATABASE` are cluster-wide, so that unscoped sweep let one local session's `globalSetup`/teardown destroy a concurrently-running session's still-live template and worker databases. `global-setup.ts` now generates a random `runId` once per invocation (`randomBytes(4).toString('hex')`), threads it to workers via the new `'squadRunId'` Vitest `provide`/`inject` key (mirroring the existing `'squadTemplateDb'` key), and `isolated-db.ts`'s new `useRunId`/`currentRunId` embed it into every constructed database name (`sqtmpl_<runId>_shared_*`, `sqtmpl_<runId>_<pid>_*`, `sqtest_<runId>_*`, `sqworker_<runId>_<pid>_*`). `dropTestDatabases(runId)` is now exported and scopes its `WHERE` clause to `<prefix>_<runId>_%`, so a sweep only ever drops its own run's leftovers.
+
 ## 2026-07-27 — DISCORD-5 роль-синк: роль панели → роль Discord (#152)
 
 ### Added
