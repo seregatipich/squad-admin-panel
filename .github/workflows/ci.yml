@@ -124,6 +124,8 @@ jobs:
         run: pnpm --filter @squad/db migrate
       - name: Run panel-bridge plugin tests
         run: pnpm turbo run test --filter=panel-bridge
+      - name: Run shared-config mutation tests (Stryker)
+        run: pnpm turbo run test:mutation --filter=@squad/shared-config
       - run: pnpm exec biome check .
       - name: Check every vitest package is in test:cov
         run: bash scripts/test-cov-complete.sh

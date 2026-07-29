@@ -45,6 +45,10 @@
       "dependsOn": ["build", "^build"],
       "outputs": ["playwright-report/**", "test-results/**"]
     },
+    "test:mutation": {
+      "dependsOn": ["build", "^build"],
+      "outputs": ["reports/mutation/**"]
+    },
     "clean": {
       "cache": false
     }
