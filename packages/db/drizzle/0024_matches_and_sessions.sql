@@ -28,8 +28,12 @@ CREATE INDEX IF NOT EXISTS player_sessions_open_idx
 CREATE INDEX IF NOT EXISTS player_sessions_connected_at_brin_idx
   ON player_sessions USING brin (connected_at) WITH (pages_per_range = 32);
 
--- Bootstrap partitions: previous month + current + 3 look-ahead months.
--- pg_partman / pg_cron create and drop the rest in production.
+-- Bootstrap partitions: 6 look-back months through 3 look-ahead months.
+-- pg_partman / pg_cron create and drop the rest in production. The
+-- look-back margin exists so fixture data in tests migrated well after this
+-- file was authored still lands in a partition that exists (this migration
+-- only ever runs once, against a freshly created database, so widening it
+-- here never touches an already-migrated database).
 DO $$
 DECLARE
   m          int;
@@ -38,7 +42,7 @@ DECLARE
   part_end   date;
   part_name  text;
 BEGIN
-  FOR m IN -1..3 LOOP
+  FOR m IN -6..3 LOOP
     part_start := cur_month + (m || ' months')::interval;
     part_end   := part_start + interval '1 month';
     part_name  := 'player_sessions_' || to_char(part_start, 'YYYY_MM');

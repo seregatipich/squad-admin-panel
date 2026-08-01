@@ -27,10 +27,14 @@ CREATE INDEX IF NOT EXISTS combat_events_occurred_at_brin_idx ON combat_events U
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS combat_events_default PARTITION OF combat_events DEFAULT;
 --> statement-breakpoint
+-- Look-back widened to 6 months (from 1); see the matching comment on the
+-- events bootstrap in 0000_init.sql. combat_events also has a DEFAULT
+-- partition as a safety net, but explicit partitions keep older fixture
+-- rows out of that unpruned catch-all.
 DO $$
 DECLARE m int; cur_month date := date_trunc('month', now())::date; part_start date; part_end date; part_name text;
 BEGIN
-  FOR m IN -1..3 LOOP
+  FOR m IN -6..3 LOOP
     part_start := cur_month + (m || ' months')::interval;
     part_end := part_start + interval '1 month';
     part_name := 'combat_events_' || to_char(part_start, 'YYYY_MM');
