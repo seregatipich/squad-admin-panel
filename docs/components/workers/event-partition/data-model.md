@@ -6,7 +6,7 @@
 
 Declared in `packages/db/src/schema/events.ts`. Partitioned by `occurred_at` (range, monthly).
 
-Initial 6 monthly partitions (current + 5 look-ahead months) are bootstrapped by `packages/db/drizzle/0000_init.sql`.
+Initial 12 monthly partitions (6 look-back + current + 5 look-ahead months) are bootstrapped by `packages/db/drizzle/0000_init.sql`. The look-back margin exists so fixture data in tests migrated well after this file was authored still lands in a partition that exists.
 
 The worker keeps the current + next month partitions present (`ensureMonthlyPartitions`, hourly) and drops any partition entirely older than the 24-month retention window — a dropped partition's rows are gone, not archived elsewhere.
 
