@@ -23,10 +23,13 @@ CREATE INDEX IF NOT EXISTS bonus_transactions_player_created_idx
 CREATE INDEX IF NOT EXISTS bonus_transactions_created_at_brin_idx
   ON bonus_transactions USING brin (created_at) WITH (pages_per_range = 32);
 
+-- Look-back widened to 6 months (from 1) so fixture data in tests migrated
+-- well after this file was authored still lands in a partition that exists;
+-- see the matching comment on the events bootstrap in 0000_init.sql.
 DO $$
 DECLARE m int; cur_month date := date_trunc('month', now())::date; part_start date; part_end date; part_name text;
 BEGIN
-  FOR m IN -1..3 LOOP
+  FOR m IN -6..3 LOOP
     part_start := cur_month + (m || ' months')::interval;
     part_end := part_start + interval '1 month';
     part_name := 'bonus_transactions_' || to_char(part_start, 'YYYY_MM');

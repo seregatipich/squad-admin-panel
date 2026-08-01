@@ -115,13 +115,6 @@ async function clearTestRows() {
 beforeAll(async () => {
   if (!DATABASE_URL) return;
   sql = postgres(DATABASE_URL, { max: 1, onnotice: () => undefined });
-  // The 0000_init.sql bootstrap only creates `events` partitions for the
-  // current month onward (relative to whenever the test DB was migrated), so
-  // this suite's fixed July 2026 fixture dates need their own partition
-  // explicitly ensured rather than relying on that rolling window.
-  await sql.unsafe(
-    `CREATE TABLE IF NOT EXISTS events_2026_07 PARTITION OF events FOR VALUES FROM ('2026-07-01') TO ('2026-08-01')`,
-  );
   await sql`
     INSERT INTO players (id, canonical_name, canonical_name_normalized, steam_id64, eos_id)
     VALUES (${PLAYER_STEAM}, 'Steamer', 'steamer', 76561190000000001, 'eos-steamer')

@@ -46,16 +46,6 @@ async function accrualRows() {
 beforeAll(async () => {
   if (!DATABASE_URL) return;
   sql = postgres(DATABASE_URL, { max: 1, onnotice: () => undefined });
-  // The 0000_init.sql bootstrap only creates `bonus_transactions` partitions
-  // for last month through +3 months (relative to whenever the test DB was
-  // migrated), so this suite's fixed June/July 2026 fixture dates need their
-  // own partitions explicitly ensured rather than relying on that window.
-  await sql.unsafe(
-    `CREATE TABLE IF NOT EXISTS bonus_transactions_2026_06 PARTITION OF bonus_transactions FOR VALUES FROM ('2026-06-01') TO ('2026-07-01')`,
-  );
-  await sql.unsafe(
-    `CREATE TABLE IF NOT EXISTS bonus_transactions_2026_07 PARTITION OF bonus_transactions FOR VALUES FROM ('2026-07-01') TO ('2026-08-01')`,
-  );
   await sql.unsafe(ACCRUALS_SQL);
   for (const [id, name] of [
     [PLAYER_A, 'AccrualAlpha'],
