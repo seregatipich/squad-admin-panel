@@ -222,10 +222,14 @@ CREATE TABLE events (
   PRIMARY KEY (event_id, occurred_at)
 ) PARTITION BY RANGE (occurred_at);
 
--- Bootstrap partitions: current month + 3 look-ahead months.
+-- Bootstrap partitions: 6 look-back months through 5 look-ahead months.
 -- pg_partman / pg_cron take over in a later migration when they are
 -- available; for P0 with single-host deploys, the bootstrap partitions
 -- are sufficient and the backup/retention job drops old ones monthly.
+-- The look-back margin exists so fixture data in tests migrated well after
+-- this file was authored still lands in a partition that exists (this
+-- migration only ever runs once, against a freshly created database, so
+-- widening it here never touches an already-migrated database).
 DO $$
 DECLARE
   m          int;
@@ -234,7 +238,7 @@ DECLARE
   part_end   date;
   part_name  text;
 BEGIN
-  FOR m IN 0..5 LOOP
+  FOR m IN -6..5 LOOP
     part_start := cur_month + (m || ' months')::interval;
     part_end   := part_start + interval '1 month';
     part_name  := 'events_' || to_char(part_start, 'YYYY_MM');
