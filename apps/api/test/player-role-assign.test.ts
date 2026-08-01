@@ -383,7 +383,7 @@ describeIfDb('PUT /api/v1/players/:playerId/role — HTTP integration', () => {
       .returning({ id: players.id });
     if (!targetRow) throw new Error('target player missing');
     const playerId = targetRow.id;
-    const expiresAt = '2026-08-01T12:00:00.000Z';
+    const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
     const comment = 'VIP до конца июльской кампании';
 
     const res = await h.app.inject({
