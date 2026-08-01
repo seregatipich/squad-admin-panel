@@ -47,7 +47,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
+  if (h.seed.ownerPlayerId) invalidatePermissionCache(h.seed.ownerPlayerId);
   await h.cleanup();
 });
 
@@ -77,13 +77,15 @@ describe('GET /api/v1/logs', () => {
       .where(eq(roles.name, 'Viewer'))
       .limit(1);
     const viewerRoleId = viewerRows[0]?.id;
-    if (!viewerRoleId || !h.seed.ownerSteamId64) throw new Error('Viewer role missing');
+    if (!viewerRoleId || !h.seed.ownerSteamId64 || !h.seed.ownerPlayerId) {
+      throw new Error('Viewer role missing');
+    }
 
     await h.db
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId!);
+    invalidatePermissionCache(h.seed.ownerPlayerId);
 
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
@@ -280,13 +282,15 @@ describe('GET /api/v1/logs/export', () => {
       .where(eq(roles.name, 'Viewer'))
       .limit(1);
     const viewerRoleId = viewerRows[0]?.id;
-    if (!viewerRoleId || !h.seed.ownerSteamId64) throw new Error('Viewer role missing');
+    if (!viewerRoleId || !h.seed.ownerSteamId64 || !h.seed.ownerPlayerId) {
+      throw new Error('Viewer role missing');
+    }
 
     await h.db
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId!);
+    invalidatePermissionCache(h.seed.ownerPlayerId);
 
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({

@@ -33,7 +33,9 @@ async function assignRole(roleId: string): Promise<void> {
   const steamId = h.seed.ownerSteamId64;
   if (!steamId) throw new Error('missing seeded owner');
   await h.db.update(players).set({ roleId }).where(eq(players.steamId64, steamId));
-  invalidatePermissionCache(h.seed.ownerPlayerId!);
+  const ownerPlayerId = h.seed.ownerPlayerId;
+  if (!ownerPlayerId) throw new Error('missing seeded owner');
+  invalidatePermissionCache(ownerPlayerId);
 }
 
 async function viewerRoleId(): Promise<string> {

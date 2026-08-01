@@ -39,7 +39,8 @@ describe('writeAuditEntry', () => {
       context: { source: 'unit-test' },
     });
     expect(captured).toHaveLength(1);
-    const row = captured[0]!.values;
+    // captured has exactly one entry per the toHaveLength(1) assertion above.
+    const row = (captured[0] as CapturedInsert).values;
     expect(row.actorKind).toBe('steam');
     expect(row.actorPlayerId).toBe('test-player-123');
     expect(row.actorTokenId).toBeNull();
@@ -61,7 +62,8 @@ describe('writeAuditEntry', () => {
       targetId: null,
       context: {},
     });
-    const row = captured[0]!.values;
+    // writeAuditEntry performs exactly one insert().values() call, so captured has one entry.
+    const row = (captured[0] as CapturedInsert).values;
     expect(row.actorKind).toBe('system');
     expect(row.actorPlayerId).toBeNull();
     expect(row.actorTokenId).toBeNull();
@@ -82,7 +84,8 @@ describe('writeAuditEntry', () => {
       targetId: 's-2',
       context: {},
     });
-    const row = captured[0]!.values;
+    // writeAuditEntry performs exactly one insert().values() call, so captured has one entry.
+    const row = (captured[0] as CapturedInsert).values;
     expect(row.actorTokenId).toBe('0195000a-0000-7000-8000-000000000001');
     expect(row.actorPlayerId).toBe('test-player-124');
   });
@@ -97,7 +100,8 @@ describe('writeAuditEntry', () => {
       targetId: null,
       context: {},
     });
-    const row = captured[0]!.values;
+    // writeAuditEntry performs exactly one insert().values() call, so captured has one entry.
+    const row = (captured[0] as CapturedInsert).values;
     expect(row.beforeSnapshot).toBeNull();
     expect(row.afterSnapshot).toBeNull();
   });
@@ -114,7 +118,8 @@ describe('writeAuditEntry', () => {
       after: { x: 2 },
       context: {},
     });
-    const row = captured[0]!.values;
+    // writeAuditEntry performs exactly one insert().values() call, so captured has one entry.
+    const row = (captured[0] as CapturedInsert).values;
     expect(row.beforeSnapshot).toEqual({ x: 1 });
     expect(row.afterSnapshot).toEqual({ x: 2 });
   });

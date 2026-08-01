@@ -112,7 +112,9 @@ describe('softDeleteServer (orchestrator)', () => {
           directoryDelete: typeof directoryDelete;
         },
         log: silentLogger,
-        actorPlayerId: h.seed.ownerPlayerId!,
+        // beforeEach always calls buildIntegrationApp with seedOwner, so
+        // ownerPlayerId is defined for every test in this file.
+        actorPlayerId: h.seed.ownerPlayerId as string,
         actorIp: '127.0.0.1',
         actorLabel: `player:${h.seed.ownerPlayerId}`,
       },
@@ -176,7 +178,9 @@ describe('softDeleteServer (orchestrator)', () => {
           db: h.db,
           bridge: bridge as unknown as FakeBridge,
           log: silentLogger,
-          actorPlayerId: h.seed.ownerPlayerId!,
+          // beforeEach always calls buildIntegrationApp with seedOwner, so
+          // ownerPlayerId is defined for every test in this file.
+          actorPlayerId: h.seed.ownerPlayerId as string,
           actorIp: null,
           actorLabel: `player:${h.seed.ownerPlayerId}`,
         },
@@ -211,7 +215,9 @@ describe('softDeleteServer (orchestrator)', () => {
         db: h.db,
         bridge: bridge as unknown as FakeBridge,
         log: silentLogger,
-        actorPlayerId: h.seed.ownerPlayerId!,
+        // beforeEach always calls buildIntegrationApp with seedOwner, so
+        // ownerPlayerId is defined for every test in this file.
+        actorPlayerId: h.seed.ownerPlayerId as string,
         actorIp: null,
         actorLabel: `player:${h.seed.ownerPlayerId}`,
       },
@@ -258,7 +264,9 @@ describe('softDeleteServer (orchestrator)', () => {
           db: h.db,
           bridge: bridge as unknown as FakeBridge,
           log: silentLogger,
-          actorPlayerId: h.seed.ownerPlayerId!,
+          // beforeEach always calls buildIntegrationApp with seedOwner, so
+          // ownerPlayerId is defined for every test in this file.
+          actorPlayerId: h.seed.ownerPlayerId as string,
           actorIp: null,
           actorLabel: `player:${h.seed.ownerPlayerId}`,
         },
@@ -295,7 +303,9 @@ describe('softDeleteServer (orchestrator)', () => {
         db: h.db,
         bridge: bridge as unknown as FakeBridge,
         log: silentLogger,
-        actorPlayerId: h.seed.ownerPlayerId!,
+        // beforeEach always calls buildIntegrationApp with seedOwner, so
+        // ownerPlayerId is defined for every test in this file.
+        actorPlayerId: h.seed.ownerPlayerId as string,
         actorIp: null,
         actorLabel: `player:${h.seed.ownerPlayerId}`,
       },
@@ -412,7 +422,9 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
         db: h.db,
         bridge: h.bridge as unknown as FakeBridge,
         log: silentLogger,
-        actorPlayerId: h.seed.ownerPlayerId!,
+        // beforeEach always calls buildIntegrationApp with seedOwner, so
+        // ownerPlayerId is defined for every test in this file.
+        actorPlayerId: h.seed.ownerPlayerId as string,
         actorIp: '127.0.0.1',
         actorLabel: `player:${h.seed.ownerPlayerId}`,
         redis: h.redis,
@@ -444,7 +456,9 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
         db: h.db,
         bridge: h.bridge as unknown as FakeBridge,
         log: silentLogger,
-        actorPlayerId: h.seed.ownerPlayerId!,
+        // beforeEach always calls buildIntegrationApp with seedOwner, so
+        // ownerPlayerId is defined for every test in this file.
+        actorPlayerId: h.seed.ownerPlayerId as string,
         actorIp: null,
         actorLabel: `player:${h.seed.ownerPlayerId}`,
         redis: h.redis,
@@ -475,7 +489,9 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
         db: h.db,
         bridge: h.bridge as unknown as FakeBridge,
         log: silentLogger,
-        actorPlayerId: h.seed.ownerPlayerId!,
+        // beforeEach always calls buildIntegrationApp with seedOwner, so
+        // ownerPlayerId is defined for every test in this file.
+        actorPlayerId: h.seed.ownerPlayerId as string,
         actorIp: null,
         actorLabel: `player:${h.seed.ownerPlayerId}`,
         redis: h.redis,

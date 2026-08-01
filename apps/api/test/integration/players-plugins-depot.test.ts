@@ -39,7 +39,8 @@ describe('GET /api/v1/players + /players/:playerId', () => {
         totalTimePlayedSeconds: 3600,
       })
       .returning({ id: players.id });
-    testPlayerId = insertedPlayer!.id;
+    if (!insertedPlayer) throw new Error('failed to seed test player');
+    testPlayerId = insertedPlayer.id;
     await h.db.insert(playerNameHistory).values({
       playerId: testPlayerId,
       name: 'TestPlayer',
@@ -138,7 +139,8 @@ describe('GET /api/v1/players + /players/:playerId', () => {
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId!);
+    if (!h.seed.ownerPlayerId) throw new Error('seed owner missing');
+    invalidatePermissionCache(h.seed.ownerPlayerId);
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'GET',
@@ -242,7 +244,8 @@ describe('auth plugin', () => {
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId!);
+    if (!h.seed.ownerPlayerId) throw new Error('seed owner missing');
+    invalidatePermissionCache(h.seed.ownerPlayerId);
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'POST',

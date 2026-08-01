@@ -58,12 +58,15 @@ async function seedAndSoftDelete(
       Buffer.from(body, 'utf-8'),
     );
   }
+  if (!h.seed.ownerPlayerId) {
+    throw new Error('seed owner missing; pass seedOwner to buildIntegrationApp');
+  }
   await softDeleteServer(
     {
       db: h.db,
       bridge: h.bridge as unknown as FakeBridge,
       log: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      actorPlayerId: h.seed.ownerPlayerId!,
+      actorPlayerId: h.seed.ownerPlayerId,
       actorIp: '127.0.0.1',
       actorLabel: `player:${h.seed.ownerPlayerId}`,
     },

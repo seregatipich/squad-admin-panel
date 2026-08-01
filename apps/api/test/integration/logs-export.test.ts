@@ -37,7 +37,11 @@ beforeEach(async () => {
   serverIdAlpha = uuidv7();
   await h.db.insert(serversTable).values({
     id: serverIdAlpha,
-    orgId: h.seed.orgId!,
+    // `orgId` is neither an `IntegrationHarness['seed']` field nor a
+    // `servers` column (drizzle's insert builder only reads keys that match
+    // a real column, so this one is silently ignored either way); there is
+    // no definedness invariant to assert, so cast instead of `!`.
+    orgId: h.seed.orgId as string | undefined,
     displayName: 'Alpha',
     slug: 'alpha',
     gamePort: 7787,

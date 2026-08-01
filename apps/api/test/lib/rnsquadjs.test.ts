@@ -263,8 +263,13 @@ describe('relaunchSidecar', () => {
     const result = await relaunchSidecar(app, SERVER_ID, makeFsOps());
 
     expect(result).toEqual({ containerId: 'rnsquadjs-new', mode: 'shadow' });
-    const runArg = (app.bridge.containerRunRnsquadjs as ReturnType<typeof vi.fn>).mock
-      .calls[0]![0] as { server_id: string; env: Record<string, string> };
+    const runCalls = (app.bridge.containerRunRnsquadjs as ReturnType<typeof vi.fn>).mock.calls;
+    // relaunchSidecar calls containerRunRnsquadjs exactly once before returning,
+    // so calls[0] is always defined here.
+    const runArg = (runCalls[0] as unknown[])[0] as {
+      server_id: string;
+      env: Record<string, string>;
+    };
     expect(runArg.server_id).toBe(SERVER_ID);
     expect(runArg.env.PANEL_BRIDGE_MODE).toBe('shadow');
   });
@@ -274,8 +279,10 @@ describe('relaunchSidecar', () => {
     const result = await relaunchSidecar(app, SERVER_ID, makeFsOps());
 
     expect(result.mode).toBe('production');
-    const runArg = (app.bridge.containerRunRnsquadjs as ReturnType<typeof vi.fn>).mock
-      .calls[0]![0] as { env: Record<string, string> };
+    const runCalls = (app.bridge.containerRunRnsquadjs as ReturnType<typeof vi.fn>).mock.calls;
+    // relaunchSidecar calls containerRunRnsquadjs exactly once before returning,
+    // so calls[0] is always defined here.
+    const runArg = (runCalls[0] as unknown[])[0] as { env: Record<string, string> };
     expect(runArg.env.PANEL_BRIDGE_MODE).toBe('production');
   });
 
@@ -289,8 +296,10 @@ describe('relaunchSidecar', () => {
     await relaunchSidecar(app, SERVER_ID, makeFsOps());
 
     expect(containerRm).toHaveBeenCalledWith({ name: `rnsquadjs-${SERVER_ID}` });
-    const rmOrder = containerRm.mock.invocationCallOrder[0]!;
-    const runOrder = containerRunRnsquadjs.mock.invocationCallOrder[0]!;
+    // Both mocks were invoked exactly once above, so their first (only)
+    // invocation order is always recorded.
+    const rmOrder = containerRm.mock.invocationCallOrder[0] as number;
+    const runOrder = containerRunRnsquadjs.mock.invocationCallOrder[0] as number;
     expect(rmOrder).toBeLessThan(runOrder);
   });
 

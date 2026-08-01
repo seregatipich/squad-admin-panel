@@ -583,6 +583,8 @@ describe('POST /api/v1/servers/:id/configs/:name/restore/:vid', () => {
       headers: { cookie },
       payload: { content: 'mistaken' },
     });
+    // Two PUTs above guarantee at least one prior version exists, so the
+    // oldest history entry (at(-1)) is always present.
     const v1 = (
       await h.app.inject({
         method: 'GET',
@@ -591,7 +593,7 @@ describe('POST /api/v1/servers/:id/configs/:name/restore/:vid', () => {
       })
     )
       .json<{ items: Array<{ id: string }> }>()
-      .items.at(-1)!;
+      .items.at(-1) as { id: string };
     const resp = await h.app.inject({
       method: 'POST',
       url: `/api/v1/servers/${id}/configs/Admins.cfg/restore/${v1.id}`,
@@ -604,7 +606,10 @@ describe('POST /api/v1/servers/:id/configs/:name/restore/:vid', () => {
       .from(configVersions)
       .where(eq(configVersions.serverId, id));
     expect(versions).toHaveLength(3);
-    const restored = versions.sort((a, b) => +b.createdAt - +a.createdAt)[0]!;
+    // toHaveLength(3) above guarantees the array is non-empty, so index 0 is defined.
+    const restored = versions.sort(
+      (a, b) => +b.createdAt - +a.createdAt,
+    )[0] as (typeof versions)[number];
     expect(restored.content).toBe('original');
     await assertAuditRow(h, { action: 'server.config.restore', resource: 'server', targetId: id });
     void v2;
