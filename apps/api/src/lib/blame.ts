@@ -45,7 +45,8 @@ export function computeBlame(versions: BlameVersion[]): BlameLine[] {
   }));
 
   for (let i = 1; i < sorted.length; i++) {
-    const v = sorted[i]!;
+    // i < sorted.length by the loop condition, so this index is always in bounds.
+    const v = sorted[i] as BlameVersion;
     const prev = current.map((l) => l.text);
     const next = splitLines(v.content);
     const parts = diffArrays(prev, next);
@@ -64,8 +65,10 @@ export function computeBlame(versions: BlameVersion[]): BlameLine[] {
       } else if (part.removed) {
         prevCursor += part.value.length;
       } else {
+        // An unchanged part's value is a contiguous slice of `prev`, which was
+        // built 1:1 from `current`, so every prevCursor + k here is in bounds.
         for (let k = 0; k < part.value.length; k++) {
-          out.push(current[prevCursor + k]!);
+          out.push(current[prevCursor + k] as BlameLine);
         }
         prevCursor += part.value.length;
       }

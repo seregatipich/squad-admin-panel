@@ -172,7 +172,8 @@ describeIfDb('flag-derived panel permissions', () => {
       .from(players)
       .where(eq(players.steamId64, CARL))
       .limit(1);
-    const ctx = await loadUserPermissions(h.db, carlRow!.id);
+    if (!carlRow) throw new Error(`No player found for steamId64=${CARL}`);
+    const ctx = await loadUserPermissions(h.db, carlRow.id);
     expect(ctx.panelAccess).toBe(false);
     expect(ctx.permissions.size).toBe(0);
     expect(ctx.squadPermissions.has('reserve')).toBe(true);
@@ -194,7 +195,8 @@ describeIfDb('flag-derived panel permissions', () => {
       .from(players)
       .where(eq(players.steamId64, BOB))
       .limit(1);
-    const ctx = await loadUserPermissions(h.db, bobRow!.id);
+    if (!bobRow) throw new Error(`No player found for steamId64=${BOB}`);
+    const ctx = await loadUserPermissions(h.db, bobRow.id);
     expect(ctx.panelAccess).toBe(true);
     expect(ctx.permissions.has('server:view')).toBe(true);
     expect(ctx.permissions.has('server:install')).toBe(true);
@@ -234,9 +236,10 @@ describeIfDb('Owner immutability + uniqueness', () => {
       .from(players)
       .where(eq(players.steamId64, ALICE))
       .limit(1);
+    if (!aliceRow) throw new Error(`No player found for steamId64=${ALICE}`);
     const res = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/players/${aliceRow!.id}/role`,
+      url: `/api/v1/players/${aliceRow.id}/role`,
       headers: {
         cookie: await loginAsSteam(OWNER_STEAM),
         'content-type': 'application/json',

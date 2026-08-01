@@ -57,7 +57,8 @@ describe('verifyAuditChain', () => {
   it('detects a tampered row payload as a row_hash break at that row', () => {
     const rows = buildChain(5);
     // Simulate a superuser editing the stored context without recomputing the hash.
-    rows[2] = { ...rows[2]!, context_text: '{"seq": 2, "tampered": true}' };
+    // rows[2] is defined because buildChain(5) produced 5 elements.
+    rows[2] = { ...(rows[2] as AuditChainRow), context_text: '{"seq": 2, "tampered": true}' };
 
     const result = verifyAuditChain(rows);
     expect(result.ok).toBe(false);
@@ -69,7 +70,8 @@ describe('verifyAuditChain', () => {
   it('detects a broken prev-link as a prev_hash break', () => {
     const rows = buildChain(4);
     // Replace a row's prev_hash so it no longer matches the preceding row_hash.
-    rows[2] = { ...rows[2]!, prev_hash_hex: 'deadbeef'.repeat(8) };
+    // rows[2] is defined because buildChain(4) produced 4 elements.
+    rows[2] = { ...(rows[2] as AuditChainRow), prev_hash_hex: 'deadbeef'.repeat(8) };
 
     const result = verifyAuditChain(rows);
     expect(result.ok).toBe(false);
@@ -80,7 +82,8 @@ describe('verifyAuditChain', () => {
 
   it('detects a tampered genesis row', () => {
     const rows = buildChain(3);
-    rows[0] = { ...rows[0]!, action_type: 'action.forged' };
+    // rows[0] is defined because buildChain(3) produced 3 elements.
+    rows[0] = { ...(rows[0] as AuditChainRow), action_type: 'action.forged' };
 
     const result = verifyAuditChain(rows);
     expect(result.ok).toBe(false);

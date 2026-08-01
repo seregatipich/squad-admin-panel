@@ -131,9 +131,12 @@ describe('server lifecycle emits diag events', () => {
 
   it('POST /servers/archive/:id/restore emits server.restore.{requested,done}', async () => {
     const archivedId = await seedServer(h, { slug: 'diag-archived', status: 'stopped' });
+    if (!h.seed.ownerPlayerId) {
+      throw new Error('seed owner missing; pass seedOwner to buildIntegrationApp');
+    }
     await h.db
       .update(servers)
-      .set({ deletedAt: new Date(), deletedByPlayerId: h.seed.ownerPlayerId! })
+      .set({ deletedAt: new Date(), deletedByPlayerId: h.seed.ownerPlayerId })
       .where(eq(servers.id, archivedId));
 
     const cookie = await loginAsOwner(h);

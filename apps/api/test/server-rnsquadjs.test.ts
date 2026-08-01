@@ -149,17 +149,23 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
         expect(sismember).toHaveBeenCalledWith(RNSQUADJS_CUTOVER_SET, SERVER_ID);
         expect(writeSidecarConfig).toHaveBeenCalledTimes(1);
         expect(containerRm).toHaveBeenCalledWith({ name: `rnsquadjs-${SERVER_ID}` });
-        const runArg = containerRunRnsquadjs.mock.calls[0]![0] as {
+        // The tick above already drove the reconcile pass through to
+        // containerRunRnsquadjs, so mock.calls[0] is defined.
+        const call = containerRunRnsquadjs.mock.calls[0] as unknown[];
+        const runArg = call[0] as {
           server_id: string;
           env: Record<string, string>;
         };
         expect(runArg.server_id).toBe(SERVER_ID);
         expect(runArg.env.PANEL_BRIDGE_MODE).toBe('production');
 
-        // Ordering invariant: sadd < rm < run.
-        const saddOrder = sadd.mock.invocationCallOrder[0]!;
-        const rmOrder = containerRm.mock.invocationCallOrder[0]!;
-        const runOrder = containerRunRnsquadjs.mock.invocationCallOrder[0]!;
+        // Ordering invariant: sadd < rm < run. sadd, containerRm, and
+        // containerRunRnsquadjs were all confirmed called above (the SADD
+        // assertion, the containerRm toHaveBeenCalledWith, and the runArg
+        // extraction), so invocationCallOrder[0] is defined for each.
+        const saddOrder = sadd.mock.invocationCallOrder[0] as number;
+        const rmOrder = containerRm.mock.invocationCallOrder[0] as number;
+        const runOrder = containerRunRnsquadjs.mock.invocationCallOrder[0] as number;
         expect(saddOrder).toBeLessThan(rmOrder);
         expect(rmOrder).toBeLessThan(runOrder);
       } finally {
@@ -326,7 +332,10 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
 
       expect(writeSidecarConfig).toHaveBeenCalledTimes(1);
       expect(containerRm).toHaveBeenCalledWith({ name: `rnsquadjs-${SERVER_ID}` });
-      const runArg = containerRunRnsquadjs.mock.calls[0]![0] as {
+      // inject() has already resolved, so the shadow-mode handler ran to
+      // completion and containerRunRnsquadjs was called: mock.calls[0] is defined.
+      const call = containerRunRnsquadjs.mock.calls[0] as unknown[];
+      const runArg = call[0] as {
         server_id: string;
         env: Record<string, string>;
       };
@@ -334,8 +343,12 @@ describe('POST /api/v1/servers/:id/rnsquadjs', () => {
 
       // Rollback ordering invariant: run the shadow sidecar BEFORE re-enabling
       // the legacy tailer (SREM). Reversing it would let both publish — dups.
-      const runOrder = containerRunRnsquadjs.mock.invocationCallOrder[0]!;
-      const sremOrder = srem.mock.invocationCallOrder[0]!;
+      // Both mocks were called during the already-resolved handler run above
+      // (containerRunRnsquadjs via the runArg extraction, srem per the
+      // asserted toHaveBeenCalledWith below), so invocationCallOrder[0] is
+      // defined for each.
+      const runOrder = containerRunRnsquadjs.mock.invocationCallOrder[0] as number;
+      const sremOrder = srem.mock.invocationCallOrder[0] as number;
       expect(runOrder).toBeLessThan(sremOrder);
       expect(srem).toHaveBeenCalledWith(RNSQUADJS_CUTOVER_SET, SERVER_ID);
 

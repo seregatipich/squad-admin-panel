@@ -18,15 +18,20 @@ describe('diag.emit', () => {
     });
 
     expect(xadd).toHaveBeenCalledTimes(1);
-    const args = xadd.mock.calls[0]!;
+    // xadd was asserted to have been called exactly once above, so calls[0] is defined.
+    const args = xadd.mock.calls[0] as unknown[];
     expect(args[0]).toBe('diag:queue');
     expect(args).toContain('MAXLEN');
     const flat = args.slice(args.indexOf('*') + 1) as string[];
     const fields: Record<string, string> = {};
-    for (let i = 0; i < flat.length; i += 2) fields[flat[i]!] = flat[i + 1]!;
+    // flat is a flattened field/value list from the redis XADD args, so it always
+    // has an even length; both flat[i] and flat[i + 1] are in bounds every iteration.
+    for (let i = 0; i < flat.length; i += 2) fields[flat[i] as string] = flat[i + 1] as string;
     expect(fields.component).toBe('api');
     expect(fields.kind).toBe('server.start.requested');
-    expect(JSON.parse(fields.payload!)).toEqual({ reason: 'manual' });
+    // The emitted event above included a payload, serialized by emit() into this
+    // field, so fields.payload is defined.
+    expect(JSON.parse(fields.payload as string)).toEqual({ reason: 'manual' });
   });
 
   it('falls back to pino.warn when Redis throws', async () => {
@@ -35,7 +40,7 @@ describe('diag.emit', () => {
     const diag = createDiag({ redis, log });
     await diag.emit({ component: 'api', kind: 'x', severity: 'info', message: 'hi' });
     expect(log.warn).toHaveBeenCalled();
-    const arg = (log.warn as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+    const arg = (log.warn as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
       diag_event: { kind: string };
     };
     expect(arg.diag_event.kind).toBe('x');

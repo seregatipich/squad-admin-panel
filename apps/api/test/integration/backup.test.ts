@@ -36,7 +36,8 @@ async function demoteOwner(): Promise<void> {
     .update(players)
     .set({ roleId: null })
     .where(eq(players.steamId64, h.seed.ownerSteamId64));
-  invalidatePermissionCache(h.seed.ownerPlayerId!);
+  if (!h.seed.ownerPlayerId) throw new Error('seed owner missing');
+  invalidatePermissionCache(h.seed.ownerPlayerId);
 }
 
 describe('GET /api/v1/host/backups', () => {
