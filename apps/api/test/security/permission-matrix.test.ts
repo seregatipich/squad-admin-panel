@@ -36,6 +36,7 @@ async function collectProtectedRoutes(): Promise<{ routes: RouteSpec[]; wsRoutes
   const { default: serverRoutes } = await import('../../src/routes/servers.js');
   const { default: serverInstallRoutes } = await import('../../src/routes/server-install.js');
   const { default: serverConfigRoutes } = await import('../../src/routes/server-configs.js');
+  const { default: serverUpdateRoutes } = await import('../../src/routes/server-update.js');
   const { default: depotRoutes } = await import('../../src/routes/depot.js');
   const { default: playerRoutes } = await import('../../src/routes/players.js');
   const { default: auditRoutes } = await import('../../src/routes/audit.js');
@@ -91,6 +92,7 @@ async function collectProtectedRoutes(): Promise<{ routes: RouteSpec[]; wsRoutes
   await app.register(serverRoutes);
   await app.register(serverInstallRoutes);
   await app.register(serverConfigRoutes);
+  await app.register(serverUpdateRoutes);
   await app.register(depotRoutes);
   await app.register(playerRoutes);
   await app.register(auditRoutes);
@@ -136,6 +138,18 @@ describe('permission matrix coverage', () => {
           method: 'POST',
           url: '/api/v1/admins-cfg/sync',
           required: ['admin_group:edit'],
+        }),
+      ]),
+    );
+  });
+
+  it('sweeps POST /api/v1/servers/:id/update — server-update.ts was previously missing from collectProtectedRoutes() (#271)', () => {
+    expect(protectedRoutes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: 'POST',
+          url: '/api/v1/servers/:id/update',
+          required: ['server:update'],
         }),
       ]),
     );
