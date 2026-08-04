@@ -1,5 +1,15 @@
 # `api` — changelog
 
+## 2026-08-04 — Per-server "update game" now streams real progress
+
+### Fixed
+
+- `POST /api/v1/servers/:id/update` (`routes/server-update.ts`) wrote its SteamCMD output to a `server:update:{id}` Redis Stream that nothing ever read — the panel's "Обновить игру" button showed a spinner for the instant the fire-and-forget POST took to return, then silently reverted with zero indication that a multi-minute update was still running in the background. The endpoint now publishes into the same shared `depot:progress` stream `POST /api/v1/depot/update` already used (both ultimately call the same `bridge.depot_update`, guarded by the same `depot:updating` lock — there is only ever one depot update running at a time), so it's watchable through the existing `GET /api/v1/depot/progress/ws`.
+- That WS route never carried a completion signal, so even the fleet-wide "Обновить Squad" dashboard flow had the identical silent-progress gap despite the route already existing. New shared helper [`lib/depot-progress.ts`](../../../apps/api/src/lib/depot-progress.ts) (`publishDepotProgressLine`/`publishDepotProgressDone`) writes a terminal `stream:'event'` entry (`{done:true, final:'done'|'error', error?}`) from both routes' background jobs' `finally` blocks. The WS route forwards it, sends a `{backfill_complete:true}` marker between history replay and live tail so a stale/historical `done` (a prior, already-finished run) is never mistaken for the current one, and synthesizes an immediate done frame from `depot:last_update` for a client that connects after the run it triggered has already finished.
+- Fixed a latent self-inflicted stall this change would otherwise have activated: the WS route's blocking `XREAD` ran on the shared `app.redis` singleton, which would queue every other route's Redis command behind it for up to 5 s at a time for as long as any tab had the progress view open — invisible until now because nothing actually connected to this route before. It now runs on a per-connection `app.redis.duplicate()`, matching the existing pattern in `plugins/live-bus.ts`.
+- New web component `UpdateProgressModal` (mirrors the existing install-wizard's WS-into-`LogConsole` pattern) is wired into both the per-server update button and the fleet dashboard's depot-update flow.
+- Also fixed while touching the dashboard's depot-update call site: it posted `{stop_server_ids: serverIds}` to `POST /api/v1/depot/update`, but the route's Zod schema reads `server_ids` — the "select servers to stop first" checkboxes in `DepotUpdateModal` never actually took effect.
+
 ## 2026-07-29 — WS routes added to the permission-matrix auth-boundary sweep (#250)
 
 ### Added
