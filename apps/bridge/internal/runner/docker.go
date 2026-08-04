@@ -117,14 +117,80 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	}
 	squadArgs = append(squadArgs, spec.ExtraArgs...)
 	args = append(args, squadArgs...)
-	so, se, exit, err := d.R.Run(ctx, d.Bin, args, nil)
-	if err != nil {
-		return strings.TrimSpace(string(so)), err
+	var out string
+	// `docker run` failing at the OCI-runtime-create stage (the class this
+	// retries) can leave a stale Created-but-never-started container holding
+	// `name`; a bare retry would then fail with "name already in use" instead
+	// of recovering. beforeRetry clears it the same way the operator's manual
+	// force-stop did (best-effort: Rm already tolerates "no such container").
+	beforeRetry := func() {
+		_, _, _, _ = d.R.Run(ctx, d.Bin, []string{"rm", "-f", name}, nil)
 	}
-	if exit != 0 {
-		return strings.TrimSpace(string(so)), fmt.Errorf("docker run exit %d: %s", exit, strings.TrimSpace(string(se)))
+	err := retryTransientDockerFailures(ctx, beforeRetry, func() error {
+		so, se, exit, runErr := d.R.Run(ctx, d.Bin, args, nil)
+		out = strings.TrimSpace(string(so))
+		if runErr != nil {
+			return runErr
+		}
+		if exit != 0 {
+			return fmt.Errorf("docker run exit %d: %s", exit, strings.TrimSpace(string(se)))
+		}
+		return nil
+	})
+	return out, err
+}
+
+// transientDockerRunErrorMarker matches the OCI-runtime/containerd mount
+// error class documented in #266: a containerd/overlay2 race can transiently
+// block container creation with an EROFS error on the auto-created bind
+// mountpoint ("make mountpoint ... read-only file system"). It was observed
+// on both `docker start` (existing container) and `docker run` (fresh
+// container, different overlay2 layer each time), and cleared on its own
+// within a few minutes. "read-only file system" is specific enough in this
+// context (docker start/run stderr) not to collide with unrelated failures;
+// retrying a bounded number of times turns a short-lived instance of it into
+// an invisible blip instead of requiring an operator to notice and manually
+// force-stop + retry.
+const transientDockerRunErrorMarker = "read-only file system"
+
+func isTransientDockerRunError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), transientDockerRunErrorMarker)
+}
+
+// retryTransientDockerRunAttempts and retryTransientDockerRunBackoff bound
+// the extra latency retries can add: the bridge-client RPC timeouts for
+// container_start/container_run are 30s/60s (packages/bridge-client/src/client.ts),
+// so the total added sleep (1s+2s=3s here) must stay comfortably under that,
+// leaving headroom for the docker command's own execution time.
+const retryTransientDockerRunAttempts = 3
+
+var retryTransientDockerRunBackoff = []time.Duration{time.Second, 2 * time.Second}
+
+// retryTransientDockerFailures runs op up to retryTransientDockerRunAttempts
+// times, retrying only while op's error matches isTransientDockerRunError.
+// beforeRetry (may be nil) runs before each retry, e.g. to clear a
+// partially-created container left behind by the failed attempt. Context
+// cancellation aborts the wait between attempts immediately.
+func retryTransientDockerFailures(ctx context.Context, beforeRetry func(), op func() error) error {
+	var err error
+	for attempt := 0; attempt < retryTransientDockerRunAttempts; attempt++ {
+		err = op()
+		if !isTransientDockerRunError(err) {
+			return err
+		}
+		if attempt >= len(retryTransientDockerRunBackoff) {
+			break
+		}
+		if beforeRetry != nil {
+			beforeRetry()
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(retryTransientDockerRunBackoff[attempt]):
+		}
 	}
-	return strings.TrimSpace(string(so)), nil
+	return err
 }
 
 // sidecarUID is the unprivileged uid the rnsquadjs sidecar runs as. The
@@ -360,14 +426,16 @@ func (d *DockerRunner) Start(ctx context.Context, name string) error {
 	if err := validate.ContainerName(name); err != nil {
 		return err
 	}
-	_, se, exit, err := d.R.Run(ctx, d.Bin, []string{"start", name}, nil)
-	if err != nil {
-		return err
-	}
-	if exit != 0 {
-		return fmt.Errorf("docker start exit %d: %s", exit, strings.TrimSpace(string(se)))
-	}
-	return nil
+	return retryTransientDockerFailures(ctx, nil, func() error {
+		_, se, exit, err := d.R.Run(ctx, d.Bin, []string{"start", name}, nil)
+		if err != nil {
+			return err
+		}
+		if exit != 0 {
+			return fmt.Errorf("docker start exit %d: %s", exit, strings.TrimSpace(string(se)))
+		}
+		return nil
+	})
 }
 
 func (d *DockerRunner) Stop(ctx context.Context, name string, timeout time.Duration) error {
