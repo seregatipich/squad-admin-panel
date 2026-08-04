@@ -124,7 +124,11 @@ afterAll(async () => {
     .set({ seedRewardThresholdHoursPerMonth: 0, seedRewardRoleId: null })
     .where(eq(economySettings.id, 1));
   await db.delete(players).where(eq(players.steamId64, PLAYER_STEAM_ID));
-  await db.delete(players).where(eq(players.steamId64, OWNER_PLAYER_STEAM_ID));
+  // OWNER_PLAYER_STEAM_ID is intentionally never deleted: this suite runs
+  // against the shared DATABASE_URL used by test:cov's concurrent packages,
+  // so whether it is the last remaining Owner at cleanup time depends on
+  // that shared state — migration 0107's guard trigger rejects deleting the
+  // last Owner. Harmless to leave behind in CI's disposable service container.
   await db.delete(servers).where(eq(servers.id, SERVER_ID));
   await db.delete(roles).where(eq(roles.id, REWARD_ROLE_ID));
   await db.$client.end();
