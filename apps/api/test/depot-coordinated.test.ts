@@ -40,11 +40,11 @@ let h: IntegrationHarness;
 
 beforeEach(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER } });
-  await h.redis.del('depot:updating', 'depot:build_id', 'depot:last_update');
+  await h.redis.del('depot:updating', 'depot:build_id', 'depot:last_update', 'depot:progress');
 });
 
 afterEach(async () => {
-  await h.redis.del('depot:updating', 'depot:build_id', 'depot:last_update');
+  await h.redis.del('depot:updating', 'depot:build_id', 'depot:last_update', 'depot:progress');
   await h.cleanup();
 });
 
@@ -198,6 +198,17 @@ describe('POST /api/v1/depot/update background orchestration', () => {
     // Check build_id was stored
     const buildId = await h.redis.get('depot:build_id');
     expect(buildId).toBe('99887766');
+
+    // A done sentinel lands in depot:progress only after the restart phase
+    // completes, so watchers don't see "done" while servers are still down.
+    const streamEntries = (await h.redis.xrange('depot:progress', '-', '+')) as Array<
+      [string, string[]]
+    >;
+    const lastFields = streamEntries.at(-1)?.[1] ?? [];
+    const lastStream = lastFields[lastFields.indexOf('stream') + 1];
+    const lastText = lastFields[lastFields.indexOf('text') + 1] ?? '{}';
+    expect(lastStream).toBe('event');
+    expect(JSON.parse(lastText)).toEqual({ done: true, final: 'done' });
   });
 
   it('restarts servers even when depot update fails', async () => {
@@ -228,5 +239,14 @@ describe('POST /api/v1/depot/update background orchestration', () => {
     // Check last_update shows failure
     const lastUpdate = JSON.parse((await h.redis.get('depot:last_update')) ?? '{}');
     expect(lastUpdate.status).toBe('failed');
+
+    const streamEntries = (await h.redis.xrange('depot:progress', '-', '+')) as Array<
+      [string, string[]]
+    >;
+    const lastFields = streamEntries.at(-1)?.[1] ?? [];
+    const lastStream = lastFields[lastFields.indexOf('stream') + 1];
+    const lastText = lastFields[lastFields.indexOf('text') + 1] ?? '{}';
+    expect(lastStream).toBe('event');
+    expect(JSON.parse(lastText)).toEqual({ done: true, final: 'error', error: 'steamcmd failed' });
   });
 });
