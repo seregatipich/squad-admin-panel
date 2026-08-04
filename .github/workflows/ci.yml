@@ -140,6 +140,8 @@ jobs:
         run: pnpm turbo run build --concurrency=2
       - name: Apply database migrations
         run: pnpm --filter @squad/db migrate
+      - name: Run operations script tests
+        run: pnpm test:scripts
       - name: Run panel-bridge plugin tests
         run: pnpm turbo run test --filter=panel-bridge
       - name: Run shared-config mutation tests (Stryker)
