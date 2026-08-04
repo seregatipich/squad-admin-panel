@@ -3,6 +3,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { publishDepotProgressDone, publishDepotProgressLine } from '../lib/depot-progress.js';
 
 const idParams = z.object({ id: z.string().uuid() });
 
@@ -40,36 +41,31 @@ const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
 
       (async () => {
         const dedicated = app.makeBridgeClient();
+        let finalStatus: 'done' | 'error' = 'done';
+        let finalError: string | undefined;
         try {
           await dedicated.connect();
           await dedicated.depotUpdate((frame) => {
             const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
-            void app.redis.xadd(
-              `server:update:${row.id}`,
-              'MAXLEN',
-              '~',
-              '5000',
-              '*',
-              'stream',
-              frame.stream,
-              'text',
-              text,
-            );
+            void publishDepotProgressLine(app.redis, frame.stream, text);
           });
           await app.redis.set(
             'depot:last_update',
             JSON.stringify({ finished_at: new Date().toISOString(), status: 'ok' }),
           );
         } catch (err) {
+          finalStatus = 'error';
+          finalError = (err as Error).message;
           await app.redis.set(
             'depot:last_update',
             JSON.stringify({
               finished_at: new Date().toISOString(),
               status: 'failed',
-              error: (err as Error).message,
+              error: finalError,
             }),
           );
         } finally {
+          await publishDepotProgressDone(app.redis, finalStatus, finalError);
           await app.redis.del('depot:updating');
           await dedicated.close().catch(() => undefined);
         }
