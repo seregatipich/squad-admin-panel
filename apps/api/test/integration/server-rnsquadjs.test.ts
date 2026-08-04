@@ -38,6 +38,7 @@ let STATUS_URL: string;
 beforeEach(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
+    seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
   const cookie = await loginAsOwner(h);

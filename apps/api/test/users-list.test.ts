@@ -118,6 +118,7 @@ describeIfDb('GET /api/v1/users — HTTP integration', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
   });

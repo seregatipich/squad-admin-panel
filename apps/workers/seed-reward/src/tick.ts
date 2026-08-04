@@ -182,6 +182,11 @@ export async function reconcileSeedRewardAssignments(
     if (rewardRole.panelAccess) {
       throw new Error('configured seed reward role must not grant panel access');
     }
+    const [ownerRole] = await tx
+      .select({ id: roles.id })
+      .from(roles)
+      .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+      .limit(1);
 
     const states = await tx
       .select({
@@ -204,6 +209,7 @@ export async function reconcileSeedRewardAssignments(
 
     const changes: SeedRewardChange[] = [];
     for (const state of states) {
+      if (ownerRole && state.currentRoleId === ownerRole.id) continue;
       const seedSeconds = Number(state.seedSeconds);
       const qualifies = seedSeconds >= thresholdSeconds;
       const kind: SeedRewardChangeKind | null =

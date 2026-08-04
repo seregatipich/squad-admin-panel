@@ -30,6 +30,7 @@ describeIfDb('GET /api/v1/role-assignments', () => {
     // not a shared connection, since the role id differs per schema.
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
     const viewerRows = await h.db

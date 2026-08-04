@@ -15,7 +15,7 @@ const OWNER_STEAM_ID = 76561198000044551n;
 let h: IntegrationHarness;
 
 beforeEach(async () => {
-  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
+  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
 });
 
 afterEach(async () => {

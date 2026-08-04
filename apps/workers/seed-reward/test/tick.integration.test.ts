@@ -23,6 +23,8 @@ const PLAYER_ID = uuidv7();
 // completed (crash, watch-mode interrupt) would otherwise leave a row that makes
 // every later run's `beforeAll` insert fail with 23505 until someone cleans the DB.
 const PLAYER_STEAM_ID = 76561198914100000n + BigInt(randomInt(1, 1_000_000));
+const OWNER_PLAYER_ID = uuidv7();
+const OWNER_PLAYER_STEAM_ID = 76561198914200000n + BigInt(randomInt(1, 1_000_000));
 const REWARD_ROLE_ID = uuidv7();
 const SERVER_ID = uuidv7();
 const SESSION_ID = `seed-reward-${PLAYER_ID}`;
@@ -122,6 +124,7 @@ afterAll(async () => {
     .set({ seedRewardThresholdHoursPerMonth: 0, seedRewardRoleId: null })
     .where(eq(economySettings.id, 1));
   await db.delete(players).where(eq(players.steamId64, PLAYER_STEAM_ID));
+  await db.delete(players).where(eq(players.steamId64, OWNER_PLAYER_STEAM_ID));
   await db.delete(servers).where(eq(servers.id, SERVER_ID));
   await db.delete(roles).where(eq(roles.id, REWARD_ROLE_ID));
   await db.$client.end();
@@ -294,5 +297,44 @@ describeIfDb('seed reward worker integration', () => {
         after: expect.objectContaining({ role_id: null }),
       }),
     ]);
+  });
+
+  it('never reassigns a player who currently holds the Owner role, even if they qualify', async () => {
+    if (!db) throw new Error('database not configured');
+    const [ownerRole] = await db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(and(eq(roles.name, 'Owner'), eq(roles.isSystemRole, true)))
+      .limit(1);
+    if (!ownerRole) throw new Error('Owner role not found — run migrations first');
+
+    await db.insert(players).values({
+      id: OWNER_PLAYER_ID,
+      steamId64: OWNER_PLAYER_STEAM_ID,
+      canonicalName: 'Владелец на сиде',
+      canonicalNameNormalized: 'владелец на сиде',
+      roleId: ownerRole.id,
+    });
+    await db.insert(playerDailyPresence).values({
+      playerId: OWNER_PLAYER_ID,
+      serverId: SERVER_ID,
+      day: '2026-07-14',
+      seedSeconds: 3 * 3600,
+      sessionCount: 1,
+    });
+
+    const watermark = await auditWatermark();
+    const { redis } = makeRedis();
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+
+    await runSeedRewardTick({ ...createSeedRewardDeps(db, redis), now: NOW, diag });
+
+    const changes = await seedRewardAuditSince(watermark);
+    expect(changes.filter((row) => row.targetId === OWNER_PLAYER_ID)).toEqual([]);
+    const [afterTick] = await db
+      .select({ roleId: players.roleId })
+      .from(players)
+      .where(eq(players.id, OWNER_PLAYER_ID));
+    expect(afterTick?.roleId).toBe(ownerRole.id);
   });
 });

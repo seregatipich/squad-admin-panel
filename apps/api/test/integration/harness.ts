@@ -278,6 +278,13 @@ export interface BuildAppOptions {
   bridge?: FakeBridge;
   /** Whether to seed an owner player (roles come from migration 0009). */
   seedOwner?: { steamId64: bigint; canonicalName?: string };
+  /**
+   * Whether to seed an unloginable backup Owner alongside `seedOwner`.
+   * Defaults to false for a production-like single-Owner fixture. Enable only
+   * when a test intentionally demotes its authenticated Owner to exercise RBAC
+   * — migration 0107's last-Owner guard trigger otherwise rejects that update.
+   */
+  seedOwnerGuard?: boolean;
   /** Whether to run status-reconciler + other heavy plugins. Off by default. */
   withStatusReconciler?: boolean;
   /**
@@ -411,15 +418,27 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     if (!ownerRoleId) throw new Error('Owner role missing — migration 0009 not applied?');
     const insertedPlayers = await db
       .insert(players)
-      .values({
-        steamId64: ownerSteamId64,
-        canonicalName,
-        canonicalNameNormalized: canonicalName.toLowerCase(),
-        roleId: ownerRoleId,
-      })
-      .returning({ id: players.id });
+      .values([
+        {
+          steamId64: ownerSteamId64,
+          canonicalName,
+          canonicalNameNormalized: canonicalName.toLowerCase(),
+          roleId: ownerRoleId,
+        },
+        ...(opts.seedOwnerGuard === true
+          ? [
+              {
+                steamId64: null,
+                canonicalName: 'Integration Owner Guard',
+                canonicalNameNormalized: 'integration owner guard',
+                roleId: ownerRoleId,
+              },
+            ]
+          : []),
+      ])
+      .returning({ id: players.id, steamId64: players.steamId64 });
     seed.ownerSteamId64 = ownerSteamId64;
-    seed.ownerPlayerId = insertedPlayers[0]?.id;
+    seed.ownerPlayerId = insertedPlayers.find((player) => player.steamId64 === ownerSteamId64)?.id;
   }
 
   await app.ready();

@@ -1,7 +1,7 @@
 import type { DatabaseClient } from '@squad/db';
-import { auditLog, players, servers, sessions } from '@squad/db/schema';
+import { auditLog, players, roles, servers, sessions } from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
-import { and, asc, eq, inArray, isNotNull, isNull, lte } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
 
 /** Redis pub/sub channel the API's live-bus subscribes to for real-time fan-out. */
@@ -152,11 +152,13 @@ export async function findExpiredAssignments(
       roleComment: players.roleComment,
     })
     .from(players)
+    .innerJoin(roles, eq(players.roleId, roles.id))
     .where(
       and(
         isNotNull(players.roleId),
         isNotNull(players.roleExpiresAt),
         lte(players.roleExpiresAt, now),
+        sql`NOT (${roles.name} = 'Owner' AND ${roles.isSystemRole} = true)`,
       ),
     )
     .orderBy(asc(players.roleExpiresAt))
