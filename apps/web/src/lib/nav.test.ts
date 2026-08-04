@@ -64,6 +64,42 @@ describe('NAV_GROUPS', () => {
     ]);
   });
 
+  it('gives «Модерация» a children group with the moderation/access-control settings pages and no href of its own', () => {
+    const settings = NAV_GROUPS.find((group) => group.label === 'Настройки');
+    const moderation = settings?.items.find((item) => item.label === 'Модерация');
+    expect(moderation?.href).toBeUndefined();
+    expect(moderation?.children?.map((c) => c.label)).toEqual([
+      'Типы меток',
+      'Флаги чата',
+      'Альт-детект',
+      'Whitelist',
+      'Защита клан-тегов',
+      'Источники банов',
+    ]);
+  });
+
+  it('gives «Уведомления» a children group with the alert/automation settings pages and no href of its own', () => {
+    const settings = NAV_GROUPS.find((group) => group.label === 'Настройки');
+    const notifications = settings?.items.find((item) => item.label === 'Уведомления');
+    expect(notifications?.href).toBeUndefined();
+    expect(notifications?.children?.map((c) => c.label)).toEqual([
+      'Оповещения',
+      'Автоматизация',
+      'Уведомления о сидинге',
+    ]);
+  });
+
+  it('gives «Интеграции» a children group with the third-party integration pages and no href of its own', () => {
+    const settings = NAV_GROUPS.find((group) => group.label === 'Настройки');
+    const integrations = settings?.items.find((item) => item.label === 'Интеграции');
+    expect(integrations?.href).toBeUndefined();
+    expect(integrations?.children?.map((c) => c.label)).toEqual([
+      'Discord',
+      'GeoIP (MaxMind)',
+      'Публикация медиа',
+    ]);
+  });
+
   it('leaves only «Журнал действий» and «Логи» under «Аудит» now that teamkills moved into «Инструменты»', () => {
     const audit = NAV_GROUPS.find((group) => group.label === 'Аудит');
     expect(audit?.items.map((item) => item.label)).toEqual(['Журнал действий', 'Логи']);
