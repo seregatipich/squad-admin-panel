@@ -133,18 +133,26 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 const sidecarUID = 1001
 
 // sidecarSockModeRaw is the raw syscall mode for the only sidecar-writable
-// level: group rwx + setgid, nothing for others. In a raw syscall mode the
-// setgid bit is octal 0o2000 (S_ISGID); os.ModeSetgid (a high FileMode bit)
-// must NOT be used here because Fchmod takes the raw bitmask, not a FileMode.
-// os.Stat still surfaces 0o2000 as os.ModeSetgid, which the tests assert.
-const sidecarSockModeRaw uint32 = 0o2770
+// level: group rwx, nothing for others. No setgid: the panel-host-bridge
+// systemd unit runs with RestrictSUIDSGID=yes, which makes the kernel reject
+// (EPERM) any mkdir/chmod/open whose mode argument carries S_ISUID or
+// S_ISGID — unconditionally, on the raw mode bits alone, before the syscall
+// even resolves the path (see docker_test.go's ...NoSetuidOrSetgid test and
+// #267). Setgid was never load-bearing here anyway: this dir is Fchowned
+// straight to sidecarUID, and rcon.sock is created by the sidecar itself
+// (docker --user 1001:1001), so the file's group already matches without
+// needing kernel inheritance from the parent.
+const sidecarSockModeRaw uint32 = 0o0770
 
 // sidecarServerDirModeRaw is the raw syscall mode for the per-server parent
-// dir holding the host-authored config.json: group r-x + setgid, no group
-// write. It stays root-owned (never chowned) so the sidecar (uid 1001) cannot
-// rewrite config.json through the rw bind; only the nested sock subdir is
-// sidecar-writable.
-const sidecarServerDirModeRaw uint32 = 0o2750
+// dir holding the host-authored config.json: group r-x, no group write, no
+// setgid (see sidecarSockModeRaw for why). It stays root-owned (never
+// chowned) so the sidecar (uid 1001) cannot rewrite config.json through the
+// rw bind; only the nested sock subdir is sidecar-writable. Every writer of
+// this directory (this bridge process and the API's writeSidecarConfig) runs
+// as root, so group inheritance was never needed for consistent ownership
+// either.
+const sidecarServerDirModeRaw uint32 = 0o0750
 
 // allowedSidecarEnv is the exhaustive set of environment keys the API may
 // pass through to the rnsquadjs sidecar. A compromised API container cannot
@@ -238,8 +246,8 @@ func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, er
 
 // ensureSidecarDir builds the two-level per-server tree the sidecar needs:
 //
-//	{root}/{id}/       0o2750, root-owned        — holds host-authored config.json
-//	{root}/{id}/sock/  0o2770, chown uid 1001    — the only sidecar-writable level
+//	{root}/{id}/       0o0750, root-owned      — holds host-authored config.json
+//	{root}/{id}/sock/  0o0770, chown uid 1001  — the only sidecar-writable level
 //
 // Splitting the levels keeps config.json out of any sidecar-writable mount: the
 // container sees {id}/sock bound rw at /run/panelBridge and config.json bound
@@ -284,10 +292,13 @@ func (d *DockerRunner) ensureSidecarDir(serverID string) error {
 // openVerifiedSidecarDir creates name under parentFd (tolerating an existing
 // entry), reopens it O_NOFOLLOW|O_DIRECTORY relative to parentFd so a planted
 // symlink fails closed, then forces the exact mode with Fchmod (Mkdirat honours
-// the umask, which strips setgid and group bits). When chownToSidecar it
-// Fchowns the inode to the sidecar uid; a non-root caller (dev/test) hits
-// EPERM, tolerated because a non-root bridge cannot drive containers anyway.
-// Returns the open fd; the caller owns closing it.
+// the umask, which strips group/other bits down from what's requested — the
+// Fchmod re-asserts the exact target mode). mode must never carry S_ISUID or
+// S_ISGID: the panel-host-bridge systemd unit's RestrictSUIDSGID=yes makes
+// Mkdirat/Fchmod reject those bits with EPERM outright (see sidecarSockModeRaw).
+// When chownToSidecar it Fchowns the inode to the sidecar uid; a non-root
+// caller (dev/test) hits EPERM, tolerated because a non-root bridge cannot
+// drive containers anyway. Returns the open fd; the caller owns closing it.
 func openVerifiedSidecarDir(parentFd int, name string, mode uint32, chownToSidecar bool) (int, error) {
 	if err := syscall.Mkdirat(parentFd, name, mode); err != nil && !errors.Is(err, syscall.EEXIST) {
 		return -1, fmt.Errorf("create sidecar dir %q: %w", name, err)
