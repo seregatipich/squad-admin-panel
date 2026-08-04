@@ -45,31 +45,66 @@ const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
         let finalError: string | undefined;
         try {
           await dedicated.connect();
+          // Each progress line is awaited (not fired-and-forgotten): a silently
+          // dropped xadd would leave depot:last_update=ok even though a
+          // progress frame never made it to the stream.
+          const streamWrites: Promise<void>[] = [];
+          const streamWriteErrors: unknown[] = [];
           await dedicated.depotUpdate((frame) => {
             const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
-            void publishDepotProgressLine(app.redis, frame.stream, text);
+            streamWrites.push(
+              publishDepotProgressLine(app.redis, frame.stream, text).catch((error: unknown) => {
+                streamWriteErrors.push(error);
+              }),
+            );
           });
+          await Promise.all(streamWrites);
+          if (streamWriteErrors.length > 0) throw streamWriteErrors[0];
+
           await app.redis.set(
             'depot:last_update',
             JSON.stringify({ finished_at: new Date().toISOString(), status: 'ok' }),
           );
         } catch (err) {
           finalStatus = 'error';
-          finalError = (err as Error).message;
-          await app.redis.set(
-            'depot:last_update',
-            JSON.stringify({
-              finished_at: new Date().toISOString(),
-              status: 'failed',
-              error: finalError,
-            }),
-          );
+          finalError = err instanceof Error ? err.message : String(err);
+          await app.redis
+            .set(
+              'depot:last_update',
+              JSON.stringify({
+                finished_at: new Date().toISOString(),
+                status: 'failed',
+                error: finalError,
+              }),
+            )
+            .catch((statusError: unknown) => {
+              app.log.error(
+                { err: statusError, server_id: row.id, update_error: finalError },
+                'failed to record depot update failure',
+              );
+            });
         } finally {
-          await publishDepotProgressDone(app.redis, finalStatus, finalError);
-          await app.redis.del('depot:updating');
-          await dedicated.close().catch(() => undefined);
+          await publishDepotProgressDone(app.redis, finalStatus, finalError).catch(
+            (error: unknown) => {
+              app.log.error(
+                { err: error, server_id: row.id },
+                'failed to publish depot update completion event',
+              );
+            },
+          );
+          await app.redis.del('depot:updating').catch((error: unknown) => {
+            app.log.error({ err: error, server_id: row.id }, 'failed to release depot update lock');
+          });
+          await dedicated.close().catch((error: unknown) => {
+            app.log.error({ err: error, server_id: row.id }, 'failed to close depot bridge client');
+          });
         }
-      })();
+      })().catch((error: unknown) => {
+        app.log.error(
+          { err: error, server_id: row.id },
+          'unexpected depot update background error',
+        );
+      });
 
       return { status: 'started', server_id: row.id, started_at: startedAt };
     },

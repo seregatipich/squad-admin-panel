@@ -111,11 +111,18 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
         async function restartServers(ids: string[]) {
           for (const sid of ids) {
             try {
-              void publishDepotProgressLine(
+              // Best-effort: a dropped progress line must not skip the actual
+              // restart below, so its failure is logged, not thrown.
+              await publishDepotProgressLine(
                 app.redis,
                 'stdout',
                 `Restarting server squad-${sid} …`,
-              );
+              ).catch((error: unknown) => {
+                app.log.error(
+                  { err: error, server_id: sid },
+                  'failed to publish restart progress line',
+                );
+              });
               try {
                 await app.bridge.containerStart({ name: `squad-${sid}` });
               } catch {
@@ -158,7 +165,18 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           // ── Phase 1: stop requested servers ──
           for (const sid of serverIds) {
             try {
-              void publishDepotProgressLine(app.redis, 'stdout', `Stopping server squad-${sid} …`);
+              // Best-effort: a dropped progress line must not skip the actual
+              // stop below, so its failure is logged, not thrown.
+              await publishDepotProgressLine(
+                app.redis,
+                'stdout',
+                `Stopping server squad-${sid} …`,
+              ).catch((error: unknown) => {
+                app.log.error(
+                  { err: error, server_id: sid },
+                  'failed to publish stop progress line',
+                );
+              });
               await app.bridge.containerStop({ name: `squad-${sid}`, timeout_sec: 60 });
               await app.db
                 .update(servers)
@@ -171,10 +189,21 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           }
 
           // ── Phase 2: run SteamCMD depot update ──
+          // Each progress line is awaited (not fired-and-forgotten): a silently
+          // dropped xadd would leave depot:last_update=ok even though a
+          // progress frame never made it to the stream.
+          const steamCmdStreamWrites: Promise<void>[] = [];
+          const steamCmdStreamWriteErrors: unknown[] = [];
           await dedicated.depotUpdate((frame) => {
             const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
-            void publishDepotProgressLine(app.redis, frame.stream, text);
+            steamCmdStreamWrites.push(
+              publishDepotProgressLine(app.redis, frame.stream, text).catch((error: unknown) => {
+                steamCmdStreamWriteErrors.push(error);
+              }),
+            );
           });
+          await Promise.all(steamCmdStreamWrites);
+          if (steamCmdStreamWriteErrors.length > 0) throw steamCmdStreamWriteErrors[0];
 
           // ── Phase 3: store build ID from manifest ──
           try {
@@ -208,11 +237,21 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           // Even on failure, restart any servers we stopped — never leave them down.
           await restartServers(stoppedIds);
         } finally {
-          await publishDepotProgressDone(app.redis, finalStatus, finalError);
-          await app.redis.del('depot:updating');
-          await dedicated.close().catch(() => undefined);
+          await publishDepotProgressDone(app.redis, finalStatus, finalError).catch(
+            (error: unknown) => {
+              app.log.error({ err: error }, 'failed to publish depot update completion event');
+            },
+          );
+          await app.redis.del('depot:updating').catch((error: unknown) => {
+            app.log.error({ err: error }, 'failed to release depot update lock');
+          });
+          await dedicated.close().catch((error: unknown) => {
+            app.log.error({ err: error }, 'failed to close depot bridge client');
+          });
         }
-      })();
+      })().catch((error: unknown) => {
+        app.log.error({ err: error }, 'unexpected depot update background error');
+      });
 
       return {
         status: 'started',

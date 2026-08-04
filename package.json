@@ -29,6 +29,7 @@
     "verify:audit-chain": "tsx scripts/verify-audit-chain.ts",
     "solve:issues": "tsx scripts/solve-issues-parallel.ts",
     "solve:issues:test": "tsx --test scripts/solve-issues-parallel.test.ts",
+    "test:scripts": "pnpm --filter panel-bridge build && tsx --test scripts/rnsquadjs-shadow-diff.test.ts",
     "prepare": "lefthook install || true"
   },
   "devDependencies": {

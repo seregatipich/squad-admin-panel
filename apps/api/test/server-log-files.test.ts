@@ -53,6 +53,7 @@ describe('GET /api/v1/servers/:id/logs/files', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge({
         squadLogList: async ({ path }) => {
           expect(path).toBe(`${PANEL_SAVED_ROOT}/${SERVER_ID}/SquadGame/Saved/Logs`);
@@ -148,6 +149,7 @@ describe('GET /api/v1/servers/:id/logs/files/:name/download', () => {
     emittedFrames = 0;
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge({
         fileReadStream: async ({ path }, onStream) => {
           expect(path).toBe(`${PANEL_SAVED_ROOT}/${SERVER_ID}/SquadGame/Saved/Logs/SquadGame.log`);

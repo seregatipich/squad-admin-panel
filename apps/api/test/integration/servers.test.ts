@@ -43,6 +43,7 @@ beforeEach(async () => {
   vi.mocked(relaunchSidecar).mockClear();
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
+    seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
 });

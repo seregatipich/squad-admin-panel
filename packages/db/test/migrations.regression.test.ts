@@ -92,6 +92,21 @@ describeIfDb('migration regressions', () => {
     expect(rows).toEqual([expect.objectContaining({ column_name: 'id' })]);
   });
 
+  it('migration 0107 installs the last-Owner player and role guards', async () => {
+    const rows = (await db.execute(sql`
+      SELECT tgname AS trigger_name
+      FROM pg_trigger
+      WHERE tgrelid IN ('players'::regclass, 'roles'::regclass)
+        AND tgname IN ('trg_players_last_owner_guard', 'trg_roles_owner_identity_guard')
+        AND NOT tgisinternal
+      ORDER BY tgname
+    `)) as unknown as Array<{ trigger_name: string }>;
+    expect(rows.map((row) => row.trigger_name)).toEqual([
+      'trg_players_last_owner_guard',
+      'trg_roles_owner_identity_guard',
+    ]);
+  });
+
   it('servers has deletion_backup_marker_id column', async () => {
     const rows = await db.execute(sql`
       SELECT column_name FROM information_schema.columns

@@ -1,7 +1,7 @@
 import { players, roles, servers } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invalidatePermissionCache } from '../src/lib/rbac.js';
 import {
   assertAuditRow,
@@ -30,6 +30,7 @@ let h: IntegrationHarness;
 beforeEach(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
+    seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
   await h.redis.del('depot:updating', 'depot:last_update', 'depot:progress');
@@ -193,6 +194,41 @@ describe('POST /api/v1/servers/:id/update', () => {
       expect(lastUpdate.status).toBe('failed');
       expect(lastUpdate.error).toContain('steamcmd exploded');
       expect(await h.redis.get('depot:updating')).toBeNull();
+    });
+
+    it('reports depot:last_update=failed when a progress line silently fails to persist', async () => {
+      const id = await seedServer(h, 'stopped');
+      h.bridge.depotUpdate = async (onStream) => {
+        onStream({ stream: 'stdout', data: 'Update state (0x5) verifying install…' });
+        return { exit_code: 0 };
+      };
+      const xaddSpy = vi
+        .spyOn(h.redis, 'xadd')
+        .mockRejectedValueOnce(new Error('redis unavailable'));
+
+      const cookie = await loginAsOwner(h);
+      try {
+        await h.app.inject({
+          method: 'POST',
+          url: `/api/v1/servers/${id}/update`,
+          headers: { cookie },
+        });
+
+        const deadline = Date.now() + 2000;
+        let lastUpdate: { status?: string; error?: string } = {};
+        let updatingCleared = false;
+        while (Date.now() < deadline) {
+          lastUpdate = JSON.parse((await h.redis.get('depot:last_update')) ?? '{}');
+          updatingCleared = (await h.redis.get('depot:updating')) === null;
+          if (lastUpdate.status && updatingCleared) break;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        expect(lastUpdate.status).toBe('failed');
+        expect(lastUpdate.error).toContain('redis unavailable');
+        expect(updatingCleared).toBe(true);
+      } finally {
+        xaddSpy.mockRestore();
+      }
     });
   });
 });

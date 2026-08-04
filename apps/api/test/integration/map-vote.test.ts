@@ -33,7 +33,7 @@ const LAYER_UNKNOWN = `MV1TestLayer_Unknown_${RUN_TAG}`;
 let h: IntegrationHarness;
 
 beforeEach(async () => {
-  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
+  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
   await h.db.insert(servers).values({
     id: SERVER_ID,
     displayName: 'Map Vote Test Server',

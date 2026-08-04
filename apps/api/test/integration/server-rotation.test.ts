@@ -36,6 +36,7 @@ let h: IntegrationHarness;
 beforeEach(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
+    seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
 });

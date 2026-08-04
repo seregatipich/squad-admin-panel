@@ -24,6 +24,7 @@ describe('GET /api/v1/players + /players/:playerId', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
     const steamId = 76561198000000001n;
@@ -175,6 +176,7 @@ describe('/api/v1/depot', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
   });
@@ -219,6 +221,7 @@ describe('auth plugin', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
   });
@@ -269,6 +272,7 @@ describe('audit plugin', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
   });

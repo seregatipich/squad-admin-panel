@@ -28,7 +28,7 @@ type AlertTriggeredEvent = Extract<LiveEvent, { type: 'alert.triggered' }>;
 let h: IntegrationHarness;
 
 beforeEach(async () => {
-  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
+  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
   await h.db.insert(servers).values({
     id: SERVER_ID,
     displayName: 'Seed Notification Server',
