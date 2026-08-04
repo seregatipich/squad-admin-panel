@@ -402,8 +402,9 @@ func TestRunRNSquadJS(t *testing.T) {
 	if !reflect.DeepEqual(f.Calls[0].Args, wantArgs) {
 		t.Fatalf("docker called with\n  %v\nwant\n  %v", f.Calls[0].Args, wantArgs)
 	}
-	// The server dir stays root-owned and is NOT sidecar-writable: 0o750 +
-	// setgid, holding the host-authored config.json out of reach of uid 1001.
+	// The server dir stays root-owned and is NOT sidecar-writable: 0o750,
+	// holding the host-authored config.json out of reach of uid 1001. No
+	// setgid — see sidecarServerDirModeRaw for why (#267).
 	parentInfo, err := os.Stat(serverDir)
 	if err != nil {
 		t.Fatalf("stat server dir: %v", err)
@@ -411,12 +412,12 @@ func TestRunRNSquadJS(t *testing.T) {
 	if parentInfo.Mode().Perm() != 0o750 {
 		t.Errorf("server dir perm = %o, want 750", parentInfo.Mode().Perm())
 	}
-	if parentInfo.Mode()&os.ModeSetgid == 0 {
-		t.Errorf("server dir missing setgid bit: mode %v", parentInfo.Mode())
+	if parentInfo.Mode()&os.ModeSetgid != 0 {
+		t.Errorf("server dir must not carry setgid (breaks under RestrictSUIDSGID=yes): mode %v", parentInfo.Mode())
 	}
 	// The sock subdir is the ONLY thing the sidecar (uid 1001) can write,
-	// with mode 02770 so the panel group keeps rwx + setgid and others get
-	// nothing. This is where the sidecar creates rcon.sock.
+	// with mode 0770 (group rwx, others none). This is where the sidecar
+	// creates rcon.sock. No setgid — see sidecarSockModeRaw for why (#267).
 	sockInfo, err := os.Stat(filepath.Join(serverDir, "sock"))
 	if err != nil {
 		t.Fatalf("stat sock dir: %v", err)
@@ -424,8 +425,8 @@ func TestRunRNSquadJS(t *testing.T) {
 	if sockInfo.Mode().Perm() != 0o770 {
 		t.Errorf("sock dir perm = %o, want 770", sockInfo.Mode().Perm())
 	}
-	if sockInfo.Mode()&os.ModeSetgid == 0 {
-		t.Errorf("sock dir missing setgid bit: mode %v", sockInfo.Mode())
+	if sockInfo.Mode()&os.ModeSetgid != 0 {
+		t.Errorf("sock dir must not carry setgid (breaks under RestrictSUIDSGID=yes): mode %v", sockInfo.Mode())
 	}
 }
 
@@ -483,7 +484,7 @@ func TestRunRNSquadJSRequiresRenderedConfig(t *testing.T) {
 // contract: the bridge runs as root in production where the Chown to uid 1001
 // succeeds. Under a non-root test process the Chown returns EPERM, which
 // ensureSidecarDir tolerates (a non-root bridge cannot drive containers
-// anyway); the dir and its 02770 mode must still be set so the assertion is on
+// anyway); the dir and its 0770 mode must still be set so the assertion is on
 // the directory state, not the Chown error.
 func TestEnsureSidecarDirSetsModeAndToleratesNonRootChown(t *testing.T) {
 	root := t.TempDir()
@@ -497,17 +498,42 @@ func TestEnsureSidecarDirSetsModeAndToleratesNonRootChown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat server dir: %v", err)
 	}
-	// Server dir: 0o750 + setgid, root-owned (no chown), config.json safe.
-	if serverInfo.Mode().Perm() != 0o750 || serverInfo.Mode()&os.ModeSetgid == 0 {
-		t.Fatalf("server dir mode = %v, want drwxr-s--- (02750)", serverInfo.Mode())
+	// Server dir: 0o750, root-owned (no chown), config.json safe, no setgid.
+	if serverInfo.Mode().Perm() != 0o750 || serverInfo.Mode()&os.ModeSetgid != 0 {
+		t.Fatalf("server dir mode = %v, want drwxr-x--- (0750, no setgid)", serverInfo.Mode())
 	}
-	// Sock subdir: 0o770 + setgid, the only sidecar-writable level.
+	// Sock subdir: 0o770, the only sidecar-writable level, no setgid.
 	sockInfo, err := os.Stat(filepath.Join(serverDir, "sock"))
 	if err != nil {
 		t.Fatalf("stat sock dir: %v", err)
 	}
-	if sockInfo.Mode().Perm() != 0o770 || sockInfo.Mode()&os.ModeSetgid == 0 {
-		t.Fatalf("sock dir mode = %v, want drwxrws--- (02770)", sockInfo.Mode())
+	if sockInfo.Mode().Perm() != 0o770 || sockInfo.Mode()&os.ModeSetgid != 0 {
+		t.Fatalf("sock dir mode = %v, want drwxrwx--- (0770, no setgid)", sockInfo.Mode())
+	}
+}
+
+// TestSidecarDirModesCarryNoSetuidOrSetgid is a regression guard for #267:
+// the panel-host-bridge systemd unit runs with RestrictSUIDSGID=yes, under
+// which the kernel rejects (EPERM) any mkdir/chmod/open whose raw mode
+// argument sets S_ISUID or S_ISGID — unconditionally, on the mode bits alone,
+// regardless of whether the target path already exists. That made every
+// ensureSidecarDir call fail, which made container_run_rnsquadjs fail, which
+// meant the rnsquadjs sidecar (RCON status/roster/chat) never launched for
+// any server. Reproduced live against the real hardening with:
+//
+//	systemd-run --uid=0 --pipe --wait -p RestrictSUIDSGID=yes -- mkdir -m 2750 <path>  # EPERM
+//	systemd-run --uid=0 --pipe --wait -p RestrictSUIDSGID=yes -- mkdir -m 0750 <path>  # succeeds
+//
+// This test can't spin up real systemd/seccomp, but it pins the exact
+// property that must hold for ensureSidecarDir to work under that unit: ANDing the raw
+// mode constants against S_ISUID|S_ISGID (0o6000) must always be zero.
+func TestSidecarDirModesCarryNoSetuidOrSetgid(t *testing.T) {
+	const setuidSetgid = 0o6000
+	if sidecarServerDirModeRaw&setuidSetgid != 0 {
+		t.Errorf("sidecarServerDirModeRaw = %o carries setuid/setgid bits — Mkdirat fails EPERM under RestrictSUIDSGID=yes", sidecarServerDirModeRaw)
+	}
+	if sidecarSockModeRaw&setuidSetgid != 0 {
+		t.Errorf("sidecarSockModeRaw = %o carries setuid/setgid bits — Mkdirat fails EPERM under RestrictSUIDSGID=yes", sidecarSockModeRaw)
 	}
 }
 
