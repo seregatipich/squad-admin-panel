@@ -45,11 +45,27 @@ Both GitHub Actions workflows (`ci`, `deploy-tk104`) run on **self-hosted runner
   ports and off a shared host's production Postgres/Redis. The `go` job runs inside a
   `golang:1.25.11` container for a clean filesystem, and the worker contract tests
   target the CI ephemeral redis rather than a fixed `6379`.
-- **`deploy-tk104` deploys over SSH.** The job (on the org runner) writes the
-  `TK104_SSH_KEY` secret to a deploy key, `rsync`s the checkout to
-  `seregatipich@tk104.duckdns.org:~/apps/squad-admin-panel/` (excluding `.git`,
-  `.env*`, `data`, build output), then runs `scripts/deploy-tk104.sh` on the host
-  over SSH, and gates on the external `https://tk104.duckdns.org/health` probe.
+- **`deploy-tk104` deploys over SSH.** The `deploy` job (on the org runner, triggered
+  by a push to `master`) writes the `TK104_SSH_KEY` secret to a deploy key, `rsync`s
+  the checkout to `seregatipich@tk104.duckdns.org:~/apps/squad-admin-panel/`
+  (excluding `.git`, `.env*`, `data`, build output), then runs
+  `scripts/deploy-tk104.sh` on the host over SSH, and gates on the external
+  `https://tk104.duckdns.org/health` probe.
+- **`deploy-web-preview` redeploys only `web`, from `dev`.** Same workflow file,
+  triggered by a `workflow_run` event once `ci` finishes green on `dev` (or manually
+  via `workflow_dispatch` with `target: web`). It rsyncs `dev`'s checkout to the same
+  `~/apps/squad-admin-panel/` directory and same `compose.tk104.yml` project as the
+  `deploy` job above, then runs `scripts/deploy-tk104-web.sh`, which only rebuilds
+  and restarts the `web` service (`docker compose ... build web` /
+  `up -d --no-deps web`) — api/workers/postgres/redis keep running whatever `deploy`
+  last shipped from `master`. Both jobs share the `deploy-tk104` concurrency group so
+  they never touch the compose project at the same time, but this still means tk104
+  serves **unpromoted `dev` code on the production frontend** between deploys —
+  accepted tradeoff for a fast preview loop; promote `dev` → `master` as usual once a
+  change is ready to actually ship. Per GitHub's `workflow_run`/`workflow_dispatch`
+  semantics, this second job only activates once the workflow file itself has reached
+  the default branch (`master`) — merging it into `dev` alone does not arm the
+  trigger.
 
 ## Container topology
 
