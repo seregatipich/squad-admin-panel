@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/breaking-squad/squad-admin-panel/apps/bridge/internal/validate"
 )
@@ -116,6 +117,176 @@ func TestDockerRunRejectsBadMount(t *testing.T) {
 	}
 	if _, err := d.Run(context.Background(), spec); err == nil {
 		t.Errorf("expected error for /etc/passwd mount")
+	}
+}
+
+// overlayReadOnlyStderr is a real excerpt of the OCI-runtime/containerd
+// mount-race error from #266: docker start/run failing to create the
+// SquadGame/Saved bind mountpoint because the overlay2 merged dir was
+// transiently read-only.
+const overlayReadOnlyStderr = `Error response from daemon: failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: error during container init: error mounting "/var/lib/squad-panel/saved/019dbb45-3556-751f-9124-d4cf0e6b0053" to rootfs at "/squad/SquadGame/Saved": create mountpoint for /squad/SquadGame/Saved mount: make mountpoint "/squad/SquadGame/Saved": mkdirat /var/lib/docker/overlay2/210321c25600648c2bb24ae53fd6a5d227db518936d5e6b75036885db88c7c12/merged/squad/SquadGame: read-only file system`
+
+// zeroRetryBackoff eliminates the real 1s/2s sleep between retry attempts for
+// the duration of a test, restoring the production values on cleanup.
+func zeroRetryBackoff(t *testing.T) {
+	t.Helper()
+	orig := retryTransientDockerRunBackoff
+	retryTransientDockerRunBackoff = []time.Duration{0, 0}
+	t.Cleanup(func() { retryTransientDockerRunBackoff = orig })
+}
+
+func validRunSpec() ContainerRunSpec {
+	return ContainerRunSpec{
+		ServerID:    "019dbb45-3556-751f-9124-d4cf0e6b0053",
+		Image:       "squad-server:latest",
+		GamePort:    7788,
+		QueryPort:   27166,
+		BeaconPort:  15001,
+		RCONPort:    21115,
+		MaxPlayers:  20,
+		Tickrate:    50,
+		Multihome:   "0.0.0.0",
+		ConfigsHost: "/var/lib/squad-panel/configs/019dbb45-3556-751f-9124-d4cf0e6b0053/ServerConfig",
+		SavedHost:   "/var/lib/squad-panel/saved/019dbb45-3556-751f-9124-d4cf0e6b0053",
+		DepotVolume: "squad-depot",
+	}
+}
+
+func TestIsTransientDockerRunError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"exact marker", errors.New("docker start exit 1: " + overlayReadOnlyStderr), true},
+		{"different case", errors.New("...Read-Only File System"), true},
+		{"unrelated error", errors.New("docker start exit 1: Error: No such container: foo"), false},
+	}
+	for _, tc := range cases {
+		if got := isTransientDockerRunError(tc.err); got != tc.want {
+			t.Errorf("%s: isTransientDockerRunError() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestDockerStartRetriesTransientReadOnlyFilesystemError covers #266: a
+// containerd/overlay2 race can transiently fail `docker start` with a
+// read-only-filesystem mount error that clears within a few seconds. The
+// bridge must retry in place (no cleanup needed — Start operates on an
+// existing container, not a fresh one) instead of failing the whole
+// POST /servers/:id/start request on the first blip.
+func TestDockerStartRetriesTransientReadOnlyFilesystemError(t *testing.T) {
+	zeroRetryBackoff(t)
+	f := &Fake{}
+	f.OnRun = func(FakeCall) {
+		if len(f.Calls) < 3 {
+			f.Stderr = []byte(overlayReadOnlyStderr)
+			f.Exit = 1
+			return
+		}
+		f.Stderr = nil
+		f.Exit = 0
+	}
+	d := NewDocker(f)
+	if err := d.Start(context.Background(), "squad-019dbb45-3556-751f-9124-d4cf0e6b0053"); err != nil {
+		t.Fatalf("expected the 3rd attempt to succeed, got %v", err)
+	}
+	if len(f.Calls) != 3 {
+		t.Fatalf("expected 3 attempts (2 failures + 1 success), got %d: %+v", len(f.Calls), f.Calls)
+	}
+	for i, call := range f.Calls {
+		if call.Args[0] != "start" {
+			t.Errorf("call %d: expected every retry to re-run `docker start`, got %v", i, call.Args)
+		}
+	}
+}
+
+// TestDockerRunRetriesTransientReadOnlyFilesystemErrorAndClearsStaleContainer
+// covers the sharper edge in #266's suggested fix: `docker run` failing at
+// the OCI-runtime-create stage can leave a Created-but-never-started
+// container occupying --name, so a bare retry would fail differently
+// ("name already in use") instead of recovering. The retry must clear that
+// container first, exactly like the operator's manual force-stop did.
+func TestDockerRunRetriesTransientReadOnlyFilesystemErrorAndClearsStaleContainer(t *testing.T) {
+	zeroRetryBackoff(t)
+	f := &Fake{}
+	f.OnRun = func(call FakeCall) {
+		if call.Args[0] == "rm" {
+			return
+		}
+		runCalls := 0
+		for _, c := range f.Calls {
+			if c.Args[0] == "run" {
+				runCalls++
+			}
+		}
+		if runCalls < 2 {
+			f.Stdout = nil
+			f.Stderr = []byte(overlayReadOnlyStderr)
+			f.Exit = 1
+			return
+		}
+		f.Stdout = []byte("containerid\n")
+		f.Stderr = nil
+		f.Exit = 0
+	}
+	d := NewDocker(f)
+	out, err := d.Run(context.Background(), validRunSpec())
+	if err != nil {
+		t.Fatalf("expected the 2nd run attempt to succeed, got %v", err)
+	}
+	if out != "containerid" {
+		t.Errorf("out = %q, want containerid", out)
+	}
+	if len(f.Calls) != 3 {
+		t.Fatalf("expected run(fail), rm -f, run(success) = 3 calls, got %d: %+v", len(f.Calls), f.Calls)
+	}
+	wantName := "squad-019dbb45-3556-751f-9124-d4cf0e6b0053"
+	if f.Calls[0].Args[0] != "run" {
+		t.Errorf("call 1: expected docker run, got %v", f.Calls[0].Args)
+	}
+	if f.Calls[1].Args[0] != "rm" || f.Calls[1].Args[1] != "-f" || f.Calls[1].Args[2] != wantName {
+		t.Errorf("call 2: expected `docker rm -f %s` cleanup before retry, got %v", wantName, f.Calls[1].Args)
+	}
+	if f.Calls[2].Args[0] != "run" {
+		t.Errorf("call 3: expected the retried docker run, got %v", f.Calls[2].Args)
+	}
+}
+
+// TestDockerStartGivesUpAfterMaxAttempts guards the retry budget: a
+// persistently failing (not just transiently blipping) daemon must not retry
+// forever — it has to give up within the bridge-client's 30s RPC timeout for
+// container_start and surface the real error.
+func TestDockerStartGivesUpAfterMaxAttempts(t *testing.T) {
+	zeroRetryBackoff(t)
+	f := &Fake{Stderr: []byte(overlayReadOnlyStderr), Exit: 1}
+	d := NewDocker(f)
+	err := d.Start(context.Background(), "squad-019dbb45-3556-751f-9124-d4cf0e6b0053")
+	if err == nil {
+		t.Fatal("expected an error when every attempt fails")
+	}
+	if len(f.Calls) != retryTransientDockerRunAttempts {
+		t.Fatalf("expected exactly %d attempts, got %d", retryTransientDockerRunAttempts, len(f.Calls))
+	}
+	if !strings.Contains(err.Error(), "read-only file system") {
+		t.Errorf("expected the real daemon error to surface after giving up, got %v", err)
+	}
+}
+
+// TestDockerStartDoesNotRetryUnrelatedError guards against over-broad
+// retrying: a normal, non-transient docker failure must fail immediately
+// with no retry, exactly like before this change.
+func TestDockerStartDoesNotRetryUnrelatedError(t *testing.T) {
+	zeroRetryBackoff(t)
+	f := &Fake{Stderr: []byte("Error: No such image: squad-server:latest\n"), Exit: 1}
+	d := NewDocker(f)
+	err := d.Start(context.Background(), "squad-019dbb45-3556-751f-9124-d4cf0e6b0053")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if len(f.Calls) != 1 {
+		t.Fatalf("expected no retry for an unrelated error, got %d calls", len(f.Calls))
 	}
 }
 
