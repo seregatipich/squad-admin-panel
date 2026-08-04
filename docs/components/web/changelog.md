@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-08-04 — Live progress for the depot-update flows
+
+### Added
+
+- New `UpdateProgressModal` (`apps/web/src/components/UpdateProgressModal.tsx`) — connects to the shared `GET /api/v1/depot/progress/ws` (see the `api` changelog's matching entry) and streams lines into the existing `LogConsole`, mirroring the WS-into-`LogConsole` pattern the install wizard (`servers/new/page.tsx`) already used. Ignores any `done` frame received before the server's `{backfill_complete:true}` marker — it belongs to a previous, already-finished run replayed as history, not the one just watched.
+- Wired into the server detail page's "Обновить игру" button (`servers/[id]/page.tsx`): the button previously showed "Обновление..." for only the instant its `POST` took to return, then silently reverted while the real update kept running for minutes. It now opens the progress modal on a successful start and stays labeled/re-openable ("Обновление... (открыть лог)") until the run's terminal frame arrives, even if the modal itself is closed and reopened.
+- Wired into the fleet dashboard's `DepotUpdateModal` flow (`dashboard/page.tsx`): starting an update now opens `UpdateProgressModal` instead of just closing the selection dialog with no further feedback.
+
+### Fixed
+
+- `dashboard/page.tsx`'s `DepotUpdateModal onStart` handler posted `{stop_server_ids: serverIds}` to `POST /api/v1/depot/update`, but the route's Zod schema reads `server_ids` — the modal's "these servers will be stopped" checkboxes had no effect on the actual request; the depot update always ran with an empty `server_ids: []`, so operators who checked servers to protect them were not being protected. Also now surfaces a non-200 response as a thrown error instead of proceeding to show progress for an update that never started.
+
 ## 2026-07-27 — VIPSUB-5 removal of `/no-access`, panel guard on `(dashboard)` (#171)
 
 ### Added
