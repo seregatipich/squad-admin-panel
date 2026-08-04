@@ -117,14 +117,80 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 	}
 	squadArgs = append(squadArgs, spec.ExtraArgs...)
 	args = append(args, squadArgs...)
-	so, se, exit, err := d.R.Run(ctx, d.Bin, args, nil)
-	if err != nil {
-		return strings.TrimSpace(string(so)), err
+	var out string
+	// `docker run` failing at the OCI-runtime-create stage (the class this
+	// retries) can leave a stale Created-but-never-started container holding
+	// `name`; a bare retry would then fail with "name already in use" instead
+	// of recovering. beforeRetry clears it the same way the operator's manual
+	// force-stop did (best-effort: Rm already tolerates "no such container").
+	beforeRetry := func() {
+		_, _, _, _ = d.R.Run(ctx, d.Bin, []string{"rm", "-f", name}, nil)
 	}
-	if exit != 0 {
-		return strings.TrimSpace(string(so)), fmt.Errorf("docker run exit %d: %s", exit, strings.TrimSpace(string(se)))
+	err := retryTransientDockerFailures(ctx, beforeRetry, func() error {
+		so, se, exit, runErr := d.R.Run(ctx, d.Bin, args, nil)
+		out = strings.TrimSpace(string(so))
+		if runErr != nil {
+			return runErr
+		}
+		if exit != 0 {
+			return fmt.Errorf("docker run exit %d: %s", exit, strings.TrimSpace(string(se)))
+		}
+		return nil
+	})
+	return out, err
+}
+
+// transientDockerRunErrorMarker matches the OCI-runtime/containerd mount
+// error class documented in #266: a containerd/overlay2 race can transiently
+// block container creation with an EROFS error on the auto-created bind
+// mountpoint ("make mountpoint ... read-only file system"). It was observed
+// on both `docker start` (existing container) and `docker run` (fresh
+// container, different overlay2 layer each time), and cleared on its own
+// within a few minutes. "read-only file system" is specific enough in this
+// context (docker start/run stderr) not to collide with unrelated failures;
+// retrying a bounded number of times turns a short-lived instance of it into
+// an invisible blip instead of requiring an operator to notice and manually
+// force-stop + retry.
+const transientDockerRunErrorMarker = "read-only file system"
+
+func isTransientDockerRunError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), transientDockerRunErrorMarker)
+}
+
+// retryTransientDockerRunAttempts and retryTransientDockerRunBackoff bound
+// the extra latency retries can add: the bridge-client RPC timeouts for
+// container_start/container_run are 30s/60s (packages/bridge-client/src/client.ts),
+// so the total added sleep (1s+2s=3s here) must stay comfortably under that,
+// leaving headroom for the docker command's own execution time.
+const retryTransientDockerRunAttempts = 3
+
+var retryTransientDockerRunBackoff = []time.Duration{time.Second, 2 * time.Second}
+
+// retryTransientDockerFailures runs op up to retryTransientDockerRunAttempts
+// times, retrying only while op's error matches isTransientDockerRunError.
+// beforeRetry (may be nil) runs before each retry, e.g. to clear a
+// partially-created container left behind by the failed attempt. Context
+// cancellation aborts the wait between attempts immediately.
+func retryTransientDockerFailures(ctx context.Context, beforeRetry func(), op func() error) error {
+	var err error
+	for attempt := 0; attempt < retryTransientDockerRunAttempts; attempt++ {
+		err = op()
+		if !isTransientDockerRunError(err) {
+			return err
+		}
+		if attempt >= len(retryTransientDockerRunBackoff) {
+			break
+		}
+		if beforeRetry != nil {
+			beforeRetry()
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(retryTransientDockerRunBackoff[attempt]):
+		}
 	}
-	return strings.TrimSpace(string(so)), nil
+	return err
 }
 
 // sidecarUID is the unprivileged uid the rnsquadjs sidecar runs as. The
@@ -133,18 +199,26 @@ func (d *DockerRunner) Run(ctx context.Context, spec ContainerRunSpec) (string, 
 const sidecarUID = 1001
 
 // sidecarSockModeRaw is the raw syscall mode for the only sidecar-writable
-// level: group rwx + setgid, nothing for others. In a raw syscall mode the
-// setgid bit is octal 0o2000 (S_ISGID); os.ModeSetgid (a high FileMode bit)
-// must NOT be used here because Fchmod takes the raw bitmask, not a FileMode.
-// os.Stat still surfaces 0o2000 as os.ModeSetgid, which the tests assert.
-const sidecarSockModeRaw uint32 = 0o2770
+// level: group rwx, nothing for others. No setgid: the panel-host-bridge
+// systemd unit runs with RestrictSUIDSGID=yes, which makes the kernel reject
+// (EPERM) any mkdir/chmod/open whose mode argument carries S_ISUID or
+// S_ISGID — unconditionally, on the raw mode bits alone, before the syscall
+// even resolves the path (see docker_test.go's ...NoSetuidOrSetgid test and
+// #267). Setgid was never load-bearing here anyway: this dir is Fchowned
+// straight to sidecarUID, and rcon.sock is created by the sidecar itself
+// (docker --user 1001:1001), so the file's group already matches without
+// needing kernel inheritance from the parent.
+const sidecarSockModeRaw uint32 = 0o0770
 
 // sidecarServerDirModeRaw is the raw syscall mode for the per-server parent
-// dir holding the host-authored config.json: group r-x + setgid, no group
-// write. It stays root-owned (never chowned) so the sidecar (uid 1001) cannot
-// rewrite config.json through the rw bind; only the nested sock subdir is
-// sidecar-writable.
-const sidecarServerDirModeRaw uint32 = 0o2750
+// dir holding the host-authored config.json: group r-x, no group write, no
+// setgid (see sidecarSockModeRaw for why). It stays root-owned (never
+// chowned) so the sidecar (uid 1001) cannot rewrite config.json through the
+// rw bind; only the nested sock subdir is sidecar-writable. Every writer of
+// this directory (this bridge process and the API's writeSidecarConfig) runs
+// as root, so group inheritance was never needed for consistent ownership
+// either.
+const sidecarServerDirModeRaw uint32 = 0o0750
 
 // allowedSidecarEnv is the exhaustive set of environment keys the API may
 // pass through to the rnsquadjs sidecar. A compromised API container cannot
@@ -238,8 +312,8 @@ func (d *DockerRunner) composeRNSquadJSArgs(spec RNSquadJSRunSpec) ([]string, er
 
 // ensureSidecarDir builds the two-level per-server tree the sidecar needs:
 //
-//	{root}/{id}/       0o2750, root-owned        — holds host-authored config.json
-//	{root}/{id}/sock/  0o2770, chown uid 1001    — the only sidecar-writable level
+//	{root}/{id}/       0o0750, root-owned      — holds host-authored config.json
+//	{root}/{id}/sock/  0o0770, chown uid 1001  — the only sidecar-writable level
 //
 // Splitting the levels keeps config.json out of any sidecar-writable mount: the
 // container sees {id}/sock bound rw at /run/panelBridge and config.json bound
@@ -284,10 +358,13 @@ func (d *DockerRunner) ensureSidecarDir(serverID string) error {
 // openVerifiedSidecarDir creates name under parentFd (tolerating an existing
 // entry), reopens it O_NOFOLLOW|O_DIRECTORY relative to parentFd so a planted
 // symlink fails closed, then forces the exact mode with Fchmod (Mkdirat honours
-// the umask, which strips setgid and group bits). When chownToSidecar it
-// Fchowns the inode to the sidecar uid; a non-root caller (dev/test) hits
-// EPERM, tolerated because a non-root bridge cannot drive containers anyway.
-// Returns the open fd; the caller owns closing it.
+// the umask, which strips group/other bits down from what's requested — the
+// Fchmod re-asserts the exact target mode). mode must never carry S_ISUID or
+// S_ISGID: the panel-host-bridge systemd unit's RestrictSUIDSGID=yes makes
+// Mkdirat/Fchmod reject those bits with EPERM outright (see sidecarSockModeRaw).
+// When chownToSidecar it Fchowns the inode to the sidecar uid; a non-root
+// caller (dev/test) hits EPERM, tolerated because a non-root bridge cannot
+// drive containers anyway. Returns the open fd; the caller owns closing it.
 func openVerifiedSidecarDir(parentFd int, name string, mode uint32, chownToSidecar bool) (int, error) {
 	if err := syscall.Mkdirat(parentFd, name, mode); err != nil && !errors.Is(err, syscall.EEXIST) {
 		return -1, fmt.Errorf("create sidecar dir %q: %w", name, err)
@@ -360,14 +437,16 @@ func (d *DockerRunner) Start(ctx context.Context, name string) error {
 	if err := validate.ContainerName(name); err != nil {
 		return err
 	}
-	_, se, exit, err := d.R.Run(ctx, d.Bin, []string{"start", name}, nil)
-	if err != nil {
-		return err
-	}
-	if exit != 0 {
-		return fmt.Errorf("docker start exit %d: %s", exit, strings.TrimSpace(string(se)))
-	}
-	return nil
+	return retryTransientDockerFailures(ctx, nil, func() error {
+		_, se, exit, err := d.R.Run(ctx, d.Bin, []string{"start", name}, nil)
+		if err != nil {
+			return err
+		}
+		if exit != 0 {
+			return fmt.Errorf("docker start exit %d: %s", exit, strings.TrimSpace(string(se)))
+		}
+		return nil
+	})
 }
 
 func (d *DockerRunner) Stop(ctx context.Context, name string, timeout time.Duration) error {
