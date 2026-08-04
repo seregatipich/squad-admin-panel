@@ -169,6 +169,101 @@ describe('SidebarNav', () => {
     expect(screen.queryByRole('link', { name: 'Бонусы' })).not.toBeInTheDocument();
   });
 
+  it('nests "Типы меток", "Флаги чата", "Альт-детект", "Whitelist", "Защита клан-тегов" and "Источники банов" under the "Модерация" group inside "Настройки"', async () => {
+    const { NAV_GROUPS } = await import('@/lib/nav');
+    const settingsGroup = NAV_GROUPS.find((g) => g.label === 'Настройки');
+    const moderationGroup = settingsGroup?.items.find((item) => item.label === 'Модерация');
+    expect(moderationGroup?.href).toBeUndefined();
+    expect(moderationGroup?.children?.map((c) => c.label)).toEqual([
+      'Типы меток',
+      'Флаги чата',
+      'Альт-детект',
+      'Whitelist',
+      'Защита клан-тегов',
+      'Источники банов',
+    ]);
+  });
+
+  it('renders "Модерация" as a toggle button, not a link, and expands/collapses its children on click', () => {
+    render(
+      <LocaleProvider locale="ru">
+        <SidebarNav
+          permissions={['role:edit', 'player:view_ips', 'whitelist:view']}
+          displayName="Alice"
+        />
+      </LocaleProvider>,
+    );
+    expect(screen.queryByRole('link', { name: 'Модерация' })).not.toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: 'Модерация' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', { name: 'Флаги чата' })).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('link', { name: 'Флаги чата' })).toHaveAttribute(
+      'href',
+      '/settings/chat-flags',
+    );
+    expect(screen.getByRole('link', { name: 'Защита клан-тегов' })).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', { name: 'Флаги чата' })).not.toBeInTheDocument();
+  });
+
+  it('auto-expands "Уведомления" when the active route is one of its children', () => {
+    mockUsePathname.mockReturnValue('/settings/automation');
+    render(
+      <LocaleProvider locale="ru">
+        <SidebarNav permissions={[]} displayName="Alice" />
+      </LocaleProvider>,
+    );
+    expect(screen.getByRole('button', { name: 'Уведомления' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(screen.getByRole('link', { name: 'Автоматизация' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+  });
+
+  it('hides the whole "Интеграции" group without integration:manage, since none of its children are visible', () => {
+    render(
+      <LocaleProvider locale="ru">
+        <SidebarNav permissions={[]} displayName="Alice" />
+      </LocaleProvider>,
+    );
+    expect(screen.queryByRole('button', { name: 'Интеграции' })).not.toBeInTheDocument();
+  });
+
+  it('shows "Интеграции" with Discord, GeoIP and media publishing once integration:manage is granted', () => {
+    render(
+      <LocaleProvider locale="ru">
+        <SidebarNav permissions={['integration:manage']} displayName="Alice" />
+      </LocaleProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Интеграции' }));
+    expect(screen.getByRole('link', { name: 'Discord' })).toHaveAttribute(
+      'href',
+      '/settings/integrations/discord',
+    );
+    expect(screen.getByRole('link', { name: 'GeoIP (MaxMind)' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Публикация медиа' })).toBeInTheDocument();
+  });
+
+  it('keeps ungrouped settings pages like "Аккаунт" as direct links', () => {
+    render(
+      <LocaleProvider locale="ru">
+        <SidebarNav permissions={[]} displayName="Alice" />
+      </LocaleProvider>,
+    );
+    expect(screen.getByRole('link', { name: 'Аккаунт' })).toHaveAttribute(
+      'href',
+      '/settings/account',
+    );
+  });
+
   it('renders navigation labels in Russian', () => {
     render(
       <LocaleProvider locale="ru">
