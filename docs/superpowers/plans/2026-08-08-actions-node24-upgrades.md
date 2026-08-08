@@ -15,19 +15,21 @@
 
 ## Изменения
 
-1. Влить в рабочую ветку головы пяти PR:
+1. Подтвердить, что головы PR №262, №264 и №265 уже входят в `origin/dev`:
    - `actions/checkout` 7.0.1;
    - `actions/setup-node` 7.0.0;
    - `docker/setup-buildx-action` 4.2.0;
+2. Влить в рабочую ветку оставшиеся PR №274 и №275:
    - `actions/upload-artifact` 7.0.1;
    - `pnpm/action-setup` 6.0.10.
-2. Проверить объединённый diff: только `.github/workflows/ci.yml` и
-   `.github/workflows/deploy-tk104.yml`, без ослабления условий или прав.
-3. Выполнить `actionlint`, `pnpm turbo run typecheck`, `pnpm exec biome check .`,
-   применимые тесты и `bash scripts/verify-done.sh --feature`.
-4. После независимой приёмки влить ветку в `dev`, отправить `origin/dev` и
+3. Проверить объединённый diff: только закреплённые версии в
+   `.github/workflows/ci.yml`, без ослабления условий или прав.
+4. Выполнить защитные тесты workflow, `pnpm turbo run typecheck`,
+   `pnpm exec biome check .`, применимые тесты и
+   `bash scripts/verify-done.sh --feature`.
+5. После независимой приёмки влить ветку в `dev`, отправить `origin/dev` и
    дождаться зелёного CI текущего SHA.
-5. Выполнить `bash scripts/verify-done.sh`; только затем fast-forward
+6. Выполнить `bash scripts/verify-done.sh`; только затем fast-forward
    `origin/dev:master` и проверить CI/развёртывание.
 
 ## Условие остановки
