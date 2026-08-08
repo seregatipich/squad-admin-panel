@@ -327,4 +327,30 @@ describe('StatisticsBrowser — branch coverage', () => {
     ).length;
     expect(after).toBe(before + 1);
   });
+
+  it('does not refetch when the initial empty server selection debounce expires', async () => {
+    vi.useFakeTimers();
+    try {
+      await mount(<StatisticsBrowser />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByText('Население')).toBeInTheDocument();
+
+      const before = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter((call) =>
+        String(call[0]).startsWith('/api/v1/statistics'),
+      ).length;
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      const after = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter((call) =>
+        String(call[0]).startsWith('/api/v1/statistics'),
+      ).length;
+      expect(after).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
