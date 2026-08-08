@@ -84,7 +84,16 @@ export function StatisticsBrowser() {
   useEffect(() => {
     if (dropdownOpen) return;
     if (commitTimer.current) clearTimeout(commitTimer.current);
-    commitTimer.current = setTimeout(() => setCommitted(selected), SELECTION_DEBOUNCE_MS);
+    commitTimer.current = setTimeout(
+      () =>
+        setCommitted((current) => {
+          const unchanged =
+            current.length === selected.length &&
+            current.every((serverId, index) => serverId === selected[index]);
+          return unchanged ? current : selected;
+        }),
+      SELECTION_DEBOUNCE_MS,
+    );
     return () => {
       if (commitTimer.current) clearTimeout(commitTimer.current);
     };
