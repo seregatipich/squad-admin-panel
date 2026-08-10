@@ -228,6 +228,12 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       const r = role[0]!;
       const playerId = req.params.playerId;
       if (r.isSystemRole && r.name === 'Owner') {
+        const membership = await app.db
+          .select({ id: players.id })
+          .from(players)
+          .where(and(eq(players.id, playerId), eq(players.roleId, r.id)))
+          .limit(1);
+        if (membership.length === 0) return { ok: true };
         const count = await app.db
           .select({ c: sql<number>`count(*)::int` })
           .from(players)
@@ -237,18 +243,22 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
           return { error: 'cannot_remove_last_owner' };
         }
       }
-      await app.db.transaction(async (tx) => {
-        await tx
+      const removed = await app.db.transaction(async (tx) => {
+        const updated = await tx
           .update(players)
-          .set({ roleId: null })
-          .where(and(eq(players.id, playerId), eq(players.roleId, r.id)));
+          .set({ roleId: null, roleComment: null, roleExpiresAt: null })
+          .where(and(eq(players.id, playerId), eq(players.roleId, r.id)))
+          .returning({ id: players.id });
+        if (updated.length === 0) return false;
         await publishAdminsCfgSyncForAllServers(tx, app.redis, {
           reason: 'role.member.remove',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
           request_id: req.id,
         });
+        return true;
       });
+      if (!removed) return { ok: true };
       invalidatePermissionCache(playerId);
       await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
       return { ok: true };
