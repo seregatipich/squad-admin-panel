@@ -38,6 +38,16 @@ async function seedRunning(h: IntegrationHarness) {
 
 let h: IntegrationHarness;
 
+async function waitForDepotUpdate(timeoutMs = 5000): Promise<void> {
+  const startedAt = Date.now();
+  while (await h.redis.exists('depot:updating')) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`depot update did not finish within ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 beforeEach(async () => {
   h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER } });
   await h.redis.del('depot:updating', 'depot:build_id', 'depot:last_update', 'depot:progress');
@@ -64,6 +74,7 @@ describe('POST /api/v1/depot/update with server_ids', () => {
     const body = res.json();
     expect(body.status).toBe('started');
     expect(body.servers_to_stop).toEqual([id]);
+    await waitForDepotUpdate();
   });
 
   it('works without server_ids (depot-only update)', async () => {
@@ -80,6 +91,7 @@ describe('POST /api/v1/depot/update with server_ids', () => {
     const body = res.json();
     expect(body.status).toBe('started');
     expect(body.servers_to_stop).toEqual([]);
+    await waitForDepotUpdate();
   });
 
   it('rejects non-existent server IDs with 400', async () => {
@@ -182,8 +194,7 @@ describe('POST /api/v1/depot/update background orchestration', () => {
       payload: { server_ids: [id] },
     });
 
-    // Wait for background task to complete
-    await new Promise((r) => setTimeout(r, 200));
+    await waitForDepotUpdate();
 
     expect(stoppedNames).toContain(`squad-${id}`);
     expect(startedNames).toContain(`squad-${id}`);
@@ -231,7 +242,7 @@ describe('POST /api/v1/depot/update background orchestration', () => {
       payload: { server_ids: [id] },
     });
 
-    await new Promise((r) => setTimeout(r, 200));
+    await waitForDepotUpdate();
 
     // Server should still be restarted even though depot update failed
     expect(startedNames).toContain(`squad-${id}`);
