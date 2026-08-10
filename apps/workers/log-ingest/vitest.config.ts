@@ -6,6 +6,8 @@ export default defineConfig({
     testTimeout: 10_000,
     setupFiles: ['../_test-shared/load-env.ts'],
     fileParallelism: false,
+    globalSetup: ['./test/global-setup.ts'],
+    hookTimeout: 120_000,
     sequence: { concurrent: false },
     coverage: {
       provider: 'v8',
