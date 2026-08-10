@@ -71,6 +71,26 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000) {
   }
 }
 
+function waitForClose(ws: WebSocket): Promise<void> {
+  if (ws.readyState === WebSocket.CLOSED) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      ws.off('close', onClose);
+      ws.off('error', onError);
+    };
+    const onClose = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    ws.once('close', onClose);
+    ws.once('error', onError);
+  });
+}
+
 describe('GET /api/v1/depot/progress/ws', () => {
   it('backfills existing lines, streams live lines, and closes on a live done sentinel', async () => {
     await publishDepotProgressLine(redis, 'stdout', 'buffered line 1');
@@ -82,10 +102,10 @@ describe('GET /api/v1/depot/progress/ws', () => {
       frames.some((f) => (f as { backfill_complete?: boolean }).backfill_complete === true),
     );
 
+    const closed = waitForClose(ws);
     await publishDepotProgressLine(redis, 'stdout', 'live line 2');
     await publishDepotProgressDone(redis, 'done');
-
-    await new Promise<void>((resolve) => ws.on('close', () => resolve()));
+    await closed;
 
     const messages = frames
       .map((f) => (f as { message?: string }).message)
@@ -117,8 +137,9 @@ describe('GET /api/v1/depot/progress/ws', () => {
     const doneFramesSoFar = frames.filter((f) => (f as { done?: boolean }).done).length;
     expect(doneFramesSoFar).toBe(1);
 
+    const closed = waitForClose(ws);
     await publishDepotProgressDone(redis, 'error', 'boom');
-    await new Promise<void>((resolve) => ws.on('close', () => resolve()));
+    await closed;
 
     const last = frames.at(-1) as { done?: boolean; final?: string; error?: string };
     expect(last).toEqual({ done: true, final: 'error', error: 'boom' });
@@ -131,7 +152,7 @@ describe('GET /api/v1/depot/progress/ws', () => {
     );
 
     const { ws, frames } = connect();
-    await new Promise<void>((resolve) => ws.on('close', () => resolve()));
+    await waitForClose(ws);
 
     const last = frames.at(-1) as { done?: boolean; final?: string };
     expect(last).toEqual({ done: true, final: 'done' });
@@ -148,7 +169,7 @@ describe('GET /api/v1/depot/progress/ws', () => {
     );
 
     const { ws, frames } = connect();
-    await new Promise<void>((resolve) => ws.on('close', () => resolve()));
+    await waitForClose(ws);
 
     const last = frames.at(-1) as { done?: boolean; final?: string; error?: string };
     expect(last).toEqual({ done: true, final: 'error', error: 'disk full' });
