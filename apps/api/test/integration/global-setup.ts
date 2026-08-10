@@ -2,6 +2,13 @@ import { randomBytes } from 'node:crypto';
 import postgres from 'postgres';
 import { buildSharedTemplate, testDbUrl, useRunId } from './isolated-db.js';
 
+export function testDatabaseNamePattern(runId: string): RegExp {
+  if (!/^[0-9a-f]{8}$/.test(runId)) {
+    throw new Error('test database run id must be exactly 8 lowercase hexadecimal characters');
+  }
+  return new RegExp(`^(sqtest|sqtmpl|sqworker)_${runId}_[a-z0-9_]+$`);
+}
+
 /**
  * Drops every `sqtest_`/`sqtmpl_`/`sqworker_` database created by this run —
  * i.e. carrying this run's own `runId` — leaving any concurrently running
@@ -10,13 +17,12 @@ import { buildSharedTemplate, testDbUrl, useRunId } from './isolated-db.js';
  * race and destroy another local session's still-live databases (#212).
  */
 export async function dropTestDatabases(runId: string): Promise<void> {
+  const pattern = testDatabaseNamePattern(runId).source;
   const sql = postgres(testDbUrl, { max: 1, onnotice: () => undefined });
   try {
     const rows = await sql<{ datname: string }[]>`
       SELECT datname FROM pg_database
-      WHERE datname LIKE ${`sqtest_${runId}_%`}
-         OR datname LIKE ${`sqtmpl_${runId}_%`}
-         OR datname LIKE ${`sqworker_${runId}_%`}`;
+      WHERE datname ~ ${pattern}`;
     for (const { datname } of rows) {
       await sql.unsafe(`DROP DATABASE IF EXISTS "${datname}" WITH (FORCE)`).catch(() => undefined);
     }

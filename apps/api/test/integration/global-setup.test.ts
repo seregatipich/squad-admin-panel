@@ -1,29 +1,22 @@
-import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { dropTestDatabases } from './global-setup.js';
-import { testDbUrl } from './isolated-db.js';
+import { testDatabaseNamePattern } from './global-setup.js';
 
-describe('global-setup dropTestDatabases', () => {
-  it("drops only its own run-id leftovers, never a concurrent run's databases", async () => {
-    const pg = (await import('postgres')).default(testDbUrl, { max: 1, onnotice: () => undefined });
-    const myRunId = randomBytes(4).toString('hex');
-    const otherRunId = randomBytes(4).toString('hex');
-    const mine = `sqtest_${myRunId}_leftover`;
-    const theirs = `sqworker_${otherRunId}_leftover`;
-    try {
-      await pg.unsafe(`CREATE DATABASE "${mine}"`);
-      await pg.unsafe(`CREATE DATABASE "${theirs}"`);
+describe('global-setup test database ownership', () => {
+  it("matches only its own strict run-id leftovers, never a concurrent run's databases", () => {
+    const pattern = testDatabaseNamePattern('0123abcd');
 
-      await dropTestDatabases(myRunId);
+    expect('sqtest_0123abcd_leftover').toMatch(pattern);
+    expect('sqtmpl_0123abcd_shared_0123456789ab').toMatch(pattern);
+    expect('sqworker_0123abcd_leftover').toMatch(pattern);
+    expect('sqworker_deadbeef_leftover').not.toMatch(pattern);
+    expect('sqtestX0123abcdYleftover').not.toMatch(pattern);
+    expect('sqtest_0123abcd_').not.toMatch(pattern);
+    expect('sqtest_0123ABCD_leftover').not.toMatch(pattern);
+    expect('production_0123abcd_leftover').not.toMatch(pattern);
+  });
 
-      const rows = await pg<
-        { datname: string }[]
-      >`select datname from pg_database where datname in (${mine}, ${theirs}) order by datname`;
-      expect(rows.map((r) => r.datname)).toEqual([theirs]);
-    } finally {
-      await pg.unsafe(`DROP DATABASE IF EXISTS "${mine}" WITH (FORCE)`).catch(() => undefined);
-      await pg.unsafe(`DROP DATABASE IF EXISTS "${theirs}" WITH (FORCE)`).catch(() => undefined);
-      await pg.end();
-    }
-  }, 30_000);
+  it('rejects a malformed run id before constructing a database query', () => {
+    expect(() => testDatabaseNamePattern('0123abc')).toThrow(/exactly 8 lowercase hexadecimal/);
+    expect(() => testDatabaseNamePattern('0123ABCD')).toThrow(/exactly 8 lowercase hexadecimal/);
+  });
 });
