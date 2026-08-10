@@ -228,6 +228,12 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       const r = role[0]!;
       const playerId = req.params.playerId;
       if (r.isSystemRole && r.name === 'Owner') {
+        const membership = await app.db
+          .select({ id: players.id })
+          .from(players)
+          .where(and(eq(players.id, playerId), eq(players.roleId, r.id)))
+          .limit(1);
+        if (membership.length === 0) return { ok: true };
         const count = await app.db
           .select({ c: sql<number>`count(*)::int` })
           .from(players)

@@ -21,6 +21,7 @@ const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', () => {
   let h: IntegrationHarness;
   let memberId: string;
+  let ownerRoleId: string;
   let actualRoleId: string;
   let unrelatedRoleId: string;
   let serverId: string;
@@ -31,6 +32,14 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
       seedOwner: { steamId64: OWNER_STEAM },
       bridge: makeFakeBridge(),
     });
+
+    const ownerRole = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.name, 'Owner'))
+      .limit(1);
+    if (!ownerRole[0]) throw new Error('Owner role missing');
+    ownerRoleId = ownerRole[0].id;
 
     actualRoleId = uuidv7();
     unrelatedRoleId = uuidv7();
@@ -110,6 +119,26 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
       playerId: memberId,
     });
     expect(await loadUserPermissions(h.db, memberId)).toBe(cachedPermissions);
+  });
+
+  it('treats a non-member of the sole Owner role as an idempotent no-op', async () => {
+    const streamLengthBefore = await h.redis.xlen(SYNC_STREAM(serverId));
+
+    const response = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/roles/${ownerRoleId}/members/${memberId}`,
+      headers: { cookie: ownerCookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true });
+    const stored = await h.db
+      .select({ roleId: players.roleId })
+      .from(players)
+      .where(eq(players.id, memberId))
+      .limit(1);
+    expect(stored[0]?.roleId).toBe(actualRoleId);
+    expect(await h.redis.xlen(SYNC_STREAM(serverId))).toBe(streamLengthBefore);
   });
 
   it('clears assignment metadata and runs side effects once for an actual member', async () => {
