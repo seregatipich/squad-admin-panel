@@ -40,14 +40,14 @@ describe('app.diag plugin', () => {
 
     expect(res.statusCode).toBe(200);
     expect(captured).toHaveLength(1);
-    expect(captured[0]!.kind).toBe('test.event');
-    expect(captured[0]!.component).toBe('api');
-    expect(captured[0]!.severity).toBe('info');
-    expect(typeof captured[0]!.requestId).toBe('string');
-    expect(captured[0]!.requestId).not.toBe('');
+    expect(captured[0]?.kind).toBe('test.event');
+    expect(captured[0]?.component).toBe('api');
+    expect(captured[0]?.severity).toBe('info');
+    expect(typeof captured[0]?.requestId).toBe('string');
+    expect(captured[0]?.requestId).not.toBe('');
 
     const body = res.json() as { id: string };
-    expect(captured[0]!.requestId).toBe(body.id);
+    expect(captured[0]?.requestId).toBe(body.id);
 
     await app.close();
   });
@@ -81,7 +81,7 @@ describe('app.diag plugin', () => {
 
     expect(res.statusCode).toBe(200);
     expect(captured).toHaveLength(1);
-    expect(captured[0]!.requestId).toBe('caller-supplied-id');
+    expect(captured[0]?.requestId).toBe('caller-supplied-id');
 
     await app.close();
   });

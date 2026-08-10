@@ -85,7 +85,7 @@ const publicStatsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/public/stats',
-    { config: { audit: false }, schema: { querystring: publicStatsQuery } },
+    { config: { audit: false, public: true }, schema: { querystring: publicStatsQuery } },
     async (req, reply) => {
       const payload = await buildPayload(app, req.query);
 
@@ -101,7 +101,7 @@ const publicStatsRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/public/stats.csv',
-    { config: { audit: false }, schema: { querystring: publicStatsQuery } },
+    { config: { audit: false, public: true }, schema: { querystring: publicStatsQuery } },
     async (req, reply) => {
       const payload = await buildPayload(app, req.query);
       void reply.header('content-type', 'text/csv; charset=utf-8');

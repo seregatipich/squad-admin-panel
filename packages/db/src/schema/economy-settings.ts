@@ -36,6 +36,11 @@ export const economySettings = pgTable(
     seedRewardRoleId: uuid('seed_reward_role_id').references(() => roles.id, {
       onDelete: 'set null',
     }),
+    vipExpiryWindowsDays: jsonb('vip_expiry_windows_days')
+      .$type<number[]>()
+      .notNull()
+      .default([7, 3, 1]),
+    vipExpiryWarnInGame: boolean('vip_expiry_warn_in_game').notNull().default(true),
     updatedByPlayerId: uuid('updated_by_player_id').references(() => players.id, {
       onDelete: 'set null',
     }),

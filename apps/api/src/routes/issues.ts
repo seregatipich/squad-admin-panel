@@ -1,5 +1,18 @@
-import { issueComments, issueLabelLinks, issueLabels, issues, players } from '@squad/db/schema';
-import { and, desc, eq, inArray, type SQL, sql } from 'drizzle-orm';
+import {
+  ISSUE_LINK_ENTITY_TYPES,
+  type IssueLinkEntityType,
+  type IssueLinkRow,
+  issueComments,
+  issueLabelLinks,
+  issueLabels,
+  issueLinks,
+  issues,
+  mediaFiles,
+  moderationActions,
+  players,
+  servers,
+} from '@squad/db/schema';
+import { and, desc, eq, inArray, isNull, ne, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -13,13 +26,23 @@ const BODY_MAX = 4000;
 const PER_PAGE_DEFAULT = 20;
 const PER_PAGE_MAX = 100;
 
+const MAX_LINKS_PER_CREATE = 20;
+const PLAYER_CARD_ISSUES_LIMIT = 50;
+/** Shown for a link whose polymorphic target row no longer exists. */
+const DELETED_ENTITY_LABEL = 'Удалённый объект';
+
 const stateSchema = z.enum(['open', 'in_progress', 'closed']);
 const labelNamesSchema = z.array(z.string().trim().min(1).max(64)).max(20);
+const linkInput = z.object({
+  entity_type: z.enum(ISSUE_LINK_ENTITY_TYPES),
+  entity_id: z.string().uuid(),
+});
 
 const createBody = z.object({
   title: z.string().trim().min(1).max(TITLE_MAX),
   body: z.string().trim().min(1).max(BODY_MAX),
   labels: labelNamesSchema.optional(),
+  links: z.array(linkInput).max(MAX_LINKS_PER_CREATE).optional(),
 });
 
 const patchBody = z
@@ -46,6 +69,8 @@ const listQuery = z.object({
 });
 
 const idParam = z.object({ id: z.string().uuid() });
+const linkIdParam = z.object({ id: z.string().uuid(), linkId: z.string().uuid() });
+const playerIdParam = z.object({ playerId: z.string().uuid() });
 
 interface IssueLabelView {
   id: string;
@@ -53,7 +78,48 @@ interface IssueLabelView {
   color: string;
 }
 
+/** A ticket→entity link expanded for display: `label` is human-readable, `ref` is where a click goes. */
+interface IssueLinkView {
+  id: string;
+  issue_id: string;
+  entity_type: IssueLinkEntityType;
+  entity_id: string;
+  label: string;
+  ref: string | null;
+  exists: boolean;
+  created_by: string | null;
+  created_at: string;
+}
+
+interface LinkTarget {
+  entity_type: IssueLinkEntityType;
+  entity_id: string;
+}
+
+interface ResolvedEntity {
+  label: string;
+  ref: string | null;
+}
+
 type IssueRow = typeof issues.$inferSelect;
+
+function targetKey(target: LinkTarget): string {
+  return `${target.entity_type}:${target.entity_id}`;
+}
+
+/**
+ * Detects Postgres `23505` (unique violation). Drizzle wraps driver errors in a
+ * `DrizzleQueryError`, so the SQLSTATE lives on `cause`, not on the thrown
+ * error itself — the chain has to be walked.
+ */
+function isUniqueViolation(err: unknown): boolean {
+  let current: unknown = err;
+  for (let depth = 0; current !== null && current !== undefined && depth < 5; depth += 1) {
+    if (typeof current === 'object' && (current as { code?: string }).code === '23505') return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
 
 function currentUser(req: FastifyRequest, reply: FastifyReply) {
   if (!req.user) {
@@ -61,6 +127,24 @@ function currentUser(req: FastifyRequest, reply: FastifyReply) {
     return null;
   }
   return req.user;
+}
+
+/**
+ * Hand-rolled `panel_access` gate for the player-card endpoint. The rest of
+ * this module deliberately gates on authentication only, but every other
+ * section of the player card is panel-gated, so this one matches its host
+ * surface rather than its host module (mirrors `media-links.ts`).
+ */
+function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
+  if (!req.user) {
+    reply.code(401);
+    return { error: 'unauthenticated' };
+  }
+  if (!req.user.permissions.panelAccess) {
+    reply.code(403);
+    return { error: 'forbidden' };
+  }
+  return null;
 }
 
 function auditActor(req: FastifyRequest): AuditActor {
@@ -173,6 +257,127 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
     return names;
   }
 
+  /**
+   * Batch-resolves the polymorphic targets of a set of links, one query per
+   * `entity_type` present. A key missing from the returned map means the row
+   * is gone — `entity_id` carries no foreign key, so that is a normal state
+   * rather than an integrity failure, and callers render it as deleted.
+   */
+  async function resolveEntities(targets: LinkTarget[]): Promise<Map<string, ResolvedEntity>> {
+    const resolved = new Map<string, ResolvedEntity>();
+    const byType = new Map<IssueLinkEntityType, string[]>();
+    for (const target of targets) {
+      const list = byType.get(target.entity_type) ?? [];
+      if (!list.includes(target.entity_id)) list.push(target.entity_id);
+      byType.set(target.entity_type, list);
+    }
+
+    const playerIds = byType.get('player');
+    if (playerIds?.length) {
+      const rows = await app.db
+        .select({ id: players.id, name: players.canonicalName })
+        .from(players)
+        .where(inArray(players.id, playerIds));
+      for (const row of rows) {
+        resolved.set(`player:${row.id}`, { label: row.name, ref: `/players/${row.id}` });
+      }
+    }
+
+    const serverIds = byType.get('server');
+    if (serverIds?.length) {
+      const rows = await app.db
+        .select({ id: servers.id, name: servers.displayName })
+        .from(servers)
+        // Soft-deleted servers 404 on `/servers/:id`, so a link to one must
+        // read as gone rather than hand out a dead ref.
+        .where(and(inArray(servers.id, serverIds), isNull(servers.deletedAt)));
+      for (const row of rows) {
+        resolved.set(`server:${row.id}`, { label: row.name, ref: `/servers/${row.id}` });
+      }
+    }
+
+    const actionIds = byType.get('moderation_action');
+    if (actionIds?.length) {
+      const rows = await app.db
+        .select({
+          id: moderationActions.id,
+          actionType: moderationActions.actionType,
+          playerId: moderationActions.playerId,
+          createdAt: moderationActions.createdAt,
+        })
+        .from(moderationActions)
+        .where(inArray(moderationActions.id, actionIds));
+      for (const row of rows) {
+        resolved.set(`moderation_action:${row.id}`, {
+          label: `${row.actionType} · ${row.createdAt.toISOString().slice(0, 10)}`,
+          // No moderation-action page exists yet (MOD-2, #59); the offender's
+          // card is the surface that shows the action.
+          ref: `/players/${row.playerId}`,
+        });
+      }
+    }
+
+    const mediaIds = byType.get('media_file');
+    if (mediaIds?.length) {
+      const rows = await app.db
+        .select({
+          id: mediaFiles.id,
+          title: mediaFiles.title,
+          originalFilename: mediaFiles.originalFilename,
+        })
+        .from(mediaFiles)
+        // Same reasoning as servers: the stream route only serves live rows.
+        .where(and(inArray(mediaFiles.id, mediaIds), isNull(mediaFiles.deletedAt)));
+      for (const row of rows) {
+        resolved.set(`media_file:${row.id}`, {
+          label: row.title ?? row.originalFilename,
+          ref: `/api/v1/media/${row.id}/stream`,
+        });
+      }
+    }
+
+    return resolved;
+  }
+
+  async function findUnknownTargets(targets: LinkTarget[]): Promise<LinkTarget[]> {
+    if (targets.length === 0) return [];
+    const resolved = await resolveEntities(targets);
+    return targets.filter((target) => !resolved.has(targetKey(target)));
+  }
+
+  async function serializeLinks(rows: IssueLinkRow[]): Promise<IssueLinkView[]> {
+    if (rows.length === 0) return [];
+    const targets: LinkTarget[] = rows.map((row) => ({
+      entity_type: row.entityType as IssueLinkEntityType,
+      entity_id: row.entityId,
+    }));
+    const resolved = await resolveEntities(targets);
+    return rows.map((row, index) => {
+      // biome-ignore lint/style/noNonNullAssertion: targets is built 1:1 from rows
+      const hit = resolved.get(targetKey(targets[index]!));
+      return {
+        id: row.id,
+        issue_id: row.issueId,
+        entity_type: row.entityType as IssueLinkEntityType,
+        entity_id: row.entityId,
+        label: hit?.label ?? DELETED_ENTITY_LABEL,
+        ref: hit?.ref ?? null,
+        exists: hit !== undefined,
+        created_by: row.createdBy,
+        created_at: row.createdAt.toISOString(),
+      };
+    });
+  }
+
+  async function linksForIssue(issueId: string): Promise<IssueLinkView[]> {
+    const rows = await app.db
+      .select()
+      .from(issueLinks)
+      .where(eq(issueLinks.issueId, issueId))
+      .orderBy(issueLinks.createdAt);
+    return serializeLinks(rows);
+  }
+
   fast.get('/api/v1/issues/labels', async (req, reply) => {
     const user = currentUser(req, reply);
     if (!user) return;
@@ -193,6 +398,22 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       return { error: 'unknown_labels', unknown: resolved.unknown };
     }
 
+    // Deduplicated so an auto-ticket that names the same entity twice does not
+    // trip the unique index and roll the whole create back.
+    const linkTargets: LinkTarget[] = [];
+    const seenTargets = new Set<string>();
+    for (const raw of req.body.links ?? []) {
+      const key = targetKey(raw);
+      if (seenTargets.has(key)) continue;
+      seenTargets.add(key);
+      linkTargets.push({ entity_type: raw.entity_type, entity_id: raw.entity_id });
+    }
+    const unknownTargets = await findUnknownTargets(linkTargets);
+    if (unknownTargets.length > 0) {
+      reply.code(422);
+      return { error: 'unknown_entity', unknown: unknownTargets };
+    }
+
     const id = uuidv7();
     await app.db.transaction(async (tx) => {
       await tx.insert(issues).values({
@@ -207,6 +428,17 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
           .insert(issueLabelLinks)
           .values(resolved.ids.map((labelId) => ({ issueId: id, labelId })));
       }
+      if (linkTargets.length > 0) {
+        await tx.insert(issueLinks).values(
+          linkTargets.map((target) => ({
+            id: uuidv7(),
+            issueId: id,
+            entityType: target.entity_type,
+            entityId: target.entity_id,
+            createdBy: user.playerId,
+          })),
+        );
+      }
     });
 
     const created = await getIssueRow(id);
@@ -217,6 +449,7 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
     const labels = (await labelsForIssues([id])).get(id) ?? [];
     const names = await resolvePlayerNames([created.authorPlayerId, created.assigneePlayerId]);
     const view = serializeIssue(created, labels, names);
+    const links = await linksForIssue(id);
 
     reply.code(201);
     await writeAuditEntry(app.db, {
@@ -226,7 +459,7 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       targetType: 'issue',
       targetId: id,
       before: null,
-      after: view,
+      after: { ...view, links },
       context: { requestId: req.id, method: req.method, url: req.url },
       statusCode: reply.statusCode,
     });
@@ -235,7 +468,7 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
       ts: new Date().toISOString(),
       data: { issue: view },
     });
-    return view;
+    return { ...view, links };
   });
 
   fast.get('/api/v1/issues', { schema: { querystring: listQuery } }, async (req, reply) => {
@@ -311,6 +544,7 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
     return {
       ...serializeIssue(issue, labels, names),
       comments: comments.map((comment) => serializeComment(comment, issue.id, names)),
+      links: await linksForIssue(issue.id),
     };
   });
 
@@ -477,6 +711,158 @@ const issuesRoutes: FastifyPluginAsync = async (app) => {
         data: { issue_id: issue.id, comment: view },
       });
       return view;
+    },
+  );
+
+  fast.post(
+    '/api/v1/issues/:id/links',
+    { schema: { params: idParam, body: linkInput } },
+    async (req, reply) => {
+      const user = currentUser(req, reply);
+      if (!user) return;
+
+      const issue = await getIssueRow(req.params.id);
+      if (!issue) {
+        reply.code(404);
+        return { error: 'issue_not_found' };
+      }
+
+      const target: LinkTarget = {
+        entity_type: req.body.entity_type,
+        entity_id: req.body.entity_id,
+      };
+      const unknown = await findUnknownTargets([target]);
+      if (unknown.length > 0) {
+        reply.code(422);
+        return { error: 'unknown_entity', unknown };
+      }
+
+      let inserted: IssueLinkRow[];
+      try {
+        inserted = await app.db
+          .insert(issueLinks)
+          .values({
+            id: uuidv7(),
+            issueId: issue.id,
+            entityType: target.entity_type,
+            entityId: target.entity_id,
+            createdBy: user.playerId,
+          })
+          .returning();
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          reply.code(409);
+          return { error: 'link_exists' };
+        }
+        throw err;
+      }
+      const row = inserted[0];
+      if (!row) {
+        reply.code(500);
+        return { error: 'insert_failed' };
+      }
+      const [view] = await serializeLinks([row]);
+
+      reply.code(201);
+      await writeAuditEntry(app.db, {
+        actor: auditActor(req),
+        actorIp: req.ip ?? null,
+        actionType: 'issue.link.create',
+        targetType: 'issue',
+        targetId: issue.id,
+        before: null,
+        after: view,
+        context: { requestId: req.id, method: req.method, url: req.url },
+        statusCode: reply.statusCode,
+      });
+      return view;
+    },
+  );
+
+  fast.delete(
+    '/api/v1/issues/:id/links/:linkId',
+    { schema: { params: linkIdParam } },
+    async (req, reply) => {
+      const user = currentUser(req, reply);
+      if (!user) return;
+
+      const rows = await app.db
+        .select()
+        .from(issueLinks)
+        .where(and(eq(issueLinks.id, req.params.linkId), eq(issueLinks.issueId, req.params.id)))
+        .limit(1);
+      const row = rows[0];
+      if (!row) {
+        reply.code(404);
+        return { error: 'link_not_found' };
+      }
+
+      const isAuthor = row.createdBy === user.playerId;
+      if (!isAuthor && !user.permissions.canManageIssues) {
+        reply.code(403);
+        return { error: 'forbidden', required: 'can_manage_issues' };
+      }
+
+      const [view] = await serializeLinks([row]);
+      await app.db.delete(issueLinks).where(eq(issueLinks.id, row.id));
+
+      await writeAuditEntry(app.db, {
+        actor: auditActor(req),
+        actorIp: req.ip ?? null,
+        actionType: 'issue.link.delete',
+        targetType: 'issue',
+        targetId: row.issueId,
+        before: view,
+        after: null,
+        context: { requestId: req.id, method: req.method, url: req.url },
+        statusCode: reply.statusCode,
+      });
+      return { ok: true };
+    },
+  );
+
+  /**
+   * Reverse lookup for the player card: the tickets still awaiting work that
+   * name this player. `open_count` counts everything not yet `closed`, which is
+   * exactly what `items` carries.
+   */
+  fast.get(
+    '/api/v1/players/:playerId/issues',
+    { schema: { params: playerIdParam } },
+    async (req, reply) => {
+      const denied = panelGuard(req, reply);
+      if (denied) return denied;
+
+      const rows = await app.db
+        .select({
+          id: issues.id,
+          number: issues.number,
+          title: issues.title,
+          state: issues.state,
+          createdAt: issues.createdAt,
+        })
+        .from(issueLinks)
+        .innerJoin(issues, eq(issues.id, issueLinks.issueId))
+        .where(
+          and(
+            eq(issueLinks.entityType, 'player'),
+            eq(issueLinks.entityId, req.params.playerId),
+            ne(issues.state, 'closed'),
+          ),
+        )
+        .orderBy(desc(issues.number))
+        .limit(PLAYER_CARD_ISSUES_LIMIT);
+
+      return {
+        open_count: rows.length,
+        items: rows.map((row) => ({
+          id: row.id,
+          number: Number(row.number),
+          title: row.title,
+          state: row.state,
+          created_at: row.createdAt.toISOString(),
+        })),
+      };
     },
   );
 };

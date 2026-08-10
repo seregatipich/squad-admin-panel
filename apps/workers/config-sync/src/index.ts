@@ -1,9 +1,14 @@
 import { BridgeClient } from '@squad/bridge-client';
 import { createDatabaseClient, relayAdminsCfgSyncOutbox, servers } from '@squad/db';
-import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
+import {
+  createGracefulShutdownController,
+  redisSinkStream,
+  startHeartbeat,
+} from '@squad/shared-config';
 import { isNull } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
+import { sweepServerConfigDrift } from './config-drift.js';
 import { syncServerAdminsCfg } from './syncer.js';
 
 const ADMINS_CFG_SYNC_STREAM_PREFIX = 'events:admins-cfg-sync:';
@@ -28,6 +33,9 @@ const requiredEnv = (name: string): string => {
 
 const SERVERS_REFRESH_MS = 30_000;
 const DRIFT_INTERVAL_MS = Number(process.env.ADMINS_CFG_DRIFT_INTERVAL_MS ?? 5 * 60_000);
+// CFG-2 (#64): generic per-file drift sweep over the non-managed config files
+// (separate cadence from the Admins.cfg managed-segment sweep above).
+const CONFIG_DRIFT_INTERVAL_MS = Number(process.env.CONFIG_DRIFT_INTERVAL_MS ?? 5 * 60_000);
 const STREAM_BLOCK_MS = 5_000;
 // Pending-message claim cadence + minimum-idle window. A message that has
 // been delivered to *some* consumer but not XACK'd within `RECLAIM_MIN_IDLE_MS`
@@ -80,7 +88,6 @@ async function main() {
     socketPath: process.env.PANEL_BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
     onLog: (msg, meta) => log.info({ ...meta }, msg),
   });
-  await bridge.connect();
 
   let activeServerIds = new Set<string>();
   const backoffByServer = new Map<string, { delayMs: number; nextAttemptAt: number }>();
@@ -144,7 +151,27 @@ async function main() {
         ...ids,
       )) as Array<[string, Array<[string, string[]]>]> | null;
     } catch (err) {
-      log.warn({ err: (err as Error).message }, 'xreadgroup failed');
+      const msg = (err as Error).message;
+      // A destroyed per-server stream/group (its server was soft-deleted,
+      // SYNC-5) makes the multiplexed XREADGROUP reject NOGROUP for the WHOLE
+      // batch, stalling sync for every server until the next 30 s refresh.
+      // Recover immediately: re-query the server list so the vanished id is
+      // dropped (and its group is not re-created), prune its per-server
+      // backoff, and let the next loop iteration read the surviving streams.
+      if (/NOGROUP|no such key/i.test(msg)) {
+        log.info({ err: msg }, 'xreadgroup NOGROUP — refreshing server list');
+        await refreshServerList().catch((refreshErr) =>
+          log.warn(
+            { err: (refreshErr as Error).message },
+            'server-list refresh after NOGROUP failed',
+          ),
+        );
+        for (const id of backoffByServer.keys()) {
+          if (!activeServerIds.has(id)) backoffByServer.delete(id);
+        }
+        return;
+      }
+      log.warn({ err: msg }, 'xreadgroup failed');
       await new Promise((r) => setTimeout(r, 1000));
       return;
     }
@@ -323,6 +350,55 @@ async function main() {
     }
   }
 
+  async function configDriftSweep(): Promise<void> {
+    for (const serverId of activeServerIds) {
+      try {
+        const status = await sweepServerConfigDrift(ctx, serverId);
+        const drifted = Object.entries(status.files)
+          .filter(([, f]) => f.state === 'drift')
+          .map(([name]) => name);
+        if (drifted.length > 0) {
+          log.warn({ serverId, files: drifted }, 'config files drifted — awaiting resolution');
+        }
+      } catch (err) {
+        log.error({ serverId, err: (err as Error).message }, 'config drift sweep failed');
+      }
+    }
+  }
+
+  let stopped = false;
+  let refreshTimer: NodeJS.Timeout | null = null;
+  let driftTimer: NodeJS.Timeout | null = null;
+  let configDriftTimer: NodeJS.Timeout | null = null;
+  let reclaimTimer: NodeJS.Timeout | null = null;
+  let relayTimer: NodeJS.Timeout | null = null;
+  let stopHeartbeat = () => {};
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      stopped = true;
+      log.info({ sig }, 'shutdown');
+      stopHeartbeat();
+      if (refreshTimer) clearInterval(refreshTimer);
+      if (driftTimer) clearInterval(driftTimer);
+      if (configDriftTimer) clearInterval(configDriftTimer);
+      if (reclaimTimer) clearInterval(reclaimTimer);
+      if (relayTimer) clearInterval(relayTimer);
+      await bridge.close().catch(() => undefined);
+      await redis.quit().catch(() => undefined);
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
+
+  // Connect eagerly for the log line, but do NOT die if the bridge is not up:
+  // `BridgeClient` dials on demand (`packages/bridge-client/src/client.ts`), so
+  // the per-server sync reconnects on its own. Nothing else on this boot path
+  // needs it — `refreshServerList` is DB+Redis and `relayOutbox` guards itself —
+  // and exiting here meant `startHeartbeat` below never ran, so the worker read
+  // as dead rather than degraded. Matches `metrics-sampler`, `log-ingest` and
+  // `scheduler`.
+  await bridge
+    .connect()
+    .catch((err: Error) => log.warn({ err: err.message }, 'bridge not reachable at startup'));
   await refreshServerList();
   // Boot-time reclaim pass — picks up anything orphaned by a prior
   // process restart (consumer name regenerates each boot).
@@ -332,48 +408,38 @@ async function main() {
   // Boot-time relay pass — drain any outbox rows whose immediate publish never
   // reached Redis (e.g. Redis was down when the mutation committed).
   await relayOutbox();
-  const refreshTimer = setInterval(() => {
-    refreshServerList().catch((err) =>
-      log.error({ err: (err as Error).message }, 'server-list refresh failed'),
-    );
-  }, SERVERS_REFRESH_MS);
-  const driftTimer = setInterval(() => {
-    driftSweep().catch((err) => log.error({ err: (err as Error).message }, 'drift sweep failed'));
-  }, DRIFT_INTERVAL_MS);
-  const reclaimTimer = setInterval(() => {
-    reclaimPendingMessages().catch((err) =>
-      log.error({ err: (err as Error).message }, 'reclaim sweep failed'),
-    );
-  }, RECLAIM_INTERVAL_MS);
-  const relayTimer = setInterval(() => {
-    relayOutbox().catch((err) =>
-      log.error({ err: (err as Error).message }, 'outbox relay sweep failed'),
-    );
-  }, RELAY_INTERVAL_MS);
-
-  const stopHeartbeat = startHeartbeat({
+  stopHeartbeat = startHeartbeat({
     redis,
     name: 'config-sync',
     statusFn: () => `servers=${activeServerIds.size}`,
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
+  await shutdown.markReady();
+  if (shutdown.isShutdownRequested()) return;
 
-  let stopped = false;
-  const shutdown = async (sig: NodeJS.Signals) => {
-    if (stopped) return;
-    stopped = true;
-    log.info({ sig }, 'shutdown');
-    stopHeartbeat();
-    clearInterval(refreshTimer);
-    clearInterval(driftTimer);
-    clearInterval(reclaimTimer);
-    clearInterval(relayTimer);
-    await bridge.close().catch(() => undefined);
-    await redis.quit().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  refreshTimer = setInterval(() => {
+    refreshServerList().catch((err) =>
+      log.error({ err: (err as Error).message }, 'server-list refresh failed'),
+    );
+  }, SERVERS_REFRESH_MS);
+  driftTimer = setInterval(() => {
+    driftSweep().catch((err) => log.error({ err: (err as Error).message }, 'drift sweep failed'));
+  }, DRIFT_INTERVAL_MS);
+  configDriftTimer = setInterval(() => {
+    configDriftSweep().catch((err) =>
+      log.error({ err: (err as Error).message }, 'config drift sweep failed'),
+    );
+  }, CONFIG_DRIFT_INTERVAL_MS);
+  reclaimTimer = setInterval(() => {
+    reclaimPendingMessages().catch((err) =>
+      log.error({ err: (err as Error).message }, 'reclaim sweep failed'),
+    );
+  }, RECLAIM_INTERVAL_MS);
+  relayTimer = setInterval(() => {
+    relayOutbox().catch((err) =>
+      log.error({ err: (err as Error).message }, 'outbox relay sweep failed'),
+    );
+  }, RELAY_INTERVAL_MS);
 
   log.info({ consumer: CONSUMER_NAME }, 'worker-config-sync ready');
   while (!stopped) {

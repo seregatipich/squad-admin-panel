@@ -116,7 +116,8 @@ describe('audit chain integrity', () => {
       expect(raw).toHaveLength(rows.length);
 
       for (let idx = 0; idx < raw.length; idx++) {
-        const row = raw[idx]!;
+        // idx < raw.length by the loop condition, so this index is always in bounds.
+        const row = raw[idx] as RawRow;
 
         const prevRow =
           idx === 0
@@ -130,7 +131,9 @@ describe('audit chain integrity', () => {
                     LIMIT 1 OFFSET ${offsetBefore - 1}
                   `
                 )[0] ?? null)
-            : { row_hash_hex: raw[idx - 1]!.row_hash_hex };
+            : // idx !== 0 in this branch, and idx < raw.length by the loop condition,
+              // so idx - 1 is always in bounds.
+              { row_hash_hex: (raw[idx - 1] as RawRow).row_hash_hex };
 
         const expectedPrevHash = prevRow?.row_hash_hex ?? null;
 

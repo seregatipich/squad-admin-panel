@@ -27,11 +27,6 @@ describe('auth pages', () => {
     expect(mod.default).toBeDefined();
   });
 
-  it('no-access/page exports default', async () => {
-    const mod = await import('../../src/app/no-access/page');
-    expect(mod.default).toBeDefined();
-  });
-
   it('root page exports default', async () => {
     const mod = await import('../../src/app/page');
     expect(mod.default).toBeDefined();

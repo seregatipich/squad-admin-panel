@@ -1,7 +1,7 @@
-import { panelMeta, players, roles } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { adminsCfgSyncOutbox, panelMeta, players, roles, servers } from '@squad/db/schema';
+import { eq, inArray, isNull } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -343,5 +343,175 @@ describeIfDb('GET /api/v1/whitelist/export', () => {
       headers: { cookie: outsiderCookie },
     });
     expect(res.statusCode).toBe(403);
+  });
+});
+
+// WL-2: the "apply a whitelist group to every server in one action" criterion is
+// satisfied by the global-role model — a whitelist mutation fans out to every
+// active server's Admins.cfg via `publishAdminsCfgSyncForAllServers`. These cases
+// lock that fan-out invariant for the whitelist path so a future refactor cannot
+// silently regress it (see docs/architecture/decisions.md WL-2 ADR).
+describeIfDb('whitelist mutations fan out to every active server (WL-2)', () => {
+  const FANOUT_ADD_STEAM = testSteamId(165030);
+  const FANOUT_REMOVE_STEAM = testSteamId(165031);
+  const FANOUT_ZERO_STEAM = testSteamId(165032);
+  const FANOUT_IDEM_STEAM = testSteamId(165033);
+
+  let activeServerAId: string;
+  let activeServerBId: string;
+  let softDeletedServerId: string;
+  let addPlayerId: string;
+  let removePlayerId: string;
+  let zeroPlayerId: string;
+  let idemPlayerId: string;
+
+  async function activeServerIds(): Promise<string[]> {
+    const rows = await h.db
+      .select({ id: servers.id })
+      .from(servers)
+      .where(isNull(servers.deletedAt));
+    return rows.map((r) => r.id);
+  }
+
+  async function outboxRows(): Promise<Array<{ serverId: string; reason: string }>> {
+    const rows = await h.db
+      .select({ serverId: adminsCfgSyncOutbox.serverId, payload: adminsCfgSyncOutbox.payload })
+      .from(adminsCfgSyncOutbox);
+    return rows.map((r) => ({
+      serverId: r.serverId,
+      reason: (r.payload as { reason: string }).reason,
+    }));
+  }
+
+  beforeAll(async () => {
+    // Two active servers + one soft-deleted: proves the fan-out targets every
+    // active server and never the soft-deleted one.
+    activeServerAId = uuidv7();
+    activeServerBId = uuidv7();
+    softDeletedServerId = uuidv7();
+    const stamp = Date.now();
+    await h.db.insert(servers).values([
+      { id: activeServerAId, displayName: 'wl2-fanout-a', slug: `wl2-fanout-a-${stamp}` },
+      { id: activeServerBId, displayName: 'wl2-fanout-b', slug: `wl2-fanout-b-${stamp}` },
+      {
+        id: softDeletedServerId,
+        displayName: 'wl2-fanout-deleted',
+        slug: `wl2-fanout-deleted-${stamp}`,
+        deletedAt: new Date(),
+      },
+    ]);
+
+    addPlayerId = await createPlayer(FANOUT_ADD_STEAM);
+    removePlayerId = await createPlayer(FANOUT_REMOVE_STEAM);
+    zeroPlayerId = await createPlayer(FANOUT_ZERO_STEAM);
+    idemPlayerId = await createPlayer(FANOUT_IDEM_STEAM);
+
+    // Configure the whitelist role via the real route (idempotent), so the
+    // shared-state guard on direct panel_meta writes stays satisfied.
+    await h.app.inject({
+      method: 'PUT',
+      url: '/api/v1/whitelist/settings',
+      headers: { cookie: ownerCookie },
+      payload: { whitelist_role_id: whitelistRoleId },
+    });
+  }, 60_000);
+
+  afterAll(async () => {
+    await h.db
+      .delete(servers)
+      .where(inArray(servers.id, [activeServerAId, activeServerBId, softDeletedServerId]));
+  });
+
+  beforeEach(async () => {
+    await h.db.delete(adminsCfgSyncOutbox);
+  });
+
+  it('adding a member enqueues one outbox row per active server, never the soft-deleted one', async () => {
+    const activeIds = await activeServerIds();
+    expect(activeIds).toEqual(expect.arrayContaining([activeServerAId, activeServerBId]));
+    expect(activeIds).not.toContain(softDeletedServerId);
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/whitelist/members',
+      headers: { cookie: ownerCookie },
+      payload: { player_id: addPlayerId },
+    });
+    expect(res.statusCode).toBe(201);
+
+    const rows = await outboxRows();
+    expect(rows).toHaveLength(activeIds.length);
+    expect(new Set(rows.map((r) => r.serverId))).toEqual(new Set(activeIds));
+    expect(rows.map((r) => r.serverId)).not.toContain(softDeletedServerId);
+    for (const row of rows) {
+      expect(row.reason).toBe('whitelist.member.add');
+    }
+  });
+
+  it('removing a member enqueues one outbox row per active server with reason whitelist.member.remove', async () => {
+    // Arrange: assign the whitelist role first (its add fan-out is discarded).
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/whitelist/members',
+      headers: { cookie: ownerCookie },
+      payload: { player_id: removePlayerId },
+    });
+    await h.db.delete(adminsCfgSyncOutbox);
+
+    const activeIds = await activeServerIds();
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/whitelist/members/${removePlayerId}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, changed: true });
+
+    const rows = await outboxRows();
+    expect(rows).toHaveLength(activeIds.length);
+    expect(new Set(rows.map((r) => r.serverId))).toEqual(new Set(activeIds));
+    expect(rows.map((r) => r.serverId)).not.toContain(softDeletedServerId);
+    for (const row of rows) {
+      expect(row.reason).toBe('whitelist.member.remove');
+    }
+  });
+
+  it('enqueues nothing but still returns 2xx when there are no active servers', async () => {
+    const activeIds = await activeServerIds();
+    // Temporarily soft-delete every active server so the fan-out has no targets.
+    await h.db.update(servers).set({ deletedAt: new Date() }).where(inArray(servers.id, activeIds));
+    try {
+      const res = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/whitelist/members',
+        headers: { cookie: ownerCookie },
+        payload: { player_id: zeroPlayerId },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(await outboxRows()).toHaveLength(0);
+    } finally {
+      await h.db.update(servers).set({ deletedAt: null }).where(inArray(servers.id, activeIds));
+    }
+  });
+
+  it('an idempotent no-op re-add enqueues no additional outbox rows', async () => {
+    const first = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/whitelist/members',
+      headers: { cookie: ownerCookie },
+      payload: { player_id: idemPlayerId },
+    });
+    expect(first.statusCode).toBe(201);
+    await h.db.delete(adminsCfgSyncOutbox);
+
+    const second = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/whitelist/members',
+      headers: { cookie: ownerCookie },
+      payload: { player_id: idemPlayerId },
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual({ ok: true, changed: false });
+    expect(await outboxRows()).toHaveLength(0);
   });
 });

@@ -10,6 +10,7 @@ import { ForceStopDialog } from '@/components/ForceStopDialog';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
 import { ServerLogFiles } from '@/components/ServerLogFiles';
+import { UpdateProgressModal } from '@/components/UpdateProgressModal';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { nextBackoffMs } from '@/lib/ws-backoff';
 import type { SeedingSummary } from '../seeding-format';
@@ -101,6 +102,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   const [canChangeMap, setCanChangeMap] = useState(false);
   const [canBan, setCanBan] = useState(false);
   const [canDownloadLogs, setCanDownloadLogs] = useState(false);
+  const [modPermissions, setModPermissions] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -111,6 +113,8 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
     retryInMs: number | null;
   } | null>(null);
   const [forceStopOpen, setForceStopOpen] = useState(false);
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
+  const [updateRunning, setUpdateRunning] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<number>(() => Date.now());
   const [now, setNow] = useState<number>(() => Date.now());
   const wsRef = useRef<WebSocket | null>(null);
@@ -160,6 +164,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           setCanChangeMap(me.squad_permissions?.includes('changemap') ?? false);
           setCanBan(me.squad_permissions?.includes('ban') ?? false);
           setCanDownloadLogs(me.permissions?.includes('server:download_logs') ?? false);
+          setModPermissions((me.permissions ?? []).filter((key) => key.startsWith('mod:')));
         }
       } catch {
         // permission fetch is best-effort; chat UI simply stays hidden
@@ -407,6 +412,12 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
             Ротация →
           </Link>
           <Link
+            href={`/servers/${server.id}/map-vote`}
+            className="text-xs text-sky-400 hover:text-sky-300"
+          >
+            Голосование за карту →
+          </Link>
+          <Link
             href={`/servers/${server.id}/seed-calendar`}
             className="text-xs text-sky-400 hover:text-sky-300"
           >
@@ -540,7 +551,12 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
 
       <SeedCallButton serverId={server.id} canCall={canChat || canManageServer} />
 
-      <LivePlayers serverId={server.id} canChat={canChat} canBan={canBan} />
+      <LivePlayers
+        serverId={server.id}
+        canChat={canChat}
+        canBan={canBan}
+        modPermissions={modPermissions}
+      />
 
       <section className="flex flex-wrap items-center gap-2">
         <ActionButton
@@ -575,10 +591,14 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           loading={acting === 'restart'}
           tone="neutral"
         />
-        {data?.server.status === 'stopped' && (
+        {(data?.server.status === 'stopped' || updateRunning) && (
           <button
             type="button"
             onClick={async () => {
+              if (updateRunning) {
+                setUpdateModalOpen(true);
+                return;
+              }
               setActing('update');
               try {
                 const r = await fetch(`/api/v1/servers/${id}/update`, {
@@ -586,6 +606,8 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
                   credentials: 'include',
                 });
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                setUpdateRunning(true);
+                setUpdateModalOpen(true);
               } catch (e) {
                 setErr((e as Error).message);
               } finally {
@@ -595,9 +617,23 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
             disabled={acting !== null}
             className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 hover:border-sky-700 hover:text-sky-300 disabled:opacity-40"
           >
-            {acting === 'update' ? 'Обновление...' : 'Обновить игру'}
+            {acting === 'update'
+              ? 'Запуск обновления...'
+              : updateRunning
+                ? 'Обновление... (открыть лог)'
+                : 'Обновить игру'}
           </button>
         )}
+        <UpdateProgressModal
+          open={updateModalOpen}
+          onOpenChange={setUpdateModalOpen}
+          wsUrl="/api/v1/depot/progress/ws"
+          title="Обновление игры"
+          onDone={() => {
+            setUpdateRunning(false);
+            void refresh();
+          }}
+        />
         <div className="ml-auto">
           <DangerMenu
             disabled={!!acting}

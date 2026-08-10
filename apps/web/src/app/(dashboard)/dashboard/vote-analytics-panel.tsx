@@ -280,7 +280,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                       className="flex items-center justify-between gap-2 rounded border border-neutral-900 bg-neutral-900/40 px-2.5 py-1.5"
                     >
                       <Link
-                        href={`/players/${row.player_id}`}
+                        href={`/all-players/${row.player_id}`}
                         className="min-w-0 truncate text-xs text-sky-300 hover:text-sky-200"
                         title={row.nickname ?? row.player_id}
                       >
@@ -312,7 +312,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                       className="flex items-center justify-between gap-2 rounded border border-red-950 bg-red-950/30 px-2.5 py-1.5"
                     >
                       <Link
-                        href={`/players/${row.player_id}`}
+                        href={`/all-players/${row.player_id}`}
                         className="min-w-0 truncate text-xs text-red-200 hover:text-red-100"
                         title={row.nickname ?? row.player_id}
                       >

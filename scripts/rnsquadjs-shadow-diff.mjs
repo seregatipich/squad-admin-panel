@@ -4,11 +4,12 @@
 // Prereq: build the plugin first — cd docker/rnsquadjs/plugins/panelBridge && npx tsc -p tsconfig.json
 //
 // Gate (exit 1 on any failure, 0 only when all pass):
-//   - corrupt-data:      zero valid prod events while malformed records were skipped
+//   - corrupt-data:      any malformed or semantically invalid stream record
 //   - insufficient-data: prod event count below the minEvents floor
 //   - extras-exceeded:   shadow has more than max(5, 1% of prod) unmatched extras
 //   - parity-failed:     parity < 99% or a prod event type is missing in shadow
-// Malformed stream records (no 'envelope' field or unparseable JSON) are skipped and counted.
+// Malformed stream records (missing/invalid envelope fields or unparseable JSON) are skipped and
+// counted. Any skipped record fails the gate so a corrupt stream cannot produce a false pass.
 //
 // ioredis is resolved from the plugin's node_modules via createRequire — no root dependency needed.
 // Run from anywhere in the repo; compiled output is read from docker/rnsquadjs/plugins/panelBridge/dist/.
@@ -34,6 +35,32 @@ if (!Number.isInteger(minEvents) || minEvents < 0) {
 }
 const redis = new Redis(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379');
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuid(value) {
+  return typeof value === 'string' && UUID_PATTERN.test(value);
+}
+
+function isValidEnvelope(value, expectedServerId) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (!isUuid(value.event_id)) return false;
+  if (!Number.isInteger(value.version) || value.version < 1) return false;
+  if (typeof value.type !== 'string' || value.type.trim().length === 0) return false;
+  if (value.server_id !== expectedServerId) return false;
+  if (typeof value.ts !== 'string' || Number.isNaN(Date.parse(value.ts))) return false;
+  if (
+    value.actor !== null &&
+    (typeof value.actor !== 'object' ||
+      Array.isArray(value.actor) ||
+      !['user', 'system', 'external'].includes(value.actor.kind) ||
+      (value.actor.id !== null && typeof value.actor.id !== 'string'))
+  ) {
+    return false;
+  }
+  if (value.correlation_id !== null && !isUuid(value.correlation_id)) return false;
+  return Object.hasOwn(value, 'payload');
+}
+
 let badRecords = 0;
 async function readStream(name) {
   const raw = await redis.xrange(name, String(since), '+');
@@ -46,6 +73,10 @@ async function readStream(name) {
     }
     try {
       const envelope = JSON.parse(fields[idx + 1]);
+      if (!isValidEnvelope(envelope, serverId)) {
+        badRecords += 1;
+        continue;
+      }
       events.push({ type: envelope.type, ts: envelope.ts, payload: envelope.payload });
     } catch {
       badRecords += 1;
@@ -75,7 +106,7 @@ try {
   const extraAllowed = Math.max(5, prod.length * 0.01);
 
   let gate = 'pass';
-  if (prod.length === 0 && badRecords > 0) {
+  if (badRecords > 0) {
     gate = 'corrupt-data';
   } else if (prod.length < minEvents) {
     gate = 'insufficient-data';

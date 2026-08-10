@@ -1,4 +1,4 @@
-import { sessions as sessionsTable } from '@squad/db/schema';
+import { economySettings, sessions as sessionsTable } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -11,7 +11,10 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
   fast.post(
     '/api/v1/auth/logout',
-    { config: { audit: { action: 'user.logout', resource: 'session' } } },
+    {
+      // VIPSUB-5 (#171): a self-service session must always be able to end itself.
+      config: { audit: { action: 'user.logout', resource: 'session' }, selfService: true },
+    },
     async (req, reply) => {
       const token = req.cookies[SESSION_COOKIE];
       if (token) {
@@ -30,11 +33,20 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  fast.get('/api/v1/me', { config: { audit: false } }, async (req, reply) => {
+  // VIPSUB-5 (#171): `selfService` because the web DAL's `requireSession()`
+  // reads this route on every render, including the `(me)` self-service layout.
+  // The response is entirely self-scoped and its capability set is frozen for
+  // this batch — a self-service player simply sees their (empty) permissions.
+  fast.get('/api/v1/me', { config: { audit: false, selfService: true } }, async (req, reply) => {
     if (!req.user) {
       reply.code(401);
       return { error: 'unauthenticated' };
     }
+    // ECON-5 (#165): the web nav hides economy-gated pages on this flag.
+    const [economyRow] = await app.db
+      .select({ enabled: economySettings.economyEnabled })
+      .from(economySettings)
+      .limit(1);
     return {
       player_id: req.user.playerId,
       steam_id64: req.user.steamId64 ? String(req.user.steamId64) : null,
@@ -47,6 +59,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       can_manage_issues: req.user.permissions.canManageIssues,
       can_manage_economy: req.user.permissions.canManageEconomy,
       can_handle_reports: req.user.permissions.canHandleReports,
+      economy_enabled: economyRow?.enabled ?? false,
     };
   });
 

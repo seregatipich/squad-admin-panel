@@ -17,8 +17,100 @@ export const CUTOVER_TICK_MS = 16_000;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Effective event source for a server, as reported by the status route. */
+export type SidecarMode = 'production' | 'shadow' | 'legacy';
+
+/**
+ * Redis key the sidecar's own `RedisPublisher` writes its RCON heartbeat to
+ * (`docker/rnsquadjs/plugins/panelBridge/src/redisPublisher.ts`). Shadow-mode
+ * sidecars publish under a `:shadow` suffix so they never clobber a
+ * production-mode sidecar's key; both must be read to tell a healthy shadow
+ * sidecar apart from no sidecar at all.
+ *
+ * @param serverId - Server the sidecar belongs to.
+ * @param mode - Sidecar launch mode whose key is wanted.
+ * @returns The full Redis key (written with `SET ... EX 300`).
+ */
+export function sidecarStatusKey(serverId: string, mode: 'production' | 'shadow'): string {
+  return `rnsquadjs:status:${serverId}${mode === 'shadow' ? ':shadow' : ''}`;
+}
+
+/** Heartbeat payload as the sidecar serialises it (camelCase, JSON). */
+const heartbeatSchema = z.object({
+  state: z.enum(['connected', 'disconnected']),
+  lastChange: z.string(),
+});
+
+export interface SidecarStatus {
+  state: 'connected' | 'disconnected';
+  last_change: string;
+}
+
+/**
+ * Decodes a stored heartbeat into the route's snake_case shape.
+ *
+ * Returns null for an absent key (the 300s TTL lapsed — a first-class
+ * "no heartbeat" state, not an error) and also for a malformed payload, so a
+ * sidecar writing an unexpected shape degrades to "no signal" rather than 500.
+ */
+function parseHeartbeat(raw: string | null | undefined): SidecarStatus | null {
+  if (raw == null) return null;
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const parsed = heartbeatSchema.safeParse(decoded);
+  if (!parsed.success) return null;
+  return { state: parsed.data.state, last_change: parsed.data.lastChange };
+}
+
 const serverRnsquadjsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
+
+  // Shares its URL with the cutover POST below; Fastify routes on method+URL,
+  // so the two never collide.
+  fast.get(
+    '/api/v1/servers/:id/rnsquadjs',
+    {
+      config: { permissions: ['server:view'], audit: false },
+      schema: { params: paramsSchema },
+    },
+    async (req, reply) => {
+      const s = await app.db.query.servers.findFirst({
+        where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
+      });
+      if (!s) {
+        reply.code(404);
+        return { error: 'not_found' };
+      }
+
+      const serverId = s.id;
+      const [cutoverFlag, heartbeats] = await Promise.all([
+        app.redis.sismember(RNSQUADJS_CUTOVER_SET, serverId),
+        app.redis.mget(
+          sidecarStatusKey(serverId, 'production'),
+          sidecarStatusKey(serverId, 'shadow'),
+        ),
+      ]);
+      const cutover = cutoverFlag === 1;
+
+      // The cutover set is the desired state, so it decides the mode outright:
+      // a member is production even while its heartbeat is missing (sidecar
+      // restarting) and even if a stale `:shadow` key still lingers. A
+      // non-member with a live shadow heartbeat is soaking in shadow mode;
+      // a non-member with neither key is still served by the legacy parser.
+      const mode: SidecarMode = cutover
+        ? 'production'
+        : heartbeats[1] != null
+          ? 'shadow'
+          : 'legacy';
+      const raw = mode === 'production' ? heartbeats[0] : mode === 'shadow' ? heartbeats[1] : null;
+
+      return { server_id: serverId, mode, cutover, status: parseHeartbeat(raw) };
+    },
+  );
 
   fast.post(
     '/api/v1/servers/:id/rnsquadjs',

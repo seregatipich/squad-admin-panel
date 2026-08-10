@@ -28,20 +28,27 @@ import requestContextPlugin from '../src/plugins/request-context.js';
 import adminsCfgRoutes from '../src/routes/admins-cfg.js';
 import auditRoutes from '../src/routes/audit.js';
 import authRoutes from '../src/routes/auth.js';
+import discordAuthRoutes from '../src/routes/auth-discord.js';
 import steamRoutes from '../src/routes/auth-steam.js';
+import balancerRoutes from '../src/routes/balancer.js';
 import hostRoutes from '../src/routes/host.js';
 import hostActionsRoutes from '../src/routes/host-actions.js';
 import hostBackupRoutes from '../src/routes/host-backup.js';
+import integrationsBalancerRoutes from '../src/routes/integrations-balancer.js';
+import integrationsDiscordRoleMappingsRoutes from '../src/routes/integrations-discord-role-mappings.js';
 import integrationsVipRoutes from '../src/routes/integrations-vip.js';
 import meTokensRoutes from '../src/routes/me-tokens.js';
 import permissionsRoutes from '../src/routes/permissions.js';
+import playerSteamRefreshRoutes from '../src/routes/player-steam-refresh.js';
 import playerRoutes from '../src/routes/players.js';
 import roleMembersRoutes from '../src/routes/role-members.js';
 import rolesRoutes from '../src/routes/roles.js';
+import seasonsRoutes from '../src/routes/seasons.js';
 import archiveRoutes from '../src/routes/server-archive.js';
 import serverInstallRoutes from '../src/routes/server-install.js';
 import serverRoutes from '../src/routes/servers.js';
 import usersRoutes from '../src/routes/users.js';
+import vipSubscriptionRoutes from '../src/routes/vip-subscriptions.js';
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const SWAGGER_PREFIX = '/api/docs';
@@ -100,10 +107,17 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   await app.register(roleMembersRoutes);
   await app.register(usersRoutes);
   await app.register(playerRoutes);
+  await app.register(playerSteamRefreshRoutes);
   await app.register(adminsCfgRoutes);
   await app.register(integrationsVipRoutes);
+  await app.register(balancerRoutes);
+  await app.register(integrationsBalancerRoutes);
+  await app.register(integrationsDiscordRoleMappingsRoutes);
   await app.register(auditRoutes);
   await app.register(steamRoutes);
+  await app.register(discordAuthRoutes);
+  await app.register(vipSubscriptionRoutes);
+  await app.register(seasonsRoutes);
 
   // suppress 'unused imports' — plugins are referenced here defensively
   // so a future refactor that pulls them into the route registration
@@ -142,6 +156,7 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
     const allowlist = new Set([
       '/api/v1/auth/steam/callback',
       '/api/v1/integrations/vip/lifecycle',
+      '/api/v1/integrations/balancer/proposals',
     ]);
     const falsy = routes.filter(
       (r) =>

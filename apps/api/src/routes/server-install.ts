@@ -38,7 +38,13 @@ function depotMarker(): string {
   return `${depotHostRoot()}/SquadGameServer.sh`;
 }
 
-function depotConfigDir(): string {
+/**
+ * Directory holding the SteamCMD depot's default `ServerConfig` templates.
+ * Exported for the CFG-2 (#64) reset-to-depot-default route in
+ * `server-configs.ts`, which re-seeds a single file from the same templates
+ * (and re-applies the same Rcon/Server rewrites) as the installer.
+ */
+export function depotConfigDir(): string {
   return `${depotHostRoot()}/SquadGame/ServerConfig`;
 }
 

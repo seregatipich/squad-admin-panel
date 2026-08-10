@@ -42,7 +42,7 @@ function notConnectedOutcome(): WorkerRconCommandOutcome {
 }
 
 beforeEach(async () => {
-  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
+  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
   await h.db.insert(servers).values({
     id: SERVER_ID,
     displayName: 'Messaging Test Server',
@@ -61,7 +61,7 @@ async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
   await h.db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
-      name: `Messaging-${keys.join('-') || 'none'}-${roleId.slice(0, 8)}`,
+      name: `Messaging-${keys.join('-') || 'none'}-${roleId}`,
       color: 'blue',
       isSystemRole: false,
       panelAccess: true,
@@ -357,5 +357,223 @@ describeIfDb('POST /api/v1/servers/:serverId/squads/:squadId/message', () => {
     expect(resp.statusCode).toBe(200);
     expect(resp.json()).toMatchObject({ recipients: [] });
     expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
+  });
+});
+
+describeIfDb('POST /api/v1/servers/:serverId/players/:playerId/message', () => {
+  const TARGET_EOS_ID = 'eos-msg2-target-000000000000001';
+  const UNKNOWN_PLAYER_ID = '019e2000-0000-7000-8000-0000000009ff';
+
+  let targetPlayerId: string;
+  let unaddressablePlayerId: string;
+
+  beforeEach(async () => {
+    const [target] = await h.db
+      .insert(players)
+      .values({
+        steamId64: testSteamId(185001),
+        canonicalName: 'DirectTarget',
+        canonicalNameNormalized: 'directtarget',
+        eosId: TARGET_EOS_ID,
+      })
+      .returning({ id: players.id });
+    const [unaddressable] = await h.db
+      .insert(players)
+      .values({
+        steamId64: null,
+        canonicalName: 'NoIdsTarget',
+        canonicalNameNormalized: 'noidstarget',
+        eosId: null,
+      })
+      .returning({ id: players.id });
+    // biome-ignore lint/style/noNonNullAssertion: inserts above always return a row
+    targetPlayerId = target!.id;
+    // biome-ignore lint/style/noNonNullAssertion: inserts above always return a row
+    unaddressablePlayerId = unaddressable!.id;
+  });
+
+  it('rejects an unauthenticated direct message', async () => {
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      payload: { message: 'stop teamkilling' },
+    });
+    expect(resp.statusCode).toBe(401);
+    expect(resp.json()).toMatchObject({ error: 'unauthenticated' });
+    expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
+  });
+
+  it('403s without the chat squad permission on the direct-message route', async () => {
+    const cookie = await asRoleWithSquadPermissions([]);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      headers: { cookie },
+      payload: { message: 'stop teamkilling' },
+    });
+    expect(resp.statusCode).toBe(403);
+    expect(resp.json()).toMatchObject({
+      error: 'forbidden',
+      required_squad_permission: 'chat',
+    });
+    expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
+  });
+
+  it('404s for an unknown player id', async () => {
+    const cookie = await asRoleWithSquadPermissions(['chat']);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/players/${UNKNOWN_PLAYER_ID}/message`,
+      headers: { cookie },
+      payload: { message: 'stop teamkilling' },
+    });
+    expect(resp.statusCode).toBe(404);
+    expect(resp.json()).toMatchObject({ error: 'player_not_found' });
+    expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
+  });
+
+  it('404s when the target player has no eos id and no steam id', async () => {
+    const cookie = await asRoleWithSquadPermissions(['chat']);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/players/${unaddressablePlayerId}/message`,
+      headers: { cookie },
+      payload: { message: 'stop teamkilling' },
+    });
+    expect(resp.statusCode).toBe(404);
+    expect(resp.json()).toMatchObject({ error: 'player_not_addressable' });
+    expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
+  });
+
+  it('rejects a message longer than 300 characters', async () => {
+    const cookie = await asRoleWithSquadPermissions(['chat']);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      headers: { cookie },
+      payload: { message: 'x'.repeat(301) },
+    });
+    expect(resp.statusCode).toBe(400);
+    expect(sendRconCommandViaWorker).not.toHaveBeenCalled();
+  });
+
+  it('enqueues AdminWarn addressed to the target player', async () => {
+    vi.mocked(sendRconCommandViaWorker).mockResolvedValueOnce(okOutcome({ response: 'Warned' }));
+    const cookie = await asRoleWithSquadPermissions(['chat']);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      headers: { cookie },
+      payload: { message: 'stop teamkilling' },
+    });
+    expect(resp.statusCode).toBe(200);
+    expect(resp.json()).toMatchObject({
+      ok: true,
+      request_id: 'req-test',
+      response: 'Warned',
+    });
+
+    expect(sendRconCommandViaWorker).toHaveBeenCalledTimes(1);
+    expect(sendRconCommandViaWorker).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        serverId: SERVER_ID,
+        command: 'AdminWarn',
+        args: [TARGET_EOS_ID, 'stop teamkilling'],
+      }),
+    );
+  });
+
+  it('audits the direct message with the addressee and the text', async () => {
+    vi.mocked(sendRconCommandViaWorker).mockResolvedValueOnce(okOutcome());
+    const cookie = await asRoleWithSquadPermissions(['chat']);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      headers: { cookie },
+      payload: { message: 'last warning', log_to_card: true },
+    });
+    expect(resp.statusCode).toBe(200);
+
+    const audit = await assertAuditRow(h, {
+      action: 'server.player_message',
+      resource: 'server',
+      targetId: SERVER_ID,
+    });
+    expect(audit.afterSnapshot).toMatchObject({
+      player_id: targetPlayerId,
+      target: TARGET_EOS_ID,
+      message: 'last warning',
+      log_to_card: true,
+    });
+  });
+
+  it('log_to_card writes a direct chat_messages row visible on the target card', async () => {
+    vi.mocked(sendRconCommandViaWorker).mockResolvedValueOnce(okOutcome());
+    const cookie = await asRoleWithSquadPermissions(['chat']);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      headers: { cookie },
+      payload: { message: 'behave please', log_to_card: true },
+    });
+    expect(resp.statusCode).toBe(200);
+
+    const rows = await h.db.select().from(chatMessages).where(eq(chatMessages.serverId, SERVER_ID));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.playerId).toBe(targetPlayerId);
+    expect(rows[0]?.scope).toBe('direct');
+    expect(rows[0]?.source).toBe('panel');
+    expect(rows[0]?.message).toBe('behave please');
+
+    // The card's «Чат» section reads exactly this route, filtered by the addressee.
+    const listed = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/chat/messages?playerId=${targetPlayerId}&scope=direct`,
+      headers: { cookie },
+    });
+    expect(listed.statusCode).toBe(200);
+    const body = listed.json<{
+      items: Array<{ message: string; source: string; scope: string; player: { id: string } }>;
+    }>();
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]?.message).toBe('behave please');
+    expect(body.items[0]?.source).toBe('panel');
+    expect(body.items[0]?.scope).toBe('direct');
+    expect(body.items[0]?.player.id).toBe(targetPlayerId);
+  });
+
+  it('writes no chat_messages row when log_to_card is omitted', async () => {
+    vi.mocked(sendRconCommandViaWorker).mockResolvedValueOnce(okOutcome());
+    const cookie = await asRoleWithSquadPermissions(['chat']);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      headers: { cookie },
+      payload: { message: 'silent nudge' },
+    });
+    expect(resp.statusCode).toBe(200);
+
+    const rows = await h.db.select().from(chatMessages).where(eq(chatMessages.serverId, SERVER_ID));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('502s and writes no chat row when the worker is not connected', async () => {
+    vi.mocked(sendRconCommandViaWorker).mockResolvedValueOnce(notConnectedOutcome());
+    const cookie = await asRoleWithSquadPermissions(['chat']);
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${SERVER_ID}/players/${targetPlayerId}/message`,
+      headers: { cookie },
+      payload: { message: 'you there?', log_to_card: true },
+    });
+    expect(resp.statusCode).toBe(502);
+    expect(resp.json()).toMatchObject({
+      error: 'message_failed',
+      reason: 'worker_not_connected',
+    });
+
+    const rows = await h.db.select().from(chatMessages).where(eq(chatMessages.serverId, SERVER_ID));
+    expect(rows).toHaveLength(0);
   });
 });

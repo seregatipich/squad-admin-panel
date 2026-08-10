@@ -1,6 +1,9 @@
 'use client';
 import { useEffect, useId, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import DiscordRoleMappingsSection from './DiscordRoleMappingsSection';
+import DiscordStatusChannelsSection from './DiscordStatusChannelsSection';
+import DiscordTemplatesSection from './DiscordTemplatesSection';
 import {
   DISCORD_EVENT_TYPES,
   type DiscordEventType,
@@ -480,6 +483,10 @@ export default function DiscordIntegrationPage() {
           </table>
         </div>
       </section>
+      <DiscordTemplatesSection />
+      <DiscordRoleMappingsSection />
+
+      <DiscordStatusChannelsSection />
     </div>
   );
 }

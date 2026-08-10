@@ -15,12 +15,13 @@
     "format": "biome format --write .",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "test:cov": "pnpm --workspace-concurrency=${PNPM_WORKSPACE_CONCURRENCY:-4} --filter @squad/api --filter @squad/web --filter @squad/db --filter @squad/shared-config --filter @squad/shared-types --filter @squad/bridge-client --filter @squad/worker-rcon --filter @squad/worker-log-ingest --filter @squad/worker-metrics-sampler --filter @squad/worker-role-expirer exec vitest run --coverage",
+    "test:cov": "pnpm --workspace-concurrency=${PNPM_WORKSPACE_CONCURRENCY:-4} --filter @squad/api --filter @squad/web --filter @squad/db --filter @squad/diag --filter @squad/shared-config --filter @squad/shared-types --filter @squad/steam-api --filter @squad/bridge-client --filter @squad/worker-audit-archiver --filter @squad/worker-automation --filter @squad/worker-backup --filter @squad/worker-ban-sync --filter @squad/worker-clan-guard --filter @squad/worker-clan-priority-expirer --filter @squad/worker-config-sync --filter @squad/worker-diag-flush --filter @squad/worker-discord --filter @squad/worker-event-partition --filter @squad/worker-leaderboard-aggregator --filter @squad/worker-log-ingest --filter @squad/worker-media-publisher --filter @squad/worker-metrics-sampler --filter @squad/worker-presence-daily --filter @squad/worker-rcon --filter @squad/worker-role-expirer --filter @squad/worker-scheduler --filter @squad/worker-seed-reward --filter @squad/worker-stats --filter @squad/worker-steam-refresh exec vitest run --coverage",
     "test:unit": "turbo run test:unit",
     "test:integration": "turbo run test:integration",
     "test:e2e": "turbo run test:e2e",
     "db:generate": "pnpm --filter @squad/db generate",
     "db:migrate": "pnpm --filter @squad/db migrate",
+    "db:seed-demo": "pnpm --filter @squad/db seed:demo",
     "db:studio": "pnpm --filter @squad/db studio",
     "bridge:build": "pnpm --filter @squad/bridge build",
     "bridge:test": "pnpm --filter @squad/bridge test",
@@ -28,6 +29,7 @@
     "verify:audit-chain": "tsx scripts/verify-audit-chain.ts",
     "solve:issues": "tsx scripts/solve-issues-parallel.ts",
     "solve:issues:test": "tsx --test scripts/solve-issues-parallel.test.ts",
+    "test:scripts": "pnpm --filter panel-bridge build && tsx --test scripts/rnsquadjs-shadow-diff.test.ts",
     "prepare": "lefthook install || true"
   },
   "devDependencies": {
@@ -35,16 +37,24 @@
     "@biomejs/biome": "2.2.0",
     "@fast-check/vitest": "^0.3.0",
     "@types/node": "^26.1.1",
-    "@vitest/coverage-v8": "^3.2.4",
+    "@vitest/coverage-v8": "^3.2.7",
     "lefthook": "^1.8.2",
     "tsx": "^4.19.2",
-    "turbo": "^2.3.0",
+    "turbo": "2.9.18",
     "typescript": "^5.7.2"
   },
   "pnpm": {
     "overrides": {
-      "vite": "^6.4.2",
-      "esbuild": "^0.25.0"
+      "vite": "^6.4.3",
+      "esbuild": "^0.25.0",
+      "shell-quote": "^1.9.0",
+      "qs": "^6.15.2",
+      "postcss": "^8.5.23",
+      "sharp": "^0.35.3",
+      "@fastify/swagger-ui>@fastify/static": "^10.1.2",
+      "test-exclude": "^8.0.0",
+      "brace-expansion": "^5.0.8",
+      "dompurify": "3.4.12"
     }
   }
 }

@@ -22,14 +22,18 @@ async function insertAuditRow(
     )
     RETURNING id::text AS id
   `)) as unknown as Array<{ id: string }>;
-  return rows[0]!.id;
+  // A single-row INSERT ... RETURNING always yields exactly one row.
+  const row = rows[0] as { id: string };
+  return row.id;
 }
 
 async function auditRowCount(): Promise<number> {
   const rows = (await h.db.execute(
     sql`SELECT count(*)::int AS n FROM audit_log`,
   )) as unknown as Array<{ n: number }>;
-  return rows[0]!.n;
+  // SELECT count(*) always yields exactly one row.
+  const row = rows[0] as { n: number };
+  return row.n;
 }
 
 interface VerifyResult {
@@ -83,7 +87,7 @@ describe('GET /api/v1/audit/verify-chain', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as { items: Array<{ row_hash: string; prev_hash: string | null }> };
     expect(body.items.length).toBeGreaterThan(0);
-    expect(body.items[0]!.row_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(body.items[0]?.row_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('detects a tampered row and reports the break at the right id', async () => {
@@ -91,7 +95,8 @@ describe('GET /api/v1/audit/verify-chain', () => {
     for (let i = 0; i < 5; i++) {
       ids.push(await insertAuditRow(`action.${i}`, null, null, { seq: i }));
     }
-    const tamperedId = ids[2]!;
+    // The loop above pushed 5 ids; index 2 is always populated.
+    const tamperedId = ids[2] as string;
 
     // Simulate a superuser editing a stored row directly, bypassing the
     // append-only deny trigger (which normally blocks UPDATE/DELETE).

@@ -25,7 +25,7 @@ async function seedRole(db: DatabaseClient, opts: { panelAccess?: boolean } = {}
   const id = uuidv7();
   await db.insert(roles).values({
     id,
-    name: `Role-${id.slice(0, 12)}`,
+    name: `Role-${id}`,
     color: 'neutral',
     isSystemRole: false,
     panelAccess: opts.panelAccess ?? true,

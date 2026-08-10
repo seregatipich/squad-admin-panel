@@ -7,6 +7,7 @@ import { DockerPruneButton } from '@/components/DockerPruneButton';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { MetricHistoryModal, type MetricKey } from '@/components/MetricHistoryModal';
 import { RestartBridgeButton } from '@/components/RestartBridgeButton';
+import { UpdateProgressModal } from '@/components/UpdateProgressModal';
 import { formatBytes, formatBytesPerSec, formatPercent, formatUptime, ratio } from '@/lib/format';
 import { computeHostHealth, type HealthLevel, thresholdTone } from '@/lib/host-health';
 import { AnalyticsPanel } from './analytics-panel';
@@ -190,6 +191,7 @@ export default function DashboardPage() {
   const [diskBreakdown, setDiskBreakdown] = useState<DiskBreakdown | null>(null);
   const [diskModalOpen, setDiskModalOpen] = useState(false);
   const [depotModalOpen, setDepotModalOpen] = useState(false);
+  const [depotProgressOpen, setDepotProgressOpen] = useState(false);
 
   const load = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -390,14 +392,24 @@ export default function DashboardPage() {
           player_count: s.player_count ?? 0,
         }))}
         onStart={async (serverIds) => {
-          await fetch('/api/v1/depot/update', {
+          const r = await fetch('/api/v1/depot/update', {
             method: 'POST',
             credentials: 'include',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ server_ids: serverIds }),
           });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          setDepotProgressOpen(true);
           void load();
         }}
+      />
+
+      <UpdateProgressModal
+        open={depotProgressOpen}
+        onOpenChange={setDepotProgressOpen}
+        wsUrl="/api/v1/depot/progress/ws"
+        title="Обновление Squad"
+        onDone={() => void load()}
       />
     </div>
   );

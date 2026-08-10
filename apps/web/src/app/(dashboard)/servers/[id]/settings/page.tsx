@@ -2,6 +2,12 @@
 
 import { use, useCallback, useEffect, useState } from 'react';
 import { TagInput } from '@/components/TagInput';
+import {
+  licenseRestartRequired,
+  type RnsquadjsIntegration,
+  rnsquadjsModeLabel,
+  rnsquadjsStatusPill,
+} from './helpers';
 
 interface Settings {
   server_id: string;
@@ -28,10 +34,23 @@ interface Settings {
 
 const RULES_TEXT_MAX = 300;
 
+const RNSQUADJS_PILL_TONE: Record<'green' | 'amber' | 'neutral', string> = {
+  green: 'bg-emerald-900/60 text-emerald-300',
+  amber: 'bg-amber-900/60 text-amber-300',
+  neutral: 'bg-neutral-800 text-neutral-400',
+};
+
 interface ServerInfo {
   status: string;
   display_name: string;
   tags: string[];
+}
+
+interface LicenseState {
+  configured: boolean;
+  license_id: string | null;
+  updated_at: string | null;
+  restart_required: boolean;
 }
 
 export default function SettingsPage({ params }: { params: Promise<{ id: string }> }) {
@@ -46,8 +65,14 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const [tags, setTags] = useState<string[]>([]);
   const [licenseId, setLicenseId] = useState('');
   const [licenseKey, setLicenseKey] = useState('');
+  const [license, setLicense] = useState<LicenseState | null>(null);
+  const [container, setContainer] = useState<{
+    running: boolean;
+    started_at: string | null;
+  } | null>(null);
 
   const [canManageServer, setCanManageServer] = useState(false);
+  const [rnsquadjs, setRnsquadjs] = useState<RnsquadjsIntegration | null>(null);
   const [seedingDraft, setSeedingDraft] = useState<{
     seed_live_at?: number;
     seed_hysteresis?: number;
@@ -67,6 +92,14 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         tags: data.server.tags ?? [],
       });
       setTags(data.server.tags ?? []);
+      const lic = (data.server.license ?? null) as LicenseState | null;
+      setLicense(lic);
+      setLicenseId(lic?.license_id ?? '');
+      setContainer(
+        data.container
+          ? { running: !!data.container.running, started_at: data.container.started_at ?? null }
+          : null,
+      );
       setSettings(data.settings);
       setDraft({});
     } catch (e) {
@@ -98,6 +131,30 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
       cancelled = true;
     };
   }, []);
+
+  // STATS-4 (#71). Read-only sidecar status, gated on `server:view`; the
+  // section self-hides on 403 rather than rendering an error, matching
+  // SeedContributionSection. Cutover/rollback stays on the server detail page's
+  // controls (POST .../rnsquadjs, `server:stop`) — this section only reports.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/v1/servers/${id}/rnsquadjs`, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as RnsquadjsIntegration;
+        if (!cancelled) setRnsquadjs(data);
+      } catch {
+        // best-effort: the section simply stays hidden
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   const isRunning = serverInfo && !['stopped', 'ready', 'pending'].includes(serverInfo.status);
 
@@ -162,16 +219,22 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     setBusy(true);
     setErr(null);
     try {
+      // ID-only edit: with a key already stored, an empty key field means
+      // "keep the stored key" — send only the id.
+      const payload: { license_id: string; license_key?: string } = { license_id: licenseId };
+      if (licenseKey) payload.license_key = licenseKey;
       const r = await fetch(`/api/v1/servers/${id}`, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ license_id: licenseId, license_key: licenseKey }),
+        body: JSON.stringify(payload),
       });
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
         throw new Error(body.message ?? body.error ?? `HTTP ${r.status}`);
       }
+      setLicenseKey('');
+      await load();
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -197,6 +260,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
       }
       setLicenseId('');
       setLicenseKey('');
+      await load();
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -346,6 +410,45 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         </label>
       </section>
 
+      {rnsquadjs && (
+        <section className="mb-6">
+          <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
+            Интеграция RNSquadJS
+          </h2>
+          <p className="mb-2 text-xs text-neutral-500">{rnsquadjsModeLabel(rnsquadjs.mode).hint}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-xs text-neutral-200">
+              {rnsquadjsModeLabel(rnsquadjs.mode).title}
+            </span>
+            <span
+              className={`rounded px-2 py-0.5 text-xs ${
+                RNSQUADJS_PILL_TONE[rnsquadjsStatusPill(rnsquadjs.status).tone]
+              }`}
+            >
+              {rnsquadjsStatusPill(rnsquadjs.status).text}
+            </span>
+          </div>
+          <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
+            <div>
+              <dt className="text-neutral-500">Переключён на сайдкар</dt>
+              <dd className="mt-0.5 text-neutral-200">{rnsquadjs.cutover ? 'Да' : 'Нет'}</dd>
+            </div>
+            <div>
+              <dt className="text-neutral-500">Последнее изменение связи</dt>
+              <dd className="mt-0.5 text-neutral-200">
+                {rnsquadjs.status
+                  ? new Date(rnsquadjs.status.last_change).toLocaleString('ru-RU')
+                  : '—'}
+              </dd>
+            </div>
+          </dl>
+          <p className="mt-2 text-xs text-neutral-500">
+            Переключение и откат сайдкара выполняются отдельным правом <code>server:stop</code>; эта
+            секция только показывает состояние.
+          </p>
+        </section>
+      )}
+
       <section className="mb-6">
         <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
           Архив логов
@@ -471,7 +574,24 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
           Лицензия
         </h2>
-        <p className="mb-2 text-xs text-neutral-500">Требуется перезапуск сервера</p>
+        {licenseRestartRequired(
+          license?.updated_at ?? null,
+          container?.running ?? false,
+          container?.started_at ?? null,
+        ) ? (
+          <p className="mb-2 flex items-center gap-2 text-xs text-amber-400">
+            <span className="rounded bg-amber-800 px-1.5 py-0.5 text-[10px] text-amber-100">
+              рестарт
+            </span>
+            Лицензия сохранена и применится после перезапуска сервера
+          </p>
+        ) : (
+          <p className="mb-2 text-xs text-neutral-500">
+            {license?.configured
+              ? 'Лицензия привязана и применена'
+              : 'License.cfg записывается панелью; применяется после перезапуска сервера'}
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <label className="block">
             <span className="text-xs text-neutral-500">License ID</span>
@@ -488,7 +608,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
               type="password"
               value={licenseKey}
               onChange={(e) => setLicenseKey(e.target.value)}
-              placeholder="Не указан"
+              placeholder={license?.configured ? '••••••••  (сохранён)' : 'Не указан'}
               className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
             />
           </label>
@@ -496,7 +616,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         <div className="mt-2 flex gap-2">
           <button
             type="button"
-            disabled={!licenseId || !licenseKey || busy}
+            disabled={!licenseId || (!licenseKey && !license?.configured) || busy}
             onClick={saveLicense}
             className="rounded bg-sky-700 px-3 py-1.5 text-xs text-white hover:bg-sky-600 disabled:opacity-40"
           >

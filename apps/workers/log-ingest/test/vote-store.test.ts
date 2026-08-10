@@ -21,10 +21,10 @@ const SERVER_ID = uuidv7();
 const INITIATOR_ID = uuidv7();
 const VOTER_A_ID = uuidv7();
 const VOTER_B_ID = uuidv7();
-const INITIATOR_EOS = '0002aaaa0002aaaa0002aaaa0002aaaa';
-const VOTER_A_EOS = '0002bbbb0002bbbb0002bbbb0002bbbb';
-const VOTER_B_EOS = '0002cccc0002cccc0002cccc0002cccc';
-const VOTER_B_STEAM = 76561198012345678n;
+const INITIATOR_EOS = '0005aaaa0005aaaa0005aaaa0005aaaa';
+const VOTER_A_EOS = '0005bbbb0005bbbb0005bbbb0005bbbb';
+const VOTER_B_EOS = '0005cccc0005cccc0005cccc0005cccc';
+const VOTER_B_STEAM = 76561198000500002n;
 
 function makePublisher() {
   return { publish: vi.fn().mockResolvedValue(1) };

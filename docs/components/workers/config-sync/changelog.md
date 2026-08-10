@@ -1,5 +1,55 @@
 # Changelog — worker-config-sync
 
+## 2026-07-28 — boot no longer requires the host bridge (#229)
+
+### Changed
+
+- `src/index.ts` no longer dies when `PANEL_BRIDGE_SOCKET` is unreachable at
+  startup. `await bridge.connect()` rejected into the top-level handler and the
+  process exited 1 before `startHeartbeat` ran. Nothing else on the boot path
+  needs the bridge — `refreshServerList` is DB+Redis and `relayOutbox` already
+  guards itself — so the failure is now warned and swallowed; `BridgeClient`
+  dials on demand and the per-server sync reconnects on its own. Both contract
+  cases (heartbeat, clean SIGTERM) failed on this before.
+
+## 2026-07-26 — CFG-2: generic config-drift sweep (#64)
+
+### Added
+
+- `src/config-drift.ts` — a second, independent sweep (every `CONFIG_DRIFT_INTERVAL_MS`, default 5 min) comparing each of the 16 non-managed config files' on-disk sha256 (via `bridge.fileRead`) against its `config_versions` tip, publishing per-file state to `config-drift:status:<server_id>` (TTL 24h). Excluded: `Admins.cfg` (SYNC-3/4 managed segment), `LayerRotation.cfg` (ROT-2), `License.cfg` (#45 panel-managed). Detect-only — resolution (accept / revert / reset-to-depot-default) happens through the API's drift routes and the config editor UI.
+- New env `CONFIG_DRIFT_INTERVAL_MS` (docker-compose + `.env.example`), separate from `ADMINS_CFG_DRIFT_INTERVAL_MS`.
+
+## 2026-07-25 — SYNC-9: pull vs. push evaluated, push retained (#39)
+
+### Decided
+
+- Evaluated Squad's `RemoteAdminListHosts.cfg` pull mechanism (servers fetch the admin list from a panel-hosted URL) as an alternative to this worker's push architecture. **Verdict: stay on push.** Pull would forfeit sha256 drift detection, the per-server `admins_cfg.synced`/`.force_synced`/`.sync_failed` audit trail, and the `admins-cfg:status:<id>` unreachable/outage state machine (incl. the SYNC-5 >1 h alert); it removes the panel's ability to force immediate application (push issues RCON `AdminReloadServerConfig` after each write, SYNC-3 correction №1); and it adds a silent-staleness failure mode when the panel URL is unreachable — with no offsetting cadence or bandwidth win. No code change; the push path is unchanged. Full analysis, three env-gated live-measurement protocols, and the reversal conditions are recorded in the ADR [`ai_docs/adr/2026-07-25-remote-admin-list-hosts-vs-push.md`](../../../../ai_docs/adr/2026-07-25-remote-admin-list-hosts-vs-push.md). A hybrid "push as source of truth + optionally publish a read-only URL" is left as a follow-up.
+
+## 2026-07-25 — Server-delete queue cleanup fallout (SYNC-5, #38)
+
+### Changed
+
+- **`XREADGROUP` `NOGROUP` fast-refresh** (`src/index.ts`). When the API tears down a per-server stream + `config-sync` group on soft-delete (SYNC-5), the worker's multiplexed `XREADGROUP` rejects `NOGROUP` / "no such key" for the whole batch. The catch now detects that class of error, logs `xreadgroup NOGROUP — refreshing server list`, calls `refreshServerList()` immediately (dropping the vanished id and pruning its `backoffByServer` entry), and resumes on the next loop iteration — instead of sleeping 1 s and re-hitting the same error until the 30-s refresh tick.
+- **Outbox relay soft-delete guard** ([`packages/db/src/admins-cfg-outbox.ts`](../../../../packages/db/src/admins-cfg-outbox.ts), consumed by `relayOutbox`). `relayAdminsCfgSyncOutbox` now inner-joins `servers` (`FOR UPDATE OF admins_cfg_sync_outbox`) and, for any pending row whose server is soft-deleted, stamps it `relayed_at` **without** publishing — so a mutation that raced a delete cannot `XADD` the torn-down stream back into existence. Rows for live servers relay unchanged.
+
+### Tests
+
+- `test/index-import.test.ts` gains the `NOGROUP xreadgroup → immediate refresh` case (mocked `ioredis`).
+- API-side DB coverage in `apps/api/test/server-delete.test.ts` and `apps/api/test/integration/admins-cfg-outbox.test.ts` (see [testing.md](./testing.md)).
+
+## 2026-07-25 — RCON reload after write (SYNC-3, #36)
+
+### Added
+
+- **`AdminReloadServerConfig` after every successful `Admins.cfg` write** (`src/rcon-reload.ts` → `requestAdminsCfgReload`). Closes SYNC-3 correction №1 (`ai_docs/plans/2026-07-04-task-decomposition.md`): Squad does **not** passively re-read `Admins.cfg`, so the panel must issue the RCON reload for permission changes to take effect without a container restart. The command is `XADD`'d onto worker-rcon's `rcon:commands:<server_id>` stream (`MAXLEN ~ 500`), byte-identical to the clan-guard / log-ingest / scheduler `sendRconCommand` helpers.
+- The reload is **gated** on `rcon:status:<server_id>.state === 'connected'` (one Redis `GET`) — skipped otherwise, so commands don't pile up on a stopped server — and **strictly best-effort**: it never throws and never rolls back the committed write. Its outcome (`enqueued` | `skipped_rcon_disconnected` | `failed`) is exposed on `SyncResult.reload` and recorded in the `admins_cfg.synced` / `admins_cfg.force_synced` audit `context.reload`.
+- Fired **only on the successful-write branch** — not on `in_sync` (no write), `drift`, or failure (`unreachable`) branches.
+- `test/rcon-reload.test.ts` (pure unit, fake Redis) and reload coverage in `test/syncer.test.ts`. New run-deferred live e2e `apps/api/test/e2e/admins-cfg-reload-live.e2e.test.ts` (tier-3).
+
+### Changed
+
+- `package.json`: added deps `@squad/shared-types` (`rconCommandRequestSchema` / `rconCommandStream`) and `uuid` (v7 `request_id`).
+
 ## 2026-04-28
 
 ### Changed

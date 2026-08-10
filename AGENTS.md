@@ -44,7 +44,7 @@ The local stack runs in Docker (`postgres`, `redis`, `api`, `web`). Getting an i
   eval "$(bash scripts/new-test-db.sh <slug>)"   # sets DATABASE_URL and TEST_DATABASE_URL
   pnpm --filter @squad/api exec vitest run test/<your>.test.ts   # run only your files, not test:cov
   ```
-- **Adding an API route?** Register it in **BOTH** `apps/api/src/server.ts` **and** `apps/api/test/integration/harness.ts` — they keep parallel registration lists, so a route missing from the harness 404s in integration tests.
+- **Adding an API route?** Add the import and `await app.register(...)` call to `registerRoutes()` in `apps/api/src/routes/index.ts` — both `apps/api/src/server.ts` and `apps/api/test/integration/harness.ts` call that single function, so there is no second list to keep in sync. `apps/api/test/route-registration-parity.test.ts` fails the build if a route file under `apps/api/src/routes/` is ever added without being imported and registered there.
 - **API tests that mutate `players`/`roles`/`panel_meta`** must scope the mutation by `steamId64` (a unique/test-range value), never a bare `uuid` — the parallel `test:cov` shares one DB and `apps/api/test/test-isolation.regression.test.ts` fails any unguarded `delete(players)` / `update(players).roleId` / …. A single-file `vitest run <your.test.ts>` does NOT run that guard, so before pushing also run `pnpm --filter @squad/api exec vitest run test/test-isolation.regression.test.ts`.
 - **The pre-push checklist auto-provisions a test DB when it can.** If `DATABASE_URL` is unset but Docker and `.env` are present, `scripts/pre-push-checklist.sh` runs `scripts/new-test-db.sh` for you; if neither a DB nor Docker is available the checklist fails rather than silently skipping tests. Even so, the checklist is a local pre-check, not the gate — **CI is the source of truth.** The Go bridge build cannot run on macOS and Docker image builds are not run locally, so `--no-verify` remains available for genuine emergencies (and for pushing when only Go/Docker-scoped work is untestable locally); CI will still catch anything skipped locally.
 
@@ -60,6 +60,10 @@ gh run view <run-id> --log-failed   # logs of the failing step
 
 The `ci` workflow runs on the org's self-hosted runner (a Multipass VM registered under the default `self-hosted` label) — see the "Self-hosted runner" section in `docs/development/agent-harness.md` for its setup and operating details.
 
+**Adding a package? Add it to `test:cov`.** CI's only JS test step is `pnpm test:cov`, which carries an explicit `--filter` list. A package missing from that list never runs in CI — it can be merged with a red suite while `dev` stays green (#229: 16 of 28 suites were invisible this way, and two workers sat broken behind a green dashboard). [`scripts/test-cov-complete.sh`](scripts/test-cov-complete.sh) now fails CI when a workspace package whose `test` script runs vitest is not in the list; run it locally any time with `bash scripts/test-cov-complete.sh`. The Go bridge is deliberately excluded — it has its own `go` job.
+
+**Every `uses:` line under `.github/workflows/` must be SHA-pinned.** `ci.yml` and `deploy-tk104.yml` run on the org's single, non-ephemeral self-hosted runner, and `deploy-tk104.yml`'s `deploy` job checks out code and then, in the same job, writes the production SSH deploy key to disk — a mutable version tag (e.g. `@v4`) on any referenced action could be repointed to execute arbitrary code with the runner's privileges (#248). [`scripts/test-workflow-pins.sh`](scripts/test-workflow-pins.sh) fails CI when any `uses:` line resolves to something other than a 40-hex-char commit SHA; run it locally any time with `bash scripts/test-workflow-pins.sh`.
+
 ### Local pre-check
 
 The lefthook `pre-push` hook runs [`scripts/pre-push-checklist.sh`](scripts/pre-push-checklist.sh) automatically before every push, as a fast local pre-check ahead of the cloud run. Any failed item blocks the push (bypass in an emergency with `git push --no-verify`).
@@ -69,7 +73,7 @@ The checklist runs, in order:
 1. `pnpm turbo run typecheck`
 2. `pnpm exec biome check .` (whole repo) — the item that most often breaks after a merge; an `error`-severity diagnostic such as `assist/source/organizeImports` (commonly from union-merged imports) fails it, fix with `pnpm exec biome check --write <file>`. `noNonNullAssertion` is `warn` and does not fail it.
 3. `pnpm turbo run build` (skip with `SKIP_BUILD=1`)
-4. gitleaks secret scan (best-effort — only if `gitleaks` is installed)
+4. gitleaks secret scan, scoped to origin/dev..HEAD (best-effort — only if `gitleaks` is installed; assumes origin/dev is already fetched locally, same as item 5 below)
 5. Tests — the packages affected since `origin/dev` (`pnpm turbo run test --filter='...[origin/dev]'`), or the full coverage suite with `FULL=1`. Auto-provisions an isolated migrated DB via `scripts/new-test-db.sh` when `DATABASE_URL` is unset.
 
 Run it by hand any time with `bash scripts/pre-push-checklist.sh`. **Not run locally:** the Go bridge (`apps/bridge` — cannot build on macOS; run `go vet ./... && go test -race ./...` there on Linux) and Docker image builds. The branch model is still enforced independently by the lefthook/`.claude` git-guard hooks (see "Enforcement harness"), not by CI.

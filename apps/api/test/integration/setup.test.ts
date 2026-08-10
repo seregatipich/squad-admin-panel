@@ -186,7 +186,7 @@ describeIfDb('POST /api/v1/setup/complete', () => {
     expect(row?.organizationName).toBe('First Name');
   });
 
-  it('returns 410 after completion regardless of the caller (gate precedes auth)', async () => {
+  it('returns 410 for an authenticated non-owner after completion; 401 for an anonymous caller (#246)', async () => {
     const first = await h.app.inject({
       method: 'POST',
       url: '/api/v1/setup/complete',
@@ -195,15 +195,26 @@ describeIfDb('POST /api/v1/setup/complete', () => {
     });
     expect(first.statusCode).toBe(200);
 
+    // #246: POST /api/v1/setup/complete deliberately declares neither
+    // config.public nor config.permissions (its in-handler 410-before-401
+    // precedence was already correct for an authenticated caller), so the
+    // global fail-closed auth hook now gates an anonymous caller with 401
+    // before the handler's own setupCompleted check ever runs. This used to
+    // be 410 under the old fail-open default, which let anonymous requests
+    // reach the handler at all; 401 is strictly more restrictive, not a
+    // regression.
     const anon = await h.app.inject({
       method: 'POST',
       url: '/api/v1/setup/complete',
       headers: { 'content-type': 'application/json' },
       payload: { organization_name: 'Anon Retry' },
     });
-    expect(anon.statusCode).toBe(410);
-    expect(anon.json()).toMatchObject({ error: 'setup_already_completed' });
+    expect(anon.statusCode).toBe(401);
+    expect(anon.json()).toMatchObject({ error: 'unauthenticated' });
 
+    // An authenticated non-owner still reaches the handler (the hook only
+    // requires a session, not a permission, on this undecorated route), so
+    // the completion gate still precedes the ownership check for them.
     const stranger = await h.app.inject({
       method: 'POST',
       url: '/api/v1/setup/complete',

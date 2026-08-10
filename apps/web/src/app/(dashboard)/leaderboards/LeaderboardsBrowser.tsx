@@ -8,9 +8,12 @@ import {
   type ColumnKey,
   canNavigatePeriod,
   currentPeriodStart,
+  defaultSeasonPeriodStart,
+  findSeason,
   formatCount,
   formatMetricValue,
   isFuturePeriod,
+  isSeasonReadOnly,
   type LeaderboardBody,
   type LeaderboardFilters,
   type LeaderboardRow,
@@ -22,14 +25,23 @@ import {
   pageInfoLabel,
   parseFilters,
   periodRangeLabel,
+  type Season,
   type ServerOption,
+  seasonOptionLabel,
+  seasonPeriodStart,
+  seasonRangeLabel,
   shiftPeriodStart,
   shouldNavigateRow,
+  sortSeasonsForSelector,
   visibleColumns,
 } from './helpers';
 
 interface ServersResponse {
   items: Array<{ id: string; display_name: string | null; slug: string | null }>;
+}
+
+interface SeasonsResponse {
+  items: Season[];
 }
 
 const inputClass =
@@ -42,6 +54,7 @@ export function LeaderboardsBrowser() {
   const filters = useMemo(() => parseFilters(searchParams), [searchParams]);
 
   const [servers, setServers] = useState<ServerOption[]>([]);
+  const [seasons, setSeasons] = useState<Season[]>([]);
   const [data, setData] = useState<LeaderboardBody | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,6 +93,22 @@ export function LeaderboardsBrowser() {
             slug: entry.slug,
           })),
         );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // LEAD-7 (#178): the season list drives the period selector. A viewer without
+  // panel access simply gets no seasons, which collapses the selector rather
+  // than surfacing an error — the leaderboard itself already reports auth.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/v1/seasons', { credentials: 'include', cache: 'no-store' })
+      .then(async (res) => (res.ok ? ((await res.json()) as SeasonsResponse) : { items: [] }))
+      .then((body) => {
+        if (!cancelled) setSeasons(body.items);
       })
       .catch(() => {});
     return () => {
@@ -137,7 +166,7 @@ export function LeaderboardsBrowser() {
         hasSelection: Boolean(selection),
       });
       if (!allowed) return;
-      router.push(`/players/${playerId}`);
+      router.push(`/all-players/${playerId}`);
     },
     [router],
   );
@@ -147,6 +176,7 @@ export function LeaderboardsBrowser() {
       <FilterRail
         filters={filters}
         servers={servers}
+        seasons={seasons}
         searchDraft={searchDraft}
         onSearchChange={setSearchDraft}
         onChange={navigate}
@@ -212,12 +242,14 @@ export function LeaderboardsBrowser() {
 function FilterRail({
   filters,
   servers,
+  seasons,
   searchDraft,
   onSearchChange,
   onChange,
 }: {
   filters: LeaderboardFilters;
   servers: ServerOption[];
+  seasons: Season[];
   searchDraft: string;
   onSearchChange: (value: string) => void;
   onChange: (partial: Partial<LeaderboardFilters>) => void;
@@ -251,22 +283,31 @@ function FilterRail({
         </select>
       </div>
 
-      <PeriodPicker filters={filters} onChange={onChange} />
+      <PeriodPicker filters={filters} seasons={seasons} onChange={onChange} />
     </aside>
   );
 }
 
 function PeriodPicker({
   filters,
+  seasons,
   onChange,
 }: {
   filters: LeaderboardFilters;
+  seasons: Season[];
   onChange: (partial: Partial<LeaderboardFilters>) => void;
 }) {
   const navigable = canNavigatePeriod(filters.period);
   const atLatest = isFuturePeriod(filters.period, filters.periodStart);
+  const seasonMode = filters.period === 'season';
+  const orderedSeasons = useMemo(() => sortSeasonsForSelector(seasons), [seasons]);
+  const selectedSeason = seasonMode ? findSeason(seasons, filters.periodStart) : null;
 
   function selectPeriod(period: Period) {
+    if (period === 'season') {
+      onChange({ period, periodStart: defaultSeasonPeriodStart(seasons), page: 1 });
+      return;
+    }
     onChange({
       period,
       periodStart: canNavigatePeriod(period) ? currentPeriodStart(period) : '',
@@ -293,6 +334,36 @@ function PeriodPicker({
           </button>
         ))}
       </div>
+      {seasonMode ? (
+        <div className="space-y-1.5 pt-1">
+          {orderedSeasons.length === 0 ? (
+            <p className="text-xs text-neutral-500">Сезоны не заданы.</p>
+          ) : (
+            <>
+              <select
+                aria-label="Сезон"
+                value={filters.periodStart}
+                onChange={(event) => onChange({ periodStart: event.target.value, page: 1 })}
+                className={`w-full ${inputClass}`}
+              >
+                {orderedSeasons.map((season) => (
+                  <option key={season.id} value={seasonPeriodStart(season)}>
+                    {seasonOptionLabel(season)}
+                  </option>
+                ))}
+              </select>
+              {selectedSeason ? (
+                <p className="text-xs text-neutral-400">
+                  {seasonRangeLabel(selectedSeason)}
+                  {isSeasonReadOnly(selectedSeason) ? (
+                    <span className="ml-1 text-neutral-500">· только просмотр</span>
+                  ) : null}
+                </p>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : null}
       {navigable ? (
         <div className="flex items-center justify-between gap-2 pt-1">
           <button
@@ -439,7 +510,7 @@ function CellContent({
   if (column === 'player') {
     return (
       <a
-        href={`/players/${row.player_id}`}
+        href={`/all-players/${row.player_id}`}
         className="font-medium text-sky-400 hover:text-sky-300"
         onClick={(event) => event.stopPropagation()}
       >

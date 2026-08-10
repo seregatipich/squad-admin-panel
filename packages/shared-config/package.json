@@ -48,6 +48,6 @@
     "@stryker-mutator/vitest-runner": "^9.6.1",
     "@types/node": "^22.10.1",
     "typescript": "^5.7.2",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.7"
   }
 }

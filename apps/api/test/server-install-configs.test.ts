@@ -117,7 +117,9 @@ async function runInstallAndWaitForDone(
   while (Date.now() < deadline) {
     const lines = h.app.installProgress.snapshot(serverId);
     if (lines.some((l) => l.step === 'done' || l.step === 'error')) {
-      const terminal = lines.find((l) => l.step === 'done' || l.step === 'error')!;
+      const terminal = lines.find((l) => l.step === 'done' || l.step === 'error');
+      // The `some(...)` check above used the identical predicate, so a match exists.
+      if (!terminal) throw new Error('expected a terminal install progress line');
       if (terminal.step === 'error') {
         throw new Error(`install errored: ${terminal.message}`);
       }
@@ -169,7 +171,7 @@ describe('server install depot seeding', () => {
       for (const name of Object.keys(SYNTHETIC_CONTENTS)) {
         const buf = bridge.files.get(`${destDir}/${name}`);
         expect(buf, `${name} should be written`).toBeDefined();
-        expect(buf!.length).toBeGreaterThan(0);
+        expect(buf?.length).toBeGreaterThan(0);
       }
 
       const [row] = await h.db.select().from(servers).where(eq(servers.id, serverId));
@@ -202,15 +204,18 @@ describe('server install depot seeding', () => {
       for (const name of Object.keys(SYNTHETIC_CONTENTS)) {
         const buf = bridge.files.get(`${destDir}/${name}`);
         expect(buf, `${name} should be written under ${destDir}`).toBeDefined();
-        expect(buf!.length).toBeGreaterThan(0);
+        expect(buf?.length).toBeGreaterThan(0);
       }
 
-      const rcon = bridge.files.get(`${destDir}/Rcon.cfg`)!.toString('utf-8');
+      // Rcon.cfg is a SYNTHETIC_CONTENTS key, so the loop above already
+      // asserted it was written; the non-null cast is safe here.
+      const rcon = (bridge.files.get(`${destDir}/Rcon.cfg`) as Buffer).toString('utf-8');
       expect(rcon).toMatch(/Password=.+/);
       expect(rcon).toMatch(new RegExp(`Port=${createBody.rcon_port}`));
       expect(rcon).not.toMatch(/depot-template-placeholder/);
 
-      const serverCfg = bridge.files.get(`${destDir}/Server.cfg`)!.toString('utf-8');
+      // Server.cfg is likewise a SYNTHETIC_CONTENTS key already asserted above.
+      const serverCfg = (bridge.files.get(`${destDir}/Server.cfg`) as Buffer).toString('utf-8');
       expect(serverCfg).toMatch(new RegExp(`ServerName="${createBody.display_name}"`));
 
       const rconVersion = versions.find((v) => v.filename === 'Rcon.cfg');
@@ -245,7 +250,7 @@ describe('server install depot seeding', () => {
       const destDir = `/var/lib/squad-panel/configs/${serverId}/ServerConfig`;
       const admins = bridge.files.get(`${destDir}/Admins.cfg`);
       expect(admins).toBeDefined();
-      expect(admins!.length).toBe(0);
+      expect(admins?.length).toBe(0);
 
       const versions = await h.db
         .select()
@@ -278,7 +283,9 @@ describe('server install depot seeding', () => {
       await runInstallAndWaitForDone(h, cookie, serverId);
 
       expect(runRnsquadjs).toHaveBeenCalledTimes(1);
-      const arg = runRnsquadjs.mock.calls[0]![0] as {
+      const call = runRnsquadjs.mock.calls[0];
+      if (!call) throw new Error('runRnsquadjs.mock.calls[0] is missing');
+      const arg = call[0] as {
         server_id: string;
         env: Record<string, string>;
       };

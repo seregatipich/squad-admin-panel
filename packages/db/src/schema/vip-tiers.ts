@@ -21,6 +21,13 @@ export const vipTiers = pgTable(
     description: text('description'),
     /** Default subscription length in days applied on grant; NULL means no default. */
     defaultDays: integer('default_days'),
+    /**
+     * Bonus-point price in the internal privilege shop (ECON-6). NULL means the
+     * tier is not purchasable. A non-NULL price requires {@link vipTiers.defaultDays}
+     * (enforced by `vip_tiers_price_requires_days_chk`), because a purchase is
+     * always a timed grant.
+     */
+    priceBonuses: integer('price_bonuses'),
     sortOrder: integer('sort_order').notNull().default(0),
     isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),

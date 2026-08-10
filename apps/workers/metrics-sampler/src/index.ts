@@ -1,6 +1,10 @@
 import { BridgeClient } from '@squad/bridge-client';
 import { createDiag } from '@squad/diag';
-import { redisSinkStream, startHeartbeat } from '@squad/shared-config';
+import {
+  createGracefulShutdownController,
+  redisSinkStream,
+  startHeartbeat,
+} from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
 import { emitStarted, emitStopped } from './lifecycle.js';
@@ -46,32 +50,29 @@ async function main(): Promise<void> {
   });
 
   const diag = createDiag({ redis, log });
+  let stopSampler = () => {};
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      log.info({ sig }, 'shutdown');
+      // Watchdog: guarantee a clean exit even if graceful teardown stalls.
+      const forceExit = setTimeout(() => {
+        log.warn('graceful shutdown timed out; forcing exit');
+        process.exit(0);
+      }, 3000);
+      forceExit.unref();
+      stopSampler();
+      await emitStopped(diag, sig).catch(() => undefined);
+      stopHeartbeat();
+      await redis.quit().catch(() => undefined);
+      await bridge.close().catch(() => undefined);
+      clearTimeout(forceExit);
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
+
   await emitStarted(diag);
-
-  const stopSampler = runSampler({ bridge, redis, log });
-
-  let shuttingDown = false;
-  const shutdown = async (sig: NodeJS.Signals) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    log.info({ sig }, 'shutdown');
-    // Watchdog: guarantee a clean exit even if graceful teardown stalls (e.g. the
-    // bridge close or a redis quit hangs). Mirrors worker-rcon's shutdown contract.
-    const forceExit = setTimeout(() => {
-      log.warn('graceful shutdown timed out; forcing exit');
-      process.exit(0);
-    }, 3000);
-    forceExit.unref();
-    stopSampler();
-    await emitStopped(diag, sig).catch(() => undefined);
-    stopHeartbeat();
-    await redis.quit().catch(() => undefined);
-    await bridge.close().catch(() => undefined);
-    clearTimeout(forceExit);
-    process.exit(0);
-  };
-  process.once('SIGTERM', shutdown);
-  process.once('SIGINT', shutdown);
+  stopSampler = runSampler({ bridge, redis, log });
+  await shutdown.markReady();
 }
 
 main().catch((err) => {

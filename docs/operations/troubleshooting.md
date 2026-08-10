@@ -21,7 +21,7 @@ Squad v10 does not respond to A2S queries. Visibility depends on the EOS session
 - `Server.cfg` has `ShouldAdvertise=true` (default).
 - `IsLANMatch=false` (default).
 - UFW allows game/query/beacon ports — `ufw status` on the host.
-- `License.cfg` is populated. The panel does not ship a Squad license key — operators must drop it in manually after install (free, per-operator, from Offworld Industries). If empty, the server log shows `Warning: [LogEOSSessions] Session will be created, but user lacks permission to advertise presence`.
+- `License.cfg` is populated. The panel does not ship a Squad license key (free, per-operator, from Offworld Industries) — attach yours in **Настройки сервера → Лицензия** and the panel writes `License.cfg` for you (SRV-6, #45); it takes effect after a server restart (the settings page shows a «рестарт» badge until then). Do not edit the file by hand or through the config editor — it is panel-managed there (shown masked, writes rejected). If the license is empty, the server log shows `Warning: [LogEOSSessions] Session will be created, but user lacks permission to advertise presence`.
 - Give it 1–3 minutes after start; first registration with EOS takes a moment.
 
 ## Audit log shows a gap or hash mismatch
@@ -69,13 +69,13 @@ If restarts don't help, capture `docker compose logs worker-rcon` and open an is
 
 ## Steam login
 
-### "Доступ запрещён" on `/no-access` after Steam login
+### Steam login lands on «Мой VIP» (`/me`) instead of the panel
 
-The Steam ID has no panel role. An admin needs to assign one:
+The Steam ID has no role with `panel_access`. The login itself succeeded — since VIPSUB-5 (#171) the callback always issues a session, but one scoped `self_service`, which every panel route treats as anonymous. An admin needs to assign a panel role:
 
 1. Owner opens `/players/<their_steam_id64>` in the panel.
 2. Section "Доступ к панели" → "Назначить роль" dropdown → pick role → "Назначить".
-3. The user logs in via Steam again. Their next callback now resolves to a player with non-empty permissions and they are redirected to `/`.
+3. The user reloads `/`. The `self_service` downgrade stops applying as soon as the player holds `panel_access`, so they land on the dashboard without logging in again.
 
 ### `owner_role_missing` 500 on first login
 

@@ -59,7 +59,7 @@ function rconStatus(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(async () => {
-  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
+  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
   await h.db.insert(servers).values({
     id: SERVER_ID,
     displayName: 'Map Widget Test Server',
@@ -108,7 +108,7 @@ async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
   await h.db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
-      name: `MapWidget-${keys.join('-') || 'none'}-${roleId.slice(0, 8)}`,
+      name: `MapWidget-${keys.join('-') || 'none'}-${roleId}`,
       color: 'blue',
       isSystemRole: false,
       panelAccess: true,

@@ -2,6 +2,70 @@
 
 Meaningful architectural choices, recorded as we make them.
 
+## 2026-07-29 — #246: invert the auth hook to fail-closed; explicit `config.public` allowlist
+
+### Context
+
+The global `onRequest` hook (`apps/api/src/plugins/auth.ts`) gates every route on `config.permissions`. It returned early — no session required — whenever a route declared no `config.permissions` at all, treating "nobody added permissions" as "this route is public". Most routes in this codebase authorise through an in-handler `Guard()` helper instead of `config.permissions`, so the gap was usually masked by that second layer. It was not always: `GET /api/docs*` (the full 298-route OpenAPI schema and Swagger UI) and `GET /api/v1/host/bridge-status` shipped to production reachable by anyone with the URL, no session or permission required. Auditing every route/plugin file under `apps/api/src/{routes,plugins}/*.ts` (`perms=0 guard=0 requser=0`) found three more live instances: `GET /api/v1/health/workers`, `GET /api/v1/health/reconciler`, and the two newer webhook route files `integrations-balancer.ts` and `integrations-vip.ts`.
+
+### Decision
+
+1. **Invert the default.** `apps/api/src/plugins/auth.ts`'s hook now requires `req.user` to be set — 401 otherwise — unless the route declares `config.public: true`. `config.permissions` still narrows further to specific permission keys, exactly as before; only the *no permissions declared* case changes meaning, from "public" to "authenticated, no permission required".
+2. **`config.public` is a new, explicit field** on `FastifyContextConfig` (`apps/api/src/plugins/types.ts`), documented alongside the existing `selfService` opt-in. It is reserved for a short, reviewed allowlist rather than a general escape hatch.
+3. **Every currently-unguarded route gets an explicit decision**, not a default:
+   - `host:view` (existing `PermissionKey`, already gating `GET /api/v1/host/info`) — `GET /api/v1/host/bridge-status`, `GET /api/v1/health/workers`, `GET /api/v1/health/reconciler`.
+   - `config.public: true` — `GET /health`, `GET /ready`, `GET /metrics`, the signature/token-gated webhooks (`integrations-balancer.ts`, `integrations-vip.ts`, `discord-interactions.ts`, `public-media.ts`'s upload-token redemption), the public data portals (`public-stats.ts`, `public-clans.ts`, `public-appeals.ts`), the pre-login Steam OAuth round-trip (`auth-steam.ts`), and `setup.ts`'s `GET /status` probe.
+   - `permissions: ['banlist:read']` — `public-banlist.ts`'s `GET /api/v1/public/banlist`, a drift correction: the handler already enforced `req.user` + the permission in-handler, so this only makes the existing gate declarative.
+   - `GET /api/docs*` needs no route-level change at all: `authPlugin` is registered with `fastify-plugin` (`fp()`), so its hook is not encapsulated to its registration point and Fastify applies it at the root scope to every descendant route, including the swagger-ui routes, regardless of registration order.
+4. **`POST /api/v1/setup/complete` is deliberately left undecorated.** Its in-handler `if (!req.user)` check already matches the new default, so no route change is needed there — but this does change one pre-existing behavior: an anonymous caller now gets `401` from the global hook before the handler's own "setup already completed → 410" precedence check ever runs, instead of leaking `setup_already_completed` to an unauthenticated caller. An authenticated non-owner is unaffected. This is strictly more restrictive, not a regression, and `apps/api/test/integration/setup.test.ts` was updated to assert it.
+
+### Rationale
+
+- **Fail-closed is the correct default for an admin panel.** A route with neither `config.permissions` nor a considered public decision should require a session, not silently serve anonymous traffic. The old default made "public" the path of least resistance for a route file that forgot to declare anything.
+- **An explicit `public: true` is reviewable.** `git grep 'public: true'` now enumerates every intentionally anonymous route in one pass; a reviewer sees the decision in the diff instead of inferring "nothing declared → presumably fine" from silence.
+- **In-handler `Guard()` routes are unaffected and stay in scope.** The majority of the API authorises via an in-handler `Guard()` helper with no `config.permissions` at all. Under the new default those routes require a session (correct — they always required one in practice) and are otherwise unchanged; converting them to declarative `config.permissions` is a decentralization cleanup deliberately deferred out of scope.
+
+### Consequences
+
+- `apps/api/test/security/fail-open-default.test.ts` (new) pins the fail-closed floor, the `config.public` opt-out, and the five newly-decided routes; verified red-before-fix (the four failure-path assertions genuinely fail on the pre-fix hook) and green after.
+- `apps/api/test/security/permission-matrix.test.ts`'s dead `if (route.url.startsWith('/api/docs')) return;` carve-out is removed — the route collector never imports swagger, so the line never fired; `GET /api/v1/host/bridge-status` is now automatically covered by the matrix's generic 403-without/not-403-with sweep since `host.ts` was already imported there.
+- Runtime-verified: unauthenticated `curl` against a running `api` instance returns `401` for both `GET /api/docs/json` and `GET /api/v1/host/bridge-status`.
+- No new `PermissionKey` was added; every newly-gated route reuses `host:view` or `banlist:read`.
+
+### Alternatives considered
+
+- **Add a `uiHooks.onRequest` gate directly on the `swaggerUi` registration.** Rejected as the primary mechanism — redundant with the already-inverted global hook once encapsulation is understood correctly, and would have hidden the real bug (the hook's default) behind a route-local patch. Kept as a documented fallback only if the runtime check had disagreed with the encapsulation model (it did not).
+- **Extend `permission-matrix.test.ts` into a blanket "every route must declare permissions or public" assertion.** Rejected — most of the API authorises via in-handler `Guard()` helpers with no `config.permissions`, which remains a correct and safe pattern under the new fail-closed default; a blanket assertion would force a mechanical, out-of-scope migration of those routes just to satisfy a lint-shaped test.
+
+## 2026-07-25 — WL-2: no per-server whitelist group template; roles are global
+
+### Context
+
+WL-2 ([#66](https://github.com/breaking-squad/squad-admin-panel/issues/66)) asked to first *decide* whether the panel still needs a per-server "whitelist-group template" — a construct that would let an operator define a whitelist group once and push it to every server in a single action. The task flagged the item as a probable duplicate (spec §2.1, "роли и так глобальны") and gave a two-branch acceptance: (a) record the decision; only (b) build the template if it is kept. This entry records branch (a).
+
+### Decision
+
+WL-2 is a structural duplicate of the model the panel already ships. **No new schema, route, or UI is added.** The "apply a whitelist group to every server in one action" criterion is already satisfied by the existing global-role + Admins.cfg-sync design:
+
+1. **Roles are global.** [`packages/db/src/schema/roles.ts`](../../packages/db/src/schema/roles.ts) has no `server_id` column and `players.role_id` is a single global FK — a role (including the designated whitelist role at `panel_meta.whitelist_role_id`) is never scoped to one server.
+2. **One global snapshot, written identically to every server.** The Admins.cfg managed segment is generated once from a single DB snapshot (`snapshotRolesAndAdmins` in [`apps/workers/config-sync/src/db-snapshot.ts`](../../apps/workers/config-sync/src/db-snapshot.ts)) rendered by [`buildManagedSegmentBody`](../../packages/shared-config/src/admins-config.ts), then written into every active server's file between the `//SQUAD-PANEL` markers.
+3. **One action fans out to every active server.** Every whitelist/role mutation calls [`publishAdminsCfgSyncForAllServers`](../../apps/api/src/lib/admins-cfg-sync.ts), which — in the same transaction as the mutation — inserts one durable outbox row per active server (`WHERE deleted_at IS NULL`). Adding or removing a whitelist member (`POST`/`DELETE /api/v1/whitelist/members`) is therefore already a single action that reaches every server; soft-deleted servers are excluded.
+
+### Rationale
+
+- **The template is the model we already have.** A per-server template only makes sense if roles or whitelists could diverge per server; they cannot. Building a second grouping construct on top of global roles would duplicate the fan-out the transactional outbox already guarantees, and re-introduce the server-scoped grouping the RBAC redesign deliberately dissolved.
+- **Decision over code.** The acceptance criterion is met by recording the duplicate and locking the existing behaviour with a regression test, not by shipping a redundant endpoint.
+
+### Consequences
+
+- No migration, no route, no permission, no UI change. The RBAC surface and the Admins.cfg-sync pipeline are unchanged.
+- The whitelist fan-out invariant is now pinned by an integration test (`apps/api/test/integration/whitelist.test.ts`, the "whitelist mutations fan out to every active server (WL-2)" block): a member add/remove enqueues exactly one `admins_cfg_sync_outbox` row per active server, never for a soft-deleted server, and a no-op re-add enqueues none. A future refactor that narrows the fan-out will fail the suite.
+
+### Alternatives considered
+
+- **Build a per-server whitelist-group template.** Rejected — duplicates the global-role model and its existing all-servers fan-out; see the 2026-04-25 "Panel RBAC" and 2026-05-01 "Roles unified" decisions.
+- **Close the issue with no artifact.** Rejected — the decision needs a durable record (this ADR) and a test that prevents silent regression of the "one action → all servers" property the task cared about.
+
 ## 2026-05-01 — Roles unified with Squad permissions; Admins.cfg synthesized from DB
 
 ### Context

@@ -8,6 +8,9 @@ export type ScheduledTaskType = 'restart' | 'set_next_layer' | 'change_layer' | 
 export interface ScheduledTaskParams {
   layer?: string;
   message?: string;
+  /** Ordered rotation of broadcast texts (MSG-4, #187); overrides `message` when present. */
+  messages?: string[];
+  templateIds?: string[];
 }
 
 /** One enabled row of the `scheduled_tasks` table. */
@@ -22,6 +25,10 @@ export interface ScheduledTaskEntry {
   /** 5-field cron expression, UTC. Null = one-off. */
   recurrence: string | null;
   lastExecutedAt: Date | null;
+  /** Index into `params.messages` that fires next for a rotating broadcast (MSG-4, #187). */
+  rotationIndex: number;
+  /** Player who created the task; the author of the chat echo. Null → echo skipped. */
+  createdBy: string | null;
   createdAt: Date;
 }
 
@@ -48,6 +55,14 @@ export interface ScheduledTaskAuditEntry {
   context: Record<string, unknown>;
 }
 
+/** Echo of a scheduled broadcast into `chat_messages` (MSG-3/MSG-4). */
+export interface ScheduledBroadcastEcho {
+  serverId: string;
+  authorPlayerId: string;
+  message: string;
+  sentAt: Date;
+}
+
 export interface ScheduledTaskTickDeps {
   now?: Date;
   loadEnabledTasks(): Promise<ScheduledTaskEntry[]>;
@@ -56,6 +71,10 @@ export interface ScheduledTaskTickDeps {
   /** Restarts a server via the SRV-3 container-restart mechanism. */
   restartServer(serverId: string): Promise<void>;
   setLastExecutedAt(taskId: string, executedAt: Date): Promise<void>;
+  /** Advances a rotating broadcast's cursor after a successful dispatch (MSG-4, #187). */
+  advanceRotationIndex(taskId: string, nextIndex: number): Promise<void>;
+  /** Records a scheduled broadcast in `chat_messages` (scope broadcast, source panel). */
+  echoBroadcastToChat(echo: ScheduledBroadcastEcho): Promise<void>;
   recordRun(run: ScheduledTaskRunRecord): Promise<void>;
   writeAuditEntry(entry: ScheduledTaskAuditEntry): Promise<void>;
   diag: Pick<Diag, 'emit'>;
@@ -108,7 +127,7 @@ export function resolveDueOccurrence(entry: ScheduledTaskEntry, now: Date): Date
 async function dispatchTask(
   entry: ScheduledTaskEntry,
   deps: ScheduledTaskTickDeps,
-): Promise<{ command: string }> {
+): Promise<{ command: string; broadcast?: { text: string; listLength: number } }> {
   switch (entry.taskType) {
     case 'restart':
       await deps.restartServer(entry.serverId);
@@ -124,14 +143,20 @@ async function dispatchTask(
       return { command };
     }
     case 'broadcast': {
-      const message = entry.params.message;
-      if (!message) throw new Error(`scheduled_task ${entry.id} (broadcast) is missing a message`);
+      // MSG-4 (#187): a rotating broadcast carries `messages`; a legacy single
+      // broadcast carries `message`. Fire the entry at the current cursor.
+      const list = entry.params.messages ?? (entry.params.message ? [entry.params.message] : []);
+      if (list.length === 0)
+        throw new Error(`scheduled_task ${entry.id} (broadcast) is missing a message`);
+      const text = list[entry.rotationIndex % list.length];
+      if (text === undefined)
+        throw new Error(`scheduled_task ${entry.id} (broadcast) has no message at rotation cursor`);
       await deps.sendRconCommand({
         serverId: entry.serverId,
         command: 'AdminBroadcast',
-        args: [message],
+        args: [text],
       });
-      return { command: 'AdminBroadcast' };
+      return { command: 'AdminBroadcast', broadcast: { text, listLength: list.length } };
     }
   }
 }
@@ -190,8 +215,9 @@ export async function runScheduledTaskTick(
       }
 
       let command: string;
+      let broadcast: { text: string; listLength: number } | undefined;
       try {
-        ({ command } = await dispatchTask(entry, deps));
+        ({ command, broadcast } = await dispatchTask(entry, deps));
       } catch (err) {
         failed++;
         const message = err instanceof Error ? err.message : String(err);
@@ -216,11 +242,55 @@ export async function runScheduledTaskTick(
       }
 
       await deps.setLastExecutedAt(entry.id, occurrence);
+
+      const detail: Record<string, unknown> = {
+        occurrence: occurrence.toISOString(),
+        task_type: entry.taskType,
+        command,
+      };
+
+      // MSG-4 (#187): advance the rotation cursor and echo the broadcast into
+      // chat. Both run only after the RCON dispatch succeeded; an echo failure
+      // is logged but never downgrades the already-executed run.
+      if (broadcast) {
+        detail.message = broadcast.text;
+        if (broadcast.listLength > 1) {
+          await deps.advanceRotationIndex(
+            entry.id,
+            (entry.rotationIndex + 1) % broadcast.listLength,
+          );
+        }
+        if (entry.createdBy !== null) {
+          try {
+            await deps.echoBroadcastToChat({
+              serverId: entry.serverId,
+              authorPlayerId: entry.createdBy,
+              message: broadcast.text,
+              sentAt: now,
+            });
+            detail.echo = 'sent';
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            detail.echo = 'failed';
+            detail.echo_error = message;
+            await deps.diag.emit({
+              component: 'worker-scheduler',
+              kind: 'scheduled_task.echo_failed',
+              severity: 'warn',
+              message: `scheduled_task ${entry.id} broadcast echo failed: ${message}`,
+              payload: { task_id: entry.id, server_id: entry.serverId, err: message },
+            });
+          }
+        } else {
+          detail.echo = 'skipped_no_author';
+        }
+      }
+
       await deps.recordRun({
         taskId: entry.id,
         executedAt: now,
         status: 'executed',
-        detail: { occurrence: occurrence.toISOString(), task_type: entry.taskType, command },
+        detail,
       });
       await deps.writeAuditEntry({
         actor: { kind: 'system', label: 'task-scheduler' },

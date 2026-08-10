@@ -1,5 +1,14 @@
-import { createDatabaseClient, events, matches, players, servers } from '@squad/db';
-import { and, eq } from 'drizzle-orm';
+import {
+  combatEvents,
+  createDatabaseClient,
+  events,
+  matches,
+  players,
+  playerVehicleStats,
+  playerWeaponStats,
+  servers,
+} from '@squad/db';
+import { and, eq, inArray } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { handleCombat, LIVE_BUS_CHANNEL } from '../src/combat/store.js';
@@ -52,6 +61,9 @@ const REVIVE_LINE = `[2026.07.05-12.00.03:000][103]LogSquad: MedicCarol (Online 
 const SUICIDE_LINE = `[2026.07.05-12.10.00:000][300]LogSquadTrace: [DedicatedServer]ASQSoldier::Die(): Player:AttackerAlice KillingDamage=-100.000000 from AttackerAlice (Online IDs: EOS: ${ALICE_EOS} steam: ${ALICE_STEAM}) caused by BP_Grenade_C`;
 const ENV_LINE = `[2026.07.05-12.11.00:000][301]LogSquad: Player:VictimBob ActualDamage=15.000000 from nullptr caused by BP_FallDamage_C`;
 const EOS_ONLY_KILL = `[2026.07.05-12.05.00:000][200]LogSquadTrace: [DedicatedServer]ASQSoldier::Die(): Player:VictimBob KillingDamage=-100.000000 from Newcomer (Online IDs: EOS: ${NEWCOMER_EOS}) caused by BP_M4_C`;
+const WOUND_LINE = `[2026.07.05-12.00.01:000][101]LogSquadTrace: [DedicatedServer]ASQSoldier::Wound(): Player:VictimBob KillingDamage=-50.000000 from AttackerAlice (Online IDs: EOS: ${ALICE_EOS} steam: ${ALICE_STEAM}) caused by BP_AK74_C`;
+
+const AGGREGATE_PLAYER_IDS = [ALICE_ID, BOB_ID, MEDIC_ID, REVIVED_ID];
 
 const ROSTER_SAME_TEAM = [
   { eos_id: ALICE_EOS, steam_id64: ALICE_STEAM, name: 'AttackerAlice', team_id: 1 },
@@ -101,8 +113,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await db.delete(combatEvents).where(eq(combatEvents.serverId, SERVER_ID));
   await db.delete(events).where(eq(events.serverId, SERVER_ID));
   await db.delete(matches).where(eq(matches.serverId, SERVER_ID));
+  // Aggregates cascade on player delete; the shared test:cov DB keeps these
+  // scoped to this run's unique player uuids.
   await db.delete(players).where(eq(players.id, ALICE_ID));
   await db.delete(players).where(eq(players.id, BOB_ID));
   await db.delete(players).where(eq(players.id, MEDIC_ID));
@@ -113,6 +128,13 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  await db.delete(combatEvents).where(eq(combatEvents.serverId, SERVER_ID));
+  await db
+    .delete(playerWeaponStats)
+    .where(inArray(playerWeaponStats.playerId, AGGREGATE_PLAYER_IDS));
+  await db
+    .delete(playerVehicleStats)
+    .where(inArray(playerVehicleStats.playerId, AGGREGATE_PLAYER_IDS));
   await db.delete(events).where(eq(events.serverId, SERVER_ID));
   await db.delete(matches).where(eq(matches.serverId, SERVER_ID));
   await db.delete(players).where(eq(players.eosId, NEWCOMER_EOS));
@@ -123,6 +145,21 @@ async function eventsOfKind(kind: string) {
     .select()
     .from(events)
     .where(and(eq(events.serverId, SERVER_ID), eq(events.kind, kind)));
+}
+
+async function combatEventsOfType(eventType: string) {
+  return db
+    .select()
+    .from(combatEvents)
+    .where(and(eq(combatEvents.serverId, SERVER_ID), eq(combatEvents.eventType, eventType)));
+}
+
+async function weaponStat(playerId: string, weapon: string) {
+  const rows = await db
+    .select()
+    .from(playerWeaponStats)
+    .where(and(eq(playerWeaponStats.playerId, playerId), eq(playerWeaponStats.weapon, weapon)));
+  return rows[0] ?? null;
 }
 
 describe('handleCombat envelope writes', () => {
@@ -253,5 +290,86 @@ describe('handleCombat match association and dedup', () => {
     expect(second.eventId).toBe(first.eventId);
     const rows = await eventsOfKind('combat_death');
     expect(rows).toHaveLength(1);
+  });
+});
+
+describe('handleCombat dossier aggregation (DOSSIER-2)', () => {
+  it('writes one combat_events death row and increments the weapon kill atomically', async () => {
+    await handleCombat(db, makeRedis(), command(DEATH_LINE));
+
+    const ce = await combatEventsOfType('death');
+    expect(ce).toHaveLength(1);
+    expect(ce[0].attackerPlayerId).toBe(ALICE_ID);
+    expect(ce[0].victimPlayerId).toBe(BOB_ID);
+    expect(ce[0].weapon).toBe('BP_AK74');
+    expect(ce[0].isTeamkill).toBe(false);
+
+    const ws = await weaponStat(ALICE_ID, 'BP_AK74');
+    expect(ws?.kills).toBe(1);
+    expect(ws?.teamkills).toBe(0);
+    expect(ws?.shotsEvents).toBe(0);
+    expect(ws?.damage).toBeNull();
+    expect(ws?.lastUsedAt).not.toBeNull();
+  });
+
+  it('accumulates weapon shots and damage from a damage line', async () => {
+    await handleCombat(db, makeRedis(), command(DAMAGE_LINE));
+
+    const ce = await combatEventsOfType('damage');
+    expect(ce).toHaveLength(1);
+
+    const ws = await weaponStat(ALICE_ID, 'BP_Projectile_762x54');
+    expect(ws?.shotsEvents).toBe(1);
+    expect(ws?.kills).toBe(0);
+    expect(Number(ws?.damage)).toBeCloseTo(54.321);
+  });
+
+  it('counts a same-team kill as a teamkill in the aggregate', async () => {
+    await handleCombat(db, makeRedis(ROSTER_SAME_TEAM), command(DEATH_LINE));
+    const ws = await weaponStat(ALICE_ID, 'BP_AK74');
+    expect(ws?.kills).toBe(0);
+    expect(ws?.teamkills).toBe(1);
+  });
+
+  it('increments player_vehicle_stats when the kill came from a vehicle', async () => {
+    const cmd: CombatRecordCommand = { ...command(DEATH_LINE), attackerVehicle: 'BTR82A' };
+    await handleCombat(db, makeRedis(), cmd);
+
+    const rows = await db
+      .select()
+      .from(playerVehicleStats)
+      .where(
+        and(
+          eq(playerVehicleStats.playerId, ALICE_ID),
+          eq(playerVehicleStats.vehicleAssetId, 'BTR82A'),
+        ),
+      );
+    expect(rows[0]?.kills).toBe(1);
+  });
+
+  it('records a wound line in combat_events without moving any weapon aggregate', async () => {
+    await handleCombat(db, makeRedis(), command(WOUND_LINE));
+    const ce = await combatEventsOfType('wound');
+    expect(ce).toHaveLength(1);
+    expect(await weaponStat(ALICE_ID, 'BP_AK74')).toBeNull();
+  });
+
+  it('does not double-count the aggregate on offset replay (idempotency)', async () => {
+    const cmd = command(DEATH_LINE);
+    await handleCombat(db, makeRedis(), cmd);
+    const second = await handleCombat(db, makeRedis(), cmd);
+    expect(second.inserted).toBe(false);
+
+    const ce = await combatEventsOfType('death');
+    expect(ce).toHaveLength(1);
+    const ws = await weaponStat(ALICE_ID, 'BP_AK74');
+    expect(ws?.kills).toBe(1);
+  });
+
+  it('aggregates an EOS-only attacker by uuid', async () => {
+    const result = await handleCombat(db, makeRedis(), command(EOS_ONLY_KILL));
+    expect(result.attackerPlayerId).not.toBeNull();
+    const ws = await weaponStat(result.attackerPlayerId as string, 'BP_M4');
+    expect(ws?.kills).toBe(1);
   });
 });

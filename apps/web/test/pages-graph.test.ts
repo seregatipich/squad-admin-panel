@@ -71,11 +71,11 @@ vi.mock('../src/lib/live-bus', () => ({
   })),
 }));
 
+import playerDetailPage from '../src/app/(dashboard)/all-players/[id]/page';
+import playersPage from '../src/app/(dashboard)/all-players/page';
 import auditPage from '../src/app/(dashboard)/audit/page';
 import dashboardPage from '../src/app/(dashboard)/dashboard/page';
 import logsPage from '../src/app/(dashboard)/logs/page';
-import playerDetailPage from '../src/app/(dashboard)/players/[id]/page';
-import playersPage from '../src/app/(dashboard)/players/page';
 import rolesEditPage from '../src/app/(dashboard)/roles/[id]/page';
 import rolesNewPage from '../src/app/(dashboard)/roles/new/page';
 import rolesPage from '../src/app/(dashboard)/roles/page';
@@ -90,10 +90,15 @@ import serversPage from '../src/app/(dashboard)/servers/page';
 import settingsAccountPage from '../src/app/(dashboard)/settings/account/page';
 import settingsGroupMembersPage from '../src/app/(dashboard)/settings/groups/[id]/members/page';
 import settingsGroupsPage from '../src/app/(dashboard)/settings/groups/page';
+import mediaPublishingPage from '../src/app/(dashboard)/settings/integrations/media/page';
+import settingsSeasonsPage from '../src/app/(dashboard)/settings/seasons/page';
 import settingsTokensPage from '../src/app/(dashboard)/settings/tokens/page';
+import statisticsPage from '../src/app/(dashboard)/statistics/page';
 import usersPage from '../src/app/(dashboard)/users/page';
+import meLayout from '../src/app/(me)/layout';
+import mePage from '../src/app/(me)/me/page';
+import publicUploadPage from '../src/app/(public)/upload/[token]/page';
 import loginPage from '../src/app/login/page';
-import noAccessPage from '../src/app/no-access/page';
 import rootPage from '../src/app/page';
 
 describe('pages static import graph', () => {
@@ -105,8 +110,12 @@ describe('pages static import graph', () => {
     expect(loginPage).toBeDefined();
   });
 
-  it('no-access page exports default', () => {
-    expect(noAccessPage).toBeDefined();
+  it('self-service me page exports default', () => {
+    expect(mePage).toBeDefined();
+  });
+
+  it('self-service (me) layout exports default', () => {
+    expect(meLayout).toBeDefined();
   });
 
   it('dashboard page exports default', () => {
@@ -181,6 +190,10 @@ describe('pages static import graph', () => {
     expect(settingsTokensPage).toBeDefined();
   });
 
+  it('settings seasons page exports default', () => {
+    expect(settingsSeasonsPage).toBeDefined();
+  });
+
   it('settings groups page exports default', () => {
     expect(settingsGroupsPage).toBeDefined();
   });
@@ -191,5 +204,17 @@ describe('pages static import graph', () => {
 
   it('users page exports default', () => {
     expect(usersPage).toBeDefined();
+  });
+
+  it('statistics page exports default', () => {
+    expect(statisticsPage).toBeDefined();
+  });
+
+  it('public one-time upload page exports default', () => {
+    expect(publicUploadPage).toBeDefined();
+  });
+
+  it('media publishing integration page exports default', () => {
+    expect(mediaPublishingPage).toBeDefined();
   });
 });

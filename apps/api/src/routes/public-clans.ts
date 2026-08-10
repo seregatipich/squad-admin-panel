@@ -52,7 +52,13 @@ const publicClansRoutes: FastifyPluginAsync = async (app) => {
 
   fast.get(
     '/api/v1/public/clans',
-    { config: { audit: false, rateLimit: { max: PUBLIC_RATE_LIMIT, timeWindow: '1 minute' } } },
+    {
+      config: {
+        audit: false,
+        public: true,
+        rateLimit: { max: PUBLIC_RATE_LIMIT, timeWindow: '1 minute' },
+      },
+    },
     async () => {
       const rows = await app.db
         .select({
@@ -75,7 +81,11 @@ const publicClansRoutes: FastifyPluginAsync = async (app) => {
   fast.get(
     '/api/v1/public/clans/:id',
     {
-      config: { audit: false, rateLimit: { max: PUBLIC_RATE_LIMIT, timeWindow: '1 minute' } },
+      config: {
+        audit: false,
+        public: true,
+        rateLimit: { max: PUBLIC_RATE_LIMIT, timeWindow: '1 minute' },
+      },
       schema: { params: clanIdParams },
     },
     async (req, reply) => {

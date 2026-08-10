@@ -1,5 +1,22 @@
 import { z } from 'zod';
 
+/**
+ * An optional secret that compose may pass as a blank string.
+ *
+ * Both compose files write `SOME_SECRET: ${SOME_SECRET:-}`, so an unconfigured
+ * secret arrives as `''`, not as `undefined`. Plain `.optional()` permits only
+ * `undefined`, so `.min()` rejected the blank value and the API exited 1 in a
+ * restart loop — the 2026-07-28 production outage. Treat blank as absent, which
+ * is what an operator who left the variable unset means, while still rejecting a
+ * short-but-non-empty secret that is a genuine misconfiguration.
+ */
+function optionalSecret(min: number) {
+  return z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.string().min(min).optional(),
+  );
+}
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   API_HOST: z.string().default('0.0.0.0'),
@@ -19,10 +36,21 @@ const envSchema = z.object({
   STEAM_API_KEY: z.string().optional(),
   DISCORD_CLIENT_ID: z.string().optional(),
   DISCORD_CLIENT_SECRET: z.string().optional(),
+  DISCORD_PUBLIC_KEY: z.string().optional(),
   GLITCHTIP_DSN: z.string().optional(),
-  VIP_LIFECYCLE_WEBHOOK_SECRET: z.string().min(32).optional(),
+  VIP_LIFECYCLE_WEBHOOK_SECRET: optionalSecret(32),
+  BALANCER_WEBHOOK_SECRET: optionalSecret(32),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   MEDIA_STORAGE_DIR: z.string().default('./media'),
+  // VIDEO-4 (#160) media publishing. Optional on both sides: the API only ever
+  // reports whether a destination is configured, and `worker-media-publisher`
+  // defers publications for a destination whose credentials are missing instead
+  // of failing them. Blank values therefore disable a destination cleanly.
+  YOUTUBE_CLIENT_ID: z.string().optional(),
+  YOUTUBE_CLIENT_SECRET: z.string().optional(),
+  YOUTUBE_REFRESH_TOKEN: z.string().optional(),
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_CHAT_ID: z.string().optional(),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

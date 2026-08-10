@@ -40,4 +40,9 @@ describe('settings pages', () => {
     const mod = await import('../../src/app/(dashboard)/settings/tokens/page');
     expect(mod.default).toBeDefined();
   });
+
+  it('settings/integrations/media/page exports default', async () => {
+    const mod = await import('../../src/app/(dashboard)/settings/integrations/media/page');
+    expect(mod.default).toBeDefined();
+  });
 });

@@ -1,4 +1,4 @@
-import { players, roles } from '@squad/db/schema';
+import { markTypes, players, roles } from '@squad/db/schema';
 import { eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -40,6 +40,60 @@ async function loginAsSteam(steamId64: bigint, userAgent: string): Promise<strin
     ttlMs: 21_600_000,
   });
   return `__Host-sid=${token}`;
+}
+
+/**
+ * Runs `body` with the `mark_types` race window forced open, from inside the
+ * route's own `app.db.transaction(async (tx) => {...})`: the conflicting row is
+ * committed after the route's pre-check SELECT has already reported "slug free",
+ * but before the route's own INSERT (issued via `tx`, not `db`) executes. That is
+ * the interleaving two concurrent create requests produce, and the only way to
+ * reach the route's unique-violation handler — the pre-check swallows every
+ * non-racing duplicate.
+ *
+ * Only the timing is simulated. The database, the drizzle client, the unique index
+ * and the thrown `DrizzleQueryError` are all real, so the route's `23505` handling
+ * is exercised exactly as it would be under a live race.
+ */
+async function withRacingDuplicateInsert<T>(
+  insertConflictingRow: () => Promise<unknown>,
+  body: () => Promise<T>,
+): Promise<T> {
+  type InsertBuilder = { values: (v: unknown) => { returning: () => Promise<unknown> } };
+  type TxLike = { insert: (table: unknown) => InsertBuilder };
+  const db = h.app.db as unknown as {
+    transaction: <R>(fn: (tx: TxLike) => Promise<R>) => Promise<R>;
+  };
+  const realTransaction = db.transaction.bind(db);
+  let fired = false;
+
+  db.transaction = (async (fn: (tx: TxLike) => Promise<unknown>) =>
+    realTransaction(async (tx) => {
+      const realTxInsert = tx.insert.bind(tx);
+      tx.insert = (table: unknown): InsertBuilder => {
+        const builder = realTxInsert(table);
+        if (fired || table !== markTypes) return builder;
+        fired = true;
+        return {
+          values: (v: unknown) => {
+            const routeInsert = builder.values(v);
+            return {
+              returning: async () => {
+                await insertConflictingRow();
+                return routeInsert.returning();
+              },
+            };
+          },
+        };
+      };
+      return fn(tx);
+    })) as typeof db.transaction;
+
+  try {
+    return await body();
+  } finally {
+    db.transaction = realTransaction;
+  }
 }
 
 beforeAll(async () => {
@@ -219,6 +273,43 @@ describeIfDb('POST /api/v1/mark-types', () => {
       }),
     });
     expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 409 when a concurrent writer wins the race past the pre-check', async () => {
+    const res = await withRacingDuplicateInsert(
+      () =>
+        h.db.insert(markTypes).values({
+          id: 30000,
+          slug: 'race_slug_test',
+          labelEn: 'Race Condition',
+          labelRu: 'Гонка',
+          icon: 'flag',
+          severity: 1,
+          isActive: true,
+          sortOrder: 30000,
+        }),
+      () =>
+        h.app.inject({
+          method: 'POST',
+          url: '/api/v1/mark-types',
+          headers: { cookie: editorCookie, 'content-type': 'application/json' },
+          payload: JSON.stringify({
+            slug: 'race_slug_test',
+            label_en: 'Racer',
+            label_ru: 'Гонщик',
+            icon: 'flag',
+            severity: 2,
+          }),
+        }),
+    );
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'slug_already_exists' });
+
+    const rows = await h.db
+      .select({ id: markTypes.id })
+      .from(markTypes)
+      .where(eq(markTypes.slug, 'race_slug_test'));
+    expect(rows).toHaveLength(1);
   });
 });
 

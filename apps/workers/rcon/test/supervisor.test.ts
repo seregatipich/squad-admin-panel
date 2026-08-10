@@ -68,6 +68,7 @@ function makePollingRconServer(): Promise<{ server: Server; port: number; comman
       MapName_s: 'Gorodok_RAAS_v1',
       GameMode_s: 'RAAS',
       ServerTickRate: 49.7,
+      PublicQueue_I: '7',
     }),
     ShowNextMap: 'Next level is Fallujah, layer is Fallujah_RAAS_v1',
   };
@@ -164,8 +165,12 @@ describe('RconSupervisor polling', () => {
       const deadline = Date.now() + 3000;
       let squadsPayload: { squads: Array<{ name: string; team_id: number; size: number }> } | null =
         null;
-      let statusPayload: { state?: string; next_layer?: string; squad_count?: number } | null =
-        null;
+      let statusPayload: {
+        state?: string;
+        next_layer?: string;
+        squad_count?: number;
+        public_queue?: number;
+      } | null = null;
 
       while (Date.now() < deadline && (!squadsPayload || !statusPayload?.squad_count)) {
         await sleep(25);
@@ -192,6 +197,9 @@ describe('RconSupervisor polling', () => {
       expect(statusPayload).toMatchObject({
         next_layer: 'Fallujah_RAAS_v1',
         squad_count: 1,
+        // DISCORD-6 (#153): the Discord status channel renders {players}x{queue},
+        // so the parsed PublicQueue_I has to reach the rcon:status cache.
+        public_queue: 7,
       });
     } finally {
       await supervisor.stop();
@@ -375,9 +383,12 @@ describe('RconSupervisor seeding transitions', () => {
       // Repeat polls at the same count: no further transition, but the
       // redis state key keeps refreshing every poll.
       const setCallsBeforeRepeat = redis.set.mock.calls.filter((c) => c[0] === stateKey).length;
-      await sleep(90);
-      const setCallsAfterRepeat = redis.set.mock.calls.filter((c) => c[0] === stateKey).length;
-      expect(setCallsAfterRepeat).toBeGreaterThan(setCallsBeforeRepeat);
+      const deadlineRepeat = Date.now() + 3000;
+      const stateRefreshCount = () => redis.set.mock.calls.filter((c) => c[0] === stateKey).length;
+      while (Date.now() < deadlineRepeat && stateRefreshCount() <= setCallsBeforeRepeat) {
+        await sleep(15);
+      }
+      expect(stateRefreshCount()).toBeGreaterThan(setCallsBeforeRepeat);
       expect(insertedEvents).toHaveLength(1);
 
       // Progress-only change (still seeding, no transition) still

@@ -1,10 +1,13 @@
-import { alertEvents, alertRules } from '@squad/db/schema';
-import { desc, eq } from 'drizzle-orm';
+import { alertEvents, alertRules, ROLE_EXPIRY_ALERT_RULE_ID } from '@squad/db/schema';
+import { and, desc, eq, isNull, ne, or } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 
+// `role_expiring` (VIPSUB-4, #170) is deliberately NOT creatable here: the one
+// system rule is seeded by migration 0092 and its events are produced by
+// worker-role-expirer's reminder tick.
 const ALERT_RULE_TYPES = [
   'server_crashed',
   'unusual_activity',
@@ -152,6 +155,10 @@ const alertRulesRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     async (req, reply) => {
+      if (req.params.id === ROLE_EXPIRY_ALERT_RULE_ID) {
+        reply.code(409);
+        return { error: 'system_rule_immutable' };
+      }
       const existing = (await app.db
         .select()
         .from(alertRules)
@@ -190,6 +197,10 @@ const alertRulesRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     async (req, reply) => {
+      if (req.params.id === ROLE_EXPIRY_ALERT_RULE_ID) {
+        reply.code(409);
+        return { error: 'system_rule_immutable' };
+      }
       const deleted = await app.db
         .delete(alertRules)
         .where(eq(alertRules.id, req.params.id))
@@ -207,7 +218,17 @@ const alertRulesRoutes: FastifyPluginAsync = async (app) => {
     { schema: { querystring: historyQuery }, config: { audit: false } },
     async (req, reply) => {
       if (denyRead(req, reply)) return;
-      const conditions = req.query.rule_id ? eq(alertEvents.ruleId, req.query.rule_id) : undefined;
+      // `role_expiring` reminders are admin-audience alerts: hidden unless the
+      // caller holds can_assign_roles (mirrors the live-bus frame gating).
+      const canAssignRoles = req.user?.permissions.canAssignRoles ?? false;
+      const ruleFilter = req.query.rule_id ? eq(alertEvents.ruleId, req.query.rule_id) : undefined;
+      const visibilityFilter = canAssignRoles
+        ? undefined
+        : or(isNull(alertRules.type), ne(alertRules.type, 'role_expiring'));
+      const conditions =
+        ruleFilter && visibilityFilter
+          ? and(ruleFilter, visibilityFilter)
+          : (ruleFilter ?? visibilityFilter);
       const rows = await app.db
         .select({
           id: alertEvents.id,

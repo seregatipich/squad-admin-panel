@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
+import { ApplicationsSection } from './ApplicationsSection';
 
 interface WhitelistSettings {
   whitelist_role_id: string | null;
@@ -282,6 +283,8 @@ export default function WhitelistSettingsPage() {
           Скачать whitelist.csv
         </a>
       </section>
+
+      <ApplicationsSection canEdit={canEdit} />
     </div>
   );
 }

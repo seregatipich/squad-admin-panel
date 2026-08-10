@@ -1,5 +1,126 @@
 # Changelog
 
+## 2026-08-04 — Live progress for the depot-update flows
+
+### Added
+
+- New `UpdateProgressModal` (`apps/web/src/components/UpdateProgressModal.tsx`) — connects to the shared `GET /api/v1/depot/progress/ws` (see the `api` changelog's matching entry) and streams lines into the existing `LogConsole`, mirroring the WS-into-`LogConsole` pattern the install wizard (`servers/new/page.tsx`) already used. Ignores any `done` frame received before the server's `{backfill_complete:true}` marker — it belongs to a previous, already-finished run replayed as history, not the one just watched.
+- Wired into the server detail page's "Обновить игру" button (`servers/[id]/page.tsx`): the button previously showed "Обновление..." for only the instant its `POST` took to return, then silently reverted while the real update kept running for minutes. It now opens the progress modal on a successful start and stays labeled/re-openable ("Обновление... (открыть лог)") until the run's terminal frame arrives, even if the modal itself is closed and reopened.
+- Wired into the fleet dashboard's `DepotUpdateModal` flow (`dashboard/page.tsx`): starting an update now opens `UpdateProgressModal` instead of just closing the selection dialog with no further feedback.
+
+### Fixed
+
+- `dashboard/page.tsx`'s `DepotUpdateModal onStart` handler posted `{stop_server_ids: serverIds}` to `POST /api/v1/depot/update`, but the route's Zod schema reads `server_ids` — the modal's "these servers will be stopped" checkboxes had no effect on the actual request; the depot update always ran with an empty `server_ids: []`, so operators who checked servers to protect them were not being protected. Also now surfaces a non-200 response as a thrown error instead of proceeding to show progress for an update that never started.
+
+## 2026-07-27 — VIPSUB-5 removal of `/no-access`, panel guard on `(dashboard)` (#171)
+
+### Added
+
+- Panel-access guard in `apps/web/src/app/(dashboard)/layout.tsx` — a session whose `me.permissions` array is empty is redirected to `/me` instead of rendering the admin shell. `GET /api/v1/me` is a `selfService` route, so `requireSession()` succeeds for a `self_service` session too; `/` already sent such a player to `/me` (`apps/web/src/app/page.tsx`), but that covered only the post-login hop — typing a `(dashboard)` URL by hand would otherwise render the sidebar around content every panel-gated route answers `401` for. The check is the same one the root page makes: `derivePanelPermissions` hands the whole non-gated catalogue to anyone with `panel_access`, so an empty set proves its absence. It sits deliberately **outside** the `GET /api/v1/setup/status` try/catch, because `redirect()` aborts by throwing and that bare `catch` would swallow it.
+- `apps/web/src/app/(dashboard)/layout.test.tsx` — two cases pinning the guard: a session with `permissions: []` throws `NEXT_REDIRECT` and calls `redirect('/me')`, a session holding `servers.view` renders. The `next/navigation` mock now throws like the real `redirect`, otherwise the guard would fall through and the assertion would pass for the wrong reason.
+
+### Removed
+
+- `apps/web/src/app/no-access/page.tsx` and `page.test.tsx` — the page became unreachable with VIPSUB-5 (#171): every successful Steam login now gets a session, `panel`-scoped with a redirect to `/` when the role has `panel_access` and `self_service`-scoped with a redirect to `/me` when it does not (a player with no role at all included). Nothing produces `/no-access?steam_id64=…&reason=no_role|role_no_access` any more.
+- All `noAccess.*` keys from `apps/web/src/i18n/dictionaries/ru.ts` and `en.ts` — «Доступ запрещён», «Steam ID {steamId} не имеет роли в этой панели.», both `reason` variants with their hints, the `.first-owner-claimed` Owner hint and the «Вернуться на страницу входа» link had no consumer left. `i18n.test.ts` interpolates `login.error.notAuthorized` instead, which carries the surviving `{steamId}` placeholder.
+- `apps/web/e2e/no-access.spec.ts`, plus the route's cases in `apps/web/test/pages-graph.test.ts` and `apps/web/test/pages/auth.test.ts`.
+## 2026-07-27 — DISCORD-5 секция «Синхронизация ролей» (#152)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/settings/integrations/discord/DiscordRoleMappingsSection.tsx` — «Синхронизация ролей» on `/settings/integrations/discord`, over `GET/POST/PATCH/DELETE /api/v1/integrations/discord/role-mappings`. A table of panel role → Discord role id with an inline enabled/disabled toggle and «Удалить», a create form (role `<select>` from `GET /api/v1/roles` × a snowflake field), and «Синхронизировать сейчас» on `POST …/role-mappings/reconcile`. The role select hides the system `Owner` role and any role that already has a mapping, since the API enforces one mapping per role.
+- A red banner rendered from the `status` the list route returns: `roleSyncStatusText` (exported for tests) gives the missing-`Manage Roles` case its own Russian wording because it is the one failure an operator can fix, and falls back to the worker's message for anything else. This is the UI half of DISCORD-5's "no silent failure" criterion.
+- The section self-hides on `403` — `GET /api/v1/me` exposes no `can_manage_integrations` boolean, so the permission rule is not duplicated client-side.
+## 2026-07-27 — VIDEO-4 публикация медиа в YouTube/Telegram (#160)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/players/[id]/MediaPublishControl.tsx` — «Опубликовать» on each evidence item: pick the destinations, `POST /api/v1/media/:id/publications`, then per-destination status and the external link once published. `can_manage_media` is not exposed by `GET /api/v1/me`, so the control **self-hides on a 403** from the publications endpoint instead of reading a capability flag. It renders nothing for an `external_link` — there is no local file to upload, and the API would answer `not_a_stored_file`. Mounted from `EvidenceSection.tsx`.
+- `apps/web/src/app/(dashboard)/players/[id]/media-publications.ts` — pure helpers with their own unit tests: `destinationLabel`, `publicationsUrl`, `isPublishable`, `statusLabel`, `publicationErrorLabel`. `statusLabel` splits the API's single `queued` state three ways («ждёт квоту YouTube» / «повтор запланирован» / «нет настроек интеграции»); an operator watching «в очереди» for six hours otherwise cannot tell which is happening. An unrecognised error code is shown verbatim rather than swallowed.
+- `apps/web/src/app/(dashboard)/settings/integrations/media/page.tsx` — «Публикация медиа» settings page: connection status for both destinations (presence only, since the API returns booleans and never values) and the «освобождать локальный файл» switch, which keeps showing its stored value if the `PATCH` is rejected rather than pretending it moved. Registered in `nav.ts`, both i18n dictionaries, `test/pages-graph.test.ts` and `test/pages/settings.test.ts`.
+
+## 2026-07-27 — MOD-3 moderation history with evidence on the player card (#60)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/players/[id]/ModerationHistorySection.tsx` — «История модерации» section on `/players/{id}`, the first UI consumer of `GET /api/v1/players/:playerId/moderation-actions`. Each entry shows the action type as a coloured badge, the reason, the author (panel user or worker system label), the server and the time, plus an «отменено» marker on a reverted action. The media evidence attached to an action renders inline: images and video through the Range-streaming route (`/api/v1/media/:id/stream`, VIDEO-1 #157), external links as an anchor. The section self-hides on `401`/`403`, matching the other player-card sections.
+- `apps/web/src/app/(dashboard)/players/[id]/moderation-history.ts` — pure helpers behind it: `moderationActionLabel`/`moderationActionBadgeClass` (Russian labels for the panel's `warn`/`kick`/`ban`/`unban` and the worker-issued `name_kick`/`external_ban_kick`/`external_ban.local_ban`/`clan_tag_protection`, raw value as fallback), `formatModerationDate`, `authorLabel`, `evidenceLabel`, `mediaStreamUrl`, `detachEvidenceUrl`, and `canDetachEvidence`.
+- «Открепить» on an evidence item, calling `DELETE /api/v1/media/:id/links` (VIDEO-2, #158). It is offered **only on links the viewer created themselves**: the server also accepts someone else's link from a `can_manage_media` holder, but that flag is not exposed on `GET /api/v1/me`, so the panel cannot gate on it client-side — `canDetachEvidence` is the single place to widen once it is. A `403` from the route is surfaced rather than silently swallowed.
+## 2026-07-27 — ISSUE-3 связанные объекты у тикета и связанные тикеты у игрока (#156)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/issues/[id]/IssueLinksBlock.tsx` — «Связанные объекты» on the ticket card: the expanded `links[]` from `GET /api/v1/issues/:id`, each row a type badge plus a link to `/players/{id}`, `/servers/{id}` or the media stream. A target that no longer exists renders struck-through and non-clickable. Adding a link uses the existing `PlayerSearchSelect` autocomplete for players and a plain `<select>` for servers; the server option is offered only when `GET /api/v1/servers` succeeds, because that route needs `server:view` which a tracker user need not hold. The remove button appears only for links the viewer may detach (own link, or `can_manage_issues`), mirroring the API gate.
+- `apps/web/src/app/(dashboard)/issues/[id]/issue-links.ts` — pure helpers behind that block: `entityTypeLabel`, `canRemoveLink`, `linkErrorMessage` (Russian text for 403/404/409/422), `sortLinks`.
+- `apps/web/src/app/(dashboard)/players/[id]/IssueLinksSection.tsx` — «Связанные тикеты» on `/players/{id}`: the counter and list of unclosed tickets naming the player (`GET /api/v1/players/:playerId/issues`), each linking to `/issues/{id}`. Self-hides on `401`/`403` and when the player has no linked ticket, matching the other player-card sections.
+## 2026-07-27 — LEAD-5 стат-дашборд `/statistics` (#176)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/statistics/` — the `/statistics` server statistics dashboard: a thin `'use client'` page over `StatisticsBrowser`, which owns a single fetch, a single `loading` state and a single `data` state, so changing the date range or the server selection redraws every chart atomically.
+- Controls: date-range presets (Сегодня / Вчера / Неделя / Месяц / 30 дней / Произвольно, with two `YYYY-MM-DD` inputs for the custom range) and a server multiselect defaulting to every server. The selection is committed when the dropdown closes and then debounced by 300 ms, so a burst of checkbox clicks collapses into one request.
+- Blocks: население (средний онлайн, пик онлайна, средняя очередь, онлайн по часам суток, онлайн по дням недели), матчи (матчей за день, doughnut по режимам, топ боевых карт), сообщество (новых игроков, сообщений чата, тимкиллов) and модерация (наказаний, средний/пик онлайна админов). Each time-series prints a «Среднее / Максимум / Всего» KPI line computed from the same stacked values the chart draws.
+- Export: a CSV link carrying the loaded window and a JSON blob download of the exact payload.
+- Drill-down: clicking a bar segment offers a link into `/events`, `/chat`, `/combat-log` or `/external-bans` pre-filtered to that server and, where the destination supports it, that day (`preset=custom&from=D&to=D`). `/external-bans` parses neither filter today, so its link is deliberately bare.
+- `apps/web/src/lib/server-color.ts` — deterministic `serverId → colour`, assigned by position in the **sorted** list of known server ids so a server keeps one colour across every chart and every refetch.
+- `apps/web/src/app/(dashboard)/statistics/StatisticsCharts.tsx` — the recharts surface, loaded through `next/dynamic` so recharts stays out of the page's first-load bundle.
+- Nav entry «Статистика» → `/statistics` with `nav.statistics` added to both `ru.ts` and `en.ts`.
+
+Gating is self-hide-on-403: `GET /api/v1/me` does not expose `panelAccess`, so the page surfaces the API's refusal rather than pre-checking a capability, matching `dashboard/analytics-panel.tsx`. The clock is read in a post-mount `useEffect`, never during render, so the CSV href cannot cause a hydration mismatch.
+## 2026-07-27 — VIDEO-3 публичная страница загрузки по одноразовой ссылке (#159)
+
+### Added
+
+- `apps/web/src/app/(public)/upload/[token]/page.tsx` + `UploadClient.tsx` — session-less upload page under the `(public)` route group (the `middleware.ts` matcher does not cover `/upload`, so no session gate applies). Drag-and-drop plus a file picker over the four allowlisted formats, a progress bar with transferred megabytes and speed via `XMLHttpRequest` (the only browser API that reports upload progress), and Russian status/error copy mapped from the public endpoint's `410`/`413`/`415`/`429`/`400`. The token is never validated client-side, so an invalid link fails at upload time with the same `410` as a spent one.
+- `apps/web/src/app/(public)/upload/[token]/upload-progress.ts` — pure helpers (`formatMegabytes`, `formatSpeed`, `computeProgress`, `isAcceptedUploadType`, `uploadErrorMessage`) unit-tested independently of the component.
+- `apps/web/e2e/public-upload.spec.ts` — Playwright confirmation that the page renders and uploads from a browser context carrying no `__Host-sid` cookie, and that the same link then fails. Runs only via `pnpm --filter @squad/web test:e2e`; the vitest config excludes `e2e/**`.
+
+### Changed
+
+- `EvidenceSection.tsx` gains «Получить ссылку для загрузки» (`POST /api/v1/media/upload-tokens`, pre-bound to the player being viewed), which renders the one-time URL exactly once in a read-only field because the API never returns it again. Evidence delivered through a link is labelled «загружено по ссылке, аноним», and the section refreshes itself on the `media.uploaded` live event (ignoring events bound to a different player's card).
+- `apps/web/src/lib/live-bus.ts` — client `LiveEvent` union gains `media.uploaded`, kept in lockstep with `apps/api/src/plugins/live-bus.ts`.
+
+## 2026-07-27 — VIDEO-2 evidence section on the player card (#158)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/players/[id]/EvidenceSection.tsx` — «Доказательства» section on `/players/{id}`, listing media evidence attached to the player directly or via a moderation action against them (`GET /api/v1/players/:playerId/media`). Video and image files play/render inline through the existing Range-streaming route (`/api/v1/media/:id/stream`, VIDEO-1 #157); external links open in a new tab. The section self-hides on `401`/`403`, matching the other player-card sections.
+
+## 2026-07-26 — DISCORD-3 Discord message-template editor
+
+### Added
+
+- `apps/web/src/app/(dashboard)/settings/integrations/discord/DiscordTemplatesSection.tsx` — «Шаблоны сообщений» section on `/settings/integrations/discord`: per-event-type embed editor (title, url, description, colour, fields) over `GET/PUT /api/v1/integrations/discord/templates`, a «Сбросить к дефолту» button on `POST …/reset`, and a debounced server-rendered live preview on `POST …/preview` that names every placeholder the renderer could not substitute. Gated on `integration:manage`; the section renders nothing on a 403.
+## 2026-07-26 — PLAYER-6 sortable player list (#27)
+
+### Added
+
+- `apps/web/src/app/(dashboard)/players/helpers.ts` — pure sort/filter helpers for the list page: `nextSortState` (two-state per-column toggle with per-column first-click direction), `sortIndicator` (`↑`/`↓`/`↕`), and `buildPlayersListQuery` (emits `sort`, `dir`, and optional `filter=new`).
+- **Created** column on `/players`, rendering each player's `first_seen_at` between Total playtime and Last seen.
+- Sortable Ник, Total playtime, Created, and Last seen headers, each a `SortHeader` button that drives `GET /api/v1/players?sort=&dir=` server-side and shows its direction indicator.
+- `новые (<7 дней)` checkbox that adds `filter=new` to the list request.
+
+The Статус header's client-side online sort, the `только онлайн` checkbox, and the in-memory search box are unchanged and still client-side.
+## 2026-07-26 — DOSSIER-6 player dossier tabs
+
+### Added
+
+- `apps/web/src/app/(dashboard)/players/[id]/DossierSection.tsx` — «Досье» block on the player card, fed by exactly one `GET /api/v1/players/:playerId/dossier` request per (server, period) selection; switching tabs never refetches.
+- Four tabs render from that single payload: `DossierSkillTab.tsx` (eleven combat KPIs, period selector, kills-vs-deaths donut and stacked month trend), `DossierWeaponsTab.tsx` (top-N weapon table with kills/damage sorting), `DossierVehiclesTab.tsx` («На технике» and «Уничтожено» sub-tables) and `DossierKitsTab.tsx` (kit time, longest first).
+- The block self-hides on `401`/`403` because the route is gated on `combat:view`, which `GET /api/v1/me` does not report — there is no permission flag to gate on client-side.
+- `skill.damage_dealt` is permanently null upstream, so the «Урон» tile and every null damage cell render `—` titled «Источник не содержит данных об уроне»; a zero is never substituted.
+- Vehicle names are localised from the `vehicle_catalog` `name_ru`/`name_en` columns via `useLocale()`; an uncatalogued row shows its raw asset id titled «Нет в каталоге техники».
+- The server selector appears only on «Скилл» and «Киты»; «Оружие» and «Техника» state «Пожизненно, без разбивки по серверам», matching the route's own lifetime-only aggregates.
+- `apps/web/src/app/(dashboard)/players/[id]/dossier.ts` — response types, formatters, sorters and the client-side zero-fill for the months the API's `matches_played > 0` filter drops, with `dossier.test.ts` unit coverage; `DossierSection.test.tsx` covers all four tabs, the empty state, the 401/403 self-hide and the no-refetch rule.
+- `DossierSkillChart.tsx` is loaded through `next/dynamic`, keeping recharts out of the curated static import graphs.
+
+## 2026-07-25 — WL-3 whitelist application portal
+
+### Added
+
+- `apps/web/src/app/(public)/public/whitelist/page.tsx` — public, no-session application form (SteamID64 + message + optional contact) reading the open/closed switch from `/api/v1/public/whitelist/settings` and posting to `/api/v1/public/whitelist/applications`; renders closed / success / duplicate / error states.
+- `apps/web/src/app/(dashboard)/settings/whitelist/ApplicationsSection.tsx` — review queue on `/settings/whitelist`: portal open/closed toggle + default-term, status filter, and per-application approve (role + term preset → time-bounded grant) / reject (note). Gated on `whitelist:edit` for mutations, `whitelist:view` for reads.
+
 ## 2026-07-14 — CBAN-4 local-ban action
 
 ### Added

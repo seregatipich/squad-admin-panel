@@ -31,12 +31,17 @@ let h: IntegrationHarness;
 beforeEach(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
+    seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
 });
 
 afterEach(async () => {
-  if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
+  if (h.seed.ownerSteamId64) {
+    if (!h.seed.ownerPlayerId)
+      throw new Error('seed owner missing; pass seedOwner to buildIntegrationApp');
+    invalidatePermissionCache(h.seed.ownerPlayerId);
+  }
   await h.cleanup();
 });
 
@@ -103,7 +108,8 @@ describe('GET /api/v1/host/disk-usage', () => {
       .update(players)
       .set({ roleId: null })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId!);
+    if (!h.seed.ownerPlayerId) throw new Error('owner player id missing');
+    invalidatePermissionCache(h.seed.ownerPlayerId);
 
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({

@@ -17,22 +17,25 @@ let h: IntegrationHarness;
 beforeEach(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
+    seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
 });
 
 afterEach(async () => {
-  if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
+  if (h.seed.ownerSteamId64 && h.seed.ownerPlayerId) {
+    invalidatePermissionCache(h.seed.ownerPlayerId);
+  }
   await h.cleanup();
 });
 
 async function demoteToNoRole(h: IntegrationHarness): Promise<void> {
-  if (!h.seed.ownerSteamId64) throw new Error('owner steam id missing');
+  if (!h.seed.ownerSteamId64 || !h.seed.ownerPlayerId) throw new Error('owner steam id missing');
   await h.db
     .update(players)
     .set({ roleId: null })
     .where(eq(players.steamId64, h.seed.ownerSteamId64));
-  invalidatePermissionCache(h.seed.ownerPlayerId!);
+  invalidatePermissionCache(h.seed.ownerPlayerId);
 }
 
 describe('POST /api/v1/host/restart', () => {
@@ -61,12 +64,14 @@ describe('POST /api/v1/host/restart', () => {
       .where(eq(roles.name, 'Viewer'))
       .limit(1);
     const viewerRoleId = viewerRoleRows[0]?.id;
-    if (!viewerRoleId || !h.seed.ownerSteamId64) throw new Error('viewer role missing');
+    if (!viewerRoleId || !h.seed.ownerSteamId64 || !h.seed.ownerPlayerId) {
+      throw new Error('viewer role missing');
+    }
     await h.db
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId!);
+    invalidatePermissionCache(h.seed.ownerPlayerId);
 
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({

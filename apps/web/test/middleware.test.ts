@@ -88,8 +88,8 @@ describe('config.matcher', () => {
     expect(config.matcher).toContain('/settings/:path*');
   });
 
-  it('includes /players/:path*', () => {
-    expect(config.matcher).toContain('/players/:path*');
+  it('includes /all-players/:path*', () => {
+    expect(config.matcher).toContain('/all-players/:path*');
   });
 
   it('includes /audit/:path*', () => {

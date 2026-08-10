@@ -175,12 +175,14 @@ describe('GET /api/v1/servers/:id/configs/:name', () => {
 });
 
 describe('PUT /api/v1/servers/:id/configs/:name auto-reloads Squad', () => {
+  // These cases exercise the RCON reload path, which now fires only for
+  // hot_reload files (CFG-1, #63) — Admins.cfg is one, so they write it.
   it('reports reload.applied=false / reason=not_running when server status is pending', async () => {
     const cookie = await login();
     const id = await createServer(cookie);
     const resp = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/servers/${id}/configs/Server.cfg`,
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
       headers: { cookie },
       payload: { content: 'ServerName="x"' },
     });
@@ -211,7 +213,7 @@ describe('PUT /api/v1/servers/:id/configs/:name auto-reloads Squad', () => {
 
       const resp = await h.app.inject({
         method: 'PUT',
-        url: `/api/v1/servers/${id}/configs/Server.cfg`,
+        url: `/api/v1/servers/${id}/configs/Admins.cfg`,
         headers: { cookie },
         payload: { content: 'ServerName="y"' },
       });
@@ -253,7 +255,7 @@ describe('PUT /api/v1/servers/:id/configs/:name auto-reloads Squad', () => {
 
       const resp = await h.app.inject({
         method: 'PUT',
-        url: `/api/v1/servers/${id}/configs/Server.cfg`,
+        url: `/api/v1/servers/${id}/configs/Admins.cfg`,
         headers: { cookie },
         payload: { content: 'ServerName="fallback"' },
       });
@@ -287,7 +289,7 @@ describe('PUT /api/v1/servers/:id/configs/:name auto-reloads Squad', () => {
 
     const resp = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/servers/${id}/configs/Server.cfg`,
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
       headers: { cookie },
       payload: { content: 'ServerName="no-listener"' },
     });
@@ -300,6 +302,75 @@ describe('PUT /api/v1/servers/:id/configs/:name auto-reloads Squad', () => {
     expect(body.reload.applied).toBe(false);
     expect(body.reload.reason).toBe('rcon_failed');
     expect(body.reload.detail).toBeTruthy();
+  });
+});
+
+describe('PUT /api/v1/servers/:id/configs/:name gates reload on hot_reload (CFG-1, #63)', () => {
+  it('does NOT fire RCON for a requires_restart file, returns reason=not_hot_reload', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    // Running server with a reachable fake RCON: proves the gate short-circuits
+    // BEFORE any RCON command, not merely because the server is unreachable.
+    await h.db
+      .update(servers)
+      .set({ status: 'running', updatedAt: new Date() })
+      .where(eq(servers.id, id));
+    const fake = await startFakeRcon();
+    try {
+      await h.db
+        .update(serverCredentials)
+        .set({ rconHost: '127.0.0.1', rconPort: fake.port })
+        .where(eq(serverCredentials.serverId, id));
+
+      const resp = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${id}/configs/Server.cfg`,
+        headers: { cookie },
+        payload: { content: 'ServerName="requires-restart"' },
+      });
+      expect(resp.statusCode).toBe(200);
+      const body = resp.json<{
+        unchanged: boolean;
+        reload: { applied: boolean; reason?: string };
+      }>();
+      expect(body.unchanged).toBe(false); // the write still happened
+      expect(body.reload.applied).toBe(false);
+      expect(body.reload.reason).toBe('not_hot_reload');
+      expect(fake.receivedCommands).not.toContain('AdminReloadServerConfig');
+      expect(fake.receivedCommands).toHaveLength(0);
+    } finally {
+      fake.close();
+    }
+  });
+
+  it('does NOT fire RCON for a rotation file (LayerRotation.cfg), returns reason=not_hot_reload', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    await h.db
+      .update(servers)
+      .set({ status: 'running', updatedAt: new Date() })
+      .where(eq(servers.id, id));
+    const fake = await startFakeRcon();
+    try {
+      await h.db
+        .update(serverCredentials)
+        .set({ rconHost: '127.0.0.1', rconPort: fake.port })
+        .where(eq(serverCredentials.serverId, id));
+
+      const resp = await h.app.inject({
+        method: 'PUT',
+        url: `/api/v1/servers/${id}/configs/LayerRotation.cfg`,
+        headers: { cookie },
+        payload: { content: 'Yehorivka RAAS v1' },
+      });
+      expect(resp.statusCode).toBe(200);
+      const body = resp.json<{ reload: { applied: boolean; reason?: string } }>();
+      expect(body.reload.applied).toBe(false);
+      expect(body.reload.reason).toBe('not_hot_reload');
+      expect(fake.receivedCommands).toHaveLength(0);
+    } finally {
+      fake.close();
+    }
   });
 });
 
@@ -351,6 +422,37 @@ describe('PUT /api/v1/servers/:id/configs/:name', () => {
       .from(configVersions)
       .where(eq(configVersions.serverId, id));
     expect(versions).toHaveLength(1);
+  });
+
+  it('round-trips a CRLF payload byte-identically through PUT → GET and into config_versions', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    const crlf = '[SquadName]\r\nServerName="Test"\r\nMaxPlayers=80\r\n';
+    const put = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Server.cfg`,
+      headers: { cookie },
+      payload: { content: crlf },
+    });
+    expect(put.statusCode).toBe(200);
+
+    const get = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/servers/${id}/configs/Server.cfg`,
+      headers: { cookie },
+    });
+    expect(get.statusCode).toBe(200);
+    expect(get.json<{ content: string }>().content).toBe(crlf);
+
+    const [row] = await h.db
+      .select({ content: configVersions.content })
+      .from(configVersions)
+      .where(and(eq(configVersions.serverId, id), eq(configVersions.filename, 'Server.cfg')));
+    expect(row?.content).toBe(crlf);
+    // the bridge stored the exact bytes on disk too
+    expect(
+      h.bridge.files.get(`${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/Server.cfg`)?.toString('utf-8'),
+    ).toBe(crlf);
   });
 });
 
@@ -481,6 +583,8 @@ describe('POST /api/v1/servers/:id/configs/:name/restore/:vid', () => {
       headers: { cookie },
       payload: { content: 'mistaken' },
     });
+    // Two PUTs above guarantee at least one prior version exists, so the
+    // oldest history entry (at(-1)) is always present.
     const v1 = (
       await h.app.inject({
         method: 'GET',
@@ -489,7 +593,7 @@ describe('POST /api/v1/servers/:id/configs/:name/restore/:vid', () => {
       })
     )
       .json<{ items: Array<{ id: string }> }>()
-      .items.at(-1)!;
+      .items.at(-1) as { id: string };
     const resp = await h.app.inject({
       method: 'POST',
       url: `/api/v1/servers/${id}/configs/Admins.cfg/restore/${v1.id}`,
@@ -502,10 +606,56 @@ describe('POST /api/v1/servers/:id/configs/:name/restore/:vid', () => {
       .from(configVersions)
       .where(eq(configVersions.serverId, id));
     expect(versions).toHaveLength(3);
-    const restored = versions.sort((a, b) => +b.createdAt - +a.createdAt)[0]!;
+    // toHaveLength(3) above guarantees the array is non-empty, so index 0 is defined.
+    const restored = versions.sort(
+      (a, b) => +b.createdAt - +a.createdAt,
+    )[0] as (typeof versions)[number];
     expect(restored.content).toBe('original');
     await assertAuditRow(h, { action: 'server.config.restore', resource: 'server', targetId: id });
     void v2;
+  });
+
+  it('restoring the tip version repairs an out-of-band disk edit byte-for-byte (CFG-2 #64)', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    const crlf = '[SquadName]\r\nServerName="Tip"\r\nMaxPlayers=80\r\n';
+    const put = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Server.cfg`,
+      headers: { cookie },
+      payload: { content: crlf },
+    });
+    expect(put.statusCode).toBe(200);
+    const vid = put.json<{ version_id: string }>().version_id;
+    // Out-of-band SSH edit while the DB tip stays put — restoring the tip
+    // version dedups by sha, but must still converge the disk.
+    h.bridge.files.set(
+      `${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/Server.cfg`,
+      Buffer.from('tampered over ssh\n', 'utf-8'),
+    );
+
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/configs/Server.cfg/restore/${vid}`,
+      headers: { cookie },
+      payload: {},
+    });
+    expect(resp.statusCode).toBe(200);
+    const body = resp.json<{ unchanged: boolean; disk_repaired?: boolean }>();
+    expect(body.unchanged).toBe(true);
+    expect(body.disk_repaired).toBe(true);
+
+    // Byte-for-byte, CRLF preserved — no newline normalization anywhere.
+    const disk = h.bridge.files.get(`${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/Server.cfg`);
+    expect(disk).toBeDefined();
+    expect(Buffer.from(crlf, 'utf-8').equals(disk as Buffer)).toBe(true);
+
+    // No duplicate history row on the unchanged path.
+    const versions = await h.db
+      .select({ id: configVersions.id })
+      .from(configVersions)
+      .where(and(eq(configVersions.serverId, id), eq(configVersions.filename, 'Server.cfg')));
+    expect(versions).toHaveLength(1);
   });
 });
 

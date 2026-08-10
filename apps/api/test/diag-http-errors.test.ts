@@ -104,6 +104,47 @@ describe('http error diag emits', () => {
     expect(captured.find((e) => e.kind === 'http.5xx')).toBeUndefined();
   });
 
+  it('maps the database last-Owner invariant to a stable 409 response', async () => {
+    const { app, captured } = await buildApp();
+
+    app.route({
+      method: 'POST',
+      url: '/__test/last-owner',
+      handler: async () => {
+        throw Object.assign(new Error('cannot_remove_last_owner'), {
+          code: '23514',
+          constraint_name: 'players_last_owner_guard',
+        });
+      },
+    });
+
+    const response = await app.inject({ method: 'POST', url: '/__test/last-owner' });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'cannot_remove_last_owner' });
+    expect(captured.find((event) => event.kind === 'http.5xx')).toBeUndefined();
+  });
+
+  it('maps a wrapped last-Owner invariant error (err.cause) to a stable 409 response', async () => {
+    const { app, captured } = await buildApp();
+
+    app.route({
+      method: 'POST',
+      url: '/__test/last-owner-wrapped',
+      handler: async () => {
+        const driverError = Object.assign(new Error('cannot_remove_last_owner'), {
+          code: '23514',
+          constraint_name: 'players_last_owner_guard',
+        });
+        throw new Error('transaction failed', { cause: driverError });
+      },
+    });
+
+    const response = await app.inject({ method: 'POST', url: '/__test/last-owner-wrapped' });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'cannot_remove_last_owner' });
+    expect(captured.find((event) => event.kind === 'http.5xx')).toBeUndefined();
+  });
+
   it('truncates the stack to 2000 characters', async () => {
     const { app, captured } = await buildApp();
 

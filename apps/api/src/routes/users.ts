@@ -29,6 +29,7 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
         role_is_system: boolean;
         role_expires_at: string | null;
         role_comment: string | null;
+        discord_linked: boolean;
       };
       const q = req.query.q?.toLowerCase().trim();
       const roleId = req.query.role_id;
@@ -37,9 +38,11 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
                r.id AS role_id, r.name AS role_name, r.color AS role_color,
                r.is_system_role AS role_is_system,
                p.role_expires_at::text AS role_expires_at,
-               p.role_comment AS role_comment
+               p.role_comment AS role_comment,
+               (pdl.player_id IS NOT NULL) AS discord_linked
         FROM players p
         JOIN roles r ON r.id = p.role_id
+        LEFT JOIN player_discord_links pdl ON pdl.player_id = p.id
         WHERE p.role_id IS NOT NULL
           ${roleId ? sql`AND r.id = ${roleId}` : sql``}
           ${
@@ -64,6 +67,9 @@ const usersRoutes: FastifyPluginAsync = async (app) => {
         assigned_by: null,
         role_expires_at: r.role_expires_at ? new Date(r.role_expires_at).toISOString() : null,
         role_comment: r.role_comment,
+        // DISCORD-4 (#151): a boolean only — the raw `discord_user_id` is
+        // served exclusively by GET /api/v1/players/:playerId/discord.
+        discord_linked: r.discord_linked === true,
       }));
     },
   );

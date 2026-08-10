@@ -96,6 +96,22 @@ async function seedSeedingTransition(
   `;
 }
 
+async function clearTestRows() {
+  await sql`
+    DELETE FROM bonus_transactions
+    WHERE player_id = ANY(${[PLAYER_STEAM, PLAYER_EOS]})
+  `;
+  await sql`
+    DELETE FROM player_daily_presence
+    WHERE player_id = ANY(${[PLAYER_STEAM, PLAYER_EOS]})
+  `;
+  await sql`
+    DELETE FROM player_sessions
+    WHERE player_id = ANY(${[PLAYER_STEAM, PLAYER_EOS]})
+  `;
+  await sql`DELETE FROM events WHERE server_id = ANY(${[SERVER_1, SERVER_2]})`;
+}
+
 beforeAll(async () => {
   if (!DATABASE_URL) return;
   sql = postgres(DATABASE_URL, { max: 1, onnotice: () => undefined });
@@ -123,10 +139,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!sql) return;
-  await sql`TRUNCATE bonus_transactions`;
-  await sql`TRUNCATE player_daily_presence`;
-  await sql`TRUNCATE player_sessions`;
-  await sql`DELETE FROM events WHERE server_id = ANY(${[SERVER_1, SERVER_2]})`;
+  await clearTestRows();
   await sql`DELETE FROM servers WHERE id = ANY(${[SERVER_1, SERVER_2]})`;
   await sql`DELETE FROM players WHERE id = ANY(${[PLAYER_STEAM, PLAYER_EOS]})`;
   await sql`UPDATE economy_settings SET economy_enabled = false WHERE id = 1`;
@@ -135,11 +148,12 @@ afterAll(async () => {
 
 beforeEach(async () => {
   if (!sql) return;
-  await sql`TRUNCATE bonus_transactions`;
-  await sql`TRUNCATE player_daily_presence`;
-  await sql`TRUNCATE player_sessions`;
-  await sql`DELETE FROM events WHERE server_id = ANY(${[SERVER_1, SERVER_2]})`;
-  await sql`UPDATE players SET bonus_balance = 0`;
+  await clearTestRows();
+  await sql`
+    UPDATE players
+    SET bonus_balance = 0
+    WHERE id = ANY(${[PLAYER_STEAM, PLAYER_EOS]})
+  `;
 });
 
 describeIfDb('accrueDailyBonuses', () => {
@@ -242,7 +256,9 @@ describeIfDb('accrueDailyBonuses', () => {
     expect(await balanceOf(PLAYER_EOS)).toBe(2);
   });
 
-  it('does nothing when the economy is disabled', async () => {
+  it('writes no ledger rows when the economy is disabled', async () => {
+    // Seed attribution still runs with the economy off (see the LEAD-6 test
+    // below), but no bonus ledger rows or balance changes may be produced.
     await seedSession({
       playerId: PLAYER_STEAM,
       serverId: SERVER_1,
@@ -257,9 +273,43 @@ describeIfDb('accrueDailyBonuses', () => {
 
     expect(result.economyEnabled).toBe(false);
     expect(result.transactionsWritten).toBe(0);
+    expect(result.balanceDelta).toBe(0);
     expect(await balanceOf(PLAYER_STEAM)).toBe(0);
     const ledger = await ledgerFor(PLAYER_STEAM);
     expect(ledger).toEqual([]);
+  });
+
+  it('persists seed_seconds with the economy off but writes no ledger rows (LEAD-6, #177)', async () => {
+    // A seeding-window session on SERVER_2: seed attribution must run and persist
+    // seed_seconds even when the economy is disabled, so the seeding leaderboard
+    // is never silently empty. No ledger rows or balance changes may result —
+    // seeding accounting is decoupled from the monetization flag.
+    await seedSeedingTransition(SERVER_2, 'server.seeding_started', `${DAY}T10:00:00.000Z`);
+    await seedSeedingTransition(SERVER_2, 'server.seeding_ended', `${DAY}T10:30:00.000Z`);
+    await seedSession({
+      playerId: PLAYER_STEAM,
+      serverId: SERVER_2,
+      connectedAt: `${DAY}T10:00:00.000Z`,
+      disconnectedAt: `${DAY}T10:30:00.000Z`,
+      mode: 'online',
+    });
+    await recompute();
+    await setEconomy({ enabled: false, kSeed: 3, seedThreshold: 100 });
+
+    const result = await accrueDailyBonuses(sql, { day: DAY, now: NOW });
+
+    expect(result.economyEnabled).toBe(false);
+    expect(result.transactionsWritten).toBe(0);
+    expect(result.balanceDelta).toBe(0);
+    expect(await balanceOf(PLAYER_STEAM)).toBe(0);
+    expect(await ledgerFor(PLAYER_STEAM)).toEqual([]);
+
+    // seed_seconds was still attributed from the session ∩ seeding-window overlap.
+    const [presence] = await sql<{ seed_seconds: number }[]>`
+      SELECT seed_seconds FROM player_daily_presence
+      WHERE player_id = ${PLAYER_STEAM} AND day = ${DAY}::date AND server_id = ${SERVER_2}
+    `;
+    expect(presence?.seed_seconds).toBe(1800); // 30 min inside the seeding window
   });
 });
 

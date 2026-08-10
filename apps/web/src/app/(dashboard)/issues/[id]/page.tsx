@@ -13,9 +13,12 @@ import {
   STATE_LABELS,
 } from '../helpers';
 import { type PickedPlayer, PlayerSearchSelect } from '../PlayerSearchSelect';
+import { IssueLinksBlock } from './IssueLinksBlock';
+import type { IssueLinkView } from './issue-links';
 
 interface IssueDetail extends IssueView {
   comments: IssueComment[];
+  links: IssueLinkView[];
 }
 
 interface Me {
@@ -142,7 +145,7 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
           <span className="text-neutral-500">
             Автор:{' '}
             <Link
-              href={`/players/${issue.author_player_id}`}
+              href={`/all-players/${issue.author_player_id}`}
               className="text-sky-400 hover:text-sky-300"
             >
               {authorLabel(issue.author, issue.author_player_id)}
@@ -152,7 +155,7 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
             Исполнитель:{' '}
             {issue.assignee ? (
               <Link
-                href={`/players/${issue.assignee.id}`}
+                href={`/all-players/${issue.assignee.id}`}
                 className="text-sky-400 hover:text-sky-300"
               >
                 {issue.assignee.name}
@@ -243,6 +246,13 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
         </section>
       ) : null}
 
+      <IssueLinksBlock
+        issueId={id}
+        links={issue.links ?? []}
+        viewer={me ? { player_id: me.player_id, can_manage_issues: canManage } : null}
+        onChanged={() => void load()}
+      />
+
       <CommentFeed
         issueId={id}
         comments={issue.comments}
@@ -322,7 +332,7 @@ function CommentFeed({
             >
               <div className="flex items-center gap-2 text-xs">
                 <Link
-                  href={`/players/${comment.author_player_id}`}
+                  href={`/all-players/${comment.author_player_id}`}
                   className="font-medium text-neutral-200 hover:text-neutral-100"
                 >
                   {authorLabel(comment.author, comment.author_player_id)}

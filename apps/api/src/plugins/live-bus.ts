@@ -194,6 +194,16 @@ export type LiveEvent =
       data: { report: ReportLiveView };
     }
   | {
+      type: 'appeal.created';
+      ts: string;
+      data: { appeal_id: string; number: number; status: string };
+    }
+  | {
+      type: 'appeal.updated';
+      ts: string;
+      data: { appeal_id: string; number: number; status: string };
+    }
+  | {
       type: 'server.map.changed';
       ts: string;
       data: { server_id: string; action: string; layer: string | null };
@@ -213,6 +223,22 @@ export type LiveEvent =
         reason: string | null;
         action: 'none' | 'alert' | 'kick';
         kick_enqueued?: boolean;
+      };
+    }
+  | {
+      /**
+       * A file arrived through a one-time delegated-upload link (VIDEO-3,
+       * #159). `player_id` is the admin who minted the token, and `live.ts`
+       * delivers the frame only to that admin's own sockets.
+       */
+      type: 'media.uploaded';
+      ts: string;
+      data: {
+        player_id: string | null;
+        media_id: string;
+        token_id: string;
+        target_entity_type: 'player' | 'moderation_action' | 'match' | 'issue' | null;
+        target_entity_id: string | null;
       };
     }
   | {

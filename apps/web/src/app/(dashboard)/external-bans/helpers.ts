@@ -4,7 +4,7 @@ export {
   formatDate,
   trustLevelBadgeClass,
   trustLevelLabel,
-} from '../players/[id]/external-bans';
+} from '../all-players/[id]/external-bans';
 
 export const DEFAULT_LIMIT = 25;
 

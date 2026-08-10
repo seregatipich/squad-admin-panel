@@ -9,14 +9,22 @@ All tables live in the `public` schema of a PostgreSQL 16+ database. The Drizzle
 | Table | Source file | Purpose |
 |---|---|---|
 | [`audit_log`](#audit_log) | `audit-log.ts` | Append-only, hash-chained action log |
+| [`ban_appeals`](#ban_appeals) | `ban-appeals.ts` | MOD-5 anonymous ban-appeal portal queue |
+| [`balancer_settings`](#balancer-tables-game-2) | `balancer-settings.ts` | GAME-2 singleton team-balancer rules/thresholds |
+| [`balancer_proposals`](#balancer-tables-game-2) | `balancer-proposals.ts` | GAME-2 cache of dry-run balance snapshots from the SquadJS exporter |
+| [`balancer_decisions`](#balancer-tables-game-2) | `balancer-decisions.ts` | GAME-2 append-only operator decisions on a snapshot |
 | [`config_versions`](#config_versions) | `config-versions.ts` | Append-only history of every cfg file edit |
 | [`diagnostic_events`](#diagnostic_events) | `diagnostic-events.ts` | Per-day-partitioned panel-internal diagnostic feed (24h retention) |
 | [`events`](#events) | `events.ts` | Monthly-partitioned Squad event feed |
 | [`processed_events`](#processed_events) | `events.ts` | Event-consumer idempotency tracker |
 | [`panel_meta`](#panel_meta) | `panel-meta.ts` | Singleton row for panel bootstrap state |
+| [`whitelist_applications`](#whitelist_applications) | `whitelist-applications.ts` | WL-3 public whitelist/VIP application queue |
 | [`player_api_tokens`](#player_api_tokens) | `player-api-tokens.ts` | Bearer API tokens issued to players |
 | [`player_ip_history`](#player_ip_history) | `player-ip-history.ts` | Per-player IP observation dedup log |
 | [`player_name_history`](#player_name_history) | `player-name-history.ts` | Per-player display-name dedup log |
+| [`player_weapon_stats`](#dossier-aggregates-dossier-2) | `player-weapon-stats.ts` | Per-player, per-weapon dossier aggregate |
+| [`player_vehicle_stats`](#dossier-aggregates-dossier-2) | `player-vehicle-stats.ts` | Per-player kills/damage dealt from a vehicle |
+| [`player_vehicle_kills`](#dossier-aggregates-dossier-2) | `player-vehicle-kills.ts` | Per-player vehicles destroyed, per (vehicle, weapon) |
 | [`players`](#players) | `players.ts` | One row per SteamID64; universal identity anchor |
 | [`role_permissions`](#role_permissions) | `role-permissions.ts` | M:N mapping of roles to permission keys |
 | [`roles`](#roles) | `roles.ts` | RBAC role definitions |
@@ -24,6 +32,7 @@ All tables live in the `public` schema of a PostgreSQL 16+ database. The Drizzle
 | [`server_settings`](#server_settings) | `server-settings.ts` | Per-server panel configuration |
 | [`servers`](#servers) | `servers.ts` | One row per managed Squad server instance |
 | [`sessions`](#sessions) | `sessions.ts` | Browser session tokens keyed on SteamID64 |
+| [`vip_subscriptions`](#vip_subscriptions) | `vip-subscriptions.ts` | VIPSUB-5 recurring VIP subscriptions billed in ECON bonus points |
 
 ---
 
@@ -302,6 +311,9 @@ Singleton row (enforced by `CHECK (id = 1)`). Tracks bootstrap state so the firs
 | `id` | `smallint` | NO | `1` | Primary key; CHECK enforces value = 1 |
 | `first_owner_claimed` | `boolean` | NO | `false` | Set to `true` after the first Steam login claims the Owner role |
 | `roles_seeded` | `boolean` | NO | `false` | Set to `true` by migration `0009_panel_rbac.sql` after inserting the 5 system roles |
+| `whitelist_role_id` | `uuid` | YES | `null` | WL-1: role treated as the whitelist grant (FK → `roles.id`) |
+| `whitelist_applications_enabled` | `boolean` | NO | `false` | WL-3: master switch for the public application portal (default closed) |
+| `whitelist_application_default_days` | `integer` | YES | `null` | WL-3: default grant term in days for approvals with no explicit `expires_at`; `null` = permanent |
 | `created_at` | `timestamptz` | NO | `now()` | |
 
 **Constraints**
@@ -429,8 +441,25 @@ One row per Steam account that has ever been seen on any managed server. The `st
 | `first_seen_at` | `timestamptz` | NO | `now()` | |
 | `last_seen_at` | `timestamptz` | NO | `now()` | |
 | `total_time_played_seconds` | `bigint` | NO | `0` | Cumulative playtime across all servers |
+| `avatar_url` | `text` | YES | NULL | INT-1: `GetPlayerSummaries.avatarfull` |
+| `persona_name` | `text` | YES | NULL | INT-1: `GetPlayerSummaries.personaname` |
+| `profile_visibility` | `smallint` | YES | NULL | INT-1: `communityvisibilitystate` — 1 = private, 3 = public |
+| `steam_account_created_at` | `timestamptz` | YES | NULL | INT-1: `timecreated`; Steam only returns it for public profiles |
+| `vac_banned` | `boolean` | NO | `false` | INT-1: `GetPlayerBans.VACBanned` |
+| `vac_ban_count` | `integer` | NO | `0` | INT-1: `NumberOfVACBans` |
+| `game_ban_count` | `integer` | NO | `0` | INT-1: `NumberOfGameBans` |
+| `days_since_last_ban` | `integer` | YES | NULL | INT-1: `DaysSinceLastBan`; NULL when the account has no ban at all (Steam reports 0 for both "never" and "today") |
+| `owns_squad` | `boolean` | YES | NULL | INT-1: appid `393380` present in `GetOwnedGames`. **NULL = Steam withheld the library** (private profile), not "does not own" |
+| `steam_playtime_minutes` | `integer` | YES | NULL | INT-1: `playtime_forever` for appid `393380` |
+| `steam_checked_at` | `timestamptz` | YES | NULL | INT-1: last successful Steam poll; NULL = never refreshed |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `updated_at` | `timestamptz` | NO | `now()` | |
+
+The INT-1 (#76) Steam columns are written on demand by
+`POST /api/v1/players/:playerId/steam-refresh` and in the background by
+`worker-steam-refresh`. The worker checks never-refreshed and seven-day-stale
+Steam players in batches of at most 100. Until the first complete refresh, the
+nullable fields remain NULL and the non-null ban counters keep their defaults.
 
 **Indexes**
 
@@ -440,6 +469,7 @@ One row per Steam account that has ever been seen on any managed server. The `st
 | `players_canonical_name_normalized_idx` | `canonical_name_normalized` | — |
 | `players_last_seen_at_idx` | `last_seen_at` | — |
 | `players_role_id_idx` | `role_id` | `role_id IS NOT NULL` |
+| `players_steam_checked_at_idx` | `steam_checked_at NULLS FIRST` | `steam_id64 IS NOT NULL` |
 
 **Example row:**
 
@@ -651,6 +681,7 @@ Browser session tokens. The `id` column is an opaque string (UUID or prefixed ra
 | `last_activity_at` | `timestamptz` | NO | `now()` | Sliding-window updated on activity |
 | `ip` | `inet` | YES | NULL | IP at session creation |
 | `user_agent` | `text` | YES | NULL | Browser User-Agent header |
+| `scope` | `text` | NO | `'panel'` | VIPSUB-5 authority scope; `sessions_scope_chk` allows `panel` / `self_service`. A `self_service` session is minted for a Steam login whose role has no `panel_access` and is honoured only on routes declaring `config.selfService` |
 | `created_at` | `timestamptz` | NO | `now()` | |
 
 **Indexes**
@@ -662,6 +693,210 @@ Browser session tokens. The `id` column is an opaque string (UUID or prefixed ra
 | `sessions_last_activity_idx` | `last_activity_at` |
 
 ---
+
+## `vip_subscriptions`
+
+Recurring VIP subscriptions (VIPSUB-5, #171). Currency is internal ECON bonus points only — there is no payment provider, and integrating one is explicitly out of scope; a provider webhook remains a future seam.
+
+`price_bonuses` and `renews_every_days` are **snapshots** taken when the subscription is created and are never re-read from `vip_tiers`: editing the catalog must not reprice a live subscription. The `role-expirer` renewal tick charges the snapshot each period and pushes `players.role_expires_at` forward; when the balance falls short the row flips to `expired` and the existing role-expiry tick removes the role once the paid period runs out. Cancelling sets `status`/`cancelled_at` only — the paid period is never clawed back.
+
+**Columns**
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | `uuid` | NO | — | Primary key; app-side uuidv7 |
+| `player_id` | `uuid` | NO | — | FK → `players.id` ON DELETE CASCADE |
+| `tier_id` | `uuid` | NO | — | FK → `vip_tiers.id` ON DELETE RESTRICT |
+| `status` | `text` | NO | `'active'` | `vip_subscriptions_status_chk`: `active` / `cancelled` / `expired` |
+| `renews_every_days` | `integer` | NO | — | `vip_subscriptions_renews_every_days_chk`: `> 0` |
+| `price_bonuses` | `integer` | NO | — | `vip_subscriptions_price_bonuses_chk`: `>= 0` |
+| `next_renewal_at` | `timestamptz` | NO | — | Advanced by one period from the date that was due, not from the wall clock |
+| `created_at` | `timestamptz` | NO | `now()` | |
+| `cancelled_at` | `timestamptz` | YES | NULL | Set on cancel and on expiry |
+
+**Indexes**
+
+| Name | Columns | Notes |
+|---|---|---|
+| `vip_subscriptions_due_idx` | `status, next_renewal_at` | Renewal scan |
+| `vip_subscriptions_player_idx` | `player_id` | |
+| `vip_subscriptions_one_active_idx` | `player_id` WHERE `status = 'active'` | UNIQUE — one live subscription per player; a duplicate purchase answers 409 `already_subscribed` |
+
+---
+
+## Dossier aggregates (DOSSIER-2)
+
+Three incremental aggregate tables back the player dossier (per-weapon / per-vehicle
+stats). All are keyed on `players.id` (**uuid**, not `steam_id64`) so EOS-only
+players aggregate correctly, and `damage` is **nullable** everywhere — when a source
+log line carries no damage magnitude the aggregate keeps only the counters and the
+UI renders "—". Migration [`0038`](#migration-history) creates them.
+
+They are maintained by two paths in [`packages/db/src/dossier/aggregate.ts`](../../../packages/db/src/dossier/aggregate.ts):
+
+- **Incremental** — `worker-log-ingest` calls `applyCombatEventToDossier(tx, …)` in
+  the same transaction as each `combat_events` insert (see
+  [log-ingest/flows.md](../workers/log-ingest/flows.md#combat--vehicle-events-dossier-2)).
+- **Reconcile** — `worker-stats` runs `reconcileDossierAggregates(sql, { windowHours: 48 })`
+  nightly, report-only, to alert on drift (see [workers/stats/README.md](../workers/stats/README.md)).
+
+**Retention is indefinite.** Unlike the source `combat_events` feed (COMBAT-2,
+monthly partitions with ~12–24-month retention), these aggregates are never
+partition-dropped — they are the dossier's multi-year history and survive
+`combat_events` partition drops untouched.
+
+### `player_weapon_stats`
+
+PK `(player_id, weapon)`. Columns: `player_id uuid` (FK → `players.id` ON DELETE
+CASCADE), `weapon text`, `kills int`, `teamkills int`, `damage numeric NULL`,
+`shots_events int` (count of damage events), `last_used_at timestamptz`. CHECK
+`kills, teamkills, shots_events >= 0`. Index `(player_id, kills DESC)`.
+
+### `player_vehicle_stats`
+
+Kills/damage dealt **from** a vehicle (source `attacker_vehicle`). PK
+`(player_id, vehicle_asset_id)`. Columns: `player_id uuid`, `vehicle_asset_id text`,
+`kills int`, `damage numeric NULL`. CHECK `kills >= 0`. Index `(player_id, kills DESC)`.
+
+### `player_vehicle_kills`
+
+Vehicles **destroyed**, per (vehicle, weapon). PK
+`(player_id, victim_vehicle_asset_id, weapon)`. Columns: `player_id uuid`,
+`victim_vehicle_asset_id text`, `weapon text`, `destroyed_count int`. CHECK
+`destroyed_count >= 0`. Index `(player_id, destroyed_count DESC)`.
+
+Read by the API dossier routes (`GET /api/v1/players/:playerId/{weapon,vehicle}-stats`,
+see [api/api.md](../api/api.md#players)).
+
+---
+## `whitelist_applications`
+
+WL-3 (#67) public whitelist/VIP application queue. Anyone may submit one **pending** application per SteamID64 via the public portal; a whitelist admin approves (granting a time-bounded role) or rejects it. Auto-expiry of an approved grant is handled by `worker-role-expirer` via `players.role_expires_at` — this table only records the request and its decision.
+
+**Columns**
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | `uuid` | NO | `gen_random_uuid()` | Primary key |
+| `steam_id64` | `bigint` | NO | | Applicant SteamID64 |
+| `player_id` | `uuid` | YES | `null` | FK → `players.id` ON DELETE SET NULL; best-effort resolution at submit |
+| `contact` | `text` | YES | `null` | Optional contact string (Discord, Steam profile, …) |
+| `body` | `text` | NO | | Application message |
+| `requested_role_id` | `uuid` | YES | `null` | FK → `roles.id` ON DELETE SET NULL |
+| `status` | `text` | NO | `'pending'` | CHECK IN (`pending`,`approved`,`rejected`) |
+| `reviewer_player_id` | `uuid` | YES | `null` | FK → `players.id` ON DELETE SET NULL |
+| `review_note` | `text` | YES | `null` | Reviewer note |
+| `granted_role_id` | `uuid` | YES | `null` | FK → `roles.id` ON DELETE SET NULL; role granted on approval |
+| `granted_until` | `timestamptz` | YES | `null` | Mirrors `players.role_expires_at`; `null` = permanent |
+| `source` | `text` | NO | `'public'` | CHECK IN (`public`,`panel`) |
+| `created_at` | `timestamptz` | NO | `now()` | |
+| `decided_at` | `timestamptz` | YES | `null` | Set when approved/rejected |
+
+**Indexes**
+
+- `whitelist_applications_status_created_idx` on `(status, created_at)`
+- `whitelist_applications_steam_id64_idx` on `(steam_id64)`
+- `whitelist_applications_pending_unique_idx` UNIQUE on `(steam_id64) WHERE status = 'pending'` — one open application per SteamID64
+
+---
+## `ban_appeals`
+
+MOD-5 (#62) ban-appeal portal queue. A banned player has no panel session, so rows are created by the **anonymous** `POST /api/v1/public/appeals` and worked through the panel queue gated on `mod:unban`. Approving an appeal is an unban: it runs the MOD-2 (#59) revert path (`Bans.cfg` line removal, `moderation_actions.reverted_at`/`reverted_by`, an `unban` ledger row and the `moderation.unban` EVT-1 envelope), so no ban state is stored here.
+
+`player_id` is **nullable on purpose**: the portal accepts a submission for any SteamID64, including one the panel has never seen, so its response cannot be walked to discover who is banned. The anti-spam partial unique index therefore keys on `steam_id64`, which is always present — a `player_id` index would not collide on NULLs.
+
+**Columns**
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | `uuid` | NO | `gen_random_uuid()` | Primary key |
+| `number` | `bigserial` | NO | `nextval(...)` | Human-readable queue number (as `issues.number`) |
+| `player_id` | `uuid` | YES | `null` | FK → `players.id` ON DELETE CASCADE; best-effort resolution at submit |
+| `moderation_action_id` | `uuid` | YES | `null` | FK → `moderation_actions.id` ON DELETE SET NULL; the appealed ban, resolved best-effort |
+| `steam_id64` | `bigint` | NO | | SteamID64 exactly as submitted |
+| `body` | `text` | NO | | Appeal text; CHECK `char_length(body) <= 4000` |
+| `contact` | `text` | YES | `null` | Optional contact string; CHECK `<= 200` |
+| `status` | `text` | NO | `'pending'` | CHECK IN (`pending`,`in_review`,`approved`,`rejected`) |
+| `handler_player_id` | `uuid` | YES | `null` | FK → `players.id` ON DELETE SET NULL; who took/decided it |
+| `decision_note` | `text` | YES | `null` | **Public** reply, shown on `/appeal/<token>`; CHECK `<= 2000` |
+| `internal_note` | `text` | YES | `null` | Never leaves the panel; CHECK `<= 2000` |
+| `tracking_token` | `text` | NO | | `randomBytes(24).toString('base64url')`; returned once, the applicant's only handle |
+| `submitter_ip` | `inet` | YES | `null` | Abuse forensics |
+| `created_at` | `timestamptz` | NO | `now()` | |
+| `updated_at` | `timestamptz` | NO | `now()` | |
+| `decided_at` | `timestamptz` | YES | `null` | Set on `approved`/`rejected` |
+
+**Indexes**
+
+- `ban_appeals_number_key` UNIQUE on `(number)`
+- `ban_appeals_tracking_token_key` UNIQUE on `(tracking_token)`
+- `ban_appeals_status_created_idx` on `(status, created_at)`
+- `ban_appeals_player_idx` on `(player_id)`
+- `ban_appeals_action_idx` on `(moderation_action_id)`
+- `ban_appeals_open_steam_unique_idx` UNIQUE on `(steam_id64) WHERE status IN ('pending','in_review')` — one open appeal per SteamID64
+## Balancer tables (GAME-2)
+
+GAME-2 (#81) team balancer, migration `0103_balancer`. The panel is a **review
+and configuration surface only** — it stores proposals and decisions and never
+executes a team change (`RCON_OPERATOR_COMMANDS` carries no team-change verb).
+
+### `balancer_settings`
+
+Singleton (`id smallint PK DEFAULT 1`, CHECK `id = 1`), modelled on
+`economy_settings`. Columns: `enabled boolean NOT NULL DEFAULT false`,
+`win_streak_threshold int NOT NULL DEFAULT 3` (CHECK `>= 1`),
+`ticket_diff_threshold int NOT NULL DEFAULT 150` (CHECK `>= 0`),
+`one_sided_rounds_threshold int NOT NULL DEFAULT 2` (CHECK `>= 1`),
+`quorum int NOT NULL DEFAULT 5` (CHECK `>= 0`),
+`pass_threshold_pct int NOT NULL DEFAULT 60` (CHECK `0..100`),
+`require_moderator_veto boolean NOT NULL DEFAULT false`,
+`prefer_squad_grouping boolean NOT NULL DEFAULT true`,
+`player_level_enabled boolean NOT NULL DEFAULT false`,
+`updated_by_player_id uuid` → `players.id` ON DELETE SET NULL, `updated_at timestamptz`.
+
+The three `*_threshold` values feed `evaluateBalancerSignals` in
+`@squad/shared-types`; `quorum` / `pass_threshold_pct` /
+`require_moderator_veto` describe the runtime vote model SquadJS owns and are
+stored here so operators configure one place.
+
+### `balancer_proposals`
+
+One row per dry-run snapshot delivered by
+`POST /api/v1/integrations/balancer/proposals`. Columns: `id uuid PK`,
+`source_snapshot_id text NOT NULL` (exporter idempotency key),
+`server_id uuid NOT NULL` → `servers.id` ON DELETE CASCADE,
+`match_id uuid` → `matches.id` ON DELETE SET NULL, `layer text`, `gamemode text`,
+`mode text NOT NULL` (CHECK IN `squad`,`player`),
+`schema_version int NOT NULL DEFAULT 1` (CHECK `>= 1`),
+`generated_at timestamptz NOT NULL`, `signals jsonb NOT NULL DEFAULT '{}'`,
+`proposal jsonb NOT NULL DEFAULT '[]'`,
+`status text NOT NULL DEFAULT 'open'` (CHECK IN `open`,`reviewed`,`dismissed`,`superseded`),
+`received_at`, `created_at`.
+
+`signals` and `proposal` are stored verbatim and versioned by `schema_version`,
+so a change in the exporter's payload is a value change rather than a
+migration. `proposal` entries are
+`{subject_type, subject_id, label, current_team, target_team, state}` with
+`state ∈ {on_target, no_change, should_move}` — the only input to the review
+UI's green/gray/red colouring.
+
+**Indexes**
+
+- `balancer_proposals_source_snapshot_key` UNIQUE on `(source_snapshot_id)` — makes redelivery idempotent
+- `balancer_proposals_server_generated_idx` on `(server_id, generated_at DESC)`
+- `balancer_proposals_status_idx` on `(status, generated_at DESC)`
+
+### `balancer_decisions`
+
+Append-only operator decisions. Columns: `id uuid PK`,
+`proposal_id uuid NOT NULL` → `balancer_proposals.id` ON DELETE CASCADE,
+`decision text NOT NULL` (CHECK IN `acknowledge`,`veto`,`dismiss`),
+`veto_reason_kind text` (CHECK NULL or IN `seeding`,`event`,`clan_match`,`other`),
+`veto_reason text`, `decided_by_player_id uuid` → `players.id` ON DELETE SET NULL,
+`created_at timestamptz`. CHECK `balancer_decisions_veto_reason_required`
+(`decision <> 'veto' OR veto_reason IS NOT NULL`) enforces the veto-reason rule
+at the storage layer, not only in the route. Index
+`balancer_decisions_proposal_idx` on `(proposal_id, created_at DESC)`.
 
 ## Migration history
 
@@ -685,4 +920,9 @@ Applied in order by `pnpm db:migrate`. Journal: [`packages/db/drizzle/meta/_jour
 | 0013 | `0013_servers_soft_delete` | 2026-04-30 | Adds `servers.deleted_at` / `deleted_by_steam_id64` / `deletion_backup_marker_id`; replaces full unique `servers_slug_key` with partial `servers_slug_active_key` (where `deleted_at IS NULL`); adds `servers_deleted_at_idx` |
 | 0017 | `0017_diagnostic_events` | 2026-04-28 | Creates `diagnostic_events` partitioned table (range on `ts`, daily) with composite PK, severity check, FK → `servers.id` ON DELETE SET NULL, and 25-day bootstrap of partitions |
 | 0018 | `0018_diagnostic_events_utc_invariant` | 2026-04-28 | No-op (SELECT 1). Documents the UTC-bounds invariant for `diagnostic_events` partitions enforced by `worker-event-partition`. Required because `0017`'s bootstrap used session-TZ-dependent `current_date` |
+| 0038 | `0038_dossier_weapon_vehicle_stats` | 2026-07 | DOSSIER-2: creates the three dossier aggregate tables (`player_weapon_stats`, `player_vehicle_stats`, `player_vehicle_kills`), uuid-keyed with nullable `damage` (see [Dossier aggregates](#dossier-aggregates-dossier-2)) |
 | 0077 | `0077_seed4_notifications` | 2026-07-14 | Adds `seed_subscriptions`, schedule notification lead time, built-in AUTO-3 seed-call rules, and the Discord `seed_needed` template |
+| 0087 | `0087_whitelist_applications` | 2026-07-25 | WL-3: creates `whitelist_applications` (status/source CHECKs, partial-unique pending index, FKs to `players`/`roles`) and adds `panel_meta.whitelist_applications_enabled` / `whitelist_application_default_days` |
+| 0106 | `0106_ban_appeals` | 2026-07-27 | MOD-5: creates `ban_appeals` (status CHECK, body/contact/note length CHECKs, partial-unique open-appeal index on `steam_id64`, FKs to `players`/`moderation_actions`) |
+| 0104 | `0104_vip_subscriptions` | 2026-07-27 | VIPSUB-5: creates `vip_subscriptions` (status/period/price CHECKs, due + player indexes, partial-unique one-active index) and adds `sessions.scope` (`panel` / `self_service`, default `panel`) |
+| 0103 | `0103_balancer` | 2026-07-27 | GAME-2: creates `balancer_settings`, `balancer_proposals` and `balancer_decisions` in one slot (see [Balancer tables](#balancer-tables-game-2)) |

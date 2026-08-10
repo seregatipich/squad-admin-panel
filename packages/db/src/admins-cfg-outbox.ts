@@ -1,6 +1,7 @@
 import { asc, eq, isNull } from 'drizzle-orm';
 import type { DatabaseClient } from './client.js';
 import { adminsCfgSyncOutbox } from './schema/admins-cfg-sync-outbox.js';
+import { servers } from './schema/servers.js';
 
 /**
  * Minimal structural view of the Redis client the relay needs. Declared here
@@ -38,7 +39,15 @@ type RelayDb = Pick<DatabaseClient, 'transaction'>;
  * (they no longer match `relayed_at IS NULL`), so effects are never duplicated
  * by the relay itself.
  *
- * @returns the number of rows relayed across all batches.
+ * Rows whose server has been **soft-deleted** (`servers.deleted_at IS NOT
+ * NULL`) are never published — an `XADD` would recreate the very stream the
+ * delete tore down (SYNC-5). They are instead stamped `relayed_at` without a
+ * publish so the pending queue drains and the relay never loops on them. The
+ * server join uses `FOR UPDATE OF admins_cfg_sync_outbox` so only the outbox
+ * rows are locked, never the `servers` rows.
+ *
+ * @returns the number of rows published to a stream across all batches
+ *   (soft-deleted rows that were cancelled without publishing are not counted).
  */
 export async function relayAdminsCfgSyncOutbox(
   db: RelayDb,
@@ -56,16 +65,27 @@ export async function relayAdminsCfgSyncOutbox(
           id: adminsCfgSyncOutbox.id,
           serverId: adminsCfgSyncOutbox.serverId,
           payload: adminsCfgSyncOutbox.payload,
+          serverDeletedAt: servers.deletedAt,
         })
         .from(adminsCfgSyncOutbox)
+        .innerJoin(servers, eq(servers.id, adminsCfgSyncOutbox.serverId))
         .where(isNull(adminsCfgSyncOutbox.relayedAt))
         .orderBy(asc(adminsCfgSyncOutbox.createdAt))
         .limit(batchSize)
-        .for('update', { skipLocked: true });
+        .for('update', { of: adminsCfgSyncOutbox, skipLocked: true });
 
       if (rows.length === 0) return true;
 
       for (const row of rows) {
+        if (row.serverDeletedAt !== null) {
+          // Server soft-deleted: drain the row without publishing so the
+          // torn-down stream is never resurrected (SYNC-5).
+          await tx
+            .update(adminsCfgSyncOutbox)
+            .set({ relayedAt: new Date() })
+            .where(eq(adminsCfgSyncOutbox.id, row.id));
+          continue;
+        }
         const streamId = await redis.xadd(
           `${opts.streamPrefix}${row.serverId}`,
           'MAXLEN',

@@ -34,7 +34,7 @@ export default fp(async (app) => {
           .limit(1);
         const player = playerRows[0];
         if (player) {
-          req.session = { id: session.id, playerId: player.id };
+          req.session = { id: session.id, playerId: player.id, scope: session.scope };
           req.user = {
             playerId: player.id,
             steamId64: player.steamId64,
@@ -111,12 +111,44 @@ export default fp(async (app) => {
       }
     }
 
-    const required = req.routeOptions?.config?.permissions;
-    if (!required || required.length === 0) return;
+    // VIPSUB-5 (#171) — self-service session scope.
+    //
+    // `auth-steam.ts` now mints a session for a player whose role has no
+    // `panel_access` so they can manage their own VIP on `/me`. That session is
+    // scoped `self_service` and is honoured ONLY on routes that opt in with
+    // `config.selfService`; anywhere else the request is downgraded to
+    // anonymous. Deny-by-default is required here rather than trusting the
+    // permission set, because `loadUserPermissions` adds explicit
+    // `role_permissions` rows on top of the derived set, and because ~30 routes
+    // authorise on `req.user` alone (`issues.ts`, `message-templates.ts`,
+    // `banned-names.ts`) or on `squadPermissions`, which `rbac.ts` does not gate
+    // on `panel_access`. Downgrading instead of answering 403 keeps genuinely
+    // public routes public and leaks nothing about the caller.
+    //
+    // The scope never over-restricts a real admin: once the player actually
+    // holds `panel_access` the gate lifts without re-login.
+    if (
+      req.session?.scope === 'self_service' &&
+      !req.user?.permissions.panelAccess &&
+      req.routeOptions?.config?.selfService !== true
+    ) {
+      req.user = undefined;
+      req.session = undefined;
+      req.apiTokenId = undefined;
+    }
+
+    // #246 — fail-closed default. A route is authenticated-required unless it
+    // explicitly opts out with `config.public: true`; declaring
+    // `config.permissions` further narrows it to specific permission holders.
+    // Before this hook was inverted, a route with neither `public` nor
+    // `permissions` was silently served to anonymous callers (`/api/docs*`,
+    // `GET /api/v1/host/bridge-status`, and others) — see #230 for the audit.
+    if (req.routeOptions?.config?.public === true) return;
     if (!req.user) {
       reply.code(401).send({ error: 'unauthenticated' });
       return;
     }
+    const required = req.routeOptions?.config?.permissions ?? [];
     for (const perm of required) {
       if (!req.user.permissions.permissions.has(perm)) {
         reply.code(403).send({ error: 'forbidden', required });

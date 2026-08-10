@@ -42,11 +42,11 @@ Streaming methods (deliver `BridgeStreamFrame` before the final response): `cont
 | `players` | `player:view_notes` | | ✓ |
 | `players` | `player:edit_notes` | | ✓ |
 | `players` | `player:set_flags` | | ✓ |
-| `moderation` | `mod:kick` | ✓ | ✓ |
-| `moderation` | `mod:warn` | | ✓ |
-| `moderation` | `mod:ban_temp` | ✓ | ✓ |
-| `moderation` | `mod:ban_perm` | ✓ | ✓ |
-| `moderation` | `mod:unban` | | ✓ |
+| `moderation` | `mod:kick` | ✓ | |
+| `moderation` | `mod:warn` | | |
+| `moderation` | `mod:ban_temp` | ✓ | |
+| `moderation` | `mod:ban_perm` | ✓ | |
+| `moderation` | `mod:unban` | | |
 | `admin_groups` | `admin_group:view` | | ✓ |
 | `admin_groups` | `admin_group:edit` | | ✓ |
 | `whitelist` | `whitelist:view` | | ✓ |

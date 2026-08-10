@@ -33,6 +33,7 @@ describe('GET /api/v1/players + /players/:playerId', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
     const steamId = 76561198000000001n;
@@ -48,7 +49,8 @@ describe('GET /api/v1/players + /players/:playerId', () => {
         totalTimePlayedSeconds: 3600,
       })
       .returning({ id: players.id });
-    testPlayerId = insertedPlayer!.id;
+    if (!insertedPlayer) throw new Error('failed to seed test player');
+    testPlayerId = insertedPlayer.id;
     await h.db.insert(playerNameHistory).values({
       playerId: testPlayerId,
       name: 'TestPlayer',
@@ -147,7 +149,8 @@ describe('GET /api/v1/players + /players/:playerId', () => {
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId!);
+    if (!h.seed.ownerPlayerId) throw new Error('seed owner missing');
+    invalidatePermissionCache(h.seed.ownerPlayerId);
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'GET',
@@ -182,6 +185,7 @@ describe('/api/v1/depot', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
   });
@@ -301,6 +305,7 @@ describe('auth plugin', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
   });
@@ -326,7 +331,8 @@ describe('auth plugin', () => {
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId!);
+    if (!h.seed.ownerPlayerId) throw new Error('seed owner missing');
+    invalidatePermissionCache(h.seed.ownerPlayerId);
     const cookie = await loginAsOwner(h);
     const resp = await h.app.inject({
       method: 'POST',
@@ -350,6 +356,7 @@ describe('audit plugin', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
   });

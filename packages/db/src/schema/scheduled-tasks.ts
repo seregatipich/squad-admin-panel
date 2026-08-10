@@ -1,5 +1,15 @@
 import { sql } from 'drizzle-orm';
-import { boolean, check, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { players } from './players.js';
 import { servers } from './servers.js';
 
@@ -20,8 +30,17 @@ export type ScheduledTaskRunStatus = (typeof SCHEDULED_TASK_RUN_STATUSES)[number
 export interface ScheduledTaskParams {
   /** Target layer for `set_next_layer` / `change_layer`. */
   layer?: string;
-  /** Broadcast text for `broadcast`. */
+  /** Broadcast text for a single-message `broadcast` (legacy/one-message form). */
   message?: string;
+  /**
+   * Ordered rotation of broadcast texts (MSG-4, #187). Present only when a
+   * `broadcast` task carries more than one message; the scheduler fires them in
+   * turn using {@link scheduledTasks.rotationIndex}. A single message is stored
+   * as {@link ScheduledTaskParams.message} instead.
+   */
+  messages?: string[];
+  /** Optional MSG-1 template ids the rotation `messages` were substituted from. */
+  templateIds?: string[];
 }
 
 /**
@@ -59,6 +78,12 @@ export const scheduledTasks = pgTable(
     /** 5-field cron expression (minute hour day-of-month month day-of-week), UTC. Null = one-off. */
     recurrence: text('recurrence'),
     enabled: boolean('enabled').notNull().default(true),
+    /**
+     * Rotation cursor for multi-message `broadcast` tasks (MSG-4, #187): the
+     * index into `params.messages` that fires next, advanced after each
+     * successful broadcast. 0 for single-message and non-broadcast tasks.
+     */
+    rotationIndex: integer('rotation_index').notNull().default(0),
     createdBy: uuid('created_by').references(() => players.id, { onDelete: 'set null' }),
     lastExecutedAt: timestamp('last_executed_at', { withTimezone: true, mode: 'date' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).defaultNow().notNull(),

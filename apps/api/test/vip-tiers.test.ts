@@ -267,6 +267,149 @@ describeIfDb('vip-tiers API (VIPSUB-3)', () => {
     expect(gone.length).toBe(0);
   });
 
+  it('refuses to delete a role referenced by a VIP tier (409) and keeps the role', async () => {
+    // Regression (#169, VIPSUB-3): vip_tiers.role_id is ON DELETE RESTRICT
+    // (migration 0035). Deleting a referenced role used to surface the raw
+    // Postgres FK violation as a 500; it must be a clean 409 instead.
+    const referencedRoleId = await seedRole(h.db, { panelAccess: true });
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/vip-tiers',
+      headers: { cookie: ownerCookie },
+      payload: { name: `VIP FK Guard ${uuidv7()}`, role_id: referencedRoleId },
+    });
+    expect(created.statusCode).toBe(201);
+    createdTierIds.push((created.json() as { id: string }).id);
+
+    const blocked = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/roles/${referencedRoleId}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toMatchObject({ error: 'role_referenced_by_vip_tier' });
+
+    // The rejected delete must leave the role intact.
+    const stillThere = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.id, referencedRoleId))
+      .limit(1);
+    expect(stillThere.length).toBe(1);
+  });
+
+  it('deletes a role with no referencing VIP tier (200 ok)', async () => {
+    const freeRoleId = await seedRole(h.db, { panelAccess: true });
+    const res = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/roles/${freeRoleId}`,
+      headers: { cookie: ownerCookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true });
+
+    const gone = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.id, freeRoleId))
+      .limit(1);
+    expect(gone.length).toBe(0);
+  });
+
+  it('round-trips price_bonuses through create and update', async () => {
+    const create = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/vip-tiers',
+      headers: { cookie: ownerCookie },
+      payload: {
+        name: `VIP Priced ${uuidv7()}`,
+        role_id: tierRoleId,
+        default_days: 30,
+        price_bonuses: 500,
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const created = create.json() as { id: string; price_bonuses: number | null };
+    createdTierIds.push(created.id);
+    expect(created.price_bonuses).toBe(500);
+
+    const update = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/vip-tiers/${created.id}`,
+      headers: { cookie: ownerCookie },
+      payload: { price_bonuses: 750 },
+    });
+    expect(update.statusCode).toBe(200);
+    expect((update.json() as { price_bonuses: number | null }).price_bonuses).toBe(750);
+
+    const cleared = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/vip-tiers/${created.id}`,
+      headers: { cookie: ownerCookie },
+      payload: { price_bonuses: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect((cleared.json() as { price_bonuses: number | null }).price_bonuses).toBeNull();
+
+    const list = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/vip-tiers',
+      headers: { cookie: ownerCookie },
+    });
+    const row = (
+      list.json() as { rows: Array<{ id: string; price_bonuses: number | null }> }
+    ).rows.find((r) => r.id === created.id);
+    expect(row?.price_bonuses).toBeNull();
+  });
+
+  it('rejects price without default_days (price_requires_days)', async () => {
+    const createNoDays = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/vip-tiers',
+      headers: { cookie: ownerCookie },
+      payload: { name: `VIP NoDays ${uuidv7()}`, role_id: tierRoleId, price_bonuses: 100 },
+    });
+    expect(createNoDays.statusCode).toBe(422);
+    expect(createNoDays.json()).toMatchObject({ error: 'price_requires_days' });
+
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/vip-tiers',
+      headers: { cookie: ownerCookie },
+      payload: { name: `VIP DaysGuard ${uuidv7()}`, role_id: tierRoleId, default_days: 30 },
+    });
+    expect(created.statusCode).toBe(201);
+    const tier = created.json() as { id: string };
+    createdTierIds.push(tier.id);
+
+    // Setting a price while simultaneously clearing default_days must fail.
+    const bothInvalid = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/vip-tiers/${tier.id}`,
+      headers: { cookie: ownerCookie },
+      payload: { price_bonuses: 100, default_days: null },
+    });
+    expect(bothInvalid.statusCode).toBe(422);
+    expect(bothInvalid.json()).toMatchObject({ error: 'price_requires_days' });
+
+    // Give it a price, then try to clear default_days alone — also refused.
+    const priced = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/vip-tiers/${tier.id}`,
+      headers: { cookie: ownerCookie },
+      payload: { price_bonuses: 100 },
+    });
+    expect(priced.statusCode).toBe(200);
+    const clearDays = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/vip-tiers/${tier.id}`,
+      headers: { cookie: ownerCookie },
+      payload: { default_days: null },
+    });
+    expect(clearDays.statusCode).toBe(422);
+    expect(clearDays.json()).toMatchObject({ error: 'price_requires_days' });
+  });
+
   it('treats an expired grant as inactive so its tier can be deleted', async () => {
     const expiredRoleId = await seedRole(h.db, { panelAccess: true });
     const created = await h.app.inject({

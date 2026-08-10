@@ -25,6 +25,8 @@
         └──────────┘               └──────────────────┘               └──────────────┘
 ```
 
+After a successful `fileAtomicWrite`, the worker also `XADD`s an `AdminReloadServerConfig` command onto `rcon:commands:<server_id>` (consumed by worker-rcon) so Squad applies the new permissions immediately — see step-by-step below.
+
 Step-by-step:
 
 1. The API records a mutation (e.g. `PUT /api/v1/roles/:id` updates squad permissions). In the same response cycle it calls `publishAdminsCfgSyncForAllServers(db, redis, event)`.
@@ -35,12 +37,13 @@ Step-by-step:
    - Snapshot DB: `roles` (with `role_squad_permissions`) + `players WHERE role_id IS NOT NULL` mapped to role names.
    - `buildManagedSegment(snapshot)` produces the deterministic byte body + sha256.
    - `bridge.fileRead({ path })` reads the current file; `findManagedSegment` extracts the existing managed slice.
-   - If hashes match and `forceWrite=false`, set status `in_sync` and **skip the write** (idempotency).
+   - If hashes match and `forceWrite=false`, set status `in_sync` and **skip the write** (idempotency) — no reload is issued on this branch.
    - Otherwise `bridge.fileAtomicWrite({ path, content })` with the spliced body.
    - Update status to `in_sync` with the fresh hash, group/admin counts, and a timestamp.
-   - Append an `admins_cfg.synced` (or `admins_cfg.force_synced`) row to `audit_log`.
+   - **Request an RCON `AdminReloadServerConfig`** via `requestAdminsCfgReload(redis, serverId, log)` (`src/rcon-reload.ts`) so the freshly-written permissions apply without a restart. This is gated on `rcon:status:<server_id>.state === 'connected'` and is strictly best-effort — it never throws and never rolls back the write. The outcome (`enqueued` | `skipped_rcon_disconnected` | `failed`) is captured on `SyncResult.reload`.
+   - Append an `admins_cfg.synced` (or `admins_cfg.force_synced`) row to `audit_log`, including the `reload` outcome in the row `context`.
    - `XACK` the stream entry.
-5. Squad re-reads `Admins.cfg` once a minute on its own — no container restart needed.
+5. **Squad does NOT passively re-read `Admins.cfg`** — the panel issues the RCON `AdminReloadServerConfig` above so the change takes effect immediately, without a container restart (SYNC-3 correction №1, `ai_docs/plans/2026-07-04-task-decomposition.md`). If no RCON listener is connected the reload is skipped; worker-rcon replays the current config on its next successful connect, and the periodic drift sweep keeps the file authoritative in the meantime.
 
 ## Drift detection flow (every 5 min)
 
@@ -54,6 +57,16 @@ Active mutations (role.create/update/delete, player.role.assign/unassign, role.m
 
 The UI's `<AdminsCfgDriftBanner>` polls `/api/v1/admins-cfg/drift?server_id=...` every 30 s. When state ∈ {`drift`, `unreachable`}, the banner offers a "Force sync" button that POSTs to `/api/v1/admins-cfg/sync?server_id=...`. That endpoint enqueues a `force_sync` event onto the stream; the worker picks it up and overwrites unconditionally (`opts.forceWrite=true`).
 
+## Config drift detection flow (generic)
+
+CFG-2 (#64) adds a second, independent sweep (`src/config-drift.ts`, `setInterval` every `CONFIG_DRIFT_INTERVAL_MS`, default 5 min) covering the **16 non-managed config files** — the 19-file allowlist minus `Admins.cfg` (managed segment above), `LayerRotation.cfg` (ROT-2 managed segment) and `License.cfg` (panel-managed, #45). For each active server it:
+
+1. Reads each file's `config_versions` tip sha256 from Postgres (one `DISTINCT ON (filename)` query per server).
+2. Reads the file via `bridge.fileRead` and hashes the on-disk bytes.
+3. Publishes per-file state to `config-drift:status:<server_id>` (TTL 24h): `in_sync` | `drift` (shas differ — e.g. hand-edited over SSH) | `missing` (file absent) | `unreachable` (bridge read failed) | `unknown` (file never versioned).
+
+Like the Admins.cfg sweep, it **detects, never auto-corrects** — the worker only publishes status. Resolution is operator-driven on the config editor page (`/servers/:id/configs`): the drift banner offers «Принять» (`POST .../configs/:name/drift/accept` — records the disk bytes as a new version), «Откатить» (`POST .../configs/:name/drift/revert` — repairs the disk byte-for-byte back to the DB tip, no duplicate history row) and a unified diff (`GET .../configs/:name/drift/diff`). The API's `GET .../configs/drift` reads live via the bridge, so the UI works even before the first sweep.
+
 ## Error / retry flow
 
 | Failure mode | Outcome | Recovery |
@@ -63,6 +76,7 @@ The UI's `<AdminsCfgDriftBanner>` polls `/api/v1/admins-cfg/drift?server_id=...`
 | `bridge.fileAtomicWrite` fails | Same as above — status `unreachable`, no `XACK`, audit `phase=file_atomic_write`. | Auto-retry via reclaim. |
 | Audit append throws | Logged at error level, but the sync itself is committed. | Operator investigates DB connectivity; sync proceeds. |
 | Server deleted (`servers.deleted_at` set) | Worker drops it from the active set on next refresh (every 30 s); no further reads. | n/a |
+| `XREADGROUP` returns `NOGROUP` / "no such key" (a per-server stream+group was destroyed by the API on soft-delete, SYNC-5) | The multiplexed read rejects for the WHOLE batch, so the worker cannot tell which stream vanished. It logs `xreadgroup NOGROUP — refreshing server list`, calls `refreshServerList()` immediately (dropping the vanished id and pruning its `backoffByServer` entry), and resumes on the next loop iteration — instead of the pre-SYNC-5 behaviour of sleeping 1 s and re-hitting the same error until the 30-s refresh. | Self-heals within one loop iteration. |
 | Worker crash / SIGTERM | Heartbeat key expires within 30 s. In-flight messages stay in the crashed consumer's PEL. The next worker process — even with a fresh `consumer-${pid}-${rand}` name — picks them up via the periodic `XAUTOCLAIM` pass once they exceed `RECLAIM_MIN_IDLE_MS` (default 60 s). | systemd restart. |
 
 ## Pending-message reclaim (XAUTOCLAIM)
@@ -80,7 +94,7 @@ Together they guarantee:
 ## Per-server lifecycle
 
 - **Server install** — when a new server's row appears in DB, the next 30-s `refreshServerList` tick adds it to the active set and creates the consumer group with `MKSTREAM`. The API enqueues an initial sync event so the file is populated before Squad first boots.
-- **Server soft-delete** — once `deleted_at` is set the worker drops the server from `activeServerIds` after the 30-s refresh, stops reading its stream, and never writes its file again.
+- **Server soft-delete** — the API's `softDeleteServer` now tears the per-server sync queue down synchronously (SYNC-5, #38): it `XGROUP DESTROY`s the `config-sync` group, `UNLINK`s the `events:admins-cfg-sync:<id>` stream, `DEL`s the `admins-cfg:status:<id>` key, and stamps any still-pending `admins_cfg_sync_outbox` rows `relayed_at`. The worker reacts two ways: (1) the destroyed stream makes the next multiplexed `XREADGROUP` reject `NOGROUP`, which triggers an immediate `refreshServerList()` (see the retry table) so the id is dropped without waiting for the 30-s tick; (2) even without that, the id falls out of `activeServerIds` on the next refresh. The **outbox relay** ([`relayAdminsCfgSyncOutbox`](../../../../packages/db/src/admins-cfg-outbox.ts)) additionally joins `servers` and, for any pending row whose server is soft-deleted, stamps it `relayed_at` **without** an `XADD` — so a mutation that raced the delete can never resurrect the torn-down stream.
 - **Server restore** — re-appears on the active list, the consumer group is (re-)created with `MKSTREAM`, the next reconcile rewrites the managed segment from current DB.
 
 ## Background flow — heartbeat

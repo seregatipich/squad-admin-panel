@@ -15,6 +15,7 @@ export const PERMISSION_CATEGORIES = [
   'discord',
   'triggers',
   'scheduler',
+  'balancer',
 ] as const;
 export type PermissionCategory = (typeof PERMISSION_CATEGORIES)[number];
 
@@ -78,24 +79,21 @@ export const PERMISSIONS = [
     category: 'moderation',
     label: 'Kick через UI',
     dangerous: true,
-    unimplemented: true,
   },
-  { key: 'mod:warn', category: 'moderation', label: 'Warn', unimplemented: true },
+  { key: 'mod:warn', category: 'moderation', label: 'Warn' },
   {
     key: 'mod:ban_temp',
     category: 'moderation',
     label: 'Temp ban',
     dangerous: true,
-    unimplemented: true,
   },
   {
     key: 'mod:ban_perm',
     category: 'moderation',
     label: 'Permanent ban',
     dangerous: true,
-    unimplemented: true,
   },
-  { key: 'mod:unban', category: 'moderation', label: 'Unban', unimplemented: true },
+  { key: 'mod:unban', category: 'moderation', label: 'Unban' },
   {
     key: 'banlist:read',
     category: 'moderation',
@@ -170,6 +168,12 @@ export const PERMISSIONS = [
     category: 'scheduler',
     label: 'Редактировать расписание',
     unimplemented: true,
+  },
+  { key: 'balancer:view', category: 'balancer', label: 'Видеть балансировщик команд' },
+  {
+    key: 'balancer:edit',
+    category: 'balancer',
+    label: 'Менять правила и решать по предложениям балансировщика',
   },
 ] as const satisfies readonly PermissionDef[];
 

@@ -8,6 +8,11 @@ import {
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import {
+  DEPOT_PROGRESS_STREAM,
+  publishDepotProgressDone,
+  publishDepotProgressLine,
+} from '../lib/depot-progress.js';
 
 /**
  * Manages the shared `squad-depot` Docker volume that holds Squad game
@@ -107,17 +112,18 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
         async function restartServers(ids: string[]) {
           for (const sid of ids) {
             try {
-              void app.redis.xadd(
-                'depot:progress',
-                'MAXLEN',
-                '~',
-                '5000',
-                '*',
-                'stream',
+              // Best-effort: a dropped progress line must not skip the actual
+              // restart below, so its failure is logged, not thrown.
+              await publishDepotProgressLine(
+                app.redis,
                 'stdout',
-                'text',
                 `Restarting server squad-${sid} …`,
-              );
+              ).catch((error: unknown) => {
+                app.log.error(
+                  { err: error, server_id: sid },
+                  'failed to publish restart progress line',
+                );
+              });
               try {
                 await app.bridge.containerStart({ name: `squad-${sid}` });
               } catch {
@@ -152,23 +158,26 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           }
         }
 
+        let finalStatus: 'done' | 'error' = 'done';
+        let finalError: string | undefined;
         try {
           await dedicated.connect();
 
           // ── Phase 1: stop requested servers ──
           for (const sid of serverIds) {
             try {
-              void app.redis.xadd(
-                'depot:progress',
-                'MAXLEN',
-                '~',
-                '5000',
-                '*',
-                'stream',
+              // Best-effort: a dropped progress line must not skip the actual
+              // stop below, so its failure is logged, not thrown.
+              await publishDepotProgressLine(
+                app.redis,
                 'stdout',
-                'text',
                 `Stopping server squad-${sid} …`,
-              );
+              ).catch((error: unknown) => {
+                app.log.error(
+                  { err: error, server_id: sid },
+                  'failed to publish stop progress line',
+                );
+              });
               await app.bridge.containerStop({ name: `squad-${sid}`, timeout_sec: 60 });
               await app.db
                 .update(servers)
@@ -181,20 +190,21 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           }
 
           // ── Phase 2: run SteamCMD depot update ──
+          // Each progress line is awaited (not fired-and-forgotten): a silently
+          // dropped xadd would leave depot:last_update=ok even though a
+          // progress frame never made it to the stream.
+          const steamCmdStreamWrites: Promise<void>[] = [];
+          const steamCmdStreamWriteErrors: unknown[] = [];
           await dedicated.depotUpdate((frame) => {
             const text = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
-            void app.redis.xadd(
-              'depot:progress',
-              'MAXLEN',
-              '~',
-              '5000',
-              '*',
-              'stream',
-              frame.stream,
-              'text',
-              text,
+            steamCmdStreamWrites.push(
+              publishDepotProgressLine(app.redis, frame.stream, text).catch((error: unknown) => {
+                steamCmdStreamWriteErrors.push(error);
+              }),
             );
           });
+          await Promise.all(steamCmdStreamWrites);
+          if (steamCmdStreamWriteErrors.length > 0) throw steamCmdStreamWriteErrors[0];
 
           // ── Phase 3: store build ID from manifest ──
           try {
@@ -215,21 +225,34 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           // ── Phase 4: restart previously stopped servers ──
           await restartServers(stoppedIds);
         } catch (err) {
+          finalStatus = 'error';
+          finalError = (err as Error).message;
           await app.redis.set(
             'depot:last_update',
             JSON.stringify({
               finished_at: new Date().toISOString(),
               status: 'failed',
-              error: (err as Error).message,
+              error: finalError,
             }),
           );
           // Even on failure, restart any servers we stopped — never leave them down.
           await restartServers(stoppedIds);
         } finally {
-          await app.redis.del('depot:updating');
-          await dedicated.close().catch(() => undefined);
+          await publishDepotProgressDone(app.redis, finalStatus, finalError).catch(
+            (error: unknown) => {
+              app.log.error({ err: error }, 'failed to publish depot update completion event');
+            },
+          );
+          await app.redis.del('depot:updating').catch((error: unknown) => {
+            app.log.error({ err: error }, 'failed to release depot update lock');
+          });
+          await dedicated.close().catch((error: unknown) => {
+            app.log.error({ err: error }, 'failed to close depot bridge client');
+          });
         }
-      })();
+      })().catch((error: unknown) => {
+        app.log.error({ err: error }, 'unexpected depot update background error');
+      });
 
       return {
         status: 'started',
@@ -248,10 +271,43 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
     (socket) => {
       let closed = false;
       let lastId = '0';
+      // A blocking XREAD occupies the connection it runs on until data
+      // arrives or the block times out — issuing it on the shared app.redis
+      // singleton would queue every other route's Redis command behind it
+      // for up to 5s at a time. Each connection gets its own duplicate,
+      // matching the pattern in plugins/live-bus.ts.
+      const redis = app.redis.duplicate();
+      redis.on('error', () => {
+        // connection lost; the read loop's catch block ends the socket.
+      });
+
+      // Sends one stream entry. Entries written by publishDepotProgressDone
+      // (`stream: 'event'`) carry a pre-encoded {done,final,error?} object and
+      // are forwarded verbatim; returns true for those so the caller can tell
+      // a terminal frame was sent. Ordinary stdout/stderr lines are wrapped
+      // and always return false.
+      function sendEntry(kv: string[]): boolean {
+        const idx = kv.indexOf('text');
+        if (idx < 0) return false;
+        const stream = kv[kv.indexOf('stream') + 1] ?? 'stdout';
+        const text = kv[idx + 1] ?? '';
+        if (stream === 'event') {
+          socket.send(text);
+          return true;
+        }
+        socket.send(JSON.stringify({ ts: new Date().toISOString(), stream, message: text }));
+        return false;
+      }
+
       void (async () => {
         try {
-          const backfill = (await app.redis.xrange(
-            'depot:progress',
+          // Backfill may span a prior, already-finished run followed by the
+          // run the client just triggered — a 'done' seen here isn't
+          // necessarily current, so it's forwarded (for context) but never
+          // treated as terminal. Only 'done' frames seen live, after
+          // `backfill_complete`, end the connection.
+          const backfill = (await redis.xrange(
+            DEPOT_PROGRESS_STREAM,
             '-',
             '+',
             'COUNT',
@@ -259,40 +315,66 @@ const depotRoutes: FastifyPluginAsync = async (app) => {
           )) as Array<[string, string[]]>;
           for (const [id, kv] of backfill) {
             lastId = id;
-            const idx = kv.indexOf('text');
-            if (idx < 0) continue;
-            const stream = kv[kv.indexOf('stream') + 1] ?? 'stdout';
-            const text = kv[idx + 1] ?? '';
-            socket.send(JSON.stringify({ ts: new Date().toISOString(), stream, message: text }));
+            sendEntry(kv);
           }
+          socket.send(JSON.stringify({ backfill_complete: true }));
+
+          // If no update is running right now, the run the client just
+          // triggered may have already finished (or none is in flight at
+          // all) between their POST and this WS connecting — synthesize a
+          // terminal frame from the last known result instead of blocking
+          // on a live event that will never arrive.
+          const updating = await redis.get('depot:updating');
+          if (!updating) {
+            const lastUpdateRaw = await redis.get('depot:last_update');
+            if (lastUpdateRaw) {
+              const lastUpdate = JSON.parse(lastUpdateRaw) as {
+                status: 'ok' | 'failed';
+                error?: string;
+              };
+              socket.send(
+                JSON.stringify(
+                  lastUpdate.status === 'ok'
+                    ? { done: true, final: 'done' }
+                    : { done: true, final: 'error', error: lastUpdate.error },
+                ),
+              );
+              socket.close();
+              return;
+            }
+          }
+
           while (!closed) {
-            const res = (await app.redis.xread(
+            const res = (await redis.xread(
               'BLOCK',
               '5000',
               'STREAMS',
-              'depot:progress',
+              DEPOT_PROGRESS_STREAM,
               lastId,
             )) as Array<[string, Array<[string, string[]]>]> | null;
             if (!res) continue;
             for (const [, entries] of res) {
               for (const [id, kv] of entries) {
                 lastId = id;
-                const idx = kv.indexOf('text');
-                if (idx < 0) continue;
-                const stream = kv[kv.indexOf('stream') + 1] ?? 'stdout';
-                const text = kv[idx + 1] ?? '';
-                socket.send(
-                  JSON.stringify({ ts: new Date().toISOString(), stream, message: text }),
-                );
+                if (sendEntry(kv)) {
+                  socket.close();
+                  return;
+                }
               }
             }
           }
         } catch {
           // socket gone
+        } finally {
+          redis.disconnect();
         }
       })();
       socket.on('close', () => {
         closed = true;
+        // Forcibly tears down an in-flight blocking XREAD so a client that
+        // disconnects mid-block doesn't leave the duplicate connection open
+        // for up to another 5s waiting on data nobody will read.
+        redis.disconnect();
       });
     },
   );

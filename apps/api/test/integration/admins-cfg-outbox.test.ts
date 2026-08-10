@@ -1,9 +1,9 @@
 import { relayAdminsCfgSyncOutbox } from '@squad/db';
 import { adminsCfgSyncOutbox, roles, servers } from '@squad/db/schema';
-import { eq, isNotNull, isNull } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ADMINS_CFG_SYNC_STREAM_PREFIX,
   type AdminsCfgSyncEvent,
@@ -191,5 +191,45 @@ describeIfDb('admins-cfg-sync durable outbox (SYNC-1)', () => {
     for (const id of serverIds) {
       expect(await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${id}`)).toBe(1);
     }
+  });
+
+  it("stamps a soft-deleted server's pending rows relayed without publishing (SYNC-5)", async () => {
+    // A server that was soft-deleted after its sync task was enqueued.
+    const deletedId = uuidv7();
+    await h.db.insert(servers).values({
+      id: deletedId,
+      displayName: 'outbox-deleted-server',
+      slug: `outbox-deleted-${Date.now()}`,
+      deletedAt: new Date(),
+    });
+    const streamKey = `${ADMINS_CFG_SYNC_STREAM_PREFIX}${deletedId}`;
+    await h.redis.del(streamKey);
+    await h.db
+      .insert(adminsCfgSyncOutbox)
+      .values({ serverId: deletedId, payload: makeEvent('post-delete') });
+
+    const xaddSpy = vi.spyOn(h.redis, 'xadd');
+    try {
+      const { relayed } = await relayAdminsCfgSyncOutbox(h.db, h.redis, {
+        streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX,
+      });
+      expect(relayed).toBe(0);
+      // No XADD targeted the deleted server's stream, so it was never resurrected.
+      for (const call of xaddSpy.mock.calls) {
+        expect(call[0]).not.toBe(streamKey);
+      }
+      expect(await h.redis.exists(streamKey)).toBe(0);
+    } finally {
+      xaddSpy.mockRestore();
+    }
+
+    // The orphan row is drained (stamped relayed) so the relay never loops on it.
+    const stillPending = await h.db
+      .select({ id: adminsCfgSyncOutbox.id })
+      .from(adminsCfgSyncOutbox)
+      .where(
+        and(eq(adminsCfgSyncOutbox.serverId, deletedId), isNull(adminsCfgSyncOutbox.relayedAt)),
+      );
+    expect(stillPending).toHaveLength(0);
   });
 });

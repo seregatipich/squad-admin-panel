@@ -129,9 +129,35 @@ export type LiveEvent =
       data: { report: ReportLiveView };
     }
   | {
+      type: 'appeal.created';
+      ts: string;
+      data: { appeal_id: string; number: number; status: string };
+    }
+  | {
+      type: 'appeal.updated';
+      ts: string;
+      data: { appeal_id: string; number: number; status: string };
+    }
+  | {
       type: 'server.map.changed';
       ts: string;
       data: { server_id: string; action: string; layer: string | null };
+    }
+  | {
+      /**
+       * A file arrived through a one-time delegated-upload link (VIDEO-3,
+       * #159). The API delivers this frame only to the admin who minted the
+       * link, so any socket that receives it is the intended recipient.
+       */
+      type: 'media.uploaded';
+      ts: string;
+      data: {
+        player_id: string | null;
+        media_id: string;
+        token_id: string;
+        target_entity_type: 'player' | 'moderation_action' | 'match' | 'issue' | null;
+        target_entity_id: string | null;
+      };
     }
   | {
       type: 'alert.triggered';

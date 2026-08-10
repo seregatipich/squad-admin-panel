@@ -3,7 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { recomputeLeaderboardPeriod } from '../src/leaderboard/aggregate.js';
+import {
+  ALLTIME_PERIOD_START,
+  backfillMonths,
+  recomputeLeaderboardPeriod,
+} from '../src/leaderboard/aggregate.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
@@ -27,33 +31,57 @@ async function seedPresence(
   day: string,
   onlineSeconds: number,
   boostSeconds = 0,
+  seedSeconds = 0,
 ) {
   await sql`
-    INSERT INTO player_daily_presence (player_id, server_id, day, online_seconds, boost_seconds)
-    VALUES (${playerId}, ${serverId}, ${day}::date, ${onlineSeconds}, ${boostSeconds})
+    INSERT INTO player_daily_presence
+      (player_id, server_id, day, online_seconds, boost_seconds, seed_seconds)
+    VALUES (${playerId}, ${serverId}, ${day}::date, ${onlineSeconds}, ${boostSeconds}, ${seedSeconds})
     ON CONFLICT (player_id, day, server_id)
-    DO UPDATE SET online_seconds = EXCLUDED.online_seconds, boost_seconds = EXCLUDED.boost_seconds
+    DO UPDATE SET online_seconds = EXCLUDED.online_seconds,
+                  boost_seconds = EXCLUDED.boost_seconds,
+                  seed_seconds = EXCLUDED.seed_seconds
   `;
 }
 
-async function setEconomyCoefficients(kOnline: number, kBoost: number) {
+async function setEconomyCoefficients(kOnline: number, kBoost: number, kSeed = 3) {
   await sql`
-    INSERT INTO economy_settings (id, k_online, k_boost)
-    VALUES (1, ${kOnline}, ${kBoost})
-    ON CONFLICT (id) DO UPDATE SET k_online = EXCLUDED.k_online, k_boost = EXCLUDED.k_boost
+    INSERT INTO economy_settings (id, k_online, k_boost, k_seed)
+    VALUES (1, ${kOnline}, ${kBoost}, ${kSeed})
+    ON CONFLICT (id) DO UPDATE SET k_online = EXCLUDED.k_online,
+                                   k_boost = EXCLUDED.k_boost,
+                                   k_seed = EXCLUDED.k_seed
   `;
 }
 
-async function seedMatch(serverId: string, startedAt: string, playerIds: string[]) {
+interface MatchPlayerSeed {
+  playerId: string;
+  team?: number;
+  kills?: number;
+  deaths?: number;
+  teamkills?: number;
+  revives?: number;
+}
+
+async function seedMatch(
+  serverId: string,
+  startedAt: string,
+  playerSeeds: (string | MatchPlayerSeed)[],
+  winner: 'team1' | 'team2' | 'draw' | null = null,
+) {
   const [match] = await sql<{ id: string }[]>`
-    INSERT INTO matches (server_id, started_at)
-    VALUES (${serverId}, ${startedAt}::timestamptz)
+    INSERT INTO matches (server_id, started_at, winner)
+    VALUES (${serverId}, ${startedAt}::timestamptz, ${winner})
     RETURNING id
   `;
-  for (const playerId of playerIds) {
+  for (const entry of playerSeeds) {
+    const seed = typeof entry === 'string' ? { playerId: entry } : entry;
     await sql`
-      INSERT INTO match_players (match_id, player_id, joined_at, play_seconds)
-      VALUES (${match.id}, ${playerId}, ${startedAt}::timestamptz, 600)
+      INSERT INTO match_players
+        (match_id, player_id, joined_at, play_seconds, team, kills, deaths, teamkills, revives)
+      VALUES (${match.id}, ${seed.playerId}, ${startedAt}::timestamptz, 600,
+              ${seed.team ?? null}, ${seed.kills ?? null}, ${seed.deaths ?? null},
+              ${seed.teamkills ?? null}, ${seed.revives ?? null})
     `;
   }
 }
@@ -223,7 +251,7 @@ describeIfDb('recompute idempotency', () => {
 });
 
 describeIfDb('matches_played and combat availability', () => {
-  it('counts distinct matches per player/server and leaves combat metrics zero', async () => {
+  it('counts distinct matches per player/server', async () => {
     await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 3600);
     await seedMatch(SERVER_1, '2026-07-05T08:00:00.000Z', [PLAYER_A, PLAYER_B]);
     await seedMatch(SERVER_1, '2026-07-05T09:00:00.000Z', [PLAYER_A]);
@@ -235,11 +263,119 @@ describeIfDb('matches_played and combat availability', () => {
     const bravoServer1 = rows.find((r) => r.player_id === PLAYER_B && r.server_id === SERVER_1);
     expect(alphaServer1?.matches_played).toBe(2);
     expect(bravoServer1?.matches_played).toBe(1);
-    expect(alphaServer1?.kills).toBe(0);
-    expect(alphaServer1?.deaths).toBe(0);
-    expect(alphaServer1?.teamkills).toBe(0);
-    expect(alphaServer1?.revives).toBe(0);
     expect(bravoServer1?.online_seconds).toBe(0);
+  });
+});
+
+describeIfDb('combat aggregation (DOSSIER-4)', () => {
+  it('aggregates combat columns from match_players into month rows', async () => {
+    // June: one match on SERVER_1. July: two matches split across two servers.
+    await seedMatch(SERVER_1, '2026-06-10T18:00:00.000Z', [
+      { playerId: PLAYER_A, kills: 5, deaths: 2, teamkills: 1, revives: 3 },
+    ]);
+    await seedMatch(SERVER_1, '2026-07-05T08:00:00.000Z', [
+      { playerId: PLAYER_A, kills: 4, deaths: 3 },
+      { playerId: PLAYER_B, kills: 2, deaths: 1, revives: 6 },
+    ]);
+    await seedMatch(SERVER_2, '2026-07-20T09:00:00.000Z', [
+      { playerId: PLAYER_A, kills: 3, deaths: 1, teamkills: 2 },
+    ]);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'month', periodStart: '2026-06-01' });
+    await recomputeLeaderboardPeriod(sql, { periodType: 'month', periodStart: '2026-07-01' });
+
+    // Events from two different months land in two separate month rows.
+    const june = await statRows('month', '2026-06-01');
+    const july = await statRows('month', '2026-07-01');
+    const juneA = june.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_1);
+    expect(juneA?.kills).toBe(5);
+    expect(juneA?.deaths).toBe(2);
+    expect(juneA?.teamkills).toBe(1);
+    expect(juneA?.revives).toBe(3);
+    expect(juneA?.kd_ratio).toBe(2.5);
+
+    const julyAServer1 = july.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_1);
+    const julyAServer2 = july.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_2);
+    const julyARollup = july.find((r) => r.player_id === PLAYER_A && r.server_id === null);
+    const julyBServer1 = july.find((r) => r.player_id === PLAYER_B && r.server_id === SERVER_1);
+    expect(julyAServer1?.kills).toBe(4);
+    expect(julyAServer2?.kills).toBe(3);
+    // The all-servers rollup sums the per-server combat rows and recomputes kd.
+    expect(julyARollup?.kills).toBe(7);
+    expect(julyARollup?.deaths).toBe(4);
+    expect(julyARollup?.teamkills).toBe(2);
+    expect(julyARollup?.kd_ratio).toBe(7 / 4);
+    expect(julyBServer1?.revives).toBe(6);
+
+    // The materialised monthly kills reconcile with a manual sum over match_players.
+    const [manual] = await sql<{ total: number }[]>`
+      SELECT COALESCE(SUM(mp.kills), 0)::bigint AS total
+      FROM match_players mp
+      JOIN matches m ON m.id = mp.match_id
+      WHERE m.server_id = ANY(${[SERVER_1, SERVER_2]})
+    `;
+    const [materialised] = await sql<{ total: number }[]>`
+      SELECT COALESCE(SUM(kills), 0)::bigint AS total
+      FROM player_stat_periods
+      WHERE period_type = 'month' AND server_id IS NOT NULL
+    `;
+    expect(Number(materialised.total)).toBe(Number(manual.total));
+    expect(Number(materialised.total)).toBe(14);
+  });
+
+  it('kd_ratio uses kills when deaths is zero', async () => {
+    await seedMatch(SERVER_1, '2026-07-05T08:00:00.000Z', [
+      { playerId: PLAYER_A, kills: 4, deaths: 0 },
+    ]);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+
+    const rows = await statRows('day', '2026-07-05');
+    const server1 = rows.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_1);
+    expect(server1?.kills).toBe(4);
+    expect(server1?.deaths).toBe(0);
+    expect(server1?.kd_ratio).toBe(4);
+  });
+
+  it('players without combat rows keep zero metrics', async () => {
+    // match_players combat columns are nullable; a row with no recorded combat
+    // must COALESCE to zero, and presence-only players must stay at zero too.
+    await seedPresence(PLAYER_B, SERVER_2, '2026-07-05', 900);
+    await seedMatch(SERVER_1, '2026-07-05T08:00:00.000Z', [PLAYER_A]);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+
+    const rows = await statRows('day', '2026-07-05');
+    const alphaServer1 = rows.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_1);
+    const bravoServer2 = rows.find((r) => r.player_id === PLAYER_B && r.server_id === SERVER_2);
+    for (const row of [alphaServer1, bravoServer2]) {
+      expect(row?.kills).toBe(0);
+      expect(row?.deaths).toBe(0);
+      expect(row?.teamkills).toBe(0);
+      expect(row?.revives).toBe(0);
+      expect(row?.kd_ratio).toBe(0);
+    }
+    expect(alphaServer1?.matches_played).toBe(1);
+  });
+
+  it('backfillMonths recomputes the last N month periods and is a no-op for zero', async () => {
+    await seedMatch(SERVER_1, '2026-06-10T18:00:00.000Z', [
+      { playerId: PLAYER_A, kills: 5, deaths: 2 },
+    ]);
+    await seedMatch(SERVER_1, '2026-07-05T08:00:00.000Z', [
+      { playerId: PLAYER_A, kills: 4, deaths: 1 },
+    ]);
+
+    const now = new Date('2026-07-26T12:00:00.000Z');
+    expect(await backfillMonths(sql, 0, now)).toBe(0);
+
+    const written = await backfillMonths(sql, 2, now);
+    expect(written).toBeGreaterThan(0);
+
+    const june = await statRows('month', '2026-06-01');
+    const july = await statRows('month', '2026-07-01');
+    expect(june.find((r) => r.server_id === SERVER_1)?.kills).toBe(5);
+    expect(july.find((r) => r.server_id === SERVER_1)?.kills).toBe(4);
   });
 });
 
@@ -288,6 +424,124 @@ describeIfDb('bonus/boost accrual (LEAD-4)', () => {
   });
 });
 
+describeIfDb('seeding contribution (LEAD-6)', () => {
+  it('materialises per-server seeding_seconds and sums them into the rollup', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 3600, 0, 1200);
+    await seedPresence(PLAYER_A, SERVER_2, '2026-07-05', 1800, 0, 600);
+    await seedPresence(PLAYER_B, SERVER_1, '2026-07-05', 900, 0, 300);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+
+    const rows = await statRows('day', '2026-07-05');
+    const aServer1 = rows.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_1);
+    const aServer2 = rows.find((r) => r.player_id === PLAYER_A && r.server_id === SERVER_2);
+    const aRollup = rows.find((r) => r.player_id === PLAYER_A && r.server_id === null);
+    const bServer1 = rows.find((r) => r.player_id === PLAYER_B && r.server_id === SERVER_1);
+
+    // Per-server seeding_seconds matches the presence rows exactly.
+    expect(aServer1?.seeding_seconds).toBe(1200);
+    expect(aServer2?.seeding_seconds).toBe(600);
+    expect(bServer1?.seeding_seconds).toBe(300);
+    // The NULL-server rollup is the sum of the player's per-server rows.
+    expect(aRollup?.seeding_seconds).toBe(1800);
+
+    // The materialised total reconciles with player_daily_presence.
+    const [presenceSum] = await sql<{ total: number }[]>`
+      SELECT COALESCE(SUM(seed_seconds), 0)::bigint AS total
+      FROM player_daily_presence WHERE day = '2026-07-05'
+    `;
+    const [statSum] = await sql<{ total: number }[]>`
+      SELECT COALESCE(SUM(seeding_seconds), 0)::bigint AS total
+      FROM player_stat_periods
+      WHERE period_type = 'day' AND period_start = '2026-07-05' AND server_id IS NOT NULL
+    `;
+    expect(Number(statSum.total)).toBe(Number(presenceSum.total));
+    expect(Number(statSum.total)).toBe(2100);
+  });
+
+  it('ranks weekly top seeders by seeding_seconds with hand-computed totals', async () => {
+    // PLAYER_A seeds across two days on one server → 1000 + 2000 = 3000 for the week.
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-30', 0, 0, 1000);
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-01', 0, 0, 2000);
+    // PLAYER_B seeds 4000 on a single day → outranks PLAYER_A.
+    await seedPresence(PLAYER_B, SERVER_1, '2026-07-02', 0, 0, 4000);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'week', periodStart: '2026-06-29' });
+
+    const top = await sql<{ player_id: string; seeding_seconds: number }[]>`
+      SELECT player_id, seeding_seconds
+      FROM player_stat_periods
+      WHERE period_type = 'week' AND period_start = '2026-06-29' AND server_id IS NULL
+      ORDER BY seeding_seconds DESC
+    `;
+    expect(top.map((r) => r.player_id)).toEqual([PLAYER_B, PLAYER_A]);
+    expect(top[0]?.seeding_seconds).toBe(4000);
+    expect(top[1]?.seeding_seconds).toBe(3000);
+  });
+
+  it('adds k_seed × seed to bonus_points alongside online and boost', async () => {
+    await setEconomyCoefficients(1, 2, 3);
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 3600, 600, 1200);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+
+    const rows = await statRows('day', '2026-07-05');
+    const server1 = rows.find((r) => r.server_id === SERVER_1 && r.player_id === PLAYER_A);
+    expect(server1?.seeding_seconds).toBe(1200);
+    // bonus = k_online*online + k_boost*boost + k_seed*seed = 1*3600 + 2*600 + 3*1200
+    expect(server1?.bonus_points).toBe(1 * 3600 + 2 * 600 + 3 * 1200);
+  });
+
+  it('freezes seeding_seconds and its bonus until the period is recomputed', async () => {
+    await setEconomyCoefficients(1, 2, 3);
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 0, 0, 1000);
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+
+    const before = (await statRows('day', '2026-07-05')).find((r) => r.server_id === SERVER_1);
+    expect(before?.seeding_seconds).toBe(1000);
+    expect(before?.bonus_points).toBe(3 * 1000);
+
+    // Owner raises k_seed; the stored row stays frozen until an explicit recompute.
+    await setEconomyCoefficients(1, 2, 9);
+    const frozen = (await statRows('day', '2026-07-05')).find((r) => r.server_id === SERVER_1);
+    expect(frozen?.bonus_points).toBe(3 * 1000);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+    const after = (await statRows('day', '2026-07-05')).find((r) => r.server_id === SERVER_1);
+    expect(after?.bonus_points).toBe(9 * 1000);
+    // seeding_seconds is sourced from presence and is unaffected by k_seed.
+    expect(after?.seeding_seconds).toBe(1000);
+  });
+
+  it('stores zero seeding_seconds without a constraint violation and is idempotent', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 3600); // seedSeconds defaults to 0
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+    const first = await statRows('day', '2026-07-05');
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-07-05' });
+    const second = await statRows('day', '2026-07-05');
+
+    expect(first.find((r) => r.server_id === SERVER_1)?.seeding_seconds).toBe(0);
+    expect(second).toStrictEqual(first);
+  });
+
+  it('sums seeding_seconds across every day for the alltime period', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-04', 0, 0, 500);
+    await seedPresence(PLAYER_A, SERVER_1, '2026-07-05', 0, 0, 700);
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'alltime',
+      periodStart: ALLTIME_PERIOD_START,
+    });
+
+    const rows = await statRows('alltime', ALLTIME_PERIOD_START);
+    const server1 = rows.find((r) => r.server_id === SERVER_1 && r.player_id === PLAYER_A);
+    const rollup = rows.find((r) => r.server_id === null && r.player_id === PLAYER_A);
+    expect(server1?.seeding_seconds).toBe(1200);
+    expect(rollup?.seeding_seconds).toBe(1200);
+  });
+});
+
 describeIfDb('top-N query uses the metric index', () => {
   it('EXPLAIN of a top-100 online query hits the index without a seq scan', async () => {
     try {
@@ -320,4 +574,158 @@ describeIfDb('top-N query uses the metric index', () => {
       await sql`DELETE FROM players WHERE canonical_name LIKE 'lbbulk%'`;
     }
   }, 30_000);
+});
+
+// LEAD-7 (#178). A season is an arbitrary named interval, so its window cannot
+// be derived from `period_start` the way day/week/month can — `periodDayRange`
+// returns null for 'season', which would silently widen the slice to all time.
+// The caller therefore passes the window explicitly via `range`.
+describeIfDb('season periods recompute over an explicit range (LEAD-7)', () => {
+  const SEASON_START = '2026-06-10';
+  const SEASON_RANGE = { fromDay: '2026-06-10', toDay: '2026-06-20' };
+
+  it('counts only presence inside [fromDay, toDay]', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-09', 1000); // day before
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-10', 2000); // first day
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-15', 3000); // middle
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-20', 4000); // last day
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-21', 5000); // day after
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+
+    const rows = await statRows('season', SEASON_START);
+    const rollup = rows.find((row) => row.server_id === null);
+    // 2000 + 3000 + 4000 — both boundary days included, neither neighbour is.
+    expect(rollup?.online_seconds).toBe(9000);
+  });
+
+  it('counts only matches inside the window, for both matches and combat', async () => {
+    await seedMatch(SERVER_1, '2026-06-09T12:00:00Z', [
+      { playerId: PLAYER_A, kills: 100, deaths: 1, revives: 7 },
+    ]);
+    await seedMatch(SERVER_1, '2026-06-15T12:00:00Z', [
+      { playerId: PLAYER_A, kills: 5, deaths: 2, revives: 1 },
+    ]);
+    await seedMatch(SERVER_1, '2026-06-20T23:30:00Z', [
+      { playerId: PLAYER_A, kills: 3, deaths: 2, revives: 2 },
+    ]);
+    await seedMatch(SERVER_1, '2026-06-21T00:30:00Z', [
+      { playerId: PLAYER_A, kills: 200, deaths: 1, revives: 9 },
+    ]);
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+
+    const rows = await statRows('season', SEASON_START);
+    const rollup = rows.find((row) => row.server_id === null);
+    expect(rollup?.matches_played).toBe(2);
+    expect(rollup?.kills).toBe(8);
+    expect(rollup?.deaths).toBe(4);
+    expect(rollup?.revives).toBe(3);
+    // toDay is inclusive to the end of the day, so 23:30 on the last day counts
+    // while 00:30 on the following day does not.
+    expect(rollup?.kd_ratio).toBeCloseTo(2, 5);
+  });
+
+  // Regression: the match window was built as `started_at < toDay::date + 1 day`,
+  // whose result is a *local-time* timestamp. On any deployment whose Postgres
+  // session TimeZone is not UTC the window silently slid by the UTC offset,
+  // while presence (a `date` column filled from UTC days) did not — so the two
+  // halves of the same period covered different spans. Pinned in UTC here.
+  it('anchors the match window to UTC days regardless of the session TimeZone', async () => {
+    // Both of these are inside the UTC window [2026-06-10, 2026-06-20].
+    await seedMatch(SERVER_1, '2026-06-10T00:15:00Z', [{ playerId: PLAYER_A, kills: 1 }]);
+    await seedMatch(SERVER_1, '2026-06-20T23:45:00Z', [{ playerId: PLAYER_A, kills: 1 }]);
+    // Both of these are outside it.
+    await seedMatch(SERVER_1, '2026-06-09T23:45:00Z', [{ playerId: PLAYER_A, kills: 50 }]);
+    await seedMatch(SERVER_1, '2026-06-21T00:15:00Z', [{ playerId: PLAYER_A, kills: 50 }]);
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+
+    const rollup = (await statRows('season', SEASON_START)).find((row) => row.server_id === null);
+    expect(rollup?.matches_played).toBe(2);
+    expect(rollup?.kills).toBe(2);
+  });
+
+  it('writes both the per-server rows and the server_id IS NULL rollup', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-15', 600);
+    await seedPresence(PLAYER_A, SERVER_2, '2026-06-15', 400);
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+
+    const rows = await statRows('season', SEASON_START);
+    expect(rows.filter((row) => row.server_id !== null)).toHaveLength(2);
+    const rollup = rows.find((row) => row.server_id === null);
+    expect(rollup?.online_seconds).toBe(1000);
+  });
+
+  it('is idempotent — recomputing the same window rewrites identical rows', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-15', 1234, 10, 20);
+    await seedMatch(SERVER_1, '2026-06-16T12:00:00Z', [
+      { playerId: PLAYER_A, kills: 4, deaths: 2, revives: 1 },
+    ]);
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+    const first = await statRows('season', SEASON_START);
+
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+    const second = await statRows('season', SEASON_START);
+
+    expect(second).toEqual(first);
+  });
+
+  it('does not disturb other period types sharing the same source rows', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-15', 777);
+
+    await recomputeLeaderboardPeriod(sql, { periodType: 'day', periodStart: '2026-06-15' });
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+      range: SEASON_RANGE,
+    });
+
+    const dayRows = await statRows('day', '2026-06-15');
+    expect(dayRows.find((row) => row.server_id === null)?.online_seconds).toBe(777);
+    const seasonRows = await statRows('season', SEASON_START);
+    expect(seasonRows.find((row) => row.server_id === null)?.online_seconds).toBe(777);
+  });
+
+  it('without an explicit range a season slice would span all time (why range is required)', async () => {
+    await seedPresence(PLAYER_A, SERVER_1, '2020-01-01', 111);
+    await seedPresence(PLAYER_A, SERVER_1, '2026-06-15', 222);
+
+    // periodDayRange('season', ...) returns null, so the recompute falls back to
+    // an unbounded window. This is exactly the bug the `range` option exists to
+    // prevent, pinned here so the fallback cannot be mistaken for correct.
+    await recomputeLeaderboardPeriod(sql, {
+      periodType: 'season',
+      periodStart: SEASON_START,
+    });
+
+    const rows = await statRows('season', SEASON_START);
+    expect(rows.find((row) => row.server_id === null)?.online_seconds).toBe(333);
+  });
 });

@@ -2,7 +2,7 @@
 
 ## Symptom: Wedge after reinstall — `claimFirstOwner` returns `already_claimed` despite fresh DB
 
-**Symptom.** Operator runs the reinstall procedure (drop+recreate DB, flush Redis, run migrator), then logs in via Steam. Lands on `/no-access` with the message "Steam ID … не имеет роли в этой панели." DB shows `panel_meta.first_owner_claimed = false` and `players.role_id IS NULL` for the operator's record — yet the Owner trick failed to fire.
+**Symptom.** Operator runs the reinstall procedure (drop+recreate DB, flush Redis, run migrator), then logs in via Steam. The login succeeds but lands on the «Мой VIP» self-service page (`/me`) instead of the dashboard — the session was issued with scope `self_service` because the player has no `panel_access`. DB shows `panel_meta.first_owner_claimed = false` and `players.role_id IS NULL` for the operator's record — yet the Owner trick failed to fire.
 
 **Root cause.** Pre-2026-04-25 versions of `claimFirstOwner` short-circuited on the presence of `/var/lib/squad-panel/.first-owner-claimed`. The sentinel file persists across DB resets (it lives on the host filesystem, not in any Docker volume that `docker compose down -v` would wipe). After reinstall the DB was clean, but the stale sentinel from the previous installation made every first-login return `already_claimed` without consulting the DB.
 
@@ -97,7 +97,7 @@ The `cannot_remove_last_owner` API guard prevents this from happening via the UI
 
 ## Symptom: "Owner role missing" — 0009 migration not applied
 
-If the Owner role was never seeded, the first-login Owner trick will find no role to assign and `claimFirstOwner` will set `first_owner_claimed = true` on `panel_meta` while leaving `players.role_id = NULL`. Subsequent logins will skip the trick entirely and everyone will be redirected to `/no-access`.
+If the Owner role was never seeded, the first-login Owner trick finds no role to assign: `claimFirstOwner` returns `no_owner_role` without touching `panel_meta`, and the Steam callback answers `500 owner_role_missing` instead of issuing a session — nobody gets in at all. If instead the Owner role was deleted *after* a successful claim, `first_owner_claimed` is already `true`, the trick is skipped, and every login ends in a `self_service`-scoped session redirected to `/me` — the panel is reachable by nobody.
 
 **Diagnostics**
 

@@ -69,22 +69,34 @@ softDeleteServer(ctx, serverId):
            updatedAt = now()
      WHERE id = ? AND deleted_at IS NULL          ← partial-unique-safe
 
+  Phase 6 — Admins.cfg sync-queue cleanup (SYNC-5, best-effort; requires ctx.redis)
+    runs AFTER Phase 5 so the outbox relay's `deleted_at IS NULL` guard is live
+    (a) UPDATE admins_cfg_sync_outbox SET relayed_at = now()
+          WHERE server_id = ? AND relayed_at IS NULL   → sync_outbox_cancelled = rowcount
+    (b) XGROUP DESTROY events:admins-cfg-sync:<id> config-sync
+          ← swallow NOGROUP / "no such key" / "requires the key to exist"
+    (c) UNLINK events:admins-cfg-sync:<id>            ← fall back to DEL
+    (d) DEL admins-cfg:status:<id>                    ← drop stale unreachable alert
+    sync_queue_removed = true; any Redis fault → errors.push({phase:'sync_queue_cleanup', error})
+    When ctx.redis is omitted the whole phase is skipped (sync_queue_removed = false).
+
   return DeleteResult { backup_marker_id, files_backed_up, files_attempted,
                         container_removed, configs_dir_removed, saved_dir_removed,
-                        ufw_rules_removed, errors[] }
+                        ufw_rules_removed, sync_queue_removed, sync_outbox_cancelled,
+                        errors[] }
 
 route layer:
-  Phase 6 — audit
+  Phase 7 — audit
     auditPlugin writes audit_log row with action='server.delete',
     target='server', context=DeleteResult JSON.
 
-  Phase 7 — live event
+  Phase 8 — live event
     app.liveBus.publish({type: 'server.deleted', ts, data: {server_id, deleted_at, by}})
     → in-process WS subscribers see it immediately,
     → Redis PUBLISH live-bus replicates to other API instances.
 ```
 
-Failure handling per phase: phase 1 throws → 500, server stays alive. Phases 2-4 errors are collected in `result.errors[]` and the delete still completes (operator inspects `audit_log.context.errors` and cleans up by hand if needed). Phase 5 always runs because phases 2-4 do not throw; the row gets `deleted_at` even when the container or files survive.
+Failure handling per phase: phase 1 throws → 500, server stays alive. Phases 2-4 and phase 6 errors are collected in `result.errors[]` and the delete still completes (operator inspects `audit_log.context.errors` and cleans up by hand if needed). Phase 5 always runs because phases 2-4 do not throw; the row gets `deleted_at` even when the container or files survive. Phase 6 runs after phase 5 and is itself best-effort: destroying the per-server Redis stream + consumer group + status key stops the config-sync worker from replaying against a deleted server, and stamping the still-pending outbox rows relayed (paired with the relay's own soft-delete guard) prevents a racing enqueue from resurrecting the torn-down stream.
 
 ## Server restore (archive → new server)
 
@@ -133,9 +145,12 @@ Audit row at step 1 (`server.restore`), step 3 (`server.restore_configs`), and t
 
 Single source of truth: [`apps/api/src/routes/server-configs.ts`](../../../apps/api/src/routes/server-configs.ts) (`writeVersion` at line 403). Each edit pairs a host-filesystem write with a `config_versions` row — never one without the other.
 
+**Editor exception — `License.cfg` is panel-managed (SRV-6, #45).** The editor never touches it: `PUT` (and `POST …/restore/:vid`) return `400 {error:'panel_managed_file'}`, and `GET …/configs/License.cfg` re-renders a masked copy (`LicenseKey=********`) from `server_credentials` instead of reading the disk bytes. The file is written exclusively by the server-settings license flow ([`lib/license-cfg.ts`](../../../apps/api/src/lib/license-cfg.ts) `syncLicenseCfg`, called from `PATCH /api/v1/servers/:id`): it bypasses `writeVersion`, writes the plaintext id+key pair to disk via the same `fileAtomicWrite`, inserts a **masked** `config_versions` row, and never fires a reload — the license applies on the next container start, surfaced as `server.license.restart_required` on `GET /servers/:id`.
+
 ```
 PUT /api/v1/servers/:id/configs/:name   body={content, message?}
   ↓ name ∈ ALLOWED_CONFIG_FILES (19, in @squad/shared-config)
+  ↓ name != 'License.cfg' (panel-managed → 400 panel_managed_file, see above)
   ↓ content ≤ 1 MiB
   ↓
 writeVersion():
@@ -161,6 +176,8 @@ writeVersion():
                                  author_label=actor?NULL:'system',
                                  author_ip, message)
   Step 5 — best-effort live reload (no audit on its own)
+    if configFileClass(name) != 'hot_reload':
+      return { applied:false, reason:'not_hot_reload' }   ← no RCON is sent
     reloadServerConfig(app, serverId):
       if status NOT IN (running, starting):
         return { applied:false, reason:'not_running' }
@@ -189,17 +206,21 @@ audit plugin writes `config.write` row with before.sha256 / after.sha256
 
 **Behavior classes** (`configFileClass` in `@squad/shared-config`) decide whether the file-being-present is enough or whether Squad needs a nudge:
 
+The behavior class also gates whether step 5 fires RCON at all: **only `hot_reload` files trigger `AdminReloadServerConfig`** (CFG-1, #63). For the other two classes step 5 short-circuits with `reload: { applied:false, reason:'not_hot_reload' }` and no RCON is sent.
+
 | Class | Files | What happens after step 3 |
 |---|---|---|
-| `hot_reload` | `Admins.cfg`, `Bans.cfg`, `RemoteAdminListHosts.cfg`, `RemoteBanListHosts.cfg` | Squad re-reads from disk on its own when a relevant command fires (e.g. an admin runs `/admin`). RCON reload in step 5 still fires but is effectively a no-op for these. |
-| `rotation` | `LayerRotation.cfg`, `LevelRotation.cfg`, `Excluded{Layers,Levels,Factions}.cfg`, `LayerVoting{,LowPlayers,Night}.cfg`, `VoteConfig.cfg` | RCON `AdminReloadServerConfig` (step 5) makes Squad re-parse them in-place. |
-| `requires_restart` | `CustomOptions.cfg`, `License.cfg`, `MOTD.cfg`, `Rcon.cfg`, `Server.cfg`, `ServerMessages.cfg` | File on disk is fresh, but Squad cached the old values at boot. Operator must restart the container; UI surfaces this via `behavior` + `reload.applied=false`. |
+| `hot_reload` | `Admins.cfg`, `Bans.cfg`, `RemoteAdminListHosts.cfg`, `RemoteBanListHosts.cfg` | The **only** class where step 5 sends RCON `AdminReloadServerConfig`, so Squad re-reads the file live. (Squad also re-reads some of these on its own when a relevant command fires, e.g. an admin runs `/admin`.) |
+| `rotation` | `LayerRotation.cfg`, `LevelRotation.cfg`, `Excluded{Layers,Levels,Factions}.cfg`, `LayerVoting{,LowPlayers,Night}.cfg`, `VoteConfig.cfg` | Applies from the next match. Step 5 sends **no** RCON (`reason:'not_hot_reload'`); the UI shows a "next match" hint. |
+| `requires_restart` | `CustomOptions.cfg`, `License.cfg`\*, `MOTD.cfg`, `Rcon.cfg`, `Server.cfg`, `ServerMessages.cfg` | File on disk is fresh, but Squad cached the old values at boot. Step 5 sends **no** RCON (`reason:'not_hot_reload'`); the operator must restart the container, which the config editor offers via a "Рестарт сервера" button (needs `server:restart`). |
+
+\* `License.cfg` keeps its `requires_restart` class but is panel-managed (SRV-6, #45): the editor shows it masked and rejects writes/restores with `panel_managed_file`; it is written only by the server-settings license flow, which bypasses `writeVersion` entirely (see the editor exception above the flow).
 
 **Failure modes**:
 
 - Step 3 fails (path forbidden, disk full, bridge down): the route returns the bridge error verbatim (typically 500), DB unchanged, no audit `config.write` row.
 - Step 4 fails after step 3 succeeded (DB unreachable mid-request): the file on disk is the new content but no `config_versions` row exists. The next successful PUT will see `prev.sha256` from the previous-but-one row and produce a normal lineage; the orphan-on-disk state is benign and self-heals on next save. There is **no rollback** of the disk write.
-- Step 5 fails: reported in the response (`reload.applied=false`, `reason`); the audit row is still written (the edit *did* happen). UI shows a warning suggesting a manual restart.
+- Step 5 fails or is skipped: reported in the response (`reload.applied=false`, `reason` — `rcon_failed`/`not_running`/`no_credentials` for a hot_reload file, or `not_hot_reload` for rotation/requires_restart files); the audit row is still written (the edit *did* happen). UI shows a warning suggesting a manual restart for `requires_restart` files.
 
 ## Status reconciler
 
@@ -649,11 +670,11 @@ The reconciler-confirmed event is documented separately because it lives in `plu
 
 #### Soft-delete (DELETE /servers/:id)
 
-Source: [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). Calls `softDeleteServer` from [`lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts), which performs config backup → container stop+rm → directory delete → ufw rule remove → set `deletedAt`.
+Source: [`routes/servers.ts`](../../../apps/api/src/routes/servers.ts). Calls `softDeleteServer` from [`lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts), which performs config backup → container stop+rm → directory delete → ufw rule remove → set `deletedAt` → Admins.cfg sync-queue cleanup (`redis: app.redis`).
 
 ```
 api emits server.soft_delete.requested
-  ├─ softDeleteServer(...)                    ← reads + backs up configs, removes container, drops ufw rules
+  ├─ softDeleteServer(...)                    ← backs up configs, removes container, drops ufw rules, tears down the Admins.cfg sync queue
   └─ liveBus.publish({type: 'server.deleted', ...})
 api emits server.soft_delete.done            ← payload.backup_id + files_backed_up + durationMs
 ─────── on throw ───────

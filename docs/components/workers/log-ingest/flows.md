@@ -68,6 +68,36 @@ For each line:
 4. `LogIngestor.handleMessage(category, message, ts)` → returns zero or more `EventEnvelope` objects. Wrapped in try/catch — any throw becomes a `parser_error` diag emit with `regex` set to the failing category name.
 5. For each envelope: `publish(redis, envelope)` — dedup check then `XADD`.
 
+## Combat & vehicle events (DOSSIER-2)
+
+Combat (`combat_death`/`combat_damage`/`combat_wound`/`combat_revive`) and vehicle
+(`vehicle_destroyed`/`vehicle_damage`) commands are handled by `src/combat/store.ts`
+(`handleCombat` / `handleVehicle`), chained per server so lines apply in order.
+
+For each command:
+
+1. Resolve (or create) the attacker/victim `players` rows, detect teamkill from the
+   RCON roster cache, and resolve the open `matches` row — all before the transaction.
+2. In one `db.transaction`:
+   - Insert the generic `events` envelope (`onConflictDoNothing` on `(event_id, occurred_at)`).
+   - **Only if that insert actually inserted:** insert the typed `combat_events` row
+     (command kind mapped to `event_type`: `combat_death→death`, `combat_damage→damage`,
+     `combat_wound→wound`, `combat_revive→revive`, `vehicle_destroyed→vehicle_destroyed`,
+     `vehicle_damage→damage`), then fold it into the dossier aggregates with
+     `applyCombatEventToDossier(tx, …)`.
+3. After the transaction commits, if the envelope was newly inserted, publish the
+   `combat.event` / `combat.vehicle` frame on the `live-bus` Redis channel.
+
+Idempotency: on offset replay the envelope conflicts, `wasInserted` is false, and
+the `combat_events` insert, the aggregate fold **and** the live-bus publish are all
+skipped — a redelivered line never double-counts. Atomicity: any error in the
+transaction rolls back the envelope, the `combat_events` row and the aggregate delta
+together. `match_id` is written `NULL` (a `bigint` column that log-ingest's `uuid`
+match id cannot fill — a COMBAT-2/DOSSIER-1 schema gap; the aggregates and the
+reconcile guard ignore it). `wound`/`revive` rows are recorded in `combat_events`
+but move no aggregate. A missing production `player_sessions` writer for the live
+flow is tracked separately (PRES-1).
+
 ## Squad fatal detection patterns
 
 | Pattern | Source line shape | Captured groups |

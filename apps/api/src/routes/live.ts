@@ -27,6 +27,7 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
       let closed = false;
       const connectionPlayerId = req.user?.playerId ?? null;
       const canViewCombat = req.user?.permissions.combatView ?? false;
+      const canAssignRoles = req.user?.permissions.canAssignRoles ?? false;
 
       app.diag
         .emit({
@@ -72,6 +73,21 @@ const liveRoutes: FastifyPluginAsync = async (app) => {
           typeof event.data.player_id === 'string' &&
           event.data.player_id !== connectionPlayerId
         ) {
+          return;
+        }
+        if (
+          event.type === 'alert.triggered' &&
+          (event.data.event_kind === 'role_expiring' ||
+            // VIPSUB-5 (#171): a failed subscription renewal names the player,
+            // so it goes to the same audience as an expiry reminder.
+            event.data.event_kind === 'subscription_expired') &&
+          !canAssignRoles
+        ) {
+          return;
+        }
+        // Delegated-upload notifications are private to the admin who minted
+        // the link; nobody else learns that an anonymous upload happened.
+        if (event.type === 'media.uploaded' && event.data.player_id !== connectionPlayerId) {
           return;
         }
         if (event.type === 'combat.event' && !canViewCombat) return;

@@ -101,4 +101,43 @@ describe('loadConfig', () => {
     const cfg = loadConfig();
     expect(cfg.SESSION_TTL_SECONDS).toBe(86400);
   });
+
+  /**
+   * Regression for the 2026-07-28 production outage: compose passes
+   * `BALANCER_WEBHOOK_SECRET: ${BALANCER_WEBHOOK_SECRET:-}`, which supplies an
+   * empty string rather than leaving the variable unset. `.optional()` permits
+   * `undefined`, not `''`, so `.min(32)` rejected it and the API refused to boot
+   * in a restart loop. An unset optional secret and a blank one must mean the
+   * same thing: the feature is off.
+   */
+  it('treats a blank optional webhook secret as unset rather than refusing to boot', async () => {
+    const loadConfig = await freshLoadConfig();
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, VALID_ENV, {
+      BALANCER_WEBHOOK_SECRET: '',
+      VIP_LIFECYCLE_WEBHOOK_SECRET: '',
+    });
+
+    const config = loadConfig();
+
+    expect(config.BALANCER_WEBHOOK_SECRET).toBeUndefined();
+    expect(config.VIP_LIFECYCLE_WEBHOOK_SECRET).toBeUndefined();
+  });
+
+  it('still rejects a non-empty optional webhook secret that is too short', async () => {
+    const loadConfig = await freshLoadConfig();
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, VALID_ENV, { BALANCER_WEBHOOK_SECRET: 'too-short' });
+
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it('accepts a real optional webhook secret', async () => {
+    const loadConfig = await freshLoadConfig();
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    const secret = 'z'.repeat(32);
+    Object.assign(process.env, VALID_ENV, { BALANCER_WEBHOOK_SECRET: secret });
+
+    expect(loadConfig().BALANCER_WEBHOOK_SECRET).toBe(secret);
+  });
 });

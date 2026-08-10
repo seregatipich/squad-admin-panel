@@ -8,8 +8,6 @@ name: ci
 on:
   push:
     branches: [master, dev]
-  pull_request:
-    branches: [master, dev]
   workflow_dispatch:
 
 concurrency:
@@ -19,29 +17,21 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/dev' && github.ref != 'refs/heads/master' }}
 
 jobs:
-  # Enforces the branch model (see AGENTS.md): pull requests may only target
-  # master from dev. On push events the job always succeeds so the dev tip SHA
-  # carries a passing branch-guard check — required by the protect-master
-  # ruleset for the fast-forward promotion push (.github/rulesets/).
+  # Enforces the branch model (see AGENTS.md). Runs only on trusted push
+  # (master/dev) and workflow_dispatch events — never pull_request or
+  # pull_request_target — so no untrusted or merely review-stage PR head
+  # ever executes on this shared self-hosted runner (#217). On push events
+  # the job always succeeds so the dev tip SHA carries a passing
+  # branch-guard check — required by the protect-master ruleset for the
+  # fast-forward promotion push (.github/rulesets/).
   branch-guard:
     runs-on: self-hosted
     # Single shared self-hosted runner: a wedged job with no timeout could block every subsequent CI run indefinitely, so every job below gets a timeout-minutes.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Enforce master-only-from-dev
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.base_ref }}
-          HEAD: ${{ github.head_ref }}
-        run: |
-          if [ "$EVENT" = "pull_request" ] && [ "$BASE" = "master" ] && [ "$HEAD" != "dev" ]; then
-            echo "::error::Pull requests must not target master from '$HEAD'. master only receives promotions from dev (git push origin origin/dev:master). Retarget this PR to dev."
-            exit 1
-          fi
-          echo "branch model OK ($EVENT ${BASE:+base=$BASE }${HEAD:+head=$HEAD})"
       - name: Audit master ancestry
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         run: |
@@ -56,6 +46,20 @@ jobs:
         run: bash scripts/test-git-guard.sh
       - name: Run verify-done test suite
         run: bash scripts/test-verify-done.sh
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
+          echo "$PWD" >> "$GITHUB_PATH"
+      - name: Run pre-push-checklist test suite
+        run: bash scripts/test-pre-push-checklist.sh
+      - name: Run workflow-pin test suite
+        run: bash scripts/test-workflow-pins.sh
+      - name: Run workflow security test suite
+        run: bash scripts/test-workflow-security.sh
+      - name: Run check-runner-health test suite
+        run: bash scripts/test-check-runner-health.sh
+      - name: Run codeql-default-setup test suite
+        run: bash scripts/test-codeql-default-setup.sh
 
   node:
     runs-on: self-hosted
@@ -107,12 +111,24 @@ jobs:
             echo "REDIS_URL=$RD"
             echo "TEST_REDIS_URL=$RD/15"
           } >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
+      # pnpm/action-setup@v5+ probes `node --version` on PATH and silently falls
+      # back to the standalone @pnpm/exe bootstrap (which needs libatomic.so.1,
+      # not installed on this runner — see #269) whenever it can't find Node
+      # >= 22.13. This runner has no system Node until actions/setup-node runs,
+      # so a Node-less pnpm/action-setup step always hit that fallback. Setting
+      # up Node here first — before pnpm/action-setup — keeps a real Node on
+      # PATH so it bootstraps via plain npm instead. The second setup-node step
+      # below stays: actions/setup-node's `cache: pnpm` needs pnpm already on
+      # PATH to resolve the cache key, so it must run after pnpm/action-setup.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with: { version: 9.15.0 }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm
@@ -124,14 +140,20 @@ jobs:
         run: pnpm turbo run build --concurrency=2
       - name: Apply database migrations
         run: pnpm --filter @squad/db migrate
+      - name: Run operations script tests
+        run: pnpm test:scripts
       - name: Run panel-bridge plugin tests
         run: pnpm turbo run test --filter=panel-bridge
+      - name: Run shared-config mutation tests (Stryker)
+        run: pnpm turbo run test:mutation --filter=@squad/shared-config
       - run: pnpm exec biome check .
+      - name: Check every vitest package is in test:cov
+        run: bash scripts/test-cov-complete.sh
       - name: Run tests with coverage
         run: pnpm test:cov
       - name: Upload coverage artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-${{ github.sha }}
           path: '**/coverage/lcov.info'
@@ -167,7 +189,7 @@ jobs:
       - name: Prepare writable Go dirs
         run: mkdir -p "$GOPATH/bin" "$GOCACHE"
         working-directory: /
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: go vet ./...
       - run: go test -race -count=1 ./...
       - name: govulncheck
@@ -186,8 +208,8 @@ jobs:
     needs: [node, go]
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: build api image
         run: docker build -f docker/api.Dockerfile -t squad-admin-panel/api:ci .
       - name: build worker-log-ingest image
@@ -196,6 +218,8 @@ jobs:
         run: docker build -f docker/worker.Dockerfile --build-arg WORKER=rcon -t squad-admin-panel/worker-rcon:ci .
       - name: build rnsquadjs sidecar image
         run: docker build -f docker/rnsquadjs.Dockerfile -t squad-panel/rnsquadjs:ci .
+      - name: build web image
+        run: docker build -f docker/web.Dockerfile -t squad-admin-panel/web:ci .
       - name: backup/restore round-trip (INFRA-8)
         run: bash scripts/test-backup-restore.sh
       # The 20 GB disk has no auto-refresh yet, so CI must self-clean after every
@@ -203,10 +227,16 @@ jobs:
       # e.g. the old squad-admin-panel/api:ci image superseded by this run's build —
       # while keeping named base images (golang:1.25.11-bookworm, postgres:16-alpine,
       # redis:7-alpine) cached so they aren't re-pulled from the network every run.
-      - name: Reclaim disk (dangling images + build cache)
+      # `docker volume prune -f` is a safety net, not the primary fix: it only
+      # catches volumes with no container reference left at all, which is what a
+      # bare `docker rm -f` (missing `-v`) on a script-managed container leaves
+      # behind — see scripts/test-backup-restore.sh, which leaked ~7.5 GB of
+      # these before its `docker rm -f` calls were fixed to `-fv`.
+      - name: Reclaim disk (dangling images, build cache, orphaned volumes)
         if: always()
         run: |
           docker image prune -f
           docker builder prune -f --filter "unused-for=72h" || docker builder prune -f
           docker container prune -f
+          docker volume prune -f
           df -h / || true

@@ -1,4 +1,5 @@
 import { boolean, inet, integer, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import type { MapVoteSelection } from './map-vote.js';
 import { servers } from './servers.js';
 
 export const serverSettings = pgTable('server_settings', {
@@ -41,6 +42,23 @@ export const serverSettings = pgTable('server_settings', {
    * Default false keeps the server on the current delete-only path. See LOG-3 (#51).
    */
   archiveLogsToBackup: boolean('archive_logs_to_backup').notNull().default(false),
+  /** Master switch for the GAME-1 (#80) map auto-selection tick. */
+  mapVoteEnabled: boolean('map_vote_enabled').notNull().default(false),
+  /**
+   * GAME-1 selection rule applied by the scheduler tick. The allowed values
+   * are enforced by `server_settings_map_vote_selection_check` in migration
+   * 0090 (this table has no extras callback for a drizzle-side CHECK).
+   */
+  mapVoteSelection: text('map_vote_selection')
+    .$type<MapVoteSelection>()
+    .notNull()
+    .default('weighted_random'),
+  /** GAME-1: a layer played within the last N non-seed matches is excluded. */
+  mapVoteLayerCooldown: integer('map_vote_layer_cooldown').notNull().default(3),
+  /** GAME-1: a map played within the last N non-seed matches is excluded. */
+  mapVoteMapCooldown: integer('map_vote_map_cooldown').notNull().default(2),
+  /** Optional broadcast template announcing the GAME-1 pick; null = no broadcast configured. */
+  mapVoteBroadcastTemplate: text('map_vote_broadcast_template'),
 });
 
 export type ServerSettingsRow = typeof serverSettings.$inferSelect;

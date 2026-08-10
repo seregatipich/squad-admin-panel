@@ -18,7 +18,7 @@ export const alertRules = pgTable(
   (table) => ({
     typeChk: check(
       'alert_rules_type_chk',
-      sql`${table.type} IN ('server_crashed','unusual_activity','admin_login_new_ip','custom')`,
+      sql`${table.type} IN ('server_crashed','unusual_activity','admin_login_new_ip','custom','role_expiring')`,
     ),
     enabledIdx: index('alert_rules_enabled_idx').on(table.enabled),
   }),

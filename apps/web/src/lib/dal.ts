@@ -13,6 +13,8 @@ export interface Me {
   avatar_url: string | null;
   permissions: string[];
   squad_permissions: string[];
+  /** ECON-5 (#165): economy module flag; gates economy-only nav items. */
+  economy_enabled?: boolean;
 }
 
 export const getSession = cache(async (): Promise<Me | null> => {

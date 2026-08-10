@@ -8,9 +8,10 @@ import {
   recomputeCoplayForAllSessions,
   recomputeCoplayWindow,
   recomputeDailyPresence,
+  recomputeServerDailyStats,
 } from '@squad/db';
 import { createDiag, type Diag } from '@squad/diag';
-import { startHeartbeat } from '@squad/shared-config';
+import { createGracefulShutdownController, startHeartbeat } from '@squad/shared-config';
 import Redis from 'ioredis';
 import pino from 'pino';
 import postgres from 'postgres';
@@ -91,6 +92,32 @@ export async function runPresenceDailyTick(deps: PresenceTickDeps): Promise<void
       kind: 'presence_daily.run_failed',
       severity: 'error',
       message: `recompute failed: ${message}`,
+      payload: { ...window },
+    });
+  }
+
+  // `server_daily_stats` has exactly one writer, and this is it. The rollup shares
+  // presence's yesterday+today window because both read the same closed-and-open
+  // sessions, and it runs after the presence recompute so a failure there cannot
+  // leave the two tables describing different windows.
+  try {
+    const rows = await recomputeServerDailyStats(sql, { ...window, now });
+    log.info({ ...window, rows }, 'server daily stats rollup ok');
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'server_daily_stats.run_ok',
+      severity: 'info',
+      message: `server daily stats recomputed ${window.fromDay}..${window.toDay}`,
+      payload: { ...window, rows },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error({ err: message, ...window }, 'server daily stats rollup failed');
+    await diag.emit({
+      component: COMPONENT,
+      kind: 'server_daily_stats.run_failed',
+      severity: 'error',
+      message: `server daily stats recompute failed: ${message}`,
       payload: { ...window },
     });
   }
@@ -178,6 +205,25 @@ async function main() {
 
   const diag: Diag = redis ? createDiag({ redis, log }) : { async emit() {} };
 
+  let interval: NodeJS.Timeout | null = null;
+  const shutdown = createGracefulShutdownController({
+    cleanup: async (sig) => {
+      log.info({ sig }, 'shutdown');
+      if (interval) clearInterval(interval);
+      await diag.emit({
+        component: COMPONENT,
+        kind: 'presence_daily.stopped',
+        severity: 'info',
+        message: `presence-daily received ${sig}`,
+        payload: { sig },
+      });
+      stopHeartbeat();
+      await sql.end({ timeout: 5 });
+      await redis?.quit().catch(() => undefined);
+    },
+    onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
+  });
+
   await diag.emit({
     component: COMPONENT,
     kind: 'presence_daily.started',
@@ -191,29 +237,13 @@ async function main() {
   }
 
   await runPresenceDailyTick({ sql, diag });
-  const interval = setInterval(() => {
+  await shutdown.markReady();
+  if (shutdown.isShutdownRequested()) return;
+  interval = setInterval(() => {
     runPresenceDailyTick({ sql, diag }).catch((err) =>
       log.error({ err: (err as Error).message }, 'presence tick failed'),
     );
   }, TICK_INTERVAL_MS);
-
-  const shutdown = async (sig: NodeJS.Signals) => {
-    log.info({ sig }, 'shutdown');
-    clearInterval(interval);
-    await diag.emit({
-      component: COMPONENT,
-      kind: 'presence_daily.stopped',
-      severity: 'info',
-      message: `presence-daily received ${sig}`,
-      payload: { sig },
-    });
-    stopHeartbeat();
-    await sql.end({ timeout: 5 });
-    await redis?.quit().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
 }
 
 function isMainEntrypoint(): boolean {

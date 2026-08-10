@@ -2,22 +2,32 @@ import { describe, expect, it } from 'vitest';
 import {
   buildApiQuery,
   buildQueryString,
+  COLUMNS,
   canNavigatePeriod,
   columnMetric,
   currentPeriodStart,
   defaultFilters,
+  defaultSeasonPeriodStart,
+  findSeason,
   formatDuration,
   formatMetricValue,
   isFuturePeriod,
   isoWeekStart,
+  isSeasonReadOnly,
   type LeaderboardFilters,
   medalFor,
   nextSort,
   pageInfoLabel,
   parseFilters,
+  periodHasStart,
   periodRangeLabel,
+  type Season,
+  seasonOptionLabel,
+  seasonPeriodStart,
+  seasonRangeLabel,
   shiftPeriodStart,
   shouldNavigateRow,
+  sortSeasonsForSelector,
   visibleColumns,
 } from './helpers';
 
@@ -33,6 +43,18 @@ const NOW = new Date('2026-07-05T12:00:00.000Z');
 
 function withFilters(overrides: Partial<LeaderboardFilters> = {}): LeaderboardFilters {
   return { ...defaultFilters(), ...overrides };
+}
+
+function makeSeason(overrides: Partial<Season> = {}): Season {
+  return {
+    id: 'season-1',
+    name: 'Лето 2026',
+    starts_at: '2026-06-01T00:00:00.000Z',
+    ends_at: '2026-08-31T00:00:00.000Z',
+    status: 'active',
+    finalized: false,
+    ...overrides,
+  };
 }
 
 describe('parseFilters', () => {
@@ -158,16 +180,24 @@ describe('period navigation', () => {
     expect(currentPeriodStart('day', NOW)).toBe('2026-07-05');
     expect(currentPeriodStart('week', NOW)).toBe(isoWeekStart('2026-07-05'));
     expect(currentPeriodStart('month', NOW)).toBe('2026-07-01');
-    expect(currentPeriodStart('season', NOW)).toBe('2026-01-01');
+    // LEAD-7 (#178): a season is a named interval stored server-side, so it has
+    // no clock-derivable start. It used to be faked as the calendar year.
+    expect(currentPeriodStart('season', NOW)).toBe('');
     expect(currentPeriodStart('alltime', NOW)).toBe('');
   });
 
-  it('steps day/week/month/season backward and forward', () => {
+  it('steps day/week/month backward and forward', () => {
     expect(shiftPeriodStart('day', '2026-07-05', -1)).toBe('2026-07-04');
     expect(shiftPeriodStart('day', '2026-07-05', 1)).toBe('2026-07-06');
     expect(shiftPeriodStart('week', '2026-06-29', -1)).toBe('2026-06-22');
     expect(shiftPeriodStart('month', '2026-01-01', -1)).toBe('2025-12-01');
-    expect(shiftPeriodStart('season', '2026-01-01', 1)).toBe('2027-01-01');
+  });
+
+  it('never steps a season by calendar year — seasons are picked, not paged', () => {
+    expect(canNavigatePeriod('season')).toBe(false);
+    expect(shiftPeriodStart('season', '2026-01-01', 1)).toBe('2026-01-01');
+    expect(shiftPeriodStart('season', '2026-01-01', -1)).toBe('2026-01-01');
+    expect(isFuturePeriod('season', '2026-01-01', NOW)).toBe(false);
   });
 
   it('never navigates alltime', () => {
@@ -226,6 +256,14 @@ describe('economy column visibility (LEAD-4)', () => {
     expect(normalizeSpaces(formatMetricValue('boost', 3600))).toBe('1ч 0м');
     expect(normalizeSpaces(formatMetricValue('bonus', 12345))).toBe('12 345');
   });
+
+  it('names the seeding component in the bonus tooltip (LEAD-6)', () => {
+    const bonus = COLUMNS.find((column) => column.key === 'bonus');
+    expect(bonus?.tooltip).toContain('сидинг');
+    expect(bonus?.tooltip).toBe(
+      'Начисленные бонусы (онлайн + буст + сидинг по коэффициентам экономики)',
+    );
+  });
 });
 
 describe('medal rendering', () => {
@@ -271,6 +309,95 @@ describe('formatting', () => {
 
   it('labels navigable period ranges', () => {
     expect(periodRangeLabel('alltime', '')).toBe('Всё время');
-    expect(periodRangeLabel('season', '2026-01-01')).toBe('Сезон 2026');
+  });
+
+  it('labels a season by its name, not by a calendar year', () => {
+    expect(periodRangeLabel('season', '2026-06-01', makeSeason({ name: 'Лето 2026' }))).toBe(
+      'Лето 2026',
+    );
+    // No season loaded yet (or an unknown period_start): fall back to the
+    // generic chip label rather than inventing a year.
+    expect(periodRangeLabel('season', '2026-06-01')).toBe('Сезон');
+    expect(periodRangeLabel('season', '')).toBe('Сезон');
+  });
+});
+
+describe('season selector (LEAD-7)', () => {
+  it('derives period_start from starts_at in UTC', () => {
+    expect(seasonPeriodStart(makeSeason({ starts_at: '2026-06-01T00:00:00.000Z' }))).toBe(
+      '2026-06-01',
+    );
+    // 23:30Z is still the same UTC day even though it is the next day locally.
+    expect(seasonPeriodStart(makeSeason({ starts_at: '2026-06-01T23:30:00.000Z' }))).toBe(
+      '2026-06-01',
+    );
+  });
+
+  it('treats closed and finalized seasons as read-only', () => {
+    expect(isSeasonReadOnly(makeSeason({ status: 'active', finalized: false }))).toBe(false);
+    expect(isSeasonReadOnly(makeSeason({ status: 'upcoming', finalized: false }))).toBe(false);
+    expect(isSeasonReadOnly(makeSeason({ status: 'closed', finalized: false }))).toBe(true);
+    expect(isSeasonReadOnly(makeSeason({ status: 'active', finalized: true }))).toBe(true);
+  });
+
+  it('marks a read-only season in its option label', () => {
+    expect(seasonOptionLabel(makeSeason({ name: 'Лето 2026' }))).toBe('Лето 2026');
+    expect(seasonOptionLabel(makeSeason({ name: 'Зима 2025', status: 'closed' }))).toBe(
+      'Зима 2025 (архив)',
+    );
+  });
+
+  it('formats the season date range', () => {
+    expect(normalizeSpaces(seasonRangeLabel(makeSeason()))).toBe('01.06.2026 — 31.08.2026');
+  });
+
+  it('finds the season matching a period_start', () => {
+    const seasons = [
+      makeSeason({ id: 'a' }),
+      makeSeason({ id: 'b', starts_at: '2026-01-05T00:00:00.000Z' }),
+    ];
+    expect(findSeason(seasons, '2026-01-05')?.id).toBe('b');
+    expect(findSeason(seasons, '2026-06-01')?.id).toBe('a');
+    expect(findSeason(seasons, '1999-01-01')).toBeNull();
+    expect(findSeason([], '2026-06-01')).toBeNull();
+  });
+
+  it('defaults to the active season, then to the most recent one', () => {
+    const closed = makeSeason({
+      id: 'old',
+      status: 'closed',
+      starts_at: '2025-01-01T00:00:00.000Z',
+    });
+    const active = makeSeason({
+      id: 'live',
+      status: 'active',
+      starts_at: '2026-06-01T00:00:00.000Z',
+    });
+    expect(defaultSeasonPeriodStart([closed, active])).toBe('2026-06-01');
+    expect(defaultSeasonPeriodStart([closed])).toBe('2025-01-01');
+    expect(defaultSeasonPeriodStart([])).toBe('');
+  });
+
+  it('orders the selector newest first', () => {
+    const older = makeSeason({ id: 'older', starts_at: '2025-01-01T00:00:00.000Z' });
+    const newer = makeSeason({ id: 'newer', starts_at: '2026-06-01T00:00:00.000Z' });
+    expect(sortSeasonsForSelector([older, newer]).map((s) => s.id)).toEqual(['newer', 'older']);
+  });
+
+  it('sends period_start for seasons even though they are not arrow-navigable', () => {
+    expect(periodHasStart('season')).toBe(true);
+    expect(canNavigatePeriod('season')).toBe(false);
+    expect(periodHasStart('alltime')).toBe(false);
+
+    const query = buildApiQuery(withFilters({ period: 'season', periodStart: '2026-06-01' }));
+    expect(query).toContain('period_start=2026-06-01');
+    const url = buildQueryString(withFilters({ period: 'season', periodStart: '2026-06-01' }));
+    expect(url).toContain('start=2026-06-01');
+  });
+
+  it('omits period_start for a season that has not been resolved yet', () => {
+    expect(buildApiQuery(withFilters({ period: 'season', periodStart: '' }))).not.toContain(
+      'period_start',
+    );
   });
 });

@@ -24,10 +24,9 @@ Return the full permission registry as defined in `@squad/shared-config`.
     "dangerous": true
   },
   {
-    "key": "mod:kick",
-    "category": "moderation",
-    "label": "Kick через UI",
-    "dangerous": true,
+    "key": "player:set_flags",
+    "category": "players",
+    "label": "Custom теги (toxic, helpful)",
     "unimplemented": true
   }
 ]

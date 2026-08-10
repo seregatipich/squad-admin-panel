@@ -7,6 +7,7 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 - **Authentication**: cookie `__Host-sid` (`Secure; HttpOnly; SameSite=lax; Path=/`). Set on `GET /api/v1/auth/steam/callback`. Cleared on `POST /api/v1/auth/logout`. As an alternative for programmatic access, requests may carry `Authorization: Bearer sqp_…` (an API token minted via `/api/v1/me/tokens`) — the cookie path takes precedence when both are present. Token-managing routes (`/api/v1/me/tokens*`) reject Bearer auth.
 - **Identity anchor**: `players.steam_id64` (bigint). There are no email/password accounts. All sessions and permissions are keyed on Steam ID.
 - **Authorisation**: every authed route declares `config.permissions: PermissionKey[]`. Anonymous → 401. Missing permission → 403.
+- **Session scope** (VIPSUB-5): a Steam login whose role has no `panel_access` receives a session with `sessions.scope = 'self_service'`. Such a session is honoured only on routes that declare `config.selfService: true`; on every other route [`plugins/auth.ts`](../../../apps/api/src/plugins/auth.ts) drops `req.user`/`req.session`, so the request is treated as anonymous and answers 401. The gate lifts automatically as soon as the player actually holds `panel_access`. Self-service routes take **no** player id — the subject is always `req.user.playerId`.
 - **Audit**: every mutation must declare `config.audit: { action, resource }`. The CI gate [`audit-coverage.test.ts`](../../../apps/api/test/audit-coverage.test.ts) fails the build otherwise.
 - **bigserial IDs**: `audit_log.id` is serialized as a string to survive `JSON.stringify`.
 
@@ -15,7 +16,10 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
 | GET | `/api/v1/auth/steam/login` | Generates a random nonce (base64url, 16 bytes), stores it in Redis (`steam-nonce:{nonce}`, TTL 300 s) and a `__Host-steam-nonce` cookie, then redirects to `steamcommunity.com/openid/login`. | none |
-| GET | `/api/v1/auth/steam/callback` | Validates nonce cookie↔query match, single-use Redis nonce, `return_to` host-binding to `PANEL_PUBLIC_URL`, Steam `check_authentication`, and `openid.response_nonce` replay guard (`steam-response-nonce:{nonce}`, TTL 3600 s, NX). On success: upserts `players` row, runs `claimFirstOwner`, checks permissions; redirects to `/` with `__Host-sid` cookie on success or `/no-access?steam_id64=…` when no role is assigned. | none |
+| GET | `/api/v1/auth/steam/callback` | Validates nonce cookie↔query match, single-use Redis nonce, `return_to` host-binding to `PANEL_PUBLIC_URL`, Steam `check_authentication`, and `openid.response_nonce` replay guard (`steam-response-nonce:{nonce}`, TTL 3600 s, NX). On success: upserts `players` row, runs `claimFirstOwner`, checks permissions; issues a `__Host-sid` cookie and redirects to `/` for a role with `panel_access`, or to `/me` with a `self_service`-scoped session for one without (VIPSUB-5 #171). | none |
+| GET | `/api/v1/auth/discord/login` | DISCORD-4 step 1. Generates a random `state` (base64url, 16 bytes), stores it in Redis (`discord-oauth-state:{state}`, TTL 300 s, bound to the caller's `player_id`) and a `__Host-discord-state` cookie, then redirects to `discord.com/oauth2/authorize` with `scope=identify`. 503 `oauth_not_configured` when `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` are unset. | session |
+| GET | `/api/v1/auth/discord/callback` | DISCORD-4 step 2. Requires `state` cookie ↔ query match **and** a Redis record owned by the caller (403 `state_mismatch`); a missing/expired record is 400 `state_expired`; the record is consumed single-use. Exchanges the code (form POST to `discord.com/api/oauth2/token`, HTTP Basic credentials), reads `users/@me`, and inserts `player_discord_links`. 409 `already_linked_self` when the player already has a link, 409 `already_linked_other` when the Discord account belongs to another player, 502 `discord_exchange_failed` when Discord rejects the exchange. On success writes an `integration.discord.link` audit row and redirects to `/players/{playerId}`. | session |
+| GET | `/api/v1/auth/steam/callback` | Validates nonce cookie↔query match, single-use Redis nonce, `return_to` host-binding to `PANEL_PUBLIC_URL`, Steam `check_authentication`, and `openid.response_nonce` replay guard (`steam-response-nonce:{nonce}`, TTL 3600 s, NX). On success: upserts `players` row, runs `claimFirstOwner`, checks permissions; sets the `__Host-sid` cookie and redirects to `/` for a role with `panel_access`, or to `/me` with a `self_service`-scoped session otherwise. | none |
 | POST | `/api/v1/auth/logout` | Revoke current session, clear `__Host-sid` cookie. | session |
 | GET | `/api/v1/me` | Current player, permissions array, clearance. Returns `{ steam_id64, canonical_name, avatar_url, permissions, clearance }`. | session |
 | GET | `/api/v1/me/sessions` | List own active sessions; `current: true` on the request's session. | session |
@@ -24,6 +28,25 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 | GET | `/api/v1/me/tokens` | List own API tokens (id, name, scopes, created_at, last_used_at, revoked_at). Never returns plaintext or hash. | session |
 | POST | `/api/v1/me/tokens` | Mint a new API token. Body: `{ name: string (1..100), scopes: string[] }`. `scopes ⊆ caller.permissions` (422 `invalid_scopes` otherwise). Hard cap of 25 active tokens per user (409 `too_many_active_tokens`). Returns `{ id, name, scopes, created_at, plaintext: 'sqp_<uuid>_<random>' }` — plaintext appears **once**. | session |
 | DELETE | `/api/v1/me/tokens/:id` | Soft-revoke own token (sets `revoked_at`). Idempotent — second call returns `{ ok: true, already_revoked: true }`. 404 for foreign token. | session |
+
+Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/totp/*`, `POST /api/v1/setup/{org,owner,finalize}`, `GET /api/v1/setup/check-env`, `POST /api/v1/setup/init`.
+## VIP self-service (VIPSUB-5)
+
+Implemented in [`apps/api/src/routes/vip-subscriptions.ts`](../../../apps/api/src/routes/vip-subscriptions.ts). Every route below declares `config.selfService: true`, so it is the only surface a session without `panel_access` can reach. Currency is internal ECON bonus points only — there is no payment provider, and integrating one is out of scope.
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/me/tiers` | Purchasable tiers: active, priced, with `default_days`, and whose role neither opens the panel nor is a system role. `{ rows: [{ tier_id, name, description, role_id, days, price_bonuses }] }`. | session (self-service) |
+| GET | `/api/v1/me/bonus-balance` | Own `{ player_id, balance, role_id, role_expires_at }`. | session (self-service) |
+| GET | `/api/v1/me/bonus-transactions` | Own ledger, cursor-paginated (`limit`, `before`). | session (self-service) |
+| GET | `/api/v1/me/subscriptions` | Own subscriptions, newest first, with `tier_name`. | session (self-service) |
+| POST | `/api/v1/me/purchases` | One-off tier purchase for bonus points. Body `{ tier_id }`. Charges the price, grants the timed role (extending from the later of now and the current expiry) and enqueues the Admins.cfg sync. 409 `insufficient_balance` / `role_conflict` / `role_permanent` / `tier_not_purchasable` / `economy_disabled`, 403 `role_grants_panel_access`, 404 `tier_not_found`. | session (self-service) |
+| POST | `/api/v1/me/subscriptions` | Recurring subscription. Body `{ tier_id }`. Charges the first period, then records `price_bonuses`/`renews_every_days` as a **snapshot** and schedules `next_renewal_at`. 409 `already_subscribed` (one active subscription per player, enforced by a partial unique index). | session (self-service) |
+| DELETE | `/api/v1/me/subscriptions/:id` | Cancel own subscription: `status = 'cancelled'`, `cancelled_at = now`. **The paid period is kept** — `role_id`/`role_expires_at` are untouched. 404 for a foreign or already-inactive subscription. | session (self-service) |
+| GET | `/api/v1/players/:playerId/subscriptions` | A player's subscriptions. | `panel_access` |
+| POST | `/api/v1/players/:playerId/subscriptions` | Admin grant from the player card. Body `{ tier_id, renews_every_days?, price_bonuses? }`. Requires **both** `can_manage_economy` and `can_assign_roles`, mirroring the ECON-6 privilege-shop guard: the operation spends the ledger *and* grants a role. | `can_manage_economy` + `can_assign_roles` |
+
+The spend-and-grant transaction itself lives in [`packages/db/src/economy/vip-grant.ts`](../../../packages/db/src/economy/vip-grant.ts) (`planVipGrant` / `applyVipGrant`) and is shared by the privilege shop, these routes and the `role-expirer` renewal tick — the worker cannot import `apps/api/src/lib/`.
 
 Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/totp/*`, `GET /api/v1/auth/discord/*`, `POST /api/v1/setup/{org,owner,finalize}`, `GET /api/v1/setup/check-env`, `POST /api/v1/setup/init`.
 
@@ -65,6 +88,56 @@ Body:
 
 Ownership boundary: `vip-user-service` owns wallet ledger, purchase idempotency and economic rollback. This panel owns role membership, `role_expires_at` and Admins.cfg sync. Discord role sync is handled outside this API.
 
+### Team balancer proposals
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| POST | `/api/v1/integrations/balancer/proposals` | Signed service endpoint the SquadJS team-balancer exporter pushes one dry-run proposal snapshot to. Disabled (503 `balancer_webhook_disabled`) unless `BALANCER_WEBHOOK_SECRET` is set. | HMAC only |
+
+Required headers:
+
+- `x-balancer-timestamp`: ISO timestamp used in the signature payload.
+- `x-balancer-signature`: `sha256=<hex>` HMAC-SHA256 of `<x-balancer-timestamp>.<canonical-json-body>` using `BALANCER_WEBHOOK_SECRET`.
+
+Body:
+
+```json
+{
+  "source_snapshot_id": "balancer-snapshot-001",
+  "server_id": "0190abcd-0000-7000-8000-0000000000a1",
+  "mode": "squad",
+  "generated_at": "2026-07-27T08:55:00.000Z",
+  "layer": "Yehorivka_RAAS_v1",
+  "gamemode": "RAAS",
+  "schema_version": 1,
+  "signals": { "win_streak": 4, "ticket_diff": -320, "one_sided_rounds": 3 },
+  "proposal": [
+    {
+      "subject_type": "squad",
+      "subject_id": "sq-alpha",
+      "label": "Alpha",
+      "current_team": 1,
+      "target_team": 2,
+      "state": "should_move"
+    }
+  ]
+}
+```
+
+`mode` is `squad` or `player`; `state` is `on_target`, `no_change` or `should_move` and is the only thing the review UI derives its green/gray/red colouring from. `signals` and `proposal` are stored verbatim as `jsonb` and versioned by `schema_version`, so an exporter payload change needs no migration; unknown extra fields inside a proposal entry are preserved. `source_snapshot_id` is the idempotency key: redelivering the same id refreshes the stored row and returns `200 { ok: true, duplicate: true }`, while a new snapshot returns `202` and flips the previous still-`open` snapshot for the same `(server_id, mode)` pair to `superseded`. Unknown `server_id` → 404 `server_not_found`; bad signature → 401 `invalid_signature`.
+
+Ownership boundary: SquadJS owns the planner, the ELO/history weighting and any runtime chat vote. This panel owns the review surface, the threshold rules and the operator decision history. **The panel never executes a team change** — `RCON_OPERATOR_COMMANDS` contains no team-change verb and this slice adds none.
+
+### Team balancer review and rules
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/balancer/settings` | Singleton threshold/rules row (snake_case) under `{ settings }`. Returns the column defaults when no row exists yet. | `balancer:view` |
+| PUT | `/api/v1/balancer/settings` | Partial upsert of the singleton. Body accepts any subset of `enabled`, `win_streak_threshold` (≥1), `ticket_diff_threshold` (≥0), `one_sided_rounds_threshold` (≥1), `quorum` (≥0), `pass_threshold_pct` (0–100), `require_moderator_veto`, `prefer_squad_grouping`, `player_level_enabled`; an empty body is 400. Audit: `balancer.settings.update`. | `balancer:edit` |
+| GET | `/api/v1/balancer/proposals` | Cursor page of stored snapshots, newest `generated_at` first. Query: `server_id` (uuid or `all`), `status`, `mode`, `cursor`, `limit` (≤100). Each item carries the raw `signals`/`proposal` blobs plus an `evaluation` verdict (`{triggered, reasons[]}`) computed from the current thresholds. Returns `{ items: [], next_cursor: null }` with HTTP 200 when no snapshot has ever arrived. Malformed cursor → 400 `invalid_cursor`. | `balancer:view` |
+| GET | `/api/v1/balancer/proposals/:id` | One snapshot plus its `decisions[]` history, newest first. 404 `proposal_not_found`. | `balancer:view` |
+| POST | `/api/v1/balancer/proposals/:id/decision` | Records an operator verdict: `{ decision: 'acknowledge'\|'veto'\|'dismiss', veto_reason_kind?, veto_reason? }`. A `veto` without `veto_reason` is 400 `veto_reason_required`. `acknowledge`/`veto` set the snapshot to `reviewed`, `dismiss` to `dismissed`. Returns 201. Audit: `balancer.proposal.decision`. | `balancer:edit` |
+
 ## RBAC reference
 
 ### Permissions
@@ -87,7 +160,7 @@ Ownership boundary: `vip-user-service` owns wallet ledger, purchase idempotency 
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| GET | `/api/v1/users` | Players with a non-NULL `role_id`, joined to `roles`. Sorted `last_seen_at DESC`. Returns `{steam_id64, canonical_name, last_seen_at, role: {id, name, color, is_system_role}, assigned_at, assigned_by}`. `assigned_at`/`assigned_by` are NULL in this iteration. | `user:view` |
+| GET | `/api/v1/users` | Players with a non-NULL `role_id`, joined to `roles`. Sorted `last_seen_at DESC`. Returns `{steam_id64, canonical_name, last_seen_at, role: {id, name, color, is_system_role}, assigned_at, assigned_by, discord_linked}`. `assigned_at`/`assigned_by` are NULL in this iteration. `discord_linked` (DISCORD-4) is a boolean derived from a LEFT JOIN on `player_discord_links` — the raw `discord_user_id` is never part of this list. | `user:view` |
 
 ## Servers
 
@@ -100,8 +173,11 @@ Ownership boundary: `vip-user-service` owns wallet ledger, purchase idempotency 
 | POST | `/api/v1/servers/:id/start` | If container exists → `container_start`; otherwise `container_run`. | `server:start` |
 | POST | `/api/v1/servers/:id/stop` | Sets `servers.status='stopping'` and emits `server.status` LiveEvent **before** the RCON sequence so the UI updates instantly and a process crash mid-stop leaves a state the reconciler can resolve. Then worker-rcon queued `AdminBroadcast` when connected, direct RCON fallback only if the command was not accepted → 15 s wait → worker-rcon queued `AdminEndMatch` or direct fallback → `container_stop` (60 s grace). | `server:stop` |
 | POST | `/api/v1/servers/:id/restart` | `container_stop` then `container_start`. | `server:restart` |
+| POST | `/api/v1/servers/:id/update` | Runs a SteamCMD depot update for a `stopped`/`ready` server (409 `server_must_be_stopped` otherwise). Shares the fleet-wide `depot:updating` lock and `depot:progress` Redis Stream with `POST /api/v1/depot/update` below — it's the same underlying `bridge.depot_update` call, just without the stop/restart orchestration, so either action's progress is watchable from `GET /api/v1/depot/progress/ws`. 409 `depot_update_in_progress` if the lock is already held. Returns `{status:'started', server_id, started_at}` immediately; the update itself runs in the background. | `server:update` |
 | POST | `/api/v1/servers/:id/reconcile` | Forces a single-server reconciliation: calls `container_inspect` once, maps the docker state, updates `servers.status` if it changed, and emits `server.status` LiveEvent. Returns `{ inspected_state, inspected_running, previous_status, new_status, changed }`. 502 `bridge_unavailable` when the bridge throws — the next call can recover. 404 for unknown/soft-deleted servers. Audit `server.reconcile`. Use this when ops sees a server stuck in `starting`/`stopping`/`installing` longer than expected. | `server:view` |
 | GET | `/api/v1/servers/:id/events` | Recent envelopes from `events:server:{id}` (XREVRANGE, default 100). Used by the live-events UI. | `server:view` |
+| GET | `/api/v1/servers/:id/rnsquadjs` | RNSquadJS sidecar status. Returns `{ server_id, mode: 'production'\|'shadow'\|'legacy', cutover, status: { state: 'connected'\|'disconnected', last_change } \| null }`. `cutover` is `SISMEMBER rnsquadjs:cutover-servers` and decides `mode` outright; a non-member falls back to `shadow` when the `:shadow` heartbeat key is live, else `legacy`. `status` reads **both** heartbeat keys the sidecar publishes (`rnsquadjs:status:{id}` in production mode, `rnsquadjs:status:{id}:shadow` in shadow mode, each `SET … EX 300`) and is `null` when no heartbeat arrived inside that TTL — a first-class state, not an error. Read-only, `audit:false`. 404 for unknown/soft-deleted servers. | `server:view` |
+| POST | `/api/v1/servers/:id/rnsquadjs` | Per-server sidecar cutover / rollback. Body `{ mode: 'production'\|'shadow' }`. `production` SADDs the cutover set and returns 202 `{status:'switching'}` immediately, then after one worker-log-ingest reconcile tick (16 s) writes the sidecar config and relaunches the container — re-checking set membership either side of the wait so a concurrent rollback wins. `shadow` stands the shadow sidecar back up **before** SREM so the legacy tailer only resumes once a publisher exists. Audit `server.rnsquadjs.cutover`. | `server:stop` |
 | GET | `/api/v1/servers/:id/seed-call` | Returns the manual “need seeders” availability, cooldown seconds, and a `steam://connect/<host>:<game-port>` join link. | panel access |
 | POST | `/api/v1/servers/:id/seed-call` | Emits `seed.call_sent`, materializes AUTO-3 alerts for subscribed players, and fans out to DISCORD-2. Limited to once per server per two hours. Requires `chat` or `manageserver`. | session + `chat`/`manageserver` |
 | GET | `/api/v1/seed-subscriptions` | Lists the current player’s per-server `email`/`webpush` seed subscriptions. | panel access |
@@ -162,7 +238,7 @@ Errors:
 |---|---|---|---|
 | GET | `/api/v1/servers/:id/configs` | List 19 allowed cfg files with `{name, size, sha256, behavior, exists}`. `behavior` is `hot_reload` / `rotation` / `requires_restart`. | `server:view` |
 | GET | `/api/v1/servers/:id/configs/:name` | Tip content + sha256 + behavior class. | `server:view` |
-| PUT | `/api/v1/servers/:id/configs/:name` | Atomic write + INSERT into `config_versions`. No-op (sha unchanged) short-circuits without touching disk or DB. After write: best-effort `AdminReloadServerConfig` through worker-rcon when connected, direct RCON fallback only if the command was not accepted; outcome surfaced as `reload: { applied, via?, reason? }` so UI can warn that a restart is still needed (e.g. `requires_restart` files). Container sees the new content the instant `rename(2)` completes — the cfg directory is bind-mounted, so no copy/sync. Body: `{ content, message? }`. Audit `config.write` (sha-only, content never persisted). See [flows.md → Config edit](flows.md#config-edit-put-apiv1serversidconfigsname). | `config:edit` |
+| PUT | `/api/v1/servers/:id/configs/:name` | Atomic write + INSERT into `config_versions`. No-op (sha unchanged) short-circuits without touching disk or DB. After write, the RCON reload fires **only for `hot_reload` files** (Admins/Bans/RemoteAdmin/RemoteBan): best-effort `AdminReloadServerConfig` through worker-rcon when connected, direct RCON fallback only if the command was not accepted. For `rotation` / `requires_restart` files no RCON is sent — the outcome is `reload: { applied:false, reason:'not_hot_reload' }`. Outcome surfaced as `reload: { applied, via?, reason? }` so UI can warn that a restart is still needed (e.g. `requires_restart` files). Container sees the new content the instant `rename(2)` completes — the cfg directory is bind-mounted, so no copy/sync. Body: `{ content, message? }`. Audit `config.write` (sha-only, content never persisted). See [flows.md → Config edit](flows.md#config-edit-put-apiv1serversidconfigsname). | `config:edit` |
 | GET | `/api/v1/servers/:id/configs/:name/history` | Versions (newest first). Includes `author_email`, `author_ip`, `message`, `sha256`, `size`. Query: `limit` (≤500). | `config:view` |
 | GET | `/api/v1/servers/:id/configs/:name/versions/:vid` | Full content of a single past version. | `config:view` |
 | GET | `/api/v1/servers/:id/configs/:name/diff?from=:vid&to=:vid` | Unified-diff patch text between two versions. | `config:view` |
@@ -177,6 +253,34 @@ Errors:
 | GET | `/api/v1/servers/:id/logs/files` | Lists on-disk `SquadGame*.log` files under `<saved>/<id>/SquadGame/Saved/Logs` via `bridge.squad_log_list`: `{ files: [{ name, size, mtime (RFC3339), is_live }] }`. `is_live` marks the active `SquadGame.log`. | `server:download_logs` |
 | GET | `/api/v1/servers/:id/logs/files/:name/download` | Streams the chosen log (`Content-Disposition: attachment`) by piping `bridge.file_read_stream` chunk frames straight to the reply — a multi-hundred-MB file is never buffered whole. `:name` must match `SquadGame*.log` (else 400). | `server:download_logs` |
 
+## Server scheduled tasks
+
+AUTO-2 (#73) task definitions run out-of-band by `@squad/worker-scheduler`
+(`runScheduledTaskTick`); this route only manages definitions and surfaces run
+history. A task fires on a one-off `scheduled_at` instant or a recurring 5-field
+UTC cron `recurrence`. Reads are gated on panel access; mutations are gated per
+`task_type` (`restart` → `server:restart`; `set_next_layer`/`change_layer` →
+Squad `changemap`; `broadcast` → Squad `chat` **and** `role:edit`, MSG-4 #187).
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/servers/:id/scheduled-tasks` | Lists tasks (newest first) plus per-type `capabilities` so the UI can hide actions the caller cannot schedule. | panel access |
+| GET | `/api/v1/servers/:id/scheduled-tasks/history` | Execution runs (newest first). Query: `from`, `to`, `limit` (≤500). | panel access |
+| POST | `/api/v1/servers/:id/scheduled-tasks` | Creates a task. Body: `{ name, task_type, params?, scheduled_at?, recurrence?, enabled?, server_ids? }`. `broadcast` `params` accepts `message` (single) OR `messages: string[1..10]` (rotation, each ≤300 chars) with optional `template_ids`; a 1-element `messages` normalises to `{message}`. `server_ids` (≤50) fans the task out to one row per unique target (path server always included) in a single transaction — the response is the path-server row plus additive `also_created: [{id, server_id}]`, with one audit row per created row; an unknown/soft-deleted target 404s and rolls back. A recurring `broadcast` firing more often than every 5 minutes is rejected `400 {error:'interval_too_short', min_interval_minutes:5}`. Audit `server.scheduled_task.create`. | per `task_type` |
+| PATCH | `/api/v1/servers/:id/scheduled-tasks/:taskId` | Updates `name`/`params`/`scheduled_at`/`recurrence`/`enabled`. Setting `enabled:false` stops firing without deleting the rule. The 5-minute broadcast floor is re-checked. Audit `server.scheduled_task.update`. | per `task_type` |
+| DELETE | `/api/v1/servers/:id/scheduled-tasks/:taskId` | Deletes the task (cascades its run history). Audit `server.scheduled_task.delete`. | per `task_type` |
+
+## Direct player message
+
+MSG-2 (#185). One addressed in-game message to a single panel player, delivered
+as RCON `AdminWarn <target> <message>` through the worker-rcon command queue.
+The addressee is resolved from the `players` row — EOS id first, SteamID64 as
+fallback — so a row carrying neither is rejected rather than mis-addressed.
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| POST | `/api/v1/servers/:id/players/:playerId/message` | Sends one `AdminWarn` addressed to `:playerId` via the worker-rcon queue. Body: `{ message (2..300 after trim), log_to_card? (default false) }` — 300 is the worker's `BROADCAST_MAX_CHARS`, re-asserted when the command is built, so a longer body would be rejected at execution time. `log_to_card: true` also writes one `chat_messages` row keyed on the **addressee** (`player_id` = target, `scope: 'direct'`, `source: 'panel'`), which is what makes it appear in that player's card chat history via `GET /api/v1/chat/messages?playerId=…`; omitted, nothing is stored. Errors: 401 `unauthenticated`, 403 `{error:'forbidden', required_squad_permission:'chat'}`, 404 `player_not_found` (no such row) / `player_not_addressable` (row has neither eos id nor steam id), 400 from the body schema, 502 `{error:'message_failed', reason, detail}` when the worker is not connected (nothing is stored). Success: `{ ok: true, request_id, response }`. Audit `server.player_message` on target type `server`, with the addressee, resolved target, text and `log_to_card` in `after_snapshot`. | Squad `chat` |
+
 ## Live event bus (panel-wide)
 
 | Method | Path | Purpose | Permissions |
@@ -187,12 +291,106 @@ Errors:
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| GET | `/api/v1/players` | Up to 200 most-recently-seen, ordered by `last_seen_at`. Optional `?q=` filter: `q` is normalized with `normalizePlayerName` (clan tags stripped) and matched as a substring against `canonical_name_normalized` and historic `player_name_history.name_normalized` (so a player is found by a past nickname without its clan tag), or exactly against `steam_id64::text` / `eos_id`. | `player:view` |
-| GET | `/api/v1/players/:steamId` | Full detail with name history; IP history is gated by `player:view_ips` (returned as empty array + `ips_visible:false` otherwise). | `player:view` |
+| GET | `/api/v1/players` | Up to 200 players (the cap is unchanged). `?sort=` accepts `nickname` (`canonical_name_normalized`), `last_seen` (`last_seen_at`, default), `created` (`first_seen_at`), `total_time` (`total_time_played_seconds`); `?dir=` accepts `asc` / `desc` (default `desc`); `players.id` ascending is the stable tiebreak. `?filter=new` restricts the result to `first_seen_at >= now() - interval '7 days'` (database clock) and composes with `?q=` rather than replacing it; an active-bans filter is tracked in #59. Example: `?sort=nickname&dir=asc`. An unrecognised `sort`, `dir`, or `filter` value is rejected with 400 by the Zod querystring schema (`?sort=bogus` → 400). Optional `?q=` filter (unchanged): `q` is normalized with `normalizePlayerName` (clan tags stripped) and matched as a substring against `canonical_name_normalized` and historic `player_name_history.name_normalized` (so a player is found by a past nickname without its clan tag), or exactly against `steam_id64::text` / `eos_id`. | `player:view` |
+| GET | `/api/v1/players/:steamId` | Full detail with name history; IP history is gated by `player:view_ips` (returned as empty array + `ips_visible:false` otherwise). `player` also carries the INT-1 Steam snapshot: `avatar_url`, `persona_name`, `profile_visibility`, `steam_account_created_at`, `vac_banned`, `vac_ban_count`, `game_ban_count`, `days_since_last_ban`, `owns_squad`, `steam_playtime_minutes`, `steam_checked_at` — all null/`false`/`0` until a refresh has run. | `player:view` |
+| POST | `/api/v1/players/:playerId/steam-refresh` | INT-1 (#76) on-demand Steam Web API enrichment for one player: reads `GetPlayerSummaries` + `GetPlayerBans` + `GetOwnedGames` (appid `393380`), stores the snapshot on `players` and returns it in snake_case. Reads go through the shared `@squad/steam-api` Redis caches (profile 1 h, bans 6 h, ownership 24 h), also used by `worker-steam-refresh`, so repeated refreshes do not burn Steam quota. Writes are all-or-nothing. Errors: 404 `player_not_found`, 409 `no_steam_id` (player has no `steam_id64`), 503 `steam_api_key_missing` (`STEAM_API_KEY` unset — no outbound request is made), 502 `steam_api_error` (Steam answered non-OK; nothing is written). Audit: `player.steam_refresh` on target type `player`. | `player:view` |
 | GET | `/api/v1/players/:playerId/external-bans` | External-ban records grouped by source for the player card, including active/permanent status. | panel access |
 | POST | `/api/v1/players/:playerId/external-bans/:externalBanId/local-ban` | Sends `AdminBan` to the selected server for an active external-ban match. Body: `{ server_id, reason, ban_length }`. Writes moderation history, audit, and `moderation.ban`; rejects mismatched/inactive records and unavailable RCON without writing the ledger. | panel access + Squad `ban` |
+| GET | `/api/v1/players/:playerId/weapon-stats` | DOSSIER-2 per-weapon aggregates from `player_weapon_stats` (uuid key). Returns `{ weapons: [{ weapon, kills, teamkills, damage, shots_events, last_used_at }] }`, ordered by `kills DESC, shots_events DESC`. `damage` is `null` when the source carried no magnitude (UI renders "—"). | panel access |
+| GET | `/api/v1/players/:playerId/vehicle-stats` | DOSSIER-2 per-vehicle aggregates. Returns `{ from_vehicle: [{ vehicle_asset_id, kills, damage }], destroyed: [{ victim_vehicle_asset_id, weapon, destroyed_count }] }` — kills/damage dealt _from_ a vehicle (ordered by `kills DESC`) and vehicles _destroyed_ per (vehicle, weapon) (ordered by `destroyed_count DESC`). `damage` may be `null`. | panel access |
+| GET | `/api/v1/players/:playerId/combat-summary` | DOSSIER-4 combat summary + monthly K/D trend. Query: `?from=&to=` (`YYYY-MM-DD`) and `serverId=<uuid\|all>` (default `all`). Returns `{ skill, kd_trend, period }`: `skill` aggregates `match_players ⋈ matches` (kills/deaths/kd/teamkills/revives, `damage_dealt` always `null`, matches, wins/losses/draws, `winrate = wins/(wins+losses)` — `null` when no decided matches); `kd_trend` lists materialised `player_stat_periods` month rows (`[{ month, kills, deaths, kd, matches }]`), months without matches are absent (UI draws zeros). 404 `player_not_found` for an unknown id; cached 60 s (`x-cache: hit\|miss`). | panel access |
+| GET | `/api/v1/players/:playerId/dossier` | DOSSIER-5 consolidated dossier: one payload with `skill` + `kd_trend` (same sources and rules as `/combat-summary`; `kd_trend` entries are `[{ month, kills, deaths }]`), `weapons` (top `weaponsLimit`, default 20, max 100) + `weapons_total`, `vehicles` + `vehicle_kills` (LEFT-JOIN-enriched from `vehicle_catalog` with `name_en`/`name_ru`/`vehicle_class`; uncatalogued asset ids get `unlocalized: true` + null names), and `kits` from `player_kit_time`. Query: `?from=&to=`, `serverId=<uuid\|all>` (default `all`), `weaponsLimit=`. Caveat: `serverId=<uuid>` filters only `kits` and `skill`/`kd_trend` — the weapon/vehicle aggregate tables carry no server dimension and always report lifetime totals (`period: "all"`). `damage`/`damage_dealt` serialize as `null`, never 0; a player without history → 200 with zeros/empty arrays. 404 `player_not_found` for an unknown id; cached 60 s (`x-cache: hit\|miss`). | `combat:view` |
+| GET | `/api/v1/players/:playerId/discord` | DISCORD-4 read model for the player-card "Discord" block. Returns `{ linked, discord_user_id, discord_username, linked_at }` (all-null when unlinked). This is the **only** surface that serves `discord_user_id`; no `public-*` route may select `player_discord_links` (guarded by `apps/api/test/security/discord-link-public-leak.test.ts`). | `player:view` |
+| DELETE | `/api/v1/players/me/discord/link` | DISCORD-4 self-service unlink of the caller's own link. 404 `not_linked` when absent. Audit: `integration.discord.unlink`. | session |
+| DELETE | `/api/v1/players/:playerId/discord/link` | DISCORD-4 forced unlink of another player's link. Gated on the `can_assign_roles` role flag (403 `forbidden`), not on a catalogue key. 404 `not_linked` when absent. Audit: `integration.discord.unlink`. | `can_assign_roles` |
 | GET | `/api/v1/players/:steamId/role` | Returns current role or `{role: null}`. Single-role model — each player has at most one panel role. | `user:view` |
 | PUT | `/api/v1/players/:steamId/role` | Assign or clear a role. Body: `{role_id: uuid \| null}`. 404 `role_not_found` if the role UUID doesn't exist. 409 `cannot_remove_last_owner` when the change would leave zero Owners. Invalidates the player's permission cache. Audit: `player.role.assign`. | `user:manage_roles` |
+
+## Bulk moderation
+
+MOD-4 (#61) applies one warn/kick/ban to a set of players picked from the live
+roster in a single request, reusing MOD-2's
+[`lib/moderation-enforce.ts`](../../../apps/api/src/lib/moderation-enforce.ts)
+pipeline per target.
+
+**Partial failure is the normal case, and the semantics are fixed as
+non-transactional.** Half of each target's effect leaves the process (an RCON
+command executed on the game server) and Squad exposes no inverse command, so a
+rollback could only ever undo the ledger rows — leaving players banned in game
+with no record. Instead:
+
+- Each target's `moderation_actions` row is written immediately after its RCON
+  command is confirmed, before the loop advances — an action applied in game is
+  never left without a ledger row.
+- A failed target is recorded in `results[]` and the loop continues; the
+  response stays `200` and is never a whole-request `502`.
+- Every row of one request shares a `bulk_group` uuidv7 in
+  `moderation_actions.context` (alongside `bulk_size` and `bulk_index`) and in
+  the audit rows' `context`.
+- Time budget: 25 s wall clock for the whole loop, because each target costs one
+  worker-rcon round trip with a 4 s default timeout. Targets not reached inside
+  the budget come back as `bulk_deadline_exceeded` without being attempted, and
+  the partial result is still returned.
+
+Per-target `results[].error` values: `player_not_found`,
+`target_identity_missing`, `target_offline` (warn/kick only — `AdminBan` accepts
+an offline SteamID64), `rcon_failed` (with the worker outcome in `detail`),
+`bulk_deadline_exceeded`.
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| POST | `/api/v1/moderation-actions/bulk` | Bulk warn/kick/ban. Body: `{ server_id, action_type: 'warn'\|'kick'\|'ban', player_ids (1..50 uuid, deduplicated), reason (1..300), ban_length? (default `'0'` = permanent), confirm_bulk: true }`. `confirm_bulk` must be the literal `true` — the server half of the UI's double confirmation. Returns `{ bulk_group, action_type, server_id, requested, applied, failed, results: [{ player_id, status, moderation_action_id?, error?, detail? }] }`. Audit `moderation.bulk_action`: one row per target reached through RCON (`target_type='player'`) plus one summary row naming every target (`target_type='server'`). 404 `server_not_found`. | panel access + `mod:warn` / `mod:kick` / `mod:ban_temp` / `mod:ban_perm` (the key is chosen from `action_type` and `ban_length`, so it is checked in the handler rather than declaratively) |
+
+## Whitelist applications
+
+WL-3 (#67) public application portal + panel approval. The public half is
+unauthenticated and rate limited; anyone can read whether the portal is open and
+submit one **pending** application per SteamID64 (a partial-unique index enforces
+the single-pending rule). Approving grants the resolved role to the matching
+`players` row, time-bounded via `players.role_expires_at` — the existing
+`worker-role-expirer` (VIPSUB-1) clears it automatically when the term lapses,
+and the grant fans out to every active server's `Admins.cfg` via the durable
+outbox. WL-3 adds no new expiry mechanic.
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| GET | `/api/v1/public/whitelist/settings` | Portal open/closed flag `{ enabled }`. Rate limit 60/min. | none (public) |
+| POST | `/api/v1/public/whitelist/applications` | Submit an application. Body: `{ steam_id64 (17 digits), body (1..2000), contact? (≤128) }`. `404 applications_disabled` when closed; `409 application_already_pending` on a duplicate pending SteamID64; else `201 {id, status:'pending'}`. Best-effort player resolution; audit `whitelist.application.create` (anonymous `actor_kind='system'`, label `http-anonymous`). Rate limit 5/hour. | none (public) |
+| GET | `/api/v1/whitelist/applications?status=&page=&page_size=` | Paginated review queue (newest first), joined to player/role/reviewer names. | `whitelist:view` |
+| GET | `/api/v1/whitelist/applications/settings` | Panel view of `{ enabled, default_days }`. | `whitelist:view` |
+| PUT | `/api/v1/whitelist/applications/settings` | Set `{ enabled, default_days (1..3650 \| null) }` (null = permanent grants). Audit `whitelist.application.settings.update`. | `whitelist:edit` |
+| PATCH | `/api/v1/whitelist/applications/:id` | Approve or reject. Body: `{ status:'approved'\|'rejected', review_note?, role_id?, expires_at? }`. Approve resolves the role as `role_id ?? requested_role_id ?? whitelist_role_id`, computes the term as `expires_at ?? now+default_days` (null = permanent), grants + fans out in one transaction, and invalidates the permission cache. Errors: `404 application_not_found`/`player_not_found`/`role_not_found`, `409 application_not_pending`/`whitelist_role_not_configured`, `400 role_expiry_must_be_future`, `403 self_approval_forbidden`. Both branches audit `whitelist.application.review`. | `whitelist:edit` |
+
+## Ban appeals (MOD-5, #62)
+
+Public appeal portal plus the panel review queue. A banned player has no panel
+session by definition, so the two `/api/v1/public/appeals*` routes are
+**anonymous** (`config.audit: false` + a declarative rate limit, self-auditing
+through an explicit `writeAuditEntry` with a `system`/`http-anonymous` actor —
+the same shape as the public whitelist portal above).
+
+Both public routes are deliberately blind oracles: submitting answers `201` for
+a banned player, an unbanned player and an unknown SteamID64 alike, so the
+portal cannot be walked to discover who is banned, and the status route answers
+one `404 appeal_not_found` for both an unknown and somebody else's token.
+
+Approving an appeal **is an unban**: it reuses the MOD-2 (#59) revert path
+(`unbanPlayerOnServer` in `routes/moderation-actions.ts`) once per server the
+appellant is banned on — `Bans.cfg` line removal, `moderation_actions.reverted_at`
+/`reverted_by`, an `unban` ledger row and the `moderation.unban` EVT-1 envelope
+that `discord-notify` renders with the existing `unban` template. Because
+`GET /api/v1/public/banlist` reads that ledger, an approved appeal also drops the
+player out of outbound ban federation. The `mod:unban` gate is the catalogue key
+MOD-2 put behind the role's live-Squad `ban` permission, so a panel user who may
+not ban may not lift a ban through an appeal either.
+
+| Method | Path | Purpose | Permissions |
+|---|---|---|---|
+| POST | `/api/v1/public/appeals` | Submit an appeal. Body: `{ steam_id64 (17 digits), body (20..4000), contact? (≤200), moderation_action_id? }`. `201 {id, number, status:'pending', tracking_token}` — the token is returned **once** and is the applicant's only handle. `409 appeal_already_open` (partial-unique index on `steam_id64` while `pending`/`in_review`), `429 rate_limited`. Anti-abuse: `@fastify/rate-limit` 5/hour plus daily Redis counters `appeal-rl:ip:<ip>` (10/day) and `appeal-rl:steam:<id>` (3/day). Audit `appeal.create` (anonymous `actor_kind='system'`, label `http-anonymous`). | none (public) |
+| GET | `/api/v1/public/appeals/:token` | Applicant status page data. Returns exactly `{ number, status, created_at, decided_at, decision_note }` — never `internal_note`, `contact`, `player_id`, `steam_id64`, `moderation_action_id` or `submitter_ip`. `404 appeal_not_found`. Rate limit 60/min. | none (public) |
+| GET | `/api/v1/appeals?status=&player_id=&page=&page_size=` | Paginated review queue (newest first), joined to the appellant, the appealed ban and the handler. | `mod:unban` |
+| GET | `/api/v1/appeals/:id` | One appeal card. `404 appeal_not_found`. | `mod:unban` |
+| PATCH | `/api/v1/appeals/:id` | Move status. Body: `{ status:'in_review'\|'approved'\|'rejected', decision_note? (≤2000), internal_note? (≤2000) }`. Transitions: `pending → in_review\|approved\|rejected`, `in_review → approved\|rejected`. Approving reverts every active ban of the appellant, one unban per server. Returns `{ appeal, revert: { reverted_action_ids, unban_action_ids, removed_lines } \| null }`. Errors: `404 appeal_not_found`, `409 appeal_already_decided`, `400 invalid_transition`, `409 bans_cfg_conflict`. Every transition audits `appeal.status_change` with before/after snapshots; approving additionally audits `appeal.unban`. | `mod:unban` |
 
 ## Audit
 
@@ -216,8 +414,8 @@ Errors:
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
 | GET | `/api/v1/depot` | Volume populated? + `build_id` parsed from `appmanifest_403240.acf` + `last_update` JSON from Redis. | `server:view` |
-| POST | `/api/v1/depot/update` | Kicks off `bridge.depot_update` in the background. Sets `depot:updating` lock; concurrent calls return `{status:'already_in_progress'}`. Streams output to `depot:progress` Redis Stream. | `server:install` |
-| WS | `/api/v1/depot/progress/ws` | Replays last 500 entries from `depot:progress` then tails. Multiple tabs can subscribe to the same update. | `server:view` |
+| POST | `/api/v1/depot/update` | Kicks off `bridge.depot_update` in the background, optionally stopping the given `server_ids` first and restarting them after (best-effort; a stopped server is always restarted even if the update itself fails). Sets `depot:updating` lock; concurrent calls (including `POST /api/v1/servers/:id/update` above) return `{status:'already_in_progress'}`. Streams output to `depot:progress` Redis Stream via [`lib/depot-progress.ts`](../../../apps/api/src/lib/depot-progress.ts). | `server:install` |
+| WS | `/api/v1/depot/progress/ws` | Replays last 500 entries from `depot:progress`, sends `{backfill_complete:true}`, then tails live. Multiple tabs — and both `/servers/:id/update` and `/depot/update` triggers — can subscribe to the same update. On the underlying `bridge.depot_update` finishing (success or failure), a terminal `{done:true, final:'done'|'error', error?}` frame is written to the stream and forwarded; a client that connects between the run's end and the next one starts gets this synthesized immediately from `depot:last_update` instead of blocking. Consumers must ignore any `done` frame seen *before* `backfill_complete` — it belongs to a previous, already-finished run replayed as history, not the one just triggered. Runs its own blocking `XREAD` on a `redis.duplicate()`-ed connection per WebSocket (not the shared `app.redis`), since a blocking command on the shared client would queue every other route's Redis command behind it for up to 5 s at a time. | `server:view` |
 
 ## Connector logs (panel-wide)
 

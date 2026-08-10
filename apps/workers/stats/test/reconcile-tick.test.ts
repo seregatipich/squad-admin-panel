@@ -33,7 +33,7 @@ describe('runStatsReconcileTick', () => {
 
     await runStatsReconcileTick({ sql, diag });
 
-    expect(reconcileDossierAggregates).toHaveBeenCalledWith(sql);
+    expect(reconcileDossierAggregates).toHaveBeenCalledWith(sql, { windowHours: 48 });
     expect(diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'dossier_reconcile.run_ok', severity: 'info' }),
     );
@@ -57,15 +57,16 @@ describe('runStatsReconcileTick', () => {
     );
   });
 
-  it('does not repair on a scheduled tick (report-only)', async () => {
+  it('reconciles the last 48h in report-only mode (never repairs) on a scheduled tick', async () => {
     reconcileDossierAggregates.mockResolvedValue(noDrift);
     const diag = { emit: vi.fn().mockResolvedValue(undefined) };
 
     await runStatsReconcileTick({ sql: {} as never, diag });
 
-    // Called with no options → report mode; never passes { repair: true }.
-    expect(reconcileDossierAggregates).toHaveBeenCalledWith(expect.anything());
-    expect(reconcileDossierAggregates.mock.calls[0]).toHaveLength(1);
+    // Windowed report mode: passes { windowHours: 48 } and never { repair: true }.
+    const options = reconcileDossierAggregates.mock.calls[0][1];
+    expect(options).toEqual({ windowHours: 48 });
+    expect(options).not.toHaveProperty('repair');
   });
 
   it('emits run_failed when reconcile throws', async () => {

@@ -498,6 +498,160 @@
       "when": 1783401500000,
       "tag": "0085_log_archive_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1783401600000,
+      "tag": "0086_scheduled_task_broadcast_rotation",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1783401700000,
+      "tag": "0087_whitelist_applications",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1783401800000,
+      "tag": "0088_license_applied_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1783401900000,
+      "tag": "0089_player_monthly_combat_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1783402000000,
+      "tag": "0090_map_vote",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1783402100000,
+      "tag": "0091_bonus_accrual_window",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1783402200000,
+      "tag": "0092_vip_expiry_reminders",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1783402300000,
+      "tag": "0093_vip_tier_price",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1783402500000,
+      "tag": "0095_media_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1783402550000,
+      "tag": "0094_player_steam_profile",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1783402600000,
+      "tag": "0096_media_upload_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1783402800000,
+      "tag": "0098_player_discord_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1783403100000,
+      "tag": "0101_server_daily_stats",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1783403300000,
+      "tag": "0103_balancer",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1783403400000,
+      "tag": "0104_vip_subscriptions",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1783403500000,
+      "tag": "0105_issue_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1783403600000,
+      "tag": "0106_ban_appeals",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1783403650000,
+      "tag": "0099_discord_role_mappings",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1783403652000,
+      "tag": "0102_seasons",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1783403697000,
+      "tag": "0097_media_publications",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1783403797000,
+      "tag": "0100_server_status_channel",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1785853336000,
+      "tag": "0107_last_owner_invariant",
+      "breakpoints": true
     }
   ]
 }

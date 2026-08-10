@@ -337,7 +337,7 @@ function RosterColumn({
                 >
                   <td className="max-w-[180px] py-2 pr-3">
                     <Link
-                      href={`/players/${entry.player_id}`}
+                      href={`/all-players/${entry.player_id}`}
                       className="block truncate text-sky-400 hover:text-sky-300"
                     >
                       {entry.nickname}
@@ -490,7 +490,7 @@ export function MatchTimeline({
 function TimelinePlayer({ player }: { player: MatchTimelineEvent['attacker'] }) {
   if (!player) return <span className="text-neutral-500">—</span>;
   return (
-    <Link href={`/players/${player.player_id}`} className="text-sky-400 hover:text-sky-300">
+    <Link href={`/all-players/${player.player_id}`} className="text-sky-400 hover:text-sky-300">
       {player.current_name ?? player.player_id.slice(0, 8)}
     </Link>
   );

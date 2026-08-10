@@ -6,6 +6,7 @@ Open-source, self-hosted control panel for Squad dedicated servers. Owns the ful
 
 ### Architecture
 
+- [**Architecture map**](architecture/map.md) — the whole system in one document: subsystem map, dependency graph, route catalogue, schema ERD, messaging substrates, end-to-end flows, extension guide
 - [System overview](architecture/system-overview.md) — privilege zones, components, bird's-eye view
 - [Data flow](architecture/data-flow.md) — install flow, event pipeline, RCON loop
 - [RBAC](architecture/rbac.md) — permission keys, system roles, enforcement

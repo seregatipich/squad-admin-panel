@@ -50,10 +50,11 @@ function panelGuard(req: FastifyRequest, reply: FastifyReply): { error: string }
   return null;
 }
 
-function serializeMediaFile(row: MediaFileRow): MediaFileResponse {
+export function serializeMediaFile(row: MediaFileRow): MediaFileResponse {
   return {
     id: row.id,
     uploader_player_id: row.uploaderPlayerId,
+    upload_token_id: row.uploadTokenId,
     kind: row.kind as MediaFileResponse['kind'],
     original_filename: row.originalFilename,
     mime_type: row.mimeType,
@@ -67,7 +68,10 @@ function serializeMediaFile(row: MediaFileRow): MediaFileResponse {
   };
 }
 
-async function loadActiveMediaFile(db: DatabaseClient, id: string): Promise<MediaFileRow | null> {
+export async function loadActiveMediaFile(
+  db: DatabaseClient,
+  id: string,
+): Promise<MediaFileRow | null> {
   const rows = await db
     .select()
     .from(mediaFiles)

@@ -28,24 +28,43 @@ function dotenvLookup(key: string): string | undefined {
   return undefined;
 }
 
-const DB_PASSWORD =
-  dotenvLookup('POSTGRES_PASSWORD') ??
-  (() => {
-    const url = dotenvLookup('DATABASE_URL');
-    if (url) {
-      const m = url.match(/^postgres:\/\/[^:]+:([^@]+)@/);
-      if (m) return m[1];
-    }
-    return 'admin';
-  })();
+/**
+ * Resolves the Postgres password for the default `admin`/`admin@127.0.0.1:5432`
+ * fallback URL. Throws instead of guessing when `POSTGRES_PASSWORD`,
+ * `DATABASE_URL`, and the repo `.env` all fail to resolve one — silently
+ * defaulting to the literal string `admin` masked a genuinely misconfigured
+ * environment as a connection that "just happens" to work. Called lazily, only
+ * from inside the `TEST_DATABASE_URL` short-circuits below, so a correctly
+ * configured run that sets `TEST_DATABASE_URL` directly never evaluates it.
+ */
+function resolveDbPassword(): string {
+  const fromEnvVar = dotenvLookup('POSTGRES_PASSWORD');
+  if (fromEnvVar) return fromEnvVar;
 
-const DEFAULT_DB_URL = `postgres://admin:${DB_PASSWORD}@127.0.0.1:5432/admin`;
+  const url = dotenvLookup('DATABASE_URL');
+  if (url) {
+    const m = url.match(/^postgres:\/\/[^:]+:([^@]+)@/);
+    if (m) return m[1];
+  }
+
+  throw new Error(
+    'Could not resolve a Postgres password: POSTGRES_PASSWORD is unset, DATABASE_URL has ' +
+      'no embedded password, and the repo .env file is missing or has no POSTGRES_PASSWORD ' +
+      'entry. Set TEST_DATABASE_URL (or POSTGRES_PASSWORD/DATABASE_URL) explicitly instead of ' +
+      'relying on the default admin/admin@127.0.0.1:5432 fallback.',
+  );
+}
+
+function defaultDbUrl(): string {
+  return `postgres://admin:${resolveDbPassword()}@127.0.0.1:5432/admin`;
+}
+
 const DEFAULT_REDIS_URL = 'redis://127.0.0.1:6379/15';
 
 // Read per call so the per-worker setup hook can point each worker at its own
 // isolated database and Redis logical DB before tests run.
 export function hostDbUrl(): string {
-  return process.env.TEST_DATABASE_URL ?? DEFAULT_DB_URL;
+  return process.env.TEST_DATABASE_URL ?? defaultDbUrl();
 }
 export function hostRedisUrl(): string {
   return process.env.TEST_REDIS_URL ?? DEFAULT_REDIS_URL;
@@ -53,7 +72,7 @@ export function hostRedisUrl(): string {
 
 // Frozen at module load for the main-process globalSetup sweep; workers override
 // their own env after this runs, but any connection reaches the same cluster.
-export const testDbUrl = process.env.TEST_DATABASE_URL ?? DEFAULT_DB_URL;
+export const testDbUrl = process.env.TEST_DATABASE_URL ?? defaultDbUrl();
 export const testRedisUrl = process.env.TEST_REDIS_URL ?? DEFAULT_REDIS_URL;
 
 export interface CreatedSchema {
@@ -109,6 +128,7 @@ async function applyMigrations(sql: SqlClient): Promise<void> {
 
 let injectedTemplate: string | null = null;
 let templateDatabase: Promise<string> | null = null;
+let runId: string | null = null;
 
 /**
  * Registers the shared template built once by `global-setup.ts` and passed to
@@ -121,11 +141,30 @@ export function useSharedTemplate(name: string): void {
 }
 
 /**
+ * Registers the per-run id generated once by `global-setup.ts` and passed to
+ * each worker via Vitest's `inject`. Embedded into every database name this
+ * module constructs so a concurrently-running session's own `dropTestDatabases`
+ * sweep — which is cluster-wide by nature — never touches this run's databases.
+ */
+export function useRunId(id: string): void {
+  runId = id;
+}
+
+/**
+ * Resolves the active run id, falling back to a per-process id for callers
+ * running without `global-setup.ts` (e.g. a lone worker started outside the
+ * suite's normal `globalSetup`/`inject` wiring).
+ */
+function currentRunId(): string {
+  return runId ?? `p${process.pid}`;
+}
+
+/**
  * Builds a fresh template database migrated exactly once. Called by
  * `global-setup.ts` to produce the single shared template for the run.
  */
 export function buildSharedTemplate(): Promise<string> {
-  return buildTemplateDatabase(`sqtmpl_shared_${randomBytes(6).toString('hex')}`);
+  return buildTemplateDatabase(`sqtmpl_${currentRunId()}_shared_${randomBytes(6).toString('hex')}`);
 }
 
 /**
@@ -139,7 +178,7 @@ function ensureTemplateDatabase(): Promise<string> {
   if (injectedTemplate) return Promise.resolve(injectedTemplate);
   if (!templateDatabase) {
     templateDatabase = buildTemplateDatabase(
-      `sqtmpl_${process.pid}_${randomBytes(4).toString('hex')}`,
+      `sqtmpl_${currentRunId()}_${process.pid}_${randomBytes(4).toString('hex')}`,
     );
   }
   return templateDatabase;
@@ -190,7 +229,7 @@ async function cloneTemplate(target: string, template: string): Promise<void> {
  */
 export async function createIsolatedSchema(): Promise<CreatedSchema> {
   const template = await ensureTemplateDatabase();
-  const name = `sqtest_${randomBytes(6).toString('hex')}`;
+  const name = `sqtest_${currentRunId()}_${randomBytes(6).toString('hex')}`;
   await cloneTemplate(name, template);
   return {
     schema: name,
@@ -235,7 +274,7 @@ async function doProvisionWorkerResources(): Promise<void> {
   process.env.TEST_REDIS_URL = redisTarget;
 
   const template = await ensureTemplateDatabase();
-  const name = `sqworker_${process.pid}_${randomBytes(4).toString('hex')}`;
+  const name = `sqworker_${currentRunId()}_${process.pid}_${randomBytes(4).toString('hex')}`;
   await cloneTemplate(name, template);
   const url = databaseUrl(name);
   process.env.DATABASE_URL = url;

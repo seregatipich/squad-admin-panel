@@ -19,7 +19,7 @@ const RESPONSE_NONCE_TTL_SECONDS = 3600;
 const steamRoutes: FastifyPluginAsync = async (app) => {
   app.get(
     '/api/v1/auth/steam/login',
-    { config: { audit: false, rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    { config: { audit: false, public: true, rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (req, reply) => {
       const nonce = randomBytes(16).toString('base64url');
       await app.redis.set(
@@ -45,7 +45,7 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
 
   app.get(
     '/api/v1/auth/steam/callback',
-    { config: { audit: false, rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    { config: { audit: false, public: true, rateLimit: { max: 10, timeWindow: '1 minute' } } },
     async (req, reply) => {
       const q = req.query as Record<string, string | undefined>;
       const queryNonce = q.n;
@@ -139,17 +139,21 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(500).send({ error: 'owner_role_missing' });
       }
 
+      // VIPSUB-5 (#171): a player without `panel_access` used to be refused a
+      // session outright and bounced to `/no-access`. Self-service VIP needs
+      // them authenticated, so they now get a `self_service`-scoped session and
+      // land on `/me`. That scope is honoured only on routes declaring
+      // `config.selfService` (`apps/api/src/plugins/auth.ts`), so the panel is
+      // exactly as unreachable for them as it was before.
       const ctx = await loadUserPermissions(app.db, playerId);
-      if (!ctx.panelAccess) {
-        const reason = ctx.roleId === null ? 'no_role' : 'role_no_access';
-        return reply.redirect(`/no-access?steam_id64=${String(steamId64)}&reason=${reason}`, 302);
-      }
+      const scope = ctx.panelAccess ? 'panel' : 'self_service';
 
       const { token } = await createSession(app.db, app.redis, {
         playerId,
         ip: req.ip ?? null,
         userAgent: req.headers['user-agent'] ?? null,
         ttlMs: app.config.SESSION_TTL_SECONDS * 1000,
+        scope,
       });
       reply.setCookie(SESSION_COOKIE, token, {
         path: '/',
@@ -158,7 +162,7 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
         sameSite: 'lax',
         maxAge: app.config.SESSION_TTL_SECONDS,
       });
-      return reply.redirect('/', 302);
+      return reply.redirect(scope === 'panel' ? '/' : '/me', 302);
     },
   );
 };

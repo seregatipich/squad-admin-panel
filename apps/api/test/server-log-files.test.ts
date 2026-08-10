@@ -33,7 +33,9 @@ async function assignRole(roleId: string): Promise<void> {
   const steamId = h.seed.ownerSteamId64;
   if (!steamId) throw new Error('missing seeded owner');
   await h.db.update(players).set({ roleId }).where(eq(players.steamId64, steamId));
-  invalidatePermissionCache(h.seed.ownerPlayerId!);
+  const ownerPlayerId = h.seed.ownerPlayerId;
+  if (!ownerPlayerId) throw new Error('missing seeded owner');
+  invalidatePermissionCache(ownerPlayerId);
 }
 
 async function viewerRoleId(): Promise<string> {
@@ -51,6 +53,7 @@ describe('GET /api/v1/servers/:id/logs/files', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge({
         squadLogList: async ({ path }) => {
           expect(path).toBe(`${PANEL_SAVED_ROOT}/${SERVER_ID}/SquadGame/Saved/Logs`);
@@ -116,7 +119,7 @@ describe('GET /api/v1/servers/:id/logs/files', () => {
     const roleId = uuidv7();
     await h.db.insert(roles).values({
       id: roleId,
-      name: `panel-${roleId.slice(0, 8)}`,
+      name: `panel-${roleId}`,
       color: 'neutral',
       isSystemRole: false,
       panelAccess: true,
@@ -146,6 +149,7 @@ describe('GET /api/v1/servers/:id/logs/files/:name/download', () => {
     emittedFrames = 0;
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM_ID },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge({
         fileReadStream: async ({ path }, onStream) => {
           expect(path).toBe(`${PANEL_SAVED_ROOT}/${SERVER_ID}/SquadGame/Saved/Logs/SquadGame.log`);

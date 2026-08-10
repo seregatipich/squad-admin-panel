@@ -1,5 +1,8 @@
 import {
+  applyCombatEventToDossier,
   auditLog,
+  type CombatEventType,
+  combatEvents,
   type DatabaseClient,
   events,
   matches,
@@ -12,14 +15,34 @@ import { v5 as uuidv5, v7 as uuidv7 } from 'uuid';
 import {
   buildTeamIndex,
   type CombatIdentity,
+  type CombatKind,
   type CombatRecordCommand,
   detectTeamkill,
   type RosterTeamMember,
+  type VehicleEventKind,
   type VehicleRecordCommand,
 } from '../parser/combat.js';
 
 export const LIVE_BUS_CHANNEL = 'live-bus';
 const COMBAT_EVENT_NAMESPACE = '2a7c1f6e-9b3d-4c8a-8e5f-1d6b0a4c9e73';
+
+/**
+ * DOSSIER-2 (#189): maps the log-ingest command kinds to the `combat_events`
+ * `event_type` domain so the raw feed and the dossier aggregates share one
+ * vocabulary. `vehicle_damage` folds into the generic `damage` type (weapon
+ * damage dealt to a vehicle); `combat_revive`/`combat_wound` are recorded but
+ * do not move any aggregate.
+ */
+const COMBAT_KIND_TO_EVENT_TYPE: Record<CombatKind, CombatEventType> = {
+  combat_death: 'death',
+  combat_damage: 'damage',
+  combat_wound: 'wound',
+  combat_revive: 'revive',
+};
+const VEHICLE_KIND_TO_EVENT_TYPE: Record<VehicleEventKind, CombatEventType> = {
+  vehicle_destroyed: 'vehicle_destroyed',
+  vehicle_damage: 'damage',
+};
 
 export interface CombatRedis {
   get(key: string): Promise<string | null>;
@@ -234,24 +257,61 @@ export async function handleCombat(
 
   const eventId = deterministicEventId(command);
   const payload = buildPayload(command, attackerPlayerId, victimPlayerId, isTeamkill, matchId);
+  const eventType = COMBAT_KIND_TO_EVENT_TYPE[command.kind];
 
-  const inserted = await db
-    .insert(events)
-    .values({
-      eventId,
+  // DOSSIER-2 (#189): the events envelope, the typed combat_events row and the
+  // dossier aggregate fold commit atomically. The fold runs only when the events
+  // insert actually inserted (onConflictDoNothing returns [] on replay), so a
+  // redelivered line never double-counts. match_id stays NULL: combat_events keys
+  // matches by bigint while log-ingest resolves a uuid (a COMBAT-2/DOSSIER-1
+  // schema gap, out of scope here); the aggregates and reconcile ignore it.
+  let wasInserted = false;
+  await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(events)
+      .values({
+        eventId,
+        serverId: command.serverId,
+        occurredAt,
+        kind: command.kind,
+        version: 1,
+        actorKind: 'system',
+        actorId: attackerPlayerId,
+        correlationId: matchId,
+        payload,
+      })
+      .onConflictDoNothing({ target: [events.eventId, events.occurredAt] })
+      .returning({ eventId: events.eventId });
+
+    wasInserted = inserted.length > 0;
+    if (!wasInserted) return;
+
+    await tx.insert(combatEvents).values({
+      eventType,
       serverId: command.serverId,
+      matchId: null,
+      attackerPlayerId,
+      victimPlayerId,
+      victimVehicle: null,
+      attackerVehicle: command.attackerVehicle,
+      weapon: command.weapon,
+      damage: command.damage != null ? String(command.damage) : null,
+      attackerKit: null,
+      isTeamkill,
       occurredAt,
-      kind: command.kind,
-      version: 1,
-      actorKind: 'system',
-      actorId: attackerPlayerId,
-      correlationId: matchId,
-      payload,
-    })
-    .onConflictDoNothing({ target: [events.eventId, events.occurredAt] })
-    .returning({ eventId: events.eventId });
+    });
 
-  const wasInserted = inserted.length > 0;
+    await applyCombatEventToDossier(tx, {
+      eventType,
+      attackerPlayerId,
+      weapon: command.weapon,
+      attackerVehicle: command.attackerVehicle,
+      victimVehicle: null,
+      damage: command.damage,
+      isTeamkill,
+      occurredAt,
+    });
+  });
 
   if (wasInserted && redis) {
     const frame = JSON.stringify({
@@ -328,24 +388,57 @@ export async function handleVehicle(
     weapon: command.weapon,
     damage: command.damage,
   };
+  const eventType = VEHICLE_KIND_TO_EVENT_TYPE[command.kind];
 
-  const inserted = await db
-    .insert(events)
-    .values({
-      eventId,
+  // DOSSIER-2 (#189): same atomic envelope + combat_events + aggregate fold as
+  // handleCombat. Vehicle victims are not players, so victim_player_id is NULL.
+  let wasInserted = false;
+  await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(events)
+      .values({
+        eventId,
+        serverId: command.serverId,
+        occurredAt,
+        kind: command.kind,
+        version: 1,
+        actorKind: 'system',
+        actorId: attackerPlayerId,
+        correlationId: matchId,
+        payload,
+      })
+      .onConflictDoNothing({ target: [events.eventId, events.occurredAt] })
+      .returning({ eventId: events.eventId });
+
+    wasInserted = inserted.length > 0;
+    if (!wasInserted) return;
+
+    await tx.insert(combatEvents).values({
+      eventType,
       serverId: command.serverId,
+      matchId: null,
+      attackerPlayerId,
+      victimPlayerId: null,
+      victimVehicle: command.victimVehicle,
+      attackerVehicle: command.attackerVehicle,
+      weapon: command.weapon,
+      damage: command.damage != null ? String(command.damage) : null,
+      attackerKit: null,
+      isTeamkill: false,
       occurredAt,
-      kind: command.kind,
-      version: 1,
-      actorKind: 'system',
-      actorId: attackerPlayerId,
-      correlationId: matchId,
-      payload,
-    })
-    .onConflictDoNothing({ target: [events.eventId, events.occurredAt] })
-    .returning({ eventId: events.eventId });
+    });
 
-  const wasInserted = inserted.length > 0;
+    await applyCombatEventToDossier(tx, {
+      eventType,
+      attackerPlayerId,
+      weapon: command.weapon,
+      attackerVehicle: command.attackerVehicle,
+      victimVehicle: command.victimVehicle,
+      damage: command.damage,
+      isTeamkill: false,
+      occurredAt,
+    });
+  });
 
   if (wasInserted && redis) {
     const frame = JSON.stringify({

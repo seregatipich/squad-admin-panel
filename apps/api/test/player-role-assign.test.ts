@@ -26,6 +26,11 @@ let viewerRoleId: string;
 const TEST_PLAYER_A = testSteamId(800001);
 const TEST_PLAYER_B = testSteamId(800002);
 const TEST_PLAYER_C = testSteamId(800003);
+// A dedicated, always-Owner backup player: migration 0107's last-Owner guard
+// trigger means the "Owner-lockout invariant" tests below (and this suite's
+// own afterEach, which unconditionally clears every test player's role) can
+// no longer assume the target DB happens to already host a real Owner.
+const BACKUP_OWNER_STEAM = testSteamId(800099);
 const createdRoleIds: string[] = [];
 const playerIds = new Map<bigint, string>();
 function pid(steamId: bigint): string {
@@ -58,9 +63,25 @@ beforeAll(async () => {
     .limit(1);
   if (!viewerRows[0]) throw new Error('Viewer role not found — run migrations first');
   viewerRoleId = viewerRows[0].id;
+
+  await db
+    .insert(players)
+    .values({
+      steamId64: BACKUP_OWNER_STEAM,
+      canonicalName: 'Backup Owner',
+      canonicalNameNormalized: 'backup owner',
+      roleId: ownerRoleId,
+    })
+    .onConflictDoUpdate({ target: players.steamId64, set: { roleId: ownerRoleId } });
 });
 
 afterAll(async () => {
+  // BACKUP_OWNER_STEAM is intentionally never deleted: by the time this runs
+  // it is the DB's only remaining Owner, and migration 0107's guard trigger
+  // rejects both role_id changes and deletes of the last Owner. Harmless to
+  // leave behind — every environment that runs this suite (CI's ephemeral
+  // service containers, scripts/new-test-db.sh) provisions a disposable
+  // database per run.
   if (sql) await sql.end({ timeout: 5 });
 });
 
@@ -237,6 +258,7 @@ describeIfDb('GET /api/v1/players — HTTP integration', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM },
+      seedOwnerGuard: true,
       bridge: makeFakeBridge(),
     });
   });
@@ -318,6 +340,8 @@ describeIfDb('PUT /api/v1/players/:playerId/role — HTTP integration', () => {
   let h: IntegrationHarness;
 
   beforeEach(async () => {
+    // No seedOwnerGuard here: "returns 409 when trying to remove the last
+    // Owner" below specifically needs OWNER_STEAM to be the sole Owner.
     h = await buildIntegrationApp({
       seedOwner: { steamId64: OWNER_STEAM },
       bridge: makeFakeBridge(),
@@ -383,7 +407,7 @@ describeIfDb('PUT /api/v1/players/:playerId/role — HTTP integration', () => {
       .returning({ id: players.id });
     if (!targetRow) throw new Error('target player missing');
     const playerId = targetRow.id;
-    const expiresAt = '2026-08-01T12:00:00.000Z';
+    const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
     const comment = 'VIP до конца июльской кампании';
 
     const res = await h.app.inject({

@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     exclude: ['**/node_modules/**', '**/dist/**'],
     testTimeout: 10_000,
+    setupFiles: ['../_test-shared/load-env.ts'],
     fileParallelism: false,
     sequence: { concurrent: false },
     coverage: {

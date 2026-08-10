@@ -51,10 +51,12 @@ CREATE INDEX IF NOT EXISTS chat_messages_player_sent_idx ON chat_messages (playe
 CREATE INDEX IF NOT EXISTS chat_messages_server_sent_idx ON chat_messages (server_id, sent_at DESC);
 CREATE INDEX IF NOT EXISTS chat_messages_message_trgm_idx ON chat_messages USING gin (message gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS chat_messages_sent_at_brin_idx ON chat_messages USING brin (sent_at) WITH (pages_per_range = 32);
+-- Look-back widened to 6 months (from 1); see the matching comment on the
+-- events bootstrap in 0000_init.sql.
 DO $$
 DECLARE m int; cur_month date := date_trunc('month', now())::date; part_start date; part_end date; part_name text;
 BEGIN
-  FOR m IN -1..3 LOOP
+  FOR m IN -6..3 LOOP
     part_start := cur_month + (m || ' months')::interval;
     part_end := part_start + interval '1 month';
     part_name := 'chat_messages_' || to_char(part_start, 'YYYY_MM');

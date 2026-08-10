@@ -5,26 +5,27 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 ## Responsibilities
 
 - Dashboard, server detail, install wizard, config editor, players, audit, panel-wide log console, account.
-- Auth screens: Steam login button → OpenID redirect, `/no-access` for players without a role.
+- Auth screens: Steam login button → OpenID redirect, `/me` self-service page for players whose role has no `panel_access`.
 - Live indicators: connection state, polling staleness, WS reconnect with exponential backoff.
 
 ## What this component does NOT do
 
 - It does not call the bridge directly — it goes through `api`.
-- Next.js middleware never authorises. The real gate is server-side `requireSession()` inside `src/app/(dashboard)/layout.tsx`, deduped via `react.cache()`. This is intentional after CVE-2025-29927.
+- Next.js middleware never authorises. The real gate is server-side `requireSession()` inside `src/app/(dashboard)/layout.tsx`, deduped via `react.cache()`. This is intentional after CVE-2025-29927. Since VIPSUB-5 (#171) a session alone no longer implies panel access, so the same layout also redirects a session with an empty `permissions` array to `/me`.
 
 ## App Router pages
 
 | Route | File | What it does |
 |---|---|---|
 | `/login` | `src/app/login/page.tsx` | "Войти через Steam" button. Redirects to Steam OpenID 2.0. Immediately redirects to `/dashboard` if already authenticated. |
-| `/no-access` | `src/app/no-access/page.tsx` | Shown after successful Steam login when the player has no panel role. Displays their Steam ID so an Owner can look them up. |
+| `/me` | `src/app/(me)/me/page.tsx` | «Мой VIP» self-service page (VIPSUB-5, #171). Where a successful Steam login lands when the player's role has no `panel_access` — including a player with no role at all: the API issues a `self_service`-scoped session and redirects here instead of into the panel. Shows the player's own bonus balance, VIP expiry, tariff list («Купить разово» / «Подписаться»), active subscription with «Отменить подписку», and a paginated bonus history — all over `/api/v1/me/*`, which take no player id. Lives in the `(me)` route group, whose layout requires a session but no panel access and deliberately renders no sidebar or live-bus widgets. |
 | `/dashboard` | `src/app/(dashboard)/dashboard/page.tsx` | Hub: bridge status, host metrics tile (live), per-worker heartbeats, server count summary. The metrics tile opens the `MetricHistoryModal` for 24 h history. |
 | `/servers` | `src/app/(dashboard)/servers/page.tsx` | List with live `rcon_state` / `player_count` / `last_poll_at`. |
 | `/servers/new` | `src/app/(dashboard)/servers/new/page.tsx` | Install wizard: collects display name + ports, `POST /servers`, then `POST /servers/:id/install`, subscribes to `/install/ws`. |
 | `/servers/[id]` | `src/app/(dashboard)/servers/[id]/page.tsx` | Detail: status, container stats, RCON, action buttons (start/stop/restart/delete), live `/logs/ws` console. Delete confirm copy explains: "Файлы будут стёрты с диска. Бэкап `.cfg` сохранится в архиве (раздел Архив серверов)." |
-| `/servers/[id]/configs` | `src/app/(dashboard)/servers/[id]/configs/page.tsx` | Monaco editor with three tabs: Editor / История (versions, restore, diff) / Blame. |
+| `/servers/[id]/configs` | `src/app/(dashboard)/servers/[id]/configs/page.tsx` | Monaco editor with three tabs: Editor / История (versions, restore, diff) / Blame. `Admins.cfg`'s `//SQUAD-PANEL` managed segment is highlighted and made read-only inside the editor via a decorations overlay + undo-guard (`managed-segment.ts`; monaco 0.56.0 has no read-only-range API) — the rest of the file stays editable and a banner links to `/settings/groups`. `requires_restart` files show a "Рестарт сервера" button (needs `server:restart` from `/api/v1/me`). CRLF line endings are preserved on save. |
 | `/servers/[id]/events` | `src/app/(dashboard)/servers/[id]/events/page.tsx` | Newest envelopes from `events:server:{id}` via `GET /servers/:id/events`. |
+| `/servers/[id]/schedule` | `src/app/(dashboard)/servers/[id]/schedule/page.tsx` | AUTO-2 scheduled tasks (restart / layer / broadcast) on a one-off instant or 5-field UTC cron, plus a read-only run history. Actions the caller lacks permission for (per the API `capabilities`) are hidden. MSG-4 (#187): a `broadcast` task shows the `TemplatePicker` (`{server}` substituted at rule-creation) feeding an ordered rotation list (up to 10 messages, free-text fallback), a server multi-select ("all servers") posting `server_ids`, and a client-side 5-minute floor via `minCron5IntervalMinutes` that disables submit with an inline hint; each broadcast task lists its rotation and highlights the current `rotation_index`. |
 | `/servers/archive` | `src/app/(dashboard)/servers/archive/page.tsx` | Soft-deleted servers table (`GET /api/v1/servers/archive`): display name, slug, deleted_at, deleted_by. Row click → archive detail. |
 | `/servers/archive/[id]` | `src/app/(dashboard)/servers/archive/[id]/page.tsx` | Archive detail: settings snapshot + per-file backup browser. Each cfg row opens a read-only Monaco viewer fed by `GET /api/v1/servers/archive/:id/configs/:filename`. "Восстановить" CTA navigates to the restore wizard. |
 | `/servers/archive/[id]/restore` | `src/app/(dashboard)/servers/archive/[id]/restore/page.tsx` | Restore wizard: enter slug + display_name → POST /restore (handles 409 inline) → POST /install → tail install WS → POST /restore-configs (shows `files_restored` / `files_skipped` / `files_missing` summary) → POST /start → "Открыть сервер". |
@@ -83,7 +84,7 @@ Every polling surface uses `LiveIndicator` + the same shape: poll every N second
 
 ## Dependencies
 
-- `next` 15.1, `react` 19, `react-dom` 19
+- `next` 15.5, `react` 19, `react-dom` 19
 - `tailwindcss` 4 + `@tailwindcss/postcss`
 - `@monaco-editor/react` 4.7
 - `recharts` 3 — used only inside `MetricHistoryChart`, split into its own JS chunk via `next/dynamic`

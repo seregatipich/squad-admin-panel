@@ -25,7 +25,7 @@ describe('GET /api/v1/servers/:id/metrics', () => {
     await h.db.insert(servers).values({
       id,
       displayName: 'Test',
-      slug: `t-${id.slice(0, 8)}`,
+      slug: `t-${id}`,
       status: 'running',
       runtime: 'container',
     });
@@ -46,7 +46,7 @@ describe('GET /api/v1/servers/:id/metrics', () => {
     await h.db.insert(servers).values({
       id,
       displayName: 'Test',
-      slug: `t-${id.slice(0, 8)}`,
+      slug: `t-${id}`,
       status: 'running',
       runtime: 'container',
     });
@@ -93,7 +93,7 @@ describe('GET /api/v1/servers/:id/metrics', () => {
     await h.db.insert(servers).values({
       id,
       displayName: 'Test',
-      slug: `t-${id.slice(0, 8)}`,
+      slug: `t-${id}`,
       status: 'running',
       runtime: 'container',
     });
@@ -154,7 +154,7 @@ describe('GET /api/v1/servers/:id/metrics', () => {
     await h.db.insert(servers).values({
       id,
       displayName: 'Deleted',
-      slug: `d-${id.slice(0, 8)}`,
+      slug: `d-${id}`,
       status: 'stopped',
       runtime: 'container',
       deletedAt: new Date(),

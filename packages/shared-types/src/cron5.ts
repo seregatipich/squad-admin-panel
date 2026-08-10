@@ -142,3 +142,38 @@ export function expandCron5Occurrences(
   }
   return occurrences;
 }
+
+/** Start of the fixed probe window used by {@link minCron5IntervalMinutes}: 2024-12-01T00:00:00Z. */
+const PROBE_WINDOW_START_MS = Date.UTC(2024, 11, 1, 0, 0, 0);
+/** Length of the probe window, one full 31-day month (December 2024). */
+const PROBE_WINDOW_MINUTES = 31 * 24 * 60;
+
+/**
+ * Smallest gap, in whole minutes, between two consecutive occurrences of
+ * `expression` — the anti-spam floor used to reject too-frequent broadcast
+ * rotations (MSG-4, #187). Occurrences are expanded over a fixed 31-day UTC
+ * probe window (all of December 2024) so the result is deterministic and
+ * independent of "now"; the window is half-open so a strictly monthly
+ * expression yields a single occurrence.
+ *
+ * Returns {@link Number.POSITIVE_INFINITY} when fewer than two occurrences
+ * fall in the window (e.g. once-a-month or rarer). Throws (via
+ * {@link parseCron5}) when `expression` is malformed.
+ */
+export function minCron5IntervalMinutes(expression: string): number {
+  const from = new Date(PROBE_WINDOW_START_MS);
+  const to = new Date(PROBE_WINDOW_START_MS + (PROBE_WINDOW_MINUTES - 1) * 60_000);
+  const occurrences = expandCron5Occurrences(expression, from, to, PROBE_WINDOW_MINUTES);
+  if (occurrences.length < 2) return Number.POSITIVE_INFINITY;
+
+  let min = Number.POSITIVE_INFINITY;
+  let previous: Date | undefined;
+  for (const current of occurrences) {
+    if (previous) {
+      const delta = (current.getTime() - previous.getTime()) / 60_000;
+      if (delta < min) min = delta;
+    }
+    previous = current;
+  }
+  return min;
+}

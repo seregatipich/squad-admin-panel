@@ -55,8 +55,8 @@ describe('MatchTimeline', () => {
     expect(html).toContain('Тимкилл');
     expect(html).toContain('+2м 30с');
     expect(html).toContain('BP_AK74');
-    expect(html).toContain('href="/players/attacker-1"');
-    expect(html).toContain('href="/players/victim-1"');
+    expect(html).toContain('href="/all-players/attacker-1"');
+    expect(html).toContain('href="/all-players/victim-1"');
     expect(html).toContain('href="/combat-log?server=srv-1"');
   });
 

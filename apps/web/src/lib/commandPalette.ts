@@ -25,20 +25,26 @@ export type PaletteResult =
 /**
  * Returns the nav pages visible to `permissions` whose label or href match
  * `query` (case-insensitive substring). An empty query matches every visible
- * page.
+ * page. Items with `requiresEconomy` are visible only while `economyEnabled`
+ * is true (ECON-5 #165), mirroring the sidebar filter.
  */
 export function filterPageResults(
   groups: NavGroup[],
   permissions: string[],
   query: string,
+  economyEnabled = false,
 ): NavItem[] {
   const visible = flattenNavItems(groups).filter(
-    (item) => !item.permission || permissions.includes(item.permission),
+    (item) =>
+      (!item.permission || permissions.includes(item.permission)) &&
+      (!item.requiresEconomy || economyEnabled),
   );
   const needle = query.trim().toLowerCase();
   if (!needle) return visible;
   return visible.filter(
-    (item) => item.label.toLowerCase().includes(needle) || item.href.toLowerCase().includes(needle),
+    (item) =>
+      item.label.toLowerCase().includes(needle) ||
+      (item.href?.toLowerCase().includes(needle) ?? false),
   );
 }
 
@@ -69,9 +75,9 @@ export function isPaletteHotkey(
 export function resultHref(result: PaletteResult): string {
   switch (result.kind) {
     case 'page':
-      return result.href;
+      return result.href ?? '';
     case 'player':
-      return `/players/${result.id}`;
+      return `/all-players/${result.id}`;
     case 'server':
       return `/servers/${result.id}`;
   }

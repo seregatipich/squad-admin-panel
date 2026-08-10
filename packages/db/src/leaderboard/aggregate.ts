@@ -135,6 +135,19 @@ export function periodsToRecompute(now: Date = new Date()): PeriodDescriptor[] {
 export interface RecomputePeriodInput {
   periodType: StatPeriodType;
   periodStart: string;
+  /**
+   * Explicit day window, overriding `periodDayRange(periodType, periodStart)`.
+   *
+   * Required for `period_type = 'season'` (LEAD-7, #178): a season is an
+   * arbitrary named interval, so its bounds cannot be derived from
+   * `periodStart` the way day/week/month can. `periodDayRange` returns `null`
+   * for `'season'`, which would otherwise widen the slice to all time and pull
+   * in events from outside the season.
+   *
+   * Both ends are inclusive: presence is matched on `day`, and matches on
+   * `started_at < toDay + 1 day`, so an event at 23:30 on `toDay` counts.
+   */
+  range?: DayRange;
 }
 
 export async function recomputeLeaderboardPeriod(
@@ -142,14 +155,20 @@ export async function recomputeLeaderboardPeriod(
   input: RecomputePeriodInput,
 ): Promise<number> {
   const { periodType, periodStart } = input;
-  const range = periodDayRange(periodType, periodStart);
+  const range = input.range ?? periodDayRange(periodType, periodStart);
 
   const presenceFilter = range
     ? sql`WHERE day >= ${range.fromDay}::date AND day <= ${range.toDay}::date`
     : sql``;
+  // The day bounds are UTC days everywhere else in this file (`utcDayKey`, and
+  // `player_daily_presence.day`), so the match window must be anchored to UTC
+  // too. Writing it as `${toDay}::date + INTERVAL '1 day'` yields a *local*
+  // timestamp, which on a non-UTC Postgres session slides the window by the
+  // offset and makes the presence and match halves of one period cover
+  // different spans. `AT TIME ZONE 'UTC'` pins both edges.
   const matchesFilter = range
-    ? sql`WHERE m.started_at >= ${range.fromDay}::date
-        AND m.started_at < (${range.toDay}::date + INTERVAL '1 day')`
+    ? sql`WHERE m.started_at >= (${range.fromDay}::date)::timestamp AT TIME ZONE 'UTC'
+        AND m.started_at < (${range.toDay}::date + INTERVAL '1 day')::timestamp AT TIME ZONE 'UTC'`
     : sql``;
 
   return sql.begin(async (tx) => {
@@ -162,12 +181,14 @@ export async function recomputeLeaderboardPeriod(
       WITH settings AS (
         SELECT
           COALESCE((SELECT k_online FROM economy_settings WHERE id = 1), 1) AS k_online,
-          COALESCE((SELECT k_boost FROM economy_settings WHERE id = 1), 2) AS k_boost
+          COALESCE((SELECT k_boost FROM economy_settings WHERE id = 1), 2) AS k_boost,
+          COALESCE((SELECT k_seed FROM economy_settings WHERE id = 1), 3) AS k_seed
       ),
       presence_agg AS (
         SELECT player_id, server_id,
                COALESCE(SUM(online_seconds), 0)::int AS online_seconds,
-               COALESCE(SUM(boost_seconds), 0)::int AS boost_seconds
+               COALESCE(SUM(boost_seconds), 0)::int AS boost_seconds,
+               COALESCE(SUM(seed_seconds), 0)::int AS seed_seconds
         FROM player_daily_presence
         ${presenceFilter}
         GROUP BY player_id, server_id
@@ -180,26 +201,51 @@ export async function recomputeLeaderboardPeriod(
         ${matchesFilter}
         GROUP BY mp.player_id, m.server_id
       ),
+      combat_agg AS (
+        SELECT mp.player_id, m.server_id,
+               COALESCE(SUM(mp.kills), 0)::int AS kills,
+               COALESCE(SUM(mp.deaths), 0)::int AS deaths,
+               COALESCE(SUM(mp.teamkills), 0)::int AS teamkills,
+               COALESCE(SUM(mp.revives), 0)::int AS revives
+        FROM match_players mp
+        JOIN matches m ON m.id = mp.match_id
+        ${matchesFilter}
+        GROUP BY mp.player_id, m.server_id
+      ),
       combined AS (
         SELECT
-          COALESCE(p.player_id, mm.player_id) AS player_id,
-          COALESCE(p.server_id, mm.server_id) AS server_id,
+          COALESCE(p.player_id, mm.player_id, c.player_id) AS player_id,
+          COALESCE(p.server_id, mm.server_id, c.server_id) AS server_id,
           COALESCE(p.online_seconds, 0) AS online_seconds,
           COALESCE(p.boost_seconds, 0) AS boost_seconds,
-          COALESCE(mm.matches_played, 0) AS matches_played
+          COALESCE(p.seed_seconds, 0) AS seed_seconds,
+          COALESCE(mm.matches_played, 0) AS matches_played,
+          COALESCE(c.kills, 0) AS kills,
+          COALESCE(c.deaths, 0) AS deaths,
+          COALESCE(c.teamkills, 0) AS teamkills,
+          COALESCE(c.revives, 0) AS revives
         FROM presence_agg p
         FULL OUTER JOIN matches_agg mm
           ON p.player_id = mm.player_id AND p.server_id = mm.server_id
+        FULL OUTER JOIN combat_agg c
+          ON COALESCE(p.player_id, mm.player_id) = c.player_id
+         AND COALESCE(p.server_id, mm.server_id) = c.server_id
       ),
       per_server AS (
-        SELECT player_id, server_id, online_seconds, boost_seconds, matches_played
+        SELECT player_id, server_id, online_seconds, boost_seconds, seed_seconds,
+               matches_played, kills, deaths, teamkills, revives
         FROM combined
       ),
       rollup AS (
         SELECT player_id, NULL::uuid AS server_id,
                SUM(online_seconds)::int AS online_seconds,
                SUM(boost_seconds)::int AS boost_seconds,
-               SUM(matches_played)::int AS matches_played
+               SUM(seed_seconds)::int AS seed_seconds,
+               SUM(matches_played)::int AS matches_played,
+               SUM(kills)::int AS kills,
+               SUM(deaths)::int AS deaths,
+               SUM(teamkills)::int AS teamkills,
+               SUM(revives)::int AS revives
         FROM combined
         GROUP BY player_id
       ),
@@ -218,16 +264,18 @@ export async function recomputeLeaderboardPeriod(
         ${periodType},
         ${periodStart}::date,
         all_rows.online_seconds,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
+        all_rows.seed_seconds,
+        all_rows.kills,
+        all_rows.deaths,
+        all_rows.teamkills,
+        all_rows.revives,
+        CASE WHEN all_rows.deaths = 0 THEN all_rows.kills
+             ELSE all_rows.kills::numeric / all_rows.deaths END,
         all_rows.matches_played,
         all_rows.boost_seconds,
         (settings.k_online * all_rows.online_seconds
-          + settings.k_boost * all_rows.boost_seconds)::numeric
+          + settings.k_boost * all_rows.boost_seconds
+          + settings.k_seed * all_rows.seed_seconds)::numeric
       FROM all_rows CROSS JOIN settings
       RETURNING player_id
     `;
@@ -236,13 +284,49 @@ export async function recomputeLeaderboardPeriod(
   });
 }
 
+/**
+ * Recomputes several periods in sequence.
+ *
+ * Accepts `RecomputePeriodInput[]` rather than `PeriodDescriptor[]` so a
+ * caller can mix the derived day/week/month/alltime descriptors from
+ * `periodsToRecompute` with a season descriptor carrying an explicit `range`
+ * (LEAD-7, #178). `PeriodDescriptor` is structurally assignable, so existing
+ * callers are unaffected.
+ */
 export async function recomputeLeaderboardPeriods(
   sql: postgres.Sql,
-  periods: PeriodDescriptor[],
+  periods: RecomputePeriodInput[],
 ): Promise<number> {
   let total = 0;
   for (const period of periods) {
     total += await recomputeLeaderboardPeriod(sql, period);
+  }
+  return total;
+}
+
+/**
+ * One-shot combat backfill (DOSSIER-4 #191): recomputes the `month` stat
+ * periods for the last `months` calendar months (current UTC month included,
+ * counting backwards), so historical `match_players` combat data lands in
+ * `player_stat_periods` without waiting for the regular tick to walk past it.
+ *
+ * @param sql - postgres.js connection.
+ * @param months - how many months to recompute; `<= 0` is a no-op.
+ * @param now - clock override for tests; defaults to the current time.
+ * @returns total number of `player_stat_periods` rows written.
+ */
+export async function backfillMonths(
+  sql: postgres.Sql,
+  months: number,
+  now: Date = new Date(),
+): Promise<number> {
+  let total = 0;
+  for (let i = 0; i < months; i += 1) {
+    const monthDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    total += await recomputeLeaderboardPeriod(sql, {
+      periodType: 'month',
+      periodStart: utcDayKey(monthDate),
+    });
   }
   return total;
 }

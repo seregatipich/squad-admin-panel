@@ -1,5 +1,44 @@
 # Changelog — worker-log-ingest
 
+## 2026-07-29
+
+### Fixed
+
+- #228: `test/vote-store.test.ts` / `test/match-roster-store.test.ts` moved their
+  hardcoded `players.eos_id`/`players.steam_id64` fixture literals to disjoint
+  per-file ranges — they previously shared `0002aaaa…`/`0002bbbb…`/`0002cccc…`
+  eos_ids and `76561198000000001`/`…004` steam_id64s with `test/combat-store.test.ts`,
+  so a persistent (non-recreated) database that still held one file's rows made
+  the next file's `beforeAll` insert fail on `players_eos_id_unique_idx` /
+  `players_steam_id64_unique_idx`. Invisible in CI, which provisions a fresh
+  database per run.
+- `test/fixture-isolation.regression.test.ts`: new static guard (mirrors
+  `apps/api/test/test-isolation.regression.test.ts`) asserting `combat-store`,
+  `vote-store` and `match-roster-store` never declare the same eos_id/steam_id64
+  fixture literal.
+
+## 2026-07-25
+
+### Added
+
+- DOSSIER-2 (#189): `src/combat/store.ts` now writes the typed `combat_events` row
+  and folds the per-weapon/per-vehicle dossier aggregates
+  (`player_weapon_stats`, `player_vehicle_stats`, `player_vehicle_kills`) via
+  `applyCombatEventToDossier`, in the **same transaction** as the `events` envelope
+  insert. The `combat_events` insert and the aggregate fold run only when the
+  envelope actually inserted, so offset replay never double-counts. The `live-bus`
+  publish stays outside the transaction.
+- `test/combat-store.test.ts` / `test/vehicle-store.test.ts`: DB-backed coverage of
+  the atomic `combat_events` + aggregate writes, teamkill vs kill, damage/shots
+  accumulation, attacker-vehicle stats, EOS-only aggregation by uuid, wound recorded
+  without aggregate movement, and replay idempotency.
+
+### Notes
+
+- `combat_events.match_id` is written `NULL`: the column is `bigint` while log-ingest
+  resolves a `uuid` match id (a COMBAT-2/DOSSIER-1 schema gap, out of scope). The
+  aggregates and the reconcile guard do not use it.
+
 ## 2026-07-09
 
 ### Added

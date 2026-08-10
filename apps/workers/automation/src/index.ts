@@ -91,15 +91,16 @@ async function main() {
   });
 
   const shutdown = async (sig: NodeJS.Signals) => {
-    log.info({ sig }, 'shutdown');
+    if (stopped) return;
     stopped = true;
+    log.info({ sig }, 'shutdown');
     stopHeartbeat();
     await dispatchLoop;
     await redis.quit().catch(() => undefined);
     process.exit(0);
   };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 
   log.info('worker-automation ready');
 }

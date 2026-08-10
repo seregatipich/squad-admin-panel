@@ -7,9 +7,35 @@ const MESSAGE_TRUNCATE_LIMIT = 200;
 
 let unhandledRejectionListenerAttached = false;
 
+const MAX_CAUSE_CHAIN_DEPTH = 5;
+
+/**
+ * drizzle-orm wraps the driver error, so the postgres `23514` raised by the
+ * `players_last_owner_guard` trigger can land on `err.cause` rather than on
+ * the thrown object directly — walk the chain (see isUniqueViolation in
+ * integrations-discord-role-mappings.ts for the same pattern).
+ */
+function isLastOwnerViolation(err: unknown): boolean {
+  let current: unknown = err;
+  for (let depth = 0; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++) {
+    if (typeof current === 'object') {
+      const candidate = current as { code?: unknown; constraint_name?: unknown };
+      if (candidate.code === '23514' && candidate.constraint_name === 'players_last_owner_guard') {
+        return true;
+      }
+    }
+    current = (current as { cause?: unknown } | null)?.cause;
+  }
+  return false;
+}
+
 export const errorDiagPlugin = fp(
   async (app: FastifyInstance) => {
     app.setErrorHandler((err: FastifyError, req, reply) => {
+      if (isLastOwnerViolation(err)) {
+        reply.code(409).send({ error: 'cannot_remove_last_owner' });
+        return;
+      }
       const replyStatus = reply.statusCode && reply.statusCode >= 400 ? reply.statusCode : 0;
       const status = replyStatus || err.statusCode || 500;
       if (status >= 500) {

@@ -4,8 +4,9 @@ import {
   roles,
   scheduledTaskRuns,
   scheduledTasks,
+  servers,
 } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { invalidatePermissionCache } from '../../src/lib/rbac.js';
@@ -28,6 +29,7 @@ let h: IntegrationHarness;
 beforeEach(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
+    seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
 });
@@ -65,16 +67,18 @@ async function createServer(cookie: string, slug = 'scheduled-tasks-server'): Pr
 /** Demotes the seeded owner to a role with the given panel access + squad permissions. */
 async function asRole(opts: {
   panelAccess?: boolean;
+  canEditRoles?: boolean;
   squadPermissions?: string[];
 }): Promise<string> {
   const roleId = uuidv7();
   await h.db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
-      name: `Sched-${roleId.slice(0, 8)}`,
+      name: `Sched-${roleId}`,
       color: 'blue',
       isSystemRole: false,
       panelAccess: opts.panelAccess ?? true,
+      canEditRoles: opts.canEditRoles ?? false,
     });
     for (const key of opts.squadPermissions ?? []) {
       await tx.insert(roleSquadPermissions).values({ roleId, squadPermissionKey: key });
@@ -521,5 +525,285 @@ describe('scheduled_tasks cascade', () => {
       .from(scheduledTasks)
       .where(eq(scheduledTasks.id, taskId));
     expect(remainingTasks).toHaveLength(0);
+  });
+});
+
+describe('MSG-4 (#187): broadcast rotation, fan-out, and the role:edit gate', () => {
+  async function extraServer(cookie: string, idx: number): Promise<string> {
+    const resp = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/servers',
+      headers: { cookie },
+      payload: {
+        display_name: `MSG4 Server ${idx}`,
+        slug: `msg4-server-${idx}`,
+        game_port: 7800 + idx * 10,
+        query_port: 27200 + idx * 10,
+        beacon_port: 15100 + idx * 10,
+        rcon_port: 21200 + idx * 10,
+        max_players: 80,
+        tickrate: 50,
+        multihome: '0.0.0.0',
+      },
+    });
+    if (resp.statusCode !== 201) throw new Error(`extra server create failed: ${resp.body}`);
+    return resp.json<{ id: string }>().id;
+  }
+
+  it('persists a 3-message rotation and returns 201 with the messages params', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverId}/scheduled-tasks`,
+      headers: { cookie },
+      payload: {
+        name: 'Rules rotation',
+        task_type: 'broadcast',
+        params: { messages: ['rule one', 'rule two', 'rule three'] },
+        recurrence: '*/30 * * * *',
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json<TaskOut & { rotation_index: number; also_created: unknown[] }>();
+    expect(body.params).toEqual({ messages: ['rule one', 'rule two', 'rule three'] });
+    expect(body.rotation_index).toBe(0);
+    expect(body.also_created).toEqual([]);
+  });
+
+  it('normalises a single-element messages array to the legacy {message} shape', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverId}/scheduled-tasks`,
+      headers: { cookie },
+      payload: {
+        name: 'Single message',
+        task_type: 'broadcast',
+        params: { message: 'just one' },
+        recurrence: '0 * * * *',
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json<TaskOut>().params).toEqual({ message: 'just one' });
+  });
+
+  it('rejects a broadcast recurring more often than every 5 minutes', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverId}/scheduled-tasks`,
+      headers: { cookie },
+      payload: {
+        name: 'Too spammy',
+        task_type: 'broadcast',
+        params: { message: 'spam' },
+        recurrence: '*/2 * * * *',
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'interval_too_short', min_interval_minutes: 5 });
+  });
+
+  it('accepts a broadcast recurring exactly every 5 minutes', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverId}/scheduled-tasks`,
+      headers: { cookie },
+      payload: {
+        name: 'Every five',
+        task_type: 'broadcast',
+        params: { message: 'ok' },
+        recurrence: '*/5 * * * *',
+      },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('does not apply the 5-minute floor to non-broadcast recurring tasks', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverId}/scheduled-tasks`,
+      headers: { cookie },
+      payload: { name: 'Frequent restart', task_type: 'restart', recurrence: '*/2 * * * *' },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('fans a broadcast out to extra servers: 3 rows, 3 audit rows, also_created length 2', async () => {
+    const cookie = await login();
+    const serverA = await createServer(cookie);
+    const serverB = await extraServer(cookie, 1);
+    const serverC = await extraServer(cookie, 2);
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverA}/scheduled-tasks`,
+      headers: { cookie },
+      payload: {
+        name: 'Fan out',
+        task_type: 'broadcast',
+        params: { message: 'to all' },
+        recurrence: '0 * * * *',
+        server_ids: [serverB, serverC],
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json<
+      TaskOut & { server_id: string; also_created: { id: string; server_id: string }[] }
+    >();
+    expect(body.server_id).toBe(serverA);
+    expect(body.also_created).toHaveLength(2);
+    expect([body.server_id, ...body.also_created.map((c) => c.server_id)].sort()).toEqual(
+      [serverA, serverB, serverC].sort(),
+    );
+
+    const allIds = [body.id, ...body.also_created.map((c) => c.id)];
+    const rows = await h.db.select().from(scheduledTasks).where(inArray(scheduledTasks.id, allIds));
+    expect(rows).toHaveLength(3);
+
+    for (const id of allIds) {
+      await assertAuditRow(h, {
+        action: 'server.scheduled_task.create',
+        resource: 'scheduled_task',
+        targetId: id,
+      });
+    }
+  });
+
+  it('rolls back the whole fan-out and returns 404 for an unknown target server', async () => {
+    const cookie = await login();
+    const serverA = await createServer(cookie);
+    const unknownId = '019f46a1-0000-7000-8000-0000000000ff';
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverA}/scheduled-tasks`,
+      headers: { cookie },
+      payload: {
+        name: 'Bad fan out',
+        task_type: 'broadcast',
+        params: { message: 'to all' },
+        recurrence: '0 * * * *',
+        server_ids: [unknownId],
+      },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ error: 'not_found', server_id: unknownId });
+
+    const rows = await h.db
+      .select()
+      .from(scheduledTasks)
+      .where(eq(scheduledTasks.serverId, serverA));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('returns 404 for a soft-deleted target server and creates nothing', async () => {
+    const cookie = await login();
+    const serverA = await createServer(cookie);
+    const serverB = await extraServer(cookie, 1);
+    await h.db.update(servers).set({ deletedAt: new Date() }).where(eq(servers.id, serverB));
+
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverA}/scheduled-tasks`,
+      headers: { cookie },
+      payload: {
+        name: 'Deleted target',
+        task_type: 'broadcast',
+        params: { message: 'x' },
+        recurrence: '0 * * * *',
+        server_ids: [serverB],
+      },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ error: 'not_found', server_id: serverB });
+
+    const rows = await h.db
+      .select()
+      .from(scheduledTasks)
+      .where(eq(scheduledTasks.serverId, serverA));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('rejects a broadcast from a caller with chat but without role:edit', async () => {
+    const ownerCookie = await login();
+    const serverId = await createServer(ownerCookie);
+    const cookie = await asRole({
+      panelAccess: true,
+      canEditRoles: false,
+      squadPermissions: ['chat'],
+    });
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverId}/scheduled-tasks`,
+      headers: { cookie },
+      payload: {
+        name: 'No role edit',
+        task_type: 'broadcast',
+        params: { message: 'hi' },
+        recurrence: '0 * * * *',
+      },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: 'forbidden', required_permission: 'role:edit' });
+  });
+
+  it('keeps the existing chat 403 for a caller with role:edit but without chat', async () => {
+    const ownerCookie = await login();
+    const serverId = await createServer(ownerCookie);
+    const cookie = await asRole({
+      panelAccess: true,
+      canEditRoles: true,
+      squadPermissions: ['changemap'],
+    });
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverId}/scheduled-tasks`,
+      headers: { cookie },
+      payload: {
+        name: 'No chat',
+        task_type: 'broadcast',
+        params: { message: 'hi' },
+        recurrence: '0 * * * *',
+      },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: 'forbidden', required_squad_permission: 'chat' });
+  });
+
+  it('keeps a disabled broadcast rule (enabled:false) present rather than deleting it', async () => {
+    const cookie = await login();
+    const serverId = await createServer(cookie);
+    const createRes = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${serverId}/scheduled-tasks`,
+      headers: { cookie },
+      payload: {
+        name: 'Toggleable',
+        task_type: 'broadcast',
+        params: { messages: ['a', 'b'] },
+        recurrence: '0 * * * *',
+      },
+    });
+    const taskId = createRes.json<{ id: string }>().id;
+
+    const patchRes = await h.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/servers/${serverId}/scheduled-tasks/${taskId}`,
+      headers: { cookie },
+      payload: { enabled: false },
+    });
+    expect(patchRes.statusCode).toBe(200);
+    expect(patchRes.json<TaskOut>().enabled).toBe(false);
+
+    const rows = await h.db.select().from(scheduledTasks).where(eq(scheduledTasks.id, taskId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.enabled).toBe(false);
   });
 });

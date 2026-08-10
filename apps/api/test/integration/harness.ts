@@ -26,98 +26,7 @@ import installProgressPlugin from '../../src/plugins/install-progress.js';
 import liveBusPlugin from '../../src/plugins/live-bus.js';
 import requestContextPlugin from '../../src/plugins/request-context.js';
 import statusReconcilerPlugin from '../../src/plugins/status-reconciler.js';
-import adminsCfgRoutes from '../../src/routes/admins-cfg.js';
-import alertRulesRoutes from '../../src/routes/alert-rules.js';
-import analyticsRoutes from '../../src/routes/analytics.js';
-import auditRoutes from '../../src/routes/audit.js';
-import authRoutes from '../../src/routes/auth.js';
-import automationRulesRoutes from '../../src/routes/automation-rules.js';
-import banSourcesRoutes from '../../src/routes/ban-sources.js';
-import bannedNamesRoutes from '../../src/routes/banned-names.js';
-import chatRoutes from '../../src/routes/chat.js';
-import clansRoutes from '../../src/routes/clans.js';
-import combatEventsRoutes from '../../src/routes/combat-events.js';
-import depotRoutes from '../../src/routes/depot.js';
-import economyRoutes from '../../src/routes/economy.js';
-import eventsRoutes from '../../src/routes/events.js';
-import externalBansRoutes from '../../src/routes/external-bans.js';
-import hostRoutes from '../../src/routes/host.js';
-import hostActionsRoutes from '../../src/routes/host-actions.js';
-import hostBackupRoutes from '../../src/routes/host-backup.js';
-import integrationsDiscordRoutes from '../../src/routes/integrations-discord.js';
-import integrationsGeoipRoutes from '../../src/routes/integrations-geoip.js';
-import integrationsVipRoutes from '../../src/routes/integrations-vip.js';
-import issuesRoutes from '../../src/routes/issues.js';
-import layersRoutes from '../../src/routes/layers.js';
-import leaderboardsRoutes from '../../src/routes/leaderboards.js';
-import liveRoutes from '../../src/routes/live.js';
-import logsRoutes from '../../src/routes/logs.js';
-import markTypesRoutes from '../../src/routes/mark-types.js';
-import marksRoutes from '../../src/routes/marks.js';
-import matchesRoutes from '../../src/routes/matches.js';
-import meTokensRoutes from '../../src/routes/me-tokens.js';
-import mediaRoutes from '../../src/routes/media.js';
-import messageTemplatesRoutes from '../../src/routes/message-templates.js';
-import moderationActionsRoutes from '../../src/routes/moderation-actions.js';
-import notesFeedRoutes from '../../src/routes/notes-feed.js';
-import permissionsRoutes from '../../src/routes/permissions.js';
-import playerAltCandidatesRoutes from '../../src/routes/player-alt-candidates.js';
-import playerBanAltWarningRoutes from '../../src/routes/player-ban-alt-warning.js';
-import playerCompareOnlineRoutes from '../../src/routes/player-compare-online.js';
-import playerCoplayRoutes from '../../src/routes/player-coplay.js';
-import playerDossierStatsRoutes from '../../src/routes/player-dossier-stats.js';
-import playerGeoAnomaliesRoutes from '../../src/routes/player-geo-anomalies.js';
-import playerLinksRoutes from '../../src/routes/player-links.js';
-import playerMatchesRoutes from '../../src/routes/player-matches.js';
-import playerNotesRoutes from '../../src/routes/player-notes.js';
-import playerPresenceRoutes from '../../src/routes/player-presence.js';
-import playerSeedContributionRoutes from '../../src/routes/player-seed-contribution.js';
-import playerSteamFriendCheckRoutes from '../../src/routes/player-steam-friend-check.js';
-import playerRoutes from '../../src/routes/players.js';
-import publicBanlistRoutes from '../../src/routes/public-banlist.js';
-import publicClansRoutes from '../../src/routes/public-clans.js';
-import publicStatsRoutes from '../../src/routes/public-stats.js';
-import reportActionsRoutes from '../../src/routes/report-actions.js';
-import reportAnalyticsRoutes from '../../src/routes/report-analytics.js';
-import reportsRoutes from '../../src/routes/reports.js';
-import roleAssignmentsRoutes from '../../src/routes/role-assignments.js';
-import roleMembersRoutes from '../../src/routes/role-members.js';
-import rolesRoutes from '../../src/routes/roles.js';
-import archiveRoutes from '../../src/routes/server-archive.js';
-import serverChatCommandsRoutes from '../../src/routes/server-chat-commands.js';
-import serverConfigRoutes from '../../src/routes/server-configs.js';
-import forceStopRoutes from '../../src/routes/server-force-stop.js';
-import serverInstallRoutes from '../../src/routes/server-install.js';
-import serverLogFilesRoutes from '../../src/routes/server-log-files.js';
-import serverLogsRoutes from '../../src/routes/server-logs.js';
-import serverMapRoutes from '../../src/routes/server-map.js';
-import serverMessagingRoutes from '../../src/routes/server-messaging.js';
-import serverMetricsRoutes from '../../src/routes/server-metrics.js';
-import serverRosterRoutes from '../../src/routes/server-roster.js';
-import serverRotationRoutes from '../../src/routes/server-rotation.js';
-import serverRotationCalendarRoutes from '../../src/routes/server-rotation-calendar.js';
-import serverScheduledTasksRoutes from '../../src/routes/server-scheduled-tasks.js';
-import serverSeedNotificationRoutes from '../../src/routes/server-seed-notifications.js';
-import serverSeedScheduleRoutes from '../../src/routes/server-seed-schedule.js';
-import serverSeedingRoutes from '../../src/routes/server-seeding.js';
-import serverSettingsRoutes from '../../src/routes/server-settings.js';
-import serverUpdateRoutes from '../../src/routes/server-update.js';
-import serverRoutes from '../../src/routes/servers.js';
-import settingsAltDetectionRoutes from '../../src/routes/settings-alt-detection.js';
-import settingsBanlistPublicationRoutes from '../../src/routes/settings-banlist-publication.js';
-import settingsChatFlagsRoutes from '../../src/routes/settings-chat-flags.js';
-import settingsClanGuardRoutes from '../../src/routes/settings-clan-guard.js';
-import settingsCoplayRoutes from '../../src/routes/settings-coplay.js';
-import settingsEconomyRoutes from '../../src/routes/settings-economy.js';
-import setupRoutes from '../../src/routes/setup.js';
-import suspectsRoutes from '../../src/routes/suspects.js';
-import teamkillsRoutes from '../../src/routes/teamkills.js';
-import usersRoutes from '../../src/routes/users.js';
-import vehicleCatalogRoutes from '../../src/routes/vehicle-catalog.js';
-import vipTiersRoutes from '../../src/routes/vip-tiers.js';
-import voteAnalyticsRoutes from '../../src/routes/vote-analytics.js';
-import votesRoutes from '../../src/routes/votes.js';
-import whitelistRoutes from '../../src/routes/whitelist.js';
+import { registerRoutes } from '../../src/routes/index.js';
 import { createIsolatedSchema, hostDbUrl, hostRedisUrl } from './isolated-db.js';
 
 export { createIsolatedSchema };
@@ -369,6 +278,13 @@ export interface BuildAppOptions {
   bridge?: FakeBridge;
   /** Whether to seed an owner player (roles come from migration 0009). */
   seedOwner?: { steamId64: bigint; canonicalName?: string };
+  /**
+   * Whether to seed an unloginable backup Owner alongside `seedOwner`.
+   * Defaults to false for a production-like single-Owner fixture. Enable only
+   * when a test intentionally demotes its authenticated Owner to exercise RBAC
+   * — migration 0107's last-Owner guard trigger otherwise rejects that update.
+   */
+  seedOwnerGuard?: boolean;
   /** Whether to run status-reconciler + other heavy plugins. Off by default. */
   withStatusReconciler?: boolean;
   /**
@@ -379,6 +295,8 @@ export interface BuildAppOptions {
    * isolated schema. Isolate such suites with their own dedicated database.
    */
   reusePublicSchema?: boolean;
+  /** DISCORD-6 (#153): raw Ed25519 public key the interactions route verifies against. */
+  discordInteractionsPublicKey?: string;
 }
 
 export interface IntegrationHarness {
@@ -428,6 +346,14 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     SESSION_TTL_SECONDS: 21600,
     SESSION_TOUCH_THROTTLE_SECONDS: 60,
     MEDIA_STORAGE_DIR: mediaDir,
+    // OAuth round-trip config (DISCORD-4) and the origin the delegated-upload
+    // link is built against (VIDEO-3): both need a public origin, and the
+    // Discord routes also need client credentials to build their redirects.
+    // The values are inert — every outbound call is faked by the test.
+    PANEL_PUBLIC_URL: 'https://panel.test',
+    DISCORD_PUBLIC_KEY: opts.discordInteractionsPublicKey,
+    DISCORD_CLIENT_ID: 'test-discord-client-id',
+    DISCORD_CLIENT_SECRET: 'test-discord-client-secret',
   });
   app.decorate('encryptionKey', Buffer.from(TEST_ENCRYPTION_KEY, 'base64'));
   app.decorate('db', db);
@@ -470,98 +396,7 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     });
   }
 
-  await app.register(authRoutes);
-  await app.register(setupRoutes);
-  await app.register(meTokensRoutes);
-  await app.register(messageTemplatesRoutes);
-  await app.register(permissionsRoutes);
-  await app.register(rolesRoutes);
-  await app.register(roleMembersRoutes);
-  await app.register(roleAssignmentsRoutes);
-  await app.register(usersRoutes);
-  await app.register(hostRoutes);
-  await app.register(hostActionsRoutes);
-  await app.register(hostBackupRoutes);
-  await app.register(serverRoutes);
-  await app.register(serverRosterRoutes);
-  await app.register(serverSeedingRoutes);
-  await app.register(serverSeedScheduleRoutes);
-  await app.register(serverScheduledTasksRoutes);
-  await app.register(serverChatCommandsRoutes);
-  await app.register(serverSeedNotificationRoutes);
-  await app.register(serverSettingsRoutes);
-  await app.register(serverUpdateRoutes);
-  await app.register(archiveRoutes);
-  await app.register(serverInstallRoutes);
-  await app.register(forceStopRoutes);
-  await app.register(serverLogsRoutes);
-  await app.register(serverLogFilesRoutes);
-  await app.register(serverMapRoutes);
-  await app.register(serverMessagingRoutes);
-  await app.register(serverMetricsRoutes);
-  await app.register(serverConfigRoutes);
-  await app.register(serverRotationRoutes);
-  await app.register(serverRotationCalendarRoutes);
-  await app.register(depotRoutes);
-  await app.register(playerRoutes);
-  await app.register(issuesRoutes);
-  await app.register(marksRoutes);
-  await app.register(markTypesRoutes);
-  await app.register(suspectsRoutes);
-  await app.register(matchesRoutes);
-  await app.register(playerMatchesRoutes);
-  await app.register(playerPresenceRoutes);
-  await app.register(playerCompareOnlineRoutes);
-  await app.register(playerSeedContributionRoutes);
-  await app.register(playerSteamFriendCheckRoutes);
-  await app.register(playerCoplayRoutes);
-  await app.register(playerAltCandidatesRoutes);
-  await app.register(playerBanAltWarningRoutes);
-  await app.register(playerLinksRoutes);
-  await app.register(playerDossierStatsRoutes);
-  await app.register(playerGeoAnomaliesRoutes);
-  await app.register(leaderboardsRoutes);
-  await app.register(economyRoutes);
-  await app.register(mediaRoutes);
-  await app.register(settingsEconomyRoutes);
-  await app.register(settingsChatFlagsRoutes);
-  await app.register(settingsClanGuardRoutes);
-  await app.register(settingsAltDetectionRoutes);
-  await app.register(settingsBanlistPublicationRoutes);
-  await app.register(settingsCoplayRoutes);
-  await app.register(clansRoutes);
-  await app.register(chatRoutes);
-  await app.register(combatEventsRoutes);
-  await app.register(teamkillsRoutes);
-  await app.register(vehicleCatalogRoutes);
-  await app.register(layersRoutes);
-  await app.register(vipTiersRoutes);
-  await app.register(votesRoutes);
-  await app.register(voteAnalyticsRoutes);
-  await app.register(reportsRoutes);
-  await app.register(reportActionsRoutes);
-  await app.register(reportAnalyticsRoutes);
-  await app.register(moderationActionsRoutes);
-  await app.register(eventsRoutes);
-  await app.register(playerNotesRoutes);
-  await app.register(notesFeedRoutes);
-  await app.register(auditRoutes);
-  await app.register(logsRoutes);
-  await app.register(integrationsDiscordRoutes);
-  await app.register(integrationsGeoipRoutes);
-  await app.register(integrationsVipRoutes);
-  await app.register(liveRoutes);
-  await app.register(adminsCfgRoutes);
-  await app.register(analyticsRoutes);
-  await app.register(publicStatsRoutes);
-  await app.register(publicClansRoutes);
-  await app.register(publicBanlistRoutes);
-  await app.register(bannedNamesRoutes);
-  await app.register(banSourcesRoutes);
-  await app.register(externalBansRoutes);
-  await app.register(alertRulesRoutes);
-  await app.register(automationRulesRoutes);
-  await app.register(whitelistRoutes);
+  await registerRoutes(app);
 
   // Test fixture: legacy "Viewer" role used by older permission-bound
   // tests (depot, host-actions, logs, rbac, ...). The production seed
@@ -583,15 +418,27 @@ export async function buildIntegrationApp(opts: BuildAppOptions = {}): Promise<I
     if (!ownerRoleId) throw new Error('Owner role missing — migration 0009 not applied?');
     const insertedPlayers = await db
       .insert(players)
-      .values({
-        steamId64: ownerSteamId64,
-        canonicalName,
-        canonicalNameNormalized: canonicalName.toLowerCase(),
-        roleId: ownerRoleId,
-      })
-      .returning({ id: players.id });
+      .values([
+        {
+          steamId64: ownerSteamId64,
+          canonicalName,
+          canonicalNameNormalized: canonicalName.toLowerCase(),
+          roleId: ownerRoleId,
+        },
+        ...(opts.seedOwnerGuard === true
+          ? [
+              {
+                steamId64: null,
+                canonicalName: 'Integration Owner Guard',
+                canonicalNameNormalized: 'integration owner guard',
+                roleId: ownerRoleId,
+              },
+            ]
+          : []),
+      ])
+      .returning({ id: players.id, steamId64: players.steamId64 });
     seed.ownerSteamId64 = ownerSteamId64;
-    seed.ownerPlayerId = insertedPlayers[0]?.id;
+    seed.ownerPlayerId = insertedPlayers.find((player) => player.steamId64 === ownerSteamId64)?.id;
   }
 
   await app.ready();

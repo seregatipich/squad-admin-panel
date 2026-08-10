@@ -43,6 +43,7 @@ beforeEach(async () => {
   vi.mocked(relaunchSidecar).mockClear();
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
+    seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
 });
@@ -654,7 +655,9 @@ describe('RBAC enforcement on /api/v1/servers', () => {
       .update(players)
       .set({ roleId: viewerRoleId })
       .where(eq(players.steamId64, h.seed.ownerSteamId64));
-    invalidatePermissionCache(h.seed.ownerPlayerId!);
+    if (!h.seed.ownerPlayerId)
+      throw new Error('seed owner missing; pass seedOwner to buildIntegrationApp');
+    invalidatePermissionCache(h.seed.ownerPlayerId);
 
     const cookie = await login();
     const resp = await h.app.inject({

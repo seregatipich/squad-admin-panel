@@ -1,5 +1,208 @@
 # `api` — changelog
 
+## 2026-08-04 — Per-server "update game" now streams real progress
+
+### Fixed
+
+- `POST /api/v1/servers/:id/update` (`routes/server-update.ts`) wrote its SteamCMD output to a `server:update:{id}` Redis Stream that nothing ever read — the panel's "Обновить игру" button showed a spinner for the instant the fire-and-forget POST took to return, then silently reverted with zero indication that a multi-minute update was still running in the background. The endpoint now publishes into the same shared `depot:progress` stream `POST /api/v1/depot/update` already used (both ultimately call the same `bridge.depot_update`, guarded by the same `depot:updating` lock — there is only ever one depot update running at a time), so it's watchable through the existing `GET /api/v1/depot/progress/ws`.
+- That WS route never carried a completion signal, so even the fleet-wide "Обновить Squad" dashboard flow had the identical silent-progress gap despite the route already existing. New shared helper [`lib/depot-progress.ts`](../../../apps/api/src/lib/depot-progress.ts) (`publishDepotProgressLine`/`publishDepotProgressDone`) writes a terminal `stream:'event'` entry (`{done:true, final:'done'|'error', error?}`) from both routes' background jobs' `finally` blocks. The WS route forwards it, sends a `{backfill_complete:true}` marker between history replay and live tail so a stale/historical `done` (a prior, already-finished run) is never mistaken for the current one, and synthesizes an immediate done frame from `depot:last_update` for a client that connects after the run it triggered has already finished.
+- Fixed a latent self-inflicted stall this change would otherwise have activated: the WS route's blocking `XREAD` ran on the shared `app.redis` singleton, which would queue every other route's Redis command behind it for up to 5 s at a time for as long as any tab had the progress view open — invisible until now because nothing actually connected to this route before. It now runs on a per-connection `app.redis.duplicate()`, matching the existing pattern in `plugins/live-bus.ts`.
+- New web component `UpdateProgressModal` (mirrors the existing install-wizard's WS-into-`LogConsole` pattern) is wired into both the per-server update button and the fleet dashboard's depot-update flow.
+- Also fixed while touching the dashboard's depot-update call site: it posted `{stop_server_ids: serverIds}` to `POST /api/v1/depot/update`, but the route's Zod schema reads `server_ids` — the "select servers to stop first" checkboxes in `DepotUpdateModal` never actually took effect.
+
+## 2026-07-29 — WS routes added to the permission-matrix auth-boundary sweep (#250)
+
+### Added
+
+- `test/security/permission-matrix.test.ts`'s `collectProtectedRoutes()` no longer silently drops `websocket: true` routes before generating test cases. `live.ts`'s and `server-logs.ts`'s route plugins are now registered in the bare route-collection app (a `liveBus.subscribe(...)` stub was added since `live.ts` calls it at plugin registration time), and the `onRoute` hook tags `websocket === true` routes into a new `wsRoutes` set instead of returning early — still excluded from the `.inject()`-based REST sweep, which cannot complete a WebSocket upgrade. A new `permission matrix coverage` canary asserts `wsRoutes` equals exactly the four currently-permissioned websocket routes (`/api/v1/ws/live`, `/api/v1/servers/:id/logs/ws`, `/api/v1/servers/:id/install/ws`, `/api/v1/depot/progress/ws`), each requiring `['server:view']`.
+- New `test/security/ws-auth-boundary.test.ts`: connects a real `ws` client, with no session cookie, to all four routes above against the real `buildIntegrationApp()` harness and asserts each upgrade is rejected 401 (via `ws`'s `'unexpected-response'` event) before the socket opens — the actual regression proof that a future route addition or accidental permission removal on a websocket route fails CI instead of relying on manual source review.
+- No production code changed: `plugins/auth.ts`'s fail-closed `onRequest` gate already rejected these unauthenticated upgrades correctly; this closes a test-coverage gap (#230), not a behavior bug.
+
+## 2026-07-29 — Fail-open permission default flipped to fail-closed (#246)
+
+### Fixed
+
+- **Security:** `plugins/auth.ts`'s global `onRequest` hook used to return early — no session required — whenever a route declared no `config.permissions`, treating "nobody added permissions" as "public". `GET /api/docs*` (the full OpenAPI schema and Swagger UI) and `GET /api/v1/host/bridge-status` shipped to production unauthenticated this way. Auditing every route/plugin file found three more live instances: `GET /api/v1/health/workers`, `GET /api/v1/health/reconciler`, and the `integrations-balancer.ts`/`integrations-vip.ts` webhook routes.
+- The hook is now **fail-closed**: a route requires `req.user` unless it declares the new `config.public: true` (`plugins/types.ts`). `config.permissions` still narrows further as before. `GET /api/v1/host/bridge-status`, `GET /api/v1/health/workers`, and `GET /api/v1/health/reconciler` now require `host:view`, matching the sibling `GET /api/v1/host/info`. `public-banlist.ts`'s `GET /api/v1/public/banlist` gets `config.permissions: ['banlist:read']` declared (a drift correction — the in-handler check already enforced it).
+- `config.public: true` is now explicit on every route that was already intentionally anonymous: `GET /health`, `GET /ready`, `GET /metrics`, the signature-gated webhooks (`integrations-balancer.ts`, `integrations-vip.ts`, `discord-interactions.ts`), the public data portals (`public-stats.ts`, `public-clans.ts`, `public-appeals.ts`, `public-media.ts`), the Steam OAuth entry points (`auth-steam.ts`), and `setup.ts`'s `GET /status` probe. `POST /api/v1/setup/complete` is unchanged — its in-handler `if (!req.user)` check already matched the new default.
+- `GET /api/docs*` needed no route-level change: `authPlugin` is registered via `fastify-plugin`, so its hook applies at Fastify's root scope to every descendant route regardless of registration order.
+- See the "#246: invert the auth hook to fail-closed" entry in [`architecture/decisions.md`](../../architecture/decisions.md) and the "Fail-closed default" section of [`architecture/rbac.md`](../../architecture/rbac.md#enforcement).
+
+## 2026-07-29 — isolated-db fails loudly instead of guessing a Postgres password (#221)
+
+### Fixed
+
+- `test/integration/isolated-db.ts`'s `hostDbUrl()`/`testDbUrl` no longer fall back to the literal password `admin` when `POSTGRES_PASSWORD`, `DATABASE_URL`, and the repo `.env` all fail to resolve one — that silent default masked a genuinely misconfigured environment as a connection that happened to work. The password resolution (`resolveDbPassword()`) and the default URL it feeds (`defaultDbUrl()`) are now lazy functions, evaluated only inside the `process.env.TEST_DATABASE_URL ?? …` short-circuits in `hostDbUrl()` and the `testDbUrl` export, so a run with `TEST_DATABASE_URL` already set never evaluates them and never throws. When none of the three sources resolves a password, they throw an `Error` whose message contains `Postgres password` instead of connecting as `admin`.
+
+## 2026-07-29 — Run-id-scoped test-db sweep (#212)
+
+### Fixed
+
+- `test/integration/global-setup.ts`'s `dropTestDatabases()` no longer sweeps every `sqtest_*`/`sqtmpl_*`/`sqworker_*` database in the cluster — `pg_database`/`DROP DATABASE` are cluster-wide, so that unscoped sweep let one local session's `globalSetup`/teardown destroy a concurrently-running session's still-live template and worker databases. `global-setup.ts` now generates a random `runId` once per invocation (`randomBytes(4).toString('hex')`), threads it to workers via the new `'squadRunId'` Vitest `provide`/`inject` key (mirroring the existing `'squadTemplateDb'` key), and `isolated-db.ts`'s new `useRunId`/`currentRunId` embed it into every constructed database name (`sqtmpl_<runId>_shared_*`, `sqtmpl_<runId>_<pid>_*`, `sqtest_<runId>_*`, `sqworker_<runId>_<pid>_*`). `dropTestDatabases(runId)` is now exported and scopes its `WHERE` clause to `<prefix>_<runId>_%`, so a sweep only ever drops its own run's leftovers.
+
+## 2026-07-27 — DISCORD-5 роль-синк: роль панели → роль Discord (#152)
+
+### Added
+
+- Five routes in the new [`routes/integrations-discord-role-mappings.ts`](../../../apps/api/src/routes/integrations-discord-role-mappings.ts), all gated on the existing catalogue key `integration:manage` (declarative `config.permissions`; `app.requirePermission(...)` does not exist):
+  - `GET /api/v1/integrations/discord/role-mappings` → `{ items[], status }`. Each item is `{ id, role_id, role_name, discord_role_id, source, enabled, created_at, updated_at }`; `role_name` comes from an inner join on `roles`. `source` is the constant `panel_role` and is **synthesised, not stored** — leaderboard-driven roles (top-kills, playtime tiers) are a post-STATS-3 extension that will bring their own columns.
+  - `POST …/role-mappings` — `{ role_id, discord_role_id, enabled? }` → `201`. `404 role_not_found` for an unknown panel role, `409 role_mapping_exists` when the role is already mapped (unique `role_id`), `400` for a `discord_role_id` that is not a snowflake.
+  - `PATCH …/role-mappings/:id` — `{ discord_role_id?, enabled? }`; `404 mapping_not_found`.
+  - `DELETE …/role-mappings/:id` → `{ ok: true }`; `404 mapping_not_found`. Deleting a mapping deliberately does **not** revoke the Discord role — once the mapping is gone the panel no longer manages that role, so reconcile leaves every holder alone instead of mass-revoking.
+  - `POST …/role-mappings/reconcile` → `{ enqueued: true }` — asks worker-discord for a full drift repair now.
+  All four mutations declare `config.audit`, so `plugins/audit.ts` persists `discord.role_mapping.create` / `.update` / `.delete` / `.reconcile` against `discord_role_mapping`.
+- [`lib/discord-role-sync.ts`](../../../apps/api/src/lib/discord-role-sync.ts) — `publishDiscordRoleSync(redis, playerId|null, reason, log?)` (`XADD discord:role-sync MAXLEN ~ 10000`) and `readDiscordRoleSyncStatus(redis)`. The publish is deliberately best-effort and never throws: it runs *after* the role transaction commits, so a Redis blip must not turn a successful role change into a 500, and worker-discord's hourly reconcile re-derives everything anyway. There is no outbox table for the same reason.
+- `PUT` and `DELETE /api/v1/players/:playerId/role` ([`routes/players.ts`](../../../apps/api/src/routes/players.ts)) publish a per-player sync request after their transaction commits, with `reason` `player.role.assign` / `player.role.unassign`. This is the ≤60 s reaction path.
+- The `status` field on the list route is the worker's last role-sync outcome, read from the Redis key `discord:role-sync:status` (`{ state, reason, message, checked_at }`, or `null` when the worker never reported). It exists so a bot missing **Manage Roles** surfaces in the settings UI instead of failing silently; an unreachable Redis or an unparseable value degrades to `null` rather than failing the request.
+
+### Notes
+
+- `GET /api/v1/me` is unchanged — no capability boolean was added. The UI gates by self-hiding on `403`.
+- `isUniqueViolation` here walks the `err.cause` chain: drizzle-orm 0.45 wraps the driver error, so the flat `err.code === '23505'` check used in `routes/marks.ts` does not match.
+## 2026-07-27 — LEAD-7 сезоны лидербордов (#178)
+
+### Added
+
+- `GET /api/v1/seasons` ([`routes/seasons.ts`](../../../apps/api/src/routes/seasons.ts)): lists named leaderboard seasons behind `panel_access`, optional `?status=upcoming|active|closed`. Returns `{ items: Season[] }`, `Season = { id, name, starts_at, ends_at, status, finalized }`.
+- `POST /api/v1/seasons` and `PATCH /api/v1/seasons/:id`: gated on the **`can_edit_roles` capability flag** (Owner short-circuits it in `lib/rbac.ts`), matching the VIP tier catalogue. The flag is *not* exposed by `GET /api/v1/me`, so the UI hides its management surface on a 403 rather than reading a boolean. Errors: `400 invalid_bounds`, `409 active_season_exists`, `409 season_name_taken`, `404 season_not_found`, `422 season_finalized` (a frozen season's window and lifecycle stop moving, so the stored slice keeps describing the season it belongs to). A season cannot be created directly in the `closed` state.
+- Both conflicts are SQLSTATE **23505**, so the handler distinguishes "second active season" from "duplicate name" by the violated constraint name. drizzle-orm 0.45.2 wraps driver errors — the thrown error's message is only `Failed query: …`, and the SQLSTATE plus `constraint_name` sit on `err.cause` — so the route walks the cause chain rather than matching on the message.
+- New audit actions `season.create` / `season.update`, both carrying before/after snapshots.
+
+### Changed
+
+- `GET /api/v1/leaderboards` no longer fails for `period=season`. `resolvePeriodStart` used to throw when `period_start` was omitted; the route now resolves the **active** season (`400 no_active_season` when there is none), looks up the named season when `period_start` *is* supplied (the archive view), and reports it as a new `season` payload field (`null` for every other period). `period_start` is derived as the season's start day in **UTC**, matching the day convention the aggregator materialises rows under.
+- [`plugins/audit.ts`](../../../apps/api/src/plugins/audit.ts) gains an opt-in `req.auditSnapshots = { before?, after?, targetId? }` channel. The declarative `config.audit` hook previously wrote no before/after, so a route needing them had to opt out with `audit: false` — which `test/audit-coverage.test.ts` allows for only three allowlisted URLs. Routes that do not set the field behave exactly as before.
+## 2026-07-27 — VIDEO-4 внешняя публикация медиа (#160)
+
+### Added
+
+- `POST /api/v1/media/:id/publications` ([`routes/media-publications.ts`](../../../apps/api/src/routes/media-publications.ts)): queues a stored media file for fan-out. Body `{ destinations: ('youtube'|'telegram')[] }`. Gated on `can_manage_media` (`403 { error: 'forbidden', required: 'can_manage_media' }`). `404 media_not_found` for an unknown/soft-deleted file; `400 not_a_stored_file` for an `external_link` row, which has no bytes of ours to upload; `409 { error: 'already_queued', destinations }` when any requested direction already has a row — **all-or-nothing**, so a caller's retry is never ambiguous. The 409 path pre-checks *and* catches the unique violation, walking the error `cause` chain: drizzle-orm 0.45 wraps SQLSTATE `23505` where a flat `err.code === '23505'` check misses it and would 500 on the race.
+- `GET /api/v1/media/:id/publications`: per-destination status for any panel user. A quota-blocked job appears here as `status: 'queued'` with `error: 'quota_exceeded'` and a future `next_attempt_at` — never `failed`.
+- `DELETE /api/v1/media/:id/publications/:destination`: removes a publication (`can_manage_media`; `404 publication_not_found`).
+- `GET /api/v1/integrations/media-publishing`: `{ youtube_configured, telegram_configured, release_local_file }`. Reports credential **presence only** — no value, not even masked. YouTube counts as configured only with the full OAuth triple; a partially filled app reads as unconfigured, because a two-of-three refresh only produces a confusing auth failure.
+- `PATCH /api/v1/integrations/media-publishing`: flips `release_local_file` (`can_manage_media`).
+- Config ([`config.ts`](../../../apps/api/src/config.ts)): optional `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`. The API never calls either service — it only reports whether the worker could.
+- Audit: `media.publish`, `media.publish.delete`, `media.publish.settings.update`, all written by hand (`config: { audit: false }`, matching the rest of the media modules). `apps/api/test/media-publications.test.ts` asserts no publishing secret reaches an audit row.
+
+### Changed
+
+- `worker-media-publisher` added to both compose files, and `api` now shares a persistent `media_data` volume with it at `/var/lib/squad-panel/media` (`MEDIA_STORAGE_DIR`). The two containers have different WORKDIRs, so the previous relative `./media` default resolved to two separate ephemeral directories — the publisher would have found nothing to upload.
+
+## 2026-07-27 — MOD-4 массовые операции модерации (#61)
+
+### Added
+
+- `POST /api/v1/moderation-actions/bulk` ([`routes/moderation-bulk.ts`](../../../apps/api/src/routes/moderation-bulk.ts)): applies one warn/kick/ban to up to 50 players in a single request, enforcing each target through MOD-2's [`lib/moderation-enforce.ts`](../../../apps/api/src/lib/moderation-enforce.ts). Body `{ server_id, action_type, player_ids, reason, ban_length?, confirm_bulk: true }`; `confirm_bulk` must be the literal `true` (server half of the UI's double confirmation) and repeated ids are deduplicated. **The operation is deliberately non-transactional**: each target's ledger row is written immediately after its RCON command is confirmed, a failure is reported in `results[]` and the loop continues, and the response stays `200` — see the "Bulk moderation" section of [`api.md`](./api.md) for the full semantics, the per-target error codes, and the 25 s time budget. RBAC uses the existing catalog keys only (`mod:warn`/`mod:kick`/`mod:ban_temp`/`mod:ban_perm`, themselves gated on the role's Squad `kick`/`ban` permission by `derivePanelPermissions`); no new permission key was introduced. New audit action `moderation.bulk_action` — one row per target reached through RCON (`target_type='player'`) plus a summary row naming every target (`target_type='server'`), all sharing the request's `bulk_group` in `context`. No migration: the grouping lives in `moderation_actions.context`.
+- Web: `apps/web/src/components/BulkModerationModal.tsx` (two-step confirmation — a form, then a target list where a ban additionally requires typing the target count back — plus an `applied`/`failed` result screen with per-target reasons) and multi-select in the live-roster table (`servers/[id]/live-players.tsx`), gated on the caller's `mod:*` keys from `GET /api/v1/me`.
+
+## 2026-07-27 — MOD-3 доказательства для действий модерации (#60)
+
+### Added
+
+- `POST /api/v1/players/:playerId/moderation-actions` body gains optional `evidence_media_ids` — up to 10 ids of existing, non-deleted `media_files` rows. Each becomes a `media_links` row with `entity_type='moderation_action'`, `entity_id` = the new action's id, and `linked_by_player_id` = the caller. Duplicates in the array are deduplicated. `moderation_actions` itself gains no column: `media_links` (VIDEO-2, #158) is the canonical evidence store, so this task ships **no migration**.
+- The ids are validated **before** the RCON command is sent — an unknown or soft-deleted id returns `400 { error: 'evidence_media_not_found', media_id }` and nothing is enforced, so a bad id can never leave a player banned in-game with no ledger row to revert. More than 10 ids is a `400` from the body schema.
+- Every moderation-action read gains `evidence[]` and `evidence_count`. Each item carries `{ id, kind, external_url, original_filename, mime_type, size_bytes, title, linked_by_player_id, linked_at }`. Applies to `GET /api/v1/players/:playerId/moderation-actions` and to the action returned by the `POST` route.
+- Evidence for a whole history page is loaded in **one** query (`media_links` ⋈ `media_files`, `inArray` over the page's action ids, `isNull(media_files.deleted_at)`) — the shape of `reports.ts`'s `loadEvidenceForReports`, not a per-action lookup.
+
+### Changed
+
+- A `media_links` row pointing at a soft-deleted `media_files` row is omitted from `evidence[]` but is **not** deleted — detaching stays an explicit operator action through `DELETE /api/v1/media/:id/links` (VIDEO-2, #158), and restoring the file restores its evidence.
+
+Route gating, error codes and audit configuration are unchanged: `panel_access` plus the live-Squad `kick`/`ban` permission on the write path, `config: { audit: false }` on the history read.
+## 2026-07-27 — ISSUE-3 связь тикетов с сущностями панели (#156)
+
+All four routes live in the existing [`routes/issues.ts`](../../../apps/api/src/routes/issues.ts) and inherit that module's gate — authentication only, no `config.permissions` — except the player-card endpoint, which is hand-guarded on `panel_access` because every other section of the player card is. Audit rows are written manually with `writeAuditEntry`, as everywhere else in the module.
+
+### Added
+
+- `POST /api/v1/issues/:id/links` — links a ticket to a `player`, `server`, `moderation_action`, or `media_file` (`{ entity_type, entity_id }` body). `201` with the expanded link; `404 issue_not_found`; `422 unknown_entity` (with the offending pairs in `unknown`) when the polymorphic target does not exist; `409 link_exists` on a duplicate `(issue_id, entity_type, entity_id)`. Audit action `issue.link.create` (target type `issue`).
+- `DELETE /api/v1/issues/:id/links/:linkId` — `200 { ok: true }`; `404 link_not_found`; `403 { error: 'forbidden', required: 'can_manage_issues' }` when the caller neither created the link nor holds `can_manage_issues`. Audit action `issue.link.delete`.
+- `GET /api/v1/players/:playerId/issues` — reverse lookup for the player card: `{ open_count, items }` over the linked tickets that are not `closed`, newest ticket number first, capped at 50. Gated on `panel_access`.
+- `POST /api/v1/issues` accepts an optional `links: [{ entity_type, entity_id }]` (max 20, deduplicated) applied inside the route's **existing transaction**, so "create a ticket from a moderation action" lands the ticket and both links (`moderation_action` + `player`) atomically or not at all. An unknown target rejects the whole request with `422 unknown_entity` and creates nothing. The `issue.create` audit row's `after` snapshot carries the links.
+- New table `issue_links` backing these routes — see `docs/components/db/changelog.md` (migration 0105).
+
+### Changed
+
+- `GET /api/v1/issues/:id` gains a `links[]` field: `{ id, issue_id, entity_type, entity_id, label, ref, exists, created_by, created_at }`. `label` is the target's human name (player canonical name, server display name, `<action_type> · <YYYY-MM-DD>`, media title or original filename) and `ref` is where a click goes (`/players/:id`, `/servers/:id`, the offender's card for a moderation action, `/api/v1/media/:id/stream`). A target whose row is gone reads back as `exists: false`, `label: "Удалённый объект"`, `ref: null` — `entity_id` carries no foreign key, so that is a normal state. Soft-deleted servers and media files count as gone (both `GET /api/v1/servers/:id` and the media stream route 404 for them), on read and when validating a new link. No `schema.response` was added to the route, so every pre-existing field is untouched.
+- `POST /api/v1/issues` and `GET /api/v1/issues/:id` responses are supersets of their previous shapes; the `issue.created`/`issue.updated` live-bus payloads are unchanged (no new event types).
+## 2026-07-27 — LEAD-5 серверный стат-дашборд (#176)
+
+### Added
+
+- `GET /api/v1/statistics` ([`routes/statistics.ts`](../../../apps/api/src/routes/statistics.ts)) — the server-wide statistics slice behind `/statistics`. Querystring `{ from?, to?, servers?, format? }`: `from`/`to` are ISO datetimes resolved through AN-1's `resolveWindow` (default 7 days, clamped to `MAX_WINDOW_DAYS = 92`), `servers` is a CSV of server UUIDs (absent or empty means every server; malformed entries are dropped rather than rejected), `format` is `json` (default) or `csv`.
+- Response sections `population` (`avg_online`, `peak_online`, `avg_queue`, `by_hour`, `by_weekday`), `matches` (`by_day`, `modes[]`, `maps[]`), `community` (`new_players`, `chat_messages`, `teamkills`) and `moderation` (`punishments`, `avg_admins`, `peak_admins`), plus `days[]` (the dense UTC-day axis) and `servers[]`. Every metric is a `{ by_server[], totals[], kpi{avg,max,total} }` series whose `kpi.total` is exactly the sum of its per-server points, so a stacked bar chart and its KPI cannot disagree. All metric values are numbers; the payload carries no profiling fields.
+- Reads come from the materialised `server_daily_stats` (see `docs/components/db/changelog.md`, migration 0101) — no live scan of `events`/`combat_events`. Hour-of-day buckets are the sole live computation: one windowed pass over `player_sessions`, not AN-1's per-tick correlated subquery. Weekday buckets are a regrouping of the daily rows.
+- `format=csv` emits RFC-4180 long format `section,metric,server_id,key,value` with `text/csv; charset=utf-8` and `attachment; filename="statistics.csv"`.
+- Gate: the file-local `panelGuard` copied from `analytics.ts` — `401 { error: 'unauthenticated' }` without a session, `403 { error: 'forbidden' }` without the `panel_access` role capability. Read-only, so `config: { audit: false }` and no `audit-coverage` entry. No `schema.response` is declared (that would enable Zod serialization and strip undeclared fields), matching every other analytics route.
+- Measured on a seeded window of 180 rollup rows and 36 000 sessions, 30 days × 6 servers responds in **137 ms median** (min 137 / max 142 over five samples after one warm-up) — inside the 500 ms acceptance criterion.
+
+## 2026-07-27 — MOD-2 действия модерации (#59)
+
+### Added
+
+- The five `mod:*` permission keys (`mod:kick`, `mod:warn`, `mod:ban_temp`, `mod:ban_perm`, `mod:unban`) lose `unimplemented: true` in `@squad/shared-config`'s `PERMISSIONS`. `derivePanelPermissions` ([`lib/rbac.ts`](../../../apps/api/src/lib/rbac.ts)) gains a seventh `squadPermissions` parameter and two gates — `mod:kick`/`mod:warn` require the role's live-Squad `kick` permission, `mod:ban_temp`/`mod:ban_perm`/`mod:unban` require `ban` — closing the gap where every `panel_access` user previously received all five keys regardless of their Squad permissions.
+- `POST /api/v1/players/:playerId/moderation-actions` (`routes/moderation-actions.ts`): enforces a warn/kick/ban through the new [`lib/moderation-enforce.ts`](../../../apps/api/src/lib/moderation-enforce.ts) helper (RCON via worker-rcon, then the `moderation_actions` ledger row and EVT-1 publish, only once the command is confirmed applied). Body `{ server_id, action_type, reason, ban_length?, source? }`; guarded the same way as `external-bans.ts`'s local-ban route (squad `kick` for warn/kick, `ban` for ban). Audit action `moderation.action` (target type `player`).
+- `POST /api/v1/moderation-actions/:id/revert`: unbans a player — removes their `Banned:` line(s) from the panel's `Bans.cfg` copy via the new pure [`lib/bans-cfg.ts`](../../../apps/api/src/lib/bans-cfg.ts) (`removeBanLines`, read-verify-write retried up to 3 times against a racing edit before `409 bans_cfg_conflict`), marks every active ban row for that player+server reverted, and inserts an `unban` ledger row. Audit action `moderation.revert` (target type `player`).
+- `GET /api/v1/players/:playerId/moderation-actions` querystring gains `action_type`, `server_id`, and `cursor` filters alongside the existing `limit`; the response shape is unchanged.
+
+## 2026-07-27 — VIDEO-3 делегированная загрузка по одноразовому токену (#159)
+
+### Added
+
+- `POST /api/v1/media/upload-tokens` ([`routes/media-upload-tokens.ts`](../../../apps/api/src/routes/media-upload-tokens.ts)) — hand-guarded on `panel_access`, mints a one-time upload credential. Body `{ target_entity_type?, target_entity_id?, expires_in_seconds? (60…604800, default 7200), max_size_bytes? }`; the target pair must be supplied together or not at all (`400 invalid_target`) and must exist (`404 entity_not_found`). `max_size_bytes` is a request, not a grant: the route clamps it to `MEDIA_MAX_UPLOAD_BYTES`, so a token can never exceed the server-wide cap. `201` returns `{ id, token, upload_url, expires_at, max_size_bytes, target_entity_type, target_entity_id }` — **the raw token appears here once and nowhere else**. Audit action `media.upload_token.mint` (`targetType: 'media_upload_token'`) deliberately records only the token id.
+- `POST /api/v1/public/media?token=` ([`routes/public-media.ts`](../../../apps/api/src/routes/public-media.ts)) — public, session-less redemption registered next to `publicStatsRoutes`/`publicClansRoutes`. Accepts one multipart file through the VIDEO-1 `storeMediaUpload` machinery under the token's own `maxBytes`, inserts `media_files` with `uploader_player_id = NULL` and `upload_token_id` set, and — when the token was pre-bound — inserts the matching `media_links` row attributed to the minter. `201 { ok: true, media_id }` is deliberately minimal. Errors: `410 token_used_or_expired` (unknown **or** spent **or** expired — the same body for all three, so the endpoint cannot be used to probe which tokens exist), `413 file_too_large`, `400 magic_byte_mismatch`, `415 unsupported_media_type`, `429 rate_limited`. Audit action `media.public_upload` with a `system` actor labelled `public-upload`, context `{ token_id, ip }`, never the raw token.
+- Single use is enforced by the **database**, not application logic: [`lib/media-upload-tokens.ts`](../../../apps/api/src/lib/media-upload-tokens.ts)'s `redeemUploadToken` runs `UPDATE … SET used_at = now() WHERE id = $1 AND used_at IS NULL AND expires_at > now() RETURNING id`, so of two concurrent uploads racing the same token exactly one can observe a returned row. The burn happens **after** the bytes are safely on disk, so an aborted or rejected upload leaves the link usable; when the claim loses the race the just-written file is removed and the caller gets `410`.
+- Per-IP throttling on the public route is a manual Redis `INCR`/`EXPIRE` (the `leaderboards.ts` pattern, 10/hour, constants exported for tests) rather than the declarative `@fastify/rate-limit` config, because that plugin is not registered in `apps/api/test/integration/harness.ts` and a declarative limit would therefore be untestable.
+- New `LiveEvent` variant `media.uploaded` (`{ player_id, media_id, token_id, target_entity_type, target_entity_id }`). [`routes/live.ts`](../../../apps/api/src/routes/live.ts) delivers it only to the socket whose `connectionPlayerId` matches `player_id`, so nobody but the minting admin learns that an anonymous upload happened.
+
+### Changed
+
+- `serializeMediaFile` and the `mediaFileResponse` Zod schema gain `upload_token_id: string | null` — non-null marks evidence that arrived through a one-time link (such a row always has `uploader_player_id = NULL`). Additive and nullable, so every pre-#159 caller parses unchanged.
+- `entityExists` in [`routes/media-links.ts`](../../../apps/api/src/routes/media-links.ts) is exported so the mint route can validate a pre-bound target through the same code path as `POST /api/v1/media/:id/links`.
+- New table `media_upload_tokens` and column `media_files.upload_token_id` — see `docs/components/db/changelog.md` (migration 0096).
+
+## 2026-07-27 — VIDEO-2 привязка медиа к сущностям (#158)
+
+### Added
+
+- `POST /api/v1/media/:id/links` — attaches a `media_files` row to a `player`, `moderation_action`, `match`, or `issue` (`entity_type`/`entity_id` body, Zod-validated). `201` with the created link; `404 media_not_found`/`404 entity_not_found` when the media file or the polymorphic target doesn't exist; `409 already_linked` on a duplicate `(media_id, entity_type, entity_id)`.
+- `DELETE /api/v1/media/:id/links?entity_type=&entity_id=` — detaches a link. `200 { ok: true }`; `404 link_not_found`; `403 { error: 'forbidden', required: 'can_manage_media' }` when the caller neither created the link nor holds `can_manage_media`.
+- `GET /api/v1/players/:playerId/media` — evidence for a player card: the union of direct `entity_type='player'` links and `entity_type='moderation_action'` links whose action belongs to the player. Works for EOS-only players (no `steam_id64`) via `players.id`.
+- `GET /api/v1/moderation-actions/:id/media` — evidence attached directly to one moderation action.
+- All four routes carry `config: { audit: false }` with audit rows written manually via `writeAuditEntry`: `media.link.attach` and `media.link.detach`, both `targetType: 'media_link'`.
+- New table `media_links` backing these routes — see `docs/components/db/changelog.md` (migration 0095).
+
+## 2026-07-26 — PLAYER-6 player list sorting and filters (#27)
+
+### Changed
+
+- `GET /api/v1/players` querystring gains `sort` (`nickname` | `last_seen` | `created` | `total_time`, default `last_seen`), `dir` (`asc` | `desc`, default `desc`), and `filter` (`new`). Unrecognised values are rejected with 400 by the Zod `querystring` schema instead of being ignored — `?sort=nickname&dir=asc` sorts, `?sort=bogus` is a 400.
+- The route now applies the chosen key as a real SQL `ORDER BY` — `canonical_name_normalized`, `last_seen_at`, `first_seen_at`, or `total_time_played_seconds` — with `players.id` ascending as the stable tiebreak so equal sort values come back in a deterministic order. With no params the ordering is byte-for-byte today's `ORDER BY last_seen_at DESC`, `LIMIT 200`.
+- `filter=new` adds `first_seen_at >= now() - interval '7 days'` (evaluated by the database clock) and is `AND`-composed with the existing `?q=` predicate rather than replacing it.
+- The response body is unchanged: `{ items: [...], total }` with the same seven item fields, no `schema.response`, `total` still `rows.length` capped by the 200-row `LIMIT`. `GET /api/v1/players/search` is untouched. An active-bans filter stays out of the `filter` enum and is tracked in #59.
+## 2026-07-26 — MSG-2 direct player message (#185)
+
+### Added
+
+- `POST /api/v1/servers/:id/players/:playerId/message` in `server-messaging.ts`: one addressed in-game message delivered as RCON `AdminWarn <target> <message>` through the existing worker-rcon command queue. Target resolution prefers `players.eos_id` and falls back to `players.steam_id64`; a row with neither 404s as `player_not_addressable`. Gated on the Squad `chat` permission.
+- Body `{ message, log_to_card? }` with `message` capped at 300 characters after trim (minimum 2) — the worker's `BROADCAST_MAX_CHARS`, re-asserted when `AdminWarn` is built. `log_to_card: true` writes one `chat_messages` row keyed on the **addressee** (`scope: 'direct'`, `source: 'panel'`), making the message visible in the target's card chat history with no read-path change; a not-connected worker 502s and writes nothing.
+- Audit action `server.player_message` (target type `server`), carrying `player_id`, `target`, `message` and `log_to_card` in `after_snapshot`. No migration — `chat_messages` already accepted the `direct` scope.
+
+## 2026-07-25 — WL-3 whitelist application portal
+
+### Added
+
+- `whitelist-applications.ts` route: public portal (`GET /api/v1/public/whitelist/settings`, `POST /api/v1/public/whitelist/applications` — unauthenticated, rate limited, one pending application per SteamID64) and panel approval workflow (`GET`/`PUT /api/v1/whitelist/applications/settings`, `GET /api/v1/whitelist/applications`, `PATCH /api/v1/whitelist/applications/:id`), gated on `whitelist:view`/`whitelist:edit`.
+- Approving a pending application grants the resolved role to the applicant time-bounded via `players.role_expires_at` and fans the change out to every active server's `Admins.cfg`; auto-expiry reuses the existing `worker-role-expirer` (VIPSUB-1) — no new expiry mechanic. New audit actions `whitelist.application.create` / `.review` / `.settings.update`.
+
+## 2026-07-25 — Server-delete Admins.cfg sync-queue cleanup (SYNC-5, #38)
+
+### Changed
+
+- `softDeleteServer` ([`lib/server-delete.ts`](../../../apps/api/src/lib/server-delete.ts)) gained an optional `redis` on `DeleteContext` and a new **Phase 6** that runs after the soft-delete UPDATE: it stamps every still-pending `admins_cfg_sync_outbox` row for the server `relayed_at` (reported as `sync_outbox_cancelled`), then `XGROUP DESTROY` + `UNLINK` (falling back to `DEL`) the `events:admins-cfg-sync:<id>` stream and `DEL`s the `admins-cfg:status:<id>` key. Every step is best-effort — a Redis fault is recorded on `result.errors` under `phase: 'sync_queue_cleanup'` and never aborts the delete; the server row is already marked deleted. `DeleteResult` gains `sync_queue_removed` and `sync_outbox_cancelled`. Prior to this, a soft-deleted server left an orphan Redis stream, its `config-sync` consumer group, and a stale status key behind (the queue was never explicitly cleaned — only bounded by `MAXLEN ~ 500`).
+- `DELETE /api/v1/servers/:id` ([`routes/servers.ts`](../../../apps/api/src/routes/servers.ts)) now passes `redis: app.redis` into the delete context so the cleanup runs in production; the field stays optional so archival/unit callers compile unchanged.
+- The stream-prefix and consumer-group names are imported from [`lib/admins-cfg-sync.ts`](../../../apps/api/src/lib/admins-cfg-sync.ts) rather than re-declared.
+
 ## 2026-07-09 — Parallel API test suite
 
 ### Changed

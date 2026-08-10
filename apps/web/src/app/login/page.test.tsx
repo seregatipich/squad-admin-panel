@@ -33,7 +33,7 @@ describe('LoginPage', () => {
     );
     expect(screen.getByRole('heading', { name: 'Squad Admin Panel' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Войти через Steam' })).toBeInTheDocument();
-    expect(screen.getByText('Steam OpenID 2.0 — единственный способ входа.')).toBeInTheDocument();
+    expect(screen.queryByText(/единственный способ входа/i)).not.toBeInTheDocument();
   });
 
   it('renders the sign-in call to action in English', () => {
@@ -43,7 +43,7 @@ describe('LoginPage', () => {
       </LocaleProvider>,
     );
     expect(screen.getByRole('link', { name: 'Sign in with Steam' })).toBeInTheDocument();
-    expect(screen.getByText('Steam OpenID 2.0 is the only way to sign in.')).toBeInTheDocument();
+    expect(screen.queryByText(/the only way to sign in/i)).not.toBeInTheDocument();
     expect(screen.queryByText('Войти через Steam')).not.toBeInTheDocument();
   });
 

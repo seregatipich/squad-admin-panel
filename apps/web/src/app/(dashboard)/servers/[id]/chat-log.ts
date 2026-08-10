@@ -31,8 +31,8 @@ export function channelMeta(channel: ChatChannel): ChannelMeta {
 }
 
 export function playerHref(message: ChatMessage): string | null {
-  if (message.player_id) return `/players/${message.player_id}`;
-  if (message.steam_id64) return `/players?q=${message.steam_id64}`;
+  if (message.player_id) return `/all-players/${message.player_id}`;
+  if (message.steam_id64) return `/all-players?q=${message.steam_id64}`;
   return null;
 }
 

@@ -2,16 +2,23 @@
 
 ## App Router pages
 
-All pages live under `apps/web/src/app/`. The `(dashboard)` route group requires an active session cookie (`__Host-sid`); the layout at `apps/web/src/app/(dashboard)/layout.tsx` calls `requireSession()` and renders the sidebar.
+All pages live under `apps/web/src/app/`. The `(dashboard)` route group requires an active session cookie (`__Host-sid`) **and** panel access; the layout at `apps/web/src/app/(dashboard)/layout.tsx` calls `requireSession()`, redirects a session with an empty `permissions` array to `/me`, and otherwise renders the sidebar.
 
 ### Unauthenticated pages
 
 | Route | File | What it does |
 |---|---|---|
-| `/` | `app/page.tsx` | Reads `__Host-sid` cookie server-side; redirects to `/dashboard` when present, otherwise to `/login`. |
+| `/` | `app/page.tsx` | Reads `__Host-sid` cookie server-side; redirects to `/login` when absent, to `/me` when the session carries no panel permissions, otherwise to `/dashboard`. |
 | `/login` | `app/login/page.tsx` | Steam OpenID sign-in entry point. Redirects to `/dashboard` if already authenticated. Shows errors for `?error=auth_failed` and `?error=not_authorized`. |
 | `/setup` | `app/setup/page.tsx` | First-time panel finalization. Before the first Owner claim it shows the Steam login CTA; after the first Owner login it asks for the organization name and calls `POST /api/v1/setup/complete`. Completed panels redirect back to `/`. |
-| `/no-access` | `app/no-access/page.tsx` | Landing for authenticated Steam users who have no panel role. Shows optional `?steam_id64=` in the URL. |
+
+### Self-service pages
+
+The `(me)` route group requires a session cookie but **not** panel access — its layout (`app/(me)/layout.tsx`) calls `requireSession()` and renders only a header with the display name and a logout button, no sidebar and no live-bus widgets.
+
+| Route | File | What it does |
+|---|---|---|
+| `/me` | `app/(me)/me/page.tsx` | «Мой VIP». Landing for a Steam login whose role has no `panel_access` (including a player with no role): the callback issues a `self_service`-scoped session and redirects here. Sections: Баланс (bonus balance + VIP expiry), Подписка (active subscription, «Отменить подписку»), Тарифы («Купить разово» / «Подписаться»), История бонусов (cursor-paginated, «Показать ещё»). Every call goes to `/api/v1/me/*`, which take no player id — the subject is always the session's own player. |
 
 ### Dashboard pages
 
@@ -28,7 +35,7 @@ All require a valid session. Permission gating is noted where applicable.
 | `/servers/archive` | `(dashboard)/servers/archive/page.tsx` | `server:view` | Soft-deleted server table from `GET /api/v1/servers/archive`. Forbidden state when caller lacks the permission. |
 | `/servers/archive/[id]` | `(dashboard)/servers/archive/[id]/page.tsx` | `server:view` (+ `config:view` to read backup contents) | Detail + per-cfg backup browser. Each row opens a read-only Monaco viewer fed by `GET /api/v1/servers/archive/:id/configs/:filename`. |
 | `/servers/archive/[id]/restore` | `(dashboard)/servers/archive/[id]/restore/page.tsx` | `server:install` (+ `config:edit`) | Restore wizard: slug + display_name → POST `/restore` (409 inline on slug conflict) → POST `/install` with WS log tail → POST `/restore-configs` → POST `/start`. |
-| `/players` | `(dashboard)/players/page.tsx` | none | Paginated player list; search by name, SteamID64, EOS ID. "Online" filter (last_seen_at within 90 s). Polls every 8 s. |
+| `/players` | `(dashboard)/players/page.tsx` | none | Paginated player list; search by name, SteamID64, EOS ID. Server-driven sorting on Ник, Total playtime, Created, and Last seen — each header is a button that sets `?sort=`/`?dir=` on `GET /api/v1/players` and shows a direction indicator (`↑`/`↓` active, `↕` inactive); clicking the active column flips its direction. New **Created** column rendering `first_seen_at`. A `новые (<7 дней)` checkbox sets `filter=new`. The pure sort/filter state machine lives in `(dashboard)/players/helpers.ts`. The "Online" filter (last_seen_at within 90 s) and the search box stay client-side. Polls every 8 s. |
 | `/players/[steam_id64]` | `(dashboard)/players/[steam_id64]/page.tsx` | none | Player profile: SteamID64, EOS ID, playtime, name history, IP history (hidden unless `player:view_ips`). `PanelAccessSection` (assign/remove panel role) shown when caller has `user:manage_roles`. |
 | `/audit` | `(dashboard)/audit/page.tsx` | none | Full audit log (last 200 entries), filterable by action_type, target, or actor. Expandable context JSON per row. Polls every 6 s. |
 | `/logs` | `(dashboard)/logs/page.tsx` | `host:view` (sidebar link gated) | Live log stream from `GET /api/v1/logs`. `LogList` component with source, level, server, and text filters. Export button. |

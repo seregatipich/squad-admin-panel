@@ -16,9 +16,15 @@ describe('integration harness', () => {
       seedOwner: { steamId64: 76561198000000001n },
     });
     expect(typeof current.seed.ownerSteamId64).toBe('bigint');
-    expect(current.schema).toMatch(/^sqtest_[0-9a-f]{12}$/);
+    expect(current.schema).toMatch(/^sqtest_[0-9a-f]{8}_[0-9a-f]{12}$/);
     const meRes = await current.app.inject({ method: 'GET', url: '/api/v1/me' });
     expect([200, 401]).toContain(meRes.statusCode);
+  }, 30_000);
+
+  it('GET /api/v1/auth/steam/login resolves through the shared registerRoutes() (regression, #207)', async () => {
+    current = await buildIntegrationApp();
+    const res = await current.app.inject({ method: 'GET', url: '/api/v1/auth/steam/login' });
+    expect(res.statusCode).toBe(302);
   }, 30_000);
 
   it('cleanup drops the database', async () => {

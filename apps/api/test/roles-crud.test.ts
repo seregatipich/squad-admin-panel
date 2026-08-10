@@ -195,7 +195,9 @@ describeIfDb('roles HTTP — description=null update and color validation', () =
   });
 
   afterEach(async () => {
-    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId!);
+    // ownerSteamId64 and ownerPlayerId are set together in buildIntegrationApp's
+    // seedOwner branch, so ownerSteamId64 being truthy guarantees ownerPlayerId is too.
+    if (h.seed.ownerSteamId64) invalidatePermissionCache(h.seed.ownerPlayerId as string);
     await h.cleanup();
   });
 
@@ -257,9 +259,10 @@ describeIfDb('roles HTTP — description=null update and color validation', () =
       (r) => r.name === 'Owner',
     );
     expect(ownerRole).toBeDefined();
+    if (!ownerRole) throw new Error('Owner role not found in GET /roles response');
     const res = await h.app.inject({
       method: 'PUT',
-      url: `/api/v1/roles/${ownerRole!.id}`,
+      url: `/api/v1/roles/${ownerRole.id}`,
       headers: { cookie },
       payload: { name: 'Hacker' },
     });
@@ -274,9 +277,10 @@ describeIfDb('roles HTTP — description=null update and color validation', () =
       (r) => r.name === 'Owner',
     );
     expect(ownerRole).toBeDefined();
+    if (!ownerRole) throw new Error('Owner role not found in GET /roles response');
     const res = await h.app.inject({
       method: 'DELETE',
-      url: `/api/v1/roles/${ownerRole!.id}`,
+      url: `/api/v1/roles/${ownerRole.id}`,
       headers: { cookie },
     });
     expect(res.statusCode).toBe(400);

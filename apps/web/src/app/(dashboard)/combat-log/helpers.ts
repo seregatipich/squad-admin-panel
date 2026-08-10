@@ -338,7 +338,7 @@ export interface CombatListResponse {
 
 export function playerHref(player: CombatPlayer | null): string | null {
   if (!player || !player.player_id) return null;
-  return `/players/${player.player_id}`;
+  return `/all-players/${player.player_id}`;
 }
 
 export function playerLabel(player: CombatPlayer | null): string {

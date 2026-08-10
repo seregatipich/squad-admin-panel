@@ -24,6 +24,7 @@ let h: IntegrationHarness;
 beforeEach(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM_ID },
+    seedOwnerGuard: true,
     bridge: makeFakeBridge(),
   });
 });
@@ -64,7 +65,7 @@ async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
   await h.db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
-      name: `SeedSchedule-${keys.join('-') || 'none'}-${roleId.slice(0, 8)}`,
+      name: `SeedSchedule-${keys.join('-') || 'none'}-${roleId}`,
       color: 'blue',
       isSystemRole: false,
       panelAccess: true,

@@ -45,7 +45,7 @@ The package uses `uuid`'s `v7` named export. If the workspace is downgraded to a
 
 ### Possible cause C — vitest version drift
 
-The repo uses vitest `^3.2.4`. If `pnpm-lock.yaml` resolves an older vitest (e.g. via a stale lock), `vi.fn().mockResolvedValue` may fail. Run `pnpm install` to sync the lockfile.
+The repo uses vitest `^3.2.7`. If `pnpm-lock.yaml` resolves an older vitest (e.g. via a stale lock), `vi.fn().mockResolvedValue` may fail. Run `pnpm install` to sync the lockfile.
 
 ## Symptom: `emit()` rejects with an error
 

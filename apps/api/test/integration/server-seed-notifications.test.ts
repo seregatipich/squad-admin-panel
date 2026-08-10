@@ -28,7 +28,7 @@ type AlertTriggeredEvent = Extract<LiveEvent, { type: 'alert.triggered' }>;
 let h: IntegrationHarness;
 
 beforeEach(async () => {
-  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID } });
+  h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, seedOwnerGuard: true });
   await h.db.insert(servers).values({
     id: SERVER_ID,
     displayName: 'Seed Notification Server',
@@ -54,7 +54,7 @@ async function asRoleWithSquadPermissions(keys: string[]): Promise<string> {
   await h.db.transaction(async (tx) => {
     await tx.insert(roles).values({
       id: roleId,
-      name: `SeedNotify-${keys.join('-') || 'none'}-${roleId.slice(0, 8)}`,
+      name: `SeedNotify-${keys.join('-') || 'none'}-${roleId}`,
       color: 'blue',
       isSystemRole: false,
       panelAccess: true,
@@ -77,7 +77,7 @@ async function createSubscriber(): Promise<{ cookie: string; playerId: string }>
   const roleId = uuidv7();
   await h.db.insert(roles).values({
     id: roleId,
-    name: `SeedSubscriber-${roleId.slice(0, 8)}`,
+    name: `SeedSubscriber-${roleId}`,
     color: 'blue',
     isSystemRole: false,
     panelAccess: true,

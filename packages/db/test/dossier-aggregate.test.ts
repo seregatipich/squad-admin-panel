@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -26,6 +27,8 @@ const ATTACKER = '000000e2-0000-4000-9000-0000000000e2';
 const EOS_ONLY = '000000e3-0000-4000-9000-0000000000e3';
 
 let sql: ReturnType<typeof postgres>;
+let drzSql: ReturnType<typeof postgres>;
+let drz: ReturnType<typeof drizzle>;
 let monthStart: Date;
 
 function ddlStatements(source: string): string[] {
@@ -95,10 +98,20 @@ beforeAll(async () => {
     { month_start: Date }[]
   >`SELECT date_trunc('month', now()) AS month_start`;
   monthStart = row.month_start;
+
+  // A dedicated connection for the drizzle executor: drizzle-orm/postgres-js
+  // overrides the client's type parsers, so it must not share the raw `sql`
+  // connection above. `prepare: false` mirrors createDatabaseClient() (the config
+  // log-ingest uses) so Date/numeric params serialize via the simple protocol.
+  // Its own search_path points at the same test schema.
+  drzSql = postgres(DATABASE_URL, { max: 1, prepare: false, onnotice: () => undefined });
+  await drzSql.unsafe('SET search_path TO dossier_dbtest, public');
+  drz = drizzle(drzSql);
 }, 60_000);
 
 afterAll(async () => {
   if (!sql) return;
+  await drzSql?.end({ timeout: 5 });
   await sql.unsafe('DROP SCHEMA IF EXISTS dossier_dbtest CASCADE');
   await sql`DELETE FROM players WHERE id = ANY(${[ATTACKER, EOS_ONLY]})`;
   await sql`DELETE FROM servers WHERE id = ${SERVER}`;
@@ -265,6 +278,105 @@ describeIfDb('reconcileDossierAggregates', () => {
 
     // Simulate a 24-month retention partition drop: the raw events vanish.
     await sql`DELETE FROM combat_events`;
+
+    const [row] = await sql<{ kills: number }[]>`
+      SELECT kills FROM player_weapon_stats WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`;
+    expect(row.kills).toBe(2);
+  });
+});
+
+describeIfDb('applyCombatEventToDossier — drizzle executor path', () => {
+  // The log-ingest writer holds a drizzle client, not a raw postgres.js `Sql`.
+  // These mirror the postgres.js assertions above but drive the fold through the
+  // drizzle `execute(sql`…`)` overload, proving both executor kinds agree.
+  it('increments per-weapon kills through the drizzle executor', async () => {
+    const at = new Date(monthStart.getTime() + 5000);
+    await applyCombatEventToDossier(drz, death({ occurredAt: at }));
+
+    const [row] = await sql<{ kills: number; teamkills: number; last_used_at: Date }[]>`
+      SELECT kills, teamkills, last_used_at FROM player_weapon_stats
+      WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`;
+    expect(row.kills).toBe(1);
+    expect(row.teamkills).toBe(0);
+    expect(row.last_used_at.getTime()).toBe(at.getTime());
+  });
+
+  it('accumulates weapon damage through the drizzle executor', async () => {
+    await applyCombatEventToDossier(drz, death({ eventType: 'damage', damage: 40 }));
+    await applyCombatEventToDossier(drz, death({ eventType: 'damage', damage: 60 }));
+    const [row] = await sql<{ shots_events: number; damage: string }[]>`
+      SELECT shots_events, damage FROM player_weapon_stats WHERE player_id = ${ATTACKER}`;
+    expect(row.shots_events).toBe(2);
+    expect(Number(row.damage)).toBe(100);
+  });
+
+  it('records vehicle destruction through the drizzle executor', async () => {
+    await applyCombatEventToDossier(
+      drz,
+      death({ eventType: 'vehicle_destroyed', weapon: 'BP_RPG7', victimVehicle: 'T72B3' }),
+    );
+    const [row] = await sql<{ destroyed_count: number }[]>`
+      SELECT destroyed_count FROM player_vehicle_kills
+      WHERE player_id = ${ATTACKER} AND victim_vehicle_asset_id = 'T72B3' AND weapon = 'BP_RPG7'`;
+    expect(row.destroyed_count).toBe(1);
+  });
+
+  it('rolls back the aggregate delta when the drizzle transaction throws', async () => {
+    await expect(
+      drz.transaction(async (tx) => {
+        await applyCombatEventToDossier(tx, death());
+        throw new Error('boom');
+      }),
+    ).rejects.toThrow('boom');
+
+    const [{ n }] = await sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM player_weapon_stats`;
+    expect(n).toBe(0);
+  });
+});
+
+describeIfDb('reconcileDossierAggregates — 48h window', () => {
+  const HOUR = 60 * 60 * 1000;
+  const DAY = 24 * HOUR;
+
+  it('reports drift for a recent gap and repair:true restores it', async () => {
+    const recent = new Date(Date.now() - HOUR);
+    await insertCombatEvent(sql, death({ occurredAt: recent }));
+    await insertCombatEvent(sql, death({ occurredAt: new Date(recent.getTime() + 1000) }));
+
+    const report = await reconcileDossierAggregates(sql, { windowHours: 48 });
+    expect(report.discrepancies.weaponStats).toBeGreaterThan(0);
+    expect(report.repaired).toBe(false);
+
+    const repair = await reconcileDossierAggregates(sql, { windowHours: 48, repair: true });
+    expect(repair.repaired).toBe(true);
+
+    const [row] = await sql<{ kills: number }[]>`
+      SELECT kills FROM player_weapon_stats WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`;
+    expect(row.kills).toBe(2);
+
+    const after = await reconcileDossierAggregates(sql, { windowHours: 48 });
+    expect(after.discrepancies.total).toBe(0);
+  });
+
+  it('ignores an unapplied event older than the window that a full pass would flag', async () => {
+    const old = new Date(Date.now() - 5 * DAY);
+    await insertCombatEvent(sql, death({ occurredAt: old }));
+
+    const full = await reconcileDossierAggregates(sql);
+    expect(full.discrepancies.weaponStats).toBeGreaterThan(0);
+
+    const windowed = await reconcileDossierAggregates(sql, { windowHours: 48 });
+    expect(windowed.discrepancies.total).toBe(0);
+  });
+
+  it('does not flag a cumulative aggregate that exceeds the windowed recompute', async () => {
+    await ingest(death({ occurredAt: new Date(Date.now() - 5 * DAY) }));
+    await ingest(death({ occurredAt: new Date(Date.now() - HOUR) }));
+
+    // Stored kills = 2 (all-time); the window only sees the recent kill (1).
+    // A naive equality check would flag 1 != 2; the lower-bound check must not.
+    const windowed = await reconcileDossierAggregates(sql, { windowHours: 48 });
+    expect(windowed.discrepancies.total).toBe(0);
 
     const [row] = await sql<{ kills: number }[]>`
       SELECT kills FROM player_weapon_stats WHERE player_id = ${ATTACKER} AND weapon = 'BP_AK74'`;

@@ -521,7 +521,7 @@ function VoteCard({ vote }: { vote: VoteListItem }) {
               Инициатор:{' '}
               {vote.initiator_player_id ? (
                 <Link
-                  href={`/players/${vote.initiator_player_id}`}
+                  href={`/all-players/${vote.initiator_player_id}`}
                   className="text-sky-300 hover:text-sky-200"
                 >
                   {vote.initiator_nickname ?? vote.initiator_player_id.slice(0, 8)}
@@ -581,7 +581,7 @@ function VoteCard({ vote }: { vote: VoteListItem }) {
               {ballots.map((ballot) => (
                 <li key={`${vote.id}-${ballot.player_id}`}>
                   <Link
-                    href={`/players/${ballot.player_id}`}
+                    href={`/all-players/${ballot.player_id}`}
                     className="inline-flex items-center gap-1.5 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 no-underline hover:border-neutral-600"
                   >
                     <span

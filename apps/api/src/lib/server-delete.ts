@@ -1,11 +1,18 @@
 import { createHash } from 'node:crypto';
 import type { BridgeClient } from '@squad/bridge-client';
 import type { DatabaseClient } from '@squad/db';
-import { configVersions, serverSettings, servers } from '@squad/db/schema';
+import { adminsCfgSyncOutbox, configVersions, serverSettings, servers } from '@squad/db/schema';
 import { ALLOWED_CONFIG_FILES, PANEL_CONFIGS_ROOT, PANEL_SAVED_ROOT } from '@squad/shared-config';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
+import type Redis from 'ioredis';
+import { ADMINS_CFG_SYNC_GROUP, ADMINS_CFG_SYNC_STREAM_PREFIX } from './admins-cfg-sync.js';
 import { sidecarContainerName } from './rnsquadjs.js';
+
+// Prefix of the per-server Admins.cfg sync-status key the config-sync worker
+// publishes (mirrors the local const in `routes/admins-cfg.ts`). Dropped on
+// delete so a stale `unreachable` alert cannot outlive the server.
+const ADMINS_CFG_STATUS_KEY_PREFIX = 'admins-cfg:status:';
 
 export interface DeleteResult {
   backup_marker_id: string | null;
@@ -15,6 +22,10 @@ export interface DeleteResult {
   configs_dir_removed: boolean;
   saved_dir_removed: boolean;
   ufw_rules_removed: number;
+  /** True when the per-server Redis sync queue cleanup ran (requires `redis`). */
+  sync_queue_removed: boolean;
+  /** Count of still-pending outbox rows stamped relayed (cancelled) on delete. */
+  sync_outbox_cancelled: number;
   errors: Array<{ phase: string; error: string }>;
 }
 
@@ -28,6 +39,14 @@ export interface DeleteContext {
   actorPlayerId: string | null;
   actorIp: string | null;
   actorLabel: string;
+  /**
+   * Optional Redis handle used to tear down the per-server Admins.cfg sync
+   * queue (SYNC-5). When omitted the queue cleanup is skipped and
+   * {@link DeleteResult.sync_queue_removed} stays `false` — kept optional so
+   * callers that do not touch the sync queue (archival helpers, unit fakes)
+   * compile unchanged.
+   */
+  redis?: Pick<Redis, 'xgroup' | 'unlink' | 'del'>;
 }
 
 const NOT_FOUND_RE = /not_found|no such container/i;
@@ -44,6 +63,8 @@ export async function softDeleteServer(
     configs_dir_removed: false,
     saved_dir_removed: false,
     ufw_rules_removed: 0,
+    sync_queue_removed: false,
+    sync_outbox_cancelled: 0,
     errors: [],
   };
 
@@ -184,6 +205,63 @@ export async function softDeleteServer(
       updatedAt: new Date(),
     })
     .where(and(eq(servers.id, serverId), isNull(servers.deletedAt)));
+
+  // Phase 6 — per-server Admins.cfg sync-queue cleanup (SYNC-5). Runs AFTER
+  // the soft-delete UPDATE so the outbox relay's `deleted_at IS NULL` guard is
+  // already in effect. Each step is best-effort: a Redis fault is recorded on
+  // `result.errors` under `sync_queue_cleanup` and never aborts the delete —
+  // the server row is already marked deleted and must not be resurrected.
+  if (ctx.redis) {
+    result.sync_queue_removed = true;
+    const streamKey = `${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`;
+
+    // (a) Stamp every still-pending outbox row relayed so the relay never
+    // republishes them onto the stream we are about to destroy.
+    try {
+      const cancelled = await ctx.db
+        .update(adminsCfgSyncOutbox)
+        .set({ relayedAt: new Date() })
+        .where(
+          and(eq(adminsCfgSyncOutbox.serverId, serverId), isNull(adminsCfgSyncOutbox.relayedAt)),
+        )
+        .returning({ id: adminsCfgSyncOutbox.id });
+      result.sync_outbox_cancelled = cancelled.length;
+    } catch (err) {
+      result.errors.push({ phase: 'sync_queue_cleanup', error: (err as Error).message });
+    }
+
+    // (b) Destroy the consumer group. The idempotent no-op cases are swallowed:
+    // a missing stream key (`requires the key to exist` / `no such key`) or a
+    // missing group (`NOGROUP`) — both mean "never installed / already cleaned".
+    try {
+      await ctx.redis.xgroup('DESTROY', streamKey, ADMINS_CFG_SYNC_GROUP);
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (!/NOGROUP|no such key|requires the key to exist/i.test(msg)) {
+        result.errors.push({ phase: 'sync_queue_cleanup', error: msg });
+      }
+    }
+
+    // (c) Drop the stream itself. UNLINK reclaims memory off-thread; fall back
+    // to DEL for clients/builds without UNLINK.
+    try {
+      await ctx.redis.unlink(streamKey);
+    } catch {
+      try {
+        await ctx.redis.del(streamKey);
+      } catch (err) {
+        result.errors.push({ phase: 'sync_queue_cleanup', error: (err as Error).message });
+      }
+    }
+
+    // (d) Drop the per-server sync-status key so no stale `unreachable` alert
+    // lingers for a server that no longer exists.
+    try {
+      await ctx.redis.del(`${ADMINS_CFG_STATUS_KEY_PREFIX}${serverId}`);
+    } catch (err) {
+      result.errors.push({ phase: 'sync_queue_cleanup', error: (err as Error).message });
+    }
+  }
 
   return result;
 }

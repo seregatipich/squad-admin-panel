@@ -14,7 +14,7 @@ export function middleware(req: NextRequest) {
     !hasSession &&
     (pathname.startsWith('/dashboard') ||
       pathname.startsWith('/servers') ||
-      pathname.startsWith('/players') ||
+      pathname.startsWith('/all-players') ||
       pathname.startsWith('/audit') ||
       pathname.startsWith('/settings'))
   ) {
@@ -30,7 +30,7 @@ export const config = {
   matcher: [
     '/dashboard/:path*',
     '/servers/:path*',
-    '/players/:path*',
+    '/all-players/:path*',
     '/audit/:path*',
     '/settings/:path*',
   ],
