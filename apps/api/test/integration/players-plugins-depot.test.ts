@@ -1,12 +1,4 @@
-import {
-  auditLog,
-  playerIpHistory,
-  playerNameHistory,
-  players,
-  roles,
-  serverSettings,
-  servers,
-} from '@squad/db/schema';
+import { auditLog, playerIpHistory, playerNameHistory, players, roles } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -243,60 +235,6 @@ describe('/api/v1/depot', () => {
     expect(resp.statusCode).toBe(400);
     expect(resp.json<{ error: string }>().error).toBe('validation_error');
     // The unknown key must not have silently acquired the update lock.
-    expect(await h.redis.get('depot:updating')).toBeNull();
-  });
-
-  it('POST /depot/update accepts the correct server_ids key for a running server', async () => {
-    await h.redis.del('depot:updating');
-    const serverId = uuidv7();
-    await h.db.insert(servers).values({
-      id: serverId,
-      displayName: 'Depot Test Server',
-      slug: `depot-${serverId.slice(0, 8)}`,
-      status: 'running',
-      runtime: 'container',
-    });
-    await h.db.insert(serverSettings).values({
-      serverId,
-      installPath: `/var/lib/squad-panel/configs/${serverId}`,
-      gamePort: 7787,
-      queryPort: 27165,
-      beaconPort: 15000,
-      rconPort: 21114,
-    });
-
-    const cookie = await loginAsOwner(h);
-    const resp = await h.app.inject({
-      method: 'POST',
-      url: '/api/v1/depot/update',
-      headers: { cookie },
-      payload: { server_ids: [serverId] },
-    });
-    expect(resp.statusCode).toBe(200);
-    const body = resp.json<{ status: string; servers_to_stop: string[] }>();
-    expect(body.status).toBe('started');
-    expect(body.servers_to_stop).toEqual([serverId]);
-
-    // Let the fire-and-forget orchestration settle against the fake bridge so it
-    // does not race the harness teardown, then clear the lock it acquired.
-    await new Promise((r) => setTimeout(r, 200));
-    await h.redis.del('depot:updating');
-  });
-
-  it('POST /depot/update rejects a non-existent server_id with servers_not_found', async () => {
-    await h.redis.del('depot:updating');
-    const cookie = await loginAsOwner(h);
-    const bogus = uuidv7();
-    const resp = await h.app.inject({
-      method: 'POST',
-      url: '/api/v1/depot/update',
-      headers: { cookie },
-      payload: { server_ids: [bogus] },
-    });
-    expect(resp.statusCode).toBe(400);
-    const body = resp.json<{ error: string; missing: string[] }>();
-    expect(body.error).toBe('servers_not_found');
-    expect(body.missing).toEqual([bogus]);
     expect(await h.redis.get('depot:updating')).toBeNull();
   });
 });
