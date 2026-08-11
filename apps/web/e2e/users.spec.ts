@@ -21,7 +21,9 @@ test.describe('users page', () => {
     await ownerPage.keyboard.press('Escape');
     await ownerPage.getByTestId('role-expiry-native-date').evaluate((node) => {
       const input = node as HTMLInputElement;
-      input.value = '2099-12-31';
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      valueSetter?.call(input, '2099-12-31');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await expect(ownerPage.getByRole('button', { name: /Выбрано 31\/12\/2099/ })).toContainText(
