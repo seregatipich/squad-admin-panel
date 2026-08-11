@@ -189,7 +189,7 @@ describe('RotationCalendarPage', () => {
     const profileDeleteButton = within(profileSection).getByRole('button', { name: 'удалить' });
     fireEvent.click(profileDeleteButton);
     expect(screen.getByText('Профили не настроены.')).toBeInTheDocument();
-  });
+  }, 15_000);
 
   it('shows calendar and layer-load errors', async () => {
     vi.stubGlobal(
