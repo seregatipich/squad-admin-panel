@@ -1,18 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildRoleAssignPayload,
+  formatRoleExpiryDate,
   formatRoleExpiryLabel,
   formatVipExpiry,
   isRoleExpirySoon,
+  toRoleExpiryDateValue,
 } from './role-expiry';
 
 describe('role expiry helpers', () => {
   it('builds role assignment payload with optional expiry and trimmed comment', () => {
-    expect(buildRoleAssignPayload('role-1', '2026-08-01T12:30', '  VIP по заявке  ')).toEqual({
+    expect(buildRoleAssignPayload('role-1', '2026-08-01', '  VIP по заявке  ')).toEqual({
       role_id: 'role-1',
-      expires_at: new Date('2026-08-01T12:30').toISOString(),
+      expires_at: '2026-08-01T23:59:59.999Z',
       comment: 'VIP по заявке',
     });
+  });
+
+  it('rejects an invalid date-only expiry instead of shifting it silently', () => {
+    expect(() => buildRoleAssignPayload('role-1', '2026-02-30', '')).toThrow(
+      'invalid_role_expiry_date',
+    );
   });
 
   it('omits blank expiry/comment values', () => {
@@ -25,6 +33,10 @@ describe('role expiry helpers', () => {
 
   it('formats a missing role expiry for compact table cells', () => {
     expect(formatRoleExpiryLabel(null)).toBe('Без срока');
+  });
+
+  it('formats a stored role expiry without time or locale-dependent order', () => {
+    expect(formatRoleExpiryLabel('2099-12-31T23:59:59.999Z')).toBe('До 31/12/2099 включительно');
   });
 
   it('formats a permanent VIP grant as infinity', () => {
@@ -49,6 +61,18 @@ describe('role expiry helpers', () => {
 
   it('reports an invalid timestamp distinctly', () => {
     expect(formatVipExpiry('not-a-date')).toBe('Некорректный срок');
+  });
+
+  it('round-trips stored expiry through a UTC date value', () => {
+    expect(toRoleExpiryDateValue('2026-08-01T23:59:59.999Z')).toBe('2026-08-01');
+    expect(toRoleExpiryDateValue('not-a-date')).toBe('');
+    expect(toRoleExpiryDateValue(null)).toBe('');
+  });
+
+  it('formats the selected day as dd/mm/yyyy independently of browser locale', () => {
+    expect(formatRoleExpiryDate('2099-12-31')).toBe('31/12/2099');
+    expect(formatRoleExpiryDate('')).toBe('');
+    expect(formatRoleExpiryDate('2099-02-29')).toBe('');
   });
 });
 

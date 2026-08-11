@@ -43,9 +43,9 @@ If the first-owner claim already happened and the user's role has no `panel_acce
 2. Page loads user list and `/me`. "Назначить роль игроку" button appears when `user:manage_roles` is in permissions.
 3. Admin clicks button → `AssignModal` opens.
 4. Admin types a player name or SteamID64 in the search field; after 250 ms debounce, `GET /api/v1/players?q=...` fires and shows up to 20 matches.
-5. Admin picks a player, selects a role from the dropdown.
-6. If the selected role is the Owner system role, a confirm dialog fires: "Это даст пользователю полный доступ к панели."
-7. On confirm: `PUT /api/v1/players/:steam_id64/role` with `{role_id}`.
+5. Admin picks a player, selects a role from the dropdown and optionally selects an inclusive expiry day through the full-width `ДД/ММ/ГГГГ` calendar field. Empty expiry means a permanent role.
+6. The optional comment is identified as a grant reason visible to other admins.
+7. `PUT /api/v1/players/:playerId/role` receives `{role_id, expires_at, comment}`. A selected day becomes `23:59:59.999Z` on that same UTC date.
 8. Modal closes; user list reloads.
 
 ---
@@ -55,13 +55,12 @@ If the first-owner claim already happened and the user's role has no `panel_acce
 1. Admin opens `/players/:steam_id64` (any authenticated user can view profiles).
 2. `PanelAccessSection` is rendered when the caller has `user:manage_roles`.
 3. Section loads the player's current role via `GET /api/v1/players/:steam_id64/role` and the full role list.
-4. Admin clicks "Изменить" → a select dropdown appears with all available roles.
+4. Admin clicks "Выдать роль" → a role dropdown, the same `ДД/ММ/ГГГГ` expiry field and an explained optional comment appear.
 5. Admin picks a role and clicks "Сохранить".
-6. If the selected role is Owner, a confirm dialog fires.
-7. `PUT /api/v1/players/:steam_id64/role` is called.
-8. If the API returns 409 (last Owner), an error message is shown: "Нельзя снять роль у последнего Owner."
-9. On success the section refreshes and shows the new role.
-10. "Снять роль" button calls `PUT` with `{role_id: null}`.
+6. `PUT /api/v1/players/:playerId/role` is called with the same date/comment semantics as the `/users` modal.
+7. If the API returns 409 (last Owner), an error message is shown: "Нельзя снять роль у последнего Owner."
+8. On success the section refreshes and shows the new role.
+9. "Снять роль" button calls `DELETE /api/v1/players/:playerId/role`.
 
 ---
 

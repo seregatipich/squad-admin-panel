@@ -9,12 +9,13 @@ import { BannedNameRuleModal } from '@/components/BannedNameRuleModal';
 import { DirectMessageButton } from '@/components/DirectMessageModal';
 import { PlayerMarks } from '@/components/PlayerMarks';
 import { RoleColorDot } from '@/components/RoleColorDot';
+import { RoleExpiryDateField } from '@/components/RoleExpiryDateField';
 import {
   buildRoleAssignPayload,
   DEFAULT_VIP_EXPIRY_WINDOWS_DAYS,
   formatRoleExpiryLabel,
   isRoleExpirySoon,
-  toDatetimeLocalValue,
+  toRoleExpiryDateValue,
 } from '@/lib/role-expiry';
 import { AltsSection } from './AltsSection';
 import { BonusSection } from './BonusSection';
@@ -490,7 +491,7 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
 
   useEffect(() => {
     if (!editing) return;
-    setExpiresAt(toDatetimeLocalValue(current?.role_expires_at));
+    setExpiresAt(toRoleExpiryDateValue(current?.role_expires_at));
     setComment(current?.role_comment ?? '');
   }, [editing, current?.role_expires_at, current?.role_comment]);
 
@@ -609,34 +610,67 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
         </div>
       ) : (
         <div className="space-y-2">
-          <div className="grid gap-2 md:grid-cols-[1fr_220px]">
-            <select
-              value={picked}
-              onChange={(e) => setPicked(e.target.value)}
-              className="rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-            >
-              <option value="">— выберите —</option>
-              {assignableRoles.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}
-                </option>
-              ))}
-            </select>
-            <input
-              type="datetime-local"
-              value={expiresAt}
-              onChange={(e) => setExpiresAt(e.target.value)}
-              className="rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-            />
+          <div className="grid gap-3 md:grid-cols-[1fr_320px]">
+            <div>
+              <label
+                htmlFor={`role-select-${playerId}`}
+                className="text-xs uppercase text-neutral-400"
+              >
+                Новая роль
+              </label>
+              <select
+                id={`role-select-${playerId}`}
+                value={picked}
+                onChange={(e) => setPicked(e.target.value)}
+                className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
+              >
+                <option value="">— выберите —</option>
+                {assignableRoles.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label
+                htmlFor={`role-expiry-${playerId}`}
+                className="text-xs uppercase text-neutral-400"
+              >
+                Срок действия
+              </label>
+              <RoleExpiryDateField
+                id={`role-expiry-${playerId}`}
+                value={expiresAt}
+                onChange={setExpiresAt}
+              />
+            </div>
           </div>
-          <textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            maxLength={512}
-            rows={2}
-            className="w-full resize-none rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-            placeholder="Комментарий"
-          />
+          <div>
+            <label
+              htmlFor={`role-comment-${playerId}`}
+              className="text-xs uppercase text-neutral-400"
+            >
+              Комментарий
+            </label>
+            <textarea
+              id={`role-comment-${playerId}`}
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              maxLength={512}
+              rows={2}
+              aria-describedby={`role-comment-${playerId}-hint`}
+              className="mt-1 w-full resize-none rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
+              placeholder="Например: VIP по заявке"
+            />
+            <p
+              id={`role-comment-${playerId}-hint`}
+              className="mt-1 text-xs leading-5 text-neutral-500"
+            >
+              Необязательно. Причина выдачи видна другим администраторам в карточке игрока и
+              списках.
+            </p>
+          </div>
           <div className="flex justify-end gap-2">
             <button
               type="button"
