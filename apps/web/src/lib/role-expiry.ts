@@ -4,24 +4,54 @@ export interface RoleAssignPayload {
   comment: string | null;
 }
 
+const roleExpiryDatePattern = /^\d{4}-\d{2}-\d{2}$/;
+
+function roleExpiryDateToIso(dateValue: string): string {
+  if (!roleExpiryDatePattern.test(dateValue)) throw new Error('invalid_role_expiry_date');
+  const expiry = new Date(`${dateValue}T23:59:59.999Z`);
+  if (Number.isNaN(expiry.getTime()) || expiry.toISOString().slice(0, 10) !== dateValue) {
+    throw new Error('invalid_role_expiry_date');
+  }
+  return expiry.toISOString();
+}
+
 export function buildRoleAssignPayload(
   roleId: string,
-  expiresAtLocal: string,
+  expiryDate: string,
   comment: string,
 ): RoleAssignPayload {
   const trimmedComment = comment.trim();
   return {
     role_id: roleId,
-    expires_at: expiresAtLocal ? new Date(expiresAtLocal).toISOString() : null,
+    expires_at: expiryDate ? roleExpiryDateToIso(expiryDate) : null,
     comment: trimmedComment || null,
   };
 }
 
+export function toRoleExpiryDateValue(expiresAt: string | null | undefined): string {
+  if (!expiresAt) return '';
+  const date = new Date(expiresAt);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString().slice(0, 10);
+}
+
+export function formatRoleExpiryDate(dateValue: string): string {
+  if (!dateValue) return '';
+  try {
+    roleExpiryDateToIso(dateValue);
+  } catch {
+    return '';
+  }
+  const [year, month, day] = dateValue.split('-');
+  return `${day}/${month}/${year}`;
+}
+
 export function formatRoleExpiryLabel(expiresAt: string | null | undefined): string {
   if (!expiresAt) return 'Без срока';
-  const date = new Date(expiresAt);
-  if (Number.isNaN(date.getTime())) return 'Некорректный срок';
-  return `До ${date.toLocaleString()}`;
+  const dateValue = toRoleExpiryDateValue(expiresAt);
+  const formatted = formatRoleExpiryDate(dateValue);
+  if (!formatted) return 'Некорректный срок';
+  return `До ${formatted} включительно`;
 }
 
 /**
@@ -64,12 +94,4 @@ export function isRoleExpirySoon(
   const msLeft = date.getTime() - now.getTime();
   if (msLeft <= 0) return false;
   return msLeft <= Math.max(...windows) * 24 * 60 * 60 * 1000;
-}
-
-export function toDatetimeLocalValue(expiresAt: string | null | undefined): string {
-  if (!expiresAt) return '';
-  const date = new Date(expiresAt);
-  if (Number.isNaN(date.getTime())) return '';
-  const offsetMs = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
 }

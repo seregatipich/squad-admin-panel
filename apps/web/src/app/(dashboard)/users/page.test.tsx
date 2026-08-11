@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/navigation', () => ({
@@ -41,7 +41,7 @@ function userRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function stubFetch(users: unknown[]) {
+function stubFetch(users: unknown[], permissions: string[] = []) {
   vi.stubGlobal(
     'fetch',
     vi.fn((input: unknown) => {
@@ -50,7 +50,7 @@ function stubFetch(users: unknown[]) {
         return Promise.resolve(new Response(JSON.stringify(users), { status: 200 }));
       }
       if (url.startsWith('/api/v1/me')) {
-        return Promise.resolve(new Response(JSON.stringify({ permissions: [] }), { status: 200 }));
+        return Promise.resolve(new Response(JSON.stringify({ permissions }), { status: 200 }));
       }
       if (url.startsWith('/api/v1/roles')) {
         return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
@@ -91,4 +91,21 @@ describe('UsersPage Discord badge (DISCORD-4)', () => {
     },
     TEST_TIMEOUT_MS,
   );
+});
+
+describe('UsersPage role assignment', () => {
+  it('renders a date-only picker and explains the optional comment', async () => {
+    stubFetch([], ['user:manage_roles']);
+    render(<UsersPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Назначить роль игроку' }));
+
+    expect(
+      screen.getByRole('button', { name: 'Открыть календарь срока действия' }),
+    ).toHaveTextContent('ДД/ММ/ГГГГ');
+    expect(screen.getByPlaceholderText('Например: VIP по заявке')).toHaveAccessibleDescription(
+      /причина выдачи видна другим администраторам/i,
+    );
+    expect(document.querySelector('input[type="datetime-local"]')).toBeNull();
+  });
 });

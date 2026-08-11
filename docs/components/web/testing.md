@@ -56,8 +56,8 @@ PLAYWRIGHT_BASE_URL=https://squad-panel.lan \
 | `dashboard.spec.ts` | Owner sees full sidebar nav, heading visible, unauthed redirects to /login. |
 | `servers-new.spec.ts` | Cyrillic→latin slug auto-gen, form field render, API error message display. |
 | `roles.spec.ts` | All 5 roles listed, Owner Системная badge, Owner has no delete button. |
-| `users.spec.ts` | Table renders with Owner row, assign-role modal opens and closes. |
-| `player-detail.spec.ts` | Profile section, PanelAccessSection visible for Owner. |
+| `users.spec.ts` | Table renders with Owner row; assign-role modal opens/closes and renders a locale-independent date-only expiry plus explained comment. |
+| `player-detail.spec.ts` | Profile section and PanelAccessSection are visible for Owner; the inline role editor uses the same date-only expiry contract. |
 | `auth.spec.ts` | Steam button on login, dashboard → /login redirect. |
 | `live-refresh.spec.ts` | 9 polling surfaces verified without page reload (a–i). |
 | `server-detail-live.spec.ts` | LiveIndicator tick/reset on server detail. |

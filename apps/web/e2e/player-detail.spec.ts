@@ -53,4 +53,20 @@ test.describe('player detail page', () => {
       timeout: 10_000,
     });
   });
+
+  test('shows the explained date-only picker in the role editor', async ({ ownerPage }) => {
+    await ownerPage.goto(`/players/${probeUuid}`);
+    await ownerPage.getByRole('button', { name: 'Выдать роль' }).click();
+
+    const expiryField = ownerPage.getByRole('button', {
+      name: 'Открыть календарь срока действия',
+    });
+    await expect(expiryField).toContainText('ДД/ММ/ГГГГ');
+    await expiryField.click();
+    await ownerPage.keyboard.press('Escape');
+    await expect(ownerPage.getByPlaceholder('Например: VIP по заявке')).toHaveAttribute(
+      'aria-describedby',
+    );
+    await expect(ownerPage.locator('input[type="datetime-local"]')).toHaveCount(0);
+  });
 });

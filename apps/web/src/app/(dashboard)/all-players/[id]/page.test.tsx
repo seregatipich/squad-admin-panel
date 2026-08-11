@@ -56,6 +56,7 @@ const PLAYER_RESPONSE = {
 
 function mockFetch(opts: {
   canBan: boolean;
+  canManageRoles?: boolean;
   checkMatched?: boolean;
   player?: Partial<(typeof PLAYER_RESPONSE)['player']>;
 }) {
@@ -72,7 +73,7 @@ function mockFetch(opts: {
         new Response(
           JSON.stringify({
             player_id: 'me-1',
-            permissions: [],
+            permissions: opts.canManageRoles ? ['user:manage_roles'] : [],
             squad_permissions: opts.canBan ? ['ban'] : [],
           }),
           { status: 200 },
@@ -88,6 +89,23 @@ function mockFetch(opts: {
     }
     if (url === `/api/v1/players/${PLAYER_ID}/role`) {
       return Promise.resolve(new Response(JSON.stringify({ role: null }), { status: 200 }));
+    }
+    if (url === '/api/v1/roles') {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            {
+              id: 'role-admin',
+              name: 'Admin',
+              color: 'sky',
+              is_system_role: false,
+              role_expires_at: null,
+              role_comment: null,
+            },
+          ]),
+          { status: 200 },
+        ),
+      );
     }
     if (url.startsWith('/api/v1/banned-names/check')) {
       return Promise.resolve(
@@ -212,5 +230,20 @@ describe('PlayerDetailPage', () => {
       fireEvent.click(button);
     });
     expect(writeText).toHaveBeenCalledWith(EOS_ID);
+  });
+
+  it('uses the same explained date-only picker in the player role editor', async () => {
+    vi.stubGlobal('fetch', mockFetch({ canBan: false, canManageRoles: true }));
+    await renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Выдать роль' }));
+
+    expect(
+      screen.getByRole('button', { name: 'Открыть календарь срока действия' }),
+    ).toHaveTextContent('ДД/ММ/ГГГГ');
+    expect(screen.getByPlaceholderText('Например: VIP по заявке')).toHaveAccessibleDescription(
+      /причина выдачи видна другим администраторам/i,
+    );
+    expect(document.querySelector('input[type="datetime-local"]')).toBeNull();
   });
 });

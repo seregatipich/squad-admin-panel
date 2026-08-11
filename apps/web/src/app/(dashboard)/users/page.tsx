@@ -3,6 +3,7 @@ import type { RoleColor } from '@squad/shared-config/role-colors';
 import Link from 'next/link';
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
+import { RoleExpiryDateField } from '@/components/RoleExpiryDateField';
 import { buildRoleAssignPayload, formatRoleExpiryLabel } from '@/lib/role-expiry';
 
 interface UserRow {
@@ -354,13 +355,7 @@ function AssignModal({ onClose }: { onClose: () => void }) {
           <label htmlFor={expiresInputId} className="text-xs uppercase text-neutral-400">
             Срок действия
           </label>
-          <input
-            id={expiresInputId}
-            type="datetime-local"
-            value={expiresAt}
-            onChange={(e) => setExpiresAt(e.target.value)}
-            className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-2 text-sm"
-          />
+          <RoleExpiryDateField id={expiresInputId} value={expiresAt} onChange={setExpiresAt} />
         </div>
         <div>
           <label htmlFor={commentInputId} className="text-xs uppercase text-neutral-400">
@@ -372,8 +367,13 @@ function AssignModal({ onClose }: { onClose: () => void }) {
             onChange={(e) => setComment(e.target.value)}
             maxLength={512}
             rows={3}
+            placeholder="Например: VIP по заявке"
+            aria-describedby={`${commentInputId}-hint`}
             className="mt-1 w-full resize-none rounded border border-neutral-800 bg-neutral-950 px-2 py-2 text-sm"
           />
+          <p id={`${commentInputId}-hint`} className="mt-1 text-xs leading-5 text-neutral-500">
+            Необязательно. Причина выдачи видна другим администраторам в карточке игрока и списках.
+          </p>
         </div>
         <div className="flex justify-end gap-2">
           <button

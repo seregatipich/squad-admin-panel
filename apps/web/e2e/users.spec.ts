@@ -13,6 +13,24 @@ test.describe('users page', () => {
     await expect(btn).toBeVisible({ timeout: 10_000 });
     await btn.click();
     await expect(ownerPage.locator('h2', { hasText: 'Назначить роль' })).toBeVisible();
+    const expiryField = ownerPage.getByRole('button', {
+      name: 'Открыть календарь срока действия',
+    });
+    await expect(expiryField).toContainText('ДД/ММ/ГГГГ');
+    await expiryField.click();
+    await ownerPage.keyboard.press('Escape');
+    await ownerPage.getByTestId('role-expiry-native-date').evaluate((node) => {
+      const input = node as HTMLInputElement;
+      input.value = '2099-12-31';
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await expect(ownerPage.getByRole('button', { name: /Выбрано 31\/12\/2099/ })).toContainText(
+      '31/12/2099',
+    );
+    await expect(ownerPage.getByPlaceholder('Например: VIP по заявке')).toHaveAttribute(
+      'aria-describedby',
+    );
+    await expect(ownerPage.locator('input[type="datetime-local"]')).toHaveCount(0);
   });
 
   test('assign-role modal closes on cancel', async ({ ownerPage }) => {
