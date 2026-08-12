@@ -26,12 +26,16 @@ for _ in $(seq 1 40); do
   [[ "$status" == "healthy" ]] && break
   sleep 3
 done
+if [[ "$status" != "healthy" ]]; then
+  echo "fatal: api did not become healthy after 120 seconds (last status: ${status:-missing})" >&2
+  exit 1
+fi
 
 echo "==> Local health probe (through Caddy on 443)"
 # Caddy serves TLS only for the tk104.duckdns.org SNI (DNS-01 cert), so probe
 # 127.0.0.1 with the real host name via --resolve instead of https://localhost.
-curl -sk --resolve tk104.duckdns.org:443:127.0.0.1 https://tk104.duckdns.org/health \
-  -o /dev/null -w 'caddy->api /health: %{http_code}\n' --max-time 10 || true
+curl -fsk --resolve tk104.duckdns.org:443:127.0.0.1 https://tk104.duckdns.org/health \
+  -o /dev/null -w 'caddy->api /health: %{http_code}\n' --max-time 10
 
 echo "==> Container status"
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
