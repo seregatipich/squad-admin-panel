@@ -21,10 +21,10 @@ interface CliResult {
 
 let redis: Redis;
 
-function runCli(args: string[]): CliResult {
+function runCli(args: string[], env: NodeJS.ProcessEnv = {}): CliResult {
   const result = spawnSync(process.execPath, [SCRIPT, ...args], {
     cwd: REPOSITORY_ROOT,
-    env: { ...process.env, REDIS_URL },
+    env: { ...process.env, REDIS_URL, ...env },
     encoding: 'utf8',
     timeout: 10_000,
   });
@@ -260,6 +260,29 @@ describe('rnsquadjs-shadow-diff CLI', () => {
       const result = runCli([SERVER_ID, '60000', minimum]);
       assert.equal(result.status, 2);
       assert.match(result.stderr, new RegExp(`invalid minEvents: ${minimum}`));
+      assert.equal(result.stdout, '');
+    }
+  });
+
+  it('rejects non-integer, negative, and non-numeric lookback windows with exit 2', () => {
+    for (const window of ['-1', '1.5', 'not-a-number']) {
+      const result = runCli([SERVER_ID, window, '0'], {
+        REDIS_URL: 'redis://127.0.0.1:notaport',
+      });
+      assert.equal(result.status, 2);
+      assert.match(result.stderr, new RegExp(`invalid sinceMs: ${window}`));
+      assert.equal(result.stdout, '');
+    }
+  });
+
+  it('rejects unsafe stream record limits with exit 2', () => {
+    for (const limit of ['0', '-1', '1.5', 'not-a-number', '1000001']) {
+      const result = runCli([SERVER_ID, '60000', '0'], {
+        MAX_STREAM_RECORDS: limit,
+        REDIS_URL: 'redis://127.0.0.1:notaport',
+      });
+      assert.equal(result.status, 2);
+      assert.match(result.stderr, new RegExp(`invalid MAX_STREAM_RECORDS: ${limit}`));
       assert.equal(result.stdout, '');
     }
   });

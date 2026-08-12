@@ -27,12 +27,26 @@ if (!serverId) {
   console.error('usage: rnsquadjs-shadow-diff.mjs <serverId> [sinceMs] [minEvents]');
   process.exit(2);
 }
-const since = Date.now() - Number(sinceMsRaw ?? 24 * 3600 * 1000);
+const sinceMs = Number(sinceMsRaw ?? 24 * 3600 * 1000);
+if (!Number.isSafeInteger(sinceMs) || sinceMs < 0) {
+  console.error(`invalid sinceMs: ${sinceMsRaw}`);
+  process.exit(2);
+}
 const minEvents = Number(minEventsRaw ?? process.env.MIN_EVENTS ?? 100);
-if (!Number.isInteger(minEvents) || minEvents < 0) {
+if (!Number.isSafeInteger(minEvents) || minEvents < 0) {
   console.error(`invalid minEvents: ${minEventsRaw ?? process.env.MIN_EVENTS}`);
   process.exit(2);
 }
+const maxStreamRecords = Number(process.env.MAX_STREAM_RECORDS ?? 100_000);
+if (
+  !Number.isSafeInteger(maxStreamRecords) ||
+  maxStreamRecords < 1 ||
+  maxStreamRecords > 1_000_000
+) {
+  console.error(`invalid MAX_STREAM_RECORDS: ${process.env.MAX_STREAM_RECORDS}`);
+  process.exit(2);
+}
+const since = Math.max(0, Date.now() - sinceMs);
 const redis = new Redis(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379');
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
