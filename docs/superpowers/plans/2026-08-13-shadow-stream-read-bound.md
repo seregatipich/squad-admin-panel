@@ -51,7 +51,9 @@ function runCli(args: string[], env: NodeJS.ProcessEnv = {}): CliResult {
 ```ts
 it('rejects non-integer, negative, and non-numeric lookback windows with exit 2', () => {
   for (const window of ['-1', '1.5', 'not-a-number']) {
-    const result = runCli([SERVER_ID, window, '0']);
+    const result = runCli([SERVER_ID, window, '0'], {
+      REDIS_URL: 'redis://127.0.0.1:notaport',
+    });
     assert.equal(result.status, 2);
     assert.match(result.stderr, new RegExp(`invalid sinceMs: ${window}`));
     assert.equal(result.stdout, '');
@@ -60,7 +62,10 @@ it('rejects non-integer, negative, and non-numeric lookback windows with exit 2'
 
 it('rejects unsafe stream record limits with exit 2', () => {
   for (const limit of ['0', '-1', '1.5', 'not-a-number', '1000001']) {
-    const result = runCli([SERVER_ID, '60000', '0'], { MAX_STREAM_RECORDS: limit });
+    const result = runCli([SERVER_ID, '60000', '0'], {
+      MAX_STREAM_RECORDS: limit,
+      REDIS_URL: 'redis://127.0.0.1:notaport',
+    });
     assert.equal(result.status, 2);
     assert.match(result.stderr, new RegExp(`invalid MAX_STREAM_RECORDS: ${limit}`));
     assert.equal(result.stdout, '');
