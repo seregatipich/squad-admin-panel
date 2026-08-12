@@ -3,7 +3,7 @@
 import { useCallback } from 'react';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
-import { handleForcedLogout } from './forcedLogout';
+import { handleForcedLogout } from './forcedLogoutHandler';
 
 type SessionRevokedEvent = Extract<LiveEvent, { type: 'session.revoked' }>;
 
