@@ -121,6 +121,8 @@ If you claim a bug is fixed or a feature is shipped, the corresponding test is i
 
 Tests in `apps/api/test/*.test.ts` run against a **per-worker isolated Postgres database** — each Vitest worker clones a fresh database from a once-migrated template (`worker-setup.ts` overrides `DATABASE_URL`/`TEST_DATABASE_URL`), so a run never mutates the operator's real DB. Test files that share a worker still share that worker's clone, and `test-isolation.regression.test.ts` enforces the scoping rules below — so they remain non-negotiable for any test that mutates `players`/`roles`/`panel_meta` directly (i.e. not via the harness's per-test isolated database).
 
+Database-heavy package suites use `globalSetup` with `createIsolatedPackageTestDatabase()` to provision one migrated `sqworker_*` database for the whole package run. Both `DATABASE_URL` and `TEST_DATABASE_URL` are replaced before test modules load, and the database is dropped during teardown. Packages whose contract and integration files can sweep the same rows, including `worker-clan-guard`, also disable file parallelism so tests inside that package cannot change each other's cooldown or deduplication state.
+
 ### Why it matters
 
 Per-worker cloning keeps the operator's panel DB safe from test mutations, but files that share a worker's clone can still corrupt each other: a test that calls `update(players).set({ roleId: null })` without filtering to test-only steam IDs strips the Owner role for every other test in that worker. Historically the suite ran directly against the operator DB and this stripped a real admin's Owner role mid-run — the scoping convention exists so that never recurs.
