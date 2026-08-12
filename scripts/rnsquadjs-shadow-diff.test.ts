@@ -91,6 +91,8 @@ describe('rnsquadjs-shadow-diff CLI', () => {
     assert.deepEqual(verdict(result), {
       serverId: SERVER_ID,
       minEvents: 2,
+      maxStreamRecords: 100_000,
+      inputLimitExceeded: false,
       prod: 2,
       shadow: 2,
       badRecords: 0,
@@ -124,6 +126,8 @@ describe('rnsquadjs-shadow-diff CLI', () => {
     assert.deepEqual(verdict(result), {
       serverId: SERVER_ID,
       minEvents: 1,
+      maxStreamRecords: 100_000,
+      inputLimitExceeded: false,
       prod: 1,
       shadow: 1,
       badRecords: 0,
@@ -148,6 +152,8 @@ describe('rnsquadjs-shadow-diff CLI', () => {
     assert.deepEqual(verdict(result), {
       serverId: SERVER_ID,
       minEvents: 0,
+      maxStreamRecords: 100_000,
+      inputLimitExceeded: false,
       prod: 0,
       shadow: 0,
       badRecords: 2,
@@ -201,6 +207,8 @@ describe('rnsquadjs-shadow-diff CLI', () => {
     assert.deepEqual(verdict(result), {
       serverId: SERVER_ID,
       minEvents: 1,
+      maxStreamRecords: 100_000,
+      inputLimitExceeded: false,
       prod: 1,
       shadow: 1,
       badRecords: 6,
@@ -285,5 +293,39 @@ describe('rnsquadjs-shadow-diff CLI', () => {
       assert.match(result.stderr, new RegExp(`invalid MAX_STREAM_RECORDS: ${limit}`));
       assert.equal(result.stdout, '');
     }
+  });
+
+  it('fails closed after a bounded number of records', async () => {
+    const now = new Date().toISOString();
+    for (let index = 0; index < 2; index += 1) {
+      const event = {
+        type: 'player.connected',
+        ts: now,
+        payload: { steamId: `p-${index}` },
+      };
+      await appendEnvelope(PROD_STREAM, event);
+      await appendEnvelope(SHADOW_STREAM, event);
+    }
+
+    const boundary = runCli([SERVER_ID, '60000', '2'], { MAX_STREAM_RECORDS: '2' });
+    assert.equal(boundary.status, 0, boundary.stderr);
+    assert.equal(verdict(boundary).inputLimitExceeded, false);
+    assert.equal(verdict(boundary).prod, 2);
+
+    const extra = {
+      type: 'player.connected',
+      ts: now,
+      payload: { steamId: 'p-2' },
+    };
+    await appendEnvelope(PROD_STREAM, extra);
+    await appendEnvelope(SHADOW_STREAM, extra);
+
+    const exceeded = runCli([SERVER_ID, '60000', '2'], { MAX_STREAM_RECORDS: '2' });
+    assert.equal(exceeded.status, 1);
+    assert.equal(verdict(exceeded).gate, 'input-limit-exceeded');
+    assert.equal(verdict(exceeded).inputLimitExceeded, true);
+    assert.equal(verdict(exceeded).maxStreamRecords, 2);
+    assert.equal(verdict(exceeded).prod, 2);
+    assert.equal(verdict(exceeded).shadow, 2);
   });
 });
