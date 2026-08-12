@@ -264,7 +264,7 @@ describe('rnsquadjs-shadow-diff CLI', () => {
   });
 
   it('rejects non-integer, negative, and non-numeric minimums with exit 2', () => {
-    for (const minimum of ['-1', '1.5', 'not-a-number']) {
+    for (const minimum of ['-1', '1.5', 'not-a-number', '9007199254740992']) {
       const result = runCli([SERVER_ID, '60000', minimum]);
       assert.equal(result.status, 2);
       assert.match(result.stderr, new RegExp(`invalid minEvents: ${minimum}`));
@@ -273,7 +273,7 @@ describe('rnsquadjs-shadow-diff CLI', () => {
   });
 
   it('rejects non-integer, negative, and non-numeric lookback windows with exit 2', () => {
-    for (const window of ['-1', '1.5', 'not-a-number']) {
+    for (const window of ['-1', '1.5', 'not-a-number', '9007199254740992']) {
       const result = runCli([SERVER_ID, window, '0'], {
         REDIS_URL: 'redis://127.0.0.1:notaport',
       });
@@ -318,7 +318,6 @@ describe('rnsquadjs-shadow-diff CLI', () => {
       payload: { steamId: 'p-2' },
     };
     await appendEnvelope(PROD_STREAM, extra);
-    await appendEnvelope(SHADOW_STREAM, extra);
 
     const exceeded = runCli([SERVER_ID, '60000', '2'], { MAX_STREAM_RECORDS: '2' });
     assert.equal(exceeded.status, 1);
