@@ -60,9 +60,24 @@ jobs:
         run: bash scripts/test-check-runner-health.sh
       - name: Run codeql-default-setup test suite
         run: bash scripts/test-codeql-default-setup.sh
+      - name: Run runner disk-cleanup test suite
+        run: bash scripts/test-runner-disk-cleanup.sh
+
+  prepare-runner:
+    runs-on: self-hosted
+    timeout-minutes: 10
+    steps:
+      - name: Reclaim disk before expensive jobs
+        run: |
+          docker image prune -f
+          docker builder prune -f --filter "until=72h"
+          docker container prune -f
+          docker volume prune -f
+          df -h /
 
   node:
     runs-on: self-hosted
+    needs: prepare-runner
     timeout-minutes: 30
     services:
       # Dynamic host ports (Docker assigns a free one) so the job never collides
@@ -166,6 +181,7 @@ jobs:
 
   go:
     runs-on: self-hosted
+    needs: prepare-runner
     timeout-minutes: 15
     # Run inside a Go container, not directly on the runner host: the bridge tests
     # exercise real absolute paths under /var/lib/squad-panel (e.g. directory_delete)
@@ -222,21 +238,19 @@ jobs:
         run: docker build -f docker/web.Dockerfile -t squad-admin-panel/web:ci .
       - name: backup/restore round-trip (INFRA-8)
         run: bash scripts/test-backup-restore.sh
-      # The 20 GB disk has no auto-refresh yet, so CI must self-clean after every
-      # run. `docker image prune -f` (no -a) only drops untagged/dangling layers —
-      # e.g. the old squad-admin-panel/api:ci image superseded by this run's build —
-      # while keeping named base images (golang:1.25.11-bookworm, postgres:16-alpine,
-      # redis:7-alpine) cached so they aren't re-pulled from the network every run.
-      # `docker volume prune -f` is a safety net, not the primary fix: it only
-      # catches volumes with no container reference left at all, which is what a
-      # bare `docker rm -f` (missing `-v`) on a script-managed container leaves
-      # behind — see scripts/test-backup-restore.sh, which leaked ~7.5 GB of
-      # these before its `docker rm -f` calls were fixed to `-fv`.
-      - name: Reclaim disk (dangling images, build cache, orphaned volumes)
-        if: always()
+  cleanup-runner:
+    runs-on: self-hosted
+    needs: [node, go, docker]
+    if: ${{ always() }}
+    timeout-minutes: 10
+    steps:
+      # This job is deliberately separate from `docker`: a failed node/go job
+      # skips the gated image build, but must never skip runner cleanup (#281).
+      # `image prune` omits `-a`, preserving named production/base images.
+      - name: Reclaim disk after every outcome
         run: |
           docker image prune -f
-          docker builder prune -f --filter "unused-for=72h" || docker builder prune -f
+          docker builder prune -f --filter "until=72h"
           docker container prune -f
           docker volume prune -f
-          df -h / || true
+          df -h /

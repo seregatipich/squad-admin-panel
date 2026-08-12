@@ -88,7 +88,7 @@ CI executes on a dedicated self-hosted GitHub Actions runner rather than GitHub-
 
 Unlike GitHub-hosted runners, this VM is **not ephemeral**: it has no auto-refresh or periodic recreation yet, so anything a job leaves behind — Docker images, build cache, stray containers — persists indefinitely on the 20 GB disk instead of vanishing at the end of the run. Two things in the workflow compensate:
 
-- The `docker` job prunes dangling images, build cache, and stray containers after every run (`if: always()`), so a failed build doesn't leave the disk any fuller than a green one.
+- `prepare-runner` safely removes unused Docker resources before the expensive jobs, while a separate `cleanup-runner` executes through `always()` after Node, Go, and the conditionally gated image build. A red Node/Go job therefore no longer skips cleanup together with the dependent Docker job; named base and production images remain intact, and build cache is pruned only when unused for 72 hours.
 - Every job sets a `timeout-minutes`, so one wedged job can't block the queue on the single shared runner indefinitely.
 
 The box is also small enough that test/build parallelism is deliberately capped rather than left at each tool's default: the `node` job sets the `VITEST_MAX_FORKS` and `PNPM_WORKSPACE_CONCURRENCY` env vars (read by [`apps/api/vitest.config.ts`](../../apps/api/vitest.config.ts) and root [`package.json`](../../package.json)'s `test:cov` script respectively) and passes `--concurrency=2` to `turbo`, so parallel work fits 2 vCPU / 4 GB instead of thrashing or getting OOM-killed.
