@@ -53,17 +53,32 @@ The trick is one-shot. To re-arm it:
 
 ## Transferring Owner to a different Steam account
 
-If the last Owner lost Steam access, do **not** reset the trick. Instead, assign the Owner role directly via SQL:
+If the last Owner lost Steam access, do **not** reset the trick or hand-edit the
+session tables. Run the repository command against the target database:
 
-```sql
--- Find the Owner role:
-SELECT id FROM roles WHERE name = 'Owner';
--- Assign it to the new SteamID (upsert players row first if not present):
-INSERT INTO players (steam_id64, canonical_name) VALUES (<new_steam_id64>, 'NewOwner') ON CONFLICT DO NOTHING;
-UPDATE players SET role_id = '<owner_role_id>' WHERE steam_id64 = <new_steam_id64>;
--- Optionally clear the former Owner:
-UPDATE players SET role_id = NULL WHERE steam_id64 = <old_steam_id64>;
+```bash
+pnpm --silent mint:owner-session -- \
+  --steam-id64 '<new SteamID64>' \
+  --confirm-steam-id64 '<new SteamID64>' \
+  --name '<current player name>'
 ```
+
+Load `DATABASE_URL` from the deployment's protected environment before running
+the command; do not paste the credential into shell history.
+
+The command atomically creates or updates the player, assigns the system Owner
+role without an expiry, queues `Admins.cfg` reconciliation, appends a hash-chain
+audit row, and prints a six-hour panel session token. For an existing player it
+preserves the identity already collected from Squad. The database stores only
+the token hash. Treat stdout as a secret: do not paste it into logs, issues, or
+chat. Use the token only as the `__Host-sid` cookie on the target panel, then
+revoke the temporary session from the account page after recovery. An API
+process that cached this player's old permissions can take up to 30 seconds to
+observe the new role.
+
+Clearing the former Owner is a separate, deliberate action. Use the panel after
+signing in with the recovered account so the last-Owner invariant remains in
+force.
 
 ## Verifying the install
 

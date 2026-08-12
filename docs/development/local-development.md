@@ -42,6 +42,7 @@ docker compose up -d --build
 | `pnpm db:generate` | After editing a schema file (review the SQL by hand). |
 | `pnpm db:migrate` | Apply migrations. Requires `DATABASE_URL`. |
 | `pnpm db:studio` | Drizzle Studio. |
+| `pnpm --silent mint:owner-session -- --steam-id64 <id> --confirm-steam-id64 <id> --name <name>` | Promote a player to Owner and print a six-hour panel session token. Requires `DATABASE_URL`; treat stdout as a secret. |
 
 ## pnpm overrides
 
