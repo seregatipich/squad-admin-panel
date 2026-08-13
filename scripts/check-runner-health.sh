@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # check-runner-health.sh — report whether at least one self-hosted Actions
-# runner is online for this repository, so an agent can fail fast instead of
-# waiting indefinitely on a queued `ci` run (see AGENTS.md "CI gate" and
-# docs/development/agent-harness.md "Self-hosted runner").
+# deployment runner is online for this repository, so an agent can fail fast
+# instead of waiting indefinitely on a queued production deployment (see
+# docs/development/agent-harness.md "CI and deployment runners"). Hosted CI
+# does not depend on this check.
 #
 # Queries the repository-level runner list first (`gh api
 # repos/<owner>/<repo>/actions/runners`); if that reports zero runners (the
@@ -16,7 +17,7 @@
 # Exit 0 = at least one runner confirmed online.
 # Exit 1 = no runner confirmed online — offline, none registered, or status
 #          could not be determined (e.g. org-level access denied). Do not
-#          expect a `ci` run to execute; see "Runner recovery runbook" in
+#          expect a self-hosted deployment to execute; see "Runner recovery runbook" in
 #          docs/development/agent-harness.md.
 # Requires: gh (authenticated), jq.
 

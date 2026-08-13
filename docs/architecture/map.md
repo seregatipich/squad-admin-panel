@@ -2742,7 +2742,7 @@ redis-cli config set appendonly yes >/dev/null
 until [ "$(... aof_rewrite_in_progress ...)" = "0" ]; do sleep 0.3; done
 ```
 
-Two acceptance harnesses exist: `scripts/test-backup-restore.sh` runs on the CI `docker` job with Postgres/Redis/log-archive canaries, while `scripts/test-fullstack-down-v.sh` performs the real `docker compose --profile backup down -v` and is deliberately excluded from CI — it exits 2 unless `RUN_FULLSTACK_DOWN_V=1`, because the full stack twice plus a restic restore exceeds the self-hosted runner's 2 vCPU / 4 GB. The most consequential fact: `compose.tk104.yml` contains zero occurrences of `backup` or `restic`, and the bridge's `composeBackupArgs` hard-codes `-f <dir>/docker-compose.yml` — **the entire backup subsystem is dev/self-hosted-compose only; the tk104 production stack is unbacked.**
+Two acceptance harnesses exist: `scripts/test-backup-restore.sh` runs on the CI `docker` job with Postgres/Redis/log-archive canaries, while `scripts/test-fullstack-down-v.sh` performs the real `docker compose --profile backup down -v` and is deliberately excluded from CI — it exits 2 unless `RUN_FULLSTACK_DOWN_V=1`, because the full stack twice plus a restic restore is too large for the standard hosted runner's 2 vCPU / 8 GB / 14 GB disk. The most consequential fact: `compose.tk104.yml` contains zero occurrences of `backup` or `restic`, and the bridge's `composeBackupArgs` hard-codes `-f <dir>/docker-compose.yml` — **the entire backup subsystem is dev/self-hosted-compose only; the tk104 production stack is unbacked.**
 
 ---
 
@@ -3061,27 +3061,27 @@ Third, `DATABASE_URL` and `TEST_DATABASE_URL` sit in `globalEnv`. Provisioning a
 
 Biome 2.2.0 handles lint and format together (2-space, `lineWidth: 100`, single quotes, `trailingCommas: "all"` for JS and `"none"` for JSON). `noExplicitAny`, `noUnusedImports`, `noUnusedVariables`, `useConst`, `useImportType` are errors; `noNonNullAssertion` is a **warn** and does not block; `noConsole` and `complexity/noForEach` are off. Note the declared turbo `lint` task is nearly vestigial — only `apps/bridge` defines a `lint` script; TypeScript linting runs as a repo-wide `pnpm exec biome check .` outside turbo entirely.
 
-### 14.10 CI and the self-hosted runner
+### 14.10 CI on ephemeral hosted runners
 
-`.github/workflows/ci.yml` (212 lines) triggers on push and PR to `[master, dev]` plus dispatch. Concurrency group `ci-${{ github.ref }}` cancels in progress **only for non-dev/non-master refs**. All four jobs run `runs-on: self-hosted` — a single 2 vCPU / 4 GB Multipass VM — and every job carries an explicit `timeout-minutes` with a comment explaining why: a wedged job would block the one shared runner indefinitely.
+`.github/workflows/ci.yml` (204 lines) triggers on trusted pushes to `[master, dev]` plus explicit dispatch. It deliberately has no pull-request trigger: feature branches run the local pre-push gate and only accepted integration SHAs consume the organization allowance. Concurrency group `ci-${{ github.ref }}` uses `cancel-in-progress: true`, so a newer SHA replaces an obsolete run. All four jobs use a fresh `ubuntu-24.04` VM (2 vCPU / 8 GB / 14 GB for this private repository); production deployment remains in a separate self-hosted workflow.
 
 ```mermaid
 graph LR
   BG["branch-guard (10m)<br/>ancestry audit +<br/>test-git-guard.sh<br/>test-verify-done.sh"]
   N["node (30m)<br/>pg16 + redis7 services"]
-  G["go (15m)<br/>in golang:1.25.11-bookworm<br/>--user 1000:1000"]
-  D["docker (20m)<br/>4 image builds +<br/>test-backup-restore.sh"]
+  G["go (15m)<br/>setup-go 1.25.11<br/>vet + race + vuln"]
+  D["docker (30m)<br/>5 image builds +<br/>test-backup-restore.sh"]
   N --> D
   G --> D
 ```
 
-**`branch-guard`** fails a PR whose `base_ref == master` and `head_ref != dev`; on a push to `master` it asserts `git merge-base --is-ancestor $GITHUB_SHA origin/dev`. It also runs `scripts/test-git-guard.sh` and `scripts/test-verify-done.sh` — the enforcement scripts are themselves unit-tested in CI.
+**`branch-guard`** asserts `git merge-base --is-ancestor $GITHUB_SHA origin/dev` on a push to `master`. It also runs the git/verification harness tests, workflow pin/security tests, runner strategy guard, and the other CI policy suites.
 
-**`node`** starts `postgres:16-alpine` and `redis:7-alpine` as service containers on **dynamic host ports**; a "Resolve service ports" step writes both `DATABASE_URL` and `TEST_DATABASE_URL` (plus `REDIS_URL` and `TEST_REDIS_URL` at `/15`) into `$GITHUB_ENV`. Runner sizing is pinned via `VITEST_MAX_FORKS=2` and `PNPM_WORKSPACE_CONCURRENCY=2`. Step order: install → `pnpm run solve:issues:test` → `turbo run typecheck` → `turbo run build` → `@squad/db migrate` → `turbo run test --filter=panel-bridge` → `biome check .` → `pnpm test:cov` → coverage upload → gitleaks 8.30.1 with `--exit-code 1`.
+**`node`** starts `postgres:16-alpine` and `redis:7-alpine` as service containers on **dynamic host ports**; a "Resolve service ports" step writes both `DATABASE_URL` and `TEST_DATABASE_URL` (plus `REDIS_URL` and `TEST_REDIS_URL` at `/15`) into `$GITHUB_ENV`. CPU parallelism is pinned via `VITEST_MAX_FORKS=2` and `PNPM_WORKSPACE_CONCURRENCY=2`. Step order: install → issue-runner tests → typecheck → production build → migrations → operations scripts → panel bridge → shared-config mutation tests → Biome → coverage completeness → full coverage → artifact → gitleaks.
 
-**`go`** runs *inside* `golang:1.25.11-bookworm` with `--user 1000:1000`, because bridge tests touch real absolute paths under `/var/lib/squad-panel` and need a clean container filesystem — the uid match avoids root-owned files in the shared `_work` directory. Steps: `go vet`, `go test -race -count=1`, `govulncheck`, then a static `CGO_ENABLED=0` build.
+**`go`** uses SHA-pinned `actions/setup-go` for 1.25.11 directly on the disposable VM. Bridge tests that touch absolute paths remain isolated because no machine survives the job. Steps: `go vet`, `go test -race -count=1`, `govulncheck`, then a static `CGO_ENABLED=0` build.
 
-**`docker`** is the only `needs`-gated job. It builds `api.Dockerfile`, `worker.Dockerfile` twice (log-ingest and rcon), and `rnsquadjs.Dockerfile`, then runs `scripts/test-backup-restore.sh` (the INFRA-8 round-trip) and an `if: always()` disk-reclaim step using `docker image prune -f` deliberately without `-a` so base layers stay cached.
+**`docker`** is the only `needs`-gated job. After green Node and Go jobs it builds API, two worker variants, rnsquadjs and web images, then runs `scripts/test-backup-restore.sh` (the INFRA-8 round trip). There is no persistent-runner cleanup: GitHub destroys the VM and all Docker state at job end.
 
 ### 14.11 Production delivery: deploy-tk104
 
@@ -3455,7 +3455,6 @@ Three of these read their thresholds from a settings singleton; reporter stats h
 - **`security.md:19` — bridge socket is mounted into "api, worker-rcon, worker-log-ingest".** `worker-rcon` does **not** mount it (it is `network_mode: host` and speaks RCON on loopback). The five that do are `api`, `worker-log-ingest`, `worker-config-sync`, `worker-metrics-sampler`, `worker-scheduler` (`docker-compose.yml:88,136,164,323,374`).
 - **`rbac.md:67` describes the permission gate as a `preHandler`.** It is an `onRequest` hook (`apps/api/src/plugins/auth.ts:21`); there is no `preHandler` anywhere in `apps/api/src`.
 - **`decisions.md:137` and `README.md:98` advertise roles Owner / SeniorAdmin / Admin / Moderator / Viewer.** `0015_reseed_roles_squad.sql:68` deletes `Senior Admin` and `Viewer`; `0016_drop_legacy_viewer.sql` drops Viewer again. The seeded set is **Owner, Admin, Moderator, QueuePriority, Cameraman, Intern**.
-- **`operations/deployment.md:31` — `runs-on: [self-hosted, linux, x64]`.** Actual: plain `runs-on: self-hosted` (`.github/workflows/ci.yml:27,61,146,185`).
 - **`operations/monitoring.md` — "Alerting via the Discord worker is planned as a P2 feature."** `worker-discord` ships; `alert_rules`/`alert_events` exist; `routes/alert-rules.ts` exists; `alert.triggered` is a live-bus event.
 
 ### Verified correct — do not "fix" these

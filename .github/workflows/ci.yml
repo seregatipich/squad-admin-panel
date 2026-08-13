@@ -1,32 +1,27 @@
 name: ci
-# Runs on the org self-hosted runner (a Multipass VM: 2 vCPU / 4 GB / 20 GB disk).
-# The VM has no auto-refresh yet, so jobs clean up after themselves (see the
-# docker job's "Reclaim disk" step) and concurrency is bounded throughout to fit
-# the box. The local pre-push checklist (scripts/pre-push-checklist.sh) remains
-# the fast first gate; this workflow is the authoritative one (see AGENTS.md →
-# "CI gate").
+# Runs on ephemeral GitHub-hosted Ubuntu VMs. The production deployment workflow
+# deliberately stays on the dedicated self-hosted runner; this file contains
+# verification only. The local pre-push checklist remains the fast first gate,
+# while this workflow is authoritative (see AGENTS.md → "CI gate").
 on:
   push:
     branches: [master, dev]
   workflow_dispatch:
 
 concurrency:
-  # One CI run per ref on the small shared runner: supersede stale work-branch
-  # runs, but never cancel an in-flight dev or master run.
+  # Only the newest SHA of a ref matters. Cancelling superseded work prevents a
+  # merge wave from wasting the organization's monthly hosted-runner allowance.
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/dev' && github.ref != 'refs/heads/master' }}
+  cancel-in-progress: true
 
 jobs:
-  # Enforces the branch model (see AGENTS.md). Runs only on trusted push
-  # (master/dev) and workflow_dispatch events — never pull_request or
-  # pull_request_target — so no untrusted or merely review-stage PR head
-  # ever executes on this shared self-hosted runner (#217). On push events
-  # the job always succeeds so the dev tip SHA carries a passing
-  # branch-guard check — required by the protect-master ruleset for the
-  # fast-forward promotion push (.github/rulesets/).
+  # Enforces the branch model (see AGENTS.md). Full CI remains limited to trusted
+  # master/dev pushes and explicit dispatches — draft branches use the local
+  # pre-push gate, preserving the monthly hosted-runner allowance. On push events
+  # this job gives the dev tip SHA the branch-guard result required by the
+  # protect-master ruleset for the fast-forward promotion push.
   branch-guard:
-    runs-on: self-hosted
-    # Single shared self-hosted runner: a wedged job with no timeout could block every subsequent CI run indefinitely, so every job below gets a timeout-minutes.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,25 +55,15 @@ jobs:
         run: bash scripts/test-check-runner-health.sh
       - name: Run codeql-default-setup test suite
         run: bash scripts/test-codeql-default-setup.sh
-      - name: Run runner disk-cleanup test suite
-        run: bash scripts/test-runner-disk-cleanup.sh
-
-  prepare-runner:
-    runs-on: self-hosted
-    timeout-minutes: 10
-    steps:
-      - name: Reclaim disk before expensive jobs
-        run: |
-          docker image prune -f
-          docker builder prune -f --filter "until=72h"
-          docker container prune -f
-          docker volume prune -f
-          df -h /
+      - name: Run CI runner-strategy test suite
+        run: bash scripts/test-ci-runner-strategy.sh
 
   node:
-    runs-on: self-hosted
-    needs: prepare-runner
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    # A cold hosted run has no Turbo cache; the full coverage suite alone can
+    # take about 17 minutes on 2 vCPU and the complete job exceeded 30 minutes
+    # during the #286 bootstrap proof. Keep a bounded but realistic margin.
+    timeout-minutes: 45
     services:
       # Dynamic host ports (Docker assigns a free one) so the job never collides
       # with anything already bound on the runner's host. The resolved ports are
@@ -107,7 +92,8 @@ jobs:
           --health-retries 5
     env:
       POSTGRES_PASSWORD: test_password
-      # Bound Vitest's fork pool and pnpm's workspace concurrency to fit the runner's 2 vCPU / 4 GB.
+      # Private-repository Ubuntu runners have 2 vCPU; bounded parallelism avoids
+      # CPU thrashing and keeps results comparable with the local pre-push gate.
       VITEST_MAX_FORKS: "2"
       PNPM_WORKSPACE_CONCURRENCY: "2"
     steps:
@@ -129,15 +115,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      # pnpm/action-setup@v5+ probes `node --version` on PATH and silently falls
-      # back to the standalone @pnpm/exe bootstrap (which needs libatomic.so.1,
-      # not installed on this runner — see #269) whenever it can't find Node
-      # >= 22.13. This runner has no system Node until actions/setup-node runs,
-      # so a Node-less pnpm/action-setup step always hit that fallback. Setting
-      # up Node here first — before pnpm/action-setup — keeps a real Node on
-      # PATH so it bootstraps via plain npm instead. The second setup-node step
-      # below stays: actions/setup-node's `cache: pnpm` needs pnpm already on
-      # PATH to resolve the cache key, so it must run after pnpm/action-setup.
+      # Put the requested Node version on PATH before pnpm/action-setup so pnpm
+      # bootstraps through Node rather than a platform-specific standalone exe.
+      # The second setup-node call stays because `cache: pnpm` needs pnpm already
+      # available to resolve its cache key (#269).
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -180,49 +161,35 @@ jobs:
           ./gitleaks detect --config .gitleaks.toml --no-banner --redact --exit-code 1
 
   go:
-    runs-on: self-hosted
-    needs: prepare-runner
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # Run inside a Go container, not directly on the runner host: the bridge tests
-    # exercise real absolute paths under /var/lib/squad-panel (e.g. directory_delete)
-    # and assume those paths do NOT exist — running os.RemoveAll against a host that
-    # happened to have them would be unsafe. The container gives a clean filesystem
-    # (the same guarantee a GitHub-hosted VM provided).
-    # --user 1000:1000 matches the runner user so no root-owned files are left in
-    # the shared _work dir (which would break later non-container jobs).
-    container:
-      image: golang:1.25.11-bookworm
-      options: --user 1000:1000
     env:
-      HOME: /tmp/gohome
-      GOPATH: /tmp/gohome/go
-      GOCACHE: /tmp/gohome/.cache/go-build
       GOFLAGS: -buildvcs=false
     defaults:
       run:
         working-directory: apps/bridge
     steps:
-      - name: Prepare writable Go dirs
-        run: mkdir -p "$GOPATH/bin" "$GOCACHE"
-        working-directory: /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.11'
+          cache-dependency-path: apps/bridge/go.sum
       - run: go vet ./...
       - run: go test -race -count=1 ./...
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          "$GOPATH/bin/govulncheck" ./...
+          "$(go env GOPATH)/bin/govulncheck" ./...
       - name: build static binary
         run: |
           CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/panel-host-bridge ./cmd/panel-host-bridge
-          # `file` is not shipped in the golang image; keep the check best-effort.
-          command -v file >/dev/null && file bin/panel-host-bridge || true
+          file bin/panel-host-bridge
           ls -la bin/
 
   docker:
-    runs-on: self-hosted
+    runs-on: ubuntu-24.04
     needs: [node, go]
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -238,19 +205,3 @@ jobs:
         run: docker build -f docker/web.Dockerfile -t squad-admin-panel/web:ci .
       - name: backup/restore round-trip (INFRA-8)
         run: bash scripts/test-backup-restore.sh
-  cleanup-runner:
-    runs-on: self-hosted
-    needs: [node, go, docker]
-    if: ${{ always() }}
-    timeout-minutes: 10
-    steps:
-      # This job is deliberately separate from `docker`: a failed node/go job
-      # skips the gated image build, but must never skip runner cleanup (#281).
-      # `image prune` omits `-a`, preserving named production/base images.
-      - name: Reclaim disk after every outcome
-        run: |
-          docker image prune -f
-          docker builder prune -f --filter "until=72h"
-          docker container prune -f
-          docker volume prune -f
-          df -h /

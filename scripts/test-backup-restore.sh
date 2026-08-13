@@ -11,7 +11,7 @@
 # `-f` alone, since postgres/redis declare a VOLUME for their data dir and a
 # bare `-f` orphans it. The script asserts this itself (see the two
 # "leaked its anonymous volume" checks below) after a prior run silently
-# leaked ~7.5 GB of these across the self-hosted CI runner's disk.
+# leaked ~7.5 GB on the former persistent verification runner.
 #
 # Usage: bash scripts/test-backup-restore.sh
 
