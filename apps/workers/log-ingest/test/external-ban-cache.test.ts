@@ -1,3 +1,4 @@
+import { EXTERNAL_BAN_CACHE_VERSION_KEY } from '@squad/shared-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ExternalBanCache } from '../src/external-ban/cache.js';
 
@@ -43,5 +44,7 @@ describe('ExternalBanCache', () => {
     await cache.match('76561198000000000', null);
     await cache.match('76561198000000000', null);
     expect(db.select).toHaveBeenCalledTimes(2);
+    expect(getVersion).toHaveBeenNthCalledWith(1, EXTERNAL_BAN_CACHE_VERSION_KEY);
+    expect(getVersion).toHaveBeenNthCalledWith(2, EXTERNAL_BAN_CACHE_VERSION_KEY);
   });
 });
