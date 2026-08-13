@@ -32,6 +32,10 @@ for job in branch-guard node go docker; do
     fail "ci job '$job' does not use the pinned GitHub-hosted Ubuntu image"
 done
 
+node_block=$(job_block "$ci_workflow" node)
+printf '%s\n' "$node_block" | grep -Fq 'timeout-minutes: 45' ||
+  fail 'node timeout does not cover a cold hosted full-suite run'
+
 if grep -Eq '^[[:space:]]*runs-on:[[:space:]]*self-hosted[[:space:]]*$' "$ci_workflow"; then
   fail 'ci still contains a self-hosted job'
 fi
@@ -49,6 +53,8 @@ fi
 go_block=$(job_block "$ci_workflow" go)
 printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/setup-go@[0-9a-f]{40}' ||
   fail 'go job does not install Go through a SHA-pinned setup action'
+printf '%s\n' "$go_block" | grep -Fq 'cache-dependency-path: apps/bridge/go.sum' ||
+  fail 'go cache does not use the bridge module dependency file'
 if printf '%s\n' "$go_block" | grep -Eq '^[[:space:]]+container:'; then
   fail 'go job still carries the self-hosted filesystem-isolation container'
 fi

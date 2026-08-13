@@ -61,7 +61,10 @@ jobs:
 
   node:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # A cold hosted run has no Turbo cache; the full coverage suite alone can
+    # take about 17 minutes on 2 vCPU and the complete job exceeded 30 minutes
+    # during the #286 bootstrap proof. Keep a bounded but realistic margin.
+    timeout-minutes: 45
     services:
       # Dynamic host ports (Docker assigns a free one) so the job never collides
       # with anything already bound on the runner's host. The resolved ports are
@@ -171,6 +174,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.25.11'
+          cache-dependency-path: apps/bridge/go.sum
       - run: go vet ./...
       - run: go test -race -count=1 ./...
       - name: govulncheck
