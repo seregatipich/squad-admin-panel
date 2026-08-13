@@ -55,6 +55,33 @@ Run:
 pnpm --filter @squad/api test
 ```
 
+### Проверки эксплуатационных скриптов
+
+`pnpm test:scripts` — отдельный последовательный контур для управляющих
+скриптов, которые не относятся к одному workspace-пакету. Он проверяет:
+
+- безопасные preflight/confirmation/fail-closed границы `bootstrap`,
+  `install-host-bridge`, `deploy-tk104`, `rebuild` и `uninstall` на временных
+  копиях со всеми host-командами, заменёнными журналирующими подменами;
+- настоящий length-prefixed JSON-протокол `verify-bridge` через временный
+  Unix-сокет;
+- ограниченную проверку RNSquadJS shadow-потоков через временный Redis;
+- `verify-audit-chain.ts` и реальные миграционные триггеры `audit_log` через
+  отдельные временные PostgreSQL-БД.
+
+Для полного локального запуска передайте обе пары адресов. Audit-набор
+допускает отсутствие PostgreSQL только вне CI; в CI отсутствие БД завершает
+набор ошибкой. Workflow сначала применяет миграции и только затем вызывает
+`pnpm test:scripts`.
+
+```bash
+DATABASE_URL=<isolated-postgres> \
+TEST_DATABASE_URL=<isolated-postgres> \
+REDIS_URL=<isolated-redis> \
+TEST_REDIS_URL=<isolated-redis>/15 \
+pnpm test:scripts
+```
+
 ### Tier 3 — end-to-end (e2e)
 
 Drives the **live panel** over HTTPS, uses the **real host bridge** RPC surface, creates an actual Docker container, boots Squad, verifies RCON AUTH succeeds with a real `ShowServerInfo` JSON response, edits configs, gracefully stops. This is the suite the project bets correctness on. Excluded from `pnpm turbo run test`.

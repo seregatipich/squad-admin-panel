@@ -23,6 +23,12 @@ two files in sync by hand when the bridge-facing env/volumes on a worker change 
 `docker-compose.yml`. `.env.tk104` additionally needs `PANEL_GID` and `DATA_DIR` set to
 match the host's `panel` group and the data tree created by `install-host-bridge.sh`.
 
+`scripts/deploy-tk104.sh` считается успешным только после двух обязательных
+проверок: сервис `api` должен получить Compose health `healthy` не позднее 120
+секунд, затем локальный HTTPS-запрос через Caddy должен вернуть успешный HTTP-код
+(`curl --fail`). Таймаут API, сетевой сбой и HTTP 4xx/5xx завершают deploy
+ненулевым кодом до сообщения `Deploy complete`.
+
 ## CI/CD on self-hosted runners
 
 Both GitHub Actions workflows (`ci`, `deploy-tk104`) run on **self-hosted runners**

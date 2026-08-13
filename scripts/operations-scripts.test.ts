@@ -140,6 +140,27 @@ describe('operation script static contracts', () => {
     assert.match(uninstall, /\[y\/N\]/);
     assert.match(uninstall, /\^\[yY\]\$/);
   });
+
+  it('wires every script contract after database migrations in CI', () => {
+    const packageJson = JSON.parse(
+      readFileSync(path.join(REPOSITORY_ROOT, 'package.json'), 'utf8'),
+    ) as { scripts?: Record<string, string> };
+    const testScripts = packageJson.scripts?.['test:scripts'] ?? '';
+    assert.match(testScripts, /--test-concurrency=1/);
+    for (const testFile of [
+      'scripts/operations-scripts.test.ts',
+      'scripts/rnsquadjs-shadow-diff.test.ts',
+      'scripts/verify-audit-chain.test.ts',
+    ]) {
+      assert.match(testScripts, new RegExp(testFile.replaceAll('.', '\\.')));
+    }
+
+    const workflow = readFileSync(path.join(REPOSITORY_ROOT, '.github/workflows/ci.yml'), 'utf8');
+    const migrations = workflow.indexOf('name: Apply database migrations');
+    const scriptTests = workflow.indexOf('name: Run operations and verification script tests');
+    assert.ok(migrations >= 0 && scriptTests > migrations);
+    assert.match(workflow.slice(scriptTests), /run: pnpm test:scripts/);
+  });
 });
 
 describe('bootstrap and host-bridge preflight boundaries', () => {
