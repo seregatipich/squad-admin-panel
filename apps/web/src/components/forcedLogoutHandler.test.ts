@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleForcedLogout } from './forcedLogout';
+import { handleForcedLogout } from './forcedLogoutHandler';
 
 describe('handleForcedLogout', () => {
   it('redirects when /api/v1/me reports the session is gone (401)', async () => {
