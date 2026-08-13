@@ -58,15 +58,24 @@ issues in `@fastify/static` below 10.1.0. Drop this override once `apps/api`
 deliberately upgrades `@fastify/swagger-ui` to `^6.1.1` or later — those
 releases already declare `@fastify/static: ^10.1.0` on their own.
 
-`"dompurify": "3.4.12"` pins the transitive `dompurify` copy that
-`monaco-editor` resolves internally, closing Dependabot alerts 1-8, 53-59,
-63, and 77. Nothing in this repo or in `monaco-editor`'s shipped output
+`"dompurify": "3.4.13"` pins the transitive `dompurify` copy that
+`monaco-editor` resolves internally, including the fix for
+`GHSA-55q2-fjhq-7xh7`. Nothing in this repo or in `monaco-editor`'s shipped output
 imports the npm `dompurify` package — `monaco-editor` vendors its own
 DOMPurify inside its bundled `esm/vs/base/browser/dompurify/dompurify.js`
 rather than depending on the npm package at runtime — so this override
 changes zero executed bytes; it only satisfies lockfile-scanning tools.
 The browser-executed DOMPurify copy only moves forward when
-`monaco-editor` itself is bumped (see `apps/web/package.json`).
+`monaco-editor` itself is bumped (see `apps/web/package.json`). Monaco 0.56.0
+still vendors DOMPurify 3.4.8, but its sanitization path passes a string/fragment
+and never enables DOMPurify's vulnerable `IN_PLACE` option; the npm override must
+not be described as replacing that embedded browser copy.
+
+`"fast-uri": "3.1.5"` forces the patched parser through every Fastify/AJV
+subtree, including the production API, because no workspace manifest owns this
+transitive package directly. `"postcss": "^8.5.26"` also raises its internal
+`nanoid` edge to a patched 3.3.x release. Both pins can be removed once all of
+their direct parents independently require the same fixed floors.
 
 ## Bridge development
 
