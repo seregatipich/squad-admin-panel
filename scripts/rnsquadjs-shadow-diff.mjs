@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Usage: REDIS_URL=redis://127.0.0.1:6379 node scripts/rnsquadjs-shadow-diff.mjs <serverId> [sinceMs] [minEvents]
 //   minEvents also reads from env MIN_EVENTS (positional arg wins); default 100.
+//   MAX_STREAM_RECORDS bounds each XRANGE read; default 100000, hard maximum 1000000.
 // Prereq: build the plugin first — cd docker/rnsquadjs/plugins/panelBridge && npx tsc -p tsconfig.json
 //
 // Gate (exit 1 on any failure, 0 only when all pass):
+//   - input-limit-exceeded: either stream contains more than MAX_STREAM_RECORDS entries
 //   - corrupt-data:      any malformed or semantically invalid stream record
 //   - insufficient-data: prod event count below the minEvents floor
 //   - extras-exceeded:   shadow has more than max(5, 1% of prod) unmatched extras
@@ -27,12 +29,26 @@ if (!serverId) {
   console.error('usage: rnsquadjs-shadow-diff.mjs <serverId> [sinceMs] [minEvents]');
   process.exit(2);
 }
-const since = Date.now() - Number(sinceMsRaw ?? 24 * 3600 * 1000);
+const sinceMs = Number(sinceMsRaw ?? 24 * 3600 * 1000);
+if (!Number.isSafeInteger(sinceMs) || sinceMs < 0) {
+  console.error(`invalid sinceMs: ${sinceMsRaw}`);
+  process.exit(2);
+}
 const minEvents = Number(minEventsRaw ?? process.env.MIN_EVENTS ?? 100);
-if (!Number.isInteger(minEvents) || minEvents < 0) {
+if (!Number.isSafeInteger(minEvents) || minEvents < 0) {
   console.error(`invalid minEvents: ${minEventsRaw ?? process.env.MIN_EVENTS}`);
   process.exit(2);
 }
+const maxStreamRecords = Number(process.env.MAX_STREAM_RECORDS ?? 100_000);
+if (
+  !Number.isSafeInteger(maxStreamRecords) ||
+  maxStreamRecords < 1 ||
+  maxStreamRecords > 1_000_000
+) {
+  console.error(`invalid MAX_STREAM_RECORDS: ${process.env.MAX_STREAM_RECORDS}`);
+  process.exit(2);
+}
+const since = Math.max(0, Date.now() - sinceMs);
 const redis = new Redis(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379');
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -62,10 +78,12 @@ function isValidEnvelope(value, expectedServerId) {
 }
 
 let badRecords = 0;
+let inputLimitExceeded = false;
 async function readStream(name) {
-  const raw = await redis.xrange(name, String(since), '+');
+  const raw = await redis.xrange(name, String(since), '+', 'COUNT', maxStreamRecords + 1);
+  if (raw.length > maxStreamRecords) inputLimitExceeded = true;
   const events = [];
-  for (const [, fields] of raw) {
+  for (const [, fields] of raw.slice(0, maxStreamRecords)) {
     const idx = fields.indexOf('envelope');
     if (idx === -1) {
       badRecords += 1;
@@ -106,7 +124,9 @@ try {
   const extraAllowed = Math.max(5, prod.length * 0.01);
 
   let gate = 'pass';
-  if (badRecords > 0) {
+  if (inputLimitExceeded) {
+    gate = 'input-limit-exceeded';
+  } else if (badRecords > 0) {
     gate = 'corrupt-data';
   } else if (prod.length < minEvents) {
     gate = 'insufficient-data';
@@ -123,6 +143,8 @@ try {
       {
         serverId,
         minEvents,
+        maxStreamRecords,
+        inputLimitExceeded,
         prod: prod.length,
         shadow: shadow.length,
         badRecords,
