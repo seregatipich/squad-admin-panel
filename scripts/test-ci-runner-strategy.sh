@@ -25,6 +25,9 @@ job_block() {
 [ -f "$ci_workflow" ] || fail 'ci workflow is missing'
 [ -f "$deploy_workflow" ] || fail 'deploy workflow is missing'
 
+grep -Fq 'branches: [master, dev]' "$ci_workflow" ||
+  fail 'ci push trigger is not restricted to trusted integration branches'
+
 for job in branch-guard node go docker; do
   block=$(job_block "$ci_workflow" "$job")
   [ -n "$block" ] || fail "required ci job '$job' is missing"

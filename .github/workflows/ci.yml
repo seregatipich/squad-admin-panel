@@ -5,8 +5,7 @@ name: ci
 # while this workflow is authoritative (see AGENTS.md → "CI gate").
 on:
   push:
-    # fix/286-hosted-ci is a one-time bootstrap proof and is removed before merge.
-    branches: [master, dev, fix/286-hosted-ci]
+    branches: [master, dev]
   workflow_dispatch:
 
 concurrency:
