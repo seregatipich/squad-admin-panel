@@ -161,6 +161,96 @@ describe('operation script static contracts', () => {
     assert.ok(migrations >= 0 && scriptTests > migrations);
     assert.match(workflow.slice(scriptTests), /run: pnpm test:scripts/);
   });
+
+  it('runs script contracts after database setup and before package tests in pre-push', () => {
+    const { root, script } = copyScript('scripts/pre-push-checklist.sh');
+    const shims = shimDirectory();
+    const log = path.join(root, 'commands.log');
+    executable(
+      path.join(shims, 'git'),
+      `if [[ "$*" == 'rev-parse --show-toplevel' ]]; then printf '%s\\n' ${JSON.stringify(root)}; exit 0; fi; exit 1`,
+    );
+    loggingShim(shims, 'gitleaks');
+    loggingShim(shims, 'pnpm');
+
+    const result = run('/bin/bash', [script], {
+      cwd: root,
+      env: {
+        OPS_LOG: log,
+        PATH: `${shims}:/usr/bin:/bin`,
+        DATABASE_URL: 'postgres://isolated-test-database',
+        TEST_DATABASE_URL: 'postgres://isolated-test-database',
+        FULL: '1',
+        SKIP_BUILD: '1',
+      },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual(logLines(log), [
+      'pnpm|turbo|run|typecheck',
+      'pnpm|exec|biome|check|.',
+      'gitleaks|detect|--config|.gitleaks.toml|--no-banner|--redact|--exit-code|1|--log-opts|origin/dev..HEAD',
+      'pnpm|test:scripts',
+      'pnpm|test:cov',
+      'pnpm|turbo|run|test:mutation',
+    ]);
+  });
+
+  it('blocks pre-push when an operation script contract fails', () => {
+    const { root, script } = copyScript('scripts/pre-push-checklist.sh');
+    const shims = shimDirectory();
+    const log = path.join(root, 'commands.log');
+    executable(
+      path.join(shims, 'git'),
+      `if [[ "$*" == 'rev-parse --show-toplevel' ]]; then printf '%s\\n' ${JSON.stringify(root)}; exit 0; fi; exit 1`,
+    );
+    loggingShim(shims, 'gitleaks');
+    loggingShim(shims, 'pnpm', `if [[ "$*" == 'test:scripts' ]]; then exit 37; fi; exit 0`);
+
+    const result = run('/bin/bash', [script], {
+      cwd: root,
+      env: {
+        OPS_LOG: log,
+        PATH: `${shims}:/usr/bin:/bin`,
+        DATABASE_URL: 'postgres://isolated-test-database',
+        TEST_DATABASE_URL: 'postgres://isolated-test-database',
+        FULL: '1',
+        SKIP_BUILD: '1',
+      },
+    });
+
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /operations and verification script tests.*FAILED/);
+    assert.ok(logLines(log).includes('pnpm|test:scripts'));
+  });
+
+  it('fails closed without a database and does not start DB-backed script contracts', () => {
+    const { root, script } = copyScript('scripts/pre-push-checklist.sh');
+    const shims = shimDirectory();
+    const log = path.join(root, 'commands.log');
+    executable(
+      path.join(shims, 'git'),
+      `if [[ "$*" == 'rev-parse --show-toplevel' ]]; then printf '%s\\n' ${JSON.stringify(root)}; exit 0; fi; exit 1`,
+    );
+    loggingShim(shims, 'gitleaks');
+    loggingShim(shims, 'pnpm');
+
+    const result = run('/bin/bash', [script], {
+      cwd: root,
+      env: {
+        OPS_LOG: log,
+        PATH: `${shims}:/usr/bin:/bin`,
+        DATABASE_URL: '',
+        TEST_DATABASE_URL: '',
+        FULL: '1',
+        SKIP_BUILD: '1',
+      },
+    });
+
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /tests — no DATABASE_URL and could not auto-provision/);
+    assert.equal(logLines(log).includes('pnpm|test:scripts'), false);
+  });
 });
 
 describe('bootstrap and host-bridge preflight boundaries', () => {

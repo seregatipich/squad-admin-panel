@@ -74,7 +74,9 @@ The checklist runs, in order:
 2. `pnpm exec biome check .` (whole repo) — the item that most often breaks after a merge; an `error`-severity diagnostic such as `assist/source/organizeImports` (commonly from union-merged imports) fails it, fix with `pnpm exec biome check --write <file>`. `noNonNullAssertion` is `warn` and does not fail it.
 3. `pnpm turbo run build` (skip with `SKIP_BUILD=1`)
 4. gitleaks secret scan, scoped to origin/dev..HEAD (best-effort — only if `gitleaks` is installed; assumes origin/dev is already fetched locally, same as item 5 below)
-5. Tests — the packages affected since `origin/dev` (`pnpm turbo run test --filter='...[origin/dev]'`), or the full coverage suite with `FULL=1`. Auto-provisions an isolated migrated DB via `scripts/new-test-db.sh` when `DATABASE_URL` is unset.
+5. Operation and verification script contracts (`pnpm test:scripts`) after an isolated migrated database is available.
+6. Tests — the packages affected since `origin/dev` (`pnpm turbo run test --filter='...[origin/dev]'`), or the full coverage suite with `FULL=1`. Auto-provisions an isolated migrated DB via `scripts/new-test-db.sh` when `DATABASE_URL` is unset.
+7. Shared-config mutation tests, affected since `origin/dev`, or the full mutation suite with `FULL=1`.
 
 Run it by hand any time with `bash scripts/pre-push-checklist.sh`. **Not run locally:** the Go bridge (`apps/bridge` — cannot build on macOS; run `go vet ./... && go test -race ./...` there on Linux) and Docker image builds. The branch model is still enforced independently by the lefthook/`.claude` git-guard hooks (see "Enforcement harness"), not by CI.
 

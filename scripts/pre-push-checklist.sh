@@ -11,8 +11,8 @@
 # re-tested. Bypass in a genuine emergency with `git push --no-verify`.
 #
 # Scope of what runs locally:
-#   - typecheck, biome (lint/format), build, secret scan, and the JS/TS test
-#     suite are run here.
+#   - typecheck, biome (lint/format), build, secret scan, operation-script
+#     contracts, and the JS/TS test suite are run here.
 #   - The Go bridge (`apps/bridge`) and Docker image builds are NOT run locally
 #     (the Go bridge cannot build on macOS; Docker builds are heavy) — run
 #     `go vet ./... && go test -race ./...` inside `apps/bridge` on Linux, and
@@ -62,8 +62,8 @@ else
   skip_step "gitleaks" "not installed"
 fi
 
-# 5. Tests (DB-backed). Auto-provision an isolated migrated DB when possible so
-#    the gate is real rather than skipped.
+# Test resources for steps 5 and 6. Auto-provision an isolated migrated DB when
+# possible so both gates are real rather than skipped.
 if [ -z "${DATABASE_URL:-}" ] && [ -f .env ] && docker ps >/dev/null 2>&1; then
   echo "… provisioning an isolated test DB via scripts/new-test-db.sh"
   eval "$(bash scripts/new-test-db.sh prepush 2>/dev/null)" || true
@@ -87,6 +87,10 @@ if [ -z "${DATABASE_URL:-}" ] && [ -f .env ] && command -v psql >/dev/null 2>&1;
 fi
 
 if [ -n "${DATABASE_URL:-}" ]; then
+  # 5. Operations and verification scripts (DB-backed audit contracts included).
+  run_step "operations and verification script tests" pnpm test:scripts
+
+  # 6. Package tests (DB-backed).
   if [ "${FULL:-0}" = "1" ]; then
     run_step "tests (full coverage)" pnpm test:cov
   else
@@ -101,7 +105,7 @@ else
   failed+=("tests"); fail=1
 fi
 
-# 6. Mutation testing (packages/shared-config's Stryker suite). No DB needed,
+# 7. Mutation testing (packages/shared-config's Stryker suite). No DB needed,
 #    so this runs unconditionally rather than gating on DATABASE_URL like the
 #    tests step above.
 if [ "${FULL:-0}" = "1" ]; then

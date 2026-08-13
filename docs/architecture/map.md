@@ -3093,7 +3093,7 @@ graph LR
 
 `lefthook.yml` pre-commit runs in parallel: `git-guard check-commit`, staged-file Biome, `gofmt -l -s . && go vet ./...` for bridge Go files, and `gitleaks protect --staged … || true` (non-blocking by design). Pre-push is serial: `branch-guard` at priority 1, then `checklist` at priority 2.
 
-`scripts/pre-push-checklist.sh` runs five steps through a `run_step` wrapper that accumulates passed/failed/skipped and exits non-zero on any failure: (1) `turbo run typecheck`; (2) repo-wide `biome check .`; (3) `turbo run build` (skippable with `SKIP_BUILD=1`); (4) gitleaks, only if installed; (5) tests, auto-provisioning a database first:
+`scripts/pre-push-checklist.sh` runs seven steps through a `run_step` wrapper that accumulates passed/failed/skipped and exits non-zero on any failure: (1) `turbo run typecheck`; (2) repo-wide `biome check .`; (3) `turbo run build` (skippable with `SKIP_BUILD=1`); (4) gitleaks, only if installed; (5) operation and verification script contracts after database provisioning; (6) package tests; and (7) shared-config mutation tests. The database-backed steps auto-provision a database first:
 
 ```bash
 if [ -z "${DATABASE_URL:-}" ] && [ -f .env ] && docker ps >/dev/null 2>&1; then

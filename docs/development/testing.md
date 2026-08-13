@@ -74,6 +74,11 @@ pnpm --filter @squad/api test
 набор ошибкой. Workflow сначала применяет миграции и только затем вызывает
 `pnpm test:scripts`.
 
+Этот же контур входит в `scripts/pre-push-checklist.sh`: локальный
+предохранитель сначала подготавливает изолированную мигрированную БД, затем
+запускает `pnpm test:scripts` и только после него пакетные тесты. Ошибка любого
+эксплуатационного контракта блокирует отправку ветки.
+
 ```bash
 DATABASE_URL=<isolated-postgres> \
 TEST_DATABASE_URL=<isolated-postgres> \
