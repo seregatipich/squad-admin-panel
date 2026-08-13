@@ -30,7 +30,7 @@ These rules are mandatory for every contributor and every coding agent (Claude C
    git merge --no-ff feature/<slug>
    git push origin dev
    ```
-5. **Before pushing, the local pre-push checklist must pass** — `scripts/pre-push-checklist.sh` runs automatically via the lefthook pre-push hook as a fast local pre-check (see "CI gate"). The push to `dev` then triggers the `ci` workflow on the self-hosted runner; watch the run and fix forward until every check is green. Work is not done while `dev` CI is red.
+5. **Before pushing, the local pre-push checklist must pass** — `scripts/pre-push-checklist.sh` runs automatically via the lefthook pre-push hook as a fast local pre-check (see "CI gate"). The push to `dev` then triggers the `ci` workflow on an ephemeral GitHub-hosted runner; watch the run and fix forward until every check is green. Work is not done while `dev` CI is red.
 6. Delete the merged work branch.
 
 ## Local test setup (read before running any DB-backed test)
@@ -58,11 +58,11 @@ gh run view <run-id> --json jobs --jq '.jobs[] | "\(.conclusion)\t\(.name)"'
 gh run view <run-id> --log-failed   # logs of the failing step
 ```
 
-The `ci` workflow runs on the org's self-hosted runner (a Multipass VM registered under the default `self-hosted` label) — see the "Self-hosted runner" section in `docs/development/agent-harness.md` for its setup and operating details.
+The `ci` workflow runs on fresh `ubuntu-24.04` GitHub-hosted VMs. Verification never shares filesystem or Docker state with production deployment; the self-hosted runner is reserved for `deploy-tk104.yml`. Full hosted CI intentionally runs only for trusted `dev`/`master` pushes and explicit dispatches, while superseded runs are cancelled to preserve the organization's monthly allowance. See "CI and deployment runners" in `docs/development/agent-harness.md`.
 
 **Adding a package? Add it to `test:cov`.** CI's only JS test step is `pnpm test:cov`, which carries an explicit `--filter` list. A package missing from that list never runs in CI — it can be merged with a red suite while `dev` stays green (#229: 16 of 28 suites were invisible this way, and two workers sat broken behind a green dashboard). [`scripts/test-cov-complete.sh`](scripts/test-cov-complete.sh) now fails CI when a workspace package whose `test` script runs vitest is not in the list; run it locally any time with `bash scripts/test-cov-complete.sh`. The Go bridge is deliberately excluded — it has its own `go` job.
 
-**Every `uses:` line under `.github/workflows/` must be SHA-pinned.** `ci.yml` and `deploy-tk104.yml` run on the org's single, non-ephemeral self-hosted runner, and `deploy-tk104.yml`'s `deploy` job checks out code and then, in the same job, writes the production SSH deploy key to disk — a mutable version tag (e.g. `@v4`) on any referenced action could be repointed to execute arbitrary code with the runner's privileges (#248). [`scripts/test-workflow-pins.sh`](scripts/test-workflow-pins.sh) fails CI when any `uses:` line resolves to something other than a 40-hex-char commit SHA; run it locally any time with `bash scripts/test-workflow-pins.sh`.
+**Every `uses:` line under `.github/workflows/` must be SHA-pinned.** A mutable version tag (e.g. `@v4`) can be repointed to execute arbitrary code in verification; the highest-severity case remains `deploy-tk104.yml`, whose self-hosted job checks out code and then writes the production SSH deploy key to disk (#248). [`scripts/test-workflow-pins.sh`](scripts/test-workflow-pins.sh) fails CI when any `uses:` line is not a 40-hex-char commit SHA; run it locally any time with `bash scripts/test-workflow-pins.sh`.
 
 ### Local pre-check
 

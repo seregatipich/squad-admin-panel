@@ -82,30 +82,49 @@ Emergency escape hatch: edit or disable the ruleset in GitHub → Settings → R
 
 > **Code scanning plan gating (2026-07-29, issue #211):** GitHub's default CodeQL code-scanning setup (the dynamic `github-code-scanning/codeql` workflow, never a repo-committed file) requires **GitHub Advanced Security**, which is not licensed on this private Free-plan repository — `gh api repos/breaking-squad/squad-admin-panel/code-scanning/default-setup` returns HTTP 403, and attempting to disable the workflow via the Actions API (`PUT .../actions/workflows/294697655/disable`) returns HTTP 422 `Unable to disable this workflow`. The dynamic workflow produced zero runs, successful or failed, after 2026-07-16 despite 8+ subsequent `master` pushes through 2026-07-28, so it is already out-of-band disabled and cannot be re-enabled from this repo without GHAS. There is no repo-committed `codeql*.yml`/`codeql*.yaml` workflow — creating one would fail identically. The regression guard [`scripts/test-codeql-default-setup.sh`](../../scripts/test-codeql-default-setup.sh) asserts both facts stay true: no such workflow file exists, and this note is present.
 
-## Self-hosted runner
+## CI and deployment runners
 
-CI executes on a dedicated self-hosted GitHub Actions runner rather than GitHub-hosted VMs: a Multipass VM sized 2 vCPU / 4 GB RAM / 20 GB disk, with Docker and the runner agent installed inside. It's registered under the org's default runner group and labels (just `self-hosted` — no custom tags), visible to org admins at [github.com/organizations/breaking-squad/settings/actions/runners](https://github.com/organizations/breaking-squad/settings/actions/runners). All four jobs in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) target it via `runs-on: self-hosted`.
+The two GitHub Actions workflows intentionally use different execution boundaries:
 
-Unlike GitHub-hosted runners, this VM is **not ephemeral**: it has no auto-refresh or periodic recreation yet, so anything a job leaves behind — Docker images, build cache, stray containers — persists indefinitely on the 20 GB disk instead of vanishing at the end of the run. Two things in the workflow compensate:
+- [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs verification on
+  fresh GitHub-hosted `ubuntu-24.04` VMs. Every job is disposable and starts without
+  repository Docker layers, containers, volumes, or host paths left by an earlier
+  run. The private-repository Linux shape is 2 vCPU / 8 GB RAM / 14 GB SSD.
+- [`.github/workflows/deploy-tk104.yml`](../../.github/workflows/deploy-tk104.yml)
+  remains on the organization-level `self-hosted` runner and reaches production over
+  SSH. Production credentials therefore never enter a general verification runner.
 
-- `prepare-runner` safely removes unused Docker resources before the expensive jobs, while a separate `cleanup-runner` executes through `always()` after Node, Go, and the conditionally gated image build. A red Node/Go job therefore no longer skips cleanup together with the dependent Docker job; named base and production images remain intact, and build cache is pruned only when unused for 72 hours.
-- Every job sets a `timeout-minutes`, so one wedged job can't block the queue on the single shared runner indefinitely.
+CI keeps explicit timeouts and two-way parallelism limits because a private-repository
+hosted Linux VM has two CPUs. It no longer has `prepare-runner`/`cleanup-runner` jobs:
+those jobs existed to maintain a persistent 20 GB VM and are both unnecessary and
+misleading on a fresh 14 GB VM. The Go bridge runs directly on the disposable VM via
+SHA-pinned `actions/setup-go`; tests that exercise absolute paths cannot touch a real
+panel host because the entire machine is discarded after the job.
 
-The box is also small enough that test/build parallelism is deliberately capped rather than left at each tool's default: the `node` job sets the `VITEST_MAX_FORKS` and `PNPM_WORKSPACE_CONCURRENCY` env vars (read by [`apps/api/vitest.config.ts`](../../apps/api/vitest.config.ts) and root [`package.json`](../../package.json)'s `test:cov` script respectively) and passes `--concurrency=2` to `turbo`, so parallel work fits 2 vCPU / 4 GB instead of thrashing or getting OOM-killed.
+Full CI intentionally accepts only trusted `push` events for `dev`/`master` and
+explicit dispatches. Draft branches use the local pre-push gate, and
+`cancel-in-progress: true` discards a superseded SHA so a merge wave does not consume
+the organization's monthly allowance multiple times. GitHub Free for organizations
+currently includes 2,000 hosted minutes per month. Exhaustion must be handled by
+batching accepted changes or restoring a dedicated verification runner, never by
+weakening checks or running verification on production.
 
-Because this runner is shared and non-ephemeral (Docker access, state persisting across runs), `.github/workflows/ci.yml` accepts only trusted `push` (`master`/`dev`) and explicit `workflow_dispatch` events — never `pull_request` or `pull_request_target` — so no untrusted or merely review-stage pull-request head ever executes here before human review; this repo's real merge workflow is direct work-branch merges into `dev` anyway (see AGENTS.md), never PR merges. Test suite: [`scripts/test-workflow-security.sh`](../../scripts/test-workflow-security.sh) (runs in CI as part of the `branch-guard` job) statically rejects any workflow file that combines a `pull_request`/`pull_request_target` trigger with `runs-on: self-hosted`. Run it locally with `bash scripts/test-workflow-security.sh` (#217).
-
-Not solved yet: the operator described the VM as cloud-init-based and may later add automatic environment cleanup and/or periodic VM recreation. The open design questions there — dynamic naming for the replacement VM, and gracefully draining/stopping the previous one before swapping — are unaddressed for now.
+[`scripts/test-ci-runner-strategy.sh`](../../scripts/test-ci-runner-strategy.sh)
+enforces the split: every required CI job must use `ubuntu-24.04`, persistent disk
+maintenance is forbidden there, and the deployment workflow must remain self-hosted.
+[`scripts/test-workflow-security.sh`](../../scripts/test-workflow-security.sh) retains
+the repository-wide rule that no workflow may combine a pull-request trigger with a
+self-hosted job (#217, #286).
 
 ## Runner recovery runbook
 
-If a `ci` run stays `queued` and never starts, run [`scripts/check-runner-health.sh`](../../scripts/check-runner-health.sh) before waiting further — it queries `gh api repos/<owner>/<repo>/actions/runners` and, best-effort, the org-level endpoint, prints each runner's `status`/`busy`, and exits non-zero unless at least one reports `online`. Test suite: [`scripts/test-check-runner-health.sh`](../../scripts/test-check-runner-health.sh) (runs in CI as part of the `branch-guard` job) stubs `gh` and covers the online, offline, disabled/zero-runners, and org-level-403 cases.
+If a **deployment** run stays `queued` and never starts, run [`scripts/check-runner-health.sh`](../../scripts/check-runner-health.sh) before waiting further — it queries repository runners and, best-effort, the organization-level endpoint, prints each runner's `status`/`busy`, and exits non-zero unless at least one reports `online`. Hosted CI does not depend on this result. The test suite [`scripts/test-check-runner-health.sh`](../../scripts/test-check-runner-health.sh) stubs `gh` and covers online, offline, disabled/zero-runner, and organization-endpoint-denied cases.
 
-Per [`docs/operations/deployment.md`](../operations/deployment.md#cicd-on-self-hosted-runners) ("Runner ownership"), this org has disabled repository-level self-hosted runners, so the repository-level query above always reports `total_count: 0` by design — the runner `ci` actually depends on is the org-level Multipass VM described above, reachable only via the org-level endpoint (needs `admin:org`, which a repository-scoped session does not have).
+Per [`docs/operations/deployment.md`](../operations/deployment.md#cicd-runner-split), this org has disabled repository-level self-hosted runners, so the repository-level query normally reports zero. The runner used by deployment is organization-level and its status is visible only through the organization endpoint (which needs organization administration access).
 
 **Historical incident (issue #215, 2026-07-15 to 2026-07-18):** GitHub reported the two *repository-level* runners `tk104-runner-1` (id 21) and `tk104-runner-2` (id 22) as `offline`. Host-level diagnosis on `tk104` found their registration artifacts (`.runner`, `.credentials`, `.credentials_rsaparams`) missing — both `actions.runner.breaking-squad-squad-admin-panel.tk104-runner-{1,2}.service` units were loaded but `inactive/dead`, failing since 2026-07-09 with `Not configured. Run config.(sh/cmd) to configure the runner.` Per `docs/operations/deployment.md`, `tk104-runner-1`/`-2` are an earlier, now-deprecated repository-level setup that this org's policy no longer routes jobs to — CI runs on the separate org-level runner instead, so their outage did not block `dev`/`master` CI. Restarting the existing systemd units cannot restore them; re-registering them as **org-level** runners (not repository-level, which is disabled) would need an org-admin `admin:org` credential to mint a registration token, then `config.sh --unattended --replace` in each existing runner directory and a service restart — host and org-admin access a repository-scoped session does not have.
 
-**Live re-verification (2026-07-29):** `dev` CI is green at the current tip and a runner picked up a fresh push within about a minute of it landing — the org-level runner is online. Run `bash scripts/check-runner-health.sh` for a quick check before assuming otherwise.
+**Migration incident (2026-08-12 to 2026-08-13, issue #286):** the organization runner stopped taking the authoritative `dev` CI run, while repository-scoped credentials could neither observe nor restore it. Verification moved back to ephemeral GitHub-hosted VMs; the same runner remains an independently observable dependency of production deployment only.
 
 ## Completion verification
 

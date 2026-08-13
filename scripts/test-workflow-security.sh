@@ -2,14 +2,11 @@
 # test-workflow-security.sh — fail if any GitHub Actions workflow combines a
 # pull_request(_target) trigger with a self-hosted job.
 #
-# Every job in .github/workflows/ci.yml runs on the org's shared, non-ephemeral
-# self-hosted runner, which carries Docker access and persists state across
-# runs. A pull_request (or pull_request_target) trigger checks out and
-# executes the PR head before any human review — untrusted or merely
-# review-stage code would then run with the runner's privileges. This repo's
-# actual merge workflow is direct work-branch merges into dev (see AGENTS.md),
-# never PR merges, so self-hosted workflows should accept only trusted
-# dev/master pushes and explicit trusted dispatches (#217).
+# Any self-hosted workflow carries persistent machine access. A pull_request
+# (or pull_request_target) trigger could execute untrusted or merely
+# review-stage code there before human acceptance. CI itself is now hosted,
+# but the production deploy remains self-hosted, so this invariant stays
+# repository-wide and prevents an unsafe regression (#217, #286).
 #
 # This check keeps that invariant honest: it fails if any workflow file's
 # top-level `on:` block declares pull_request or pull_request_target while

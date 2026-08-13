@@ -18,10 +18,10 @@
 #
 # ── RUN-DEFERRED ──────────────────────────────────────────────────────────────
 # This is NOT wired into CI. Building + running the entire compose stack twice
-# plus a restic restore needs more than the self-hosted CI runner (2 vCPU / 4 GB)
-# can host — see #219. It is a MANUAL acceptance run on a scratch host (or a
-# larger runner) that has Docker and enough RAM, and it is DESTRUCTIVE to the
-# local stack's data. It therefore refuses to run unless explicitly opted in:
+# plus a restic restore is destructive and exceeds the standard hosted runner's
+# 2 vCPU / 8 GB / 14 GB envelope — see #219. It is a MANUAL acceptance run on
+# a scratch host (or a larger runner) that has Docker and enough RAM. It
+# therefore refuses to run unless explicitly opted in:
 #
 #   RUN_FULLSTACK_DOWN_V=1 bash scripts/test-fullstack-down-v.sh
 #
@@ -54,7 +54,7 @@ fail() { printf '\n%bFAIL:%b %s\n' "${C_RED}${C_BOLD}" "${C_RST}" "$1" >&2; exit
 # ── guard: explicit opt-in + preconditions (fail closed) ─────────────────────
 if [[ "${RUN_FULLSTACK_DOWN_V:-0}" != "1" ]]; then
   warn "Run-deferred: this destroys the local stack's data and needs Docker + ample RAM."
-  warn "It is not part of CI (exceeds the 2vCPU/4GB runner). To run it deliberately:"
+  warn "It is not part of CI (destructive and exceeds the standard hosted runner). To run it deliberately:"
   warn "  RUN_FULLSTACK_DOWN_V=1 bash scripts/test-fullstack-down-v.sh"
   exit 2
 fi

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local pre-push checklist — a fast local pre-check that runs the same gates
 # as the cloud `ci` workflow, so most problems surface immediately at push
-# time. The `ci` GitHub Actions workflow (on the org's self-hosted runner)
+# time. The `ci` GitHub Actions workflow (on ephemeral hosted runners)
 # remains the authoritative/required gate; ANY failed item here blocks the
 # push.
 #

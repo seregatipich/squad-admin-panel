@@ -2,13 +2,10 @@
 # test-workflow-pins.sh — fail if any GitHub Actions `uses:` line references a
 # mutable version tag (e.g. `@v4`) instead of an immutable commit SHA.
 #
-# ci.yml and deploy-tk104.yml run on the org's single, non-ephemeral
-# self-hosted runner. A `uses: owner/repo@v4`-style reference resolves
-# whatever commit the `v4` tag currently points to — if that repo's owner (or
-# an attacker who compromises their account) repoints the tag, the next CI
-# run executes arbitrary code with the runner's privileges. deploy-tk104.yml's
-# `deploy` job is the highest-severity case: it checks out code and then, in
-# the same job, writes the production SSH deploy key to disk (#248).
+# A `uses: owner/repo@v4`-style reference resolves whatever commit the `v4`
+# tag currently points to. A repointed tag would execute arbitrary code in CI;
+# deploy-tk104.yml is the highest-severity case because its self-hosted job
+# checks out code and later writes the production SSH deploy key to disk (#248).
 #
 # This check keeps every remote `uses:` reference pinned to the 40-hex-char
 # commit SHA its tag currently resolves to (with the human-readable version

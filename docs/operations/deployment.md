@@ -23,29 +23,25 @@ two files in sync by hand when the bridge-facing env/volumes on a worker change 
 `docker-compose.yml`. `.env.tk104` additionally needs `PANEL_GID` and `DATA_DIR` set to
 match the host's `panel` group and the data tree created by `install-host-bridge.sh`.
 
-## CI/CD on self-hosted runners
+## CI/CD runner split
 
-Both GitHub Actions workflows (`ci`, `deploy-tk104`) run on **self-hosted runners**
-(`runs-on: [self-hosted, linux, x64]`) — GitHub-hosted minutes are not used.
+Verification and deployment deliberately use different trust and lifecycle boundaries:
 
-> **Runner ownership.** This org has **disabled repository-level self-hosted
-> runners**, so jobs run on the **org-level** runner(s) (e.g. `selfhost-1`), not on
-> tk104 itself. tk104 is therefore *not* a CI runner — the `deploy-tk104` job reaches
-> it over SSH (below). An earlier setup registered two repo-level runners on tk104
-> (`tk104-runner-{1,2}`); those no longer receive jobs under the org policy and have
-> been disabled. To run CI on tk104 again it would have to be registered as an
-> **org-level** runner (needs org-admin).
-
-- **`ci`** runs on whatever self-hosted runner picks the job up. The `node` job's
-  `postgres`/`redis` service containers publish to Docker-assigned host ports
-  (`ports: [5432]` / `[6379]`) — a `Resolve service ports` step reads the assigned
-  ports from the `job.services.*.ports[...]` context into
-  `DATABASE_URL`/`REDIS_URL` **and** `TEST_DATABASE_URL`/`TEST_REDIS_URL` (the
-  integration harness reads the `TEST_*` pair). This keeps the suite off any fixed
-  ports and off a shared host's production Postgres/Redis. The `go` job runs inside a
-  `golang:1.25.11` container for a clean filesystem, and the worker contract tests
-  target the CI ephemeral redis rather than a fixed `6379`.
-- **`deploy-tk104` deploys over SSH.** The `deploy` job (on the org runner, triggered
+- **`ci` uses ephemeral GitHub-hosted `ubuntu-24.04` VMs.** Every job starts on a
+  clean machine, so test Docker/filesystem state cannot persist into another run or
+  reach the deployment runner. The workflow runs only for trusted `dev`/`master`
+  pushes and explicit dispatches; superseded runs are cancelled to preserve the
+  GitHub Free organization allowance. The `node` job's PostgreSQL/Redis service
+  containers publish to Docker-assigned ports; `Resolve service ports` exports those
+  values through both normal and `TEST_*` variables. The `go` job installs the pinned
+  Go toolchain directly on its disposable VM. The `docker` job builds every production
+  image and executes the backup/restore round trip.
+- **`deploy-tk104` stays on the organization-level self-hosted runner.** Repository-
+  level self-hosted runners are disabled by organization policy, and the production
+  host itself is not a runner. A separate organization runner reaches production over
+  SSH. Keeping this workflow self-hosted avoids moving production credentials into the
+  general verification fleet; all referenced actions remain SHA-pinned.
+- **`deploy-tk104` deploys over SSH.** The `deploy` job (triggered
   by a push to `master`) writes the `TK104_SSH_KEY` secret to a deploy key, `rsync`s
   the checkout to `seregatipich@tk104.duckdns.org:~/apps/squad-admin-panel/`
   (excluding `.git`, `.env*`, `data`, build output), then runs
@@ -66,6 +62,12 @@ Both GitHub Actions workflows (`ci`, `deploy-tk104`) run on **self-hosted runner
   semantics, this second job only activates once the workflow file itself has reached
   the default branch (`master`) — merging it into `dev` alone does not arm the
   trigger.
+
+GitHub Free for organizations currently includes 2,000 hosted Linux minutes per
+month. If the quota is exhausted, do not weaken the gate or redirect verification to
+the production host: batch accepted changes, restore the dedicated verification
+runner, or wait for the allowance reset. The runner split is guarded by
+`scripts/test-ci-runner-strategy.sh`.
 
 ## Container topology
 
@@ -285,7 +287,7 @@ scripts/restore.sh --apply                          # restore from the restic re
 
 Because the panel's volumes are host bind mounts (`type=none, o=bind`), `down -v` removes the volume definitions but leaves `${DATA_DIR}/{postgres,redis}` on disk; the `rm -rf` step is required to genuinely simulate data loss. The automated equivalent — build the image, dump, snapshot, `down -v`, restore, assert the seeded row and key survive — runs on every CI push via [`scripts/test-backup-restore.sh`](../../scripts/test-backup-restore.sh) in the `docker` job.
 
-The full-stack version of this procedure is scripted in [`scripts/test-fullstack-down-v.sh`](../../scripts/test-fullstack-down-v.sh): it brings the **whole** compose stack up, seeds a canary, snapshots, runs the literal `down -v`, restores with `scripts/restore.sh --apply`, then asserts the api `/health` endpoint returns 200 (panel operational) and the seeded Postgres row + Redis key survived. It is **run-deferred** — building and running the entire stack twice plus a restic restore exceeds the self-hosted CI runner (2 vCPU / 4 GB, see #219), and it is destructive to the local stack — so it is **not** wired into CI and refuses to run unless explicitly opted in on a scratch host with Docker and ample RAM:
+The full-stack version of this procedure is scripted in [`scripts/test-fullstack-down-v.sh`](../../scripts/test-fullstack-down-v.sh): it brings the **whole** compose stack up, seeds a canary, snapshots, runs the literal `down -v`, restores with `scripts/restore.sh --apply`, then asserts the api `/health` endpoint returns 200 (panel operational) and the seeded Postgres row + Redis key survived. It is **run-deferred** — the destructive whole-stack cycle exceeds the standard hosted runner's 2 vCPU / 8 GB / 14 GB envelope (see #219) — so it is **not** wired into CI and refuses to run unless explicitly opted in on a scratch host with Docker and ample RAM:
 
 ```bash
 RUN_FULLSTACK_DOWN_V=1 bash scripts/test-fullstack-down-v.sh
