@@ -10,6 +10,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "node --enable-source-maps dist/index.js",
     "build": "tsc -p tsconfig.json",
+    "mint:owner-session": "tsx --conditions=development src/tools/mint-owner-session.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run",
