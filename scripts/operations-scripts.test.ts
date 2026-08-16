@@ -383,7 +383,23 @@ describe('tk104 deployment command and health boundaries', () => {
       ].join('\n'),
     );
     loggingShim(shims, 'sleep');
-    loggingShim(shims, 'curl', `exit "\${CURL_EXIT:-0}"`);
+    // CURL_FAIL_TIMES makes the first N probes fail with CURL_EXIT and every
+    // later one succeed, modelling caddy finishing its TLS handshake mid-deploy.
+    // Without CURL_FAIL_TIMES the shim keeps its original always-CURL_EXIT behaviour.
+    loggingShim(
+      shims,
+      'curl',
+      [
+        `attempts_file="\${OPS_LOG:?}.curl-attempts"`,
+        'attempts=$(( $(cat "$attempts_file" 2>/dev/null || echo 0) + 1 ))',
+        'printf "%s" "$attempts" > "$attempts_file"',
+        `if [[ -n "\${CURL_FAIL_TIMES:-}" ]]; then`,
+        `  if [[ "$attempts" -le "$CURL_FAIL_TIMES" ]]; then exit "\${CURL_EXIT:-35}"; fi`,
+        '  exit 0',
+        'fi',
+        `exit "\${CURL_EXIT:-0}"`,
+      ].join('\n'),
+    );
     return {
       root,
       script,
@@ -431,6 +447,43 @@ describe('tk104 deployment command and health boundaries', () => {
       false,
     );
     assert.doesNotMatch(result.stdout, /Deploy complete/);
+  });
+
+  // regression (#290): the Caddy probe used to be a single-shot `curl -f`. The
+  // api-health wait above returns as soon as the api container is healthy, but
+  // caddy starts in the same `up -d` and needs a moment more to bind 443, so the
+  // probe raced the deploy it verifies. Production run 31948383567 went red with
+  // curl exit 35 (SSL connect error) 140 ms after caddy started, while the stack
+  // was healthy and serving https://tk104.duckdns.org/health with a 200.
+  it('retries the Caddy probe while TLS is still coming up, then reports success', () => {
+    const fixture = deployFixture();
+    const result = run('/bin/bash', [fixture.script], {
+      env: { ...fixture.env, CURL_FAIL_TIMES: '3', CURL_EXIT: '35' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Deploy complete/);
+    const probes = logLines(fixture.log).filter((line) => line.startsWith('curl|'));
+    assert.equal(probes.length, 4, 'expected 3 failed probes then one success');
+    // The success path must still run the container-status step afterwards.
+    assert.equal(
+      logLines(fixture.log)
+        .filter((line) => line.startsWith('docker|'))
+        .at(-1)
+        ?.endsWith('|ps'),
+      true,
+    );
+  });
+
+  it('still fails closed, preserving the curl exit code, when the probe never recovers', () => {
+    const fixture = deployFixture();
+    const result = run('/bin/bash', [fixture.script], {
+      env: { ...fixture.env, CURL_EXIT: '35' },
+    });
+    assert.equal(result.status, 35);
+    assert.match(result.stderr, /health probe through Caddy failed after 20 attempts/);
+    assert.doesNotMatch(result.stdout, /Deploy complete/);
+    const probes = logLines(fixture.log).filter((line) => line.startsWith('curl|'));
+    assert.equal(probes.length, 20, 'expected the retry budget to be exhausted');
   });
 
   it('propagates build and HTTP-probe failures without announcing success', () => {
