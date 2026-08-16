@@ -41,7 +41,7 @@ apps/web/test-results/
 
 # Stryker mutation testing
 .stryker-tmp/
-reports/mutation/
+**/reports/mutation/
 
 .playwright-mcp/
 .env.tk104
