@@ -30,8 +30,8 @@ const SERVER_ID = uuidv7();
 const SERVER_DISABLED_ID = uuidv7();
 const PLAYER_ID = uuidv7();
 const TARGET_ID = uuidv7();
-const EOS = '0002a10186d9414496bf20d22d3860ba';
-const STEAM = '76561198012345678';
+const EOS = '0257a10186d9414496bf20d22d3860ba';
+const STEAM = '76561198000002570';
 const TARGET_EOS = 'ffffffffffffffffffffffffffffffff';
 const RULES_TEXT = 'Никакого читерства. Уважайте других игроков.';
 
