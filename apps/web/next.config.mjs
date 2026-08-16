@@ -1,9 +1,30 @@
 const apiUrl = process.env.API_URL ?? 'http://api:3000';
 const MONACO_CDN = 'https://cdn.jsdelivr.net';
 
-const BASE_CSP =
-  "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'";
-const CONFIGS_CSP = `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' ${MONACO_CDN}; style-src 'self' 'unsafe-inline' ${MONACO_CDN}; worker-src 'self' blob:; connect-src 'self' ${MONACO_CDN}`;
+/**
+ * `'unsafe-eval'`, but only outside production.
+ *
+ * `next dev` compiles every client chunk with an eval-based devtool, so a
+ * `script-src` without `'unsafe-eval'` blocks the framework runtime itself:
+ * the chunks download with 200s, none of them execute, and every page is
+ * frozen on its server-rendered fallback with no hydration and no console
+ * error beyond a `securitypolicyviolation` event. `next build` emits no
+ * `eval`, so production keeps the strict policy byte-for-byte.
+ *
+ * Read per `headers()` call rather than at module load so the production
+ * branch stays testable.
+ */
+function devEval() {
+  return process.env.NODE_ENV === 'production' ? '' : " 'unsafe-eval'";
+}
+
+function baseCsp() {
+  return `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline'${devEval()}; style-src 'self' 'unsafe-inline'`;
+}
+
+function configsCsp() {
+  return `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' ${MONACO_CDN}${devEval()}; style-src 'self' 'unsafe-inline' ${MONACO_CDN}; worker-src 'self' blob:; connect-src 'self' ${MONACO_CDN}`;
+}
 
 /** @type {import('next').NextConfig} */
 export default {
@@ -13,7 +34,7 @@ export default {
       {
         source: '/(.*)',
         headers: [
-          { key: 'Content-Security-Policy', value: BASE_CSP },
+          { key: 'Content-Security-Policy', value: baseCsp() },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'X-Frame-Options', value: 'DENY' },
         ],
@@ -21,7 +42,7 @@ export default {
       {
         source: '/servers/:id/configs',
         headers: [
-          { key: 'Content-Security-Policy', value: CONFIGS_CSP },
+          { key: 'Content-Security-Policy', value: configsCsp() },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'X-Frame-Options', value: 'DENY' },
         ],
