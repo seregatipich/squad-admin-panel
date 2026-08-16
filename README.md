@@ -118,7 +118,7 @@ docs/               Architecture, component docs, operations, development
 
 ## Development
 
-**Requirements**: Node.js 22+, pnpm 9+, Go 1.25.11+ (for bridge), Docker.
+**Requirements**: Node.js 22+, pnpm 9+, Go 1.25.13+ (for bridge), Docker.
 
 ```bash
 pnpm install

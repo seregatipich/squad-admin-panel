@@ -26,7 +26,7 @@ The only privileged component. A Go binary listening on `/run/panel-host-bridge/
 
 ## Dependencies
 
-- Go 1.25.11+
+- Go 1.25.13+
 - `github.com/coreos/go-systemd/v22` for socket activation
 - `golang.org/x/sys` for `getsockopt(SO_PEERCRED)`
 

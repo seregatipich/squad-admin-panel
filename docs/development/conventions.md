@@ -8,7 +8,7 @@ Project-wide conventions for structure, language choices, commit style, and inva
 apps/
   api/              Fastify 5 + Zod type-provider (REST + WebSocket)
   web/              Next.js 15 App Router
-  bridge/           Go 1.25.11+ privileged host daemon
+  bridge/           Go 1.25.13+ privileged host daemon
   workers/
     rcon/           RCON supervisor + Redis Stream publisher
     log-ingest/     docker logs tail → event parser → Redis Streams
