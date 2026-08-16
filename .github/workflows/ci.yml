@@ -49,6 +49,8 @@ jobs:
         run: bash scripts/test-pre-push-checklist.sh
       - name: Run workflow-pin test suite
         run: bash scripts/test-workflow-pins.sh
+      - name: Run gitignore-pattern test suite
+        run: bash scripts/test-gitignore-patterns.sh
       - name: Run workflow security test suite
         run: bash scripts/test-workflow-security.sh
       - name: Run check-runner-health test suite
