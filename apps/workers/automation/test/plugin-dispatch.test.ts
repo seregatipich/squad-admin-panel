@@ -27,16 +27,27 @@ describe('automation plugin dispatch (integration)', () => {
   let stop: (() => void) | null = null;
   let loop: Promise<void> | null = null;
 
+  let stream: string | null = null;
+
   afterEach(async () => {
     stop?.();
     await loop?.catch(() => undefined);
+    if (stream) {
+      await redis?.del(stream).catch(() => undefined);
+    }
     await redis?.quit().catch(() => undefined);
     redis = null;
     stop = null;
     loop = null;
+    stream = null;
   });
 
-  function startLoop(registry: PluginRegistry, group: string, pluginTimeoutMs?: number) {
+  function startLoop(
+    registry: PluginRegistry,
+    group: string,
+    streamName: string,
+    pluginTimeoutMs?: number,
+  ) {
     let stopped = false;
     stop = () => {
       stopped = true;
@@ -50,6 +61,10 @@ describe('automation plugin dispatch (integration)', () => {
       blockMs: 200,
       pluginTimeoutMs,
       shouldStop: () => stopped,
+      // Pin discovery to this test's own stream so a concurrent process
+      // XADDing to the shared `events:global` stream (e.g. another
+      // `pnpm test:cov` worker) can never have its envelope delivered here.
+      discoverStreams: async () => [streamName],
     });
   }
 
@@ -91,10 +106,15 @@ describe('automation plugin dispatch (integration)', () => {
   it('delivers the exact envelope pushed onto the stream to a subscribed plugin', async () => {
     redis = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: null });
     const group = `test-group-${randomUUID()}`;
+    // Each test gets its own stream: `events:global` is shared with every
+    // other suite (and every other concurrent `pnpm test:cov` worker) on the
+    // same Redis db, so a unique group name alone cannot stop a foreign
+    // envelope XADDed by someone else from being delivered here first.
+    stream = `events:test:${randomUUID()}`;
     // Create the consumer group (positioned at '$') before anything is
     // pushed, so the dispatch loop's own (idempotent) group creation can't
     // race against the XADD below and miss the entry.
-    await ensureConsumerGroup(redis, 'events:global', group);
+    await ensureConsumerGroup(redis, stream, group);
     const received: EventEnvelope[] = [];
     const registry = new PluginRegistry();
     registry.register(
@@ -102,10 +122,10 @@ describe('automation plugin dispatch (integration)', () => {
         received.push(envelope);
       }),
     );
-    startLoop(registry, group);
+    startLoop(registry, group, stream);
 
     const envelope = makeEnvelope();
-    await redis.xadd('events:global', '*', 'envelope', JSON.stringify(envelope));
+    await redis.xadd(stream, '*', 'envelope', JSON.stringify(envelope));
 
     await pollUntil(() => received.length === 1);
     expect(received[0]).toEqual(envelope);
@@ -114,7 +134,8 @@ describe('automation plugin dispatch (integration)', () => {
   it('a plugin not subscribed to the kind never receives it, while a subscribed one does', async () => {
     redis = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: null });
     const group = `test-group-${randomUUID()}`;
-    await ensureConsumerGroup(redis, 'events:global', group);
+    stream = `events:test:${randomUUID()}`;
+    await ensureConsumerGroup(redis, stream, group);
     const registry = new PluginRegistry();
     const subscribedReceived: EventEnvelope[] = [];
     const unsubscribedReceived: EventEnvelope[] = [];
@@ -128,10 +149,10 @@ describe('automation plugin dispatch (integration)', () => {
         unsubscribedReceived.push(envelope);
       }),
     );
-    startLoop(registry, group);
+    startLoop(registry, group, stream);
 
     const envelope = makeEnvelope({ type: 'player.connected' });
-    await redis.xadd('events:global', '*', 'envelope', JSON.stringify(envelope));
+    await redis.xadd(stream, '*', 'envelope', JSON.stringify(envelope));
 
     await pollUntil(() => subscribedReceived.length === 1);
     await sleep(300);
@@ -141,7 +162,8 @@ describe('automation plugin dispatch (integration)', () => {
   it('a throwing plugin and a hanging plugin are isolated: neither crashes the loop nor blocks a third subscriber', async () => {
     redis = new Redis(TEST_REDIS_URL, { maxRetriesPerRequest: null });
     const group = `test-group-${randomUUID()}`;
-    await ensureConsumerGroup(redis, 'events:global', group);
+    stream = `events:test:${randomUUID()}`;
+    await ensureConsumerGroup(redis, stream, group);
     const registry = new PluginRegistry();
     const survivorReceived: EventEnvelope[] = [];
     registry.register(
@@ -157,10 +179,10 @@ describe('automation plugin dispatch (integration)', () => {
         survivorReceived.push(envelope);
       }),
     );
-    startLoop(registry, group, 200);
+    startLoop(registry, group, stream, 200);
 
     const envelope = makeEnvelope();
-    await redis.xadd('events:global', '*', 'envelope', JSON.stringify(envelope));
+    await redis.xadd(stream, '*', 'envelope', JSON.stringify(envelope));
 
     await pollUntil(() => survivorReceived.length === 1);
     expect(survivorReceived[0]).toEqual(envelope);
@@ -168,7 +190,7 @@ describe('automation plugin dispatch (integration)', () => {
     // The loop must still be alive and able to process a second event after
     // the throwing/hanging plugins ran.
     const secondEnvelope = makeEnvelope();
-    await redis.xadd('events:global', '*', 'envelope', JSON.stringify(secondEnvelope));
+    await redis.xadd(stream, '*', 'envelope', JSON.stringify(secondEnvelope));
     await pollUntil(() => survivorReceived.length === 2);
     expect(survivorReceived[1]).toEqual(secondEnvelope);
   }, 15_000);
