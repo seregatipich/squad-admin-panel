@@ -1,15 +1,23 @@
-// regression: apps/workers/log-ingest/test/combat-store.test.ts, vote-store.test.ts and
-// match-roster-store.test.ts each insert rows into the shared `players` table under
-// hardcoded eos_id/steam_id64 literals. Two files claiming the same literal collide on
-// players_eos_id_unique_idx / players_steam_id64_unique_idx against a persistent
-// (non-recreated) database — invisible in CI, which provisions a fresh database per run.
-// See #228. Mirrors apps/api/test/test-isolation.regression.test.ts's static-guard idea,
-// scoped to the three files that actually write `players` rows with these fixtures.
+// regression: apps/workers/log-ingest/test/combat-store.test.ts, vote-store.test.ts,
+// match-roster-store.test.ts, chat-store.test.ts and chat-commands.test.ts each insert rows
+// into the shared `players` table under hardcoded eos_id/steam_id64 literals. Two files
+// claiming the same literal collide on players_eos_id_unique_idx / players_steam_id64_unique_idx
+// against a persistent (non-recreated) database — invisible in CI, which provisions a fresh
+// database per run. See #228 (combat-store/vote-store/match-roster-store) and #257
+// (chat-store/chat-commands, found during #228's research but out of that issue's scope).
+// Mirrors apps/api/test/test-isolation.regression.test.ts's static-guard idea, scoped to the
+// files that actually write `players` rows with these fixtures.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const GUARDED_FILES = ['combat-store.test.ts', 'vote-store.test.ts', 'match-roster-store.test.ts'];
+const GUARDED_FILES = [
+  'combat-store.test.ts',
+  'vote-store.test.ts',
+  'match-roster-store.test.ts',
+  'chat-store.test.ts',
+  'chat-commands.test.ts',
+];
 
 const FIXTURE_CONST_RE = /const\s+([A-Z][A-Z0-9_]*)\s*=\s*(?:'([^']*)'|(\d+)n)\s*;/g;
 
@@ -24,8 +32,8 @@ function fixtureLiterals(file: string): Map<string, string> {
   return byName;
 }
 
-describe('log-ingest player-fixture isolation (#228)', () => {
-  it('combat-store/vote-store/match-roster-store never share an eos_id or steam_id64 literal', () => {
+describe('log-ingest player-fixture isolation (#228, #257)', () => {
+  it('combat-store/vote-store/match-roster-store/chat-store/chat-commands never share an eos_id or steam_id64 literal', () => {
     const perFile = GUARDED_FILES.map((file) => [file, fixtureLiterals(file)] as const);
 
     for (const [file, literals] of perFile) {
