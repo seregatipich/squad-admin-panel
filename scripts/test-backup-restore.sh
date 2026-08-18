@@ -71,12 +71,31 @@ tool() {
     "$TOOL_IMG" -c "$1"
 }
 
+# The official postgres image applies its init scripts against a TEMPORARY
+# server, then shuts it down and starts the real one. That temporary server is
+# launched with `listen_addresses=''` — it answers on the Unix socket ONLY. A
+# socket-based `pg_isready` can therefore succeed against it, and the socket
+# then disappears during the handover, so the very next psql dies with
+# "No such file or directory" (#291).
+#
+# Gate on a TCP query instead: only the real server ever listens on TCP, so the
+# temporary one cannot satisfy this. The consecutive-success requirement is a
+# second belt — a single sample can never span a handover.
+PG_READY_ATTEMPTS=${PG_READY_ATTEMPTS:-120}
+PG_READY_STREAK=${PG_READY_STREAK:-3}
 wait_pg() {
-  for _ in $(seq 1 60); do
-    docker exec "$1" pg_isready -U admin -d admin >/dev/null 2>&1 && return 0
+  streak=0
+  for _ in $(seq 1 "$PG_READY_ATTEMPTS"); do
+    if docker exec -e PGPASSWORD=admin "$1" \
+      psql -U admin -d admin -h 127.0.0.1 -tAc 'select 1' >/dev/null 2>&1; then
+      streak=$((streak + 1))
+      [ "$streak" -ge "$PG_READY_STREAK" ] && return 0
+    else
+      streak=0
+    fi
     sleep 1
   done
-  fail "postgres container $1 never became ready"
+  fail "postgres container $1 never became stably ready over TCP"
 }
 wait_redis() {
   for _ in $(seq 1 60); do
