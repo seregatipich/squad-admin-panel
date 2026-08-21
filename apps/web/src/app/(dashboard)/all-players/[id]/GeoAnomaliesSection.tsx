@@ -92,20 +92,20 @@ function WorldMap({ points }: { points: GeoPoint[] }) {
     >
       <title>Карта локаций игрока</title>
       {[30, 60, 90, 120, 150].map((y) => (
-        <line key={`h${y}`} x1={0} y1={y} x2={360} y2={y} stroke="#1f2937" strokeWidth={0.4} />
+        <line key={`h${y}`} x1={0} y1={y} x2={360} y2={y} stroke="#38383a" strokeWidth={0.4} />
       ))}
       {[60, 120, 180, 240, 300].map((x) => (
-        <line key={`v${x}`} x1={x} y1={0} x2={x} y2={180} stroke="#1f2937" strokeWidth={0.4} />
+        <line key={`v${x}`} x1={x} y1={0} x2={x} y2={180} stroke="#38383a" strokeWidth={0.4} />
       ))}
-      <line x1={0} y1={90} x2={360} y2={90} stroke="#334155" strokeWidth={0.6} />
+      <line x1={0} y1={90} x2={360} y2={90} stroke="#48484a" strokeWidth={0.6} />
       {CONTINENTS.map((path) => (
-        <path key={path} d={path} fill="#1e293b" stroke="#334155" strokeWidth={0.5} />
+        <path key={path} d={path} fill="#2c2c2e" stroke="#48484a" strokeWidth={0.5} />
       ))}
       {ordered.length > 1 ? (
         <polyline
           points={trail}
           fill="none"
-          stroke="#38bdf8"
+          stroke="#409cff"
           strokeWidth={0.7}
           strokeDasharray="2 2"
           opacity={0.7}
@@ -119,8 +119,8 @@ function WorldMap({ points }: { points: GeoPoint[] }) {
               cx={projectX(point.longitude)}
               cy={projectY(point.latitude)}
               r={isLatest ? 3.4 : 2.4}
-              fill={isLatest ? '#f59e0b' : '#38bdf8'}
-              stroke="#0f172a"
+              fill={isLatest ? '#ff9f0a' : '#409cff'}
+              stroke="#1c1c1e"
               strokeWidth={0.6}
             >
               <title>{`${flagEmoji(point.country_code)} ${point.country_name ?? point.country_code ?? '—'} · ${point.ip}`}</title>

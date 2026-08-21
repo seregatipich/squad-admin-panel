@@ -23,8 +23,8 @@ interface PrimetimeResponse {
 }
 
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
-const BAR_COLOR = '#38bdf8';
-const PEAK_COLOR = '#f59e0b';
+const BAR_COLOR = '#409cff';
+const PEAK_COLOR = '#ff9f0a';
 
 function offsetLabel(offsetMinutes: number): string {
   const sign = offsetMinutes < 0 ? '-' : '+';

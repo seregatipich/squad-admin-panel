@@ -69,10 +69,10 @@ const RANGE_LABELS: Record<RangePreset, string> = {
 };
 
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
-const ONLINE_COLOR = '#10b981';
-const BOOST_COLOR = '#f59e0b';
-const PEAK_COLOR = '#f59e0b';
-const PRIMETIME_BAR_COLOR = '#38bdf8';
+const ONLINE_COLOR = '#30d158';
+const BOOST_COLOR = '#ff9f0a';
+const PEAK_COLOR = '#ff9f0a';
+const PRIMETIME_BAR_COLOR = '#409cff';
 const TOP_MEMBERS_DISPLAY_LIMIT = 5;
 const DAY_MS = 86_400_000;
 

@@ -21,9 +21,9 @@ export interface ChartServer {
   display_name: string;
 }
 
-const AXIS = '#525252';
-const GRID = '#262626';
-const TOOLTIP_STYLE = { background: '#0a0a0a', border: '1px solid #333', fontSize: 12 };
+const AXIS = '#78787d';
+const GRID = '#38383a';
+const TOOLTIP_STYLE = { background: '#2c2c2e', border: '1px solid #333', fontSize: 12 };
 
 /**
  * Stacked bar chart of one series, one colour-stable band per server.

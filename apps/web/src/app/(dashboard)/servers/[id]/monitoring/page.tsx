@@ -83,7 +83,7 @@ export default function MonitoringPage({ params }: { params: Promise<{ id: strin
           points={points.map((p) => ({ timestamp: p.timestamp, value: p.cpu_percent }))}
           label="CPU"
           unit="%"
-          color="#38bdf8"
+          color="#409cff"
           maxY={100}
           formatValue={(v) => `${v.toFixed(1)}`}
         />
@@ -92,7 +92,7 @@ export default function MonitoringPage({ params }: { params: Promise<{ id: strin
           points={points.map((p) => ({ timestamp: p.timestamp, value: p.mem_bytes }))}
           label="Память"
           unit=""
-          color="#a78bfa"
+          color="#bf5af2"
         />
 
         {points.some((p) => p.tickrate !== undefined) && (
@@ -102,7 +102,7 @@ export default function MonitoringPage({ params }: { params: Promise<{ id: strin
               .map((p) => ({ timestamp: p.timestamp, value: p.tickrate as number }))}
             label="Tickrate"
             unit=""
-            color="#34d399"
+            color="#30d158"
             formatValue={(v) => `${v.toFixed(0)}`}
           />
         )}

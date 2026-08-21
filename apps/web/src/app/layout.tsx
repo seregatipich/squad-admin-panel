@@ -1,3 +1,8 @@
+// Variable weights, self-hosted: the panel must render identically offline and
+// on a LAN-only host, so no Google Fonts round-trip. `--font-sans` prefers the
+// system UI face and falls back to Inter where there isn't one (Linux, Windows).
+import '@fontsource-variable/inter';
+import '@fontsource-variable/jetbrains-mono';
 import '../styles/globals.css';
 import type { Metadata } from 'next';
 import { LocaleProvider } from '@/i18n/LocaleProvider';

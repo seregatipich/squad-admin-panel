@@ -192,17 +192,22 @@ export function ReportsAnalytics() {
             </h3>
             <ResponsiveContainer width="100%" height={220}>
               <LineChart data={data.trend}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#222" />
-                <XAxis dataKey="day" tickFormatter={formatTrendDay} stroke="#666" minTickGap={24} />
-                <YAxis allowDecimals={false} stroke="#666" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#38383a" />
+                <XAxis
+                  dataKey="day"
+                  tickFormatter={formatTrendDay}
+                  stroke="#a1a1a8"
+                  minTickGap={24}
+                />
+                <YAxis allowDecimals={false} stroke="#a1a1a8" />
                 <Tooltip
-                  contentStyle={{ background: '#0a0a0a', border: '1px solid #333' }}
+                  contentStyle={{ background: '#2c2c2e', border: '1px solid #333' }}
                   labelFormatter={(day) => formatTrendDay(String(day))}
                 />
                 <Line
                   type="monotone"
                   dataKey="count"
-                  stroke="#38bdf8"
+                  stroke="#409cff"
                   strokeWidth={2}
                   dot={false}
                 />
@@ -222,14 +227,14 @@ export function ReportsAnalytics() {
                     seconds: row.avg_resolution_seconds ?? 0,
                   }))}
                 >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#222" />
-                  <XAxis dataKey="name" stroke="#666" />
-                  <YAxis stroke="#666" tickFormatter={(v: number) => formatDurationRu(v)} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#38383a" />
+                  <XAxis dataKey="name" stroke="#a1a1a8" />
+                  <YAxis stroke="#a1a1a8" tickFormatter={(v: number) => formatDurationRu(v)} />
                   <Tooltip
-                    contentStyle={{ background: '#0a0a0a', border: '1px solid #333' }}
+                    contentStyle={{ background: '#2c2c2e', border: '1px solid #333' }}
                     formatter={(v) => formatDurationRu(typeof v === 'number' ? v : null)}
                   />
-                  <Bar dataKey="seconds" fill="#10b981" />
+                  <Bar dataKey="seconds" fill="#30d158" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
