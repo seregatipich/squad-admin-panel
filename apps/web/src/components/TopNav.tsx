@@ -352,7 +352,7 @@ function UserMenu({ displayName, t }: { displayName: string; t: Translator }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-[calc(100%+4px)] z-50 w-52 rounded-card border border-line-2 bg-surface p-2 shadow-2xl shadow-black/50">
+        <div className="absolute right-0 top-[calc(100%+4px)] z-50 w-60 rounded-card border border-line-2 bg-surface p-2 shadow-2xl shadow-black/50">
           <p className="truncate px-2 pb-2 pt-1 text-xs text-ink">{displayName}</p>
           <Link
             href="/settings/account"
