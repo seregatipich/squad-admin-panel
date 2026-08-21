@@ -9,7 +9,7 @@ export function LogoutButton() {
     <button
       type="button"
       disabled={pending}
-      className="mt-1 text-red-400 hover:text-red-300 disabled:opacity-50"
+      className="text-crit hover:brightness-110 disabled:opacity-50"
       onClick={async () => {
         setPending(true);
         try {

@@ -3,7 +3,7 @@ import { requireSession } from '@/lib/dal';
 
 /**
  * Layout for the VIPSUB-5 (#171) self-service tier: a real session is required,
- * but panel access is NOT. Deliberately renders no `SidebarNav`, no
+ * but panel access is NOT. Deliberately renders no `TopNav`, no
  * `CommandPalette` and no live-bus widgets — every one of those calls a
  * panel-gated route that a `self_service` session cannot reach, and the whole
  * point of this group is that a plain VIP can use it.

@@ -50,7 +50,8 @@ import { MetricHistoryModal } from '../src/components/MetricHistoryModal';
 import { RestartBridgeButton } from '../src/components/RestartBridgeButton';
 import { RoleColorDot } from '../src/components/RoleColorDot';
 import { RoleEditor } from '../src/components/RoleEditor';
-import { SidebarNav } from '../src/components/SidebarNav';
+import { ServerBar } from '../src/components/ServerBar';
+import { TopNav } from '../src/components/TopNav';
 
 describe('components static import graph', () => {
   it('AdminsCfgDriftBanner is a function', () => {
@@ -105,7 +106,11 @@ describe('components static import graph', () => {
     expect(typeof RoleEditor).toBe('function');
   });
 
-  it('SidebarNav is a function', () => {
-    expect(typeof SidebarNav).toBe('function');
+  it('TopNav is a function', () => {
+    expect(typeof TopNav).toBe('function');
+  });
+
+  it('ServerBar is a function', () => {
+    expect(typeof ServerBar).toBe('function');
   });
 });

@@ -64,6 +64,21 @@ export function shouldSearchPlayers(query: string): boolean {
   return query.trim().length >= PLAYER_SEARCH_MIN_LENGTH;
 }
 
+/**
+ * Event the palette listens on so any chrome can open it.
+ *
+ * The palette and the top bar are sibling Client Components under a Server
+ * Component layout, which cannot pass a callback between them; a DOM event
+ * crosses that boundary without wrapping the whole panel in a provider whose
+ * only job is one boolean.
+ */
+export const PALETTE_OPEN_EVENT = 'squad:command-palette-open';
+
+/** Opens the global command palette from anywhere in the client tree. */
+export function openCommandPalette(): void {
+  window.dispatchEvent(new Event(PALETTE_OPEN_EVENT));
+}
+
 /** Whether a keyboard event should toggle the command palette open (Ctrl/Cmd+K). */
 export function isPaletteHotkey(
   event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey'>,

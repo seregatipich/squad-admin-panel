@@ -7,6 +7,7 @@ import {
   filterPageResults,
   filterServerResults,
   isPaletteHotkey,
+  PALETTE_OPEN_EVENT,
   type PaletteResult,
   type PlayerSearchResult,
   resultHref,
@@ -65,6 +66,16 @@ export function CommandPalette({
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // The top bar's search field opens the same palette. It always opens rather
+  // than toggles: a click on a field that is already open reads as "focus it".
+  useEffect(() => {
+    function handleOpenRequest() {
+      setOpen(true);
+    }
+    window.addEventListener(PALETTE_OPEN_EVENT, handleOpenRequest);
+    return () => window.removeEventListener(PALETTE_OPEN_EVENT, handleOpenRequest);
   }, []);
 
   // Escape closes the palette while it is open, regardless of focus.
