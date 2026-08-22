@@ -197,6 +197,19 @@
 }
 
 @layer base {
+  :root {
+    /* Height of the sticky top navigation. The server strip pins to this. */
+    --nav-h: 46px;
+
+    /* Height of *all* sticky chrome — the bar, plus the server strip when a
+       page shows one. Table headers offset by this rather than by a literal
+       46px, so nothing pinned underneath can drift out from under the bar.
+       `ServerBar` overwrites it while it is mounted, because the strip wraps
+       onto a second row once there are enough servers and its height is
+       therefore not a constant. */
+    --chrome-h: var(--nav-h);
+  }
+
   html {
     color-scheme: dark;
   }
@@ -220,8 +233,10 @@
     @apply outline-2 outline-offset-2 outline-accent;
   }
 
+  /* A placeholder is often the only label a field has, so it has to be
+     readable: tertiaryLabel measures 5.3:1 on a card, quaternary only 2.5:1. */
   ::placeholder {
-    color: var(--color-ink-4);
+    color: var(--color-ink-3);
   }
 
   ::-webkit-scrollbar {

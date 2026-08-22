@@ -73,7 +73,7 @@ describe('MediaPublishingIntegrationPage', () => {
       stubFetch(200, status({ release_local_file: true }));
       render(<MediaPublishingIntegrationPage />);
 
-      const toggle = await screen.findByRole('checkbox', {
+      const toggle = await screen.findByRole('switch', {
         name: /Освобождать локальный файл/,
       });
       expect(toggle).toBeChecked();
@@ -93,7 +93,7 @@ describe('MediaPublishingIntegrationPage', () => {
       vi.stubGlobal('fetch', fetchImpl);
       render(<MediaPublishingIntegrationPage />);
 
-      const toggle = await screen.findByRole('checkbox', {
+      const toggle = await screen.findByRole('switch', {
         name: /Освобождать локальный файл/,
       });
       fireEvent.click(toggle);
@@ -118,7 +118,7 @@ describe('MediaPublishingIntegrationPage', () => {
       vi.stubGlobal('fetch', fetchImpl);
       render(<MediaPublishingIntegrationPage />);
 
-      const toggle = await screen.findByRole('checkbox', {
+      const toggle = await screen.findByRole('switch', {
         name: /Освобождать локальный файл/,
       });
       fireEvent.click(toggle);

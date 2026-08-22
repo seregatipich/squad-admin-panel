@@ -4,6 +4,40 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RestoreSnapshotButton } from './RestoreSnapshotButton';
 
+/**
+ * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`.
+ * Полифилл живёт только в тестах — компонент рассчитан на настоящий браузер.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
 const SHORT_ID = 'a1b2c3d4';
 
 /** The modal's primary action button (distinct from the row trigger of the same name). */
@@ -14,6 +48,11 @@ function confirmButton() {
 /** The row trigger — the only "Восстановить" button before the modal opens. */
 function openModal() {
   fireEvent.click(screen.getByRole('button', { name: 'Восстановить' }));
+}
+
+/** Крестик и кнопка отказа делят одну подпись — это один и тот же выход. */
+function exits(name: string) {
+  return within(screen.getByRole('dialog')).getAllByRole('button', { name });
 }
 
 function typeConfirm(value: string) {
@@ -122,8 +161,18 @@ describe('RestoreSnapshotButton', () => {
   it('closes the modal via Cancel', () => {
     render(<RestoreSnapshotButton shortId={SHORT_ID} />);
     openModal();
-    fireEvent.click(screen.getByRole('button', { name: 'Отменить' }));
-    expect(screen.queryByText('Восстановить из бэкапа?')).not.toBeInTheDocument();
+    const buttons = exits('Отменить');
+    fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('closes the modal on Escape without calling the API', () => {
+    const fetchSpy = mockFetch(new Response('{}'));
+    render(<RestoreSnapshotButton shortId={SHORT_ID} />);
+    openModal();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('closes the error modal via the Закрыть button', async () => {
@@ -133,8 +182,9 @@ describe('RestoreSnapshotButton', () => {
     typeConfirm(SHORT_ID);
     fireEvent.click(confirmButton());
     await waitFor(() => expect(screen.getByText('Нет прав на эту операцию.')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
-    expect(screen.queryByText('Восстановить из бэкапа?')).not.toBeInTheDocument();
+    const buttons = exits('Закрыть');
+    fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('renders the snapshot time in the confirm dialog when provided', () => {

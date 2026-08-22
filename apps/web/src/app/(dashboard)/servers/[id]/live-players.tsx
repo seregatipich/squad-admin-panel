@@ -1,10 +1,33 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { BanNickButton } from '@/components/BannedNameRuleModal';
 import { BulkModerationModal, type BulkModerationTarget } from '@/components/BulkModerationModal';
 import { DirectMessageButton } from '@/components/DirectMessageModal';
 import { SquadMessageModal, type SquadMessageTarget } from '@/components/SquadMessageModal';
+import {
+  AlertDialog,
+  Button,
+  ButtonLink,
+  Card,
+  CardBody,
+  CardHeader,
+  Checkbox,
+  EmptyState,
+  FieldRow,
+  IconButton,
+  InlineBanner,
+  Select,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Textarea,
+  Th,
+  WarningIcon,
+} from '@/components/ui';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   formatTimeOnServer,
@@ -21,6 +44,70 @@ import {
 const ROSTER_POLL_MS = 30_000;
 
 const BULK_KEYS = ['mod:warn', 'mod:kick', 'mod:ban_temp', 'mod:ban_perm'] as const;
+
+/** Действие модерации над одним игроком прямо из строки ростера. */
+type QuickAction = 'warn' | 'kick' | 'ban';
+
+interface QuickRequest {
+  action: QuickAction;
+  target: BulkModerationTarget;
+}
+
+const QUICK_TITLE: Record<QuickAction, string> = {
+  warn: 'Предупредить игрока',
+  kick: 'Кикнуть игрока',
+  ban: 'Забанить игрока',
+};
+
+/** Подпись подтверждающей кнопки называет действие, а не отвечает «Да» (§5). */
+const QUICK_CONFIRM: Record<QuickAction, string> = {
+  warn: 'Предупредить',
+  kick: 'Кик',
+  ban: 'Забанить',
+};
+
+const QUICK_EXPLANATION: Record<QuickAction, string> = {
+  warn: 'Игрок получит предупреждение в игре. Причина попадёт в его карточку.',
+  kick: 'Игрок будет отключён от сервера и сможет вернуться сразу же.',
+  ban: 'Игрок будет отключён и не сможет зайти до конца срока бана.',
+};
+
+const BAN_LENGTHS: ReadonlyArray<{ value: string; label: string; permanent: boolean }> = [
+  { value: '1d', label: '1 день', permanent: false },
+  { value: '3d', label: '3 дня', permanent: false },
+  { value: '7d', label: '7 дней', permanent: false },
+  { value: '30d', label: '30 дней', permanent: false },
+  { value: '0', label: 'Навсегда', permanent: true },
+];
+
+/** Причины отказа из `results[].error` — те же, что показывает массовое окно. */
+const TARGET_ERROR_LABEL: Record<string, string> = {
+  player_not_found: 'Игрок не найден',
+  target_identity_missing: 'Нет SteamID64 и EOS ID',
+  target_offline: 'Игрок не в сети',
+  rcon_failed: 'RCON не подтвердил команду',
+  bulk_deadline_exceeded: 'Превышен лимит времени операции',
+};
+
+interface BulkResponse {
+  applied: number;
+  failed: number;
+  results: Array<{
+    player_id: string;
+    status: 'applied' | 'failed';
+    error?: string;
+    detail?: string;
+  }>;
+}
+
+/** Какие быстрые действия доступны обладателю этих `mod:*` ключей. */
+function quickAbilities(permissions: readonly string[]) {
+  return {
+    warn: permissions.includes('mod:warn'),
+    kick: permissions.includes('mod:kick'),
+    ban: permissions.includes('mod:ban_temp') || permissions.includes('mod:ban_perm'),
+  };
+}
 
 export function LivePlayers({
   serverId,
@@ -46,6 +133,7 @@ export function LivePlayers({
   const [squadTarget, setSquadTarget] = useState<SquadMessageTarget | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [quick, setQuick] = useState<QuickRequest | null>(null);
 
   const canBulk = BULK_KEYS.some((key) => modPermissions.includes(key));
 
@@ -107,100 +195,106 @@ export function LivePlayers({
   );
   const bulkTargets = selectable.filter((target) => selected.has(target.playerId));
   const allSelected = selectable.length > 0 && bulkTargets.length === selectable.length;
+  const abilities = quickAbilities(modPermissions);
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-          Игроки онлайн{roster ? ` · ${players.length}` : ''}
-        </h2>
-        <span className="text-[10px] text-neutral-600">обновление каждые 30 с</span>
-      </div>
+    <Card padding="none" as="section">
+      <CardHeader
+        title="Игроки онлайн"
+        count={roster ? players.length : undefined}
+        description="Список обновляется каждые 30 секунд"
+      />
 
       {canBulk && bulkTargets.length > 0 ? (
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded border border-amber-900 bg-amber-950/40 px-3 py-2">
-          <span className="text-xs text-amber-200">Выбрано: {bulkTargets.length}</span>
-          <button
-            type="button"
-            onClick={() => setBulkOpen(true)}
-            className="rounded bg-red-700 px-2 py-1 text-xs font-medium text-white hover:bg-red-600"
-          >
+        <div className="flex flex-wrap items-center gap-2 border-b border-line bg-raised px-4 py-2">
+          <span className="text-xs text-ink-2">Выбрано: {bulkTargets.length}</span>
+          <Button size="sm" variant="primary" onClick={() => setBulkOpen(true)}>
             Массовое действие
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelected(new Set())}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-700"
-          >
+          </Button>
+          <Button size="sm" onClick={() => setSelected(new Set())}>
             Снять выделение
-          </button>
+          </Button>
         </div>
       ) : null}
 
       {err ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-300">
-          Не удалось загрузить список: {err}
-        </div>
+        <CardBody>
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить список игроков"
+            description={err}
+            action={
+              <Button size="sm" onClick={() => void load()}>
+                Повторить
+              </Button>
+            }
+          />
+        </CardBody>
+      ) : null}
+
+      {!roster && !err ? (
+        <CardBody>
+          <SkeletonTable rows={6} cols={6} label="Загружается список игроков" />
+        </CardBody>
       ) : null}
 
       {roster && players.length === 0 && !err ? (
-        <div className="text-xs text-neutral-500">
-          Нет игроков онлайн или RCON-опрос ещё не выполнялся.
-        </div>
+        <EmptyState
+          variant="initial"
+          title="На сервере никого нет"
+          description="Никто не подключён либо RCON-опрос ещё не выполнялся."
+        />
       ) : null}
 
-      {!roster && !err ? <div className="text-xs text-neutral-500">Загрузка…</div> : null}
-
       {players.length > 0 ? (
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-xs">
-            <thead>
-              <tr className="text-left text-[10px] uppercase tracking-widest text-neutral-500">
-                {canBulk ? (
-                  <th className="py-1.5 pr-2 font-medium">
-                    <input
-                      type="checkbox"
-                      aria-label="Выделить всех"
-                      checked={allSelected}
-                      onChange={() =>
-                        setSelected(
-                          allSelected
-                            ? new Set()
-                            : new Set(selectable.map((target) => target.playerId)),
-                        )
-                      }
-                      className="align-middle accent-red-600"
-                    />
-                  </th>
-                ) : null}
-                <th className="py-1.5 pr-3 font-medium">Игрок</th>
-                <th className="py-1.5 pr-3 font-medium">SteamID64</th>
-                <th className="py-1.5 pr-3 font-medium">EOS ID</th>
-                <th className="py-1.5 pr-3 font-medium">Команда</th>
-                <th className="py-1.5 pr-3 font-medium">Отряд</th>
-                <th className="py-1.5 pr-3 font-medium">На сервере</th>
-                {canBan ? <th className="py-1.5 pr-3 font-medium"></th> : null}
-              </tr>
-            </thead>
-            <tbody>
-              {groups.map((group) => (
-                <SquadGroupRows
-                  key={`${group.team_id}:${group.squad_id}`}
-                  group={group}
-                  now={now}
-                  serverId={serverId}
-                  canChat={canChat}
-                  canBan={canBan}
-                  canBulk={canBulk}
-                  selected={selected}
-                  onToggleSelected={toggleSelected}
-                  onSelectGroup={setSelected}
-                  onMessageSquad={setSquadTarget}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table ariaLabel="Игроки онлайн">
+          <TableHead>
+            <TableRow>
+              {canBulk ? (
+                <Th className="w-8">
+                  <Checkbox
+                    className="normal-case"
+                    label={<span className="sr-only">Выделить всех</span>}
+                    checked={allSelected}
+                    onChange={() =>
+                      setSelected(
+                        allSelected
+                          ? new Set()
+                          : new Set(selectable.map((target) => target.playerId)),
+                      )
+                    }
+                  />
+                </Th>
+              ) : null}
+              <Th>Игрок</Th>
+              <Th>SteamID64</Th>
+              <Th>EOS ID</Th>
+              <Th align="right">Команда</Th>
+              <Th align="right">Отряд</Th>
+              <Th align="right">На сервере</Th>
+              <Th align="right">Действия</Th>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {groups.map((group) => (
+              <SquadGroupRows
+                key={`${group.team_id}:${group.squad_id}`}
+                group={group}
+                now={now}
+                serverId={serverId}
+                canChat={canChat}
+                canBan={canBan}
+                canBulk={canBulk}
+                abilities={abilities}
+                selected={selected}
+                onToggleSelected={toggleSelected}
+                onSelectGroup={setSelected}
+                onMessageSquad={setSquadTarget}
+                onQuickAction={setQuick}
+              />
+            ))}
+          </TableBody>
+        </Table>
       ) : null}
 
       <SquadMessageModal
@@ -220,7 +314,159 @@ export function LivePlayers({
           void load();
         }}
       />
-    </section>
+
+      <QuickModerationDialog
+        serverId={serverId}
+        request={quick}
+        permissions={modPermissions}
+        onClose={() => setQuick(null)}
+        onApplied={() => {
+          setQuick(null);
+          void load();
+        }}
+      />
+    </Card>
+  );
+}
+
+/**
+ * Одиночное действие модерации из строки ростера (предупреждение, кик, бан).
+ *
+ * Ходит в тот же `POST /api/v1/moderation-actions/bulk`, что и массовое окно,
+ * со списком из одной цели: у одиночного действия отдельного эндпоинта нет, а
+ * заводить его ради строки таблицы незачем. Челленджа с количеством целей тут
+ * нет — он охраняет массовый бан, где ошибка стоит десятков игроков; здесь
+ * достаточно подтверждения и обязательной причины, которую всё равно требует
+ * схема запроса.
+ */
+function QuickModerationDialog({
+  serverId,
+  request,
+  permissions,
+  onClose,
+  onApplied,
+}: {
+  serverId: string;
+  /** `null`, пока окно закрыто. */
+  request: QuickRequest | null;
+  permissions: readonly string[];
+  onClose: () => void;
+  onApplied: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  const [banLength, setBanLength] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const reasonId = useId();
+  const lengthId = useId();
+
+  const canBanTemp = permissions.includes('mod:ban_temp');
+  const canBanPerm = permissions.includes('mod:ban_perm');
+  const banLengths = BAN_LENGTHS.filter((entry) => (entry.permanent ? canBanPerm : canBanTemp));
+
+  const open = request !== null;
+  // Причина и срок сбрасываются на каждое открытие: текст, набранный для
+  // прошлого игрока, не должен уехать следующему.
+  useEffect(() => {
+    if (!open) return;
+    setReason('');
+    setBanLength(
+      BAN_LENGTHS.filter((e) => (e.permanent ? canBanPerm : canBanTemp))[0]?.value ?? '0',
+    );
+    setError(null);
+  }, [open, canBanPerm, canBanTemp]);
+
+  if (!request) return null;
+
+  const { action, target } = request;
+
+  async function submit() {
+    const trimmed = reason.trim();
+    if (trimmed.length === 0) {
+      setError('Укажите причину — она попадёт в карточку игрока и в журнал действий.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/v1/moderation-actions/bulk', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          server_id: serverId,
+          action_type: action,
+          player_ids: [target.playerId],
+          reason: trimmed,
+          ban_length: action === 'ban' ? banLength : '0',
+          confirm_bulk: true,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      // Запрос не транзакционный: 200 приходит и тогда, когда единственная
+      // цель не была задета, — причина лежит в `results[0].error`.
+      const body = (await res.json()) as BulkResponse;
+      const failure = body.results.find((row) => row.status === 'failed');
+      if (failure) {
+        setError(
+          TARGET_ERROR_LABEL[failure.error ?? ''] ?? failure.error ?? 'Не удалось применить',
+        );
+        return;
+      }
+      onApplied();
+    } catch (submitError) {
+      setError((submitError as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AlertDialog
+      open={open}
+      onClose={onClose}
+      title={QUICK_TITLE[action]}
+      confirmLabel={QUICK_CONFIRM[action]}
+      cancelLabel="Отмена"
+      tone={action === 'ban' ? 'destructive' : 'default'}
+      busy={busy}
+      onConfirm={submit}
+      body={
+        <div className="space-y-3">
+          <p>
+            {target.name} — {QUICK_EXPLANATION[action]}
+          </p>
+          <FieldRow label="Причина" htmlFor={reasonId} required error={error}>
+            <Textarea
+              id={reasonId}
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              maxLength={300}
+              rows={3}
+              invalid={error !== null}
+            />
+          </FieldRow>
+          {action === 'ban' ? (
+            <FieldRow label="Срок бана" htmlFor={lengthId}>
+              <Select
+                id={lengthId}
+                value={banLength}
+                onChange={(event) => setBanLength(event.target.value)}
+              >
+                {banLengths.map((entry) => (
+                  <option key={entry.value} value={entry.value}>
+                    {entry.label}
+                  </option>
+                ))}
+              </Select>
+            </FieldRow>
+          ) : null}
+        </div>
+      }
+    />
   );
 }
 
@@ -231,10 +477,12 @@ function SquadGroupRows({
   canChat,
   canBan,
   canBulk,
+  abilities,
   selected,
   onToggleSelected,
   onSelectGroup,
   onMessageSquad,
+  onQuickAction,
 }: {
   group: SquadGroup;
   now: number;
@@ -242,17 +490,19 @@ function SquadGroupRows({
   canChat: boolean;
   canBan: boolean;
   canBulk: boolean;
+  abilities: ReturnType<typeof quickAbilities>;
   selected: ReadonlySet<string>;
   onToggleSelected: (playerId: string) => void;
   onSelectGroup: (update: (current: ReadonlySet<string>) => ReadonlySet<string>) => void;
   onMessageSquad: (target: SquadMessageTarget) => void;
+  onQuickAction: (request: QuickRequest) => void;
 }) {
   const messageable = canChat && group.team_id != null && group.squad_id != null;
   const label =
     group.squad_id != null
       ? `Команда ${teamLabel(group.team_id)} · Отряд ${squadLabel(group.squad_id)}`
       : `Команда ${teamLabel(group.team_id)} · Без отряда`;
-  const colSpan = (canBan ? 7 : 6) + (canBulk ? 1 : 0);
+  const colSpan = 7 + (canBulk ? 1 : 0);
   const groupSelectable = group.players
     .map((player) => player.player_id)
     .filter((id): id is string => id !== null);
@@ -261,17 +511,19 @@ function SquadGroupRows({
 
   return (
     <>
-      <tr className="border-t border-neutral-800 bg-neutral-900/60">
+      <tr className="bg-raised">
+        {/* Не `Th`: заголовок колонки набирается заглавными, а это название
+            отряда — смысловой текст, и капслок ему запрещён (§1). */}
         <th
+          scope="colgroup"
           colSpan={colSpan}
-          className="py-1 pr-3 text-left text-[10px] font-medium text-neutral-400"
+          className="px-3 py-1.5 text-left text-xs font-semibold text-ink-2"
         >
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-2">
               {canBulk && groupSelectable.length > 0 ? (
-                <input
-                  type="checkbox"
-                  aria-label={`Выделить отряд: ${label}`}
+                <Checkbox
+                  label={<span className="sr-only">{`Выделить отряд: ${label}`}</span>}
                   checked={groupSelected}
                   onChange={() =>
                     onSelectGroup((current) => {
@@ -283,16 +535,15 @@ function SquadGroupRows({
                       return next;
                     })
                   }
-                  className="accent-red-600"
                 />
               ) : null}
-              {label} <span className="text-neutral-600">· {group.players.length}</span>
+              {label} <span className="font-normal text-ink-3">· {group.players.length}</span>
             </span>
             {messageable ? (
-              <button
-                type="button"
-                title={`Сообщение отряду: ${label}`}
-                aria-label={`Сообщение отряду: ${label}`}
+              <IconButton
+                size="sm"
+                icon={<span aria-hidden="true">✉</span>}
+                label={`Сообщение отряду: ${label}`}
                 onClick={() =>
                   onMessageSquad({
                     serverId,
@@ -304,10 +555,7 @@ function SquadGroupRows({
                     leaderName: group.leader?.name ?? null,
                   })
                 }
-                className="rounded px-1.5 py-0.5 text-sky-400 hover:bg-neutral-800 hover:text-sky-300"
-              >
-                ✉
-              </button>
+              />
             ) : null}
           </div>
         </th>
@@ -321,8 +569,10 @@ function SquadGroupRows({
           canChat={canChat}
           canBan={canBan}
           canBulk={canBulk}
+          abilities={abilities}
           checked={player.player_id !== null && selected.has(player.player_id)}
           onToggleSelected={onToggleSelected}
+          onQuickAction={onQuickAction}
         />
       ))}
     </>
@@ -336,8 +586,10 @@ function RosterRow({
   canChat,
   canBan,
   canBulk,
+  abilities,
   checked,
   onToggleSelected,
+  onQuickAction,
 }: {
   player: RosterPlayer;
   now: number;
@@ -345,70 +597,106 @@ function RosterRow({
   canChat: boolean;
   canBan: boolean;
   canBulk: boolean;
+  abilities: ReturnType<typeof quickAbilities>;
   checked: boolean;
   onToggleSelected: (playerId: string) => void;
+  onQuickAction: (request: QuickRequest) => void;
 }) {
+  // Действия модерации бьют по игроку панели, а не по слоту ростера: строка
+  // без `player_id` ещё не сопоставлена с профилем, и целью быть не может.
+  const target: BulkModerationTarget | null = player.player_id
+    ? { playerId: player.player_id, name: player.name }
+    : null;
+
   return (
-    <tr className="border-t border-neutral-900 hover:bg-neutral-900/40">
+    <TableRow interactive selected={checked}>
       {canBulk ? (
-        <td className="py-1.5 pr-2">
-          <input
-            type="checkbox"
-            aria-label={`Выбрать игрока: ${player.name}`}
+        <Td>
+          <Checkbox
+            label={<span className="sr-only">{`Выбрать игрока: ${player.name}`}</span>}
             checked={checked}
             disabled={player.player_id === null}
             title={
               player.player_id === null ? 'Игрок ещё не сопоставлен с профилем панели' : undefined
             }
             onChange={() => player.player_id && onToggleSelected(player.player_id)}
-            className="accent-red-600 disabled:opacity-30"
           />
-        </td>
+        </Td>
       ) : null}
-      <td className="py-1.5 pr-3">
+      <Td>
         <span className="flex items-center gap-1.5">
           {player.is_leader ? (
-            <span className="text-amber-400" title="Командир отряда">
+            <span className="text-warn" title="Командир отряда">
               ★
             </span>
           ) : null}
           {player.player_id ? (
-            <Link
-              href={`/all-players/${player.player_id}`}
-              className="text-sky-400 hover:text-sky-300"
-            >
+            <Link href={`/all-players/${player.player_id}`} className="text-accent">
               {player.name}
             </Link>
           ) : (
-            <span className="text-neutral-300">{player.name}</span>
+            <span>{player.name}</span>
           )}
+        </span>
+      </Td>
+      <Td className="font-mono text-ink-2">{player.steam_id64 ?? '—'}</Td>
+      <Td className="font-mono text-ink-3">
+        <span title={player.eos_id}>{shortEos(player.eos_id)}</span>
+      </Td>
+      <Td numeric>{teamLabel(player.team_id)}</Td>
+      <Td numeric>{squadLabel(player.squad_id)}</Td>
+      <Td numeric>{formatTimeOnServer(player.first_seen_at, now)}</Td>
+      <Td align="right">
+        <div className="flex items-center justify-end gap-0.5">
+          {target && abilities.warn ? (
+            <IconButton
+              size="sm"
+              icon={<WarningIcon />}
+              label={`Предупредить: ${player.name}`}
+              onClick={() => onQuickAction({ action: 'warn', target })}
+            />
+          ) : null}
+          {target && abilities.kick ? (
+            <IconButton
+              size="sm"
+              icon={<span aria-hidden="true">⇥</span>}
+              label={`Кик: ${player.name}`}
+              onClick={() => onQuickAction({ action: 'kick', target })}
+            />
+          ) : null}
+          {target && abilities.ban ? (
+            <IconButton
+              size="sm"
+              tone="destructive"
+              icon={<span aria-hidden="true">⊘</span>}
+              label={`Бан: ${player.name}`}
+              onClick={() => onQuickAction({ action: 'ban', target })}
+            />
+          ) : null}
           <DirectMessageButton
             playerId={player.player_id}
             name={player.name}
             canChat={canChat}
             serverId={serverId}
-            className="rounded px-1 text-[10px] text-sky-400 hover:bg-neutral-800"
+            className="h-6 rounded-ctl px-1.5 text-2xs text-ink-2 transition-colors hover:bg-raised hover:text-ink"
           />
-        </span>
-      </td>
-      <td className="py-1.5 pr-3 font-mono text-neutral-400">{player.steam_id64 ?? '—'}</td>
-      <td className="py-1.5 pr-3 font-mono text-neutral-500" title={player.eos_id}>
-        {shortEos(player.eos_id)}
-      </td>
-      <td className="py-1.5 pr-3 font-mono text-neutral-400">{teamLabel(player.team_id)}</td>
-      <td className="py-1.5 pr-3 font-mono text-neutral-400">{squadLabel(player.squad_id)}</td>
-      <td className="py-1.5 pr-3 font-mono text-neutral-400">
-        {formatTimeOnServer(player.first_seen_at, now)}
-      </td>
-      {canBan ? (
-        <td className="py-1.5 pr-3">
           <BanNickButton
             nick={player.name}
             canBan={canBan}
-            className="rounded border border-red-900 px-1.5 py-0.5 text-[10px] text-red-400 hover:border-red-700"
+            className="h-6 rounded-ctl px-1.5 text-2xs text-ink-2 transition-colors hover:bg-crit/15 hover:text-crit"
           />
-        </td>
-      ) : null}
-    </tr>
+          {player.player_id ? (
+            <ButtonLink
+              href={`/all-players/${player.player_id}`}
+              variant="ghost"
+              size="sm"
+              aria-label={`Досье: ${player.name}`}
+            >
+              Досье
+            </ButtonLink>
+          ) : null}
+        </div>
+      </Td>
+    </TableRow>
   );
 }

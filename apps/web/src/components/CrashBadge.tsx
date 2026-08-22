@@ -1,24 +1,30 @@
 'use client';
 
+import { Badge } from '@/components/ui';
+
 interface Props {
   crashLoop: boolean;
   crashCount: number;
 }
 
+/**
+ * Метка аварий сервера.
+ *
+ * Пульсации у цикла аварий больше нет: по §9 движение зарезервировано за
+ * индикатором «данные идут прямо сейчас», и мигающая метка в списке серверов
+ * лишь отвлекала оператора, который смотрит в этот экран всю смену. Разницу
+ * между циклом и разовыми авариями несут слова и тон метки.
+ */
 export function CrashBadge({ crashLoop, crashCount }: Props) {
   if (crashCount === 0 && !crashLoop) return null;
 
   if (crashLoop) {
-    return (
-      <span className="inline-flex items-center gap-1 rounded bg-red-900 px-1.5 py-0.5 text-xs font-medium text-red-200 animate-pulse">
-        Цикл аварий
-      </span>
-    );
+    return <Badge tone="crit">Цикл аварий</Badge>;
   }
 
   return (
-    <span className="inline-flex items-center gap-1 rounded bg-amber-900 px-1.5 py-0.5 text-xs font-medium text-amber-200">
+    <Badge tone="warn">
       {crashCount} {crashCount === 1 ? 'авария' : 'аварий'}
-    </span>
+    </Badge>
   );
 }

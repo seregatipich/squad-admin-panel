@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  banStatusBadge,
-  formatDate,
-  foundBadgeLabel,
-  trustLevelBadgeClass,
-  trustLevelLabel,
-} from './external-bans';
+import { banStatusBadge, formatDate, foundBadgeLabel, trustLevelLabel } from './external-bans';
 
 describe('foundBadgeLabel', () => {
   it('renders the green "not found" phrase for n=0', () => {
@@ -55,7 +49,7 @@ describe('banStatusBadge', () => {
   });
 });
 
-describe('trustLevelLabel / trustLevelBadgeClass', () => {
+describe('trustLevelLabel', () => {
   it('maps trusted/normal/low to Russian labels', () => {
     expect(trustLevelLabel('trusted')).toBe('Доверенный');
     expect(trustLevelLabel('normal')).toBe('Обычный');
@@ -64,12 +58,6 @@ describe('trustLevelLabel / trustLevelBadgeClass', () => {
 
   it('falls back to the raw value for an unknown level', () => {
     expect(trustLevelLabel('mystery')).toBe('mystery');
-  });
-
-  it('returns a class for every known level and falls back to normal otherwise', () => {
-    expect(trustLevelBadgeClass('trusted')).toContain('emerald');
-    expect(trustLevelBadgeClass('low')).toContain('amber');
-    expect(trustLevelBadgeClass('mystery')).toBe(trustLevelBadgeClass('normal'));
   });
 });
 

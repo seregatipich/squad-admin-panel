@@ -2,6 +2,7 @@
 
 import { use, useCallback, useEffect, useState } from 'react';
 import { MetricsChart } from '@/components/MetricsChart';
+import { Button, InlineBanner, PageContainer, SegmentedControl, Skeleton } from '@/components/ui';
 
 interface MetricsPoint {
   timestamp: string;
@@ -20,6 +21,13 @@ const RANGE_MS: Record<Range, number> = {
   '24h': 86_400_000,
 };
 
+/** Подписи периода — рядом с сегментированным переключателем, а не в разметке. */
+const RANGE_ITEMS = [
+  { value: '1h', label: '1 ч' },
+  { value: '6h', label: '6 ч' },
+  { value: '24h', label: '24 ч' },
+];
+
 const POLL_MS = 30_000;
 
 export default function MonitoringPage({ params }: { params: Promise<{ id: string }> }) {
@@ -27,6 +35,11 @@ export default function MonitoringPage({ params }: { params: Promise<{ id: strin
   const [points, setPoints] = useState<MetricsPoint[]>([]);
   const [range, setRange] = useState<Range>('1h');
   const [err, setErr] = useState<string | null>(null);
+  /**
+   * Только первое обращение к серверу показывает заглушки: опрос раз в 30
+   * секунд иначе схлопывал бы готовые графики в мерцающие прямоугольники.
+   */
+  const [firstLoad, setFirstLoad] = useState(true);
 
   const load = useCallback(async () => {
     try {
@@ -41,6 +54,8 @@ export default function MonitoringPage({ params }: { params: Promise<{ id: strin
       setErr(null);
     } catch (e) {
       setErr((e as Error).message);
+    } finally {
+      setFirstLoad(false);
     }
   }, [id, range]);
 
@@ -51,62 +66,66 @@ export default function MonitoringPage({ params }: { params: Promise<{ id: strin
   }, [load]);
 
   return (
-    <div className="mx-auto max-w-3xl py-6">
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-neutral-100">Мониторинг</h1>
-        <div className="flex gap-1">
-          {(['1h', '6h', '24h'] as const).map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setRange(r)}
-              className={`rounded px-2 py-1 text-xs ${
-                range === r
-                  ? 'bg-sky-700 text-white'
-                  : 'bg-neutral-900 text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              {r === '1h' ? '1ч' : r === '6h' ? '6ч' : '24ч'}
-            </button>
-          ))}
-        </div>
+    // Графики нарисованы в фиксированном viewBox 600×160 и растягиваются без
+    // сохранения пропорций, поэтому ширина чтения, а не операционная.
+    <PageContainer width="reading">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* Заголовок страницы — имя сервера в layout раздела; здесь h2. */}
+        <h2 className="text-[17px] font-semibold text-ink">Мониторинг</h2>
+        <SegmentedControl
+          items={RANGE_ITEMS}
+          value={range}
+          onChange={(value) => setRange(value as Range)}
+          ariaLabel="Период"
+        />
       </div>
 
-      {err && (
-        <div className="mb-4 rounded border border-red-900 bg-red-950 px-3 py-2 text-sm text-red-300">
-          {err}
+      {err ? (
+        <InlineBanner
+          tone="crit"
+          title="Метрики не загрузились"
+          description={err}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
+      ) : null}
+
+      {firstLoad ? (
+        <Skeleton variant="card" count={3} label="Загружаем метрики сервера" />
+      ) : (
+        <div className="space-y-4">
+          <MetricsChart
+            points={points.map((p) => ({ timestamp: p.timestamp, value: p.cpu_percent }))}
+            label="CPU"
+            unit="%"
+            color="#409cff"
+            maxY={100}
+            formatValue={(v) => `${v.toFixed(1)}`}
+          />
+
+          <MetricsChart
+            points={points.map((p) => ({ timestamp: p.timestamp, value: p.mem_bytes }))}
+            label="Память"
+            unit=""
+            color="#bf5af2"
+          />
+
+          {points.some((p) => p.tickrate !== undefined) && (
+            <MetricsChart
+              points={points
+                .filter((p) => p.tickrate !== undefined)
+                .map((p) => ({ timestamp: p.timestamp, value: p.tickrate as number }))}
+              label="Tickrate"
+              unit=""
+              color="#30d158"
+              formatValue={(v) => `${v.toFixed(0)}`}
+            />
+          )}
         </div>
       )}
-
-      <div className="space-y-4">
-        <MetricsChart
-          points={points.map((p) => ({ timestamp: p.timestamp, value: p.cpu_percent }))}
-          label="CPU"
-          unit="%"
-          color="#409cff"
-          maxY={100}
-          formatValue={(v) => `${v.toFixed(1)}`}
-        />
-
-        <MetricsChart
-          points={points.map((p) => ({ timestamp: p.timestamp, value: p.mem_bytes }))}
-          label="Память"
-          unit=""
-          color="#bf5af2"
-        />
-
-        {points.some((p) => p.tickrate !== undefined) && (
-          <MetricsChart
-            points={points
-              .filter((p) => p.tickrate !== undefined)
-              .map((p) => ({ timestamp: p.timestamp, value: p.tickrate as number }))}
-            label="Tickrate"
-            unit=""
-            color="#30d158"
-            formatValue={(v) => `${v.toFixed(0)}`}
-          />
-        )}
-      </div>
-    </div>
+    </PageContainer>
   );
 }

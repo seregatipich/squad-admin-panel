@@ -98,4 +98,24 @@ describe('ServerBar', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
   });
+
+  it('публикует высоту всей прилипающей хромы, пока полоса на экране', async () => {
+    respondWith(SERVERS);
+    renderBar();
+    await screen.findByRole('link', { name: /Main #1/ });
+
+    // Липкие шапки таблиц отсчитываются от этой переменной; без неё они
+    // уехали бы под полосу серверов.
+    expect(document.documentElement.style.getPropertyValue('--chrome-h')).toContain('var(--nav-h)');
+  });
+
+  it('снимает переменную, когда полоса не показывается', async () => {
+    respondWith(SERVERS);
+    mockUsePathname.mockReturnValue('/settings/account');
+    const { unmount } = renderBar();
+    await waitFor(() =>
+      expect(document.documentElement.style.getPropertyValue('--chrome-h')).toBe(''),
+    );
+    unmount();
+  });
 });

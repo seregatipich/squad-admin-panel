@@ -1,6 +1,24 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  SearchField,
+  Select,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+  Toolbar,
+} from '@/components/ui';
 
 const LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 type Level = (typeof LEVELS)[number];
@@ -15,6 +33,24 @@ const SOURCE_CODES: Record<(typeof SOURCE_LIST)[number], string> = {
   install: 'I',
   api: 'A',
 };
+
+const DEFAULT_LEVEL: Level = 'info';
+
+/** Тон пилюли только дублирует уровень, написанный в ней же словом. */
+const LEVEL_TONE: Record<Level, BadgeTone> = {
+  error: 'crit',
+  warn: 'warn',
+  info: 'good',
+  debug: 'neutral',
+};
+
+/*
+ * Ссылка на выгрузку остаётся обычным `<a download>`, а не `ButtonLink`:
+ * `next/link` перехватывает клик и уводит в клиентскую навигацию, из-за чего
+ * файл не скачивается. Классы повторяют вторичную кнопку размера `sm` (§6).
+ */
+const DOWNLOAD_LINK_CLASS =
+  'inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
 
 interface Entry {
   id: string;
@@ -32,8 +68,9 @@ interface ServersResponse {
 
 export function LogList(props: { servers: Array<{ id: string; display_name: string }> }) {
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [src, setSrc] = useState<Set<string>>(new Set(SOURCE_LIST));
-  const [lvl, setLvl] = useState<Level>('info');
+  const [lvl, setLvl] = useState<Level>(DEFAULT_LEVEL);
   const [srv, setSrv] = useState<string>('');
   const [q, setQ] = useState<string>('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -60,6 +97,7 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
 
   useEffect(() => {
     setEntries([]);
+    setLoaded(false);
     lastIdRef.current = null;
     const controller = new AbortController();
     void (async () => {
@@ -68,6 +106,7 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
         if (!r.ok) return;
         const body = (await r.json()) as { entries: Entry[] };
         setEntries(body.entries);
+        setLoaded(true);
         if (body.entries.length > 0) lastIdRef.current = body.entries[0]?.id ?? null;
       } catch {
         // swallowed (likely AbortError)
@@ -110,23 +149,34 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
     setExpanded(next);
   };
 
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-3 text-xs">
-        {SOURCE_LIST.map((s) => (
-          <label key={s} className="flex items-center gap-1 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={src.has(s)}
-              onChange={(e) => toggleSrc(s, e.target.checked)}
-            />{' '}
-            {s}
-          </label>
-        ))}
-        <select
+  const filtered =
+    q !== '' || srv !== '' || lvl !== DEFAULT_LEVEL || src.size !== SOURCE_LIST.length;
+
+  const resetFilters = () => {
+    setSrc(new Set(SOURCE_LIST));
+    setLvl(DEFAULT_LEVEL);
+    setSrv('');
+    setQ('');
+  };
+
+  // Слоты собираются один раз и раздаются обоим вариантам панели: сброс в
+  // `Toolbar` — пара «обработчик + подпись», и типом запрещено передать одну
+  // половину пары, поэтому вариант с ним и без него — это два разных вызова.
+  const toolbarSlots = {
+    search: (
+      <SearchField
+        value={q}
+        onCommit={setQ}
+        placeholder="Поиск по сообщению…"
+        label="Поиск по записям"
+        clearLabel="Очистить поиск"
+      />
+    ),
+    filters: (
+      <>
+        <Select
           value={lvl}
           onChange={(e) => setLvl(e.target.value as Level)}
-          className="rounded border border-neutral-700 bg-neutral-900 px-1 py-0.5"
           aria-label="Минимальный уровень"
         >
           {LEVELS.map((l) => (
@@ -134,92 +184,146 @@ export function LogList(props: { servers: Array<{ id: string; display_name: stri
               ≥ {l}
             </option>
           ))}
-        </select>
-        <select
-          value={srv}
-          onChange={(e) => setSrv(e.target.value)}
-          className="rounded border border-neutral-700 bg-neutral-900 px-1 py-0.5"
-          aria-label="Сервер"
-        >
-          <option value="">все серверы</option>
+        </Select>
+        <Select value={srv} onChange={(e) => setSrv(e.target.value)} aria-label="Сервер">
+          <option value="">Все серверы</option>
           {props.servers.map((s) => (
             <option key={s.id} value={s.id}>
               {s.display_name}
             </option>
           ))}
-        </select>
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="поиск…"
-          className="rounded border border-neutral-700 bg-neutral-900 px-2 py-0.5"
-          aria-label="Поиск"
-        />
-        <button
-          type="button"
-          onClick={() => setPaused((p) => !p)}
-          className="rounded border border-neutral-700 px-2 py-0.5 hover:bg-neutral-800"
-          aria-pressed={paused}
-        >
+        </Select>
+      </>
+    ),
+    actions: (
+      <>
+        <Button size="sm" onClick={() => setPaused((p) => !p)} aria-pressed={paused}>
           {paused ? 'Возобновить' : 'Пауза'}
-        </button>
-        <a
-          href="/api/v1/logs/export"
-          className="ml-auto rounded bg-neutral-800 px-2 py-1 hover:bg-neutral-700"
-          download
-        >
-          ⤓ Экспорт
+        </Button>
+        <a href="/api/v1/logs/export" download className={DOWNLOAD_LINK_CLASS}>
+          Экспорт
         </a>
-      </div>
-      <ul className="space-y-0.5 font-mono text-xs">
-        {entries.length === 0 ? (
-          <li className="py-4 text-center text-neutral-500">нет записей</li>
+      </>
+    ),
+  };
+
+  return (
+    <div className="space-y-4">
+      {filtered ? (
+        <Toolbar {...toolbarSlots} onReset={resetFilters} resetLabel="Сбросить фильтры" />
+      ) : (
+        <Toolbar {...toolbarSlots} />
+      )}
+
+      <fieldset>
+        <legend className="text-2xs uppercase tracking-[0.06em] text-ink-3">Источники</legend>
+        <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+          {SOURCE_LIST.map((s) => (
+            <Checkbox
+              key={s}
+              label={s}
+              checked={src.has(s)}
+              onChange={(e) => toggleSrc(s, e.target.checked)}
+            />
+          ))}
+        </div>
+      </fieldset>
+
+      <Card padding="none">
+        {!loaded && entries.length === 0 ? (
+          <div className="p-4">
+            <SkeletonTable rows={10} cols={5} label="Записи загружаются" />
+          </div>
+        ) : entries.length === 0 ? (
+          filtered ? (
+            <EmptyState
+              variant="filtered"
+              title="Ничего не нашлось"
+              description="Под текущие фильтры не подходит ни одна запись."
+              action={
+                <Button size="sm" onClick={resetFilters}>
+                  Сбросить фильтры
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              title="Записей нет"
+              description="Коннекторы панели ещё ничего не записали."
+            />
+          )
         ) : (
-          entries.map((e) => (
-            <li
-              key={e.id}
-              className="flex cursor-pointer items-start gap-2 border-b border-neutral-900 py-0.5"
-            >
-              <button
-                type="button"
-                onClick={() => toggleExpand(e.id)}
-                className="flex w-full items-start gap-2 text-left"
-              >
-                <span className="text-neutral-500">
-                  {new Date(e.ts).toISOString().slice(11, 23)}
-                </span>
-                <LevelPill level={e.level} />
-                <span className="w-20 shrink-0 text-neutral-400">{e.source}</span>
-                <span className="w-32 shrink-0 truncate text-neutral-500">
-                  {e.serverId ? e.serverId.slice(0, 8) : ''}
-                </span>
-                <span className="flex-1">
-                  {e.msg}
-                  {expanded.has(e.id) && e.ctx ? (
-                    <pre className="mt-1 whitespace-pre-wrap text-neutral-500">
-                      {JSON.stringify(e.ctx, null, 2)}
-                    </pre>
-                  ) : null}
-                </span>
-              </button>
-            </li>
-          ))
+          <Table dense layout="fixed" maxHeight="68vh" ariaLabel="Логи панели">
+            <TableHead>
+              <TableRow>
+                <Th width="7rem">Время</Th>
+                <Th width="5.5rem">Уровень</Th>
+                <Th width="7rem">Источник</Th>
+                <Th width="8rem">Сервер</Th>
+                <Th>Сообщение</Th>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {entries.map((e) => {
+                const open = expanded.has(e.id);
+                const detailId = `log-detail-${e.id}`;
+                return (
+                  <Fragment key={e.id}>
+                    <TableRow interactive>
+                      <Td className="whitespace-nowrap font-mono text-xs tabular-nums text-ink-3">
+                        {new Date(e.ts).toISOString().slice(11, 23)}
+                      </Td>
+                      <Td>
+                        <Badge tone={LEVEL_TONE[e.level]} size="sm">
+                          {e.level}
+                        </Badge>
+                      </Td>
+                      <Td truncate className="font-mono text-xs text-ink-2">
+                        {e.source}
+                      </Td>
+                      <Td truncate className="font-mono text-xs text-ink-3">
+                        {e.serverId ? e.serverId.slice(0, 8) : '—'}
+                      </Td>
+                      {/* Раскрывается только запись с контекстом: кнопка, которая
+                          ничего не открывает, врёт и скринридеру, и указателю.
+                          Раскрытие живёт в ячейке, а не в `onClick` на строке —
+                          до строки не добраться с клавиатуры. */}
+                      {e.ctx ? (
+                        <Td className="p-0!">
+                          <button
+                            type="button"
+                            onClick={() => toggleExpand(e.id)}
+                            aria-expanded={open}
+                            aria-controls={detailId}
+                            className="flex h-7 w-full items-center px-3 text-left font-mono transition-colors hover:text-accent"
+                          >
+                            <span className="truncate">{e.msg}</span>
+                          </button>
+                        </Td>
+                      ) : (
+                        <Td truncate className="font-mono">
+                          {e.msg}
+                        </Td>
+                      )}
+                    </TableRow>
+                    {open && e.ctx ? (
+                      <tr id={detailId}>
+                        <td colSpan={5} className="bg-raised/40 px-3 py-3">
+                          <pre className="whitespace-pre-wrap break-all font-mono text-2xs text-ink-2">
+                            {JSON.stringify(e.ctx, null, 2)}
+                          </pre>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+            </TableBody>
+          </Table>
         )}
-      </ul>
+      </Card>
     </div>
   );
-}
-
-function LevelPill({ level }: { level: Level }) {
-  const cls =
-    level === 'error'
-      ? 'bg-red-900 text-red-200'
-      : level === 'warn'
-        ? 'bg-amber-900 text-amber-200'
-        : level === 'info'
-          ? 'bg-emerald-900 text-emerald-200'
-          : 'bg-neutral-800 text-neutral-400';
-  return <span className={`shrink-0 rounded px-1 ${cls}`}>{level.toUpperCase()}</span>;
 }
 
 export type { ServersResponse };

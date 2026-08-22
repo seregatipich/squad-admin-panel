@@ -1,4 +1,20 @@
 import type { Metadata } from 'next';
+import {
+  Card,
+  CardBody,
+  CardGrid,
+  CardHeader,
+  EmptyState,
+  PageContainer,
+  PageHeader,
+  StatTile,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
 import { formatDurationRu, formatHour, formatHours, getPublicStats, peakScale } from './stats-data';
 
 export const metadata: Metadata = {
@@ -18,109 +34,117 @@ export default async function PublicStatsPage() {
   const scale = peakScale(stats.peak_by_hour);
 
   return (
-    <div className="space-y-8">
-      <header className="space-y-1 border-b border-neutral-900 pb-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Публичная статистика</h1>
-        <p className="text-sm text-neutral-400">
-          {new Date(stats.from).toLocaleDateString('ru-RU')} —{' '}
-          {new Date(stats.to).toLocaleDateString('ru-RU')}
-        </p>
-      </header>
+    <PageContainer width="wide">
+      <PageHeader
+        title="Публичная статистика"
+        subtitle={`${new Date(stats.from).toLocaleDateString('ru-RU')} — ${new Date(
+          stats.to,
+        ).toLocaleDateString('ru-RU')}`}
+      />
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Матчей" value={stats.summary.total_matches.toString()} />
-        <StatCard title="Игроков" value={stats.summary.unique_players.toString()} />
-        <StatCard title="Наиграно часов" value={formatHours(stats.summary.total_online_hours)} />
-        <StatCard
-          title="Средняя длительность матча"
+      <CardGrid cols={4}>
+        <StatTile label="Матчей" value={stats.summary.total_matches} />
+        <StatTile label="Игроков" value={stats.summary.unique_players} />
+        <StatTile label="Наиграно часов" value={formatHours(stats.summary.total_online_hours)} />
+        <StatTile
+          label="Средняя длительность матча"
           value={formatDurationRu(stats.summary.avg_match_duration_seconds)}
         />
-      </section>
+      </CardGrid>
 
-      <section className="rounded border border-neutral-800 bg-neutral-950">
-        <h2 className="border-b border-neutral-900 px-4 py-2.5 text-xs uppercase tracking-[0.2em] text-neutral-300">
-          Пиковый онлайн по часам
-        </h2>
-        <div className="flex items-end gap-1 px-4 py-4" style={{ height: '120px' }}>
-          {stats.peak_by_hour.map((entry) => (
-            <div
-              key={entry.hour}
-              className="flex-1 rounded-t bg-sky-600"
-              title={`${formatHour(entry.hour)} · ${entry.peak_players} игроков`}
-              style={{ height: `${Math.max(2, (entry.peak_players / scale) * 100)}%` }}
-            />
-          ))}
-        </div>
-      </section>
+      <Card padding="none">
+        <CardHeader title="Пиковый онлайн по часам" />
+        <CardBody>
+          {/* Столбики — иллюстрация распределения: число за каждым часом живёт в
+              подсказке, поэтому программе чтения с экрана полоса не нужна. */}
+          <div aria-hidden="true" className="flex h-28 items-end gap-1">
+            {stats.peak_by_hour.map((entry) => (
+              <div
+                key={entry.hour}
+                className="flex-1 rounded-t bg-accent"
+                title={`${formatHour(entry.hour)} · ${entry.peak_players} игроков`}
+                style={{ height: `${Math.max(2, (entry.peak_players / scale) * 100)}%` }}
+              />
+            ))}
+          </div>
+        </CardBody>
+      </Card>
 
-      <section className="grid gap-5 lg:grid-cols-2">
-        <PopularTable title="Популярные карты" rows={stats.popular_maps} labelKey="map" />
-        <PopularTable title="Популярные слои" rows={stats.popular_layers} labelKey="layer" />
-      </section>
+      <CardGrid cols={2}>
+        <PopularTable
+          title="Популярные карты"
+          columnLabel="Карта"
+          rows={stats.popular_maps}
+          labelKey="map"
+        />
+        <PopularTable
+          title="Популярные слои"
+          columnLabel="Слой"
+          rows={stats.popular_layers}
+          labelKey="layer"
+        />
+      </CardGrid>
 
-      <section className="rounded border border-neutral-800 bg-neutral-950 px-4 py-3">
-        <h2 className="mb-2 text-xs uppercase tracking-[0.2em] text-neutral-300">Итоги матчей</h2>
-        <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-          <Outcome label="Команда 1" value={stats.match_outcomes.team1} />
-          <Outcome label="Команда 2" value={stats.match_outcomes.team2} />
-          <Outcome label="Ничья" value={stats.match_outcomes.draw} />
-          <Outcome label="Неизвестно" value={stats.match_outcomes.unknown} />
-        </dl>
-      </section>
-    </div>
+      <Card padding="none">
+        <CardHeader title="Итоги матчей" />
+        <CardBody>
+          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <Outcome label="Команда 1" value={stats.match_outcomes.team1} />
+            <Outcome label="Команда 2" value={stats.match_outcomes.team2} />
+            <Outcome label="Ничья" value={stats.match_outcomes.draw} />
+            <Outcome label="Неизвестно" value={stats.match_outcomes.unknown} />
+          </dl>
+        </CardBody>
+      </Card>
+    </PageContainer>
   );
 }
 
-function StatCard({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="rounded border border-neutral-800 bg-neutral-950 p-4">
-      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500">{title}</div>
-      <div className="mt-2 text-3xl font-semibold tabular-nums leading-none text-neutral-50">
-        {value}
-      </div>
-    </div>
-  );
-}
-
+/** Служебный ярлык над значением — единственное место, где допустим капслок (§1). */
 function Outcome({ label, value }: { label: string; value: number }) {
   return (
-    <div>
-      <dt className="text-[10px] uppercase tracking-[0.16em] text-neutral-500">{label}</dt>
-      <dd className="text-lg font-semibold tabular-nums text-neutral-100">{value}</dd>
+    <div className="flex flex-col gap-1">
+      <dt className="text-2xs uppercase tracking-[0.06em] text-ink-3">{label}</dt>
+      <dd className="text-[17px] font-semibold tabular-nums text-ink">{value}</dd>
     </div>
   );
 }
 
 function PopularTable<K extends 'map' | 'layer'>({
   title,
+  columnLabel,
   rows,
   labelKey,
 }: {
   title: string;
+  /** Название первой колонки: у каждой таблицы оно своё — карта или слой. */
+  columnLabel: string;
   rows: Array<Record<K, string> & { matches: number }>;
   labelKey: K;
 }) {
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950">
-      <h2 className="border-b border-neutral-900 px-4 py-2.5 text-xs uppercase tracking-[0.2em] text-neutral-300">
-        {title}
-      </h2>
+    <Card padding="none">
+      <CardHeader title={title} />
       {rows.length === 0 ? (
-        <div className="px-4 py-6 text-center text-sm text-neutral-500">нет данных</div>
+        <EmptyState title="Данных пока нет." description="За выбранный период матчи не сыграны." />
       ) : (
-        <table className="w-full text-sm">
-          <tbody className="divide-y divide-neutral-900">
+        <Table ariaLabel={title}>
+          <TableHead sticky={false}>
+            <TableRow>
+              <Th>{columnLabel}</Th>
+              <Th align="right">Матчей</Th>
+            </TableRow>
+          </TableHead>
+          <TableBody>
             {rows.map((row) => (
-              <tr key={row[labelKey]}>
-                <td className="px-4 py-2 text-neutral-200">{row[labelKey]}</td>
-                <td className="px-4 py-2 text-right tabular-nums text-neutral-400">
-                  {row.matches}
-                </td>
-              </tr>
+              <TableRow key={row[labelKey]}>
+                <Td>{row[labelKey]}</Td>
+                <Td numeric>{row.matches}</Td>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
-    </section>
+    </Card>
   );
 }

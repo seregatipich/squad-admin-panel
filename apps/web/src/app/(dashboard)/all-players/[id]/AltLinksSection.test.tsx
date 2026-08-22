@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AltLinksSection } from './AltLinksSection';
@@ -68,13 +68,13 @@ describe('AltLinksSection', () => {
     expect(typeof AltLinksSection).toBe('function');
   });
 
-  it('shows a loading state before data resolves', () => {
+  it('announces a loading state before data resolves', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(() => new Promise(() => {})),
     );
     render(<AltLinksSection playerId="player-1" />);
-    expect(screen.getByText('Загрузка…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Загрузка связей');
   });
 
   it('returns null (hides entirely) when the links fetch is forbidden', async () => {
@@ -99,8 +99,9 @@ describe('AltLinksSection', () => {
     );
     render(<AltLinksSection playerId="player-1" />);
 
-    await screen.findByText('ConfirmedAlt');
-    expect(screen.getByText('Альт')).toBeInTheDocument();
+    const confirmedRow = (await screen.findByText('ConfirmedAlt')).closest('li');
+    if (!confirmedRow) throw new Error('confirmed link row not found');
+    expect(within(confirmedRow).getByText('Альт')).toBeInTheDocument();
 
     expect(screen.getByText('SuspectTwin')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Подтвердить связь' })).toBeInTheDocument();

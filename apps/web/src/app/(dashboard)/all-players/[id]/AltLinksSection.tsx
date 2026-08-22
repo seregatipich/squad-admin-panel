@@ -2,6 +2,27 @@
 
 import { useCallback, useEffect, useId, useState } from 'react';
 import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  FieldRow,
+  InlineBanner,
+  Modal,
+  Select,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Textarea,
+  Th,
+} from '@/components/ui';
+import {
   type AltCandidate,
   buildLinkPayload,
   formatRejectedMark,
@@ -13,10 +34,11 @@ import {
   splitCandidates,
 } from './alt-links';
 
-const CONFIDENCE_BADGE_CLASSES: Record<AltCandidate['confidence'], string> = {
-  high: 'bg-red-950/50 text-red-300 border border-red-900',
-  medium: 'bg-amber-950/50 text-amber-300 border border-amber-900',
-  low: 'bg-neutral-800 text-neutral-400 border border-neutral-700',
+/** Уверенность — состояние оценки; слово рядом с числом несёт тот же смысл, что и цвет (§5). */
+const CONFIDENCE_TONE: Record<AltCandidate['confidence'], BadgeTone> = {
+  high: 'crit',
+  medium: 'warn',
+  low: 'neutral',
 };
 
 const CONFIDENCE_LABELS_RU: Record<AltCandidate['confidence'], string> = {
@@ -93,134 +115,148 @@ export function AltLinksSection({ playerId }: { playerId: string }) {
   const undecided = unresolved.filter((candidate) => candidate.link === null);
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-        Возможные альты и связи
-      </h2>
+    <Card as="section" padding="none">
+      <CardHeader title="Возможные альты и связи" />
 
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          Ошибка: {error}
-        </div>
-      ) : loading ? (
-        <div className="text-sm text-neutral-500">Загрузка…</div>
-      ) : (
-        <>
-          <div className="space-y-2">
-            <h3 className="text-[11px] uppercase tracking-widest text-neutral-500">
-              Подтверждённые связи{confirmedLinks.length > 0 ? ` (${confirmedLinks.length})` : ''}
-            </h3>
-            {confirmedLinks.length === 0 ? (
-              <div className="text-sm text-neutral-500">Подтверждённых связей нет.</div>
-            ) : (
-              <ul className="space-y-1.5">
-                {confirmedLinks.map((link) => (
-                  <li
-                    key={link.id}
-                    className="flex flex-wrap items-center gap-2 rounded border border-emerald-900/70 bg-emerald-950/30 px-2 py-1.5 text-sm"
-                  >
-                    <span className="rounded bg-emerald-950 px-1.5 py-0.5 text-[10px] uppercase text-emerald-300">
-                      {LINK_TYPE_LABELS_RU[link.link_type]}
-                    </span>
-                    <span className="font-medium">{link.other_player?.current_name ?? '—'}</span>
-                    {link.note ? <span className="text-neutral-400">— {link.note}</span> : null}
-                    <span className="ml-auto text-xs text-neutral-600">
-                      {link.created_by ? `подтвердил ${link.created_by.name}, ` : ''}
-                      {new Date(link.updated_at).toLocaleDateString('ru-RU')}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+      <CardBody className="space-y-6">
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить связи игрока"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => void load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : loading ? (
+          <SkeletonTable rows={4} cols={4} label="Загрузка связей" />
+        ) : (
+          <>
+            <section className="space-y-2">
+              <h3 className="text-[13px] font-semibold text-ink">
+                Подтверждённые связи{confirmedLinks.length > 0 ? ` (${confirmedLinks.length})` : ''}
+              </h3>
+              {confirmedLinks.length === 0 ? (
+                <EmptyState
+                  title="Подтверждённых связей нет"
+                  description="Ни одна связь с другим аккаунтом ещё не подтверждена администратором."
+                />
+              ) : (
+                <ul className="divide-y divide-line rounded-ctl border border-line">
+                  {confirmedLinks.map((link) => (
+                    <li key={link.id} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                      <Badge tone="good" size="sm">
+                        {LINK_TYPE_LABELS_RU[link.link_type]}
+                      </Badge>
+                      <span className="font-medium">{link.other_player?.current_name ?? '—'}</span>
+                      {link.note ? <span className="text-ink-3">— {link.note}</span> : null}
+                      <span className="ml-auto text-xs text-ink-3">
+                        {link.created_by ? `подтвердил ${link.created_by.name}, ` : ''}
+                        {new Date(link.updated_at).toLocaleDateString('ru-RU')}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
 
-          <div className="space-y-2">
-            <h3 className="text-[11px] uppercase tracking-widest text-neutral-500">
-              Возможные альты{undecided.length > 0 ? ` (${undecided.length})` : ''}
-            </h3>
-            {undecided.length === 0 ? (
-              <div className="text-sm text-neutral-500">Кандидатов не найдено.</div>
-            ) : (
-              <ul className="space-y-1.5">
-                {undecided.map((candidate) => (
-                  <li
-                    key={candidate.player_id}
-                    className="flex flex-wrap items-center gap-2 rounded border border-neutral-800 bg-neutral-900/40 px-2 py-1.5 text-sm"
-                  >
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-[10px] uppercase ${CONFIDENCE_BADGE_CLASSES[candidate.confidence]}`}
-                    >
-                      {CONFIDENCE_LABELS_RU[candidate.confidence]} ({candidate.score})
-                    </span>
-                    <span className="font-medium">{candidate.current_name ?? '—'}</span>
-                    <span className="text-xs text-neutral-500">
-                      Общих IP: {candidate.shared_ip_count}
-                    </span>
-                    <div className="ml-auto flex gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setModal({ candidate, status: 'confirmed' })}
-                        className="rounded border border-emerald-900 px-2 py-1 text-xs text-emerald-300 hover:border-emerald-700"
-                      >
-                        Подтвердить связь
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setModal({ candidate, status: 'rejected' })}
-                        className="rounded border border-red-900 px-2 py-1 text-xs text-red-300 hover:border-red-700"
-                      >
-                        Отклонить
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {rejected.length > 0 ? (
-              <div className="pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowRejected((v) => !v)}
-                  className="text-xs text-neutral-500 hover:text-neutral-300"
-                >
-                  {showRejected ? 'Скрыть' : 'Показать'} отклонённые ({rejected.length})
-                </button>
-                {showRejected ? (
-                  <ul className="mt-1.5 space-y-1.5">
-                    {rejected.map((candidate) => (
-                      <li
-                        key={candidate.player_id}
-                        className="flex flex-wrap items-center gap-2 rounded border border-neutral-900 bg-neutral-900/20 px-2 py-1.5 text-sm text-neutral-500"
-                      >
-                        <span className="font-medium text-neutral-400">
-                          {candidate.current_name ?? '—'}
-                        </span>
-                        {candidate.link ? (
-                          <span className="text-xs">{formatRejectedMark(candidate.link)}</span>
-                        ) : null}
-                      </li>
+            <section className="space-y-2">
+              <h3 className="text-[13px] font-semibold text-ink">
+                Возможные альты{undecided.length > 0 ? ` (${undecided.length})` : ''}
+              </h3>
+              {undecided.length === 0 ? (
+                <EmptyState
+                  title="Кандидатов не найдено"
+                  description="Ни один другой аккаунт не пересекается с этим по IP и времени входа."
+                />
+              ) : (
+                <Table ariaLabel="Кандидаты в альты">
+                  <TableHead sticky={false}>
+                    <tr>
+                      <Th>Кандидат</Th>
+                      <Th>Уверенность</Th>
+                      <Th align="right">Общих IP</Th>
+                      <Th>Решение</Th>
+                    </tr>
+                  </TableHead>
+                  <TableBody>
+                    {undecided.map((candidate) => (
+                      <TableRow key={candidate.player_id}>
+                        <Td className="font-medium">{candidate.current_name ?? '—'}</Td>
+                        <Td>
+                          <Badge tone={CONFIDENCE_TONE[candidate.confidence]} size="sm">
+                            {CONFIDENCE_LABELS_RU[candidate.confidence]} ({candidate.score})
+                          </Badge>
+                        </Td>
+                        <Td numeric>{candidate.shared_ip_count}</Td>
+                        <Td>
+                          <span className="flex gap-1.5">
+                            <Button
+                              size="sm"
+                              onClick={() => setModal({ candidate, status: 'confirmed' })}
+                            >
+                              Подтвердить связь
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() => setModal({ candidate, status: 'rejected' })}
+                            >
+                              Отклонить
+                            </Button>
+                          </span>
+                        </Td>
+                      </TableRow>
                     ))}
-                  </ul>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        </>
-      )}
+                  </TableBody>
+                </Table>
+              )}
 
-      {modal ? (
-        <DecisionModal
-          playerId={playerId}
-          state={modal}
-          onClose={() => setModal(null)}
-          onDone={() => {
-            setModal(null);
-            load();
-          }}
-        />
-      ) : null}
-    </section>
+              {rejected.length > 0 ? (
+                <div className="space-y-2">
+                  <Button
+                    variant="plain"
+                    size="sm"
+                    aria-expanded={showRejected}
+                    onClick={() => setShowRejected((v) => !v)}
+                  >
+                    {showRejected ? 'Скрыть' : 'Показать'} отклонённые ({rejected.length})
+                  </Button>
+                  {showRejected ? (
+                    <ul className="divide-y divide-line rounded-ctl border border-line">
+                      {rejected.map((candidate) => (
+                        <li
+                          key={candidate.player_id}
+                          className="flex flex-wrap items-center gap-2 px-3 py-2 text-ink-3"
+                        >
+                          <span className="font-medium text-ink-2">
+                            {candidate.current_name ?? '—'}
+                          </span>
+                          {candidate.link ? (
+                            <span className="text-xs">{formatRejectedMark(candidate.link)}</span>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
+          </>
+        )}
+      </CardBody>
+
+      <DecisionModal
+        playerId={playerId}
+        state={modal}
+        onClose={() => setModal(null)}
+        onDone={() => {
+          setModal(null);
+          load();
+        }}
+      />
+    </Card>
   );
 }
 
@@ -231,20 +267,30 @@ function DecisionModal({
   onDone,
 }: {
   playerId: string;
-  state: DecisionModalState;
+  state: DecisionModalState | null;
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [linkType, setLinkType] = useState<PlayerLinkType>(
-    state.status === 'rejected' ? 'unrelated' : 'alt',
-  );
+  const [linkType, setLinkType] = useState<PlayerLinkType>('alt');
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
   const linkTypeId = useId();
   const noteId = useId();
 
+  const status = state?.status ?? 'confirmed';
+
+  // Каждое открытие начинается со значений, соответствующих решению: отказ —
+  // это связь «не связаны», подтверждение — «альт».
+  useEffect(() => {
+    if (!state) return;
+    setLinkType(state.status === 'rejected' ? 'unrelated' : 'alt');
+    setNote('');
+    setModalError(null);
+  }, [state]);
+
   const submit = useCallback(async () => {
+    if (!state) return;
     setSubmitting(true);
     setModalError(null);
     try {
@@ -275,81 +321,51 @@ function DecisionModal({
   }, [playerId, linkType, note, state, onDone]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4">
-      <div className="mt-16 w-full max-w-md rounded border border-neutral-800 bg-neutral-950 p-5 space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">
-            {state.status === 'confirmed' ? 'Подтвердить связь' : 'Отклонить кандидата'}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm text-neutral-400 hover:text-neutral-200"
-          >
-            Закрыть
-          </button>
-        </div>
-
-        <p className="text-sm text-neutral-400">
-          {state.candidate.current_name ?? state.candidate.player_id}
-        </p>
-
-        <div>
-          <label htmlFor={linkTypeId} className="mb-1 block text-xs text-neutral-500">
-            Тип связи
-          </label>
-          <select
+    <Modal
+      open={state !== null}
+      onClose={onClose}
+      title={status === 'confirmed' ? 'Подтвердить связь' : 'Отклонить кандидата'}
+      description={state ? (state.candidate.current_name ?? state.candidate.player_id) : undefined}
+      size="sm"
+      closeLabel="Закрыть"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={submitting}>
+            Отмена
+          </Button>
+          <Button variant="primary" onClick={() => void submit()} loading={submitting}>
+            {status === 'confirmed' ? 'Подтвердить' : 'Отклонить'}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <FieldRow label="Тип связи" htmlFor={linkTypeId}>
+          <Select
             id={linkTypeId}
             value={linkType}
             onChange={(e) => setLinkType(e.target.value as PlayerLinkType)}
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
           >
             {PLAYER_LINK_TYPES.map((type) => (
               <option key={type} value={type}>
                 {LINK_TYPE_LABELS_RU[type]}
               </option>
             ))}
-          </select>
-        </div>
+          </Select>
+        </FieldRow>
 
-        <div>
-          <label htmlFor={noteId} className="mb-1 block text-xs text-neutral-500">
-            Заметка (необязательно)
-          </label>
-          <textarea
+        <FieldRow label="Заметка (необязательно)" htmlFor={noteId}>
+          <Textarea
             id={noteId}
             value={note}
             maxLength={2000}
             onChange={(e) => setNote(e.target.value)}
             rows={3}
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
           />
-        </div>
+        </FieldRow>
 
-        {modalError ? <p className="text-xs text-red-400">{modalError}</p> : null}
-
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded border border-neutral-800 px-4 py-1.5 text-sm text-neutral-300 hover:border-neutral-600"
-          >
-            Отмена
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={submitting}
-            className={`rounded border px-4 py-1.5 text-sm disabled:opacity-40 ${
-              state.status === 'confirmed'
-                ? 'border-emerald-900 text-emerald-300 hover:border-emerald-700'
-                : 'border-red-900 text-red-300 hover:border-red-700'
-            }`}
-          >
-            {state.status === 'confirmed' ? 'Подтвердить' : 'Отклонить'}
-          </button>
-        </div>
+        {modalError ? <InlineBanner tone="crit" title={modalError} /> : null}
       </div>
-    </div>
+    </Modal>
   );
 }

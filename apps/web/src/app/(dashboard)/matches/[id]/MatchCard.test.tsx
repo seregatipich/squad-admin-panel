@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MatchDetail } from '../helpers';
@@ -119,18 +119,17 @@ describe('MatchCard', () => {
   });
 
   it(
-    'dims the roster row of a player who left before the match ended, but keeps the full-time row normal',
+    'marks the roster row of a player who left before the match ended, and leaves the full-time row unmarked',
     async () => {
       render(<MatchCard matchId="match-1" />);
-      const earlyRow = await screen.findByText('EarlyLeaver');
-      const earlyTr = earlyRow.closest('tr');
-      expect(earlyTr).toHaveClass('opacity-50');
-      expect(earlyTr).toHaveAttribute('title', 'Покинул матч до конца');
+      const earlyRow = (await screen.findByText('EarlyLeaver')).closest('tr');
+      expect(earlyRow).not.toBeNull();
+      // Состояние строки названо словами, а не одной лишь приглушённостью.
+      expect(within(earlyRow as HTMLElement).getByText('ушёл раньше')).toBeInTheDocument();
 
-      const fullTimeRow = screen.getByText('FullTimer');
-      const fullTimeTr = fullTimeRow.closest('tr');
-      expect(fullTimeTr).not.toHaveClass('opacity-50');
-      expect(fullTimeTr).not.toHaveAttribute('title');
+      const fullTimeRow = screen.getByText('FullTimer').closest('tr');
+      expect(fullTimeRow).not.toBeNull();
+      expect(within(fullTimeRow as HTMLElement).queryByText('ушёл раньше')).toBeNull();
     },
     TEST_TIMEOUT_MS,
   );
@@ -146,15 +145,16 @@ describe('MatchCard', () => {
   );
 
   it(
-    'renders null combat stats as "—" for the dimmed row instead of substituting 0',
+    'renders null combat stats as "—" instead of substituting 0',
     async () => {
       render(<MatchCard matchId="match-1" />);
       await screen.findByText('EarlyLeaver');
-      const earlyTr = screen.getByText('EarlyLeaver').closest('tr');
-      // Columns: nickname, squad, time, K/D, TK, wounds, revives.
-      const cells = earlyTr?.querySelectorAll('td') ?? [];
-      const [, , , kd, tk, wounds, revives] = Array.from(cells).map((cell) => cell.textContent);
-      expect([kd, tk, wounds, revives]).toEqual(['—', '—', '—', '—']);
+      const earlyRow = screen.getByText('EarlyLeaver').closest('tr') as HTMLElement;
+      const dashes = within(earlyRow)
+        .getAllByRole('cell')
+        .filter((cell) => cell.textContent === '—');
+      // K/D, TK, ранения, поднятия — четыре ненаписанных показателя.
+      expect(dashes).toHaveLength(4);
     },
     TEST_TIMEOUT_MS,
   );

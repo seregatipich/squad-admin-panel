@@ -1,6 +1,17 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  Skeleton,
+  TextInput,
+} from '@/components/ui';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { MediaPublishControl } from './MediaPublishControl';
@@ -133,99 +144,108 @@ export function EvidenceSection({ playerId }: { playerId: string }) {
   if (hidden) return null;
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-          Доказательства{items && items.length > 0 ? ` (${items.length})` : ''}
-        </h2>
-        <button
-          type="button"
-          onClick={() => void mintUploadLink()}
-          disabled={minting}
-          className="rounded border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-sky-700 hover:text-sky-300 disabled:opacity-50"
-        >
-          Получить ссылку для загрузки
-        </button>
-      </div>
+    <Card as="section" padding="none">
+      <CardHeader
+        title="Доказательства"
+        count={items && items.length > 0 ? items.length : undefined}
+        actions={
+          <Button size="sm" loading={minting} onClick={() => void mintUploadLink()}>
+            Получить ссылку для загрузки
+          </Button>
+        }
+      />
 
-      {mintError && (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          {mintError}
-        </div>
-      )}
+      <CardBody className="space-y-3">
+        {mintError ? <InlineBanner tone="crit" title={mintError} /> : null}
 
-      {mintedLink && (
-        <div className="space-y-1 rounded border border-sky-900 bg-sky-950/40 p-2">
-          <input
-            data-testid="upload-link-value"
-            readOnly
-            value={mintedLink.upload_url}
-            aria-label="Одноразовая ссылка для загрузки"
-            className="w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1 font-mono text-xs text-neutral-200"
-          />
-          <p className="text-[11px] text-neutral-400">
-            Ссылка показывается один раз, работает один раз и истекает{' '}
-            {new Date(mintedLink.expires_at).toLocaleString()}.
-          </p>
-        </div>
-      )}
-
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          Ошибка: {error}
-        </div>
-      ) : loading ? (
-        <div className="text-sm text-neutral-500">Загрузка…</div>
-      ) : !items || items.length === 0 ? (
-        <div className="text-sm text-neutral-500">Доказательств нет.</div>
-      ) : (
-        <ul className="space-y-3">
-          {items.map(({ link, media }) => (
-            <li
-              key={link.id}
-              className="rounded border border-neutral-900 bg-neutral-900/40 p-2 text-sm"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-neutral-300">{evidenceLabel(media)}</span>
-                <span className="text-xs text-neutral-500">
-                  {new Date(link.created_at).toLocaleString()}
-                </span>
+        {mintedLink ? (
+          <InlineBanner
+            tone="info"
+            title="Одноразовая ссылка для загрузки"
+            description={
+              <div className="space-y-1">
+                <TextInput
+                  data-testid="upload-link-value"
+                  readOnly
+                  value={mintedLink.upload_url}
+                  aria-label="Одноразовая ссылка для загрузки"
+                  className="font-mono"
+                />
+                <p>
+                  Ссылка показывается один раз, работает один раз и истекает{' '}
+                  {new Date(mintedLink.expires_at).toLocaleString()}.
+                </p>
               </div>
-              {media.upload_token_id && (
-                <span className="mt-1 inline-block rounded bg-amber-950 px-1.5 py-0.5 text-[11px] text-amber-300">
-                  загружено по ссылке, аноним
-                </span>
-              )}
-              {media.kind === 'external_link' ? (
-                media.external_url && (
-                  <a
-                    href={media.external_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-2 block text-sky-400 no-underline hover:text-sky-300"
-                  >
-                    {media.external_url}
-                  </a>
-                )
-              ) : media.kind === 'image' ? (
-                <img
-                  src={`/api/v1/media/${media.id}/stream`}
-                  alt={evidenceLabel(media)}
-                  className="mt-2 max-h-64 w-full rounded object-contain"
-                />
-              ) : (
-                // biome-ignore lint/a11y/useMediaCaption: evidence clips have no authored captions
-                <video
-                  controls
-                  src={`/api/v1/media/${media.id}/stream`}
-                  className="mt-2 max-h-64 w-full rounded"
-                />
-              )}
-              <MediaPublishControl mediaId={media.id} mediaKind={media.kind} />
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+            }
+          />
+        ) : null}
+
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить доказательства"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => void load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : loading ? (
+          <Skeleton variant="block" count={2} label="Загрузка доказательств" />
+        ) : !items || items.length === 0 ? (
+          <EmptyState
+            title="Доказательств нет."
+            description="К этому игроку не приложено ни одной записи, скриншота или ссылки."
+          />
+        ) : (
+          <ul className="space-y-3">
+            {items.map(({ link, media }) => (
+              <li key={link.id} className="rounded-ctl border border-line p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[13px] text-ink">{evidenceLabel(media)}</span>
+                  <span className="text-xs text-ink-3">
+                    {new Date(link.created_at).toLocaleString()}
+                  </span>
+                </div>
+                {media.upload_token_id ? (
+                  <span className="mt-1 inline-block">
+                    <Badge tone="warn" size="sm">
+                      загружено по ссылке, аноним
+                    </Badge>
+                  </span>
+                ) : null}
+                {media.kind === 'external_link' ? (
+                  media.external_url && (
+                    <a
+                      href={media.external_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 block text-accent no-underline hover:brightness-110"
+                    >
+                      {media.external_url}
+                    </a>
+                  )
+                ) : media.kind === 'image' ? (
+                  <img
+                    src={`/api/v1/media/${media.id}/stream`}
+                    alt={evidenceLabel(media)}
+                    className="mt-2 max-h-64 w-full rounded-ctl object-contain"
+                  />
+                ) : (
+                  // biome-ignore lint/a11y/useMediaCaption: evidence clips have no authored captions
+                  <video
+                    controls
+                    src={`/api/v1/media/${media.id}/stream`}
+                    className="mt-2 max-h-64 w-full rounded-ctl"
+                  />
+                )}
+                <MediaPublishControl mediaId={media.id} mediaKind={media.kind} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
   );
 }

@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useId, useState } from 'react';
+import { AlertDialog, Button, InlineBanner, Modal, Textarea } from '@/components/ui';
 import { type MessageTemplate, pickableTemplates } from '@/lib/messageTemplates';
 import { TemplatePicker } from './TemplatePicker';
 
@@ -21,6 +22,10 @@ export interface SquadMessageTarget {
  * Modal for warning every current member of one squad (RCON `AdminWarn`,
  * one call per player). `target` is null when the modal is closed. Template
  * previews substitute `{player}` with the squad leader's nickname, if known.
+ *
+ * Отправку подтверждает `AlertDialog`, а не системный `confirm()`: последний
+ * останавливает поток выполнения, не даёт ловушки фокуса и выглядит по-разному
+ * в разных браузерах.
  */
 export function SquadMessageModal({
   target,
@@ -32,14 +37,15 @@ export function SquadMessageModal({
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const titleId = useId();
   const textareaId = useId();
 
   useEffect(() => {
     if (!target) return;
     setMessage('');
     setFeedback(null);
+    setConfirming(false);
     let cancelled = false;
     void (async () => {
       try {
@@ -57,15 +63,6 @@ export function SquadMessageModal({
     };
   }, [target]);
 
-  useEffect(() => {
-    if (!target) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onOpenChange(false);
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [target, onOpenChange]);
-
   if (!target) return null;
 
   const trimmed = message.trim();
@@ -73,7 +70,6 @@ export function SquadMessageModal({
 
   async function handleSend() {
     if (!target || tooShort || busy) return;
-    if (!confirm(`Отправить сообщение отряду «${target.label}»?\n\n"${trimmed}"`)) return;
     setBusy(true);
     setFeedback(null);
     try {
@@ -96,79 +92,79 @@ export function SquadMessageModal({
       setFeedback({ kind: 'err', text: (err as Error).message });
     } finally {
       setBusy(false);
+      setConfirming(false);
     }
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      onClick={() => onOpenChange(false)}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') onOpenChange(false);
-      }}
-    >
-      <div
-        className="w-full max-w-md rounded border border-neutral-800 bg-neutral-950 p-6"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-        role="document"
+    <>
+      <Modal
+        open
+        onClose={() => onOpenChange(false)}
+        title={`Сообщение отряду «${target.label}»`}
+        description="Предупреждение получит каждый, кто сейчас состоит в отряде."
+        closeLabel="Закрыть"
+        dismissible={trimmed.length === 0 && !busy}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={busy}>
+              Отмена
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => setConfirming(true)}
+              disabled={tooShort}
+              loading={busy}
+            >
+              Отправить
+            </Button>
+          </>
+        }
       >
-        <h2 id={titleId} className="mb-3 text-lg font-semibold text-neutral-100">
-          Сообщение отряду «{target.label}»
-        </h2>
-
-        {pickableTemplates(templates).length > 0 ? (
-          <div className="mb-3">
+        <div className="space-y-3">
+          {pickableTemplates(templates).length > 0 ? (
             <TemplatePicker
               templates={templates}
               context={{ player: target.leaderName ?? undefined }}
               onSelect={(text) => setMessage(text.slice(0, MESSAGE_MAX))}
             />
+          ) : null}
+
+          <div>
+            <label htmlFor={textareaId} className="sr-only">
+              Текст сообщения
+            </label>
+            <Textarea
+              id={textareaId}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              maxLength={MESSAGE_MAX}
+              rows={3}
+              placeholder="Текст сообщения (мин. 2 символа)"
+            />
           </div>
-        ) : null}
 
-        <label htmlFor={textareaId} className="sr-only">
-          Текст сообщения
-        </label>
-        <textarea
-          id={textareaId}
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          maxLength={MESSAGE_MAX}
-          rows={3}
-          placeholder="Текст сообщения (мин. 2 символа)"
-          className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600"
-        />
-
-        {feedback ? (
-          <p
-            className={`mt-2 text-xs ${feedback.kind === 'ok' ? 'text-green-400' : 'text-red-400'}`}
-          >
-            {feedback.text}
-          </p>
-        ) : null}
-
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 hover:border-neutral-700"
-          >
-            Отмена
-          </button>
-          <button
-            type="button"
-            disabled={tooShort || busy}
-            onClick={() => void handleSend()}
-            className="rounded bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {busy ? 'Отправка…' : 'Отправить'}
-          </button>
+          {feedback ? (
+            <InlineBanner
+              tone={feedback.kind === 'ok' ? 'good' : 'crit'}
+              title={feedback.kind === 'ok' ? feedback.text : 'Сообщение не отправлено'}
+              description={feedback.kind === 'ok' ? undefined : feedback.text}
+            />
+          ) : null}
         </div>
-      </div>
-    </div>
+      </Modal>
+
+      <AlertDialog
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        title="Отправить сообщение отряду"
+        body={`Отряд «${target.label}» получит: «${trimmed}»`}
+        confirmLabel="Отправить сообщение"
+        cancelLabel="Отмена"
+        tone="default"
+        busy={busy}
+        onConfirm={() => void handleSend()}
+      />
+    </>
   );
 }

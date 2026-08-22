@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { Button, Checkbox, InlineBanner } from '@/components/ui';
 import {
   destinationLabel,
   isPublishable,
@@ -97,30 +98,28 @@ export function MediaPublishControl({
   if (!publishable || hidden) return null;
 
   return (
-    <div className="mt-2 space-y-2 border-t border-neutral-900 pt-2">
-      {error && <div className="text-[11px] text-red-300">{error}</div>}
+    <div className="mt-2 space-y-2 border-t border-line pt-2">
+      {error && <InlineBanner tone="crit" title={error} />}
 
       {items && items.length > 0 && (
         <ul className="space-y-1">
           {items.map((publication) => {
             const reason = publicationErrorLabel(publication.error);
             return (
-              <li key={publication.id} className="flex flex-wrap items-center gap-2 text-[11px]">
-                <span className="text-neutral-300">
-                  {destinationLabel(publication.destination)}
-                </span>
-                <span className="text-neutral-500">{statusLabel(publication)}</span>
+              <li key={publication.id} className="flex flex-wrap items-center gap-2 text-2xs">
+                <span className="text-ink-2">{destinationLabel(publication.destination)}</span>
+                <span className="text-ink-3">{statusLabel(publication)}</span>
                 {publication.external_url && (
                   <a
                     href={publication.external_url}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-sky-400 no-underline hover:text-sky-300"
+                    className="text-accent"
                   >
                     Открыть
                   </a>
                 )}
-                {reason && <span className="text-neutral-500">{reason}</span>}
+                {reason && <span className="text-ink-3">{reason}</span>}
               </li>
             );
           })}
@@ -132,52 +131,39 @@ export function MediaPublishControl({
           <div className="space-y-2">
             <div className="flex flex-wrap gap-3">
               {available.map((destination) => (
-                <label
+                <Checkbox
                   key={destination}
-                  className="flex items-center gap-1 text-[11px] text-neutral-300"
-                >
-                  <input
-                    type="checkbox"
-                    checked={chosen.includes(destination)}
-                    onChange={(event) =>
-                      setSelected((previous) =>
-                        event.target.checked
-                          ? [...previous, destination]
-                          : previous.filter((entry) => entry !== destination),
-                      )
-                    }
-                  />
-                  {destinationLabel(destination)}
-                </label>
+                  label={destinationLabel(destination)}
+                  checked={chosen.includes(destination)}
+                  onChange={(event) =>
+                    setSelected((previous) =>
+                      event.target.checked
+                        ? [...previous, destination]
+                        : previous.filter((entry) => entry !== destination),
+                    )
+                  }
+                />
               ))}
             </div>
-            {submitError && <div className="text-[11px] text-red-300">{submitError}</div>}
+            {submitError && <InlineBanner tone="crit" title={submitError} />}
             <div className="flex gap-2">
-              <button
-                type="button"
+              <Button
+                size="sm"
+                variant="primary"
                 onClick={() => void submit()}
                 disabled={submitting || chosen.length === 0}
-                className="rounded border border-emerald-900 px-2 py-1 text-[11px] text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
               >
                 Отправить
-              </button>
-              <button
-                type="button"
-                onClick={() => setPicking(false)}
-                className="rounded border border-neutral-800 px-2 py-1 text-[11px] text-neutral-400 hover:border-neutral-600"
-              >
+              </Button>
+              <Button size="sm" onClick={() => setPicking(false)}>
                 Отмена
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={() => setPicking(true)}
-            className="rounded border border-neutral-700 px-2 py-1 text-[11px] text-neutral-300 hover:border-sky-700 hover:text-sky-300"
-          >
+          <Button size="sm" onClick={() => setPicking(true)}>
             Опубликовать
-          </button>
+          </Button>
         ))}
     </div>
   );

@@ -1,5 +1,14 @@
 'use client';
 import { useEffect, useId, useState } from 'react';
+import {
+  Button,
+  FieldRow,
+  InlineBanner,
+  Modal,
+  Select,
+  Textarea,
+  TextInput,
+} from '@/components/ui';
 
 /** Mirrors the zod body schema on POST /api/v1/moderation-actions/bulk. */
 const REASON_MAX = 300;
@@ -50,6 +59,15 @@ const ERROR_LABEL: Record<string, string> = {
   bulk_deadline_exceeded: 'Превышен лимит времени операции',
 };
 
+type Step = 'form' | 'confirm' | 'result';
+
+/** Подпись шага в шапке окна: оператор всегда видит, где он и сколько осталось. */
+const STEP_LABEL: Record<Step, string> = {
+  form: 'Шаг 1 из 3 · Параметры',
+  confirm: 'Шаг 2 из 3 · Подтверждение',
+  result: 'Шаг 3 из 3 · Результат',
+};
+
 /**
  * Bulk warn/kick/ban over a set of players picked from the live roster
  * (MOD-4, #61). `targets` is null while the modal is closed.
@@ -60,6 +78,11 @@ const ERROR_LABEL: Record<string, string> = {
  * requirement, and the guard against an accidental mass ban. Because the
  * operation is not transactional, the outcome is shown as a modal result
  * screen with the per-target failure reasons rather than a toast.
+ *
+ * Три экрана живут в одном окне, поэтому шаг назван в его шапке: без этого
+ * оператор не понимает, форму он видит, вопрос или уже отчёт. Пока в форме есть
+ * набранная причина или идёт запрос, окно не закрывается ни Escape, ни кликом
+ * мимо панели — раньше промах мышью бесследно стирал причину и срок.
  *
  * @param permissions - The caller's `mod:*` catalog keys (from
  *   `GET /api/v1/me`). Action types and ban durations the caller cannot use
@@ -90,7 +113,7 @@ export function BulkModerationModal({
   ];
   const banLengths = BAN_LENGTHS.filter((entry) => (entry.value === '0' ? canBanPerm : canBanTemp));
 
-  const [step, setStep] = useState<'form' | 'confirm' | 'result'>('form');
+  const [step, setStep] = useState<Step>('form');
   const [actionType, setActionType] = useState<BulkActionType>(actionTypes[0] ?? 'kick');
   const [reason, setReason] = useState('');
   const [banLength, setBanLength] = useState(banLengths[0]?.value ?? '0');
@@ -104,7 +127,6 @@ export function BulkModerationModal({
    * — without this snapshot the failure list would show bare uuids.
    */
   const [batch, setBatch] = useState<BulkModerationTarget[]>([]);
-  const titleId = useId();
   const actionId = useId();
   const reasonId = useId();
   const lengthId = useId();
@@ -124,15 +146,6 @@ export function BulkModerationModal({
     setBatch([]);
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onOpenChange(false);
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [open, onOpenChange]);
-
   if (!targets) return null;
 
   const trimmedReason = reason.trim();
@@ -144,6 +157,10 @@ export function BulkModerationModal({
   // extra "type the number back" challenge on top of the confirmation step.
   const challengeSatisfied = actionType !== 'ban' || challenge.trim() === String(targetCount);
   const nameById = new Map(shown.map((target) => [target.playerId, target.name]));
+  // Мягкие жесты закрытия разрешены, только когда терять нечего: на форме без
+  // причины и на экране результата, который ничего не хранит.
+  const dismissible =
+    !busy && (step === 'result' || (step === 'form' && trimmedReason.length === 0));
 
   async function submit() {
     if (busy || !targets) return;
@@ -179,185 +196,167 @@ export function BulkModerationModal({
     }
   }
 
+  const footer =
+    actionTypes.length === 0 ? (
+      <Button variant="secondary" onClick={() => onOpenChange(false)}>
+        Закрыть окно
+      </Button>
+    ) : step === 'form' ? (
+      <>
+        <Button variant="secondary" onClick={() => onOpenChange(false)}>
+          Отмена
+        </Button>
+        <Button
+          variant="primary"
+          disabled={trimmedReason.length === 0}
+          onClick={() => setStep('confirm')}
+        >
+          Далее
+        </Button>
+      </>
+    ) : step === 'confirm' ? (
+      <>
+        <Button variant="secondary" onClick={() => setStep('form')} disabled={busy}>
+          Назад
+        </Button>
+        <Button
+          // Критический цвет — только у бана: предупреждение и кик обратимы,
+          // а бан на практике — нет (раздел 5 дизайн-системы).
+          variant={actionType === 'ban' ? 'destructive' : 'primary'}
+          disabled={!challengeSatisfied}
+          loading={busy}
+          onClick={() => void submit()}
+        >
+          Подтвердить
+        </Button>
+      </>
+    ) : (
+      <Button variant="primary" onClick={() => onOpenChange(false)}>
+        Готово
+      </Button>
+    );
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      onClick={() => onOpenChange(false)}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') onOpenChange(false);
-      }}
+    <Modal
+      open
+      onClose={() => onOpenChange(false)}
+      title="Массовое действие"
+      description={`Выбрано игроков: ${targetCount}`}
+      closeLabel="Закрыть"
+      dismissible={dismissible}
+      footer={footer}
     >
-      <div
-        className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded border border-neutral-800 bg-neutral-950 p-6"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-        role="document"
-      >
-        <h2 id={titleId} className="text-lg font-semibold text-neutral-100">
-          Массовое действие
-        </h2>
-        <p className="mb-4 text-xs text-neutral-500">Выбрано игроков: {targetCount}</p>
+      {actionTypes.length === 0 ? (
+        <InlineBanner
+          tone="warn"
+          title="Нет прав на массовые действия модерации."
+          description="Обратитесь к администратору за ключами mod:warn, mod:kick или mod:ban_*."
+        />
+      ) : (
+        <div className="space-y-3">
+          <p className="text-xs text-ink-3">{STEP_LABEL[step]}</p>
 
-        {actionTypes.length === 0 ? (
-          <p className="text-xs text-red-400">Нет прав на массовые действия модерации.</p>
-        ) : step === 'form' ? (
-          <div className="space-y-3">
-            <div>
-              <label htmlFor={actionId} className="mb-1 block text-xs text-neutral-400">
-                Действие
-              </label>
-              <select
-                id={actionId}
-                value={actionType}
-                onChange={(e) => setActionType(e.target.value as BulkActionType)}
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200"
-              >
-                {actionTypes.map((value) => (
-                  <option key={value} value={value}>
-                    {ACTION_LABEL[value]}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {actionType === 'ban' ? (
-              <div>
-                <label htmlFor={lengthId} className="mb-1 block text-xs text-neutral-400">
-                  Срок бана
-                </label>
-                <select
-                  id={lengthId}
-                  value={banLength}
-                  onChange={(e) => setBanLength(e.target.value)}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200"
+          {step === 'form' ? (
+            <>
+              <FieldRow label="Действие" htmlFor={actionId}>
+                <Select
+                  id={actionId}
+                  value={actionType}
+                  onChange={(e) => setActionType(e.target.value as BulkActionType)}
                 >
-                  {banLengths.map((entry) => (
-                    <option key={entry.value} value={entry.value}>
-                      {entry.label}
+                  {actionTypes.map((value) => (
+                    <option key={value} value={value}>
+                      {ACTION_LABEL[value]}
                     </option>
                   ))}
-                </select>
-              </div>
-            ) : null}
+                </Select>
+              </FieldRow>
 
-            <div>
-              <label htmlFor={reasonId} className="mb-1 block text-xs text-neutral-400">
-                Причина
-              </label>
-              <textarea
-                id={reasonId}
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                maxLength={REASON_MAX}
-                rows={3}
-                placeholder="Причина (обязательно)"
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600"
-              />
-            </div>
+              {actionType === 'ban' ? (
+                <FieldRow label="Срок бана" htmlFor={lengthId}>
+                  <Select
+                    id={lengthId}
+                    value={banLength}
+                    onChange={(e) => setBanLength(e.target.value)}
+                  >
+                    {banLengths.map((entry) => (
+                      <option key={entry.value} value={entry.value}>
+                        {entry.label}
+                      </option>
+                    ))}
+                  </Select>
+                </FieldRow>
+              ) : null}
 
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => onOpenChange(false)}
-                className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 hover:border-neutral-700"
-              >
-                Отмена
-              </button>
-              <button
-                type="button"
-                disabled={trimmedReason.length === 0}
-                onClick={() => setStep('confirm')}
-                className="rounded bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Далее
-              </button>
-            </div>
-          </div>
-        ) : step === 'confirm' ? (
-          <div className="space-y-3">
-            <p className="text-sm font-medium text-amber-300">Подтвердите массовое действие</p>
-            <p className="text-xs text-neutral-400">
-              {ACTION_LABEL[actionType]}
-              {actionType === 'ban'
-                ? ` · ${banLengths.find((entry) => entry.value === banLength)?.label ?? banLength}`
-                : ''}{' '}
-              · {targetCount} игроков · «{trimmedReason}»
-            </p>
-            <ul className="max-h-40 overflow-y-auto rounded border border-neutral-800 bg-neutral-900 p-2 text-xs text-neutral-300">
-              {targets.map((target) => (
-                <li key={target.playerId}>{target.name}</li>
-              ))}
-            </ul>
-
-            {actionType === 'ban' ? (
-              <div>
-                <label htmlFor={challengeId} className="mb-1 block text-xs text-neutral-400">
-                  Введите количество целей
-                </label>
-                <input
-                  id={challengeId}
-                  value={challenge}
-                  onChange={(e) => setChallenge(e.target.value)}
-                  inputMode="numeric"
-                  placeholder={String(targetCount)}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600"
+              <FieldRow label="Причина" htmlFor={reasonId}>
+                <Textarea
+                  id={reasonId}
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  maxLength={REASON_MAX}
+                  rows={3}
+                  placeholder="Причина (обязательно)"
                 />
-              </div>
-            ) : null}
-
-            {error ? <p className="text-xs text-red-400">{error}</p> : null}
-
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setStep('form')}
-                className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 hover:border-neutral-700"
-              >
-                Назад
-              </button>
-              <button
-                type="button"
-                disabled={busy || !challengeSatisfied}
-                onClick={() => void submit()}
-                className="rounded bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {busy ? 'Применение…' : 'Подтвердить'}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-sm text-neutral-200">
-              Применено: {result?.applied ?? 0} · Ошибок: {result?.failed ?? 0}
-            </p>
-            {result && result.failed > 0 ? (
-              <ul className="max-h-48 overflow-y-auto rounded border border-neutral-800 bg-neutral-900 p-2 text-xs text-red-300">
-                {result.results
-                  .filter((row) => row.status === 'failed')
-                  .map((row) => (
-                    <li key={row.player_id}>
-                      {nameById.get(row.player_id) ?? row.player_id} —{' '}
-                      {ERROR_LABEL[row.error ?? ''] ?? row.error ?? 'неизвестная ошибка'}
-                      {row.detail ? ` (${row.detail})` : ''}
-                    </li>
-                  ))}
+              </FieldRow>
+            </>
+          ) : step === 'confirm' ? (
+            <>
+              <p className="text-[13px] font-semibold text-ink">Подтвердите массовое действие</p>
+              <p className="text-xs text-ink-3">
+                {ACTION_LABEL[actionType]}
+                {actionType === 'ban'
+                  ? ` · ${banLengths.find((entry) => entry.value === banLength)?.label ?? banLength}`
+                  : ''}{' '}
+                · {targetCount} игроков · «{trimmedReason}»
+              </p>
+              <ul className="max-h-40 overflow-y-auto rounded-ctl border border-line bg-raised p-2 text-xs text-ink-2">
+                {targets.map((target) => (
+                  <li key={target.playerId}>{target.name}</li>
+                ))}
               </ul>
-            ) : null}
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={() => onOpenChange(false)}
-                className="rounded bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-500"
-              >
-                Закрыть
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
+
+              {actionType === 'ban' ? (
+                <FieldRow
+                  label="Введите количество целей"
+                  htmlFor={challengeId}
+                  hint="Барьер против случайного массового бана: число нужно набрать вручную."
+                >
+                  <TextInput
+                    id={challengeId}
+                    value={challenge}
+                    onChange={(e) => setChallenge(e.target.value)}
+                    inputMode="numeric"
+                    placeholder={String(targetCount)}
+                  />
+                </FieldRow>
+              ) : null}
+
+              {error ? (
+                <InlineBanner tone="crit" title="Не удалось применить" description={error} />
+              ) : null}
+            </>
+          ) : (
+            <>
+              <p className="text-[13px] text-ink">
+                Применено: {result?.applied ?? 0} · Ошибок: {result?.failed ?? 0}
+              </p>
+              {result && result.failed > 0 ? (
+                <ul className="max-h-48 space-y-1 overflow-y-auto rounded-ctl border border-line bg-raised p-2 text-xs text-ink-2">
+                  {result.results
+                    .filter((row) => row.status === 'failed')
+                    .map((row) => (
+                      <li key={row.player_id}>
+                        {nameById.get(row.player_id) ?? row.player_id} —{' '}
+                        {ERROR_LABEL[row.error ?? ''] ?? row.error ?? 'неизвестная ошибка'}
+                        {row.detail ? ` (${row.detail})` : ''}
+                      </li>
+                    ))}
+                </ul>
+              ) : null}
+            </>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }

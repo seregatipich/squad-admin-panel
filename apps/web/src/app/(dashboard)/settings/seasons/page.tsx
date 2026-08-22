@@ -1,6 +1,27 @@
 'use client';
 
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  EmptyState,
+  FieldRow,
+  InlineBanner,
+  PageHeader,
+  Select,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  TextInput,
+  Th,
+} from '@/components/ui';
 
 /** Mirrors the `Season` payload of `GET /api/v1/seasons` (LEAD-7, #178). */
 export interface Season {
@@ -27,6 +48,13 @@ const STATUS_LABELS: Record<Season['status'], string> = {
   closed: 'Закрыт',
 };
 
+/** Тон дублирует подпись статуса, а не заменяет её (§5). */
+const STATUS_TONE: Record<Season['status'], 'good' | 'accent' | 'neutral'> = {
+  upcoming: 'accent',
+  active: 'good',
+  closed: 'neutral',
+};
+
 const ERROR_MESSAGES: Record<string, string> = {
   invalid_bounds: 'Дата окончания должна быть позже даты начала.',
   active_season_exists: 'Активный сезон уже существует — закройте текущий.',
@@ -35,9 +63,6 @@ const ERROR_MESSAGES: Record<string, string> = {
   season_not_found: 'Сезон не найден.',
   forbidden: 'Недостаточно прав.',
 };
-
-const inputClass =
-  'rounded border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-sm text-neutral-100 focus:border-neutral-600 focus:outline-none';
 
 function describeError(code: unknown, status: number): string {
   if (typeof code === 'string' && ERROR_MESSAGES[code]) return ERROR_MESSAGES[code];
@@ -73,11 +98,6 @@ function formatRange(season: Season): string {
  * optimistically and disappear for good the first time the API answers 403.
  */
 export default function SeasonsSettingsPage() {
-  const nameId = useId();
-  const startsId = useId();
-  const endsId = useId();
-  const statusId = useId();
-
   const [seasons, setSeasons] = useState<Season[]>([]);
   const [loading, setLoading] = useState(true);
   const [hidden, setHidden] = useState(false);
@@ -194,148 +214,127 @@ export default function SeasonsSettingsPage() {
   if (hidden) return null;
 
   return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold">Сезоны</h1>
-        <p className="text-sm text-neutral-400">
-          Именованные интервалы для сезонных лидербордов. Активным может быть только один сезон.
-        </p>
-      </div>
+    <>
+      <PageHeader
+        title="Сезоны"
+        subtitle="Именованные интервалы для сезонных лидербордов. Активным может быть только один сезон."
+      />
 
-      {notice ? <p className="text-xs text-emerald-400">{notice}</p> : null}
+      {notice ? <InlineBanner tone="good" title={notice} /> : null}
+      {error ? <InlineBanner tone="crit" title={error} /> : null}
 
-      <section className="rounded border border-neutral-800 bg-neutral-950">
+      <Card padding="none" as="section">
+        <CardHeader title="Все сезоны" count={seasons.length > 0 ? seasons.length : undefined} />
         {loading ? (
-          <p className="p-4 text-sm text-neutral-500">Загрузка сезонов…</p>
+          <CardBody padding="sm">
+            <SkeletonTable rows={3} cols={4} label="Загрузка сезонов" />
+          </CardBody>
         ) : seasons.length === 0 ? (
-          <p className="p-4 text-sm text-neutral-500">Сезонов пока нет.</p>
+          <EmptyState
+            title="Сезонов пока нет"
+            description="Создайте первый сезон формой ниже — до этого сезонные лидерборды пусты."
+          />
         ) : (
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase tracking-widest text-neutral-500">
+          <Table ariaLabel="Сезоны">
+            <TableHead>
               <tr>
-                <th className="px-4 py-2">Название</th>
-                <th className="px-4 py-2">Период</th>
-                <th className="px-4 py-2">Статус</th>
-                <th className="px-4 py-2" />
+                <Th>Название</Th>
+                <Th>Период</Th>
+                <Th>Статус</Th>
+                <Th align="right">Действия</Th>
               </tr>
-            </thead>
-            <tbody>
+            </TableHead>
+            <TableBody>
               {seasons.map((season) => (
-                <tr key={season.id} className="border-t border-neutral-800">
-                  <td className="px-4 py-2 text-neutral-100">{season.name}</td>
-                  <td className="px-4 py-2 text-neutral-400">{formatRange(season)}</td>
-                  <td className="px-4 py-2 text-neutral-400">
-                    {STATUS_LABELS[season.status]}
-                    {season.finalized ? ' · финализирован' : ''}
-                  </td>
-                  <td className="px-4 py-2 text-right">
+                <TableRow key={season.id}>
+                  <Td>{season.name}</Td>
+                  <Td className="whitespace-nowrap text-ink-2">{formatRange(season)}</Td>
+                  <Td>
+                    <span className="flex flex-wrap items-center gap-1">
+                      <Badge tone={STATUS_TONE[season.status]} size="sm">
+                        {STATUS_LABELS[season.status]}
+                      </Badge>
+                      {season.finalized ? <Badge size="sm">финализирован</Badge> : null}
+                    </span>
+                  </Td>
+                  <Td align="right">
                     {canManage && !season.finalized ? (
                       <span className="flex justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => startEdit(season)}
-                          className="rounded border border-neutral-800 px-2 py-1 text-xs hover:border-neutral-600"
-                        >
+                        <Button size="sm" onClick={() => startEdit(season)}>
                           Изменить
-                        </button>
+                        </Button>
                         {season.status === 'active' ? (
-                          <button
-                            type="button"
-                            onClick={() => void closeSeason(season)}
-                            className="rounded border border-neutral-800 px-2 py-1 text-xs hover:border-neutral-600"
-                          >
+                          <Button size="sm" onClick={() => void closeSeason(season)}>
                             Закрыть
-                          </button>
+                          </Button>
                         ) : null}
                       </span>
                     ) : (
-                      <span className="text-xs text-neutral-600">только просмотр</span>
+                      <span className="text-xs text-ink-3">только просмотр</span>
                     )}
-                  </td>
-                </tr>
+                  </Td>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
-      </section>
+      </Card>
 
       {canManage ? (
-        <form onSubmit={submit} className="space-y-3 rounded border border-neutral-800 p-4">
-          <h2 className="text-sm font-semibold text-neutral-200">
-            {editingId ? 'Изменение сезона' : 'Новый сезон'}
-          </h2>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1 text-xs text-neutral-400" htmlFor={nameId}>
-              Название
-              <input
-                id={nameId}
-                value={form.name}
-                onChange={(event) => setForm({ ...form, name: event.target.value })}
-                className={`w-full ${inputClass}`}
-              />
-            </label>
-            <label className="space-y-1 text-xs text-neutral-400" htmlFor={statusId}>
-              Статус
-              <select
-                id={statusId}
-                value={form.status}
-                onChange={(event) =>
-                  setForm({ ...form, status: event.target.value as FormState['status'] })
-                }
-                className={`w-full ${inputClass}`}
-              >
-                <option value="upcoming">Запланирован</option>
-                <option value="active">Активный</option>
-              </select>
-            </label>
-            <label className="space-y-1 text-xs text-neutral-400" htmlFor={startsId}>
-              Начало
-              <input
-                id={startsId}
-                type="date"
-                value={form.startsAt}
-                onChange={(event) => setForm({ ...form, startsAt: event.target.value })}
-                className={`w-full ${inputClass}`}
-              />
-            </label>
-            <label className="space-y-1 text-xs text-neutral-400" htmlFor={endsId}>
-              Окончание
-              <input
-                id={endsId}
-                type="date"
-                value={form.endsAt}
-                onChange={(event) => setForm({ ...form, endsAt: event.target.value })}
-                className={`w-full ${inputClass}`}
-              />
-            </label>
-          </div>
-
-          {error ? <p className="text-xs text-red-400">{error}</p> : null}
-
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              disabled={submitting}
-              className="rounded border border-neutral-700 px-3 py-1.5 text-sm hover:border-neutral-500 disabled:opacity-40"
-            >
-              {submitting ? 'Сохранение…' : editingId ? 'Сохранить' : 'Создать'}
-            </button>
-            {editingId ? (
-              <button
-                type="button"
-                onClick={resetForm}
-                className="rounded border border-neutral-800 px-3 py-1.5 text-sm hover:border-neutral-600"
-              >
-                Отмена
-              </button>
-            ) : null}
-          </div>
-        </form>
+        <Card padding="none" as="section">
+          <CardHeader title={editingId ? 'Изменение сезона' : 'Новый сезон'} />
+          <form onSubmit={submit}>
+            <CardBody className="grid gap-4 sm:grid-cols-2">
+              <FieldRow label="Название">
+                <TextInput
+                  value={form.name}
+                  onChange={(event) => setForm({ ...form, name: event.target.value })}
+                />
+              </FieldRow>
+              <FieldRow label="Статус">
+                <Select
+                  value={form.status}
+                  onChange={(event) =>
+                    setForm({ ...form, status: event.target.value as FormState['status'] })
+                  }
+                >
+                  <option value="upcoming">Запланирован</option>
+                  <option value="active">Активный</option>
+                </Select>
+              </FieldRow>
+              <FieldRow label="Начало">
+                <TextInput
+                  type="date"
+                  value={form.startsAt}
+                  onChange={(event) => setForm({ ...form, startsAt: event.target.value })}
+                />
+              </FieldRow>
+              <FieldRow label="Окончание">
+                <TextInput
+                  type="date"
+                  value={form.endsAt}
+                  onChange={(event) => setForm({ ...form, endsAt: event.target.value })}
+                />
+              </FieldRow>
+            </CardBody>
+            <CardFooter>
+              {editingId ? (
+                <Button variant="secondary" onClick={resetForm}>
+                  Отмена
+                </Button>
+              ) : null}
+              <Button type="submit" variant="primary" loading={submitting}>
+                {editingId ? 'Сохранить' : 'Создать'}
+              </Button>
+            </CardFooter>
+          </form>
+        </Card>
       ) : (
-        <p className="text-xs text-neutral-500">
-          Управление сезонами требует права на редактирование ролей.
-        </p>
+        <InlineBanner
+          tone="info"
+          title="Управление сезонами требует права на редактирование ролей."
+        />
       )}
-    </div>
+    </>
   );
 }

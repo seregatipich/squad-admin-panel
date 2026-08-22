@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { SeedContributionSection } from './SeedContributionSection';
@@ -42,10 +42,15 @@ describe('SeedContributionSection', () => {
       stubFetch(200, payload());
       render(<SeedContributionSection playerId="player-alpha" />);
 
-      await screen.findByText('Сид-вклад');
-      expect(screen.getByText('Сид: 1ч 1м')).toBeInTheDocument();
-      expect(screen.getByText('srv-1')).toBeInTheDocument();
-      expect(screen.getByText('Начислено бонусов: 10')).toBeInTheDocument();
+      await screen.findByRole('heading', { name: 'Сид-вклад' });
+      expect(screen.getByText('Сид за 30 дней')).toBeInTheDocument();
+      // Одна и та же длительность стоит и в плитке итога, и в строке сервера.
+      expect(screen.getAllByText('1ч 1м')).toHaveLength(2);
+      const serverRow = within(screen.getByRole('table'));
+      expect(serverRow.getByText('srv-1')).toBeInTheDocument();
+      expect(serverRow.getByText('1ч 1м')).toBeInTheDocument();
+      expect(screen.getByText('Бонусы за сид')).toBeInTheDocument();
+      expect(screen.getByText('10')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
@@ -78,7 +83,8 @@ describe('SeedContributionSection', () => {
       stubFetch(500);
       render(<SeedContributionSection playerId="player-alpha" />);
 
-      await screen.findByText(/Ошибка загрузки сид-вклада/);
+      await screen.findByText('Не удалось загрузить сид-вклад');
+      expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
@@ -90,7 +96,7 @@ describe('SeedContributionSection', () => {
       render(<SeedContributionSection playerId="player-alpha" />);
 
       await screen.findByText('Нет данных о сид-вкладе по серверам.');
-      expect(screen.getByText('Сид: 0ч 0м')).toBeInTheDocument();
+      expect(screen.getByText('0ч 0м')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

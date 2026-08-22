@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslator } from '@/i18n/LocaleProvider';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 
@@ -43,6 +43,7 @@ export function ServerBar() {
   const pathname = usePathname() ?? '';
   const t = useTranslator();
   const [servers, setServers] = useState<ServerChip[]>([]);
+  const barRef = useRef<HTMLElement>(null);
 
   const inContext = CONTEXT_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
@@ -63,12 +64,45 @@ export function ServerBar() {
   useLiveSubscription('server.deleted', refresh);
   useLiveSubscription('rcon.status', refresh);
 
+  // Высота всей прилипающей хромы публикуется в `--chrome-h`, а не считается
+  // на месте: полоса серверов переносится на вторую строку, когда серверов
+  // много, поэтому её высота не константа. Липкие шапки таблиц отсчитываются
+  // от этой переменной и без неё уезжали бы под полосу.
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const bar = barRef.current;
+    if (!bar) {
+      root.style.removeProperty('--chrome-h');
+      return;
+    }
+    const apply = () => {
+      root.style.setProperty('--chrome-h', `calc(var(--nav-h) + ${bar.offsetHeight}px)`);
+    };
+    apply();
+    // Эффект и так пересчитывает высоту на каждый рендер, поэтому наблюдатель
+    // нужен только для переносов строки при изменении ширины окна. В jsdom его
+    // нет, и это не повод падать.
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(apply);
+    observer?.observe(bar);
+    return () => {
+      observer?.disconnect();
+      root.style.removeProperty('--chrome-h');
+    };
+  });
+
   // Nothing to switch between, or nothing to switch on: render no strip at all
   // rather than an empty bar that costs a row of vertical space.
   if (!inContext || servers.length === 0) return null;
 
   return (
-    <nav aria-label={t('nav.serverSwitcher')} className="border-b border-line bg-bg">
+    <nav
+      ref={barRef}
+      aria-label={t('nav.serverSwitcher')}
+      // Прилипает под верхней панелью: «какой сервер и сколько на нём людей» —
+      // вопрос, который оператор задаёт на каждом экране, а не один раз при
+      // загрузке страницы, поэтому ответ не должен уезжать вверх при прокрутке.
+      className="sticky top-[var(--nav-h)] z-30 border-b border-line bg-bg/85 backdrop-blur-xl"
+    >
       <ul className="flex flex-wrap items-stretch gap-1.5 px-3 py-2">
         {servers.map((server) => {
           const isActive = pathname.startsWith(`/servers/${server.id}`);

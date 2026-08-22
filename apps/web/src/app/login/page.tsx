@@ -2,7 +2,19 @@
 
 import { useEffect, useState } from 'react';
 import { LocaleSwitch } from '@/components/LocaleSwitch';
+import { Card, InlineBanner, PageContainer, PageHeader } from '@/components/ui';
 import { useTranslator } from '@/i18n/LocaleProvider';
+
+/**
+ * Ссылка входа — обычный `<a>`, а не `ButtonLink`.
+ *
+ * `/api/v1/auth/steam/login` начинает OpenID-обмен и обязан получить полную
+ * навигацию документа: `next/link` перехватил бы клик маршрутизатором и
+ * предзагрузил бы адрес заранее. Поэтому классы кнопки здесь выписаны вручную —
+ * это единственное место участка, где примитив не подходит по поведению.
+ */
+const STEAM_LINK_CLASS =
+  'inline-flex h-8 w-full items-center justify-center rounded-ctl bg-accent px-3 text-xs font-medium text-bg no-underline transition-colors duration-150 hover:brightness-110';
 
 export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
@@ -20,27 +32,32 @@ export default function LoginPage() {
   }, []);
 
   return (
-    <main className="mx-auto mt-24 max-w-sm space-y-6 p-6 text-neutral-100">
-      <div className="flex justify-end">
-        <LocaleSwitch className="flex items-center gap-1" />
-      </div>
-      <h1 className="text-center text-2xl font-semibold">{t('login.heading')}</h1>
-      {error === 'auth_failed' && (
-        <p className="rounded border border-amber-700/50 bg-amber-950/40 p-3 text-sm text-amber-300">
-          {t('login.error.authFailed')}
-        </p>
-      )}
-      {error === 'not_authorized' && (
-        <p className="rounded border border-rose-700/50 bg-rose-950/40 p-3 text-sm text-rose-300">
-          {t('login.error.notAuthorized', { steamId: steamId ?? '—' })}
-        </p>
-      )}
-      <a
-        href="/api/v1/auth/steam/login"
-        className="flex w-full items-center justify-center gap-2 rounded-md border border-[#66c0f4] bg-[#1b2838] px-6 py-3 text-white transition hover:bg-[#2a475e]"
-      >
-        {t('login.steamButton')}
-      </a>
+    <main className="min-h-screen bg-bg px-6 py-16 text-ink">
+      <PageContainer width="form">
+        <div className="flex justify-end">
+          <LocaleSwitch />
+        </div>
+
+        <PageHeader title={t('login.heading')} />
+
+        {/* Не удалось проверить вход — состояние обратимое: можно повторить.
+            Отказ в доступе обратимым не является и объявляется критическим. */}
+        {error === 'auth_failed' && (
+          <InlineBanner tone="warn" title={t('login.error.authFailed')} />
+        )}
+        {error === 'not_authorized' && (
+          <InlineBanner
+            tone="crit"
+            title={t('login.error.notAuthorized', { steamId: steamId ?? '—' })}
+          />
+        )}
+
+        <Card>
+          <a href="/api/v1/auth/steam/login" className={STEAM_LINK_CLASS}>
+            {t('login.steamButton')}
+          </a>
+        </Card>
+      </PageContainer>
     </main>
   );
 }

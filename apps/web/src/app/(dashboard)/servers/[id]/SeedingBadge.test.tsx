@@ -50,8 +50,8 @@ describe('SeedingBadge', () => {
     expect(screen.getByText('40 / 60 игроков до live')).toBeInTheDocument();
   });
 
-  it('renders a progress bar whose width matches progress_pct', () => {
-    const { container } = render(
+  it('renders a progress bar whose value matches progress_pct', () => {
+    render(
       <SeedingBadge
         serverId="srv-1"
         initial={{
@@ -63,13 +63,13 @@ describe('SeedingBadge', () => {
         }}
       />,
     );
-    const bar = container.querySelector('.bg-sky-400') as HTMLElement | null;
-    expect(bar).not.toBeNull();
-    expect(bar?.style.width).toBe('75%');
+    const bar = screen.getByRole('progressbar', { name: 'Прогресс сидинга' });
+    expect(bar).toHaveAttribute('aria-valuenow', '75');
+    expect(bar).toHaveAttribute('aria-valuetext', '45 / 60 игроков до live');
   });
 
-  it('clamps progress_pct above 100 to a 100% wide bar', () => {
-    const { container } = render(
+  it('clamps progress_pct above 100 to a full bar', () => {
+    render(
       <SeedingBadge
         serverId="srv-1"
         initial={{
@@ -81,7 +81,9 @@ describe('SeedingBadge', () => {
         }}
       />,
     );
-    const bar = container.querySelector('.bg-sky-400') as HTMLElement | null;
-    expect(bar?.style.width).toBe('100%');
+    expect(screen.getByRole('progressbar', { name: 'Прогресс сидинга' })).toHaveAttribute(
+      'aria-valuenow',
+      '100',
+    );
   });
 });

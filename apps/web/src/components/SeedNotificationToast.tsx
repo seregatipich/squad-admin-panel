@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
+import { Card, CloseIcon, IconButton } from '@/components/ui';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 
@@ -31,7 +32,12 @@ function readSeedNotification(event: AlertTriggeredEvent): SeedNotification | nu
   };
 }
 
-/** Shows recipient-scoped seed alerts delivered over the panel live bus. */
+/**
+ * Shows recipient-scoped seed alerts delivered over the panel live bus.
+ *
+ * Позицию задаёт общая область `ToastRegion` в layout панели; уведомление
+ * возвращает себе перехват указателя через `pointer-events-auto`.
+ */
 export function SeedNotificationToast() {
   const [notification, setNotification] = useState<SeedNotification | null>(null);
 
@@ -44,27 +50,29 @@ export function SeedNotificationToast() {
   if (!notification) return null;
 
   return (
-    <output className="fixed bottom-4 right-4 z-50 w-80 rounded border border-amber-700 bg-neutral-950 p-4 shadow-xl">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="font-semibold text-amber-200">{notification.message}</p>
-          <p className="mt-1 text-sm text-neutral-300">{notification.serverName}</p>
+    <output className="pointer-events-auto block w-80">
+      <Card>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold text-ink">{notification.message}</p>
+            <p className="mt-1 text-xs text-ink-3">{notification.serverName}</p>
+          </div>
+          <IconButton
+            icon={<CloseIcon />}
+            label="Закрыть уведомление"
+            onClick={() => setNotification(null)}
+            className="-mr-1 -mt-1 shrink-0"
+          />
         </div>
-        <button
-          type="button"
-          onClick={() => setNotification(null)}
-          aria-label="Закрыть уведомление"
-          className="text-neutral-500 hover:text-neutral-200"
+        {/* Не `ButtonLink`: `steam://` — передача адреса игре, а не навигация
+            внутри панели, и маршрутизатору Next такой адрес отдавать нечего. */}
+        <a
+          href={notification.joinLink}
+          className="mt-3 inline-flex h-8 items-center justify-center rounded-ctl bg-accent px-3 text-xs font-medium text-bg no-underline transition-colors duration-150 hover:brightness-110"
         >
-          ×
-        </button>
-      </div>
-      <a
-        href={notification.joinLink}
-        className="mt-3 inline-flex rounded border border-amber-700 bg-amber-700/70 px-3 py-1.5 text-sm text-amber-50 hover:bg-amber-600"
-      >
-        Подключиться
-      </a>
+          Подключиться
+        </a>
+      </Card>
     </output>
   );
 }

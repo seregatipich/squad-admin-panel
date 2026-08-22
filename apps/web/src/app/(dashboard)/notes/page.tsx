@@ -4,6 +4,27 @@ import Link from 'next/link';
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { RoleColorDot } from '@/components/RoleColorDot';
+import {
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  SearchField,
+  Select,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  TextInput,
+  Th,
+  Toolbar,
+  type ToolbarProps,
+} from '@/components/ui';
 
 interface FeedNote {
   id: string;
@@ -75,7 +96,6 @@ export default function NotesFeedPage() {
   const [dateTo, setDateTo] = useState('');
   const [includeDeleted, setIncludeDeleted] = useState(false);
 
-  const searchId = useId();
   const playerId = useId();
   const authorId = useId();
   const fromId = useId();
@@ -176,206 +196,210 @@ export default function NotesFeedPage() {
     });
   }
 
-  return (
-    <div className="space-y-6 max-w-6xl">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Заметки</h1>
-        <LiveIndicator lastUpdate={lastUpdate} />
-      </div>
+  const filtersApplied =
+    q.trim() !== '' ||
+    player.trim() !== '' ||
+    author !== '' ||
+    dateFrom !== '' ||
+    dateTo !== '' ||
+    includeDeleted;
 
-      <p className="text-sm text-neutral-400">
-        Кросс-игровая лента заметок админов по всем игрокам: накопленное знание о игроках и
-        подотчётность стаффа.
-      </p>
+  function resetFilters() {
+    setQ('');
+    setPlayer('');
+    setAuthor('');
+    setDateFrom('');
+    setDateTo('');
+    setIncludeDeleted(false);
+  }
+
+  // Слот сброса у `Toolbar` — пара «обработчик + подпись» или ничего.
+  const resetProps: ToolbarProps = filtersApplied
+    ? { onReset: resetFilters, resetLabel: 'Сбросить фильтр' }
+    : {};
+
+  return (
+    <PageContainer width="wide">
+      <PageHeader
+        title="Заметки"
+        subtitle="Кросс-игровая лента заметок админов по всем игрокам: накопленное знание о игроках и подотчётность стаффа."
+        status={<LiveIndicator lastUpdate={lastUpdate} />}
+      />
 
       {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          Ошибка: {error}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить заметки"
+          description={error}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex-1 min-w-48">
-          <label className="mb-1 block text-xs text-neutral-500" htmlFor={searchId}>
-            Поиск по тексту
-          </label>
-          <input
-            id={searchId}
-            type="text"
+      <Toolbar
+        search={
+          <SearchField
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onCommit={setQ}
+            label="Поиск по тексту"
             placeholder="фрагмент заметки"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
+            clearLabel="Очистить поиск"
           />
-        </div>
-        <div className="flex-1 min-w-40">
-          <label className="mb-1 block text-xs text-neutral-500" htmlFor={playerId}>
-            Целевой игрок
-          </label>
-          <input
-            id={playerId}
-            type="text"
-            value={player}
-            onChange={(e) => setPlayer(e.target.value)}
-            placeholder="ник (с учётом истории)"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-neutral-500" htmlFor={authorId}>
-            Автор
-          </label>
-          <select
-            id={authorId}
-            value={author}
-            onChange={(e) => setAuthor(e.target.value)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          >
-            <option value="">Все</option>
-            {authors.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-neutral-500" htmlFor={fromId}>
-            С даты
-          </label>
-          <input
-            id={fromId}
-            type="date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-neutral-500" htmlFor={toId}>
-            По дату
-          </label>
-          <input
-            id={toId}
-            type="date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          />
-        </div>
-        {canViewDeleted ? (
-          <label className="flex items-center gap-2 pb-2 text-sm text-neutral-300">
-            <input
-              type="checkbox"
-              checked={includeDeleted}
-              onChange={(e) => setIncludeDeleted(e.target.checked)}
+        }
+        filters={
+          <>
+            <label htmlFor={playerId} className="text-xs text-ink-3">
+              Игрок
+            </label>
+            <TextInput
+              id={playerId}
+              value={player}
+              onChange={(e) => setPlayer(e.target.value)}
+              placeholder="ник (с учётом истории)"
+              className="w-44"
             />
-            Показывать удалённые
-          </label>
-        ) : null}
-        <button
-          type="button"
-          onClick={() => void exportCsv()}
-          disabled={busy}
-          className="ml-auto rounded border border-neutral-700 px-4 py-2 text-sm text-neutral-200 hover:border-neutral-500 disabled:opacity-40"
-        >
-          Экспорт CSV
-        </button>
-      </div>
+            <label htmlFor={authorId} className="text-xs text-ink-3">
+              Автор
+            </label>
+            <Select id={authorId} value={author} onChange={(e) => setAuthor(e.target.value)}>
+              <option value="">Все</option>
+              {authors.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </Select>
+            <label htmlFor={fromId} className="text-xs text-ink-3">
+              С даты
+            </label>
+            <TextInput
+              id={fromId}
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="w-36"
+            />
+            <label htmlFor={toId} className="text-xs text-ink-3">
+              По дату
+            </label>
+            <TextInput
+              id={toId}
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="w-36"
+            />
+            {canViewDeleted ? (
+              <Checkbox
+                label="Показывать удалённые"
+                checked={includeDeleted}
+                onChange={(e) => setIncludeDeleted(e.target.checked)}
+              />
+            ) : null}
+          </>
+        }
+        {...resetProps}
+        actions={
+          <Button onClick={() => void exportCsv()} loading={busy}>
+            Экспорт CSV
+          </Button>
+        }
+      />
 
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase text-neutral-500">
-              <tr>
-                <th className="py-2 pr-3">Дата</th>
-                <th className="py-2 pr-3">Автор</th>
-                <th className="py-2 pr-3">Игрок</th>
-                <th className="py-2 pr-3">Заметка</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={4} className="py-3 text-center text-xs text-neutral-500">
-                    Загрузка…
-                  </td>
-                </tr>
-              ) : rows.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="py-3 text-center text-xs text-neutral-500">
-                    Заметок не найдено.
-                  </td>
-                </tr>
-              ) : (
-                rows.map((note) => {
-                  const isExpanded = expanded.has(note.id);
-                  const isLong = note.body.length > BODY_TRUNCATE;
-                  const shown =
-                    isExpanded || !isLong ? note.body : `${note.body.slice(0, BODY_TRUNCATE)}…`;
-                  return (
-                    <tr key={note.id} className="border-t border-neutral-900 align-top">
-                      <td className="py-2 pr-3 whitespace-nowrap text-neutral-400">
-                        {formatDate(note.created_at)}
-                        {note.edited ? <span className="ml-1 text-neutral-600">(изм.)</span> : null}
-                      </td>
-                      <td className="py-2 pr-3 whitespace-nowrap">
-                        <span className="inline-flex items-center gap-2">
-                          <RoleColorDot color={note.author.role_color ?? 'neutral'} size="sm" />
-                          <span className="text-neutral-200">{note.author.name}</span>
-                        </span>
-                      </td>
-                      <td className="py-2 pr-3 whitespace-nowrap">
-                        <Link
-                          href={`/all-players/${note.player_id}#notes`}
-                          className="text-sky-400 hover:text-sky-300"
-                        >
-                          {note.target.name}
-                        </Link>
-                      </td>
-                      <td className="py-2 pr-3">
-                        <span
-                          className={`whitespace-pre-wrap break-words ${
-                            note.deleted ? 'text-neutral-500 line-through' : 'text-neutral-100'
-                          }`}
-                        >
-                          {shown}
-                        </span>
-                        {isLong ? (
-                          <button
-                            type="button"
-                            onClick={() => toggleExpand(note.id)}
-                            className="ml-2 align-baseline text-xs text-sky-400 hover:text-sky-300 no-underline"
-                          >
-                            {isExpanded ? 'свернуть' : 'ещё'}
-                          </button>
-                        ) : null}
-                        {note.deleted ? (
-                          <div className="mt-1 text-xs text-red-400">
-                            удалено{note.deleted_by?.name ? `: ${note.deleted_by.name}` : ''}
-                          </div>
-                        ) : null}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-        {nextCursor ? (
-          <div className="mt-3 flex justify-center">
-            <button
-              type="button"
-              onClick={() => void loadMore()}
-              disabled={busy}
-              className="rounded border border-neutral-800 px-4 py-1.5 text-xs hover:border-neutral-600 disabled:opacity-40"
-            >
-              {busy ? '…' : 'Показать ещё'}
-            </button>
+      <Card padding="none">
+        {loading ? (
+          <div className="p-3">
+            <SkeletonTable rows={6} cols={4} label="Загрузка заметок" />
           </div>
-        ) : null}
-      </section>
-    </div>
+        ) : rows.length === 0 ? (
+          <EmptyState
+            variant={filtersApplied ? 'filtered' : 'initial'}
+            title={filtersApplied ? 'Ничего не нашлось' : 'Заметок пока нет'}
+            description={
+              filtersApplied
+                ? 'Ни одна заметка не подходит под запрос и выбранные фильтры.'
+                : 'Админы ещё не оставили ни одной заметки об игроках.'
+            }
+            action={filtersApplied ? <Button onClick={resetFilters}>Сбросить фильтр</Button> : null}
+          />
+        ) : (
+          <Table ariaLabel="Лента заметок админов">
+            <TableHead>
+              <tr>
+                <Th>Дата</Th>
+                <Th>Автор</Th>
+                <Th>Игрок</Th>
+                <Th>Заметка</Th>
+              </tr>
+            </TableHead>
+            <TableBody>
+              {rows.map((note) => {
+                const isExpanded = expanded.has(note.id);
+                const isLong = note.body.length > BODY_TRUNCATE;
+                const shown =
+                  isExpanded || !isLong ? note.body : `${note.body.slice(0, BODY_TRUNCATE)}…`;
+                return (
+                  <TableRow key={note.id}>
+                    <Td className="whitespace-nowrap align-top text-ink-3">
+                      {formatDate(note.created_at)}
+                      {note.edited ? <span className="ml-1 text-ink-4">(изм.)</span> : null}
+                    </Td>
+                    <Td className="whitespace-nowrap align-top">
+                      <span className="inline-flex items-center gap-2">
+                        <RoleColorDot color={note.author.role_color ?? 'neutral'} size="sm" />
+                        <span className="text-ink">{note.author.name}</span>
+                      </span>
+                    </Td>
+                    <Td className="whitespace-nowrap align-top">
+                      <Link
+                        href={`/all-players/${note.player_id}#notes`}
+                        className="text-accent no-underline hover:brightness-110"
+                      >
+                        {note.target.name}
+                      </Link>
+                    </Td>
+                    <Td className="align-top">
+                      <span
+                        className={`whitespace-pre-wrap break-words ${
+                          note.deleted ? 'text-ink-3 line-through' : 'text-ink'
+                        }`}
+                      >
+                        {shown}
+                      </span>
+                      {isLong ? (
+                        <Button
+                          variant="plain"
+                          size="sm"
+                          aria-expanded={isExpanded}
+                          onClick={() => toggleExpand(note.id)}
+                        >
+                          {isExpanded ? 'свернуть' : 'ещё'}
+                        </Button>
+                      ) : null}
+                      {note.deleted ? (
+                        <span className="mt-1 block text-xs text-crit">
+                          удалено{note.deleted_by?.name ? `: ${note.deleted_by.name}` : ''}
+                        </span>
+                      ) : null}
+                    </Td>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+
+      {nextCursor ? (
+        <div className="flex justify-center">
+          <Button onClick={() => void loadMore()} loading={busy}>
+            Показать ещё
+          </Button>
+        </div>
+      ) : null}
+    </PageContainer>
   );
 }

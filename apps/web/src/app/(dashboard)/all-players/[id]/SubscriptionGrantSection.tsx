@@ -1,6 +1,25 @@
 'use client';
 
 import { useCallback, useEffect, useId, useState } from 'react';
+import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  Select,
+  Skeleton,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
 
 interface Subscription {
   id: string;
@@ -24,6 +43,13 @@ const STATUS_LABELS: Record<string, string> = {
   active: 'Активна',
   cancelled: 'Отменена',
   expired: 'Истекла',
+};
+
+/** Состояние подписки, а не категория: тон дублирует подпись, а не заменяет её (§5). */
+const STATUS_TONE: Record<string, BadgeTone> = {
+  active: 'good',
+  cancelled: 'neutral',
+  expired: 'warn',
 };
 
 function formatDate(value: string): string {
@@ -126,63 +152,79 @@ export function SubscriptionGrantSection({ playerId }: { playerId: string }) {
   if (hidden) return null;
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">VIP-подписка</h2>
+    <Card padding="none" as="section">
+      <CardHeader title="VIP-подписка" />
+      <CardBody className="space-y-3">
+        {error ? <InlineBanner tone="crit" title="Подписка не выдана" description={error} /> : null}
+        {notice ? <InlineBanner tone="good" title={notice} /> : null}
 
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {error}
-        </div>
-      ) : null}
-      {notice ? (
-        <div className="rounded border border-emerald-900 bg-emerald-950 p-3 text-sm text-emerald-200">
-          {notice}
-        </div>
-      ) : null}
-
-      {loading ? (
-        <div className="py-4 text-center text-sm text-neutral-500">Загрузка…</div>
-      ) : rows.length === 0 ? (
-        <p className="text-sm text-neutral-500">Подписок нет.</p>
-      ) : (
-        <ul className="space-y-1 text-sm">
-          {rows.map((row) => (
-            <li key={row.id} className="border-t border-neutral-900 pt-1 text-neutral-300">
-              {row.tier_name ?? row.tier_id} — {STATUS_LABELS[row.status] ?? row.status},{' '}
-              {row.price_bonuses} бонусов / {row.renews_every_days} дн., следующее списание{' '}
-              {formatDate(row.next_renewal_at)}
-            </li>
-          ))}
-        </ul>
-      )}
+        {loading ? (
+          <Skeleton variant="row" count={2} label="Загрузка подписок" />
+        ) : rows.length === 0 ? (
+          <EmptyState
+            title="Подписок нет"
+            description="Игроку ещё не выдавали VIP-подписку через панель."
+          />
+        ) : (
+          <Table ariaLabel="Подписки игрока">
+            <TableHead>
+              <TableRow>
+                <Th>Тариф</Th>
+                <Th>Статус</Th>
+                <Th align="right">Цена</Th>
+                <Th align="right">Период</Th>
+                <Th align="right">Следующее списание</Th>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {rows.map((row) => (
+                <TableRow key={row.id}>
+                  <Td>{row.tier_name ?? row.tier_id}</Td>
+                  <Td>
+                    <Badge size="sm" tone={STATUS_TONE[row.status] ?? 'neutral'}>
+                      {STATUS_LABELS[row.status] ?? row.status}
+                    </Badge>
+                  </Td>
+                  <Td numeric>{row.price_bonuses} бон.</Td>
+                  <Td numeric>{row.renews_every_days} дн.</Td>
+                  <Td numeric>{formatDate(row.next_renewal_at)}</Td>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardBody>
 
       {canGrant ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="text-xs text-neutral-500" htmlFor={tierSelectId}>
+        <CardFooter className="justify-between">
+          <label className="text-xs text-ink-2" htmlFor={tierSelectId}>
             Тариф
           </label>
-          <select
-            id={tierSelectId}
-            value={selected}
-            onChange={(e) => setSelected(e.target.value)}
-            className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm text-neutral-200"
-          >
-            {tiers.map((tier) => (
-              <option key={tier.id} value={tier.id}>
-                {tier.name} — {tier.price_bonuses} / {tier.default_days} дн.
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            disabled={busy || !selected}
-            onClick={() => void grant()}
-            className="rounded border border-emerald-800 px-3 py-1 text-sm text-emerald-200 disabled:opacity-50"
-          >
-            Выдать подписку
-          </button>
-        </div>
+          <div className="flex items-center gap-2">
+            <Select
+              id={tierSelectId}
+              size="sm"
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+            >
+              {tiers.map((tier) => (
+                <option key={tier.id} value={tier.id}>
+                  {tier.name} — {tier.price_bonuses} / {tier.default_days} дн.
+                </option>
+              ))}
+            </Select>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={busy}
+              disabled={!selected}
+              onClick={() => void grant()}
+            >
+              Выдать подписку
+            </Button>
+          </div>
+        </CardFooter>
       ) : null}
-    </section>
+    </Card>
   );
 }

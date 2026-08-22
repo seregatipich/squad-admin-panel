@@ -1,8 +1,8 @@
 'use client';
 
-import Link from 'next/link';
 import { use } from 'react';
 
+import { PageContainer, PageHeader } from '@/components/ui';
 import { CompareOnlineView } from './CompareOnlineView';
 
 export default function ComparePlayerOnlinePage({
@@ -17,15 +17,15 @@ export default function ComparePlayerOnlinePage({
   const initialOther = Array.isArray(other) ? other[0] : other;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <Link href={`/all-players/${playerId}`} className="text-sm text-sky-400 hover:text-sky-300">
-          ← К игроку
-        </Link>
-        <h1 className="text-2xl font-semibold">Сравнение онлайна</h1>
-      </div>
+    <PageContainer width="wide">
+      <PageHeader
+        title="Сравнение онлайна"
+        subtitle="Часы, когда оба игрока были на серверах одновременно."
+        backHref={`/all-players/${playerId}`}
+        backLabel="К игроку"
+      />
 
       <CompareOnlineView playerId={playerId} initialOther={initialOther} />
-    </div>
+    </PageContainer>
   );
 }

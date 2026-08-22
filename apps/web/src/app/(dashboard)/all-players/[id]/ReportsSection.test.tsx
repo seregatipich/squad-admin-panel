@@ -36,11 +36,12 @@ describe('ReportsSection', () => {
     );
 
     render(<ReportsSection playerId="player-1" />);
-    expect(screen.getByText('Загрузка…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Загрузка жалоб');
 
     await screen.findByText('Cheating on the server');
     expect(screen.getByText('Toxic chat')).toBeInTheDocument();
-    expect(screen.getByText('Жалобы на игрока (2)')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Жалобы на игрока' })).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
   });
 
   it('hides entirely on 403', async () => {

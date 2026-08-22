@@ -4,7 +4,28 @@ import Link from 'next/link';
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { RoleColorDot } from '@/components/RoleColorDot';
-import { type MarkTypeOption, markIconEmoji, severityTone } from '@/lib/marks';
+import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  SearchField,
+  Select,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+  Toolbar,
+} from '@/components/ui';
+import { type MarkTone, type MarkTypeOption, markIconEmoji, severityTone } from '@/lib/marks';
 
 interface SuspectMark {
   mark_type_id: number;
@@ -39,10 +60,11 @@ interface SuspectsResponse {
 
 type SortOption = 'last_seen_desc' | 'last_seen_asc';
 
-const toneClasses: Record<string, string> = {
-  red: 'border-red-800 bg-red-950/70 text-red-200',
-  amber: 'border-amber-800 bg-amber-950/70 text-amber-200',
-  neutral: 'border-neutral-700 bg-neutral-900 text-neutral-200',
+/** Тяжесть метки — это состояние, и оно читается тоном пилюли (§5). */
+const MARK_TONE: Record<MarkTone, BadgeTone> = {
+  red: 'crit',
+  amber: 'warn',
+  neutral: 'neutral',
 };
 
 function formatDate(iso: string): string {
@@ -79,7 +101,6 @@ export function SuspectsBrowser() {
   const [noActiveBan, setNoActiveBan] = useState(false);
   const [sort, setSort] = useState<SortOption>('last_seen_desc');
 
-  const searchId = useId();
   const sortId = useId();
 
   useEffect(() => {
@@ -150,171 +171,170 @@ export function SuspectsBrowser() {
     });
   }
 
-  return (
-    <div className="space-y-6 max-w-6xl">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Метки</h1>
-        <LiveIndicator lastUpdate={lastUpdate} />
-      </div>
+  const filtersApplied = q.trim() !== '' || markTypeIds.size > 0 || noActiveBan;
 
-      <p className="text-sm text-neutral-400">
-        Список игроков с активными метками (читерство, гриферство и т.п.): быстрый доступ к
-        подозрительным игрокам для проверки и модерации.
-      </p>
+  return (
+    <PageContainer width="wide">
+      <PageHeader
+        title="Метки"
+        subtitle="Игроки с активными метками (читерство, гриферство и т.п.): быстрый доступ к подозрительным игрокам для проверки и модерации."
+        status={<LiveIndicator lastUpdate={lastUpdate} />}
+      />
 
       {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          Ошибка: {error}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить список"
+          description={error}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex-1 min-w-48">
-          <label className="mb-1 block text-xs text-neutral-500" htmlFor={searchId}>
-            Поиск по нику
-          </label>
-          <input
-            id={searchId}
-            type="text"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="текущий или прошлый ник"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-neutral-500" htmlFor={sortId}>
-            Сортировка
-          </label>
-          <select
-            id={sortId}
-            value={sort}
-            onChange={(e) => setSort(e.target.value as SortOption)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          >
-            <option value="last_seen_desc">Недавно на сервере</option>
-            <option value="last_seen_asc">Давно не заходили</option>
-          </select>
-        </div>
-        <label className="flex items-center gap-2 pb-2 text-sm text-neutral-300">
-          <input
-            type="checkbox"
-            checked={noActiveBan}
-            onChange={(e) => setNoActiveBan(e.target.checked)}
-          />
-          Без активного бана
-        </label>
+      <div className="space-y-3">
+        <Toolbar
+          search={
+            <SearchField
+              value={q}
+              onCommit={setQ}
+              label="Поиск по нику"
+              placeholder="текущий или прошлый ник"
+              clearLabel="Очистить поиск"
+            />
+          }
+          filters={
+            <>
+              <Checkbox
+                label="Без активного бана"
+                checked={noActiveBan}
+                onChange={(e) => setNoActiveBan(e.target.checked)}
+              />
+              <label htmlFor={sortId} className="text-xs text-ink-3">
+                Сортировка
+              </label>
+              <Select
+                id={sortId}
+                value={sort}
+                onChange={(e) => setSort(e.target.value as SortOption)}
+              >
+                <option value="last_seen_desc">Недавно на сервере</option>
+                <option value="last_seen_asc">Давно не заходили</option>
+              </Select>
+            </>
+          }
+        />
+
+        {markTypes.length > 0 ? (
+          <fieldset className="flex flex-wrap gap-2">
+            <legend className="sr-only">Фильтр по типам меток</legend>
+            {markTypes.map((type) => {
+              const active = markTypeIds.has(type.id);
+              return (
+                <button
+                  key={type.id}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => toggleMarkType(type.id)}
+                  className={`inline-flex h-7 items-center gap-1.5 rounded-ctl border px-2.5 text-2xs font-medium transition-colors duration-150 ${
+                    active
+                      ? 'border-accent bg-accent-dim text-ink'
+                      : 'border-line bg-raised text-ink-2 hover:text-ink'
+                  }`}
+                >
+                  <span aria-hidden>{markIconEmoji(type.icon)}</span>
+                  <span>{type.label_ru}</span>
+                </button>
+              );
+            })}
+          </fieldset>
+        ) : null}
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {markTypes.map((type) => {
-          const active = markTypeIds.has(type.id);
-          return (
-            <button
-              key={type.id}
-              type="button"
-              onClick={() => toggleMarkType(type.id)}
-              className={`inline-flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs transition-colors ${
-                active
-                  ? toneClasses[severityTone(type.severity)]
-                  : 'border-neutral-800 bg-neutral-950 text-neutral-400 hover:border-neutral-600'
-              }`}
-            >
-              <span aria-hidden>{markIconEmoji(type.icon)}</span>
-              <span>{type.label_ru}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase text-neutral-500">
-              <tr>
-                <th className="py-2 pr-3">Игрок</th>
-                <th className="py-2 pr-3">Метки</th>
-                <th className="py-2 pr-3">Последний визит</th>
-                <th className="py-2 pr-3">Бан</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
+      <Card padding="none">
+        {loading ? (
+          <div className="p-3">
+            <SkeletonTable rows={6} cols={4} label="Загрузка списка" />
+          </div>
+        ) : rows.length === 0 ? (
+          <EmptyState
+            variant={filtersApplied ? 'filtered' : 'initial'}
+            title="Подозреваемых не найдено."
+            description={
+              filtersApplied
+                ? 'Ни один игрок не подходит под запрос и выбранные типы меток.'
+                : 'Ни на одном игроке нет активных меток.'
+            }
+          />
+        ) : (
+          <>
+            <Table ariaLabel="Игроки с активными метками">
+              <TableHead>
                 <tr>
-                  <td colSpan={4} className="py-3 text-center text-xs text-neutral-500">
-                    Загрузка…
-                  </td>
+                  <Th>Игрок</Th>
+                  <Th>Метки</Th>
+                  <Th>Последний визит</Th>
+                  <Th>Бан</Th>
                 </tr>
-              ) : rows.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="py-3 text-center text-xs text-neutral-500">
-                    Подозреваемых не найдено.
-                  </td>
-                </tr>
-              ) : (
-                rows.map((suspect) => (
-                  <tr key={suspect.id} className="border-t border-neutral-900 align-top">
-                    <td className="py-2 pr-3 whitespace-nowrap">
+              </TableHead>
+              <TableBody>
+                {rows.map((suspect) => (
+                  <TableRow key={suspect.id} interactive>
+                    <Td className="whitespace-nowrap">
                       <Link
                         href={`/all-players/${suspect.id}`}
-                        className="text-sky-400 hover:text-sky-300"
+                        className="text-accent no-underline hover:brightness-110"
                       >
                         {suspect.canonical_name}
                       </Link>
                       {suspect.role ? (
-                        <span className="ml-2 inline-flex items-center gap-1.5 text-xs text-neutral-400">
+                        <span className="ml-2 inline-flex items-center gap-1.5 text-xs text-ink-3">
                           <RoleColorDot color={suspect.role.color} size="sm" />
                           {suspect.role.name}
                         </span>
                       ) : null}
-                    </td>
-                    <td className="py-2 pr-3">
-                      <div className="flex flex-wrap gap-1">
+                    </Td>
+                    <Td>
+                      <span className="flex flex-wrap gap-1">
                         {suspect.marks.map((mark) => (
-                          <span
+                          <Badge
                             key={mark.mark_type_id}
+                            size="sm"
+                            tone={MARK_TONE[severityTone(mark.severity)]}
                             title={mark.label_ru}
-                            className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${
-                              toneClasses[severityTone(mark.severity)]
-                            }`}
                           >
                             <span aria-hidden>{markIconEmoji(mark.icon)}</span>
                             <span>{mark.label_ru}</span>
-                          </span>
+                          </Badge>
                         ))}
-                      </div>
-                    </td>
-                    <td className="py-2 pr-3 whitespace-nowrap text-neutral-400">
+                      </span>
+                    </Td>
+                    <Td className="whitespace-nowrap text-ink-3">
                       {formatDate(suspect.last_seen_at)}
-                    </td>
-                    <td className="py-2 pr-3 whitespace-nowrap">
+                    </Td>
+                    <Td className="whitespace-nowrap">
                       {suspect.has_active_ban ? (
-                        <span className="rounded border border-red-800 bg-red-950/70 px-2 py-0.5 text-xs text-red-200">
-                          забанен
-                        </span>
+                        <Badge tone="crit">забанен</Badge>
                       ) : (
-                        <span className="text-xs text-neutral-600">—</span>
+                        <span className="text-ink-3">—</span>
                       )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-        {nextCursor ? (
-          <div className="mt-3 flex justify-center">
-            <button
-              type="button"
-              onClick={() => void loadMore()}
-              disabled={busy}
-              className="rounded border border-neutral-800 px-4 py-1.5 text-xs hover:border-neutral-600 disabled:opacity-40"
-            >
-              {busy ? '…' : 'Показать ещё'}
-            </button>
-          </div>
-        ) : null}
-      </section>
-    </div>
+                    </Td>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {nextCursor ? (
+              <div className="flex justify-center border-t border-line p-3">
+                <Button onClick={() => void loadMore()} loading={busy}>
+                  Показать ещё
+                </Button>
+              </div>
+            ) : null}
+          </>
+        )}
+      </Card>
+    </PageContainer>
   );
 }

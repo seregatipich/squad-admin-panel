@@ -82,7 +82,9 @@ describe('SettingsPage chat-commands section', () => {
     render(<SettingsPage params={Promise.resolve({ id: 'srv-1' })} />);
 
     expect(await screen.findByText('Чат-команды')).toBeInTheDocument();
-    const toggle = screen.getByRole('checkbox', { name: /Включить игровые чат-команды/ });
+    // Переключатель настройки — `button role="switch"` (дизайн-система, §11),
+    // поэтому состояние читается из `aria-checked`, а не из свойства флажка.
+    const toggle = screen.getByRole('switch', { name: /Включить игровые чат-команды/ });
     expect(toggle).toBeChecked();
     expect(screen.getByDisplayValue('Не читерить.')).toBeInTheDocument();
   });
@@ -103,7 +105,7 @@ describe('SettingsPage chat-commands section', () => {
     const user = userEvent.setup();
     render(<SettingsPage params={Promise.resolve({ id: 'srv-1' })} />);
 
-    const toggle = await screen.findByRole('checkbox', { name: /Включить игровые чат-команды/ });
+    const toggle = await screen.findByRole('switch', { name: /Включить игровые чат-команды/ });
     await user.click(toggle);
     await user.click(screen.getByRole('button', { name: 'Сохранить' }));
 

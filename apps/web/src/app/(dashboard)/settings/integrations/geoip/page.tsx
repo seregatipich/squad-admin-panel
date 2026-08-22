@@ -1,6 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  Checkbox,
+  FieldRow,
+  GroupedList,
+  GroupedRow,
+  InlineBanner,
+  PageHeader,
+  TextInput,
+} from '@/components/ui';
 
 interface GeoipSettings {
   account_id: string | null;
@@ -23,8 +39,6 @@ async function readJson<T>(res: Response): Promise<T> {
 }
 
 export default function GeoipIntegrationPage() {
-  const accountFieldId = useId();
-  const licenseFieldId = useId();
   const [settings, setSettings] = useState<GeoipSettings | null>(null);
   const [accountId, setAccountId] = useState('');
   const [licenseKey, setLicenseKey] = useState('');
@@ -32,6 +46,7 @@ export default function GeoipIntegrationPage() {
   const [saving, setSaving] = useState(false);
   const [banner, setBanner] = useState<Banner>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -41,6 +56,7 @@ export default function GeoipIntegrationPage() {
       setSettings(data);
       setAccountId(data.account_id ?? '');
       setEnabled(data.enabled);
+      setErr(null);
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -75,7 +91,6 @@ export default function GeoipIntegrationPage() {
   }
 
   async function clearKey() {
-    if (!confirm('Удалить ключ MaxMind? GeoIP-резолвинг будет отключён.')) return;
     setSaving(true);
     setBanner(null);
     try {
@@ -94,125 +109,121 @@ export default function GeoipIntegrationPage() {
       setBanner({ kind: 'err', text: (e as Error).message });
     } finally {
       setSaving(false);
+      setClearing(false);
     }
   }
 
-  if (err) {
-    return (
-      <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-        Ошибка: {err}
-      </div>
-    );
-  }
-
   return (
-    <div className="max-w-2xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">GeoIP (MaxMind)</h1>
-        <p className="mt-1 text-sm text-neutral-400">
-          Введите MaxMind Account ID и License Key — панель скачает базу GeoLite2-City и будет
-          определять страну/город по IP. Без ключа IP сохраняется, но геоданные остаются пустыми.
-        </p>
-      </div>
+    <>
+      <PageHeader
+        title="GeoIP (MaxMind)"
+        subtitle="Введите Account ID и License Key от MaxMind — панель скачает базу GeoLite2-City и будет определять страну и город по IP. Без ключа IP сохраняется, но геоданные остаются пустыми."
+      />
 
-      {banner ? (
-        <div
-          className={`rounded border p-2 text-xs ${
-            banner.kind === 'ok'
-              ? 'border-emerald-900 bg-emerald-950/50 text-emerald-200'
-              : 'border-red-900 bg-red-950 text-red-200'
-          }`}
-        >
-          {banner.text}
-        </div>
+      {err ? (
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить настройки GeoIP"
+          description={err}
+          action={
+            <Button size="sm" onClick={() => void reload()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
-      <section className="space-y-4 rounded border border-neutral-800 bg-neutral-950 p-4">
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-neutral-400">Статус</span>
-          <span
-            className={settings?.license_key_configured ? 'text-emerald-300' : 'text-neutral-500'}
-          >
-            {settings?.license_key_configured ? 'Ключ настроен' : 'Ключ не настроен'}
-            {settings?.db_present ? ' · база загружена' : ' · база не загружена'}
-          </span>
-        </div>
+      {banner ? (
+        <InlineBanner tone={banner.kind === 'ok' ? 'good' : 'crit'} title={banner.text} />
+      ) : null}
 
-        <div className="space-y-1">
-          <label
-            htmlFor={accountFieldId}
-            className="text-xs uppercase tracking-widest text-neutral-500"
-          >
-            Account ID
-          </label>
-          <input
-            id={accountFieldId}
-            value={accountId}
-            onChange={(e) => setAccountId(e.target.value)}
-            placeholder="123456"
-            className="w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-          />
-        </div>
-
-        <div className="space-y-1">
-          <label
-            htmlFor={licenseFieldId}
-            className="text-xs uppercase tracking-widest text-neutral-500"
-          >
-            License Key
-          </label>
-          <input
-            id={licenseFieldId}
-            type="password"
-            value={licenseKey}
-            onChange={(e) => setLicenseKey(e.target.value)}
-            placeholder={
-              settings?.license_key_configured ? (settings.license_key_mask ?? '') : 'lic-key'
+      <GroupedList title="Состояние">
+        <GroupedRow
+          label="Ключ MaxMind"
+          control={
+            <Badge tone={settings?.license_key_configured ? 'good' : 'neutral'}>
+              {settings?.license_key_configured ? 'Настроен' : 'Не настроен'}
+            </Badge>
+          }
+        />
+        <GroupedRow
+          label="База GeoLite2-City"
+          control={
+            <Badge tone={settings?.db_present ? 'good' : 'neutral'}>
+              {settings?.db_present ? 'Загружена' : 'Не загружена'}
+            </Badge>
+          }
+        />
+        {settings?.last_refreshed_at ? (
+          <GroupedRow
+            label="База обновлена"
+            control={
+              <span className="text-xs text-ink-3">
+                {new Date(settings.last_refreshed_at).toLocaleString('ru-RU')}
+              </span>
             }
-            className="w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-mono"
           />
-          <p className="text-xs text-neutral-600">
-            Оставьте поле пустым, чтобы сохранить текущий ключ.
-          </p>
-        </div>
+        ) : null}
+      </GroupedList>
 
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
+      <Card padding="none">
+        <CardHeader
+          title="Доступ к MaxMind"
+          description="Названия полей совпадают с личным кабинетом MaxMind, чтобы значения не пришлось искать по описанию."
+        />
+        <CardBody className="space-y-4">
+          <FieldRow label="Account ID" hint="Идентификатор аккаунта из личного кабинета MaxMind.">
+            <TextInput
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+              placeholder="123456"
+            />
+          </FieldRow>
+
+          <FieldRow
+            label="License Key"
+            hint="Лицензионный ключ из личного кабинета MaxMind. Оставьте поле пустым, чтобы сохранить текущий."
+          >
+            <TextInput
+              type="password"
+              className="font-mono"
+              value={licenseKey}
+              onChange={(e) => setLicenseKey(e.target.value)}
+              placeholder={
+                settings?.license_key_configured ? (settings.license_key_mask ?? '') : 'lic-key'
+              }
+            />
+          </FieldRow>
+
+          <Checkbox
+            label="Включить GeoIP-резолвинг"
             checked={enabled}
             onChange={(e) => setEnabled(e.target.checked)}
-            className="h-4 w-4"
           />
-          Включить GeoIP-резолвинг
-        </label>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void save()}
-            disabled={saving}
-            className="rounded bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500 disabled:opacity-40"
-          >
-            Сохранить
-          </button>
+        </CardBody>
+        <CardFooter>
           {settings?.license_key_configured ? (
-            <button
-              type="button"
-              onClick={() => void clearKey()}
-              disabled={saving}
-              className="rounded border border-red-900 px-4 py-2 text-sm text-red-400 hover:border-red-700 disabled:opacity-40"
-            >
+            <Button variant="secondary" disabled={saving} onClick={() => setClearing(true)}>
               Удалить ключ
-            </button>
+            </Button>
           ) : null}
-        </div>
+          <Button variant="primary" loading={saving} onClick={() => void save()}>
+            Сохранить
+          </Button>
+        </CardFooter>
+      </Card>
 
-        {settings?.last_refreshed_at ? (
-          <p className="text-xs text-neutral-600">
-            База обновлена: {new Date(settings.last_refreshed_at).toLocaleString()}
-          </p>
-        ) : null}
-      </section>
-    </div>
+      <AlertDialog
+        open={clearing}
+        onClose={() => setClearing(false)}
+        title="Удалить ключ MaxMind"
+        body="Ключ будет стёрт, а GeoIP-резолвинг выключен: страна и город по IP определяться перестанут. Чтобы вернуть их, ключ придётся ввести заново."
+        confirmLabel="Удалить ключ"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={saving}
+        onConfirm={() => void clearKey()}
+      />
+    </>
   );
 }

@@ -1,6 +1,34 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  EmptyState,
+  FieldRow,
+  GroupedRow,
+  IconButton,
+  InlineBanner,
+  PageHeader,
+  Select,
+  Skeleton,
+  SkeletonTable,
+  Switch,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Textarea,
+  TextInput,
+  Th,
+  TrashIcon,
+} from '@/components/ui';
 
 interface AutomationRule {
   id: string;
@@ -46,13 +74,39 @@ const ACTION_OPTIONS = [
   { value: 'notify_admin', label: 'Уведомить админа' },
 ] as const;
 
-const STATUS_BADGE: Record<string, string> = {
-  executed: 'border-emerald-800 bg-emerald-950/50 text-emerald-300',
-  matched: 'border-sky-800 bg-sky-950/50 text-sky-300',
-  no_match: 'border-neutral-700 bg-neutral-900 text-neutral-400',
-  skipped: 'border-amber-800 bg-amber-950/50 text-amber-300',
-  failed: 'border-red-800 bg-red-950/50 text-red-300',
+/** Операторы сравнения хранятся кодом, а оператору показываются знаком и словом. */
+const OPERATOR_OPTIONS = [
+  { value: 'gte', label: '≥ не меньше' },
+  { value: 'lte', label: '≤ не больше' },
+  { value: 'gt', label: '> больше' },
+  { value: 'lt', label: '< меньше' },
+  { value: 'eq', label: '= равно' },
+] as const;
+
+const RCON_COMMANDS = [
+  'AdminBroadcast',
+  'AdminChangeLayer',
+  'AdminSetNextLayer',
+  'AdminEndMatch',
+  'AdminKick',
+  'AdminWarn',
+] as const;
+
+/** Исход запуска: тон подложки и русская подпись, которая его дублирует (§5). */
+const RUN_STATUS: Record<
+  string,
+  { tone: 'good' | 'accent' | 'neutral' | 'warn' | 'crit'; label: string }
+> = {
+  executed: { tone: 'good', label: 'Выполнено' },
+  matched: { tone: 'accent', label: 'Условие совпало' },
+  no_match: { tone: 'neutral', label: 'Не совпало' },
+  skipped: { tone: 'warn', label: 'Пропущено' },
+  failed: { tone: 'crit', label: 'Ошибка' },
 };
+
+function runStatus(status: string) {
+  return RUN_STATUS[status] ?? { tone: 'neutral' as const, label: status };
+}
 
 function conditionLabel(type: string): string {
   return CONDITION_OPTIONS.find((o) => o.value === type)?.label ?? type;
@@ -148,9 +202,11 @@ export default function AutomationPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [form, setForm] = useState<Form>({ ...EMPTY_FORM });
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<AutomationRule | null>(null);
 
   const refresh = useCallback(async () => {
     const [rulesRes, runsRes, meRes] = await Promise.all([
@@ -161,6 +217,7 @@ export default function AutomationPage() {
     if (rulesRes.ok) setRules((await rulesRes.json()) as AutomationRule[]);
     if (runsRes.ok) setRuns((await runsRes.json()) as AutomationRun[]);
     if (meRes.ok) setMe((await meRes.json()) as Me);
+    setLoadFailed(!rulesRes.ok || !runsRes.ok || !meRes.ok);
   }, []);
 
   useEffect(() => {
@@ -253,7 +310,6 @@ export default function AutomationPage() {
 
   async function removeRule(rule: AutomationRule) {
     if (!canManage) return;
-    if (!confirm(`Удалить правило «${rule.name}» и всю его историю срабатываний?`)) return;
     setBusyId(rule.id);
     setError(null);
     try {
@@ -267,377 +323,359 @@ export default function AutomationPage() {
       setError(`Не удалось удалить: ${(err as Error).message}`);
     } finally {
       setBusyId(null);
+      setPendingDelete(null);
     }
   }
 
-  if (!rules || !runs || !me) return <div className="text-neutral-500">Загрузка…</div>;
+  const loading = !rules || !runs || !me;
 
   return (
-    <div className="max-w-4xl space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Автоматизация</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Правила «если условие → действие»: ключевое слово в чате, число игроков, время суток или
-          флаг игрока запускают RCON-команду, кик, предупреждение или уведомление админа. Кнопка
-          «Тест» проверяет правило без выполнения действия; все срабатывания пишутся в историю и
-          журнал аудита.
-          {!canManage ? ' У вас нет прав на изменение правил — доступен только просмотр.' : ''}
-        </p>
-      </header>
+    <>
+      <PageHeader
+        title="Автоматизация"
+        subtitle="Правила «если условие → действие»: ключевое слово в чате, число игроков, время суток или флаг игрока запускают RCON-команду, кик, предупреждение или уведомление админа. Кнопка «Тест» проверяет правило без выполнения действия; все срабатывания пишутся в историю и журнал аудита."
+      />
 
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {error}
-        </div>
-      ) : null}
-      {notice ? (
-        <div className="rounded border border-sky-900 bg-sky-950 p-3 text-sm text-sky-200">
-          {notice}
-        </div>
+      {!loading && !canManage ? (
+        <InlineBanner
+          tone="info"
+          title="Только просмотр"
+          description="У вас нет прав на изменение правил автоматизации."
+        />
       ) : null}
 
-      {canManage ? (
-        <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Добавить правило</h2>
-          <form onSubmit={createRule} className="space-y-3">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Имя</span>
-                <input
-                  type="text"
-                  value={form.name}
-                  onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-                  placeholder="Кик за спам"
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                />
-              </label>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Условие</span>
-                <select
-                  value={form.conditionType}
-                  onChange={(e) => setForm((p) => ({ ...p, conditionType: e.target.value }))}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                >
-                  {CONDITION_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Действие</span>
-                <select
-                  value={form.actionType}
-                  onChange={(e) => setForm((p) => ({ ...p, actionType: e.target.value }))}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                >
-                  {ACTION_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            {form.conditionType === 'chat_keyword' ? (
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Ключевое слово</span>
-                <input
-                  type="text"
-                  value={form.keyword}
-                  onChange={(e) => setForm((p) => ({ ...p, keyword: e.target.value }))}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                />
-              </label>
-            ) : null}
-
-            {form.conditionType === 'player_count' ? (
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Оператор</span>
-                  <select
-                    value={form.operator}
-                    onChange={(e) => setForm((p) => ({ ...p, operator: e.target.value }))}
-                    className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                  >
-                    {['gte', 'lte', 'gt', 'lt', 'eq'].map((op) => (
-                      <option key={op} value={op}>
-                        {op}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Порог</span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={form.threshold}
-                    onChange={(e) =>
-                      setForm((p) => ({ ...p, threshold: Number(e.target.value) || 0 }))
-                    }
-                    className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                  />
-                </label>
-              </div>
-            ) : null}
-
-            {form.conditionType === 'time_of_day' ? (
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Начало (мин от 00:00)</span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={1439}
-                    value={form.startMinute}
-                    onChange={(e) =>
-                      setForm((p) => ({ ...p, startMinute: Number(e.target.value) || 0 }))
-                    }
-                    className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                  />
-                </label>
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Конец (мин от 00:00)</span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={1439}
-                    value={form.endMinute}
-                    onChange={(e) =>
-                      setForm((p) => ({ ...p, endMinute: Number(e.target.value) || 0 }))
-                    }
-                    className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                  />
-                </label>
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Таймзона</span>
-                  <input
-                    type="text"
-                    value={form.timezone}
-                    onChange={(e) => setForm((p) => ({ ...p, timezone: e.target.value }))}
-                    className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                  />
-                </label>
-              </div>
-            ) : null}
-
-            {form.conditionType === 'player_flag' ? (
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Флаг</span>
-                <input
-                  type="text"
-                  value={form.flag}
-                  onChange={(e) => setForm((p) => ({ ...p, flag: e.target.value }))}
-                  placeholder="steam_eos_conflict"
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                />
-              </label>
-            ) : null}
-
-            {form.actionType === 'rcon_command' ? (
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Команда</span>
-                  <select
-                    value={form.command}
-                    onChange={(e) => setForm((p) => ({ ...p, command: e.target.value }))}
-                    className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                  >
-                    {[
-                      'AdminBroadcast',
-                      'AdminChangeLayer',
-                      'AdminSetNextLayer',
-                      'AdminEndMatch',
-                      'AdminKick',
-                      'AdminWarn',
-                    ].map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">
-                    Аргументы (по одному в строке)
-                  </span>
-                  <textarea
-                    value={form.commandArgs}
-                    onChange={(e) => setForm((p) => ({ ...p, commandArgs: e.target.value }))}
-                    className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                    rows={2}
-                  />
-                </label>
-              </div>
-            ) : null}
-
-            {form.actionType === 'kick' ? (
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Причина кика</span>
-                <input
-                  type="text"
-                  value={form.reason}
-                  onChange={(e) => setForm((p) => ({ ...p, reason: e.target.value }))}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                />
-              </label>
-            ) : null}
-
-            {form.actionType === 'warn' || form.actionType === 'notify_admin' ? (
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Сообщение</span>
-                <input
-                  type="text"
-                  value={form.message}
-                  onChange={(e) => setForm((p) => ({ ...p, message: e.target.value }))}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                />
-              </label>
-            ) : null}
-
-            <button
-              type="submit"
-              disabled={creating}
-              className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-            >
-              {creating ? 'Создание…' : 'Добавить правило'}
-            </button>
-          </form>
-        </section>
+      {loadFailed ? (
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить автоматизацию"
+          description="Часть данных не пришла — список правил или история могут быть неполными."
+          action={
+            <Button size="sm" onClick={() => void refresh()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
-      <section className="space-y-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Правила</h2>
-        {rules.length === 0 ? (
-          <div className="rounded border border-neutral-800 bg-neutral-950 p-6 text-center text-sm text-neutral-500">
-            Правил пока нет.
-          </div>
-        ) : (
-          rules.map((rule) => (
-            <div
-              key={rule.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-800 bg-neutral-950 p-4"
-            >
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-base font-semibold">{rule.name}</h3>
-                  <span className="rounded bg-neutral-900 px-2 py-0.5 text-[10px] uppercase text-neutral-400">
-                    {conditionLabel(rule.condition_type)}
-                  </span>
-                  <span className="text-neutral-600">→</span>
-                  <span className="rounded bg-neutral-900 px-2 py-0.5 text-[10px] uppercase text-neutral-400">
-                    {actionLabel(rule.action_type)}
-                  </span>
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                {canManage ? (
-                  <button
-                    type="button"
-                    disabled={busyId === rule.id}
-                    onClick={() => dryRun(rule)}
-                    className="rounded border border-sky-900 px-2 py-1 text-xs text-sky-300 hover:bg-sky-950 disabled:opacity-40"
-                  >
-                    Тест
-                  </button>
-                ) : null}
-                <label
-                  className={`flex items-center gap-2 text-xs ${
-                    canManage ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
-                  }`}
-                >
-                  <span className="text-neutral-400">
-                    {rule.enabled ? 'Включено' : 'Выключено'}
-                  </span>
-                  <input
-                    type="checkbox"
-                    aria-label={`Включить правило ${rule.name}`}
-                    checked={rule.enabled}
-                    disabled={!canManage || busyId === rule.id}
-                    onChange={() => toggleEnabled(rule)}
-                    className="h-4 w-9 cursor-pointer appearance-none rounded-full bg-neutral-800 transition-all checked:bg-sky-600 disabled:cursor-not-allowed"
-                    style={{
-                      backgroundImage:
-                        'radial-gradient(circle 7px at 8px center, white 100%, transparent 100%)',
-                    }}
-                  />
-                </label>
-                {canManage ? (
-                  <button
-                    type="button"
-                    disabled={busyId === rule.id}
-                    onClick={() => removeRule(rule)}
-                    title="Удалить правило"
-                    className="rounded border border-red-900 px-2 py-1 text-xs text-red-300 hover:bg-red-950 disabled:opacity-40"
-                  >
-                    ⌫
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          ))
-        )}
-      </section>
+      {error ? <InlineBanner tone="crit" title={error} /> : null}
+      {notice ? <InlineBanner tone="info" title={notice} /> : null}
 
-      <section className="space-y-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">История срабатываний</h2>
-        {runs.length === 0 ? (
-          <div className="rounded border border-neutral-800 bg-neutral-950 p-6 text-center text-sm text-neutral-500">
-            Срабатываний пока нет.
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded-lg border border-neutral-800">
-            <table className="w-full min-w-[720px] text-left text-xs">
-              <thead className="bg-neutral-900 text-neutral-400">
-                <tr>
-                  <th className="px-3 py-2 font-medium">Время</th>
-                  <th className="px-3 py-2 font-medium">Правило</th>
-                  <th className="px-3 py-2 font-medium">Статус</th>
-                  <th className="px-3 py-2 font-medium">Тест</th>
-                  <th className="px-3 py-2 font-medium">Совпадение</th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map((run) => (
-                  <tr key={run.id} className="border-t border-neutral-900">
-                    <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                      {formatDate(run.fired_at)}
-                    </td>
-                    <td className="px-3 py-2 text-neutral-200">{run.rule_name ?? '—'}</td>
-                    <td className="px-3 py-2">
-                      <span
-                        className={`rounded border px-2 py-0.5 text-[10px] uppercase ${
-                          STATUS_BADGE[run.status] ?? STATUS_BADGE.no_match
-                        }`}
+      {loading ? (
+        <>
+          <Card>
+            <Skeleton variant="row" count={3} label="Загрузка правил автоматизации" />
+          </Card>
+          <Card padding="sm">
+            <SkeletonTable rows={4} cols={5} />
+          </Card>
+        </>
+      ) : (
+        <>
+          {canManage ? (
+            <Card padding="none" as="section">
+              <CardHeader title="Добавить правило" />
+              <form onSubmit={createRule}>
+                <CardBody className="space-y-4">
+                  <FieldRow label="Имя">
+                    <TextInput
+                      value={form.name}
+                      onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                      placeholder="Кик за спам"
+                    />
+                  </FieldRow>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <FieldRow label="Условие">
+                      <Select
+                        value={form.conditionType}
+                        onChange={(e) => setForm((p) => ({ ...p, conditionType: e.target.value }))}
                       >
-                        {run.status}
+                        {CONDITION_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </FieldRow>
+                    <FieldRow label="Действие">
+                      <Select
+                        value={form.actionType}
+                        onChange={(e) => setForm((p) => ({ ...p, actionType: e.target.value }))}
+                      >
+                        {ACTION_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </FieldRow>
+                  </div>
+
+                  {form.conditionType === 'chat_keyword' ? (
+                    <FieldRow label="Ключевое слово">
+                      <TextInput
+                        value={form.keyword}
+                        onChange={(e) => setForm((p) => ({ ...p, keyword: e.target.value }))}
+                      />
+                    </FieldRow>
+                  ) : null}
+
+                  {form.conditionType === 'player_count' ? (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <FieldRow label="Оператор">
+                        <Select
+                          value={form.operator}
+                          onChange={(e) => setForm((p) => ({ ...p, operator: e.target.value }))}
+                        >
+                          {OPERATOR_OPTIONS.map((op) => (
+                            <option key={op.value} value={op.value}>
+                              {op.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </FieldRow>
+                      <FieldRow label="Порог">
+                        <TextInput
+                          type="number"
+                          min={0}
+                          value={form.threshold}
+                          onChange={(e) =>
+                            setForm((p) => ({ ...p, threshold: Number(e.target.value) || 0 }))
+                          }
+                        />
+                      </FieldRow>
+                    </div>
+                  ) : null}
+
+                  {form.conditionType === 'time_of_day' ? (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                      <FieldRow label="Начало, мин от 00:00">
+                        <TextInput
+                          type="number"
+                          min={0}
+                          max={1439}
+                          value={form.startMinute}
+                          onChange={(e) =>
+                            setForm((p) => ({ ...p, startMinute: Number(e.target.value) || 0 }))
+                          }
+                        />
+                      </FieldRow>
+                      <FieldRow label="Конец, мин от 00:00">
+                        <TextInput
+                          type="number"
+                          min={0}
+                          max={1439}
+                          value={form.endMinute}
+                          onChange={(e) =>
+                            setForm((p) => ({ ...p, endMinute: Number(e.target.value) || 0 }))
+                          }
+                        />
+                      </FieldRow>
+                      <FieldRow label="Часовой пояс">
+                        <TextInput
+                          value={form.timezone}
+                          onChange={(e) => setForm((p) => ({ ...p, timezone: e.target.value }))}
+                        />
+                      </FieldRow>
+                    </div>
+                  ) : null}
+
+                  {form.conditionType === 'player_flag' ? (
+                    <FieldRow label="Флаг">
+                      <TextInput
+                        value={form.flag}
+                        onChange={(e) => setForm((p) => ({ ...p, flag: e.target.value }))}
+                        placeholder="steam_eos_conflict"
+                      />
+                    </FieldRow>
+                  ) : null}
+
+                  {form.actionType === 'rcon_command' ? (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <FieldRow label="Команда">
+                        <Select
+                          value={form.command}
+                          onChange={(e) => setForm((p) => ({ ...p, command: e.target.value }))}
+                        >
+                          {RCON_COMMANDS.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </Select>
+                      </FieldRow>
+                      <FieldRow label="Аргументы" hint="По одному в строке.">
+                        <Textarea
+                          value={form.commandArgs}
+                          onChange={(e) => setForm((p) => ({ ...p, commandArgs: e.target.value }))}
+                          rows={2}
+                        />
+                      </FieldRow>
+                    </div>
+                  ) : null}
+
+                  {form.actionType === 'kick' ? (
+                    <FieldRow label="Причина кика">
+                      <TextInput
+                        value={form.reason}
+                        onChange={(e) => setForm((p) => ({ ...p, reason: e.target.value }))}
+                      />
+                    </FieldRow>
+                  ) : null}
+
+                  {form.actionType === 'warn' || form.actionType === 'notify_admin' ? (
+                    <FieldRow label="Сообщение">
+                      <TextInput
+                        value={form.message}
+                        onChange={(e) => setForm((p) => ({ ...p, message: e.target.value }))}
+                      />
+                    </FieldRow>
+                  ) : null}
+                </CardBody>
+                <CardFooter>
+                  <Button type="submit" variant="primary" loading={creating}>
+                    Добавить правило
+                  </Button>
+                </CardFooter>
+              </form>
+            </Card>
+          ) : null}
+
+          <Card padding="none" as="section">
+            <CardHeader title="Правила" count={rules.length > 0 ? rules.length : undefined} />
+            {rules.length === 0 ? (
+              <EmptyState
+                title="Правил пока нет"
+                description={
+                  canManage
+                    ? 'Добавьте первое правило формой выше — до этого автоматика ничего не делает.'
+                    : 'Правила добавляет администратор с правом изменения ролей.'
+                }
+              />
+            ) : (
+              <div className="divide-y divide-line">
+                {rules.map((rule) => (
+                  <GroupedRow
+                    key={rule.id}
+                    label={
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">{rule.name}</span>
+                        <Badge size="sm">{conditionLabel(rule.condition_type)}</Badge>
+                        <span aria-hidden="true" className="text-ink-4">
+                          →
+                        </span>
+                        <Badge size="sm">{actionLabel(rule.action_type)}</Badge>
                       </span>
-                    </td>
-                    <td className="px-3 py-2">
-                      {run.dry_run ? (
-                        <span className="text-sky-400">да</span>
-                      ) : (
-                        <span className="text-neutral-500">нет</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <code className="break-all font-mono text-[11px] text-neutral-500">
-                        {JSON.stringify(run.matched)}
-                      </code>
-                    </td>
-                  </tr>
+                    }
+                    control={
+                      <>
+                        {canManage ? (
+                          <Button
+                            size="sm"
+                            disabled={busyId === rule.id}
+                            onClick={() => void dryRun(rule)}
+                          >
+                            Тест
+                          </Button>
+                        ) : null}
+                        <span className="text-xs text-ink-3">
+                          {rule.enabled ? 'Включено' : 'Выключено'}
+                        </span>
+                        <Switch
+                          label={`Включить правило ${rule.name}`}
+                          checked={rule.enabled}
+                          disabled={!canManage || busyId === rule.id}
+                          onChange={() => void toggleEnabled(rule)}
+                        />
+                        {canManage ? (
+                          <IconButton
+                            icon={<TrashIcon />}
+                            label={`Удалить правило ${rule.name}`}
+                            tone="destructive"
+                            disabled={busyId === rule.id}
+                            onClick={() => setPendingDelete(rule)}
+                          />
+                        ) : null}
+                      </>
+                    }
+                  />
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-    </div>
+              </div>
+            )}
+          </Card>
+
+          <Card padding="none" as="section">
+            <CardHeader
+              title="История срабатываний"
+              count={runs.length > 0 ? runs.length : undefined}
+            />
+            {runs.length === 0 ? (
+              <EmptyState
+                title="Срабатываний пока нет"
+                description="Здесь появятся запуски правил — и настоящие, и проверочные."
+              />
+            ) : (
+              <Table ariaLabel="История срабатываний правил автоматизации">
+                <TableHead>
+                  <tr>
+                    <Th>Время</Th>
+                    <Th>Правило</Th>
+                    <Th>Статус</Th>
+                    <Th>Тест</Th>
+                    <Th>Совпадение</Th>
+                  </tr>
+                </TableHead>
+                <TableBody>
+                  {runs.map((run) => {
+                    const status = runStatus(run.status);
+                    return (
+                      <TableRow key={run.id}>
+                        <Td className="whitespace-nowrap text-xs text-ink-2">
+                          {formatDate(run.fired_at)}
+                        </Td>
+                        <Td>{run.rule_name ?? '—'}</Td>
+                        <Td>
+                          <Badge tone={status.tone} size="sm">
+                            {status.label}
+                          </Badge>
+                        </Td>
+                        <Td>
+                          <Badge tone={run.dry_run ? 'accent' : 'neutral'} size="sm">
+                            {run.dry_run ? 'да' : 'нет'}
+                          </Badge>
+                        </Td>
+                        <Td>
+                          <code className="break-all font-mono text-2xs text-ink-3">
+                            {JSON.stringify(run.matched)}
+                          </code>
+                        </Td>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </Card>
+        </>
+      )}
+
+      <AlertDialog
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title="Удалить правило"
+        body={
+          pendingDelete
+            ? `Правило «${pendingDelete.name}» и вся его история срабатываний будут удалены без возможности восстановления.`
+            : ''
+        }
+        confirmLabel="Удалить правило"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={pendingDelete !== null && busyId === pendingDelete.id}
+        onConfirm={() => {
+          if (pendingDelete) void removeRule(pendingDelete);
+        }}
+      />
+    </>
   );
 }

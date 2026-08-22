@@ -1,6 +1,17 @@
 'use client';
 
 import { useState } from 'react';
+import {
+  Button,
+  Card,
+  CardBody,
+  FieldRow,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Textarea,
+  TextInput,
+} from '@/components/ui';
 
 const STEAM_ID64_RE = /^\d{17}$/;
 const BODY_MIN = 20;
@@ -77,81 +88,67 @@ export default function PublicAppealPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <header className="space-y-1 border-b border-neutral-900 pb-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Апелляция на бан</h1>
-        <p className="text-sm text-neutral-400">
-          Если вы считаете, что бан выдан по ошибке, опишите ситуацию. Заявку рассмотрят
-          администраторы вручную — автоматического снятия бана нет.
-        </p>
-      </header>
+    <PageContainer width="reading">
+      <PageHeader
+        title="Апелляция на бан"
+        subtitle="Если вы считаете, что бан выдан по ошибке, опишите ситуацию. Заявку рассмотрят администраторы вручную — автоматического снятия бана нет."
+      />
 
       {submitted ? (
-        <div className="space-y-3 rounded border border-emerald-900 bg-emerald-950 p-4 text-sm text-emerald-200">
-          <p>Апелляция №{submitted.number} отправлена.</p>
-          <p className="text-emerald-300/90">
-            Сохраните эту ссылку — по ней и только по ней вы узнаете решение:
-          </p>
-          <p className="break-all rounded border border-emerald-900/60 bg-emerald-950/60 px-3 py-2 font-mono text-xs">
-            {`/appeal/${submitted.tracking_token}`}
-          </p>
-        </div>
+        <InlineBanner
+          tone="good"
+          title={`Апелляция №${submitted.number} отправлена.`}
+          description={
+            <>
+              <p>Сохраните эту ссылку — по ней и только по ней вы узнаете решение:</p>
+              <p className="mt-2 break-all rounded-ctl border border-line bg-raised px-2.5 py-2 font-mono text-xs text-ink">
+                {`/appeal/${submitted.tracking_token}`}
+              </p>
+            </>
+          }
+        />
       ) : (
-        <form
-          onSubmit={submit}
-          className="space-y-4 rounded-lg border border-neutral-800 bg-neutral-950 p-5"
-        >
-          {error ? (
-            <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-              {error}
-            </div>
-          ) : null}
+        <Card padding="none">
+          <CardBody>
+            <form onSubmit={submit} className="space-y-4">
+              {error ? <InlineBanner tone="crit" title={error} /> : null}
 
-          <label className="block text-sm">
-            <span className="mb-1 block text-neutral-400">SteamID64</span>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={steamId64}
-              onChange={(e) => setSteamId64(e.target.value)}
-              placeholder="76561198000000000"
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 font-mono text-sm"
-            />
-          </label>
+              <FieldRow label="SteamID64" required>
+                <TextInput
+                  inputMode="numeric"
+                  value={steamId64}
+                  onChange={(e) => setSteamId64(e.target.value)}
+                  placeholder="76561198000000000"
+                  className="font-mono"
+                />
+              </FieldRow>
 
-          <label className="block text-sm">
-            <span className="mb-1 block text-neutral-400">Апелляция</span>
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              rows={6}
-              maxLength={BODY_MAX}
-              placeholder="Опишите, почему бан стоит пересмотреть: что произошло, когда, что вы об этом думаете…"
-              className="w-full resize-y rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm"
-            />
-          </label>
+              <FieldRow label="Апелляция" required hint={`Минимум ${BODY_MIN} символов.`}>
+                <Textarea
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  rows={6}
+                  maxLength={BODY_MAX}
+                  placeholder="Опишите, почему бан стоит пересмотреть: что произошло, когда, что вы об этом думаете…"
+                />
+              </FieldRow>
 
-          <label className="block text-sm">
-            <span className="mb-1 block text-neutral-400">Контакт (необязательно)</span>
-            <input
-              type="text"
-              value={contact}
-              onChange={(e) => setContact(e.target.value)}
-              maxLength={CONTACT_MAX}
-              placeholder="Discord, Steam-профиль…"
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm"
-            />
-          </label>
+              <FieldRow label="Контакт (необязательно)">
+                <TextInput
+                  value={contact}
+                  onChange={(e) => setContact(e.target.value)}
+                  maxLength={CONTACT_MAX}
+                  placeholder="Discord, Steam-профиль…"
+                />
+              </FieldRow>
 
-          <button
-            type="submit"
-            disabled={submitting}
-            className="rounded-md border border-sky-700 bg-sky-950 px-4 py-2 text-sm text-sky-200 hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {submitting ? 'Отправляем…' : 'Отправить апелляцию'}
-          </button>
-        </form>
+              <Button type="submit" variant="primary" loading={submitting}>
+                Отправить апелляцию
+              </Button>
+            </form>
+          </CardBody>
+        </Card>
       )}
-    </div>
+    </PageContainer>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { BannedNameRuleModal } from '@/components/BannedNameRuleModal';
+import { AlertDialog, Badge, Button, ButtonLink } from '@/components/ui';
 import { buildCheckUrl, type NickBanCheckResponse, ruleHref } from './nick-ban';
 
 /**
@@ -22,6 +23,7 @@ export function NickBanSection({
   const [check, setCheck] = useState<NickBanCheckResponse | null>(null);
   const [hidden, setHidden] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [unbanOpen, setUnbanOpen] = useState(false);
   const [unbanning, setUnbanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,9 +50,6 @@ export function NickBanSection({
 
   async function unban() {
     if (!check?.rule) return;
-    if (!confirm(`Разбанить ник «${nick}»? Правило «${check.rule.pattern}» будет отключено.`)) {
-      return;
-    }
     setUnbanning(true);
     setError(null);
     try {
@@ -61,6 +60,7 @@ export function NickBanSection({
         body: JSON.stringify({ is_active: false }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setUnbanOpen(false);
       await load();
     } catch (unbanError) {
       setError((unbanError as Error).message);
@@ -73,34 +73,23 @@ export function NickBanSection({
     <div className="flex flex-wrap items-center gap-2">
       {check.matched && check.rule ? (
         <>
-          <span className="rounded bg-red-950 px-2 py-0.5 text-xs uppercase text-red-300">
-            Ник забанен
-          </span>
-          <a href={ruleHref(check.rule.id)} className="text-xs text-sky-400 hover:text-sky-300">
+          <Badge tone="crit">Ник забанен</Badge>
+          <ButtonLink href={ruleHref(check.rule.id)} variant="plain" size="sm">
             Правило
-          </a>
+          </ButtonLink>
           {check.can_mutate ? (
-            <button
-              type="button"
-              onClick={() => void unban()}
-              disabled={unbanning}
-              className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-300 hover:border-red-700 disabled:opacity-40"
-            >
-              {unbanning ? '…' : 'Разбанить ник'}
-            </button>
+            <Button size="sm" onClick={() => setUnbanOpen(true)}>
+              Разбанить ник
+            </Button>
           ) : null}
         </>
       ) : check.can_mutate ? (
-        <button
-          type="button"
-          onClick={() => setModalOpen(true)}
-          className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-400 hover:border-red-700"
-        >
+        <Button size="sm" variant="destructive" onClick={() => setModalOpen(true)}>
           Забанить ник
-        </button>
+        </Button>
       ) : null}
 
-      {error ? <p className="text-xs text-red-400">{error}</p> : null}
+      {error ? <p className="text-xs text-crit">{error}</p> : null}
 
       <BannedNameRuleModal
         open={modalOpen}
@@ -110,6 +99,24 @@ export function NickBanSection({
           setModalOpen(false);
           void load();
         }}
+      />
+
+      {/* Снятие бана обратимо — правило можно включить снова, поэтому тон
+          обычный, а не критический (§5). */}
+      <AlertDialog
+        open={unbanOpen}
+        onClose={() => setUnbanOpen(false)}
+        title="Разбанить ник"
+        body={
+          check.rule
+            ? `Ник «${nick}» перестанет считаться забаненным: правило «${check.rule.pattern}» будет отключено.`
+            : ''
+        }
+        confirmLabel="Разбанить ник"
+        cancelLabel="Отмена"
+        tone="default"
+        busy={unbanning}
+        onConfirm={unban}
       />
     </div>
   );

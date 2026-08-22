@@ -1,16 +1,35 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useId, useState } from 'react';
+import { CloseIcon, IconButton } from '@/components/ui';
 
 interface Props {
   tags: string[];
   onChange: (tags: string[]) => void;
   maxTags?: number;
+  /**
+   * Доступное имя поля ввода. Видимой подписи у него нет — её даёт заголовок
+   * группы настроек, — поэтому имя живёт в скрытом `<label>`.
+   */
+  label?: string;
 }
 
-export function TagInput({ tags, onChange, maxTags = 20 }: Props) {
+/**
+ * Поле ввода списка тегов: набранные теги показаны «пилюлями» слева, свободное
+ * место справа занимает само поле.
+ *
+ * Раньше контейнер был `<fieldset>` без `<legend>`, который перехватывал клик и
+ * нажатие клавиши, чтобы вручную перевести фокус на поле. И то и другое — обход
+ * платформы: у набора полей без легенды нет доступного имени, а поле внутри
+ * него оставалось безымянным для скринридера. Теперь имя даёт настоящий
+ * `<label>`, а фокус ловится сам: поле растянуто на всю свободную ширину
+ * строки, поэтому щелчок по пустому месту попадает именно в него.
+ *
+ * @param label Доступное имя поля; по умолчанию «Теги».
+ */
+export function TagInput({ tags, onChange, maxTags = 20, label = 'Теги' }: Props) {
   const [input, setInput] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputId = useId();
 
   function addTag(value: string) {
     const trimmed = value.trim().toLowerCase();
@@ -24,28 +43,27 @@ export function TagInput({ tags, onChange, maxTags = 20 }: Props) {
   }
 
   return (
-    <fieldset
-      className="flex flex-wrap items-center gap-1 rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5"
-      onClick={() => inputRef.current?.focus()}
-      onKeyDown={() => inputRef.current?.focus()}
-    >
+    <div className="flex flex-wrap items-center gap-1 rounded-ctl border border-line bg-raised px-2 py-1 focus-within:border-accent">
       {tags.map((tag) => (
         <span
           key={tag}
-          className="inline-flex items-center gap-1 rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-200"
+          className="inline-flex items-center gap-0.5 rounded-full bg-line-2 py-0.5 pl-2.5 pr-0.5 text-2xs text-ink"
         >
           {tag}
-          <button
-            type="button"
+          <IconButton
+            icon={<CloseIcon className="size-3" />}
+            label={`Удалить тег ${tag}`}
+            tone="destructive"
             onClick={() => removeTag(tag)}
-            className="text-neutral-500 hover:text-red-400"
-          >
-            ×
-          </button>
+            className="rounded-full"
+          />
         </span>
       ))}
+      <label htmlFor={inputId} className="sr-only">
+        {label}
+      </label>
       <input
-        ref={inputRef}
+        id={inputId}
         value={input}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={(e) => {
@@ -59,8 +77,8 @@ export function TagInput({ tags, onChange, maxTags = 20 }: Props) {
           }
         }}
         placeholder={tags.length === 0 ? 'Введите тег и нажмите Enter' : ''}
-        className="min-w-[80px] flex-1 border-none bg-transparent text-sm text-neutral-200 outline-none placeholder:text-neutral-600"
+        className="h-7 min-w-[80px] flex-1 border-none bg-transparent text-xs text-ink outline-none placeholder:text-ink-3"
       />
-    </fieldset>
+    </div>
   );
 }

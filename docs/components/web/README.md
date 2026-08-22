@@ -22,6 +22,7 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | `/dashboard` | `src/app/(dashboard)/dashboard/page.tsx` | Hub: bridge status, host metrics tile (live), per-worker heartbeats, server count summary. The metrics tile opens the `MetricHistoryModal` for 24 h history. |
 | `/servers` | `src/app/(dashboard)/servers/page.tsx` | List with live `rcon_state` / `player_count` / `last_poll_at`. |
 | `/servers/new` | `src/app/(dashboard)/servers/new/page.tsx` | Install wizard: collects display name + ports, `POST /servers`, then `POST /servers/:id/install`, subscribes to `/install/ws`. |
+| `/servers/[id]/*` (section frame) | `src/app/(dashboard)/servers/[id]/layout.tsx` | Owns the server name as the section's single `<h1>` and renders the subsection tabs (`SegmentedNav`) with `aria-current`. Subpages render section titles only, never their own `<h1>`. Replaced the row of nine `Конфиги →`-style links that had no active state and no way back. |
 | `/servers/[id]` | `src/app/(dashboard)/servers/[id]/page.tsx` | Detail: status, container stats, RCON, action buttons (start/stop/restart/delete), live `/logs/ws` console. Delete confirm copy explains: "Файлы будут стёрты с диска. Бэкап `.cfg` сохранится в архиве (раздел Архив серверов)." |
 | `/servers/[id]/configs` | `src/app/(dashboard)/servers/[id]/configs/page.tsx` | Monaco editor with three tabs: Editor / История (versions, restore, diff) / Blame. `Admins.cfg`'s `//SQUAD-PANEL` managed segment is highlighted and made read-only inside the editor via a decorations overlay + undo-guard (`managed-segment.ts`; monaco 0.56.0 has no read-only-range API) — the rest of the file stays editable and a banner links to `/settings/groups`. `requires_restart` files show a "Рестарт сервера" button (needs `server:restart` from `/api/v1/me`). CRLF line endings are preserved on save. |
 | `/servers/[id]/events` | `src/app/(dashboard)/servers/[id]/events/page.tsx` | Newest envelopes from `events:server:{id}` via `GET /servers/:id/events`. |
@@ -36,8 +37,37 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | `/roles` | `src/app/(dashboard)/roles/page.tsx` | List all roles with color dot, Системная badge, user count, edit/delete actions. Delete blocked for Owner; confirm dialog shows affected user count. |
 | `/roles/new` | `src/app/(dashboard)/roles/new/page.tsx` | Create role form — wraps `RoleEditor`, POSTs to `/api/v1/roles`, redirects to list. |
 | `/roles/[id]` | `src/app/(dashboard)/roles/[id]/page.tsx` | Edit role — loads via `GET /api/v1/roles/:id`, wraps `RoleEditor`; Owner role is rendered in read-only mode. |
+| `/settings` | `src/app/(dashboard)/settings/page.tsx` | Section index. The address had no page of its own before the HIG redesign — the section's twenty pages existed only as dropdown entries. The list is derived from `lib/nav.ts` and gated by the same `permission` keys, so a page added to the menu appears here without a second edit. `settings/layout.tsx` fixes one content width for the whole section. |
 | `/settings/account` | `src/app/(dashboard)/settings/account/page.tsx` | Session management — list active sessions, revoke individual or all. |
 | `/users` | `src/app/(dashboard)/users/page.tsx` | Table of all players with a non-NULL role (nick, SteamID64, role with color dot, last_seen). "Назначить роль игроку" button (gated by `user:manage_roles`) opens a modal with debounced `GET /api/v1/players?q=` typeahead + role dropdown. The shared expiry control always renders `ДД/ММ/ГГГГ`, opens the native calendar from its whole visible surface, and stores the selected UTC day inclusively; the optional comment is identified as an admin-visible grant reason. Owner is excluded from assignment. |
+
+## Design system
+
+The panel is styled against Apple's Human Interface Guidelines, dark appearance.
+[`design-system.md`](design-system.md) is the contract: type scale, 8-point
+spacing, the four allowed content widths, the three surface levels, colour as
+state, minimum hit targets, required screen states, and the rules for tables and
+grouped lists. Tokens themselves live in `apps/web/src/styles/globals.css`.
+
+`apps/web/src/components/ui/` holds the primitives that implement those rules.
+New UI is composed from them rather than from hand-written utility strings:
+
+| Primitive | What it is |
+|---|---|
+| `PageContainer`, `PageHeader` | The page frame — the only place a page's width, vertical rhythm and `<h1>` are decided. |
+| `Card`, `CardHeader`, `CardBody`, `CardFooter`, `CardGrid` | Grouped surface at one elevation. |
+| `Button`, `ButtonLink`, `IconButton` | Every action. Variants carry intent (`destructive` means irreversible), sizes carry the 32/28px control scale. |
+| `Table`, `TableHead`, `TableBody`, `TableRow`, `Th`, `SortableTh`, `Td` | Thin wrappers over native table elements: sticky head, `aria-sort`, right-aligned numerics. |
+| `Toolbar`, `SearchField`, `Pagination` | The fixed layout above every list — search, filters, counter, reset. |
+| `EmptyState`, `Skeleton`, `SkeletonTable`, `InlineBanner` | The four screen states: loading, empty, error, filtered-empty. |
+| `Modal`, `AlertDialog` | Built on native `<dialog>`, so focus trapping, the top layer and Escape come from the browser. |
+| `Field` (`TextInput`, `Textarea`, `Select`, `Checkbox`, `Switch`, `FieldRow`), `GroupedList`, `GroupedRow` | Forms and inset-grouped settings lists. |
+| `SegmentedControl`, `SegmentedNav`, `Menu` | Switching state and switching route, keyboard-navigable. |
+| `Badge`, `StatusBadge`, `StatusDot`, `StatTile`, `DateTime` | Labels, state, metrics and a single time format. |
+
+Primitives never read the translation dictionary — every human-readable string,
+`aria-label` included, arrives as a prop. That keeps them free of locale
+plumbing and keeps the dictionary a single-owner file.
 
 ## Components
 
@@ -111,5 +141,6 @@ In compose, Caddy serves the prebuilt `next start` output.
 
 ## See also
 
+- [Design system](design-system.md)
 - [Configuration](configuration.md)
 - [Testing](testing.md)

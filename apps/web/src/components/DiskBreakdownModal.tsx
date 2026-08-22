@@ -1,7 +1,20 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useState } from 'react';
+import {
+  EmptyState,
+  IconButton,
+  Modal,
+  RefreshIcon,
+  Skeleton,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
 
 interface DiskUsage {
   configs_bytes: number;
@@ -32,6 +45,14 @@ const fmt = (b: number): string => {
   return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${u[i]}`;
 };
 
+/**
+ * Разбор занятого панелью места.
+ *
+ * Окно построено на нативном `<dialog>` через {@link Modal}: рукописная
+ * подложка из `<div>` не давала ни ловушки фокуса, ни верхнего слоя. Цвета
+ * полосок здесь категориальные — они лишь разделяют соседние группы и ничего
+ * не оценивают (§5).
+ */
 export function DiskBreakdownModal({
   open,
   onOpenChange,
@@ -43,22 +64,12 @@ export function DiskBreakdownModal({
   initialData: DiskUsage | null;
   onRefresh: () => Promise<DiskUsage | null>;
 }): React.JSX.Element | null {
-  const titleId = useId();
   const [data, setData] = useState<DiskUsage | null>(initialData);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (open) setData(initialData);
   }, [open, initialData]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onOpenChange(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onOpenChange]);
 
   async function refresh() {
     if (loading) return;
@@ -86,9 +97,9 @@ export function DiskBreakdownModal({
         // depot, so don't list it twice), saved, and configs.
         const squad: Row[] = (
           [
-            { label: 'Squad depot', bytes: data.depot_volume_bytes, tone: 'depot' as const },
+            { label: 'Депо Squad', bytes: data.depot_volume_bytes, tone: 'depot' as const },
             { label: 'Saved (все серверы)', bytes: data.saved_total_bytes, tone: 'saved' as const },
-            { label: 'Configs', bytes: data.configs_bytes, tone: 'configs' as const },
+            { label: 'Конфигурации', bytes: data.configs_bytes, tone: 'configs' as const },
           ] satisfies Row[]
         ).sort((a, b) => b.bytes - a.bytes);
 
@@ -109,11 +120,11 @@ export function DiskBreakdownModal({
 
         const misc: Row[] = [
           ...otherVolumes,
-          { label: 'Audit archive', bytes: data.audit_archive_bytes, tone: 'misc' as const },
+          { label: 'Архив аудита', bytes: data.audit_archive_bytes, tone: 'misc' as const },
         ].sort((a, b) => b.bytes - a.bytes);
 
         const result: Group[] = [{ title: 'Squad', rows: squad }];
-        if (images.length > 0) result.push({ title: 'Docker images', rows: images });
+        if (images.length > 0) result.push({ title: 'Образы Docker', rows: images });
         if (misc.length > 0) result.push({ title: 'Прочее', rows: misc });
         return result;
       })()
@@ -138,158 +149,114 @@ export function DiskBreakdownModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      onClick={() => onOpenChange(false)}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') onOpenChange(false);
-      }}
+    <Modal
+      open
+      onClose={() => onOpenChange(false)}
+      title="Что занимает панель"
+      size="lg"
+      closeLabel="Закрыть"
     >
-      <div
-        className="w-[90vw] max-w-2xl rounded-lg border border-neutral-800 bg-neutral-950 p-6 text-sm text-neutral-200"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-        role="document"
-      >
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2
-            id={titleId}
-            className="text-sm font-semibold uppercase tracking-widest text-neutral-300"
-          >
-            Что занимает панель
-          </h2>
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            className="text-neutral-400 hover:text-neutral-200"
-            aria-label="Закрыть"
-          >
-            ✕
-          </button>
-        </div>
-
-        {data === null ? (
-          <div className="flex h-32 items-center justify-center text-neutral-500">
-            {loading ? 'Загрузка…' : 'Нет данных'}
-          </div>
+      {data === null ? (
+        loading ? (
+          <Skeleton variant="row" count={5} label="Загрузка разбора диска" />
         ) : (
-          <div className="space-y-5">
-            <div className="flex items-center justify-between gap-3 border-b border-neutral-900 pb-3">
-              <div className="text-sm">
-                Всего:{' '}
-                <strong className="font-mono text-neutral-100">
-                  {fmt(data.total_panel_bytes)}
-                </strong>{' '}
-                <span className="text-neutral-500">·</span>{' '}
-                <span className="font-mono">{data.panel_pct.toFixed(1)}%</span> диска{' '}
-                <span className="text-neutral-500">·</span>{' '}
-                <span className="text-neutral-400">
-                  обновлено {data.cache_age_seconds} сек назад
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={refresh}
-                disabled={loading}
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-300 hover:border-sky-700 hover:text-sky-300 disabled:cursor-not-allowed disabled:opacity-50"
-                aria-label="Обновить"
-                title="Обновить"
-              >
-                <span className={`inline-block ${loading ? 'animate-spin' : ''}`}>↻</span>
-              </button>
+          <EmptyState
+            title="Нет данных"
+            description="Агент ещё не присылал разбор занятого места. Обновите позже."
+          />
+        )
+      ) : (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between gap-3 border-b border-line pb-3">
+            <div className="text-[13px]">
+              Всего: <strong className="font-mono text-ink">{fmt(data.total_panel_bytes)}</strong>{' '}
+              <span className="text-ink-3">·</span>{' '}
+              <span className="font-mono">{data.panel_pct.toFixed(1)}%</span> диска{' '}
+              <span className="text-ink-3">·</span>{' '}
+              <span className="text-ink-3">обновлено {data.cache_age_seconds} сек назад</span>
             </div>
-
-            <div className="space-y-4">
-              {groups.map((group) => {
-                const groupTotal = group.rows.reduce((sum, r) => sum + r.bytes, 0);
-                return (
-                  <div key={group.title}>
-                    <div className="mb-2 flex items-baseline justify-between gap-3">
-                      <span className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-                        {group.title}
-                      </span>
-                      <span className="font-mono text-xs tabular-nums text-neutral-500">
-                        {fmt(groupTotal)}
-                        {total > 0 ? (
-                          <span className="ml-2 text-neutral-600">
-                            {((groupTotal / total) * 100).toFixed(1)}%
-                          </span>
-                        ) : null}
-                      </span>
-                    </div>
-                    <ul className="space-y-1.5">
-                      {group.rows.map((row) => {
-                        const pct = total > 0 ? (row.bytes / total) * 100 : 0;
-                        return (
-                          <li key={row.label} className="space-y-1">
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="truncate text-neutral-200" title={row.label}>
-                                {row.label}
-                              </span>
-                              <span className="shrink-0 font-mono text-xs tabular-nums text-neutral-400">
-                                <span className="text-neutral-200">{fmt(row.bytes)}</span>
-                                <span className="ml-2 text-neutral-600">{pct.toFixed(1)}%</span>
-                              </span>
-                            </div>
-                            <div className="h-1 w-full overflow-hidden rounded-full bg-neutral-900">
-                              <div
-                                className={`h-full ${toneClass(row.tone)}`}
-                                style={{ width: `${Math.min(100, pct)}%` }}
-                              />
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                );
-              })}
-            </div>
-
-            {sortedSaved.length > 0 ? (
-              <div>
-                <div className="mb-2 text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-                  По серверам (saved)
-                </div>
-                <div className="max-h-72 overflow-y-auto rounded border border-neutral-900">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-neutral-950">
-                      <tr className="text-left text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-                        <th className="border-b border-neutral-900 px-3 py-1.5 font-medium">
-                          Server
-                        </th>
-                        <th className="border-b border-neutral-900 px-3 py-1.5 text-right font-medium">
-                          Saved
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-neutral-900">
-                      {sortedSaved.map((s) => (
-                        <tr key={s.uuid} className="hover:bg-neutral-900/40">
-                          <td className="px-3 py-1.5">
-                            <Link
-                              href={`/servers/${s.uuid}`}
-                              className="font-mono text-sky-400 hover:text-sky-300"
-                            >
-                              {s.uuid.slice(0, 8)}
-                            </Link>
-                          </td>
-                          <td className="px-3 py-1.5 text-right font-mono tabular-nums text-neutral-300">
-                            {fmt(s.bytes)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ) : null}
+            <IconButton
+              icon={<RefreshIcon className={loading ? 'size-4 animate-spin' : 'size-4'} />}
+              label="Обновить"
+              onClick={refresh}
+              disabled={loading}
+            />
           </div>
-        )}
-      </div>
-    </div>
+
+          <div className="space-y-4">
+            {groups.map((group) => {
+              const groupTotal = group.rows.reduce((sum, r) => sum + r.bytes, 0);
+              return (
+                <div key={group.title}>
+                  <div className="mb-2 flex items-baseline justify-between gap-3">
+                    <span className="text-[13px] font-semibold text-ink">{group.title}</span>
+                    <span className="font-mono text-xs tabular-nums text-ink-3">
+                      {fmt(groupTotal)}
+                      {total > 0 ? (
+                        <span className="ml-2">{((groupTotal / total) * 100).toFixed(1)}%</span>
+                      ) : null}
+                    </span>
+                  </div>
+                  <ul className="space-y-1.5">
+                    {group.rows.map((row) => {
+                      const pct = total > 0 ? (row.bytes / total) * 100 : 0;
+                      return (
+                        <li key={row.label} className="space-y-1">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="truncate text-[13px] text-ink-2" title={row.label}>
+                              {row.label}
+                            </span>
+                            <span className="shrink-0 font-mono text-xs tabular-nums text-ink-3">
+                              <span className="text-ink">{fmt(row.bytes)}</span>
+                              <span className="ml-2">{pct.toFixed(1)}%</span>
+                            </span>
+                          </div>
+                          <div className="h-1 w-full overflow-hidden rounded-full bg-raised">
+                            <div
+                              className={`h-full ${toneClass(row.tone)}`}
+                              style={{ width: `${Math.min(100, pct)}%` }}
+                            />
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+
+          {sortedSaved.length > 0 ? (
+            <div>
+              <div className="mb-2 text-[13px] font-semibold text-ink">По серверам (Saved)</div>
+              <div className="rounded-card border border-line">
+                <Table maxHeight="18rem" ariaLabel="Место, занятое каталогами Saved по серверам">
+                  <TableHead>
+                    <TableRow>
+                      <Th>Сервер</Th>
+                      <Th align="right">Saved</Th>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {sortedSaved.map((s) => (
+                      <TableRow key={s.uuid} interactive>
+                        <Td>
+                          <Link href={`/servers/${s.uuid}`} className="font-mono text-accent">
+                            {s.uuid.slice(0, 8)}
+                          </Link>
+                        </Td>
+                        <Td numeric className="font-mono">
+                          {fmt(s.bytes)}
+                        </Td>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </Modal>
   );
 }

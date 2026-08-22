@@ -3,6 +3,20 @@
 import { use, useCallback, useEffect, useState } from 'react';
 import { TagInput } from '@/components/TagInput';
 import {
+  Badge,
+  type BadgeTone,
+  Button,
+  FieldRow,
+  GroupedList,
+  GroupedRow,
+  InlineBanner,
+  PageContainer,
+  Skeleton,
+  Switch,
+  Textarea,
+  TextInput,
+} from '@/components/ui';
+import {
   licenseRestartRequired,
   type RnsquadjsIntegration,
   rnsquadjsModeLabel,
@@ -34,11 +48,29 @@ interface Settings {
 
 const RULES_TEXT_MAX = 300;
 
-const RNSQUADJS_PILL_TONE: Record<'green' | 'amber' | 'neutral', string> = {
-  green: 'bg-emerald-900/60 text-emerald-300',
-  amber: 'bg-amber-900/60 text-amber-300',
-  neutral: 'bg-neutral-800 text-neutral-400',
+/** Тон пилюли состояния сайдкара; слово в самой пилюле несёт тот же смысл (§5). */
+const RNSQUADJS_PILL_TONE: Record<'green' | 'amber' | 'neutral', BadgeTone> = {
+  green: 'good',
+  amber: 'warn',
+  neutral: 'neutral',
 };
+
+/** Сетевые порты сервера: ключ настройки и подпись строки. */
+const PORT_FIELDS = [
+  ['game_port', 'Игровой порт'],
+  ['query_port', 'Порт запросов'],
+  ['beacon_port', 'Порт маяка'],
+  ['rcon_port', 'Порт RCON'],
+] as const;
+
+/** Лимиты ресурсов контейнера: ключ настройки, подпись строки и минимум. */
+const RESOURCE_FIELDS = [
+  ['memory_high_mb', 'Память, мягкий предел (МБ)', 2048],
+  ['memory_max_mb', 'Память, жёсткий предел (МБ)', 2048],
+  ['cpu_weight', 'Вес CPU', 1],
+  ['io_weight', 'Вес ввода-вывода', 10],
+  ['niceness', 'Приоритет (nice)', -20],
+] as const;
 
 interface ServerInfo {
   status: string;
@@ -271,7 +303,11 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   }
 
   if (!settings) {
-    return <div className="p-6 text-neutral-500">Загрузка...</div>;
+    return (
+      <PageContainer width="reading">
+        <Skeleton variant="card" count={4} label="Настройки сервера загружаются" />
+      </PageContainer>
+    );
   }
 
   const val = <K extends keyof Settings>(key: K) =>
@@ -280,367 +316,355 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const dirty = Object.keys(draft).length > 0;
 
   return (
-    <div className="mx-auto max-w-2xl py-6">
-      <h1 className="mb-6 text-xl font-semibold text-neutral-100">
-        Настройки — {serverInfo?.display_name}
-      </h1>
+    <PageContainer width="reading">
+      {err ? <InlineBanner tone="crit" title={err} /> : null}
+      {saved ? <InlineBanner tone="good" title="Сохранено" /> : null}
 
-      {err && (
-        <div className="mb-4 rounded border border-red-900 bg-red-950 px-3 py-2 text-sm text-red-300">
-          {err}
+      <GroupedList title="Теги" footnote="Теги помогают фильтровать серверы в списке.">
+        <div className="px-4 py-3">
+          <TagInput
+            tags={tags}
+            onChange={async (newTags) => {
+              setTags(newTags);
+              try {
+                await fetch(`/api/v1/servers/${id}`, {
+                  method: 'PATCH',
+                  credentials: 'include',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ tags: newTags }),
+                });
+              } catch {
+                /* best effort */
+              }
+            }}
+          />
         </div>
-      )}
-      {saved && (
-        <div className="mb-4 rounded border border-emerald-900 bg-emerald-950 px-3 py-2 text-sm text-emerald-300">
-          Сохранено
-        </div>
-      )}
+      </GroupedList>
 
-      <section className="mb-6">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
-          Теги
-        </h2>
-        <TagInput
-          tags={tags}
-          onChange={async (newTags) => {
-            setTags(newTags);
-            try {
-              await fetch(`/api/v1/servers/${id}`, {
-                method: 'PATCH',
-                credentials: 'include',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ tags: newTags }),
-              });
-            } catch {
-              /* best effort */
+      <GroupedList
+        title="Сеть"
+        footnote={
+          isRunning
+            ? 'Порты меняются только на остановленном сервере — остановите его, чтобы поля стали доступны.'
+            : 'Порты применяются при следующем запуске сервера.'
+        }
+      >
+        {PORT_FIELDS.map(([key, label]) => (
+          <GroupedRow
+            key={key}
+            label={label}
+            control={
+              <div className="w-28">
+                <TextInput
+                  type="number"
+                  aria-label={label}
+                  value={val(key) as number}
+                  onChange={(e) => setField(key, Number(e.target.value))}
+                  disabled={!!isRunning}
+                  min={1024}
+                  max={65535}
+                />
+              </div>
             }
-          }}
-        />
-      </section>
+          />
+        ))}
+      </GroupedList>
 
-      <section className="mb-6">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
-          Сеть
-        </h2>
-        {isRunning && (
-          <p className="mb-2 text-xs text-amber-400">Остановите сервер для изменения портов</p>
-        )}
-        <div className="grid grid-cols-2 gap-3">
-          {(
-            [
-              ['game_port', 'Game Port'],
-              ['query_port', 'Query Port'],
-              ['beacon_port', 'Beacon Port'],
-              ['rcon_port', 'RCON Port'],
-            ] as const
-          ).map(([key, label]) => (
-            <label key={key} className="block">
-              <span className="text-xs text-neutral-500">{label}</span>
-              <input
+      <GroupedList title="Игра">
+        <GroupedRow
+          label="Максимум игроков"
+          control={
+            <div className="w-28">
+              <TextInput
                 type="number"
-                value={val(key) as number}
-                onChange={(e) => setField(key, Number(e.target.value))}
-                disabled={!!isRunning}
-                min={1024}
-                max={65535}
-                className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm disabled:opacity-50"
+                aria-label="Максимум игроков"
+                value={val('max_players') as number}
+                onChange={(e) => setField('max_players', Number(e.target.value))}
+                min={1}
+                max={100}
               />
-            </label>
-          ))}
-        </div>
-      </section>
-
-      <section className="mb-6">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
-          Игра
-        </h2>
-        <div className="grid grid-cols-2 gap-3">
-          <label className="block">
-            <span className="text-xs text-neutral-500">Max Players</span>
-            <input
-              type="number"
-              value={val('max_players') as number}
-              onChange={(e) => setField('max_players', Number(e.target.value))}
-              min={1}
-              max={100}
-              className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-xs text-neutral-500">Tickrate</span>
-            <input
-              type="number"
-              value={val('tickrate') as number}
-              onChange={(e) => setField('tickrate', Number(e.target.value))}
-              min={10}
-              max={60}
-              className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-            />
-          </label>
-        </div>
-      </section>
-
-      <section className="mb-6">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
-          Чат-команды
-        </h2>
-        <p className="mb-2 text-xs text-neutral-500">
-          Игровые команды <code>!stats</code>, <code>!rules</code>, <code>!report</code> через RCON.
-          Отключите, если RNSquadJS обрабатывает чат-команды сам.
-        </p>
-        <label className="mb-3 flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={val('chat_commands_enabled') as boolean}
-            onChange={(e) => setField('chat_commands_enabled', e.target.checked)}
-            className="h-4 w-4 rounded border-neutral-700 bg-neutral-950"
-          />
-          <span className="text-sm text-neutral-200">Включить игровые чат-команды</span>
-        </label>
-        <label className="block">
-          <span className="text-xs text-neutral-500">Текст для !rules</span>
-          <textarea
-            value={(val('rules_text') as string | null) ?? ''}
-            onChange={(e) => setField('rules_text', e.target.value === '' ? null : e.target.value)}
-            maxLength={RULES_TEXT_MAX}
-            rows={3}
-            placeholder="Правила не заданы"
-            className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-          />
-        </label>
-      </section>
-
-      {rnsquadjs && (
-        <section className="mb-6">
-          <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
-            Интеграция RNSquadJS
-          </h2>
-          <p className="mb-2 text-xs text-neutral-500">{rnsquadjsModeLabel(rnsquadjs.mode).hint}</p>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-xs text-neutral-200">
-              {rnsquadjsModeLabel(rnsquadjs.mode).title}
-            </span>
-            <span
-              className={`rounded px-2 py-0.5 text-xs ${
-                RNSQUADJS_PILL_TONE[rnsquadjsStatusPill(rnsquadjs.status).tone]
-              }`}
-            >
-              {rnsquadjsStatusPill(rnsquadjs.status).text}
-            </span>
-          </div>
-          <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
-            <div>
-              <dt className="text-neutral-500">Переключён на сайдкар</dt>
-              <dd className="mt-0.5 text-neutral-200">{rnsquadjs.cutover ? 'Да' : 'Нет'}</dd>
             </div>
-            <div>
-              <dt className="text-neutral-500">Последнее изменение связи</dt>
-              <dd className="mt-0.5 text-neutral-200">
+          }
+        />
+        <GroupedRow
+          label="Тикрейт"
+          control={
+            <div className="w-28">
+              <TextInput
+                type="number"
+                aria-label="Тикрейт"
+                value={val('tickrate') as number}
+                onChange={(e) => setField('tickrate', Number(e.target.value))}
+                min={10}
+                max={60}
+              />
+            </div>
+          }
+        />
+      </GroupedList>
+
+      <GroupedList
+        title="Чат-команды"
+        footnote="Игровые команды !stats, !rules, !report выполняются через RCON. Отключите, если RNSquadJS обрабатывает чат-команды сам."
+      >
+        <GroupedRow
+          label="Включить игровые чат-команды"
+          description="Панель отвечает на команды игроков в игровом чате"
+          control={
+            <Switch
+              checked={val('chat_commands_enabled') as boolean}
+              onChange={(next) => setField('chat_commands_enabled', next)}
+              label="Включить игровые чат-команды"
+            />
+          }
+        />
+        <div className="px-4 py-3">
+          <FieldRow label="Текст для !rules" hint={`Не длиннее ${RULES_TEXT_MAX} символов.`}>
+            <Textarea
+              value={(val('rules_text') as string | null) ?? ''}
+              onChange={(e) =>
+                setField('rules_text', e.target.value === '' ? null : e.target.value)
+              }
+              maxLength={RULES_TEXT_MAX}
+              rows={3}
+              placeholder="Правила не заданы"
+            />
+          </FieldRow>
+        </div>
+      </GroupedList>
+
+      {rnsquadjs ? (
+        <GroupedList
+          title="Интеграция RNSquadJS"
+          footnote="Переключение и откат сайдкара выполняются отдельным правом server:stop; эта секция только показывает состояние."
+        >
+          <GroupedRow
+            label="Источник событий"
+            description={rnsquadjsModeLabel(rnsquadjs.mode).hint}
+            control={<Badge>{rnsquadjsModeLabel(rnsquadjs.mode).title}</Badge>}
+          />
+          <GroupedRow
+            label="Связь сайдкара"
+            control={
+              <Badge tone={RNSQUADJS_PILL_TONE[rnsquadjsStatusPill(rnsquadjs.status).tone]}>
+                {rnsquadjsStatusPill(rnsquadjs.status).text}
+              </Badge>
+            }
+          />
+          <GroupedRow
+            label="Переключён на сайдкар"
+            control={
+              <span className="text-[13px] text-ink">{rnsquadjs.cutover ? 'Да' : 'Нет'}</span>
+            }
+          />
+          <GroupedRow
+            label="Последнее изменение связи"
+            control={
+              <span className="text-[13px] tabular-nums text-ink">
                 {rnsquadjs.status
                   ? new Date(rnsquadjs.status.last_change).toLocaleString('ru-RU')
                   : '—'}
-              </dd>
-            </div>
-          </dl>
-          <p className="mt-2 text-xs text-neutral-500">
-            Переключение и откат сайдкара выполняются отдельным правом <code>server:stop</code>; эта
-            секция только показывает состояние.
-          </p>
-        </section>
-      )}
-
-      <section className="mb-6">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
-          Архив логов
-        </h2>
-        <p className="mb-2 text-xs text-neutral-500">
-          Перед удалением по 10-дневному retention ротированный <code>SquadGame*.log</code>{' '}
-          копируется в restic-бэкап (хранение 7д/4н/6м). По умолчанию отключено.
-        </p>
-        <label className="mb-3 flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={val('archive_logs_to_backup') as boolean}
-            onChange={(e) => setField('archive_logs_to_backup', e.target.checked)}
-            className="h-4 w-4 rounded border-neutral-700 bg-neutral-950"
+              </span>
+            }
           />
-          <span className="text-sm text-neutral-200">Архивировать в backup перед удалением</span>
-        </label>
-      </section>
+        </GroupedList>
+      ) : null}
 
-      {canManageServer && (
-        <section className="mb-6">
-          <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
-            Пороги сидинга
-          </h2>
-          {seedingErr && (
-            <div className="mb-2 rounded border border-red-900 bg-red-950 px-3 py-2 text-sm text-red-300">
-              {seedingErr}
-            </div>
-          )}
-          {seedingSaved && (
-            <div className="mb-2 rounded border border-emerald-900 bg-emerald-950 px-3 py-2 text-sm text-emerald-300">
-              Сохранено
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            <label className="block">
-              <span className="text-xs text-neutral-500">Порог live (игроков)</span>
-              <input
-                type="number"
-                value={seedingDraft.seed_live_at ?? settings.seed_live_at}
-                onChange={(e) => {
-                  setSeedingDraft((prev) => ({ ...prev, seed_live_at: Number(e.target.value) }));
-                  setSeedingSaved(false);
-                }}
-                min={1}
-                max={200}
-                className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-              />
-            </label>
-            <label className="block">
-              <span className="text-xs text-neutral-500">Гистерезис (игроков)</span>
-              <input
-                type="number"
-                value={seedingDraft.seed_hysteresis ?? settings.seed_hysteresis}
-                onChange={(e) => {
-                  setSeedingDraft((prev) => ({
-                    ...prev,
-                    seed_hysteresis: Number(e.target.value),
-                  }));
-                  setSeedingSaved(false);
-                }}
-                min={0}
-                max={50}
-                className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-              />
-            </label>
-          </div>
-          <button
-            type="button"
-            disabled={Object.keys(seedingDraft).length === 0 || seedingBusy}
-            onClick={saveSeedingSettings}
-            className="mt-3 rounded bg-sky-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-40"
+      <GroupedList
+        title="Архив логов"
+        footnote="Перед удалением по 10-дневному retention ротированный SquadGame*.log копируется в restic-бэкап (хранение 7д/4н/6м). По умолчанию отключено."
+      >
+        <GroupedRow
+          label="Архивировать в backup перед удалением"
+          control={
+            <Switch
+              checked={val('archive_logs_to_backup') as boolean}
+              onChange={(next) => setField('archive_logs_to_backup', next)}
+              label="Архивировать в backup перед удалением"
+            />
+          }
+        />
+      </GroupedList>
+
+      {canManageServer ? (
+        <div className="space-y-3">
+          {seedingErr ? <InlineBanner tone="crit" title={seedingErr} /> : null}
+          {seedingSaved ? <InlineBanner tone="good" title="Сохранено" /> : null}
+          <GroupedList
+            title="Пороги сидинга"
+            footnote="Сервер считается «живым», когда игроков не меньше порога; гистерезис не даёт состоянию дрожать у границы."
           >
-            {seedingBusy ? 'Сохранение...' : 'Сохранить'}
-          </button>
-        </section>
-      )}
-
-      <section className="mb-6">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
-          Ресурсы
-        </h2>
-        <p className="mb-2 text-xs text-neutral-500">Применяется при следующем запуске</p>
-        <div className="grid grid-cols-2 gap-3">
-          {(
-            [
-              ['memory_high_mb', 'Memory High (MB)', 2048],
-              ['memory_max_mb', 'Memory Max (MB)', 2048],
-              ['cpu_weight', 'CPU Weight', 1],
-              ['io_weight', 'IO Weight', 10],
-              ['niceness', 'Nice', -20],
-            ] as const
-          ).map(([key, label, min]) => (
-            <label key={key} className="block">
-              <span className="text-xs text-neutral-500">{label}</span>
-              <input
-                type="number"
-                value={(val(key) as number | null) ?? ''}
-                onChange={(e) =>
-                  setField(key, e.target.value === '' ? null : Number(e.target.value))
-                }
-                min={min}
-                placeholder="Нет лимита"
-                className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-              />
-            </label>
-          ))}
-          <label className="block">
-            <span className="text-xs text-neutral-500">CPU Affinity</span>
-            <input
-              value={(val('cpu_affinity') as string | null) ?? ''}
-              onChange={(e) =>
-                setField('cpu_affinity', e.target.value === '' ? null : e.target.value)
+            <GroupedRow
+              label="Порог live"
+              description="Игроков"
+              control={
+                <div className="w-28">
+                  <TextInput
+                    type="number"
+                    aria-label="Порог live (игроков)"
+                    value={seedingDraft.seed_live_at ?? settings.seed_live_at}
+                    onChange={(e) => {
+                      setSeedingDraft((prev) => ({
+                        ...prev,
+                        seed_live_at: Number(e.target.value),
+                      }));
+                      setSeedingSaved(false);
+                    }}
+                    min={1}
+                    max={200}
+                  />
+                </div>
               }
-              placeholder="Нет ограничения"
-              className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
             />
-          </label>
+            <GroupedRow
+              label="Гистерезис"
+              description="Игроков"
+              control={
+                <div className="w-28">
+                  <TextInput
+                    type="number"
+                    aria-label="Гистерезис (игроков)"
+                    value={seedingDraft.seed_hysteresis ?? settings.seed_hysteresis}
+                    onChange={(e) => {
+                      setSeedingDraft((prev) => ({
+                        ...prev,
+                        seed_hysteresis: Number(e.target.value),
+                      }));
+                      setSeedingSaved(false);
+                    }}
+                    min={0}
+                    max={50}
+                  />
+                </div>
+              }
+            />
+          </GroupedList>
+          <div className="flex justify-end">
+            <Button
+              variant="primary"
+              disabled={Object.keys(seedingDraft).length === 0}
+              loading={seedingBusy}
+              onClick={saveSeedingSettings}
+            >
+              Сохранить пороги
+            </Button>
+          </div>
         </div>
-      </section>
+      ) : null}
 
-      <section className="mb-6">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-widest text-neutral-400">
-          Лицензия
-        </h2>
-        {licenseRestartRequired(
-          license?.updated_at ?? null,
-          container?.running ?? false,
-          container?.started_at ?? null,
-        ) ? (
-          <p className="mb-2 flex items-center gap-2 text-xs text-amber-400">
-            <span className="rounded bg-amber-800 px-1.5 py-0.5 text-[10px] text-amber-100">
-              рестарт
-            </span>
-            Лицензия сохранена и применится после перезапуска сервера
-          </p>
-        ) : (
-          <p className="mb-2 text-xs text-neutral-500">
-            {license?.configured
-              ? 'Лицензия привязана и применена'
-              : 'License.cfg записывается панелью; применяется после перезапуска сервера'}
-          </p>
-        )}
-        <div className="grid grid-cols-2 gap-3">
-          <label className="block">
-            <span className="text-xs text-neutral-500">License ID</span>
-            <input
-              value={licenseId}
-              onChange={(e) => setLicenseId(e.target.value)}
-              placeholder="Не указан"
-              className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
+      <GroupedList title="Ресурсы" footnote="Применяется при следующем запуске.">
+        {RESOURCE_FIELDS.map(([key, label, min]) => (
+          <GroupedRow
+            key={key}
+            label={label}
+            control={
+              <div className="w-32">
+                <TextInput
+                  type="number"
+                  aria-label={label}
+                  value={(val(key) as number | null) ?? ''}
+                  onChange={(e) =>
+                    setField(key, e.target.value === '' ? null : Number(e.target.value))
+                  }
+                  min={min}
+                  placeholder="Нет лимита"
+                />
+              </div>
+            }
+          />
+        ))}
+        <GroupedRow
+          label="Привязка к ядрам (CPU affinity)"
+          control={
+            <div className="w-32">
+              <TextInput
+                aria-label="Привязка к ядрам (CPU affinity)"
+                value={(val('cpu_affinity') as string | null) ?? ''}
+                onChange={(e) =>
+                  setField('cpu_affinity', e.target.value === '' ? null : e.target.value)
+                }
+                placeholder="Нет ограничения"
+              />
+            </div>
+          }
+        />
+      </GroupedList>
+
+      <div className="space-y-3">
+        <GroupedList
+          title="Лицензия"
+          footnote={
+            licenseRestartRequired(
+              license?.updated_at ?? null,
+              container?.running ?? false,
+              container?.started_at ?? null,
+            )
+              ? 'Лицензия сохранена и применится после перезапуска сервера.'
+              : license?.configured
+                ? 'Лицензия привязана и применена.'
+                : 'License.cfg записывается панелью; применяется после перезапуска сервера.'
+          }
+        >
+          {licenseRestartRequired(
+            license?.updated_at ?? null,
+            container?.running ?? false,
+            container?.started_at ?? null,
+          ) ? (
+            <GroupedRow
+              label="Нужен перезапуск"
+              description="Лицензия сохранена и применится после перезапуска сервера"
+              control={<Badge tone="warn">рестарт</Badge>}
             />
-          </label>
-          <label className="block">
-            <span className="text-xs text-neutral-500">License Key</span>
-            <input
-              type="password"
-              value={licenseKey}
-              onChange={(e) => setLicenseKey(e.target.value)}
-              placeholder={license?.configured ? '••••••••  (сохранён)' : 'Не указан'}
-              className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-            />
-          </label>
-        </div>
-        <div className="mt-2 flex gap-2">
-          <button
-            type="button"
+          ) : null}
+          <GroupedRow
+            label="ID лицензии"
+            control={
+              <div className="w-56">
+                <TextInput
+                  aria-label="ID лицензии"
+                  value={licenseId}
+                  onChange={(e) => setLicenseId(e.target.value)}
+                  placeholder="Не указан"
+                />
+              </div>
+            }
+          />
+          <GroupedRow
+            label="Ключ лицензии"
+            control={
+              <div className="w-56">
+                <TextInput
+                  type="password"
+                  aria-label="Ключ лицензии"
+                  value={licenseKey}
+                  onChange={(e) => setLicenseKey(e.target.value)}
+                  placeholder={license?.configured ? '••••••••  (сохранён)' : 'Не указан'}
+                />
+              </div>
+            }
+          />
+        </GroupedList>
+        <div className="flex justify-end gap-2">
+          {/* Отвязка обратима — лицензию можно привязать снова, поэтому кнопка
+              вторичная, а не критическая (§5). */}
+          <Button disabled={busy} onClick={detachLicense}>
+            Отвязать
+          </Button>
+          <Button
+            variant="primary"
             disabled={!licenseId || (!licenseKey && !license?.configured) || busy}
             onClick={saveLicense}
-            className="rounded bg-sky-700 px-3 py-1.5 text-xs text-white hover:bg-sky-600 disabled:opacity-40"
           >
             Привязать
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={detachLicense}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-300 hover:border-red-700 hover:text-red-300"
-          >
-            Отвязать
-          </button>
+          </Button>
         </div>
-      </section>
+      </div>
 
-      <button
-        type="button"
-        disabled={!dirty || busy}
-        onClick={saveSettings}
-        className="rounded bg-sky-700 px-4 py-2 text-sm font-medium text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {busy ? 'Сохранение...' : 'Сохранить'}
-      </button>
-    </div>
+      <div className="flex justify-end">
+        <Button variant="primary" disabled={!dirty} loading={busy} onClick={saveSettings}>
+          Сохранить
+        </Button>
+      </div>
+    </PageContainer>
   );
 }

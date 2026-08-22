@@ -1,7 +1,43 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+/**
+ * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
+ * а окно назначения роли и подтверждение снятия построены на `Modal`. Полифилл
+ * повторяет ровно то, на что опирается примитив: атрибут `open`, фокус внутрь
+ * окна и цепочку Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
 
 vi.mock('next/navigation', () => ({
   redirect: vi.fn(),
@@ -41,10 +77,18 @@ function userRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function stubFetch(users: unknown[], permissions: string[] = []) {
+/** Every `DELETE …/role` the page sent, in order — the unassign requests. */
+type RoleDeleteReply = { status: number; body?: unknown };
+
+function stubFetch(
+  users: unknown[],
+  permissions: string[] = [],
+  roleDelete: RoleDeleteReply = { status: 204 },
+): { roleDeletes: string[] } {
+  const roleDeletes: string[] = [];
   vi.stubGlobal(
     'fetch',
-    vi.fn((input: unknown) => {
+    vi.fn((input: unknown, init?: RequestInit) => {
       const url = String(input);
       if (url.startsWith('/api/v1/users')) {
         return Promise.resolve(new Response(JSON.stringify(users), { status: 200 }));
@@ -55,9 +99,18 @@ function stubFetch(users: unknown[], permissions: string[] = []) {
       if (url.startsWith('/api/v1/roles')) {
         return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
       }
+      if (url.startsWith('/api/v1/players/') && init?.method === 'DELETE') {
+        roleDeletes.push(url);
+        return Promise.resolve(
+          new Response(roleDelete.body === undefined ? null : JSON.stringify(roleDelete.body), {
+            status: roleDelete.status,
+          }),
+        );
+      }
       return Promise.resolve(new Response(null, { status: 404 }));
     }),
   );
+  return { roleDeletes };
 }
 
 afterEach(() => {
@@ -107,5 +160,58 @@ describe('UsersPage role assignment', () => {
       /причина выдачи видна другим администраторам/i,
     );
     expect(document.querySelector('input[type="datetime-local"]')).toBeNull();
+  });
+});
+
+describe('UsersPage role removal', () => {
+  it('asks for confirmation in a dialog and only then sends the request', async () => {
+    const { roleDeletes } = stubFetch([userRow()], ['user:manage_roles']);
+    render(<UsersPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Снять' }));
+
+    const confirm = await screen.findByRole('button', { name: 'Снять роль' });
+    expect(
+      screen.getByText(
+        'Пользователь «Связанный» потеряет доступ к панели. Роль можно выдать заново в любой момент.',
+      ),
+    ).toBeInTheDocument();
+    expect(roleDeletes).toHaveLength(0);
+
+    fireEvent.click(confirm);
+    await waitFor(() => expect(roleDeletes).toEqual(['/api/v1/players/player-alpha/role']));
+  });
+
+  it('sends nothing when the confirmation is dismissed', async () => {
+    const { roleDeletes } = stubFetch([userRow()], ['user:manage_roles']);
+    render(<UsersPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Снять' }));
+    await screen.findByRole('button', { name: 'Снять роль' });
+
+    const [cancel] = screen.getAllByRole('button', { name: 'Отмена' });
+    fireEvent.click(cancel as HTMLElement);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Снять роль' })).not.toBeInTheDocument(),
+    );
+    expect(roleDeletes).toHaveLength(0);
+  });
+
+  it('explains the last-owner refusal instead of leaving the row unchanged', async () => {
+    stubFetch([userRow()], ['user:manage_roles'], {
+      status: 409,
+      body: { error: 'cannot_remove_last_owner' },
+    });
+    render(<UsersPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Снять' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Снять роль' }));
+
+    expect(
+      await screen.findByText(
+        'Вы единственный Owner. Сначала выдайте роль Owner другому пользователю.',
+      ),
+    ).toBeInTheDocument();
   });
 });

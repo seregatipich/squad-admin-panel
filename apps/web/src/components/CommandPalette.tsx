@@ -174,24 +174,24 @@ export function CommandPalette({
   if (!open) return null;
 
   let rowIndex = -1;
+  const activeId = `cmdk-option-${selectedIndex}`;
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-24"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-24 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label="Командная панель"
-      onClick={close}
+      // Закрытие по фону проверяет цель события, а не гасит всплытие изнутри:
+      // stopPropagation на панели ломал бы любой обработчик выше по дереву.
+      onClick={(e) => {
+        if (e.target === e.currentTarget) close();
+      }}
       onKeyDown={(e) => {
         if (e.key === 'Escape') close();
       }}
     >
-      <div
-        className="w-full max-w-lg rounded border border-neutral-800 bg-neutral-950 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-        role="document"
-      >
+      <div className="w-full max-w-lg overflow-hidden rounded-card border border-line-2 bg-surface/95 shadow-2xl shadow-black/50 backdrop-blur-xl">
         <input
           ref={inputRef}
           type="text"
@@ -203,30 +203,42 @@ export function CommandPalette({
           onKeyDown={handleInputKeyDown}
           placeholder="Поиск страниц, игроков, серверов…"
           aria-label="Командная панель: поиск"
-          className="w-full border-b border-neutral-800 bg-transparent px-4 py-3 text-sm text-neutral-100 focus:outline-none"
+          role="combobox"
+          aria-expanded
+          aria-controls="cmdk-results"
+          aria-activedescendant={sections.length > 0 ? activeId : undefined}
+          aria-autocomplete="list"
+          autoComplete="off"
+          className="w-full border-b border-line bg-transparent px-4 py-3 text-[13px] text-ink focus-visible:outline-offset-[-2px]"
         />
-        <div className="max-h-96 overflow-auto py-2 text-sm">
+        <div
+          id="cmdk-results"
+          role="listbox"
+          aria-label="Результаты"
+          className="max-h-96 overflow-auto py-2"
+        >
           {sections.length === 0 ? (
-            <div className="px-4 py-3 text-neutral-500">Ничего не найдено.</div>
+            <p className="px-4 py-3 text-xs text-ink-3">Ничего не найдено.</p>
           ) : (
             sections.map((section) => (
               <div key={section.title} className="mb-1.5 last:mb-0">
-                <div className="px-4 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-600">
+                <p className="px-4 pb-1 pt-2 text-2xs font-semibold uppercase tracking-[0.06em] text-ink-3">
                   {section.title}
-                </div>
+                </p>
                 {section.results.map((result) => {
                   rowIndex += 1;
                   const active = rowIndex === selectedIndex;
                   return (
                     <button
                       key={`${result.kind}-${result.kind === 'page' ? result.href : result.id}`}
+                      id={`cmdk-option-${rowIndex}`}
                       type="button"
+                      role="option"
+                      aria-selected={active}
                       onClick={() => select(result)}
                       onMouseEnter={() => setSelectedIndex(rowIndex)}
-                      className={`block w-full px-4 py-1.5 text-left ${
-                        active
-                          ? 'bg-neutral-900 text-neutral-50'
-                          : 'text-neutral-300 hover:bg-neutral-900/60'
+                      className={`block w-full px-4 py-2 text-left text-[13px] transition-colors ${
+                        active ? 'bg-accent-dim text-ink' : 'text-ink-2 hover:bg-raised'
                       }`}
                     >
                       {resultLabel(result)}

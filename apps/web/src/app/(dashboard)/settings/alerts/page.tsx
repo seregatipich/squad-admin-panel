@@ -1,6 +1,34 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  Checkbox,
+  EmptyState,
+  FieldRow,
+  GroupedRow,
+  IconButton,
+  InlineBanner,
+  PageHeader,
+  Select,
+  Skeleton,
+  SkeletonTable,
+  Switch,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  TextInput,
+  Th,
+  TrashIcon,
+} from '@/components/ui';
 
 interface AlertRule {
   id: string;
@@ -52,11 +80,20 @@ const CHANNEL_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'webpush', label: 'Web Push' },
 ];
 
-const SEVERITY_BADGE: Record<string, string> = {
-  critical: 'border-red-800 bg-red-950/50 text-red-300',
-  warning: 'border-amber-800 bg-amber-950/50 text-amber-300',
-  info: 'border-sky-800 bg-sky-950/50 text-sky-300',
+/** Важность срабатывания: тон подложки и русская подпись, которая его дублирует (§5). */
+const SEVERITY: Record<string, { tone: 'crit' | 'warn' | 'accent'; label: string }> = {
+  critical: { tone: 'crit', label: 'Критично' },
+  warning: { tone: 'warn', label: 'Предупреждение' },
+  info: { tone: 'accent', label: 'Информация' },
 };
+
+function severityBadge(severity: string) {
+  return SEVERITY[severity] ?? { tone: 'accent' as const, label: severity };
+}
+
+function channelLabel(channel: string): string {
+  return CHANNEL_OPTIONS.find((option) => option.value === channel)?.label ?? channel;
+}
 
 // Read-only labels for rule types that exist but are not creatable through
 // the form (system-seeded, e.g. VIPSUB-4's role_expiring) — deliberately kept
@@ -104,9 +141,11 @@ export default function AlertsPage() {
   const [events, setEvents] = useState<AlertEvent[] | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<AlertRule | null>(null);
 
   const refresh = useCallback(async () => {
     const [rulesRes, eventsRes, meRes] = await Promise.all([
@@ -117,6 +156,7 @@ export default function AlertsPage() {
     if (rulesRes.ok) setRules((await rulesRes.json()) as AlertRule[]);
     if (eventsRes.ok) setEvents((await eventsRes.json()) as AlertEvent[]);
     if (meRes.ok) setMe((await meRes.json()) as Me);
+    setLoadFailed(!rulesRes.ok || !eventsRes.ok || !meRes.ok);
   }, []);
 
   useEffect(() => {
@@ -194,7 +234,6 @@ export default function AlertsPage() {
 
   async function removeRule(rule: AlertRule) {
     if (!canManage) return;
-    if (!confirm(`Удалить правило «${rule.name}» и всю его историю срабатываний?`)) return;
     setBusyId(rule.id);
     setError(null);
     try {
@@ -208,283 +247,300 @@ export default function AlertsPage() {
       setError(`Не удалось удалить: ${(err as Error).message}`);
     } finally {
       setBusyId(null);
+      setPendingDelete(null);
     }
   }
 
-  if (!rules || !events || !me) return <div className="text-neutral-500">Загрузка…</div>;
-
+  const loading = !rules || !events || !me;
   const selectedType = TYPE_OPTIONS.find((option) => option.value === form.type);
 
   return (
-    <div className="max-w-4xl space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Оповещения</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Правила оповещений о падении сервера, аномальной активности и входе админов с нового IP.
-          Доставка по Email и Web Push включается ключами окружения; без них срабатывания
-          записываются в историю без отправки.
-          {!canManage ? ' У вас нет прав на изменение правил — доступен только просмотр.' : ''}
-        </p>
-      </header>
+    <>
+      <PageHeader
+        title="Оповещения"
+        subtitle="Правила оповещений о падении сервера, аномальной активности и входе админов с нового IP. Доставка по Email и Web Push включается ключами окружения; без них срабатывания записываются в историю без отправки."
+      />
 
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {error}
-        </div>
+      {!loading && !canManage ? (
+        <InlineBanner
+          tone="info"
+          title="Только просмотр"
+          description="У вас нет прав на изменение правил оповещений."
+        />
       ) : null}
 
-      {canManage ? (
-        <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Добавить правило</h2>
-          <form onSubmit={createRule} className="space-y-3">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Имя</span>
-                <input
-                  type="text"
-                  value={form.name}
-                  onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                  placeholder="Падение боевого сервера"
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Тип</span>
-                <select
-                  value={form.type}
-                  onChange={(event) => setForm((prev) => ({ ...prev, type: event.target.value }))}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                >
-                  {TYPE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            {selectedType ? <p className="text-xs text-neutral-500">{selectedType.hint}</p> : null}
-
-            {form.type === 'unusual_activity' ? (
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Окно (мин)</span>
-                  <input
-                    type="number"
-                    min={1}
-                    value={form.windowMinutes}
-                    onChange={(event) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        windowMinutes: Number(event.target.value) || 1,
-                      }))
-                    }
-                    className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                  />
-                </label>
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Порог подключений</span>
-                  <input
-                    type="number"
-                    min={1}
-                    value={form.connectThreshold}
-                    onChange={(event) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        connectThreshold: Number(event.target.value) || 1,
-                      }))
-                    }
-                    className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                  />
-                </label>
-              </div>
-            ) : null}
-
-            {form.type === 'custom' ? (
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Тип события (eventKind)</span>
-                  <input
-                    type="text"
-                    value={form.eventKind}
-                    onChange={(event) =>
-                      setForm((prev) => ({ ...prev, eventKind: event.target.value }))
-                    }
-                    placeholder="rcon.disconnected"
-                    className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                  />
-                </label>
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Порог (0 — без порога)</span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={form.threshold}
-                    onChange={(event) =>
-                      setForm((prev) => ({ ...prev, threshold: Number(event.target.value) || 0 }))
-                    }
-                    className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                  />
-                </label>
-              </div>
-            ) : null}
-
-            <div className="block text-xs">
-              <span className="mb-1 block text-neutral-400">Каналы доставки</span>
-              <div className="flex flex-wrap gap-3">
-                {CHANNEL_OPTIONS.map((option) => (
-                  <label key={option.value} className="flex cursor-pointer items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={form.channels.includes(option.value)}
-                      onChange={() => toggleChannel(option.value)}
-                      className="h-4 w-4"
-                    />
-                    <span className="text-neutral-300">{option.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={creating}
-              className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-            >
-              {creating ? 'Создание…' : 'Добавить правило'}
-            </button>
-          </form>
-        </section>
+      {loadFailed ? (
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить оповещения"
+          description="Часть данных не пришла — список правил или история могут быть неполными."
+          action={
+            <Button size="sm" onClick={() => void refresh()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
-      <section className="space-y-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Правила</h2>
-        {rules.length === 0 ? (
-          <div className="rounded border border-neutral-800 bg-neutral-950 p-6 text-center text-sm text-neutral-500">
-            Правил пока нет.
-          </div>
-        ) : (
-          rules.map((rule) => (
-            <div
-              key={rule.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-800 bg-neutral-950 p-4"
-            >
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-base font-semibold">{rule.name}</h3>
-                  <span className="rounded bg-neutral-900 px-2 py-0.5 text-[10px] uppercase text-neutral-400">
-                    {typeLabel(rule.type)}
-                  </span>
-                  {rule.channels.map((channel) => (
-                    <span
-                      key={channel}
-                      className="rounded bg-neutral-900 px-2 py-0.5 text-[10px] uppercase text-neutral-500"
-                    >
-                      {channel}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <label
-                  className={`flex items-center gap-2 text-xs ${
-                    canManage ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
-                  }`}
-                >
-                  <span className="text-neutral-400">
-                    {rule.enabled ? 'Включено' : 'Выключено'}
-                  </span>
-                  <input
-                    type="checkbox"
-                    aria-label={`Включить правило ${rule.name}`}
-                    checked={rule.enabled}
-                    disabled={!canManage || busyId === rule.id}
-                    onChange={() => toggleEnabled(rule)}
-                    className="h-4 w-9 cursor-pointer appearance-none rounded-full bg-neutral-800 transition-all checked:bg-sky-600 disabled:cursor-not-allowed"
-                    style={{
-                      backgroundImage:
-                        'radial-gradient(circle 7px at 8px center, white 100%, transparent 100%)',
-                    }}
-                  />
-                </label>
-                {canManage ? (
-                  <button
-                    type="button"
-                    disabled={busyId === rule.id}
-                    onClick={() => removeRule(rule)}
-                    title="Удалить правило"
-                    className="rounded border border-red-900 px-2 py-1 text-xs text-red-300 hover:bg-red-950 disabled:opacity-40"
-                  >
-                    ⌫
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          ))
-        )}
-      </section>
+      {error ? <InlineBanner tone="crit" title={error} /> : null}
 
-      <section className="space-y-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">История срабатываний</h2>
-        {events.length === 0 ? (
-          <div className="rounded border border-neutral-800 bg-neutral-950 p-6 text-center text-sm text-neutral-500">
-            Срабатываний пока нет.
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded-lg border border-neutral-800">
-            <table className="w-full min-w-[640px] text-left text-xs">
-              <thead className="bg-neutral-900 text-neutral-400">
-                <tr>
-                  <th className="px-3 py-2 font-medium">Время</th>
-                  <th className="px-3 py-2 font-medium">Правило</th>
-                  <th className="px-3 py-2 font-medium">Важность</th>
-                  <th className="px-3 py-2 font-medium">Доставлено</th>
-                  <th className="px-3 py-2 font-medium">Данные</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.map((event) => (
-                  <tr key={event.id} className="border-t border-neutral-900">
-                    <td className="whitespace-nowrap px-3 py-2 text-neutral-300">
-                      {formatDate(event.triggered_at)}
-                    </td>
-                    <td className="px-3 py-2 text-neutral-200">
-                      {event.rule_name ?? '—'}
-                      {event.rule_type ? (
-                        <span className="ml-1 text-neutral-500">
-                          ({typeLabel(event.rule_type)})
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="px-3 py-2">
-                      <span
-                        className={`rounded border px-2 py-0.5 text-[10px] uppercase ${
-                          SEVERITY_BADGE[event.severity] ?? SEVERITY_BADGE.info
-                        }`}
+      {loading ? (
+        <>
+          <Card>
+            <Skeleton variant="row" count={3} label="Загрузка правил оповещений" />
+          </Card>
+          <Card padding="sm">
+            <SkeletonTable rows={4} cols={5} />
+          </Card>
+        </>
+      ) : (
+        <>
+          {canManage ? (
+            <Card padding="none" as="section">
+              <CardHeader title="Добавить правило" />
+              <form onSubmit={createRule}>
+                <CardBody className="space-y-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <FieldRow label="Имя">
+                      <TextInput
+                        value={form.name}
+                        onChange={(event) =>
+                          setForm((prev) => ({ ...prev, name: event.target.value }))
+                        }
+                        placeholder="Падение боевого сервера"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Тип" hint={selectedType?.hint}>
+                      <Select
+                        value={form.type}
+                        onChange={(event) =>
+                          setForm((prev) => ({ ...prev, type: event.target.value }))
+                        }
                       >
-                        {event.severity}
+                        {TYPE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </FieldRow>
+                  </div>
+
+                  {form.type === 'unusual_activity' ? (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <FieldRow label="Окно, мин">
+                        <TextInput
+                          type="number"
+                          min={1}
+                          value={form.windowMinutes}
+                          onChange={(event) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              windowMinutes: Number(event.target.value) || 1,
+                            }))
+                          }
+                        />
+                      </FieldRow>
+                      <FieldRow label="Порог подключений">
+                        <TextInput
+                          type="number"
+                          min={1}
+                          value={form.connectThreshold}
+                          onChange={(event) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              connectThreshold: Number(event.target.value) || 1,
+                            }))
+                          }
+                        />
+                      </FieldRow>
+                    </div>
+                  ) : null}
+
+                  {form.type === 'custom' ? (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <FieldRow label="Тип события (eventKind)">
+                        <TextInput
+                          value={form.eventKind}
+                          onChange={(event) =>
+                            setForm((prev) => ({ ...prev, eventKind: event.target.value }))
+                          }
+                          placeholder="rcon.disconnected"
+                        />
+                      </FieldRow>
+                      <FieldRow label="Порог" hint="0 — без порога.">
+                        <TextInput
+                          type="number"
+                          min={0}
+                          value={form.threshold}
+                          onChange={(event) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              threshold: Number(event.target.value) || 0,
+                            }))
+                          }
+                        />
+                      </FieldRow>
+                    </div>
+                  ) : null}
+
+                  <fieldset className="space-y-1">
+                    <legend className="text-xs font-medium text-ink-2">Каналы доставки</legend>
+                    <div className="flex flex-wrap gap-4">
+                      {CHANNEL_OPTIONS.map((option) => (
+                        <Checkbox
+                          key={option.value}
+                          label={option.label}
+                          checked={form.channels.includes(option.value)}
+                          onChange={() => toggleChannel(option.value)}
+                        />
+                      ))}
+                    </div>
+                  </fieldset>
+                </CardBody>
+                <CardFooter>
+                  <Button type="submit" variant="primary" loading={creating}>
+                    Добавить правило
+                  </Button>
+                </CardFooter>
+              </form>
+            </Card>
+          ) : null}
+
+          <Card padding="none" as="section">
+            <CardHeader title="Правила" count={rules.length > 0 ? rules.length : undefined} />
+            {rules.length === 0 ? (
+              <EmptyState
+                title="Правил пока нет"
+                description={
+                  canManage
+                    ? 'Добавьте первое правило формой выше — до этого срабатывания не записываются.'
+                    : 'Правила добавляет администратор с правом изменения ролей.'
+                }
+              />
+            ) : (
+              <div className="divide-y divide-line">
+                {rules.map((rule) => (
+                  <GroupedRow
+                    key={rule.id}
+                    label={
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">{rule.name}</span>
+                        <Badge size="sm">{typeLabel(rule.type)}</Badge>
+                        {rule.channels.map((channel) => (
+                          <Badge key={channel} size="sm">
+                            {channelLabel(channel)}
+                          </Badge>
+                        ))}
                       </span>
-                    </td>
-                    <td className="px-3 py-2">
-                      {event.delivered ? (
-                        <span className="text-emerald-400">да</span>
-                      ) : (
-                        <span className="text-neutral-500">нет</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <code className="break-all font-mono text-[11px] text-neutral-500">
-                        {JSON.stringify(event.payload)}
-                      </code>
-                    </td>
-                  </tr>
+                    }
+                    control={
+                      <>
+                        <span className="text-xs text-ink-3">
+                          {rule.enabled ? 'Включено' : 'Выключено'}
+                        </span>
+                        <Switch
+                          label={`Включить правило ${rule.name}`}
+                          checked={rule.enabled}
+                          disabled={!canManage || busyId === rule.id}
+                          onChange={() => void toggleEnabled(rule)}
+                        />
+                        {canManage ? (
+                          <IconButton
+                            icon={<TrashIcon />}
+                            label={`Удалить правило ${rule.name}`}
+                            tone="destructive"
+                            disabled={busyId === rule.id}
+                            onClick={() => setPendingDelete(rule)}
+                          />
+                        ) : null}
+                      </>
+                    }
+                  />
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-    </div>
+              </div>
+            )}
+          </Card>
+
+          <Card padding="none" as="section">
+            <CardHeader
+              title="История срабатываний"
+              count={events.length > 0 ? events.length : undefined}
+            />
+            {events.length === 0 ? (
+              <EmptyState
+                title="Срабатываний пока нет"
+                description="Здесь появятся события, поднятые правилами, — вместе с тем, ушло ли по ним оповещение."
+              />
+            ) : (
+              <Table ariaLabel="История срабатываний правил">
+                <TableHead>
+                  <tr>
+                    <Th>Время</Th>
+                    <Th>Правило</Th>
+                    <Th>Важность</Th>
+                    <Th>Доставлено</Th>
+                    <Th>Данные</Th>
+                  </tr>
+                </TableHead>
+                <TableBody>
+                  {events.map((event) => {
+                    const severity = severityBadge(event.severity);
+                    return (
+                      <TableRow key={event.id}>
+                        <Td className="whitespace-nowrap text-xs text-ink-2">
+                          {formatDate(event.triggered_at)}
+                        </Td>
+                        <Td>
+                          {event.rule_name ?? '—'}
+                          {event.rule_type ? (
+                            <span className="ml-1 text-xs text-ink-3">
+                              ({typeLabel(event.rule_type)})
+                            </span>
+                          ) : null}
+                        </Td>
+                        <Td>
+                          <Badge tone={severity.tone} size="sm">
+                            {severity.label}
+                          </Badge>
+                        </Td>
+                        <Td>
+                          <Badge tone={event.delivered ? 'good' : 'neutral'} size="sm">
+                            {event.delivered ? 'да' : 'нет'}
+                          </Badge>
+                        </Td>
+                        <Td>
+                          <code className="break-all font-mono text-2xs text-ink-3">
+                            {JSON.stringify(event.payload)}
+                          </code>
+                        </Td>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </Card>
+        </>
+      )}
+
+      <AlertDialog
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title="Удалить правило"
+        body={
+          pendingDelete
+            ? `Правило «${pendingDelete.name}» и вся его история срабатываний будут удалены без возможности восстановления.`
+            : ''
+        }
+        confirmLabel="Удалить правило"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={pendingDelete !== null && busyId === pendingDelete.id}
+        onConfirm={() => {
+          if (pendingDelete) void removeRule(pendingDelete);
+        }}
+      />
+    </>
   );
 }

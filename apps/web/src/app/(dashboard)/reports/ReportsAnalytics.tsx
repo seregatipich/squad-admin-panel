@@ -12,6 +12,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { Card, CardHeader, EmptyState, InlineBanner, Select } from '@/components/ui';
 import {
   buildReportsAnalyticsQuery,
   formatAccuracy,
@@ -110,62 +111,70 @@ export function ReportsAnalytics() {
   })}`;
 
   return (
-    <section className="max-w-6xl rounded border border-neutral-800 bg-neutral-950">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-900 px-4 py-2.5">
-        <div className="flex items-baseline gap-2">
-          <h2 className="text-xs uppercase tracking-[0.2em] text-neutral-300">Аналитика жалоб</h2>
-          {loading ? <span className="text-[10px] text-neutral-500">загрузка…</span> : null}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="sr-only" htmlFor={serverSelectId}>
-            Сервер
-          </label>
-          <select
-            id={serverSelectId}
-            value={serverId}
-            onChange={(e) => setServerId(e.target.value)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200"
-          >
-            <option value="">Все серверы</option>
-            {servers.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.display_name}
-              </option>
-            ))}
-          </select>
-          <label className="sr-only" htmlFor={windowSelectId}>
-            Период
-          </label>
-          <select
-            id={windowSelectId}
-            value={windowDays}
-            onChange={(e) => setWindowDays(Number(e.target.value))}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200"
-          >
-            {REPORTS_WINDOW_PRESETS.map((preset) => (
-              <option key={preset.days} value={preset.days}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
-          <a
-            href={csvHref}
-            download
-            className="rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:border-sky-700 hover:text-sky-300"
-          >
-            CSV
-          </a>
-        </div>
-      </div>
+    <Card as="section" padding="none">
+      <CardHeader
+        title="Аналитика жалоб"
+        count={loading ? 'обновляем…' : undefined}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="sr-only" htmlFor={serverSelectId}>
+              Сервер
+            </label>
+            <Select
+              id={serverSelectId}
+              size="sm"
+              value={serverId}
+              onChange={(e) => setServerId(e.target.value)}
+              className="w-auto"
+            >
+              <option value="">Все серверы</option>
+              {servers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.display_name}
+                </option>
+              ))}
+            </Select>
+            <label className="sr-only" htmlFor={windowSelectId}>
+              Период
+            </label>
+            <Select
+              id={windowSelectId}
+              size="sm"
+              value={windowDays}
+              onChange={(e) => setWindowDays(Number(e.target.value))}
+              className="w-auto"
+            >
+              {REPORTS_WINDOW_PRESETS.map((preset) => (
+                <option key={preset.days} value={preset.days}>
+                  {preset.label}
+                </option>
+              ))}
+            </Select>
+            {/* Выгрузка идёт прямой ссылкой на API, а не переходом внутри
+                приложения, поэтому это обычный <a download>, а не ButtonLink. */}
+            <a
+              href={csvHref}
+              download
+              className="inline-flex h-7 items-center rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2"
+            >
+              Скачать CSV
+            </a>
+          </div>
+        }
+      />
 
       {error ? (
-        <div className="px-4 py-6 text-center text-sm text-red-400">{error}</div>
-      ) : !data ? (
-        <div className="px-4 py-10 text-center text-sm text-neutral-500">Нет данных.</div>
-      ) : data.summary.total === 0 ? (
-        <div className="px-4 py-10 text-center text-sm text-neutral-500">
-          За выбранный период жалоб нет.
+        <div className="p-4">
+          <InlineBanner tone="crit" title="Не удалось загрузить аналитику" description={error} />
         </div>
+      ) : !data ? (
+        <EmptyState title="Нет данных" description="Аналитика по жалобам ещё не собрана." />
+      ) : data.summary.total === 0 ? (
+        <EmptyState
+          variant="filtered"
+          title="За выбранный период жалоб нет"
+          description="Расширьте период или снимите фильтр по серверу."
+        />
       ) : (
         <div className="space-y-6 p-4">
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -246,7 +255,7 @@ export function ReportsAnalytics() {
                 Топ целей
               </h3>
               {data.top_targets.length === 0 ? (
-                <p className="text-xs text-neutral-600">Нет данных.</p>
+                <p className="text-xs text-neutral-500">Нет данных.</p>
               ) : (
                 <table className="w-full text-xs">
                   <thead>
@@ -286,7 +295,7 @@ export function ReportsAnalytics() {
                 Топ репортёров
               </h3>
               {data.top_reporters.length === 0 ? (
-                <p className="text-xs text-neutral-600">Нет данных.</p>
+                <p className="text-xs text-neutral-500">Нет данных.</p>
               ) : (
                 <table className="w-full text-xs">
                   <thead>
@@ -328,7 +337,7 @@ export function ReportsAnalytics() {
           </div>
         </div>
       )}
-    </section>
+    </Card>
   );
 }
 

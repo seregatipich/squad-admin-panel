@@ -1,6 +1,25 @@
 'use client';
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  EmptyState,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  SearchField,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+  Toolbar,
+} from '@/components/ui';
 
 interface AuditEntry {
   id: string;
@@ -28,6 +47,7 @@ const POLL_MS = 6000;
 
 export default function AuditPage() {
   const [items, setItems] = useState<AuditEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -54,32 +74,31 @@ export default function AuditPage() {
     }
   }
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const r = await fetch('/api/v1/audit?page=1&page_size=200', {
-          credentials: 'include',
-          cache: 'no-store',
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const j = (await r.json()) as { items: AuditEntry[] };
-        if (!cancelled) {
-          setItems(j.items);
-          setErr(null);
-          setLastUpdate(new Date());
-        }
-      } catch (e) {
-        if (!cancelled) setErr((e as Error).message);
-      }
+  // Вынесено из эффекта, чтобы «Повторить» на полосе ошибки звало ровно тот же
+  // запрос, что и опрос по таймеру, а не его копию.
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch('/api/v1/audit?page=1&page_size=200', {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = (await r.json()) as { items: AuditEntry[] };
+      setItems(j.items);
+      setErr(null);
+      setLastUpdate(new Date());
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoaded(true);
     }
-    void load();
-    const t = setInterval(load, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
   }, []);
+
+  useEffect(() => {
+    void load();
+    const t = setInterval(() => void load(), POLL_MS);
+    return () => clearInterval(t);
+  }, [load]);
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -94,137 +113,196 @@ export default function AuditPage() {
   }, [items, q]);
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Журнал действий</h1>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={verifyChain}
-            disabled={verifying}
-            className="rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-xs hover:bg-neutral-800 disabled:opacity-50"
-          >
-            {verifying ? 'Проверка…' : 'Проверить цепочку'}
-          </button>
-          <span className="text-xs text-neutral-500">записей: {items.length}</span>
-          <LiveIndicator lastUpdate={lastUpdate} />
-        </div>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="Журнал действий"
+        subtitle="Последние 200 записей о действиях операторов и системы."
+        status={<LiveIndicator lastUpdate={lastUpdate} />}
+        meta={<span>Записей: {items.length}</span>}
+        actions={
+          <Button onClick={verifyChain} loading={verifying}>
+            Проверить цепочку
+          </Button>
+        }
+      />
 
       {err ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{err}</div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить журнал"
+          description={err}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
       {verifyErr ? (
-        <output className="block rounded border border-red-900 bg-red-950 p-3 text-sm">
-          Проверка цепочки не удалась: {verifyErr}
-        </output>
+        <InlineBanner
+          tone="crit"
+          title={`Проверка цепочки не удалась: ${verifyErr}`}
+          action={
+            <Button size="sm" onClick={verifyChain} loading={verifying}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
       {verifyResult ? (
         verifyResult.ok ? (
-          <output className="block rounded border border-emerald-900 bg-emerald-950 p-3 text-sm text-emerald-300">
-            Цепочка цела: проверено записей — {verifyResult.checked}.
-          </output>
+          <InlineBanner
+            tone="good"
+            title={`Цепочка цела: проверено записей — ${verifyResult.checked}.`}
+          />
         ) : (
-          <output className="block rounded border border-red-900 bg-red-950 p-3 text-sm text-red-300">
-            Обнаружен разрыв цепочки на записи #{verifyResult.broken_at} ({verifyResult.reason}).
-            Проверено до разрыва — {verifyResult.checked}.
-          </output>
+          <InlineBanner
+            tone="crit"
+            title={`Обнаружен разрыв цепочки на записи #${verifyResult.broken_at} (${verifyResult.reason}).`}
+            description={`Проверено до разрыва — ${verifyResult.checked}.`}
+          />
         )
       ) : null}
 
-      <input
-        type="search"
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="Фильтр по действию, цели или актору…"
-        className="w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-sm"
+      <Toolbar
+        search={
+          <SearchField
+            value={q}
+            onCommit={setQ}
+            placeholder="Фильтр по действию, цели или актору…"
+            label="Фильтр записей журнала"
+            clearLabel="Очистить фильтр"
+          />
+        }
+        summary={`Показано: ${rows.length} из ${items.length}`}
       />
 
-      {rows.length === 0 ? (
-        <div className="rounded border border-neutral-800 bg-neutral-950 p-6 text-center text-neutral-500 text-sm">
-          {items.length ? 'Нет совпадений.' : 'Журнал пуст.'}
-        </div>
-      ) : (
-        <div className="overflow-x-auto rounded border border-neutral-800">
-          <table className="w-full text-sm">
-            <thead className="bg-neutral-950 text-xs uppercase tracking-widest text-neutral-500">
-              <tr>
-                <th className="text-left p-2">Время</th>
-                <th className="text-left p-2">Actor</th>
-                <th className="text-left p-2">Действие</th>
-                <th className="text-left p-2">Цель</th>
-                <th className="text-right p-2">Код</th>
-                <th className="text-right p-2">ms</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <Fragment key={r.id}>
-                  <tr
-                    className="border-t border-neutral-900 hover:bg-neutral-950 cursor-pointer"
-                    onClick={() => setExpanded(expanded === r.id ? null : r.id)}
-                  >
-                    <td className="p-2 text-neutral-500 text-xs whitespace-nowrap">
-                      {new Date(r.created_at).toLocaleString()}
-                    </td>
-                    <td className="p-2 font-mono text-xs">
-                      {r.actor_kind === 'user'
-                        ? (r.actor_user_id?.slice(0, 8) ?? '—')
-                        : r.actor_kind}
-                    </td>
-                    <td className="p-2 font-mono">{r.action_type}</td>
-                    <td className="p-2 font-mono text-xs text-neutral-400">
-                      {r.target_type ? `${r.target_type} ${r.target_id?.slice(0, 12) ?? ''}` : '—'}
-                    </td>
-                    <td className="p-2 text-right font-mono text-xs">
-                      <StatusCode code={r.status_code} />
-                    </td>
-                    <td className="p-2 text-right font-mono text-xs text-neutral-500">
-                      {r.duration_ms ?? '—'}
-                    </td>
-                  </tr>
-                  {expanded === r.id ? (
-                    <tr>
-                      <td colSpan={6} className="bg-neutral-950 p-3">
-                        <pre className="text-[11px] font-mono text-neutral-400 whitespace-pre-wrap break-all">
-                          {JSON.stringify(r.context, null, 2)}
-                        </pre>
-                        {r.row_hash ? (
-                          <dl className="mt-2 space-y-0.5 text-[11px] font-mono text-neutral-500 break-all">
-                            <div>
-                              <span className="text-neutral-600">row_hash: </span>
-                              {r.row_hash}
-                            </div>
-                            <div>
-                              <span className="text-neutral-600">prev_hash: </span>
-                              {r.prev_hash ?? '—'}
-                            </div>
-                          </dl>
-                        ) : null}
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+      <Card padding="none">
+        {!loaded ? (
+          <div className="p-4">
+            <SkeletonTable rows={8} cols={6} label="Журнал загружается" />
+          </div>
+        ) : rows.length === 0 ? (
+          items.length ? (
+            <EmptyState
+              variant="filtered"
+              title="Нет совпадений."
+              description="Под этот фильтр не подходит ни одна запись журнала."
+              action={
+                <Button size="sm" onClick={() => setQ('')}>
+                  Сбросить фильтр
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              title="Журнал пуст."
+              description="Записи появляются сами, как только оператор или система что-то делает."
+            />
+          )
+        ) : (
+          <Table dense maxHeight="68vh" ariaLabel="Журнал действий">
+            <TableHead>
+              <TableRow>
+                <Th>Время</Th>
+                <Th>Кто</Th>
+                <Th>Действие</Th>
+                <Th>Цель</Th>
+                <Th align="right">Код</Th>
+                <Th align="right">Длительность, мс</Th>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {rows.map((r) => {
+                const open = expanded === r.id;
+                const detailId = `audit-detail-${r.id}`;
+                return (
+                  <Fragment key={r.id}>
+                    <TableRow interactive>
+                      <Td className="whitespace-nowrap text-xs text-ink-3">
+                        {new Date(r.created_at).toLocaleString()}
+                      </Td>
+                      <Td className="font-mono text-xs">
+                        {r.actor_kind === 'user'
+                          ? (r.actor_user_id?.slice(0, 8) ?? '—')
+                          : r.actor_kind}
+                      </Td>
+                      {/* Раскрытие подробностей — кнопка внутри ячейки, а не
+                          `onClick` на строке: иначе до записи не добраться с
+                          клавиатуры и скринридер не объявит её раскрытой. */}
+                      <Td className="p-0!">
+                        <button
+                          type="button"
+                          onClick={() => setExpanded(open ? null : r.id)}
+                          aria-expanded={open}
+                          aria-controls={detailId}
+                          className="flex h-7 w-full items-center px-3 text-left font-mono transition-colors hover:text-accent"
+                        >
+                          {r.action_type}
+                        </button>
+                      </Td>
+                      <Td className="font-mono text-xs text-ink-2">
+                        {r.target_type
+                          ? `${r.target_type} ${r.target_id?.slice(0, 12) ?? ''}`
+                          : '—'}
+                      </Td>
+                      <Td align="right">
+                        <StatusCode code={r.status_code} />
+                      </Td>
+                      <Td numeric className="text-xs text-ink-3">
+                        {r.duration_ms ?? '—'}
+                      </Td>
+                    </TableRow>
+                    {open ? (
+                      <tr id={detailId}>
+                        <td colSpan={6} className="bg-raised/40 px-3 py-3">
+                          <pre className="whitespace-pre-wrap break-all font-mono text-2xs text-ink-2">
+                            {JSON.stringify(r.context, null, 2)}
+                          </pre>
+                          {r.row_hash ? (
+                            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 break-all font-mono text-2xs text-ink-3">
+                              <dt>row_hash:</dt>
+                              <dd>{r.row_hash}</dd>
+                              <dt>prev_hash:</dt>
+                              <dd>{r.prev_hash ?? '—'}</dd>
+                            </dl>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+    </PageContainer>
   );
 }
 
+/**
+ * Класс кода ответа словами: тон пилюли только дублирует подпись.
+ *
+ * Раньше успех от отказа отличался единственно цветом цифр — оператор с
+ * дейтеранопией видел четыре одинаково серых числа и не мог отличить
+ * выполненное действие от отклонённого.
+ */
+function statusClass(code: number): { tone: BadgeTone; text: string } {
+  if (code < 300) return { tone: 'good', text: 'успех' };
+  if (code < 400) return { tone: 'accent', text: 'переход' };
+  if (code < 500) return { tone: 'warn', text: 'отказ' };
+  return { tone: 'crit', text: 'сбой' };
+}
+
 function StatusCode({ code }: { code: number | null }) {
-  if (code == null) return <span className="text-neutral-500">—</span>;
-  const tone =
-    code < 300
-      ? 'text-emerald-400'
-      : code < 400
-        ? 'text-sky-400'
-        : code < 500
-          ? 'text-amber-400'
-          : 'text-red-400';
-  return <span className={tone}>{code}</span>;
+  if (code == null) return <span className="text-ink-3">—</span>;
+  const { tone, text } = statusClass(code);
+  return (
+    <Badge tone={tone} size="sm">
+      {`${code} · ${text}`}
+    </Badge>
+  );
 }

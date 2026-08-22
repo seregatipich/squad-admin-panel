@@ -2,6 +2,15 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { LogConsole } from '@/components/LogConsole';
+import {
+  Button,
+  Card,
+  FieldRow,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  TextInput,
+} from '@/components/ui';
 import { nameToSlug, sanitizeSlug } from './_slug';
 
 interface ProgressLine {
@@ -23,6 +32,13 @@ const DEFAULT_PORTS = {
   rcon_port: 21114,
 };
 
+/** Заголовок шага установки. Порядок ключей — порядок шагов мастера. */
+const STAGE_TITLE = {
+  installing: 'Установка…',
+  done: 'Готово',
+  error: 'Ошибка установки',
+} as const;
+
 export default function NewServerWizard() {
   const router = useRouter();
   const [step, setStep] = useState<'form' | 'installing' | 'done' | 'error'>('form');
@@ -36,10 +52,12 @@ export default function NewServerWizard() {
   const [serverId, setServerId] = useState<string | null>(null);
   const [lines, setLines] = useState<ProgressLine[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setSubmitting(true);
     const { slug_touched: _slugTouched, ...payload } = form;
     const res = await fetch('/api/v1/servers', {
       method: 'POST',
@@ -51,16 +69,18 @@ export default function NewServerWizard() {
       const body = (await res.json().catch(() => null)) as { message?: string } | null;
       const msg = body?.message ?? '';
       const human = msg.includes('body/slug')
-        ? 'Slug должен начинаться с латинской буквы или цифры (a-z, 0-9, дефис).'
+        ? 'Идентификатор должен начинаться с латинской буквы или цифры (a-z, 0-9, дефис).'
         : msg.includes('body/display_name')
           ? 'Название обязательно.'
           : msg || `HTTP ${res.status}`;
       setError(`Не удалось создать сервер: ${human}`);
+      setSubmitting(false);
       return;
     }
     const created = (await res.json()) as CreateResponse;
     setServerId(created.id);
     setStep('installing');
+    setSubmitting(false);
     const install = await fetch(`/api/v1/servers/${created.id}/install`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -103,84 +123,94 @@ export default function NewServerWizard() {
 
   if (step === 'form') {
     return (
-      <form onSubmit={submit} className="space-y-4 max-w-xl">
-        <h1 className="text-2xl font-semibold">Установка нового Squad-сервера</h1>
-        {error ? (
-          <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{error}</div>
-        ) : null}
-        <FieldText
-          label="Название"
-          value={form.display_name}
-          onChange={(v) => {
-            const next: typeof form = { ...form, display_name: v };
-            if (!form.slug_touched) next.slug = nameToSlug(v);
-            setForm(next);
-          }}
-          placeholder="My Squad Server"
-          required
+      <PageContainer width="form">
+        <PageHeader
+          title="Установка нового Squad-сервера"
+          backHref="/servers"
+          backLabel="К списку серверов"
         />
-        <FieldText
-          label="Slug (только латиница, цифры, дефисы)"
-          value={form.slug}
-          onChange={(v) =>
-            setForm({
-              ...form,
-              slug: sanitizeSlug(v),
-              slug_touched: true,
-            })
-          }
-          placeholder="my-squad"
-          pattern="^[a-z0-9][a-z0-9-]{0,63}$"
-          required
-        />
-        <div className="grid grid-cols-2 gap-4">
-          <FieldNumber
-            label="Game (UDP)"
-            value={form.game_port}
-            onChange={(v) => setForm({ ...form, game_port: v })}
-          />
-          <FieldNumber
-            label="Query (UDP)"
-            value={form.query_port}
-            onChange={(v) => setForm({ ...form, query_port: v })}
-          />
-          <FieldNumber
-            label="Beacon (UDP)"
-            value={form.beacon_port}
-            onChange={(v) => setForm({ ...form, beacon_port: v })}
-          />
-          <FieldNumber
-            label="RCON (TCP)"
-            value={form.rcon_port}
-            onChange={(v) => setForm({ ...form, rcon_port: v })}
-          />
-        </div>
-        <FieldNumber
-          label="Макс. игроков"
-          value={form.max_players}
-          onChange={(v) => setForm({ ...form, max_players: v })}
-        />
-        <button
-          type="submit"
-          className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500"
-        >
-          Установить
-        </button>
-      </form>
+        {error && <InlineBanner tone="crit" title="Установка не начата" description={error} />}
+        <Card as="section">
+          <form onSubmit={submit} className="space-y-4">
+            <FieldRow label="Название" required>
+              <TextInput
+                value={form.display_name}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  const next: typeof form = { ...form, display_name: v };
+                  if (!form.slug_touched) next.slug = nameToSlug(v);
+                  setForm(next);
+                }}
+                placeholder="My Squad Server"
+                required
+              />
+            </FieldRow>
+
+            <FieldRow
+              label="Идентификатор"
+              hint="Только латиница, цифры и дефисы; первым символом — буква или цифра."
+              required
+            >
+              <TextInput
+                value={form.slug}
+                onChange={(e) =>
+                  setForm({ ...form, slug: sanitizeSlug(e.target.value), slug_touched: true })
+                }
+                placeholder="my-squad"
+                pattern="^[a-z0-9][a-z0-9-]{0,63}$"
+                required
+              />
+            </FieldRow>
+
+            <div className="grid grid-cols-2 gap-4">
+              <PortField
+                label="Game (UDP)"
+                value={form.game_port}
+                onChange={(v) => setForm({ ...form, game_port: v })}
+              />
+              <PortField
+                label="Query (UDP)"
+                value={form.query_port}
+                onChange={(v) => setForm({ ...form, query_port: v })}
+              />
+              <PortField
+                label="Beacon (UDP)"
+                value={form.beacon_port}
+                onChange={(v) => setForm({ ...form, beacon_port: v })}
+              />
+              <PortField
+                label="RCON (TCP)"
+                value={form.rcon_port}
+                onChange={(v) => setForm({ ...form, rcon_port: v })}
+              />
+            </div>
+
+            <PortField
+              label="Макс. игроков"
+              value={form.max_players}
+              onChange={(v) => setForm({ ...form, max_players: v })}
+            />
+
+            <div className="flex justify-end">
+              <Button type="submit" variant="primary" loading={submitting}>
+                Установить
+              </Button>
+            </div>
+          </form>
+        </Card>
+      </PageContainer>
     );
   }
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">
-        {step === 'installing' ? 'Установка…' : step === 'done' ? 'Готово ✓' : 'Ошибка установки'}
-      </h1>
-      {serverId ? (
-        <div className="text-xs text-neutral-500 font-mono">server id: {serverId}</div>
-      ) : null}
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{error}</div>
-      ) : null}
+    <PageContainer width="form">
+      <PageHeader
+        title={STAGE_TITLE[step]}
+        backHref="/servers"
+        backLabel="К списку серверов"
+        meta={serverId ? <span className="font-mono">ID сервера: {serverId}</span> : undefined}
+      />
+      {error && <InlineBanner tone="crit" title="Ошибка установки" description={error} />}
       <LogConsole
         lines={lines}
         height="24rem"
@@ -189,52 +219,34 @@ export default function NewServerWizard() {
         emptyText="Ожидание первого сообщения…"
       />
       {step === 'done' && serverId ? (
-        <button
-          type="button"
-          className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500"
-          onClick={() => router.push(`/servers/${serverId}`)}
-        >
-          Открыть сервер
-        </button>
+        <div className="flex justify-end">
+          <Button variant="primary" onClick={() => router.push(`/servers/${serverId}`)}>
+            Открыть сервер
+          </Button>
+        </div>
       ) : null}
-    </div>
+    </PageContainer>
   );
 }
 
-function FieldText(props: {
+/**
+ * Числовое поле мастера: порт или предел игроков.
+ *
+ * Отдельный компонент остаётся ради пяти одинаковых полей подряд — вместе они
+ * держат один формат ввода, и разъехаться им нельзя.
+ */
+function PortField({
+  label,
+  value,
+  onChange,
+}: {
   label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  pattern?: string;
-  required?: boolean;
+  value: number;
+  onChange: (v: number) => void;
 }) {
   return (
-    <label className="block space-y-1">
-      <span className="text-xs uppercase tracking-widest text-neutral-400">{props.label}</span>
-      <input
-        type="text"
-        value={props.value}
-        onChange={(e) => props.onChange(e.target.value)}
-        placeholder={props.placeholder}
-        pattern={props.pattern}
-        required={props.required}
-        className="w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
-      />
-    </label>
-  );
-}
-
-function FieldNumber(props: { label: string; value: number; onChange: (v: number) => void }) {
-  return (
-    <label className="block space-y-1">
-      <span className="text-xs uppercase tracking-widest text-neutral-400">{props.label}</span>
-      <input
-        type="number"
-        value={props.value}
-        onChange={(e) => props.onChange(Number(e.target.value))}
-        className="w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
-      />
-    </label>
+    <FieldRow label={label}>
+      <TextInput type="number" value={value} onChange={(e) => onChange(Number(e.target.value))} />
+    </FieldRow>
   );
 }

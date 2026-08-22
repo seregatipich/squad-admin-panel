@@ -65,18 +65,18 @@ describe('TopNav', () => {
     renderNav();
     const trigger = screen.getByRole('button', { name: /^Игроки/ });
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByRole('link', { name: /Все игроки/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /Все игроки/ })).not.toBeInTheDocument();
 
     fireEvent.click(trigger);
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByRole('link', { name: /Все игроки/ })).toHaveAttribute(
+    expect(screen.getByRole('menuitem', { name: /Все игроки/ })).toHaveAttribute(
       'href',
       '/all-players',
     );
 
     fireEvent.click(trigger);
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByRole('link', { name: /Все игроки/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /Все игроки/ })).not.toBeInTheDocument();
   });
 
   it('closes an open menu on Escape and on a click outside the bar', () => {
@@ -98,7 +98,7 @@ describe('TopNav', () => {
     for (const column of ['Панель', 'Модерация', 'Игра', 'Автоматика']) {
       expect(screen.getByText(column)).toBeInTheDocument();
     }
-    expect(screen.getByRole('link', { name: /Группы/ })).toHaveAttribute(
+    expect(screen.getByRole('menuitem', { name: /Группы/ })).toHaveAttribute(
       'href',
       '/settings/groups',
     );
@@ -108,8 +108,8 @@ describe('TopNav', () => {
     renderNav({ permissions: [] });
     // Every «Аудит» item but the audit log itself is gated; the entry survives.
     fireEvent.click(screen.getByRole('button', { name: /^Аудит/ }));
-    expect(screen.getByRole('link', { name: /Журнал действий/ })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /Логи/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /Журнал действий/ })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /Логи/ })).not.toBeInTheDocument();
 
     // Every «Серверы» item is gated on server permissions — the entry goes.
     expect(screen.queryByRole('button', { name: /^Серверы/ })).not.toBeInTheDocument();
@@ -118,12 +118,12 @@ describe('TopNav', () => {
   it('hides the bonus leaderboard while the economy module is off (ECON-5, #165)', () => {
     renderNav({ economyEnabled: false });
     fireEvent.click(screen.getByRole('button', { name: /^Инструменты/ }));
-    expect(screen.queryByRole('link', { name: /Бонусы/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /Бонусы/ })).not.toBeInTheDocument();
 
     cleanup();
     renderNav({ economyEnabled: true });
     fireEvent.click(screen.getByRole('button', { name: /^Инструменты/ }));
-    expect(screen.getByRole('link', { name: /Бонусы/ })).toHaveAttribute(
+    expect(screen.getByRole('menuitem', { name: /Бонусы/ })).toHaveAttribute(
       'href',
       '/leaderboards/bonuses',
     );
@@ -152,7 +152,7 @@ describe('TopNav', () => {
 
     fireEvent.click(trigger);
     // Open, the count moves onto the item it actually describes.
-    expect(screen.getByRole('link', { name: /Жалобы/ })).toHaveTextContent('4');
+    expect(screen.getByRole('menuitem', { name: /Жалобы/ })).toHaveTextContent('4');
     expect(trigger).not.toHaveTextContent('4');
   });
 
@@ -173,23 +173,55 @@ describe('TopNav', () => {
     window.removeEventListener(PALETTE_OPEN_EVENT, onOpen);
   });
 
-  it('puts the account, tokens, logout and locale controls behind the user menu', () => {
+  it('puts the account, tokens and logout behind the user menu', () => {
     renderNav({ displayName: 'seregatipich' });
     const trigger = screen.getByRole('button', { name: 'Меню пользователя' });
     expect(trigger).toHaveTextContent('seregatipich');
-    expect(screen.queryByRole('link', { name: 'Аккаунт' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Аккаунт' })).not.toBeInTheDocument();
 
     fireEvent.click(trigger);
-    expect(screen.getByRole('link', { name: 'Аккаунт' })).toHaveAttribute(
+    expect(screen.getByRole('menuitem', { name: 'Аккаунт' })).toHaveAttribute(
       'href',
       '/settings/account',
     );
-    expect(screen.getByRole('link', { name: 'API-токены' })).toHaveAttribute(
+    expect(screen.getByRole('menuitem', { name: 'API-токены' })).toHaveAttribute(
       'href',
       '/settings/tokens',
     );
-    expect(screen.getByRole('button', { name: 'Выйти' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Выйти' })).toBeInTheDocument();
+    // Переключатель языка — элемент управления, а не команда меню, поэтому он
+    // живёт в самой полосе и доступен без открытия меню.
     expect(screen.getByRole('group', { name: 'Язык' })).toBeInTheDocument();
+  });
+
+  it('walks an open menu with the keyboard and returns focus on Escape', () => {
+    renderNav();
+    const trigger = screen.getByRole('button', { name: /^Игроки/ });
+
+    // Стрелка вниз и открывает меню, и ставит фокус на первый пункт: до этого
+    // выпадающие списки панели вообще не отвечали на клавиатуру.
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const items = screen.getAllByRole('menuitem');
+    expect(items[0]).toHaveFocus();
+
+    fireEvent.keyDown(items[0], { key: 'ArrowDown' });
+    expect(items[1]).toHaveFocus();
+
+    fireEvent.keyDown(items[1], { key: 'Home' });
+    expect(items[0]).toHaveFocus();
+
+    fireEvent.keyDown(items[0], { key: 'Escape' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).toHaveFocus();
+  });
+
+  it('exposes each dropdown as a menu rather than a list of links', () => {
+    renderNav();
+    const trigger = screen.getByRole('button', { name: /^Игроки/ });
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menu')).toBeInTheDocument();
   });
 
   it('renders the English labels under the English locale', () => {
@@ -200,7 +232,7 @@ describe('TopNav', () => {
     );
     expect(screen.getByRole('link', { name: 'Dashboard' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Players/ }));
-    expect(screen.getByRole('link', { name: /All players/ })).toHaveAttribute(
+    expect(screen.getByRole('menuitem', { name: /All players/ })).toHaveAttribute(
       'href',
       '/all-players',
     );

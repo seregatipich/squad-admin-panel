@@ -1,7 +1,17 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import {
+  Button,
+  EmptyState,
+  InlineBanner,
+  SegmentedControl,
+  Skeleton,
+  StatTile,
+  StatusDot,
+} from '@/components/ui';
+import { CHART_AXIS, CHART_FRAME, CHART_GRID } from '@/lib/chart-tokens';
 import { fmtDuration, MODE_HEX } from './presence';
 import {
   buildDailyBars,
@@ -22,13 +32,18 @@ const INNER_W = VIEW_W - PAD.left - PAD.right;
 const INNER_H = VIEW_H - PAD.top - PAD.bottom;
 const Y_TICKS = [0, 0.25, 0.5, 0.75, 1];
 
+const RANGE_ITEMS = DAILY_RANGES.map((preset) => ({
+  value: String(preset),
+  label: DAILY_RANGE_LABELS[preset],
+}));
+
 export function PresenceChart({ playerId }: { playerId: string }) {
   const [range, setRange] = useState<DailyRange>(30);
   const [data, setData] = useState<DailyPresenceResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -51,41 +66,41 @@ export function PresenceChart({ playerId }: { playerId: string }) {
     };
   }, [playerId, range]);
 
+  useEffect(() => load(), [load]);
+
   const bars = useMemo(() => (data ? buildDailyBars(data.series, data.from, data.to) : []), [data]);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="text-xs uppercase tracking-widest text-neutral-500">Онлайн по дням</div>
+          <h3 className="text-[13px] font-semibold text-ink">Онлайн по дням</h3>
           <LiveBadge live={data?.live ?? null} />
         </div>
-        <div className="flex items-center gap-1">
-          {DAILY_RANGES.map((preset) => (
-            <button
-              key={preset}
-              type="button"
-              onClick={() => setRange(preset)}
-              className={`rounded border px-2 py-0.5 text-xs ${
-                range === preset
-                  ? 'border-sky-500 bg-sky-950/40 text-sky-300'
-                  : 'border-neutral-800 text-neutral-400 hover:border-neutral-600'
-              }`}
-            >
-              {DAILY_RANGE_LABELS[preset]}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          ariaLabel="Период графика онлайна"
+          size="sm"
+          items={RANGE_ITEMS}
+          value={String(range)}
+          onChange={(value) => setRange(Number(value) as DailyRange)}
+        />
       </div>
 
       <PlaytimeCard totalSeconds={data?.total_time_played_seconds ?? 0} />
 
       {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          Ошибка: {error}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить онлайн по дням"
+          description={error}
+          action={
+            <Button size="sm" onClick={() => load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : loading || !data ? (
-        <div className="text-sm text-neutral-500">Загрузка…</div>
+        <Skeleton variant="card" label="Загрузка онлайна по дням" />
       ) : (
         <DailyBarChart bars={bars} />
       )}
@@ -95,13 +110,11 @@ export function PresenceChart({ playerId }: { playerId: string }) {
 
 function PlaytimeCard({ totalSeconds }: { totalSeconds: number }) {
   return (
-    <div className="rounded border border-neutral-800 bg-neutral-900/40 p-3">
-      <div className="text-xs uppercase tracking-widest text-neutral-500">Онлайн</div>
-      <div className="mt-1 font-mono text-2xl text-emerald-300">{fmtDuration(totalSeconds)}</div>
-      <div className="text-[11px] text-neutral-500 tabular-nums">
-        {totalSeconds.toLocaleString('ru-RU')} сек · всего наиграно
-      </div>
-    </div>
+    <StatTile
+      label="Наиграно"
+      value={fmtDuration(totalSeconds)}
+      hint={`${totalSeconds.toLocaleString('ru-RU')} сек всего`}
+    />
   );
 }
 
@@ -116,19 +129,12 @@ function LiveBadge({ live }: { live: DailyPresenceResponse['live'] | null }) {
   }, [live?.online, sinceMs]);
 
   if (!live?.online || sinceMs === null) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-neutral-800 bg-neutral-950/80 px-2 py-0.5 text-[10px] text-neutral-500">
-        <span className="inline-block h-1.5 w-1.5 rounded-full bg-neutral-600" />
-        Оффлайн
-      </span>
-    );
+    return <StatusDot state="idle" size="sm" label="Оффлайн" />;
   }
 
+  // Пульсация здесь означает ровно одно: счётчик идёт прямо сейчас (§9).
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-900 bg-emerald-950/40 px-2 py-0.5 text-[10px] text-emerald-300">
-      <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-green-500" />
-      Онлайн · <span className="tabular-nums">{liveElapsedLabel(sinceMs, now)}</span>
-    </span>
+    <StatusDot state="good" size="sm" pulse label={`Онлайн · ${liveElapsedLabel(sinceMs, now)}`} />
   );
 }
 
@@ -137,9 +143,10 @@ function DailyBarChart({ bars }: { bars: DailyBar[] }) {
 
   if (bars.length === 0) {
     return (
-      <div className="rounded border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
-        Нет данных о присутствии за период.
-      </div>
+      <EmptyState
+        title="Данных за период нет"
+        description="Нет данных о присутствии за выбранный период."
+      />
     );
   }
 
@@ -166,16 +173,15 @@ function DailyBarChart({ bars }: { bars: DailyBar[] }) {
 
   return (
     <div className="space-y-2">
-      <div className="h-4 text-[11px] text-neutral-400">
+      <div className="h-4 text-xs text-ink-2">
         {active ? (
           <span className="tabular-nums">
-            {active.day} ·{' '}
-            <span className="text-emerald-300">{fmtDuration(active.total_seconds)}</span>
+            {active.day} · <span className="text-good">{fmtDuration(active.total_seconds)}</span>
             {active.boost_seconds > 0 ? ` · буст ${fmtDuration(active.boost_seconds)}` : ''}
             {active.queue_seconds > 0 ? ` · очередь ${fmtDuration(active.queue_seconds)}` : ''}
           </span>
         ) : (
-          <span className="text-neutral-600">Наведите на столбец для точных чисел</span>
+          <span className="text-ink-3">Наведите на столбец для точных чисел</span>
         )}
       </div>
 
@@ -198,10 +204,10 @@ function DailyBarChart({ bars }: { bars: DailyBar[] }) {
                 y1={y}
                 x2={PAD.left + INNER_W}
                 y2={y}
-                stroke="#38383a"
+                stroke={CHART_GRID}
                 strokeWidth="0.5"
               />
-              <text x={PAD.left - 4} y={y + 3} textAnchor="end" fontSize="9" fill="#a1a1a8">
+              <text x={PAD.left - 4} y={y + 3} textAnchor="end" fontSize="9" fill={CHART_AXIS}>
                 {Math.round(frac * hourMax)}ч
               </text>
             </g>
@@ -245,7 +251,7 @@ function DailyBarChart({ bars }: { bars: DailyBar[] }) {
           y1={PAD.top + INNER_H}
           x2={PAD.left + INNER_W}
           y2={PAD.top + INNER_H}
-          stroke="#48484a"
+          stroke={CHART_FRAME}
           strokeWidth="1"
         />
 
@@ -257,7 +263,7 @@ function DailyBarChart({ bars }: { bars: DailyBar[] }) {
               y={VIEW_H - 6}
               textAnchor="middle"
               fontSize="9"
-              fill="#a1a1a8"
+              fill={CHART_AXIS}
             >
               {bar.day.slice(5)}
             </text>

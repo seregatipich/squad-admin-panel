@@ -85,7 +85,8 @@ describe('IssueLinksSection', () => {
       stubFetch(500);
       render(<IssueLinksSection playerId="player-alpha" />);
 
-      await screen.findByText(/Ошибка загрузки связанных тикетов/);
+      await screen.findByText('Не удалось загрузить связанные тикеты');
+      expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { Badge, Card, CardBody, CardHeader, InlineBanner, Switch } from '@/components/ui';
 
 interface TagProtectionCardProps {
   clanId: string;
@@ -18,6 +19,10 @@ interface ClanSettingsResponse {
  * (`can_manage_clans`, or the clan's own leader/deputy). A 401/403 response
  * hides the interactive control for the rest of the session and falls back
  * to a read-only status badge, matching the player-card section pattern.
+ *
+ * Состояние переключателя всегда продублировано словом рядом с ним: положение
+ * тумблера — это цвет и геометрия, а по дизайн-системе (§5) ни то, ни другое
+ * не имеет права быть единственным носителем смысла.
  */
 export default function TagProtectionCard({ clanId, initialProtected }: TagProtectionCardProps) {
   const [isProtected, setIsProtected] = useState(initialProtected);
@@ -57,46 +62,34 @@ export default function TagProtectionCard({ clanId, initialProtected }: TagProte
     }
   }, [clanId, isProtected]);
 
+  const stateLabel = isProtected ? 'Защита включена' : 'Защита выключена';
+
   return (
-    <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-5">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-medium">Защита тега</h2>
-          <p className="mt-1 max-w-xl text-xs text-neutral-500">
-            Игроков без места в ростере, носящих тег этого клана, автоматика предупреждает и, если
-            ник не сменён за грейс-период, кикает. Настройки грейс-периода и глобальный выключатель
-            — на странице «Защита клан-тегов».
-          </p>
-        </div>
-        {canToggle ? (
-          <button
-            type="button"
-            onClick={() => void toggle()}
-            disabled={saving}
-            aria-pressed={isProtected}
-            className={`shrink-0 rounded px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
-              isProtected
-                ? 'border border-emerald-800 bg-emerald-950 text-emerald-300 hover:bg-emerald-900'
-                : 'border border-neutral-800 bg-neutral-900 text-neutral-300 hover:bg-neutral-800'
-            }`}
-          >
-            {saving ? 'Сохраняем…' : isProtected ? 'Защита включена' : 'Защита выключена'}
-          </button>
-        ) : (
-          <span
-            className={`shrink-0 rounded px-2 py-0.5 text-xs ${
-              isProtected ? 'bg-emerald-950 text-emerald-300' : 'bg-neutral-800 text-neutral-400'
-            }`}
-          >
-            {isProtected ? 'Защита включена' : 'Защита выключена'}
-          </span>
-        )}
-      </div>
+    <Card padding="none">
+      <CardHeader
+        title="Защита тега"
+        description="Игроков без места в ростере, носящих тег этого клана, автоматика предупреждает и, если ник не сменён за грейс-период, кикает. Настройки грейс-периода и глобальный выключатель — на странице «Защита клан-тегов»."
+        actions={
+          canToggle ? (
+            <span className="flex items-center gap-2">
+              <span className="text-xs text-ink-2">{stateLabel}</span>
+              <Switch
+                checked={isProtected}
+                onChange={() => void toggle()}
+                disabled={saving}
+                label="Защита тега"
+              />
+            </span>
+          ) : (
+            <Badge tone={isProtected ? 'good' : 'neutral'}>{stateLabel}</Badge>
+          )
+        }
+      />
       {error ? (
-        <div className="mt-3 rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          {error}
-        </div>
+        <CardBody>
+          <InlineBanner tone="crit" title="Настройка не изменена" description={error} />
+        </CardBody>
       ) : null}
-    </section>
+    </Card>
   );
 }

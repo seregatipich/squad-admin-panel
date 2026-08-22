@@ -2,9 +2,31 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BanNickButton } from '@/components/BannedNameRuleModal';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  InlineBanner,
+  Modal,
+  PageContainer,
+  PageHeader,
+  SearchField,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+  Toolbar,
+  type ToolbarProps,
+} from '@/components/ui';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
@@ -15,6 +37,7 @@ import {
   type ChatApiItem,
   type ChatFilters,
   type ChatRow,
+  type ChatScope,
   combineRows,
   EMPTY_FILTERS,
   formatArchiveTime,
@@ -40,6 +63,25 @@ interface ServerOption {
   id: string;
   display_name: string;
 }
+
+/**
+ * Тон пилюли канала.
+ *
+ * `helpers.ts` хранит для каждого канала готовую строку классов, но это общий
+ * модуль со своим владельцем; здесь канал переводится в тон дизайн-системы.
+ * Цвет только различает соседние категории (§5) — смысл несёт подпись.
+ */
+const SCOPE_TONE: Record<ChatScope, BadgeTone> = {
+  all: 'accent',
+  team: 'good',
+  squad: 'warn',
+  admin: 'crit',
+  broadcast: 'accent',
+  direct: 'neutral',
+};
+
+/** Пилюля команды: два соседних значения должны различаться, не более того. */
+const TEAM_TONE: Record<number, BadgeTone> = { 1: 'accent', 2: 'warn' };
 
 export function ChatArchive() {
   const router = useRouter();
@@ -171,126 +213,139 @@ export function ChatArchive() {
     [liveOn, liveRows, pageRows],
   );
 
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Чат</h1>
-        <div className="flex items-center gap-2">
-          {liveOn ? <LiveIndicator lastUpdate={lastLiveAt} label="сообщение" /> : null}
-          <button
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            className="rounded border border-neutral-800 px-3 py-1.5 text-sm text-neutral-300 hover:border-neutral-600 md:hidden"
-          >
-            Фильтры
-          </button>
-        </div>
-      </div>
+  const filtersApplied = hasActiveFilters(filters);
+  const resetFilters = useCallback(() => navigate(EMPTY_FILTERS), [navigate]);
+  const resetProps: ToolbarProps = filtersApplied
+    ? { onReset: resetFilters, resetLabel: 'Сбросить фильтр' }
+    : {};
 
-      <p className="text-sm text-neutral-400">
-        Глобальный архив внутриигрового чата всех серверов: поиск по игроку и тексту, фильтры по
-        серверам, скоупам и дате. Броадкасты админов интерливятся с сообщениями игроков.
-      </p>
+  const filterPanel = (
+    <FilterSidebar
+      filters={filters}
+      servers={servers}
+      liveAvailable={liveAvailable}
+      liveEnabled={liveEnabled}
+      onToggleLive={() => setLiveEnabled((value) => !value)}
+      onChange={navigate}
+    />
+  );
+
+  return (
+    <PageContainer>
+      <PageHeader
+        title="Чат"
+        subtitle="Глобальный архив внутриигрового чата всех серверов: поиск по игроку и тексту, фильтры по серверам, каналам и дате. Бродкасты админов идут вперемешку с сообщениями игроков."
+        status={liveOn ? <LiveIndicator lastUpdate={lastLiveAt} label="сообщение" /> : undefined}
+      />
+
+      <Toolbar
+        search={
+          <SearchField
+            value={filters.text}
+            onCommit={(next) => navigate({ text: next.trim() })}
+            label="Поиск по тексту сообщений"
+            placeholder="Текст сообщения"
+            clearLabel="Очистить поиск"
+          />
+        }
+        filters={
+          <Button className="md:hidden" onClick={() => setDrawerOpen(true)}>
+            Фильтры
+          </Button>
+        }
+        {...resetProps}
+        summary={rows.length > 0 ? `Показано ${rows.length}` : undefined}
+      />
 
       <div className="flex gap-6">
-        <aside className="hidden w-72 shrink-0 md:block">
-          <FilterSidebar
-            filters={filters}
-            servers={servers}
-            liveAvailable={liveAvailable}
-            liveEnabled={liveEnabled}
-            onToggleLive={() => setLiveEnabled((value) => !value)}
-            onChange={navigate}
-          />
-        </aside>
+        <aside className="hidden w-72 shrink-0 md:block">{filterPanel}</aside>
 
-        <section className="min-w-0 flex-1 space-y-3">
+        <section className="min-w-0 flex-1 space-y-4">
           {error ? (
-            <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-              Ошибка загрузки чата: {error}
-            </div>
+            <InlineBanner
+              tone="crit"
+              title="Не удалось загрузить чат"
+              description={error}
+              action={
+                <Button size="sm" onClick={() => void load()}>
+                  Повторить
+                </Button>
+              }
+            />
           ) : null}
 
-          <div className="overflow-x-auto rounded border border-neutral-800 bg-neutral-950">
+          <Card padding="none">
             {loading ? (
-              <div className="py-12 text-center text-sm text-neutral-500">Загрузка…</div>
-            ) : rows.length === 0 ? (
-              <div className="py-12 text-center text-sm text-neutral-500">
-                Сообщения не найдены. Измените фильтры или дождитесь новых сообщений.
+              <div className="p-3">
+                <SkeletonTable rows={8} cols={6} label="Загружаем архив чата" />
               </div>
+            ) : rows.length === 0 ? (
+              <EmptyState
+                variant={filtersApplied ? 'filtered' : 'initial'}
+                title={filtersApplied ? 'Ничего не нашлось' : 'Сообщений пока нет'}
+                description={
+                  filtersApplied
+                    ? 'Ни одно сообщение не подходит под запрос и выбранные фильтры.'
+                    : 'Как только игроки напишут в чат, сообщения появятся здесь.'
+                }
+                action={
+                  filtersApplied ? <Button onClick={resetFilters}>Сбросить фильтр</Button> : null
+                }
+              />
             ) : (
-              <table className="w-full min-w-[720px] text-sm">
-                <thead className="text-left text-xs uppercase text-neutral-500">
-                  <tr>
-                    <th className="px-3 py-2 font-medium">Время</th>
-                    <th className="px-3 py-2 font-medium">Сервер</th>
-                    <th className="px-3 py-2 font-medium">Ком.</th>
-                    <th className="px-3 py-2 font-medium">Игрок</th>
-                    <th className="px-3 py-2 font-medium">Скоуп</th>
-                    <th className="px-3 py-2 font-medium">Сообщение</th>
-                    {canBan ? <th className="px-3 py-2 font-medium"></th> : null}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <ChatTableRow
-                      key={row.key}
-                      row={row}
-                      serverName={serverNames.get(row.serverId)}
-                      canBan={canBan}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+              <>
+                <Table ariaLabel="Сообщения чата">
+                  <TableHead>
+                    <TableRow>
+                      <Th>Время</Th>
+                      <Th>Сервер</Th>
+                      <Th>Команда</Th>
+                      <Th>Игрок</Th>
+                      <Th>Канал</Th>
+                      <Th>Сообщение</Th>
+                      {canBan ? <Th align="right">Действия</Th> : null}
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {rows.map((row) => (
+                      <ChatTableRow
+                        key={row.key}
+                        row={row}
+                        serverName={serverNames.get(row.serverId)}
+                        canBan={canBan}
+                      />
+                    ))}
+                  </TableBody>
+                </Table>
 
-          {!loading && cursor ? (
-            <div className="flex justify-center">
-              <button
-                type="button"
-                onClick={() => void loadMore()}
-                disabled={loadingMore}
-                className="rounded border border-neutral-800 px-4 py-1.5 text-sm text-neutral-300 hover:border-neutral-600 disabled:opacity-40"
-              >
-                {loadingMore ? 'Загрузка…' : 'Показать ещё'}
-              </button>
-            </div>
-          ) : null}
+                {cursor ? (
+                  <div className="flex justify-center border-t border-line p-3">
+                    <Button onClick={() => void loadMore()} loading={loadingMore}>
+                      Показать ещё
+                    </Button>
+                  </div>
+                ) : null}
+              </>
+            )}
+          </Card>
         </section>
       </div>
 
-      {drawerOpen ? (
-        <div className="fixed inset-0 z-40 md:hidden">
-          <button
-            type="button"
-            aria-label="Закрыть фильтры"
-            onClick={() => setDrawerOpen(false)}
-            className="absolute inset-0 bg-black/60"
-          />
-          <div className="absolute inset-y-0 left-0 w-[85%] max-w-sm overflow-y-auto border-r border-neutral-800 bg-neutral-950 p-4">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-neutral-200">Фильтры</h2>
-              <button
-                type="button"
-                onClick={() => setDrawerOpen(false)}
-                className="rounded border border-neutral-800 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-600"
-              >
-                Закрыть
-              </button>
-            </div>
-            <FilterSidebar
-              filters={filters}
-              servers={servers}
-              liveAvailable={liveAvailable}
-              liveEnabled={liveEnabled}
-              onToggleLive={() => setLiveEnabled((value) => !value)}
-              onChange={navigate}
-            />
-          </div>
-        </div>
-      ) : null}
-    </div>
+      <Modal
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        title="Фильтры"
+        closeLabel="Закрыть фильтры"
+        size="sm"
+        footer={
+          <Button variant="primary" onClick={() => setDrawerOpen(false)}>
+            Готово
+          </Button>
+        }
+      >
+        {filterPanel}
+      </Modal>
+    </PageContainer>
   );
 }
 
@@ -307,61 +362,51 @@ function ChatTableRow({
   const team = teamFlagMeta(row.teamId);
   const href = playerHref(row);
   return (
-    <tr className="border-t border-neutral-900 align-top hover:bg-neutral-900/40">
-      <td className="whitespace-nowrap px-3 py-2 font-mono text-[11px] text-neutral-500">
+    <TableRow interactive className="align-top">
+      <Td className="whitespace-nowrap font-mono text-2xs text-ink-3">
         {formatArchiveTime(row.sentAt)}
-      </td>
-      <td className="whitespace-nowrap px-3 py-2 text-xs text-neutral-400">
+      </Td>
+      <Td className="whitespace-nowrap text-xs text-ink-2">
         {serverName ?? `${row.serverId.slice(0, 8)}…`}
-      </td>
-      <td className="px-3 py-2">
+      </Td>
+      <Td>
         {team ? (
-          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${team.badgeClass}`}>
+          <Badge size="sm" tone={TEAM_TONE[row.teamId ?? 0] ?? 'neutral'}>
             {team.label}
-          </span>
+          </Badge>
         ) : (
-          <span className="text-neutral-700">—</span>
+          <span className="text-ink-4">—</span>
         )}
-      </td>
-      <td className="whitespace-nowrap px-3 py-2">
+      </Td>
+      <Td className="whitespace-nowrap">
         {href ? (
-          <Link href={href} className="font-medium text-sky-400 hover:text-sky-300">
+          <Link href={href} className="font-medium text-accent no-underline hover:brightness-110">
             {row.nickname}
           </Link>
         ) : (
-          <span className="font-medium text-neutral-300">{row.nickname}</span>
+          <span className="font-medium text-ink-2">{row.nickname}</span>
         )}
-      </td>
-      <td className="px-3 py-2">
-        <span
-          className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${scope.badgeClass}`}
-          title={scope.labelEn}
-        >
+      </Td>
+      <Td>
+        <Badge size="sm" tone={SCOPE_TONE[row.scope]}>
           <span aria-hidden>{scope.icon}</span>
           {scope.labelRu}
-        </span>
-      </td>
-      <td className="px-3 py-2 text-neutral-200" style={{ wordBreak: 'break-word' }}>
+        </Badge>
+      </Td>
+      <Td className="break-words text-ink">
         {row.isFlagged ? (
-          <span
-            className="mr-1.5 rounded bg-red-950 px-1.5 py-0.5 text-[10px] uppercase text-red-300"
-            title="Помечено фильтром чата"
-          >
+          <Badge size="sm" tone="crit" title="Помечено фильтром чата">
             флаг
-          </span>
-        ) : null}
+          </Badge>
+        ) : null}{' '}
         {row.message}
-      </td>
+      </Td>
       {canBan ? (
-        <td className="whitespace-nowrap px-3 py-2">
-          <BanNickButton
-            nick={row.nickname}
-            canBan={canBan}
-            className="rounded border border-red-900 px-1.5 py-0.5 text-[10px] text-red-400 hover:border-red-700"
-          />
-        </td>
+        <Td align="right" className="whitespace-nowrap">
+          <BanNickButton nick={row.nickname} canBan={canBan} />
+        </Td>
       ) : null}
-    </tr>
+    </TableRow>
   );
 }
 
@@ -380,176 +425,94 @@ function FilterSidebar({
   onToggleLive: () => void;
   onChange: (partial: Partial<ChatFilters>) => void;
 }) {
-  const [playerDraft, setPlayerDraft] = useState(filters.playerQuery);
-  const [textDraft, setTextDraft] = useState(filters.text);
-  const playerId = useId();
-  const textId = useId();
-  const fromId = useId();
-  const toId = useId();
-
-  useEffect(() => {
-    setPlayerDraft(filters.playerQuery);
-  }, [filters.playerQuery]);
-  useEffect(() => {
-    setTextDraft(filters.text);
-  }, [filters.text]);
-
   return (
-    <div className="space-y-4 rounded border border-neutral-800 bg-neutral-950 p-4">
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          onChange({ playerQuery: playerDraft.trim(), text: textDraft.trim() });
-        }}
-        className="space-y-3"
-      >
-        <div className="space-y-1">
-          <label htmlFor={playerId} className="text-xs text-neutral-500">
-            Игрок (ник / SteamID / EOS)
-          </label>
-          <input
-            id={playerId}
-            type="search"
-            value={playerDraft}
-            onChange={(event) => setPlayerDraft(event.target.value)}
-            placeholder="Поиск игрока"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-xs focus:border-neutral-600 focus:outline-none"
-          />
-        </div>
-        <div className="space-y-1">
-          <label htmlFor={textId} className="text-xs text-neutral-500">
-            Текст сообщения
-          </label>
-          <input
-            id={textId}
-            type="search"
-            value={textDraft}
-            onChange={(event) => setTextDraft(event.target.value)}
-            placeholder="Поиск по тексту"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-xs focus:border-neutral-600 focus:outline-none"
-          />
-        </div>
-        <button
-          type="submit"
-          className="w-full rounded border border-neutral-700 px-3 py-1.5 text-xs text-neutral-200 hover:border-neutral-500"
-        >
-          Применить
-        </button>
-      </form>
+    <Card className="space-y-4">
+      <div className="space-y-1.5">
+        <span className="block text-xs font-medium text-ink-2">Игрок</span>
+        <SearchField
+          value={filters.playerQuery}
+          onCommit={(next) => onChange({ playerQuery: next.trim() })}
+          label="Поиск игрока (ник, SteamID64 или EOS ID)"
+          placeholder="Ник, SteamID64 или EOS ID"
+          clearLabel="Очистить поиск игрока"
+        />
+      </div>
 
-      <div className="space-y-2">
-        <span className="text-xs text-neutral-500">Скоупы</span>
-        <div className="flex flex-wrap gap-1.5">
-          {CHAT_SCOPES.map((scope) => {
-            const active = filters.scopes.includes(scope);
-            const meta = SCOPE_META[scope];
-            return (
-              <button
-                key={scope}
-                type="button"
-                onClick={() => onChange({ scopes: toggleValue(filters.scopes, scope) })}
-                aria-pressed={active}
-                className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium ${
-                  active ? meta.badgeClass : 'border border-neutral-700 text-neutral-400'
-                }`}
-              >
-                <span aria-hidden>{meta.icon}</span>
-                {meta.labelRu}
-              </button>
-            );
-          })}
+      <div className="space-y-1.5">
+        <span className="block text-xs font-medium text-ink-2">Каналы</span>
+        <div className="space-y-1">
+          {CHAT_SCOPES.map((scope) => (
+            <Checkbox
+              key={scope}
+              label={
+                <span className="inline-flex items-center gap-1">
+                  <span aria-hidden>{SCOPE_META[scope].icon}</span>
+                  {SCOPE_META[scope].labelRu}
+                </span>
+              }
+              checked={filters.scopes.includes(scope)}
+              onChange={() => onChange({ scopes: toggleValue(filters.scopes, scope) })}
+            />
+          ))}
         </div>
       </div>
 
       {servers.length > 0 ? (
-        <div className="space-y-2">
-          <span className="text-xs text-neutral-500">Серверы</span>
-          <div className="flex flex-wrap gap-1.5">
-            {servers.map((server) => {
-              const active = filters.serverIds.includes(server.id);
-              return (
-                <button
-                  key={server.id}
-                  type="button"
-                  onClick={() => onChange({ serverIds: toggleValue(filters.serverIds, server.id) })}
-                  aria-pressed={active}
-                  className={`rounded px-2 py-0.5 text-[11px] font-medium ${
-                    active
-                      ? 'bg-neutral-700 text-neutral-100'
-                      : 'border border-neutral-700 text-neutral-400'
-                  }`}
-                >
-                  {server.display_name}
-                </button>
-              );
-            })}
+        <div className="space-y-1.5">
+          <span className="block text-xs font-medium text-ink-2">Серверы</span>
+          <div className="space-y-1">
+            {servers.map((server) => (
+              <Checkbox
+                key={server.id}
+                label={<span className="truncate">{server.display_name}</span>}
+                checked={filters.serverIds.includes(server.id)}
+                onChange={() => onChange({ serverIds: toggleValue(filters.serverIds, server.id) })}
+              />
+            ))}
           </div>
         </div>
       ) : null}
 
       <div className="grid grid-cols-2 gap-2">
-        <div className="space-y-1">
-          <label htmlFor={fromId} className="text-xs text-neutral-500">
-            С даты
-          </label>
+        <label className="flex flex-col gap-1 text-xs text-ink-2">
+          С даты
           <input
-            id={fromId}
             type="date"
             value={filters.from}
             onChange={(event) => onChange({ from: event.target.value })}
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-200 focus:border-neutral-600 focus:outline-none"
+            className="h-8 w-full rounded-ctl border border-line bg-raised px-2 text-xs text-ink"
           />
-        </div>
-        <div className="space-y-1">
-          <label htmlFor={toId} className="text-xs text-neutral-500">
-            По дату
-          </label>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-ink-2">
+          По дату
           <input
-            id={toId}
             type="date"
             value={filters.to}
             onChange={(event) => onChange({ to: event.target.value })}
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-200 focus:border-neutral-600 focus:outline-none"
+            className="h-8 w-full rounded-ctl border border-line bg-raised px-2 text-xs text-ink"
           />
-        </div>
+        </label>
       </div>
 
-      <label className="flex items-center gap-2 text-xs text-neutral-300">
-        <input
-          type="checkbox"
+      <div className="space-y-2 border-t border-line pt-3">
+        <Checkbox
+          label="Только помеченные фильтром"
           checked={filters.flaggedOnly}
           onChange={(event) => onChange({ flaggedOnly: event.target.checked })}
-          className="h-3.5 w-3.5 accent-red-500"
         />
-        Только флагнутые
-      </label>
-
-      <div className="flex items-center justify-between border-t border-neutral-900 pt-3">
-        <label className="flex items-center gap-2 text-xs text-neutral-300">
-          <input
-            type="checkbox"
-            checked={liveEnabled && liveAvailable}
-            disabled={!liveAvailable}
-            onChange={onToggleLive}
-            className="h-3.5 w-3.5 accent-green-500"
-          />
-          <span className={liveAvailable ? '' : 'text-neutral-600'}>Live</span>
-        </label>
-        {hasActiveFilters(filters) ? (
-          <button
-            type="button"
-            onClick={() => onChange(EMPTY_FILTERS)}
-            className="text-xs text-neutral-500 hover:text-neutral-300"
-          >
-            Сбросить
-          </button>
+        <Checkbox
+          label="Живой поток"
+          checked={liveEnabled && liveAvailable}
+          disabled={!liveAvailable}
+          onChange={onToggleLive}
+        />
+        {!liveAvailable ? (
+          <p className="text-xs text-ink-3">
+            Живой поток недоступен при фильтре по дате — очистите даты, чтобы получать новые
+            сообщения.
+          </p>
         ) : null}
       </div>
-      {!liveAvailable ? (
-        <p className="text-[11px] text-neutral-600">
-          Live недоступен при фильтре по дате — очистите даты, чтобы получать новые сообщения.
-        </p>
-      ) : null}
-    </div>
+    </Card>
   );
 }

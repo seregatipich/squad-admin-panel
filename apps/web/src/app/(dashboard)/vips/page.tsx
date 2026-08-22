@@ -3,6 +3,23 @@ import { cookies } from 'next/headers';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { RoleColorDot } from '@/components/RoleColorDot';
+import {
+  Badge,
+  Button,
+  ButtonLink,
+  Card,
+  Checkbox,
+  EmptyState,
+  PageContainer,
+  PageHeader,
+  Select,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
 import { apiFetch } from '@/lib/api';
 import { requireSession, SESSION_COOKIE } from '@/lib/dal';
 import {
@@ -42,6 +59,8 @@ interface VipsPageProps {
  * Server-rendered through `lib/dal.ts`/`lib/api.ts` against
  * `GET /api/v1/role-assignments`; the role and "expiring soon" filters are
  * plain query-string search params so the page works without client JS.
+ * Поэтому фильтры собраны из примитивов, которые не требуют обработчиков:
+ * форма отправляется браузером, а не React.
  */
 export default async function VipsPage({ searchParams }: VipsPageProps) {
   const me = await requireSession();
@@ -91,102 +110,112 @@ export default async function VipsPage({ searchParams }: VipsPageProps) {
     expiryWindows = DEFAULT_VIP_EXPIRY_WINDOWS_DAYS;
   }
 
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">VIP-роли</h1>
-        <span className="text-xs text-neutral-500">{rows.length} игрок(ов)</span>
-      </div>
+  const filtersApplied = Boolean(params.role_id) || expiringSoon;
 
-      <form method="GET" className="flex flex-wrap items-center gap-3 text-sm">
-        <select
-          name="role_id"
-          defaultValue={params.role_id ?? ''}
-          className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm"
-        >
+  return (
+    <PageContainer>
+      <PageHeader
+        title="VIP-роли"
+        subtitle="Реестр игроков с выданной ролью панели: срок действия, комментарий к выдаче и последний визит."
+        meta={<span>Игроков: {rows.length}</span>}
+      />
+
+      <form method="GET" className="flex flex-wrap items-center gap-2">
+        <label htmlFor="vips-role" className="text-xs text-ink-3">
+          Роль
+        </label>
+        <Select id="vips-role" name="role_id" defaultValue={params.role_id ?? ''}>
           <option value="">Все роли</option>
           {roleOptions.map((r) => (
             <option key={r.id} value={r.id}>
               {r.name}
             </option>
           ))}
-        </select>
-        <label className="flex items-center gap-2 text-neutral-300">
-          <input type="checkbox" name="expiring_soon" value="true" defaultChecked={expiringSoon} />
-          Истекают скоро
-        </label>
-        <button
-          type="submit"
-          className="rounded bg-sky-600 px-3 py-1.5 text-sm text-white hover:bg-sky-500"
-        >
+        </Select>
+        <Checkbox
+          label="Истекают скоро"
+          name="expiring_soon"
+          value="true"
+          defaultChecked={expiringSoon}
+        />
+        <Button type="submit" variant="primary">
           Применить
-        </button>
-        {params.role_id || expiringSoon ? (
-          <Link href="/vips" className="text-xs text-neutral-400 underline hover:text-neutral-200">
-            Сбросить
-          </Link>
-        ) : null}
+        </Button>
+        {filtersApplied ? <ButtonLink href="/vips">Сбросить фильтр</ButtonLink> : null}
       </form>
 
-      <div className="overflow-hidden rounded border border-neutral-800">
-        <table className="w-full text-sm">
-          <thead className="bg-neutral-900 text-xs uppercase tracking-widest text-neutral-400">
-            <tr>
-              <th className="p-2 text-left">Роль</th>
-              <th className="p-2 text-left">Игрок</th>
-              <th className="p-2 text-left">SteamID64 / EOS</th>
-              <th className="p-2 text-left">Срок</th>
-              <th className="p-2 text-left">Комментарий</th>
-              <th className="p-2 text-left">Last seen</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
+      <Card padding="none">
+        {rows.length === 0 ? (
+          <EmptyState
+            variant={filtersApplied ? 'filtered' : 'initial'}
+            title={filtersApplied ? 'Ничего не нашлось' : 'Ролей никому не выдано'}
+            description={
+              filtersApplied
+                ? 'Ни один игрок не подходит под выбранные фильтры.'
+                : 'Ни у одного игрока сейчас нет роли панели.'
+            }
+            action={filtersApplied ? <ButtonLink href="/vips">Сбросить фильтр</ButtonLink> : null}
+          />
+        ) : (
+          <Table ariaLabel="Игроки с выданными ролями">
+            <TableHead>
               <tr>
-                <td colSpan={6} className="p-3 text-neutral-500">
-                  Нет игроков по фильтру
-                </td>
+                <Th>Роль</Th>
+                <Th>Игрок</Th>
+                <Th>SteamID64 / EOS ID</Th>
+                <Th>Срок</Th>
+                <Th>Комментарий</Th>
+                <Th>Был(а)</Th>
               </tr>
-            ) : null}
-            {rows.map((r) => (
-              <tr key={r.id} className="border-t border-neutral-900">
-                <td className="p-2">
-                  <span className="inline-flex items-center gap-2">
-                    <RoleColorDot color={r.role.color} />
-                    {r.role.name}
-                  </span>
-                </td>
-                <td className="p-2">
-                  <Link href={`/all-players/${r.id}`} className="text-sky-400 hover:text-sky-300">
-                    {r.canonical_name}
-                  </Link>
-                </td>
-                <td className="p-2 font-mono text-xs">{r.steam_id64 ?? r.eos_id ?? '—'}</td>
-                <td className="p-2 text-neutral-300">
-                  {formatVipExpiry(r.role_expires_at)}
-                  {isRoleExpirySoon(r.role_expires_at, expiryWindows) ? (
-                    <span className="ml-2 rounded bg-amber-950 px-2 py-0.5 text-[10px] uppercase text-amber-300">
-                      истекает
+            </TableHead>
+            <TableBody>
+              {rows.map((r) => (
+                <TableRow key={r.id} interactive>
+                  <Td className="whitespace-nowrap">
+                    <span className="inline-flex items-center gap-2">
+                      <RoleColorDot color={r.role.color} />
+                      {r.role.name}
                     </span>
-                  ) : null}
-                </td>
-                <td className="p-2 text-neutral-500">
-                  {r.role_comment ? (
-                    <span className="block max-w-56 truncate" title={r.role_comment}>
-                      {r.role_comment}
-                    </span>
-                  ) : (
-                    '—'
-                  )}
-                </td>
-                <td className="p-2 text-neutral-500">
-                  {new Date(r.last_seen_at).toLocaleString('ru-RU')}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
+                  </Td>
+                  <Td>
+                    <Link
+                      href={`/all-players/${r.id}`}
+                      className="text-accent no-underline hover:brightness-110"
+                    >
+                      {r.canonical_name}
+                    </Link>
+                  </Td>
+                  <Td className="font-mono text-xs text-ink-2">
+                    {r.steam_id64 ?? r.eos_id ?? '—'}
+                  </Td>
+                  <Td className="whitespace-nowrap text-ink-2">
+                    {formatVipExpiry(r.role_expires_at)}
+                    {isRoleExpirySoon(r.role_expires_at, expiryWindows) ? (
+                      <span className="ml-2">
+                        <Badge tone="warn" size="sm">
+                          истекает
+                        </Badge>
+                      </span>
+                    ) : null}
+                  </Td>
+                  <Td className="text-ink-3">
+                    {r.role_comment ? (
+                      <span className="block max-w-56 truncate" title={r.role_comment}>
+                        {r.role_comment}
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </Td>
+                  <Td className="whitespace-nowrap text-ink-3">
+                    {new Date(r.last_seen_at).toLocaleString('ru-RU')}
+                  </Td>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+    </PageContainer>
   );
 }

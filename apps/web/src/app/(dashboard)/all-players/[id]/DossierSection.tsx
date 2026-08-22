@@ -1,6 +1,16 @@
 'use client';
 
-import { useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
+import {
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  InlineBanner,
+  SegmentedControl,
+  Select,
+  SkeletonTable,
+} from '@/components/ui';
 import { DossierKitsTab } from './DossierKitsTab';
 import { DossierSkillTab } from './DossierSkillTab';
 import { DossierVehiclesTab } from './DossierVehiclesTab';
@@ -25,33 +35,6 @@ const TABS: readonly { key: DossierTab; label: string }[] = [
   { key: 'kits', label: 'Киты' },
 ];
 
-function TabButton({
-  active,
-  testId,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  testId: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      data-testid={testId}
-      onClick={onClick}
-      className={`-mb-px whitespace-nowrap border-b-2 px-2 py-1.5 text-xs ${
-        active
-          ? 'border-sky-500 text-sky-300'
-          : 'border-transparent text-neutral-500 hover:text-neutral-300'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
 /**
  * DOSSIER-6 (#193) «Досье» block on the player card.
  *
@@ -75,7 +58,12 @@ export function DossierSection({ playerId }: { playerId: string }) {
   const [hidden, setHidden] = useState(false);
   const serverSelectId = useId();
 
-  useEffect(() => {
+  /**
+   * Загрузка досье. Возвращает отмену — та же функция служит и эффектом
+   * монтирования, и обработчиком «Повторить», поэтому повторная попытка
+   * повторяет ровно тот же запрос.
+   */
+  const load = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -108,6 +96,8 @@ export function DossierSection({ playerId }: { playerId: string }) {
     };
   }, [playerId, serverId, monthsBack]);
 
+  useEffect(() => load(), [load]);
+
   useEffect(() => {
     let cancelled = false;
     fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
@@ -128,70 +118,71 @@ export function DossierSection({ playerId }: { playerId: string }) {
   const lifetimeOnly = tab === 'weapons' || tab === 'vehicles';
 
   return (
-    <section
-      data-testid="dossier-section"
-      className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Досье</h2>
-        {lifetimeOnly ? (
-          <span className="text-[11px] text-neutral-600">{LIFETIME_ONLY_NOTE}</span>
-        ) : null}
-        {!lifetimeOnly && servers.length > 0 ? (
-          <div className="flex items-center gap-1.5">
-            <label className="text-[11px] text-neutral-500" htmlFor={serverSelectId}>
-              Сервер
-            </label>
-            <select
-              id={serverSelectId}
-              value={serverId}
-              onChange={(e) => setServerId(e.target.value)}
-              className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200"
-            >
-              <option value="all">Все серверы</option>
-              {servers.map((server) => (
-                <option key={server.id} value={server.id}>
-                  {server.display_name}
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : null}
-      </div>
+    <Card as="section" padding="none">
+      <CardHeader
+        title="Досье"
+        actions={
+          lifetimeOnly ? (
+            <span className="text-xs text-ink-3">{LIFETIME_ONLY_NOTE}</span>
+          ) : servers.length > 0 ? (
+            <span className="flex items-center gap-2">
+              <label className="text-xs text-ink-3" htmlFor={serverSelectId}>
+                Сервер
+              </label>
+              <Select
+                id={serverSelectId}
+                size="sm"
+                value={serverId}
+                onChange={(e) => setServerId(e.target.value)}
+              >
+                <option value="all">Все серверы</option>
+                {servers.map((server) => (
+                  <option key={server.id} value={server.id}>
+                    {server.display_name}
+                  </option>
+                ))}
+              </Select>
+            </span>
+          ) : null
+        }
+      />
 
-      <div className="flex items-center gap-2 overflow-x-auto border-b border-neutral-900">
-        {TABS.map((entry) => (
-          <TabButton
-            key={entry.key}
-            testId={`dossier-tab-${entry.key}`}
-            active={tab === entry.key}
-            onClick={() => setTab(entry.key)}
-          >
-            {entry.label}
-          </TabButton>
-        ))}
-      </div>
-
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          Ошибка: {error}
-        </div>
-      ) : loading || data === null ? (
-        <div className="text-sm text-neutral-500">Загрузка…</div>
-      ) : tab === 'skill' ? (
-        <DossierSkillTab
-          skill={data.skill}
-          trend={fillTrendMonths(data.kd_trend, monthsBack, new Date())}
-          monthsBack={monthsBack}
-          onMonthsBackChange={setMonthsBack}
+      <CardBody className="space-y-4">
+        <SegmentedControl
+          ariaLabel="Раздел досье"
+          value={tab}
+          onChange={(next) => setTab(next as DossierTab)}
+          items={TABS.map((entry) => ({ value: entry.key, label: entry.label }))}
         />
-      ) : tab === 'weapons' ? (
-        <DossierWeaponsTab weapons={data.weapons} weaponsTotal={data.weapons_total} />
-      ) : tab === 'vehicles' ? (
-        <DossierVehiclesTab vehicles={data.vehicles} vehicleKills={data.vehicle_kills} />
-      ) : (
-        <DossierKitsTab kits={data.kits} />
-      )}
-    </section>
+
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить досье"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : loading || data === null ? (
+          <SkeletonTable rows={5} cols={4} label="Загрузка досье" />
+        ) : tab === 'skill' ? (
+          <DossierSkillTab
+            skill={data.skill}
+            trend={fillTrendMonths(data.kd_trend, monthsBack, new Date())}
+            monthsBack={monthsBack}
+            onMonthsBackChange={setMonthsBack}
+          />
+        ) : tab === 'weapons' ? (
+          <DossierWeaponsTab weapons={data.weapons} weaponsTotal={data.weapons_total} />
+        ) : tab === 'vehicles' ? (
+          <DossierVehiclesTab vehicles={data.vehicles} vehicleKills={data.vehicle_kills} />
+        ) : (
+          <DossierKitsTab kits={data.kits} />
+        )}
+      </CardBody>
+    </Card>
   );
 }

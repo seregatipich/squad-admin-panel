@@ -3,6 +3,23 @@
 import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
+import {
   type AltCandidate,
   formatRejectedMark,
   LINK_TYPE_LABELS_RU,
@@ -17,10 +34,11 @@ const CONFIDENCE_LABELS_RU: Record<AltCandidate['confidence'], string> = {
   low: 'низкая',
 };
 
-const CONFIDENCE_BADGE_CLASSES: Record<AltCandidate['confidence'], string> = {
-  high: 'border border-red-900 bg-red-950/50 text-red-300',
-  medium: 'border border-amber-900 bg-amber-950/50 text-amber-300',
-  low: 'border border-neutral-700 bg-neutral-800 text-neutral-400',
+/** Уверенность — состояние оценки, а не украшение: слово рядом с числом несёт тот же смысл (§5). */
+const CONFIDENCE_TONE: Record<AltCandidate['confidence'], BadgeTone> = {
+  high: 'crit',
+  medium: 'warn',
+  low: 'neutral',
 };
 
 interface CandidateResponse {
@@ -139,156 +157,178 @@ export function AltsSection({ playerId }: { playerId: string }) {
   const { unresolved, rejected } = splitCandidates(candidates);
   const candidateRows = showAll ? [...unresolved, ...rejected] : unresolved.slice(0, 5);
 
+  function toggleOpen() {
+    const next = !open;
+    setOpen(next);
+    if (next) void load();
+  }
+
   return (
-    <details
-      className="rounded border border-neutral-800 bg-neutral-950 p-4"
-      open={open}
-      onToggle={(event) => {
-        const nextOpen = event.currentTarget.open;
-        setOpen(nextOpen);
-        if (nextOpen) void load();
-      }}
-    >
-      <summary className="cursor-pointer list-none text-xs uppercase tracking-widest text-neutral-400">
-        Возможные альты
-      </summary>
+    <Card as="section" padding="none">
+      <CardHeader
+        title="Возможные альты"
+        actions={
+          <Button size="sm" aria-expanded={open} onClick={toggleOpen}>
+            {open ? 'Скрыть' : 'Показать'}
+          </Button>
+        }
+      />
 
-      <div className="mt-4 space-y-4">
-        {error ? (
-          <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-            Ошибка: {error}
-          </div>
-        ) : loading ? (
-          <div className="text-sm text-neutral-500">Загрузка…</div>
-        ) : (
-          <>
-            <div className="space-y-2">
-              <h3 className="text-[11px] uppercase tracking-widest text-neutral-500">
-                Подтверждённые связи{confirmedLinks.length ? ` (${confirmedLinks.length})` : ''}
-              </h3>
-              {confirmedLinks.length === 0 ? (
-                <p className="text-sm text-neutral-500">Подтверждённых связей нет.</p>
-              ) : (
-                <ul className="space-y-1.5">
-                  {confirmedLinks.map((link) => (
-                    <li
-                      key={link.id}
-                      className="flex flex-wrap items-center gap-2 rounded border border-emerald-900/70 bg-emerald-950/30 px-2 py-1.5 text-sm"
-                    >
-                      <span className="rounded bg-emerald-950 px-1.5 py-0.5 text-[10px] uppercase text-emerald-300">
-                        {LINK_TYPE_LABELS_RU[link.link_type]}
-                      </span>
-                      {link.other_player ? (
-                        <Link
-                          href={`/all-players/${link.other_player.id}`}
-                          className="font-medium text-sky-400 hover:text-sky-300"
-                        >
-                          {link.other_player.current_name}
-                        </Link>
-                      ) : (
-                        <span className="font-medium">—</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <h3 className="text-[11px] uppercase tracking-widest text-neutral-500">
-                Топ кандидатов{unresolved.length ? ` (${unresolved.length})` : ''}
-              </h3>
-              {candidateRows.length === 0 ? (
-                <p className="text-sm text-neutral-500">Кандидатов не найдено.</p>
-              ) : (
-                <ul className="space-y-1.5">
-                  {candidateRows.map((candidate) => {
-                    const isRejected = candidate.link?.status === 'rejected';
-                    return (
-                      <li
-                        key={candidate.player_id}
-                        className={`flex flex-wrap items-center gap-2 rounded border px-2 py-1.5 text-sm ${
-                          isRejected
-                            ? 'border-neutral-900 bg-neutral-900/20 text-neutral-500'
-                            : 'border-neutral-800 bg-neutral-900/40'
-                        }`}
-                      >
-                        <span
-                          className={`rounded px-1.5 py-0.5 text-[10px] uppercase ${CONFIDENCE_BADGE_CLASSES[candidate.confidence]}`}
-                        >
-                          {CONFIDENCE_LABELS_RU[candidate.confidence]} ({candidate.score})
-                        </span>
-                        <Link
-                          href={`/all-players/${candidate.player_id}`}
-                          className="font-medium text-sky-400 hover:text-sky-300"
-                        >
-                          {candidate.current_name ?? '—'}
-                        </Link>
-                        <span className="text-xs text-neutral-500">
-                          Общих IP: {candidate.shared_ip_count}
-                        </span>
-                        <span className="text-xs text-neutral-500">
-                          Δ: {formatElapsed(candidate.min_time_delta_seconds)}
-                        </span>
-                        {candidate.has_permanent_ban ? (
-                          <span className="rounded border border-red-900 bg-red-950/50 px-1.5 py-0.5 text-[10px] uppercase text-red-300">
-                            перманентный бан
-                          </span>
-                        ) : null}
-                        {!isRejected ? (
-                          <SteamFriendCheck
-                            playerId={playerId}
-                            otherPlayerId={candidate.player_id}
-                            onResult={(result) =>
-                              setFriendResults((current) => ({
-                                ...current,
-                                [candidate.player_id]: result,
-                              }))
-                            }
-                          />
-                        ) : null}
-                        {isRejected ? (
-                          <span className="text-xs">
-                            {candidate.link ? formatRejectedMark(candidate.link) : 'Отклонено'}
-                          </span>
-                        ) : showAll ? (
-                          <div className="ml-auto flex gap-1.5">
-                            <button
-                              type="button"
-                              disabled={savingCandidate !== null}
-                              onClick={() => void saveDecision(candidate, 'confirmed')}
-                              className="rounded border border-emerald-900 px-2 py-1 text-xs text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-                            >
-                              Подтвердить
-                            </button>
-                            <button
-                              type="button"
-                              disabled={savingCandidate !== null}
-                              onClick={() => void saveDecision(candidate, 'rejected')}
-                              className="rounded border border-red-900 px-2 py-1 text-xs text-red-300 hover:border-red-700 disabled:opacity-40"
-                            >
-                              Отклонить
-                            </button>
-                          </div>
-                        ) : null}
+      {open ? (
+        <CardBody className="space-y-6">
+          {error ? (
+            <InlineBanner
+              tone="crit"
+              title="Не удалось загрузить возможные альты"
+              description={error}
+              action={
+                <Button size="sm" onClick={() => void load(true)}>
+                  Повторить
+                </Button>
+              }
+            />
+          ) : loading ? (
+            <SkeletonTable rows={4} cols={4} label="Загрузка возможных альтов" />
+          ) : (
+            <>
+              <section className="space-y-2">
+                <h3 className="text-[13px] font-semibold text-ink">
+                  Подтверждённые связи{confirmedLinks.length ? ` (${confirmedLinks.length})` : ''}
+                </h3>
+                {confirmedLinks.length === 0 ? (
+                  <EmptyState
+                    title="Подтверждённых связей нет"
+                    description="Ни одна связь с другим аккаунтом ещё не подтверждена администратором."
+                  />
+                ) : (
+                  <ul className="divide-y divide-line rounded-ctl border border-line">
+                    {confirmedLinks.map((link) => (
+                      <li key={link.id} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                        <Badge tone="good" size="sm">
+                          {LINK_TYPE_LABELS_RU[link.link_type]}
+                        </Badge>
+                        {link.other_player ? (
+                          <Link
+                            href={`/all-players/${link.other_player.id}`}
+                            className="font-medium text-accent no-underline hover:brightness-110"
+                          >
+                            {link.other_player.current_name}
+                          </Link>
+                        ) : (
+                          <span className="font-medium text-ink-3">—</span>
+                        )}
                       </li>
-                    );
-                  })}
-                </ul>
-              )}
-              {candidates.length > 0 ? (
-                <button
-                  type="button"
-                  onClick={() => setShowAll((value) => !value)}
-                  className="text-xs text-sky-400 hover:text-sky-300"
-                >
-                  {showAll ? 'Свернуть список' : 'Все кандидаты →'}
-                </button>
-              ) : null}
-            </div>
-          </>
-        )}
-      </div>
-    </details>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              <section className="space-y-2">
+                <h3 className="text-[13px] font-semibold text-ink">
+                  Топ кандидатов{unresolved.length ? ` (${unresolved.length})` : ''}
+                </h3>
+                {candidateRows.length === 0 ? (
+                  <EmptyState
+                    title="Кандидатов не найдено"
+                    description="Ни один другой аккаунт не пересекается с этим по IP и времени входа."
+                  />
+                ) : (
+                  <Table ariaLabel="Кандидаты в альты">
+                    <TableHead sticky={false}>
+                      <tr>
+                        <Th>Кандидат</Th>
+                        <Th>Уверенность</Th>
+                        <Th align="right">Общих IP</Th>
+                        <Th align="right">Разница во времени</Th>
+                        <Th>Проверка Steam</Th>
+                        <Th>Решение</Th>
+                      </tr>
+                    </TableHead>
+                    <TableBody>
+                      {candidateRows.map((candidate) => {
+                        const isRejected = candidate.link?.status === 'rejected';
+                        return (
+                          <TableRow key={candidate.player_id}>
+                            <Td>
+                              <span className="inline-flex flex-wrap items-center gap-2">
+                                <Link
+                                  href={`/all-players/${candidate.player_id}`}
+                                  className="font-medium text-accent no-underline hover:brightness-110"
+                                >
+                                  {candidate.current_name ?? '—'}
+                                </Link>
+                                {candidate.has_permanent_ban ? (
+                                  <Badge tone="crit" size="sm">
+                                    перманентный бан
+                                  </Badge>
+                                ) : null}
+                              </span>
+                            </Td>
+                            <Td>
+                              <Badge tone={CONFIDENCE_TONE[candidate.confidence]} size="sm">
+                                {CONFIDENCE_LABELS_RU[candidate.confidence]} ({candidate.score})
+                              </Badge>
+                            </Td>
+                            <Td numeric>{candidate.shared_ip_count}</Td>
+                            <Td numeric>{formatElapsed(candidate.min_time_delta_seconds)}</Td>
+                            <Td>
+                              {isRejected ? (
+                                <span className="text-ink-3">—</span>
+                              ) : (
+                                <SteamFriendCheck
+                                  playerId={playerId}
+                                  otherPlayerId={candidate.player_id}
+                                  onResult={(result) =>
+                                    setFriendResults((current) => ({
+                                      ...current,
+                                      [candidate.player_id]: result,
+                                    }))
+                                  }
+                                />
+                              )}
+                            </Td>
+                            <Td>
+                              {isRejected ? (
+                                <span className="text-xs text-ink-3">
+                                  {candidate.link
+                                    ? formatRejectedMark(candidate.link)
+                                    : 'Отклонено'}
+                                </span>
+                              ) : showAll ? (
+                                <span className="flex gap-1.5">
+                                  <Button
+                                    size="sm"
+                                    disabled={savingCandidate !== null}
+                                    onClick={() => void saveDecision(candidate, 'confirmed')}
+                                  >
+                                    Подтвердить
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    disabled={savingCandidate !== null}
+                                    onClick={() => void saveDecision(candidate, 'rejected')}
+                                  >
+                                    Отклонить
+                                  </Button>
+                                </span>
+                              ) : null}
+                            </Td>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                )}
+                {candidates.length > 0 ? (
+                  <Button variant="plain" size="sm" onClick={() => setShowAll((value) => !value)}>
+                    {showAll ? 'Свернуть список' : 'Все кандидаты'}
+                  </Button>
+                ) : null}
+              </section>
+            </>
+          )}
+        </CardBody>
+      ) : null}
+    </Card>
   );
 }

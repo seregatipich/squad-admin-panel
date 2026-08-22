@@ -1,7 +1,32 @@
 'use client';
 
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Button,
+  Card,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  EmptyState,
+  FieldRow,
+  IconButton,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Pagination,
+  type PaginationLabels,
+  SearchField,
+  Select,
+  SkeletonTable,
+  SortableTh,
+  type SortDirection,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
 import {
   buildApiQuery,
   buildQueryString,
@@ -31,7 +56,6 @@ import {
   seasonPeriodStart,
   seasonRangeLabel,
   shiftPeriodStart,
-  shouldNavigateRow,
   sortSeasonsForSelector,
   visibleColumns,
 } from './helpers';
@@ -44,8 +68,11 @@ interface SeasonsResponse {
   items: Season[];
 }
 
-const inputClass =
-  'rounded border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-sm text-neutral-100 focus:border-neutral-600 focus:outline-none';
+/** Как читается направление сортировки колонок лидерборда. */
+const SORT_DIRECTION_TEXT: Record<SortDirection, string> = {
+  asc: 'по возрастанию',
+  desc: 'по убыванию',
+};
 
 export function LeaderboardsBrowser() {
   const router = useRouter();
@@ -58,7 +85,11 @@ export function LeaderboardsBrowser() {
   const [data, setData] = useState<LeaderboardBody | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [searchDraft, setSearchDraft] = useState(filters.search);
+  /**
+   * Номер последнего запроса лидерборда: «Повторить» ходит тем же путём, что и
+   * обычная загрузка, а ответ на отменённый запрос в состояние не попадает.
+   */
+  const requestRef = useRef(0);
 
   const navigate = useCallback(
     (partial: Partial<LeaderboardFilters>) => {
@@ -68,17 +99,6 @@ export function LeaderboardsBrowser() {
     },
     [filters, pathname, router],
   );
-
-  useEffect(() => {
-    setSearchDraft(filters.search);
-  }, [filters.search]);
-
-  useEffect(() => {
-    const trimmed = searchDraft.trim();
-    if (trimmed === filters.search) return;
-    const timer = setTimeout(() => navigate({ search: trimmed, page: 1 }), 300);
-    return () => clearTimeout(timer);
-  }, [searchDraft, filters.search, navigate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -116,8 +136,10 @@ export function LeaderboardsBrowser() {
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  const load = useCallback(() => {
+    requestRef.current += 1;
+    const requestId = requestRef.current;
+    const current = () => requestRef.current === requestId;
     setLoading(true);
     setError(null);
     fetch(`/api/v1/leaderboards?${buildApiQuery(filters)}`, {
@@ -129,19 +151,22 @@ export function LeaderboardsBrowser() {
         return (await res.json()) as LeaderboardBody;
       })
       .then((body) => {
-        if (cancelled) return;
-        setData(body);
+        if (current()) setData(body);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (current()) setError((err as Error).message);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (current()) setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
   }, [filters]);
+
+  useEffect(() => {
+    load();
+    return () => {
+      requestRef.current += 1;
+    };
+  }, [load]);
 
   const combatAvailable = data?.combat_available ?? false;
   const economyAvailable = data?.economy_enabled ?? false;
@@ -152,90 +177,69 @@ export function LeaderboardsBrowser() {
   const rows = data?.rows ?? [];
   const totalRows = data?.total_rows ?? 0;
   const totalPages = Math.max(1, data?.total_pages ?? 1);
+  const filtersApplied = filters.search !== '' || filters.serverId !== 'all';
 
-  const openPlayer = useCallback(
-    (playerId: string, event: React.MouseEvent) => {
-      const target = event.target as HTMLElement;
-      if (target.closest('a')) return;
-      const selection = typeof window !== 'undefined' ? window.getSelection()?.toString() : '';
-      const allowed = shouldNavigateRow({
-        ctrlKey: event.ctrlKey,
-        metaKey: event.metaKey,
-        altKey: event.altKey,
-        shiftKey: event.shiftKey,
-        hasSelection: Boolean(selection),
-      });
-      if (!allowed) return;
-      router.push(`/all-players/${playerId}`);
-    },
-    [router],
-  );
+  const paginationLabels: PaginationLabels = {
+    previous: 'Назад',
+    next: 'Вперёд',
+    page: (page, of) => pageInfoLabel(page, of, totalRows),
+  };
 
   return (
-    <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-      <FilterRail
-        filters={filters}
-        servers={servers}
-        seasons={seasons}
-        searchDraft={searchDraft}
-        onSearchChange={setSearchDraft}
-        onChange={navigate}
-      />
+    <PageContainer>
+      <PageHeader title="Лидерборды" meta={<span>всего: {formatCount(totalRows)}</span>} />
 
-      <div className="min-w-0 flex-1 space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <h1 className="text-2xl font-semibold">Лидерборды</h1>
-          <span className="text-xs text-neutral-500">Всего: {formatCount(totalRows)}</span>
-        </div>
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+        <FilterRail filters={filters} servers={servers} seasons={seasons} onChange={navigate} />
 
-        {error ? (
-          <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-            Ошибка загрузки: {error}
-          </div>
-        ) : null}
+        <div className="min-w-0 flex-1 space-y-3">
+          {error ? (
+            <InlineBanner
+              tone="crit"
+              title="Не удалось загрузить лидерборд"
+              description={error}
+              action={
+                <Button size="sm" onClick={load}>
+                  Повторить
+                </Button>
+              }
+            />
+          ) : null}
 
-        {!combatAvailable ? (
-          <div className="rounded border border-amber-900/60 bg-amber-950/30 p-3 text-xs text-amber-300">
-            Боевые метрики (убийства, смерти, K/D, возрождения) появятся после включения импортёра
-            статистики. Пока эти колонки скрыты.
-          </div>
-        ) : null}
+          {!combatAvailable ? (
+            <InlineBanner
+              tone="warn"
+              title="Боевые метрики пока недоступны"
+              description="Убийства, смерти, K/D и возрождения появятся после включения импортёра статистики. Пока эти колонки скрыты."
+            />
+          ) : null}
 
-        <LeaderboardTable
-          columns={columns}
-          rows={rows}
-          filters={filters}
-          loading={loading}
-          onSort={(column) => {
-            const sort = nextSort(filters, column);
-            if (sort) navigate(sort);
-          }}
-          onOpenPlayer={openPlayer}
-        />
+          <Card padding="none">
+            <LeaderboardTable
+              columns={columns}
+              rows={rows}
+              filters={filters}
+              filtersApplied={filtersApplied}
+              loading={loading}
+              onSort={(column) => {
+                const sort = nextSort(filters, column);
+                if (sort) navigate(sort);
+              }}
+            />
+          </Card>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-400">
-          <span>{pageInfoLabel(filters.page, totalPages, totalRows)}</span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => navigate({ page: Math.max(1, filters.page - 1) })}
-              disabled={filters.page <= 1 || loading}
-              className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-40"
-            >
-              Назад
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate({ page: Math.min(totalPages, filters.page + 1) })}
-              disabled={filters.page >= totalPages || loading}
-              className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-40"
-            >
-              Вперёд
-            </button>
+          <div className="flex justify-end">
+            <Pagination
+              page={filters.page}
+              pageCount={totalPages}
+              onChange={(page) => navigate({ page })}
+              labels={paginationLabels}
+              allowJump
+            />
           </div>
         </div>
       </div>
-    </div>
+    </PageContainer>
   );
 }
 
@@ -243,47 +247,42 @@ function FilterRail({
   filters,
   servers,
   seasons,
-  searchDraft,
-  onSearchChange,
   onChange,
 }: {
   filters: LeaderboardFilters;
   servers: ServerOption[];
   seasons: Season[];
-  searchDraft: string;
-  onSearchChange: (value: string) => void;
   onChange: (partial: Partial<LeaderboardFilters>) => void;
 }) {
   return (
-    <aside className="w-full shrink-0 space-y-5 rounded border border-neutral-800 bg-neutral-950/40 p-4 lg:sticky lg:top-4 lg:w-72">
-      <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Поиск</span>
-        <input
-          type="search"
-          value={searchDraft}
-          onChange={(event) => onSearchChange(event.target.value)}
-          placeholder="Ник, SteamID64 или EOS ID…"
-          className={`w-full ${inputClass}`}
-        />
-      </div>
+    <aside className="w-full shrink-0 lg:sticky lg:top-4 lg:w-72">
+      <Card className="space-y-4">
+        <FieldRow label="Поиск">
+          <SearchField
+            value={filters.search}
+            onCommit={(value) => onChange({ search: value.trim(), page: 1 })}
+            label="Поиск по лидерборду"
+            placeholder="Ник, SteamID64 или EOS ID…"
+            clearLabel="Очистить поиск"
+          />
+        </FieldRow>
 
-      <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Сервер</span>
-        <select
-          value={filters.serverId}
-          onChange={(event) => onChange({ serverId: event.target.value, page: 1 })}
-          className={`w-full ${inputClass}`}
-        >
-          <option value="all">Все серверы</option>
-          {servers.map((server) => (
-            <option key={server.id} value={server.id}>
-              {server.display_name ?? server.slug ?? server.id.slice(0, 8)}
-            </option>
-          ))}
-        </select>
-      </div>
+        <FieldRow label="Сервер">
+          <Select
+            value={filters.serverId}
+            onChange={(event) => onChange({ serverId: event.target.value, page: 1 })}
+          >
+            <option value="all">Все серверы</option>
+            {servers.map((server) => (
+              <option key={server.id} value={server.id}>
+                {server.display_name ?? server.slug ?? server.id.slice(0, 8)}
+              </option>
+            ))}
+          </Select>
+        </FieldRow>
 
-      <PeriodPicker filters={filters} seasons={seasons} onChange={onChange} />
+        <PeriodPicker filters={filters} seasons={seasons} onChange={onChange} />
+      </Card>
     </aside>
   );
 }
@@ -316,75 +315,64 @@ function PeriodPicker({
   }
 
   return (
-    <div className="space-y-1.5">
-      <span className="text-xs uppercase tracking-widest text-neutral-500">Период</span>
-      <div className="flex flex-wrap gap-1">
-        {PERIODS.map((period) => (
-          <button
-            key={period.value}
-            type="button"
-            onClick={() => selectPeriod(period.value)}
-            className={`rounded px-2 py-1 text-xs ${
-              filters.period === period.value
-                ? 'bg-neutral-800 text-neutral-100'
-                : 'text-neutral-400 hover:text-neutral-200'
-            }`}
-          >
-            {period.label}
-          </button>
-        ))}
-      </div>
+    <div className="space-y-2">
+      <FieldRow label="Период">
+        <Select
+          value={filters.period}
+          onChange={(event) => selectPeriod(event.target.value as Period)}
+        >
+          {PERIODS.map((period) => (
+            <option key={period.value} value={period.value}>
+              {period.label}
+            </option>
+          ))}
+        </Select>
+      </FieldRow>
+
       {seasonMode ? (
-        <div className="space-y-1.5 pt-1">
-          {orderedSeasons.length === 0 ? (
-            <p className="text-xs text-neutral-500">Сезоны не заданы.</p>
-          ) : (
-            <>
-              <select
-                aria-label="Сезон"
-                value={filters.periodStart}
-                onChange={(event) => onChange({ periodStart: event.target.value, page: 1 })}
-                className={`w-full ${inputClass}`}
-              >
-                {orderedSeasons.map((season) => (
-                  <option key={season.id} value={seasonPeriodStart(season)}>
-                    {seasonOptionLabel(season)}
-                  </option>
-                ))}
-              </select>
-              {selectedSeason ? (
-                <p className="text-xs text-neutral-400">
-                  {seasonRangeLabel(selectedSeason)}
-                  {isSeasonReadOnly(selectedSeason) ? (
-                    <span className="ml-1 text-neutral-500">· только просмотр</span>
-                  ) : null}
-                </p>
-              ) : null}
-            </>
-          )}
-        </div>
+        orderedSeasons.length === 0 ? (
+          <p className="text-xs text-ink-3">Сезоны не заданы.</p>
+        ) : (
+          <div className="space-y-1">
+            <Select
+              aria-label="Сезон"
+              value={filters.periodStart}
+              onChange={(event) => onChange({ periodStart: event.target.value, page: 1 })}
+            >
+              {orderedSeasons.map((season) => (
+                <option key={season.id} value={seasonPeriodStart(season)}>
+                  {seasonOptionLabel(season)}
+                </option>
+              ))}
+            </Select>
+            {selectedSeason ? (
+              <p className="text-xs text-ink-3">
+                {seasonRangeLabel(selectedSeason)}
+                {isSeasonReadOnly(selectedSeason) ? <span> · только просмотр</span> : null}
+              </p>
+            ) : null}
+          </div>
+        )
       ) : null}
+
       {navigable ? (
-        <div className="flex items-center justify-between gap-2 pt-1">
-          <button
-            type="button"
-            aria-label="Предыдущий период"
+        <div className="flex items-center justify-between gap-2">
+          <IconButton
+            label="Предыдущий период"
+            icon={<ChevronLeftIcon />}
             onClick={() =>
               onChange({
                 periodStart: shiftPeriodStart(filters.period, filters.periodStart, -1),
                 page: 1,
               })
             }
-            className="rounded border border-neutral-800 px-2 py-1 text-sm hover:border-neutral-600"
-          >
-            ‹
-          </button>
-          <span className="min-w-0 flex-1 truncate text-center text-xs text-neutral-300">
+          />
+          <span className="min-w-0 flex-1 truncate text-center text-xs text-ink-2">
             {periodRangeLabel(filters.period, filters.periodStart)}
           </span>
-          <button
-            type="button"
-            aria-label="Следующий период"
+          <IconButton
+            label="Следующий период"
+            icon={<ChevronRightIcon />}
             onClick={() =>
               onChange({
                 periodStart: shiftPeriodStart(filters.period, filters.periodStart, 1),
@@ -392,10 +380,7 @@ function PeriodPicker({
               })
             }
             disabled={atLatest}
-            className="rounded border border-neutral-800 px-2 py-1 text-sm hover:border-neutral-600 disabled:opacity-40"
-          >
-            ›
-          </button>
+          />
         </div>
       ) : null}
     </div>
@@ -406,88 +391,81 @@ function LeaderboardTable({
   columns,
   rows,
   filters,
+  filtersApplied,
   loading,
   onSort,
-  onOpenPlayer,
 }: {
   columns: ReturnType<typeof visibleColumns>;
   rows: LeaderboardRow[];
   filters: LeaderboardFilters;
+  filtersApplied: boolean;
   loading: boolean;
   onSort: (column: ColumnKey) => void;
-  onOpenPlayer: (playerId: string, event: React.MouseEvent) => void;
 }) {
   if (loading && rows.length === 0) {
-    return <div className="py-10 text-center text-sm text-neutral-500">Загрузка…</div>;
+    return (
+      <div className="p-3">
+        <SkeletonTable rows={10} cols={columns.length} label="Загрузка лидерборда" />
+      </div>
+    );
   }
   if (!loading && rows.length === 0) {
     return (
-      <div className="rounded border border-dashed border-neutral-800 py-12 text-center text-sm text-neutral-400">
-        Нет данных за выбранный период.
-      </div>
+      <EmptyState
+        variant={filtersApplied ? 'filtered' : 'initial'}
+        title={filtersApplied ? 'Нет совпадений.' : 'Нет данных за выбранный период.'}
+        description={
+          filtersApplied
+            ? 'Ни один игрок не подходит под запрос и выбранный сервер.'
+            : 'За этот период панель не записала ни одного игрока.'
+        }
+      />
     );
   }
 
   return (
-    <div className="overflow-x-auto rounded border border-neutral-800">
-      <table className="w-full min-w-[720px] text-sm">
-        <thead className="bg-neutral-950 text-xs uppercase tracking-wider text-neutral-500">
-          <tr>
-            {columns.map((column) => {
-              const active = column.metric === filters.metric;
-              const arrow = active ? (filters.order === 'desc' ? '↓' : '↑') : '';
-              return (
-                <th
+    <Table ariaLabel="Лидерборд" className="min-w-[720px]">
+      <TableHead>
+        <tr>
+          {columns.map((column) =>
+            column.metric ? (
+              <SortableTh
+                key={column.key}
+                sortKey={column.key}
+                activeKey={column.metric === filters.metric ? column.key : null}
+                direction={filters.order}
+                onSort={(key) => onSort(key as ColumnKey)}
+                label={column.label}
+                directionText={SORT_DIRECTION_TEXT}
+                align={column.align === 'left' ? 'left' : 'right'}
+              />
+            ) : (
+              <Th key={column.key} align={column.align === 'left' ? 'left' : 'right'}>
+                {column.label}
+              </Th>
+            ),
+          )}
+        </tr>
+      </TableHead>
+      <TableBody>
+        {rows.map((row) => {
+          const medal = medalFor(row.rank);
+          return (
+            <TableRow key={row.player_id} interactive>
+              {columns.map((column) => (
+                <Td
                   key={column.key}
-                  title={column.tooltip}
-                  className={`p-2 ${column.align === 'left' ? 'text-left' : 'text-right'} ${
-                    active ? 'text-sky-300' : ''
-                  }`}
+                  align={column.align === 'left' ? 'left' : undefined}
+                  numeric={column.align !== 'left'}
                 >
-                  {column.metric ? (
-                    <button
-                      type="button"
-                      onClick={() => onSort(column.key)}
-                      className={`inline-flex items-center gap-1 ${
-                        active ? 'text-sky-300' : 'hover:text-neutral-300'
-                      }`}
-                    >
-                      {column.label}
-                      <span className="w-2 text-[10px]">{arrow}</span>
-                    </button>
-                  ) : (
-                    column.label
-                  )}
-                </th>
-              );
-            })}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const medal = medalFor(row.rank);
-            return (
-              <tr
-                key={row.player_id}
-                onClick={(event) => onOpenPlayer(row.player_id, event)}
-                className="cursor-pointer border-t border-neutral-900 hover:bg-neutral-900/40"
-              >
-                {columns.map((column) => (
-                  <td
-                    key={column.key}
-                    className={`p-2 ${column.align === 'left' ? 'text-left' : 'text-right'} ${
-                      column.metric === filters.metric ? 'text-sky-200' : ''
-                    }`}
-                  >
-                    <CellContent column={column.key} row={row} medal={medal} />
-                  </td>
-                ))}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+                  <CellContent column={column.key} row={row} medal={medal} />
+                </Td>
+              ))}
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }
 
@@ -502,8 +480,14 @@ function CellContent({
 }) {
   if (column === 'rank') {
     return (
-      <span className="font-mono text-xs text-neutral-400">
-        {medal ? <span className="text-base">{medal}</span> : row.rank}
+      <span className="text-xs text-ink-3">
+        {medal ? (
+          <span className="text-base" title={`Место ${row.rank}`}>
+            {medal}
+          </span>
+        ) : (
+          row.rank
+        )}
       </span>
     );
   }
@@ -511,8 +495,7 @@ function CellContent({
     return (
       <a
         href={`/all-players/${row.player_id}`}
-        className="font-medium text-sky-400 hover:text-sky-300"
-        onClick={(event) => event.stopPropagation()}
+        className="font-medium text-accent no-underline hover:brightness-110"
       >
         {row.current_name}
       </a>
@@ -520,7 +503,7 @@ function CellContent({
   }
   const metric = column as Metric;
   const value = metricValue(row, metric);
-  return <span className="font-mono text-xs">{formatMetricValue(metric, value)}</span>;
+  return <span className="text-xs">{formatMetricValue(metric, value)}</span>;
 }
 
 function metricValue(row: LeaderboardRow, metric: Metric): number {

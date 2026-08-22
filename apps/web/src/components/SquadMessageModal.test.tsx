@@ -1,8 +1,44 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SquadMessageModal, type SquadMessageTarget } from './SquadMessageModal';
+
+/**
+ * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
+ * а окно и подтверждение построены на примитивах `Modal` и `AlertDialog`.
+ * Полифилл повторяет ровно то, на что они опираются: атрибут `open`, фокус
+ * внутрь окна и цепочку Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
 
 const TEST_TIMEOUT_MS = 15_000;
 
@@ -44,12 +80,13 @@ function mockFetch(overrides: { message?: () => Promise<Response> } = {}) {
   });
 }
 
+/** Окно подтверждения отправки — второй, вложенный диалог. */
+function confirmDialog(): HTMLElement {
+  return screen.getByRole('dialog', { name: 'Отправить сообщение отряду' });
+}
+
 beforeEach(() => {
   vi.stubGlobal('fetch', mockFetch());
-  vi.stubGlobal(
-    'confirm',
-    vi.fn(() => true),
-  );
 });
 
 afterEach(() => {
@@ -69,7 +106,9 @@ describe('SquadMessageModal', () => {
     'substitutes {player} with the squad leader nickname when a template is picked',
     async () => {
       render(<SquadMessageModal target={TARGET} onOpenChange={() => undefined} />);
-      await screen.findByText(/Команда 1 · Отряд 2/);
+      expect(
+        screen.getByRole('dialog', { name: 'Сообщение отряду «Команда 1 · Отряд 2»' }),
+      ).toBeInTheDocument();
       fireEvent.click(await screen.findByText('Тимчат-варн'));
 
       const textarea = await screen.findByPlaceholderText(/текст сообщения/i);
@@ -83,7 +122,7 @@ describe('SquadMessageModal', () => {
     async () => {
       render(<SquadMessageModal target={TARGET} onOpenChange={() => undefined} />);
       const textarea = await screen.findByPlaceholderText(/текст сообщения/i);
-      const send = screen.getByRole('button', { name: /отправить/i });
+      const send = screen.getByRole('button', { name: 'Отправить' });
       expect(send).toBeDisabled();
 
       fireEvent.change(textarea, { target: { value: 'a' } });
@@ -96,14 +135,17 @@ describe('SquadMessageModal', () => {
   );
 
   it(
-    'asks for confirmation and posts to the squad-message route with team_id',
+    'asks for confirmation in a dialog and posts to the squad-message route with team_id',
     async () => {
       render(<SquadMessageModal target={TARGET} onOpenChange={() => undefined} />);
       const textarea = await screen.findByPlaceholderText(/текст сообщения/i);
       fireEvent.change(textarea, { target: { value: 'Push the flag' } });
-      fireEvent.click(screen.getByRole('button', { name: /отправить/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
 
-      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Push the flag'));
+      const dialog = confirmDialog();
+      expect(within(dialog).getByText(/Push the flag/)).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Отправить сообщение' }));
+
       await waitFor(() => {
         expect(fetch).toHaveBeenCalledWith(
           '/api/v1/servers/srv-1/squads/2/message?team_id=1',
@@ -119,18 +161,21 @@ describe('SquadMessageModal', () => {
   );
 
   it(
-    'does not send when the confirm dialog is cancelled',
+    'does not send when the confirmation is cancelled',
     async () => {
-      vi.stubGlobal(
-        'confirm',
-        vi.fn(() => false),
-      );
       render(<SquadMessageModal target={TARGET} onOpenChange={() => undefined} />);
       const textarea = await screen.findByPlaceholderText(/текст сообщения/i);
       fireEvent.change(textarea, { target: { value: 'Push the flag' } });
-      fireEvent.click(screen.getByRole('button', { name: /отправить/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
 
-      expect(confirm).toHaveBeenCalled();
+      const dialog = confirmDialog();
+      fireEvent.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0] as HTMLElement);
+
+      await waitFor(() => {
+        expect(
+          screen.queryByRole('dialog', { name: 'Отправить сообщение отряду' }),
+        ).not.toBeInTheDocument();
+      });
       expect(fetch).not.toHaveBeenCalledWith(
         expect.stringContaining('/squads/2/message'),
         expect.anything(),
@@ -144,8 +189,28 @@ describe('SquadMessageModal', () => {
     async () => {
       const onOpenChange = vi.fn();
       render(<SquadMessageModal target={TARGET} onOpenChange={onOpenChange} />);
-      fireEvent.click(await screen.findByRole('button', { name: /отмена/i }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Отмена' }));
       expect(onOpenChange).toHaveBeenCalledWith(false);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // Escape над окном с набранным текстом стирал бы работу оператора без вопроса.
+  it(
+    'refuses to dismiss itself on Escape once something is typed',
+    async () => {
+      const onOpenChange = vi.fn();
+      render(<SquadMessageModal target={TARGET} onOpenChange={onOpenChange} />);
+      const dialog = screen.getByRole('dialog', { name: /Сообщение отряду/ });
+      const textarea = await screen.findByPlaceholderText(/текст сообщения/i);
+
+      fireEvent.keyDown(dialog, { key: 'Escape' });
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+
+      onOpenChange.mockClear();
+      fireEvent.change(textarea, { target: { value: 'Push the flag' } });
+      fireEvent.keyDown(dialog, { key: 'Escape' });
+      expect(onOpenChange).not.toHaveBeenCalled();
     },
     TEST_TIMEOUT_MS,
   );

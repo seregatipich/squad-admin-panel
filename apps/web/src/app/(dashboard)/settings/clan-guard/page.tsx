@@ -1,6 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  FieldRow,
+  GroupedList,
+  GroupedRow,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Skeleton,
+  Switch,
+  TextInput,
+} from '@/components/ui';
 import { type ClanGuardSettings, formatUpdatedAt, validateGracePeriod } from './helpers';
 
 interface Me {
@@ -17,6 +33,8 @@ export default function ClanGuardSettingsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const graceId = useId();
+
   const refresh = useCallback(async () => {
     const [settingsRes, meRes] = await Promise.all([
       fetch('/api/v1/settings/clan-guard', { credentials: 'include', cache: 'no-store' }),
@@ -27,6 +45,7 @@ export default function ClanGuardSettingsPage() {
       setSettings(loaded);
       setEnabled(loaded.enabled);
       setGracePeriodInput(String(loaded.grace_period_seconds));
+      setGlobalErr(null);
     } else {
       setGlobalErr(`Не удалось загрузить настройки: ${settingsRes.status}`);
     }
@@ -74,115 +93,106 @@ export default function ClanGuardSettingsPage() {
     }
   }
 
-  if (!settings || !me) {
-    return <div className="text-neutral-500">Загрузка…</div>;
-  }
-
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Защита клан-тегов</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Механизм предупреждает и кикает игроков, которые носят тег клана с включённой защитой
-          тега, но не состоят в его ростере. Настройки конкретного клана — на его странице.
-        </p>
-      </header>
+    <PageContainer width="reading">
+      <PageHeader
+        title="Защита клан-тегов"
+        subtitle="Механизм предупреждает и кикает игроков, которые носят тег клана с включённой защитой тега, но не состоят в его ростере. Настройки конкретного клана — на его странице."
+      />
 
       {globalErr ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {globalErr}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось выполнить запрос"
+          description={globalErr}
+          action={
+            <Button size="sm" onClick={() => void refresh()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
       {notice ? (
-        <div className="rounded border border-emerald-900 bg-emerald-950 p-3 text-sm text-emerald-200">
-          {notice}
-        </div>
+        <InlineBanner
+          tone="good"
+          title={notice}
+          onDismiss={() => setNotice(null)}
+          dismissLabel="Скрыть сообщение"
+        />
       ) : null}
-      {!canManage ? (
-        <div className="rounded border border-neutral-800 bg-neutral-900/60 p-3 text-sm text-neutral-400">
-          Просмотр доступен, но для изменения настроек нужно право «Управление кланами».
-        </div>
+      {settings && me && !canManage ? (
+        <InlineBanner
+          tone="info"
+          title="Только просмотр"
+          description="Для изменения настроек нужно право «Управление кланами»."
+        />
       ) : null}
 
-      <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-5">
-        <label className="flex items-center justify-between gap-4">
-          <span>
-            <span className="block text-sm font-medium text-neutral-200">
-              Механизм защиты клан-тегов
-            </span>
-            <span className="mt-0.5 block text-xs text-neutral-500">
-              Глобальный выключатель. Выключение мгновенно останавливает все предупреждения и кики.
-            </span>
-          </span>
-          <input
-            type="checkbox"
-            aria-label="Механизм защиты клан-тегов"
-            checked={enabled}
-            disabled={!canManage}
-            onChange={(e) => {
-              setEnabled(e.target.checked);
-              setNotice(null);
-            }}
-            className="h-5 w-11 shrink-0 cursor-pointer appearance-none rounded-full bg-neutral-800 transition-all checked:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
-            style={{
-              backgroundImage:
-                'radial-gradient(circle 8px at 9px center, white 100%, transparent 100%)',
-            }}
-          />
-        </label>
-        <div className="mt-3 text-xs">
-          <span
-            className={`rounded px-2 py-0.5 ${
-              enabled ? 'bg-emerald-950 text-emerald-300' : 'bg-neutral-800 text-neutral-400'
-            }`}
-          >
-            {enabled ? 'Механизм активен' : 'Механизм выключен'}
-          </span>
-        </div>
+      {!settings || !me ? (
+        <Card>
+          <Skeleton variant="block" count={2} label="Загрузка настроек" />
+        </Card>
+      ) : (
+        <>
+          <GroupedList footnote={`Последнее изменение: ${formatUpdatedAt(settings.updated_at)}`}>
+            <GroupedRow
+              label="Механизм защиты клан-тегов"
+              description="Глобальный выключатель. Выключение мгновенно останавливает все предупреждения и кики."
+              control={
+                <>
+                  <Badge tone={enabled ? 'good' : 'neutral'}>
+                    {enabled ? 'Механизм активен' : 'Механизм выключен'}
+                  </Badge>
+                  <Switch
+                    label="Механизм защиты клан-тегов"
+                    checked={enabled}
+                    disabled={!canManage}
+                    onChange={(next) => {
+                      setEnabled(next);
+                      setNotice(null);
+                    }}
+                  />
+                </>
+              }
+            />
+          </GroupedList>
 
-        <label className="mt-5 block text-xs">
-          <span className="mb-1 block text-neutral-400">Грейс-период (сек.)</span>
-          <input
-            type="number"
-            inputMode="numeric"
-            step="1"
-            min={0}
-            max={3600}
-            value={gracePeriodInput}
-            disabled={!canManage}
-            onChange={(e) => {
-              setGracePeriodInput(e.target.value);
-              setFieldError(null);
-              setNotice(null);
-            }}
-            className={`w-full max-w-xs rounded border bg-neutral-900 px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-              fieldError ? 'border-red-800' : 'border-neutral-800'
-            }`}
-          />
-          <span className="mt-1 block text-[11px] text-neutral-500">
-            Время между предупреждением и киком, если игрок не сменил ник.
-          </span>
-          {fieldError ? (
-            <span className="mt-1 block text-[11px] text-red-400">{fieldError}</span>
-          ) : null}
-        </label>
-      </section>
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <span className="text-xs text-neutral-500">
-          Последнее изменение: {formatUpdatedAt(settings.updated_at)}
-        </span>
-        {canManage ? (
-          <button
-            type="button"
-            onClick={() => void save()}
-            disabled={saving}
-            className="rounded-md border border-sky-700 bg-sky-950 px-4 py-2 text-sm text-sky-200 hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {saving ? 'Сохраняем…' : 'Сохранить'}
-          </button>
-        ) : null}
-      </div>
-    </div>
+          <Card padding="none">
+            <CardBody>
+              <FieldRow
+                label="Грейс-период (сек.)"
+                htmlFor={graceId}
+                hint="Время между предупреждением и киком, если игрок не сменил ник."
+                error={fieldError}
+              >
+                <TextInput
+                  id={graceId}
+                  type="number"
+                  inputMode="numeric"
+                  step="1"
+                  min={0}
+                  max={3600}
+                  invalid={fieldError !== null}
+                  value={gracePeriodInput}
+                  disabled={!canManage}
+                  onChange={(e) => {
+                    setGracePeriodInput(e.target.value);
+                    setFieldError(null);
+                    setNotice(null);
+                  }}
+                />
+              </FieldRow>
+            </CardBody>
+            {canManage ? (
+              <CardFooter>
+                <Button variant="primary" loading={saving} onClick={() => void save()}>
+                  Сохранить
+                </Button>
+              </CardFooter>
+            ) : null}
+          </Card>
+        </>
+      )}
+    </PageContainer>
   );
 }

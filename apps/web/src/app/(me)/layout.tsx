@@ -10,22 +10,27 @@ import { requireSession } from '@/lib/dal';
  *
  * Distinct from `(dashboard)` (which requires the panel shell) and from
  * `(public)` (which has no session at all).
+ *
+ * Оболочка повторяет каркас панели: та же верхняя полоса 46px, те же
+ * поверхности и те же вертикальные поля страницы. Ширину содержимого выбирает
+ * сама страница через `PageContainer`, здесь задан только внешний предел и
+ * поля — иначе на одно приложение пришлось бы два разных ритма.
  */
 export default async function MeLayout({ children }: { children: React.ReactNode }) {
   const me = await requireSession();
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100">
-      <header className="border-b border-neutral-900">
-        <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-4">
-          <span className="text-sm uppercase tracking-widest text-neutral-500">Личный кабинет</span>
+    <div className="min-h-screen bg-bg text-ink">
+      <header className="flex h-[46px] items-center border-b border-line bg-surface/80 px-6 backdrop-blur-xl">
+        <div className="mx-auto flex w-full max-w-[1600px] items-center justify-between gap-4">
+          <span className="text-[13px] font-semibold text-ink">Личный кабинет</span>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-neutral-400">{me.canonical_name}</span>
+            <span className="text-xs text-ink-3">{me.canonical_name}</span>
             <LogoutButton />
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-3xl px-6 py-8">{children}</main>
+      <main className="mx-auto w-full max-w-[1600px] space-y-6 px-6 py-6">{children}</main>
     </div>
   );
 }

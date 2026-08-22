@@ -3,6 +3,27 @@
 import Link from 'next/link';
 import { use, useCallback, useEffect, useMemo, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Select,
+  Skeleton,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+  Toolbar,
+} from '@/components/ui';
+import type { BadgeTone as PriorityTone } from '../helpers';
 import { priorityBadge } from '../helpers';
 import ClanSettingsPanel from './ClanSettingsPanel';
 import ClanStatsPanel from './ClanStatsPanel';
@@ -31,10 +52,11 @@ interface MeResponse {
   can_manage_clans: boolean;
 }
 
-const BADGE_TONE_CLASSES: Record<'neutral' | 'danger' | 'warning', string> = {
-  neutral: 'bg-neutral-800 text-neutral-300',
-  danger: 'bg-red-950 text-red-300',
-  warning: 'bg-amber-950 text-amber-300',
+/** Тон срока приоритета из `helpers.ts` в тонах дизайн-системы. */
+const PRIORITY_TONE: Record<PriorityTone, BadgeTone> = {
+  neutral: 'neutral',
+  danger: 'crit',
+  warning: 'warn',
 };
 
 interface OnlineMember {
@@ -121,10 +143,14 @@ function formatMatchStart(iso: string): string {
   });
 }
 
+/**
+ * Победа и поражение подкрашиваются, но никогда не остаются одним лишь цветом:
+ * рядом стоит колонка «Победитель», которая называет исход словом (§5).
+ */
 const TICKET_TONE = {
-  winner: 'text-emerald-400 font-semibold',
-  loser: 'text-red-400',
-  neutral: 'text-neutral-300',
+  winner: 'font-semibold text-good',
+  loser: 'text-crit',
+  neutral: 'text-ink-2',
 } as const;
 
 function ticketTone(
@@ -290,106 +316,113 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   );
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Link href="/clans" className="text-sm text-sky-400 hover:text-sky-300">
-            ← Кланы
-          </Link>
-          <h1 className="text-2xl font-semibold">{clan?.name ?? 'Клан'}</h1>
-          <div className="flex flex-wrap items-center gap-1">
-            {clan?.tags.map((tag) => (
-              <span
-                key={tag}
-                className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-300"
-              >
-                {tag}
-              </span>
-            ))}
-            {clan ? (
-              <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-300">
-                {clan.priority_count} из {clan.max_priority_slots}
-              </span>
-            ) : null}
-            {expiryBadge ? (
-              <span
-                className={`rounded px-1.5 py-0.5 text-xs ${BADGE_TONE_CLASSES[expiryBadge.tone]}`}
-              >
-                {expiryBadge.label}
-              </span>
-            ) : null}
-            {clan?.is_tag_protected ? (
-              <span className="rounded bg-emerald-950 px-1.5 py-0.5 text-xs text-emerald-300">
-                Тег защищён
-              </span>
-            ) : null}
-            {clan && !clan.is_public ? (
-              <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">
-                Скрытый
-              </span>
-            ) : null}
-          </div>
-        </div>
-        <LiveIndicator lastUpdate={lastUpdate} />
-      </div>
+    <PageContainer>
+      <PageHeader
+        title={clan?.name ?? 'Клан'}
+        backHref="/clans"
+        backLabel="Все кланы"
+        status={<LiveIndicator lastUpdate={lastUpdate} />}
+        meta={
+          clan ? (
+            <>
+              {clan.tags.map((tag) => (
+                <Badge key={tag} size="sm">
+                  {tag}
+                </Badge>
+              ))}
+              <Badge size="sm">
+                Приоритет: {clan.priority_count} из {clan.max_priority_slots}
+              </Badge>
+              {expiryBadge ? (
+                <Badge size="sm" tone={PRIORITY_TONE[expiryBadge.tone]}>
+                  {expiryBadge.label}
+                </Badge>
+              ) : null}
+              {clan.is_tag_protected ? (
+                <Badge size="sm" tone="good">
+                  Тег защищён
+                </Badge>
+              ) : null}
+              {!clan.is_public ? <Badge size="sm">Скрытый</Badge> : null}
+            </>
+          ) : undefined
+        }
+      />
 
       {err ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{err}</div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить клан"
+          description={err}
+          action={
+            <Button size="sm" onClick={() => void loadClan()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
       <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-medium">Онлайн</h2>
-          <div className="text-xs text-neutral-500">участников онлайн: {onlineCount}</div>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-[17px] font-semibold text-ink">Онлайн</h2>
+          <span className="text-xs tabular-nums text-ink-3">Участников онлайн: {onlineCount}</span>
         </div>
 
-        {online && online.servers.length === 0 ? (
-          <div className="rounded border border-neutral-800 bg-neutral-950 p-6 text-center text-neutral-500 text-sm">
-            Ни один участник клана сейчас не в игре.
-          </div>
-        ) : null}
-
-        <div className="space-y-4">
-          {online?.servers.map((group) => (
-            <div key={group.server_id} className="rounded border border-neutral-800">
-              <div className="flex items-center justify-between border-b border-neutral-900 bg-neutral-950 px-3 py-2">
-                <span className="font-medium">{group.server_name}</span>
-                <span className="text-xs text-neutral-500">{group.members.length} онлайн</span>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="text-xs uppercase tracking-widest text-neutral-500">
-                    <tr>
-                      <th className="text-left p-2">Участник</th>
-                      <th className="text-left p-2">Команда</th>
-                      <th className="text-left p-2">Отряд</th>
-                      <th className="text-left p-2">В сессии</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+        {online === null ? (
+          <Card padding="none">
+            <div className="p-3">
+              <Skeleton variant="row" count={3} label="Загружаем список онлайна" />
+            </div>
+          </Card>
+        ) : online.servers.length === 0 ? (
+          <Card padding="none">
+            <EmptyState
+              title="Никого нет в игре"
+              description="Ни один участник клана сейчас не находится на серверах."
+            />
+          </Card>
+        ) : (
+          <div className="space-y-4">
+            {online.servers.map((group) => (
+              <Card key={group.server_id} padding="none">
+                <CardHeader
+                  headingLevel={3}
+                  title={group.server_name}
+                  count={`${group.members.length} онлайн`}
+                />
+                <Table ariaLabel={`Участники клана на сервере ${group.server_name}`}>
+                  <TableHead sticky={false}>
+                    <TableRow>
+                      <Th>Участник</Th>
+                      <Th>Команда</Th>
+                      <Th>Отряд</Th>
+                      <Th align="right">В сессии</Th>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
                     {group.members.map((member) => (
-                      <tr key={member.player_id} className="border-t border-neutral-900">
-                        <td className="p-2">
+                      <TableRow key={member.player_id} interactive>
+                        <Td>
                           <Link
                             href={`/all-players/${member.player_id}`}
-                            className="text-sky-400 hover:text-sky-300"
+                            className="text-accent no-underline hover:brightness-110"
                           >
                             {member.name}
                           </Link>
-                        </td>
-                        <td className="p-2 text-neutral-400">{member.team ?? '—'}</td>
-                        <td className="p-2 text-neutral-400">{member.squad ?? '—'}</td>
-                        <td className="p-2 font-mono tabular-nums text-emerald-400">
+                        </Td>
+                        <Td className="text-ink-2">{member.team ?? '—'}</Td>
+                        <Td className="text-ink-2">{member.squad ?? '—'}</Td>
+                        <Td numeric className="font-mono text-good">
                           {formatSessionDuration(member.session_started_at, nowMs)}
-                        </td>
-                      </tr>
+                        </Td>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ))}
-        </div>
+                  </TableBody>
+                </Table>
+              </Card>
+            ))}
+          </div>
+        )}
       </section>
 
       <ClanStatsPanel clanId={clanId} />
@@ -416,18 +449,18 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
       <RosterPanel clanId={clanId} />
 
       <section className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-medium">История матчей</h2>
-          {serverOptions.length > 1 ? (
-            <label className="flex items-center gap-2 text-sm text-neutral-400">
-              Сервер
-              <select
+        <h2 className="text-[17px] font-semibold text-ink">История матчей</h2>
+
+        {serverOptions.length > 1 ? (
+          <Toolbar
+            filters={
+              <Select
+                aria-label="Сервер матча"
                 value={matchServerFilter}
                 onChange={(event) => {
                   setExpandedMatchId(null);
                   setMatchServerFilter(event.target.value);
                 }}
-                className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-sm text-neutral-200"
               >
                 <option value="">Все серверы</option>
                 {serverOptions.map((option) => (
@@ -435,61 +468,74 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
                     {option.name}
                   </option>
                 ))}
-              </select>
-            </label>
-          ) : null}
-        </div>
-
-        {matchesLoaded && matchRows.length === 0 ? (
-          <div className="rounded border border-neutral-800 bg-neutral-950 p-6 text-center text-neutral-500 text-sm">
-            У клана пока нет матчей.
-          </div>
+              </Select>
+            }
+          />
         ) : null}
 
-        {matchRows.length > 0 ? (
-          <div className="overflow-x-auto rounded border border-neutral-800">
-            <table className="w-full text-sm">
-              <thead className="bg-neutral-950 text-xs uppercase tracking-widest text-neutral-500">
-                <tr>
-                  <th className="text-left p-2">Начало</th>
-                  <th className="text-left p-2">Карта</th>
-                  <th className="text-left p-2">Сервер</th>
-                  <th className="text-left p-2">Счёт</th>
-                  <th className="text-left p-2">Победитель</th>
-                  <th className="text-left p-2">Участники клана</th>
-                  <th className="text-left p-2">Длительность</th>
-                </tr>
-              </thead>
-              <tbody>
-                {matchRows.map((match) => (
-                  <MatchHistoryRow
-                    key={match.id}
-                    match={match}
-                    isExpanded={expandedMatchId === match.id}
-                    onToggle={() =>
-                      setExpandedMatchId((current) => (current === match.id ? null : match.id))
-                    }
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
+        <Card padding="none">
+          {!matchesLoaded ? (
+            <div className="p-3">
+              <Skeleton variant="row" count={5} label="Загружаем историю матчей" />
+            </div>
+          ) : matchRows.length === 0 ? (
+            <EmptyState
+              variant={matchServerFilter ? 'filtered' : 'initial'}
+              title={matchServerFilter ? 'Ничего не нашлось' : 'У клана пока нет матчей'}
+              description={
+                matchServerFilter
+                  ? 'На выбранном сервере участники клана ещё не играли.'
+                  : 'Как только участники клана сыграют матч, он появится здесь.'
+              }
+              action={
+                matchServerFilter ? (
+                  <Button onClick={() => setMatchServerFilter('')}>Сбросить фильтр</Button>
+                ) : null
+              }
+            />
+          ) : (
+            <>
+              <Table ariaLabel="История матчей клана">
+                <TableHead>
+                  <TableRow>
+                    <Th>Начало</Th>
+                    <Th>Карта</Th>
+                    <Th>Сервер</Th>
+                    <Th>Счёт</Th>
+                    <Th>Победитель</Th>
+                    <Th>Участники клана</Th>
+                    <Th align="right">Длительность</Th>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {matchRows.map((match) => (
+                    <MatchHistoryRow
+                      key={match.id}
+                      match={match}
+                      isExpanded={expandedMatchId === match.id}
+                      onToggle={() =>
+                        setExpandedMatchId((current) => (current === match.id ? null : match.id))
+                      }
+                    />
+                  ))}
+                </TableBody>
+              </Table>
 
-        {matchCursor ? (
-          <div className="flex justify-center">
-            <button
-              type="button"
-              onClick={() => void loadMatches(matchCursor, matchServerFilter, false)}
-              disabled={matchesLoading}
-              className="rounded border border-neutral-800 bg-neutral-900 px-4 py-1.5 text-sm text-neutral-200 hover:bg-neutral-800 disabled:opacity-50"
-            >
-              {matchesLoading ? 'Загрузка…' : 'Показать ещё'}
-            </button>
-          </div>
-        ) : null}
+              {matchCursor ? (
+                <div className="flex justify-center border-t border-line p-3">
+                  <Button
+                    onClick={() => void loadMatches(matchCursor, matchServerFilter, false)}
+                    loading={matchesLoading}
+                  >
+                    Показать ещё
+                  </Button>
+                </div>
+              ) : null}
+            </>
+          )}
+        </Card>
       </section>
-    </div>
+    </PageContainer>
   );
 }
 
@@ -502,96 +548,82 @@ function MatchHistoryRow({
   isExpanded: boolean;
   onToggle: () => void;
 }) {
+  const mapLabel = match.map ?? match.layer ?? '—';
   return (
     <>
-      <tr className="border-t border-neutral-900">
-        <td className="p-2 whitespace-nowrap text-neutral-400">
-          {formatMatchStart(match.started_at)}
-        </td>
-        <td className="p-2">
+      <TableRow interactive>
+        <Td className="whitespace-nowrap text-ink-2">{formatMatchStart(match.started_at)}</Td>
+        <Td>
           <div className="flex items-center gap-2">
-            <span className="text-neutral-200">{match.map ?? match.layer ?? '—'}</span>
+            <Link
+              href={`/matches/${match.id}`}
+              className="text-accent no-underline hover:brightness-110"
+            >
+              {mapLabel}
+            </Link>
             {match.is_seed ? (
-              <span className="rounded bg-amber-950 px-1.5 py-0.5 text-xs text-amber-300">
-                seed
-              </span>
+              <Badge size="sm" tone="warn">
+                Сидинг
+              </Badge>
             ) : null}
           </div>
-        </td>
-        <td className="p-2 text-neutral-400">{match.server_name ?? match.server_slug ?? '—'}</td>
-        <td className="p-2 font-mono tabular-nums">
+        </Td>
+        <Td className="text-ink-2">{match.server_name ?? match.server_slug ?? '—'}</Td>
+        <Td numeric className="font-mono">
           <span className={TICKET_TONE[ticketTone('team1', match.winner)]}>
             {match.team1_tickets ?? '—'}
           </span>
-          <span className="text-neutral-600"> : </span>
+          <span className="text-ink-3"> : </span>
           <span className={TICKET_TONE[ticketTone('team2', match.winner)]}>
             {match.team2_tickets ?? '—'}
           </span>
-        </td>
-        <td className="p-2">
-          <span
-            className={
-              match.winner && match.winner !== 'draw'
-                ? 'text-emerald-400 font-medium'
-                : 'text-neutral-400'
-            }
-          >
-            {winnerLabel(match)}
-          </span>
-        </td>
-        <td className="p-2">
-          <button
-            type="button"
+        </Td>
+        <Td className={match.winner && match.winner !== 'draw' ? 'text-good' : 'text-ink-2'}>
+          {winnerLabel(match)}
+        </Td>
+        <Td>
+          <Button
+            variant="plain"
+            size="sm"
+            aria-expanded={isExpanded}
             onClick={onToggle}
-            className="flex flex-wrap items-center gap-1"
-            title="Показать участников"
+            title={`Участники клана в матче на карте ${mapLabel}`}
           >
-            {match.participants.slice(0, 4).map((participant) => (
-              <span
-                key={participant.player_id}
-                className="rounded-full bg-sky-950 px-2 py-0.5 text-xs text-sky-300"
-              >
-                {participant.name}
-              </span>
-            ))}
-            {match.clan_participants_count > 4 ? (
-              <span className="rounded-full bg-neutral-800 px-2 py-0.5 text-xs text-neutral-400">
-                +{match.clan_participants_count - 4}
-              </span>
-            ) : null}
-          </button>
-        </td>
-        <td className="p-2 whitespace-nowrap text-neutral-400">
-          <div className="flex items-center gap-2">
-            <span>{formatMatchDuration(match.duration_seconds)}</span>
-            <Link href={`/matches/${match.id}`} className="text-sky-400 hover:text-sky-300">
-              →
-            </Link>
-          </div>
-        </td>
-      </tr>
+            {match.participants
+              .slice(0, 4)
+              .map((participant) => participant.name)
+              .join(', ')}
+            {match.clan_participants_count > 4 ? ` +${match.clan_participants_count - 4}` : ''}
+          </Button>
+        </Td>
+        <Td numeric className="whitespace-nowrap text-ink-2">
+          {formatMatchDuration(match.duration_seconds)}
+        </Td>
+      </TableRow>
       {isExpanded ? (
-        <tr className="border-t border-neutral-900 bg-neutral-950/60">
-          <td colSpan={7} className="p-3">
-            <div className="text-xs uppercase tracking-widest text-neutral-500">
+        <TableRow>
+          {/* Раскрытая строка занимает всю ширину: `Td` не принимает `colSpan`,
+              а семь пустых ячеек скринридер прочитал бы как семь пустых ячеек. */}
+          <td colSpan={7} className="bg-raised/40 px-3 py-3">
+            <p className="text-xs text-ink-3">
               Участники клана в матче ({match.clan_participants_count})
-            </div>
+            </p>
             <div className="mt-2 flex flex-wrap gap-2">
               {match.participants.map((participant) => (
                 <Link
                   key={participant.player_id}
                   href={`/all-players/${participant.player_id}`}
-                  className="rounded-full border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-xs text-sky-300 hover:bg-neutral-800"
+                  className="inline-flex items-center gap-1 rounded-full border border-line bg-raised px-2 py-0.5 text-xs text-accent no-underline hover:bg-line-2"
                 >
                   {participant.name}
-                  <span className="ml-1 text-neutral-500">
+                  <span className="text-ink-3">
                     {ROLE_LABELS[participant.member_role] ?? participant.member_role}
                   </span>
                 </Link>
               ))}
             </div>
           </td>
-        </tr>
+        </TableRow>
       ) : null}
     </>
   );

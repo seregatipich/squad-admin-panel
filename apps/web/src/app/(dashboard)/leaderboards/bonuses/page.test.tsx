@@ -77,7 +77,7 @@ describe('BonusLeaderboardPage', () => {
     expect(screen.getByText('Баланс')).toBeInTheDocument();
   });
 
-  it('navigates to the player card on row click', async () => {
+  it('reaches the player card through a real link, not a row click handler', async () => {
     mockFetch({
       period: 'all',
       available: true,
@@ -86,11 +86,17 @@ describe('BonusLeaderboardPage', () => {
       rows: ROWS,
     });
     await renderPage();
-    const cell = await screen.findByText('500');
+
+    const link = await screen.findByRole('link', { name: 'BonusRich' });
+    expect(link).toHaveAttribute('href', '/all-players/p-rich');
+
+    // Обычная ячейка никуда не ведёт: переход принадлежит ссылке в строке,
+    // а не обработчику клика на `<tr>`.
+    const cell = screen.getByText('500');
     await act(async () => {
       cell.click();
     });
-    expect(push).toHaveBeenCalledWith('/all-players/p-rich');
+    expect(push).not.toHaveBeenCalled();
   });
 
   it('renders degrade state when available:false', async () => {

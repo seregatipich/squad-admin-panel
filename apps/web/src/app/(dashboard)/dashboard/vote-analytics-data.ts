@@ -43,10 +43,20 @@ export function formatPassRate(rate: number): string {
   return `${String(Math.round(rate * 10) / 10).replace('.', ',')}%`;
 }
 
-export function passRateTone(rate: number): string {
-  if (rate >= 66) return 'text-emerald-300';
-  if (rate >= 33) return 'text-amber-300';
-  return 'text-red-300';
+/**
+ * Тон дизайн-системы для доли успешных голосований.
+ *
+ * Возвращается состояние (`good`/`warn`/`crit`), а не готовый CSS-класс: тон
+ * подставляется и в `StatTile`, и в `Badge`, а те сами знают, каким цветом его
+ * показать и как продублировать текстом (§5 дизайн-системы).
+ *
+ * @param rate Доля успешных в процентах.
+ * @returns `good` от 66%, `warn` от 33%, иначе `crit`.
+ */
+export function passRateTone(rate: number): 'good' | 'warn' | 'crit' {
+  if (rate >= 66) return 'good';
+  if (rate >= 33) return 'warn';
+  return 'crit';
 }
 
 export function trendScale(trend: Array<{ count: number }>): number {

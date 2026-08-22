@@ -1,11 +1,47 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MeBrowser } from './MeBrowser';
 
 const TEST_TIMEOUT_MS = 15_000;
+
+/**
+ * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
+ * а подтверждение отмены построено на примитиве `AlertDialog`. Полифилл
+ * повторяет ровно то, на что опирается `Modal`: атрибут `open`, фокус внутрь
+ * окна и цепочку Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
 
 const BALANCE = {
   player_id: 'player-1',
@@ -176,26 +212,29 @@ describe('MeBrowser', () => {
   );
 
   it(
-    'cancels only after the confirmation is accepted',
+    'cancels only after the confirmation dialog is accepted',
     async () => {
       const calls = stubApi(
         [{ match: '/me/subscriptions/sub-1', status: 200, body: { subscription: SUBSCRIPTION } }],
         [SUBSCRIPTION],
       );
-      vi.stubGlobal(
-        'confirm',
-        vi.fn(() => false),
-      );
       render(<MeBrowser displayName="VipPlayer" />);
 
+      // Отказ в диалоге: подписка остаётся, запрос не уходит.
       fireEvent.click(await screen.findByRole('button', { name: 'Отменить подписку' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(/Оплаченный период сохранится/)).toBeInTheDocument();
+      // Подпись «Оставить подписку» носят и крестик окна, и кнопка подвала.
+      const keeps = within(dialog).getAllByRole('button', { name: 'Оставить подписку' });
+      fireEvent.click(keeps[keeps.length - 1] as HTMLElement);
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
       expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
 
-      vi.stubGlobal(
-        'confirm',
-        vi.fn(() => true),
-      );
+      // Подтверждение: запрос уходит и результат объявляется.
       fireEvent.click(screen.getByRole('button', { name: 'Отменить подписку' }));
+      const confirmDialog = await screen.findByRole('dialog');
+      fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Отменить подписку' }));
 
       await screen.findByText('Подписка отменена. Оплаченный период сохранён.');
       expect(

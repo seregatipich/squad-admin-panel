@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef } from 'react';
+import { Button } from '@/components/ui';
 import { formatRoleExpiryDate } from '@/lib/role-expiry';
 
 interface RoleExpiryDateFieldProps {
@@ -9,6 +10,20 @@ interface RoleExpiryDateFieldProps {
   onChange: (value: string) => void;
 }
 
+/**
+ * Поле срока действия роли: видимая дата в формате ДД/ММ/ГГГГ и системный
+ * календарь за ней.
+ *
+ * Нативный `<input type="date">` остаётся единственным источником значения —
+ * он и открывает календарь платформы, — но на экране он скрыт: его собственная
+ * отрисовка отличается в каждом браузере, а порядок полей зависит от локали
+ * системы, и оператор в одной и той же панели видел бы то ДД/ММ/ГГГГ, то
+ * ММ/ДД/ГГГГ. Кнопка поверх него показывает одну и ту же запись всегда.
+ *
+ * @param id Идентификатор видимой кнопки; на него ссылается подпись поля.
+ * @param value Выбранный день в формате `ГГГГ-ММ-ДД`; пустая строка — бессрочно.
+ * @param onChange Новый день или пустая строка, когда срок сняли.
+ */
 export function RoleExpiryDateField({ id, value, onChange }: RoleExpiryDateFieldProps) {
   const calendarRef = useRef<HTMLInputElement>(null);
   const helperId = `${id}-hint`;
@@ -26,8 +41,8 @@ export function RoleExpiryDateField({ id, value, onChange }: RoleExpiryDateField
   }
 
   return (
-    <div className="mt-1 space-y-1">
-      <div className="flex items-stretch gap-2">
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
         <button
           id={id}
           type="button"
@@ -38,22 +53,17 @@ export function RoleExpiryDateField({ id, value, onChange }: RoleExpiryDateField
               ? `Открыть календарь срока действия. Выбрано ${formattedValue}`
               : 'Открыть календарь срока действия'
           }
-          className="flex min-h-10 min-w-0 flex-1 items-center justify-between gap-3 rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-left text-sm hover:border-neutral-600 focus-visible:border-sky-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/30"
+          className="flex h-8 min-w-0 flex-1 items-center justify-between gap-3 rounded-ctl border border-line bg-raised px-2.5 text-left text-xs transition-colors duration-150 hover:bg-line-2"
         >
-          <span className={formattedValue ? 'text-neutral-100' : 'text-neutral-500'}>
+          <span className={formattedValue ? 'text-ink' : 'text-ink-3'}>
             {formattedValue || 'ДД/ММ/ГГГГ'}
           </span>
-          <span className="shrink-0 text-xs text-sky-300">Календарь</span>
+          <span className="shrink-0 text-2xs text-accent">Календарь</span>
         </button>
         {value ? (
-          <button
-            type="button"
-            onClick={() => onChange('')}
-            aria-label="Сделать роль бессрочной"
-            className="rounded border border-neutral-800 px-3 text-xs text-neutral-300 hover:border-neutral-600 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/30"
-          >
+          <Button size="sm" aria-label="Сделать роль бессрочной" onClick={() => onChange('')}>
             Сбросить
-          </button>
+          </Button>
         ) : null}
       </div>
       <input
@@ -66,7 +76,7 @@ export function RoleExpiryDateField({ id, value, onChange }: RoleExpiryDateField
         data-testid="role-expiry-native-date"
         className="sr-only"
       />
-      <p id={helperId} className="text-xs leading-5 text-neutral-500">
+      <p id={helperId} className="text-xs text-ink-3">
         Роль действует до конца выбранного дня по времени панели (UTC). Пустое поле — бессрочно.
       </p>
     </div>

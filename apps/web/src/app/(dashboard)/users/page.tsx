@@ -4,6 +4,30 @@ import Link from 'next/link';
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import { RoleExpiryDateField } from '@/components/RoleExpiryDateField';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  FieldRow,
+  InlineBanner,
+  Modal,
+  PageContainer,
+  PageHeader,
+  SearchField,
+  Select,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Textarea,
+  TextInput,
+  Th,
+  Toolbar,
+} from '@/components/ui';
 import { buildRoleAssignPayload, formatRoleExpiryLabel } from '@/lib/role-expiry';
 
 interface UserRow {
@@ -32,6 +56,12 @@ interface PlayerHit {
   canonical_name: string;
 }
 
+/** Кого именно оператор попросил лишить роли — заголовок и текст диалога. */
+interface PendingUnassign {
+  id: string;
+  name: string;
+}
+
 export default function UsersPage() {
   const [users, setUsers] = useState<UserRow[] | null>(null);
   const [me, setMe] = useState<Me | null>(null);
@@ -39,6 +69,10 @@ export default function UsersPage() {
   const [showAssign, setShowAssign] = useState(false);
   const [q, setQ] = useState('');
   const [filterRoleId, setFilterRoleId] = useState('');
+  const [pendingUnassign, setPendingUnassign] = useState<PendingUnassign | null>(null);
+  const [unassignBusy, setUnassignBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const roleFilterId = useId();
 
   const load = useCallback(async () => {
     const url = new URL('/api/v1/users', window.location.origin);
@@ -59,155 +93,216 @@ export default function UsersPage() {
 
   const canManage = me?.permissions.includes('user:manage_roles') ?? false;
 
-  async function unassign(playerId: string, name: string) {
+  async function unassign({ id }: PendingUnassign) {
     if (!canManage) return;
-    if (!confirm(`Снять роль с пользователя «${name}»?`)) return;
-    const r = await fetch(`/api/v1/players/${playerId}/role`, {
-      method: 'DELETE',
-      credentials: 'include',
-    });
-    if (r.status === 409) {
-      const e = (await r.json().catch(() => ({}))) as { error?: string };
-      if (e.error === 'cannot_remove_last_owner') {
-        alert('Вы единственный Owner. Сначала выдайте роль Owner другому пользователю.');
-      } else {
-        alert(`Ошибка: ${e.error ?? r.status}`);
+    setUnassignBusy(true);
+    setActionError(null);
+    try {
+      const r = await fetch(`/api/v1/players/${id}/role`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!r.ok) {
+        const e = (await r.json().catch(() => ({}))) as { error?: string };
+        // Единственный Owner — не сбой запроса, а правило панели: оператору
+        // нужен следующий шаг, а не код ошибки.
+        setActionError(
+          r.status === 409 && e.error === 'cannot_remove_last_owner'
+            ? 'Вы единственный Owner. Сначала выдайте роль Owner другому пользователю.'
+            : `Ошибка: ${e.error ?? r.status}`,
+        );
+        return;
       }
-      return;
+      await load();
+    } finally {
+      // Диалог закрывается и после отказа: сообщение об ошибке живёт на
+      // странице, а под открытым модальным окном его никто не увидит.
+      setPendingUnassign(null);
+      setUnassignBusy(false);
     }
-    if (!r.ok) {
-      const e = (await r.json().catch(() => ({}))) as { error?: string };
-      alert(`Ошибка: ${e.error ?? r.status}`);
-      return;
-    }
-    await load();
   }
 
-  if (!users || !me) return <div className="text-neutral-500">Загрузка…</div>;
+  const filtersApplied = q.trim() !== '' || filterRoleId !== '';
+  const resetProps = filtersApplied
+    ? {
+        onReset: () => {
+          setQ('');
+          setFilterRoleId('');
+        },
+        resetLabel: 'Сбросить фильтр',
+      }
+    : {};
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Пользователи панели</h1>
-        {canManage ? (
-          <button
-            type="button"
-            onClick={() => setShowAssign(true)}
-            className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500"
-          >
-            Назначить роль игроку
-          </button>
-        ) : null}
-      </div>
-      <div className="flex flex-wrap items-center gap-3">
-        <input
-          type="text"
-          placeholder="Поиск по нику или SteamID64…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          className="w-72 rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm"
+    <PageContainer>
+      <PageHeader
+        title="Пользователи панели"
+        actions={
+          canManage ? (
+            <Button variant="primary" onClick={() => setShowAssign(true)}>
+              Назначить роль игроку
+            </Button>
+          ) : null
+        }
+      />
+
+      {actionError ? (
+        <InlineBanner
+          tone="crit"
+          title="Не удалось снять роль"
+          description={actionError}
+          onDismiss={() => setActionError(null)}
+          dismissLabel="Скрыть сообщение"
         />
-        <select
-          value={filterRoleId}
-          onChange={(e) => setFilterRoleId(e.target.value)}
-          className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm"
-        >
-          <option value="">Все роли</option>
-          {(roleOptions ?? []).map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.name}
-            </option>
-          ))}
-        </select>
-        {q || filterRoleId ? (
-          <button
-            type="button"
-            onClick={() => {
-              setQ('');
-              setFilterRoleId('');
-            }}
-            className="text-xs text-neutral-400 underline hover:text-neutral-200"
-          >
-            Сбросить
-          </button>
-        ) : null}
-      </div>
-      <div className="overflow-hidden rounded border border-neutral-800">
-        <table className="w-full text-sm">
-          <thead className="bg-neutral-900 text-xs uppercase tracking-widest text-neutral-400">
-            <tr>
-              <th className="p-2 text-left">Игрок</th>
-              <th className="p-2 text-left">SteamID64</th>
-              <th className="p-2 text-left">Роль</th>
-              <th className="p-2 text-left">Срок</th>
-              <th className="p-2 text-left">Last seen</th>
-              {canManage ? <th className="w-32 p-2 text-right">Действие</th> : null}
-            </tr>
-          </thead>
-          <tbody>
-            {users.length === 0 ? (
+      ) : null}
+
+      <Toolbar
+        {...resetProps}
+        search={
+          <SearchField
+            value={q}
+            onCommit={setQ}
+            label="Поиск по пользователям"
+            placeholder="Поиск по нику или SteamID64…"
+            clearLabel="Очистить поиск"
+          />
+        }
+        filters={
+          <>
+            <label htmlFor={roleFilterId} className="text-xs text-ink-3">
+              Роль
+            </label>
+            <Select
+              id={roleFilterId}
+              value={filterRoleId}
+              onChange={(e) => setFilterRoleId(e.target.value)}
+              className="w-48"
+            >
+              <option value="">Все роли</option>
+              {(roleOptions ?? []).map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </Select>
+          </>
+        }
+      />
+
+      <Card padding="none">
+        {users === null || me === null ? (
+          <div className="p-3">
+            <SkeletonTable rows={6} cols={5} label="Загрузка списка пользователей" />
+          </div>
+        ) : users.length === 0 ? (
+          <EmptyState
+            variant={filtersApplied ? 'filtered' : 'initial'}
+            title={filtersApplied ? 'Нет пользователей по фильтру' : 'Роль ещё никому не выдана'}
+            description={
+              filtersApplied
+                ? 'Ни один пользователь не подходит под запрос и выбранную роль.'
+                : 'Назначьте роль игроку, чтобы он получил доступ к панели.'
+            }
+          />
+        ) : (
+          <Table ariaLabel="Пользователи панели">
+            <TableHead>
               <tr>
-                <td colSpan={canManage ? 6 : 5} className="p-3 text-neutral-500">
-                  Нет пользователей по фильтру
-                </td>
-              </tr>
-            ) : null}
-            {users.map((u) => (
-              <tr key={u.id} className="border-t border-neutral-900">
-                <td className="p-2">
-                  <Link href={`/all-players/${u.id}`} className="text-sky-400 hover:text-sky-300">
-                    {u.canonical_name}
-                  </Link>
-                  {u.discord_linked ? (
-                    <span
-                      className="ml-2 rounded bg-indigo-950 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-indigo-300"
-                      title="Discord-аккаунт привязан"
-                    >
-                      Discord
-                    </span>
-                  ) : null}
-                </td>
-                <td className="p-2 font-mono text-xs">{u.steam_id64 ?? '—'}</td>
-                <td className="p-2">
-                  <span className="inline-flex items-center gap-2">
-                    <RoleColorDot color={u.role.color} />
-                    {u.role.name}
-                  </span>
-                </td>
-                <td className="p-2 text-neutral-300">
-                  <div>{formatRoleExpiryLabel(u.role_expires_at)}</div>
-                  {u.role_comment ? (
-                    <div
-                      className="mt-1 max-w-56 truncate text-xs text-neutral-500"
-                      title={u.role_comment}
-                    >
-                      {u.role_comment}
-                    </div>
-                  ) : null}
-                </td>
-                <td className="p-2 text-neutral-500">
-                  {new Date(u.last_seen_at).toLocaleString()}
-                </td>
+                <Th>Игрок</Th>
+                <Th>SteamID64</Th>
+                <Th>Роль</Th>
+                <Th>Срок</Th>
+                <Th>Был(а)</Th>
                 {canManage ? (
-                  <td className="p-2 text-right">
-                    {u.role.is_system_role && u.role.name === 'Owner' ? (
-                      <span className="text-xs text-neutral-600">—</span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => unassign(u.id, u.canonical_name)}
-                        className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-300 hover:bg-red-950"
-                      >
-                        Снять
-                      </button>
-                    )}
-                  </td>
+                  <Th align="right" width="8rem">
+                    Действие
+                  </Th>
                 ) : null}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </TableHead>
+            <TableBody>
+              {users.map((u) => (
+                <TableRow key={u.id} interactive>
+                  <Td>
+                    <span className="inline-flex items-center gap-2">
+                      <Link
+                        href={`/all-players/${u.id}`}
+                        className="text-accent no-underline hover:brightness-110"
+                      >
+                        {u.canonical_name}
+                      </Link>
+                      {u.discord_linked ? (
+                        <Badge tone="accent" size="sm" title="Discord-аккаунт привязан">
+                          Discord
+                        </Badge>
+                      ) : null}
+                    </span>
+                  </Td>
+                  <Td className="font-mono text-xs">{u.steam_id64 ?? '—'}</Td>
+                  <Td>
+                    <span className="inline-flex items-center gap-2">
+                      <RoleColorDot color={u.role.color} />
+                      {u.role.name}
+                    </span>
+                  </Td>
+                  <Td>
+                    <div>{formatRoleExpiryLabel(u.role_expires_at)}</div>
+                    {u.role_comment ? (
+                      <div
+                        className="mt-1 max-w-56 truncate text-xs text-ink-3"
+                        title={u.role_comment}
+                      >
+                        {u.role_comment}
+                      </div>
+                    ) : null}
+                  </Td>
+                  <Td className="text-xs text-ink-3">
+                    {new Date(u.last_seen_at).toLocaleString()}
+                  </Td>
+                  {canManage ? (
+                    <Td align="right">
+                      {u.role.is_system_role && u.role.name === 'Owner' ? (
+                        <span className="text-xs text-ink-3">—</span>
+                      ) : (
+                        <Button
+                          size="sm"
+                          onClick={() => setPendingUnassign({ id: u.id, name: u.canonical_name })}
+                        >
+                          Снять
+                        </Button>
+                      )}
+                    </Td>
+                  ) : null}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+
+      {/* Снятие роли обратимо — её выдают заново тем же диалогом, — поэтому
+          подтверждение обычное, а не критическое (дизайн-система, §5). */}
+      <AlertDialog
+        open={pendingUnassign !== null}
+        onClose={() => {
+          if (unassignBusy) return;
+          setPendingUnassign(null);
+        }}
+        title="Снять роль"
+        body={
+          pendingUnassign
+            ? `Пользователь «${pendingUnassign.name}» потеряет доступ к панели. Роль можно выдать заново в любой момент.`
+            : ''
+        }
+        confirmLabel="Снять роль"
+        cancelLabel="Отмена"
+        tone="default"
+        busy={unassignBusy}
+        onConfirm={() => {
+          if (pendingUnassign) void unassign(pendingUnassign);
+        }}
+      />
+
       {showAssign ? (
         <AssignModal
           onClose={() => {
@@ -216,7 +311,7 @@ export default function UsersPage() {
           }}
         />
       ) : null}
-    </div>
+    </PageContainer>
   );
 }
 
@@ -290,30 +385,44 @@ function AssignModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="max-h-[90vh] w-full max-w-md space-y-4 overflow-auto rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-lg font-semibold">Назначить роль</h2>
+    <Modal
+      open
+      onClose={onClose}
+      title="Назначить роль"
+      closeLabel="Закрыть окно"
+      // Внутри окна набранный поиск, выбранная роль и комментарий: случайный
+      // Escape над заполненной формой стёр бы работу без единого вопроса.
+      dismissible={false}
+      footer={
+        <>
+          <Button onClick={onClose} disabled={busy}>
+            Отмена
+          </Button>
+          <Button variant="primary" onClick={assign} loading={busy} disabled={!picked || !roleId}>
+            Назначить
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
         {err ? (
-          <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-            {err}
-          </div>
+          <InlineBanner tone="crit" title="Не удалось назначить роль" description={err} />
         ) : null}
-        <div>
-          <label htmlFor={playerInputId} className="text-xs uppercase text-neutral-400">
-            Игрок
-          </label>
-          <input
-            id={playerInputId}
-            value={q}
-            onChange={(e) => {
-              setQ(e.target.value);
-              setPicked(null);
-            }}
-            placeholder="ник или SteamID64"
-            className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-sm"
-          />
+
+        <div className="space-y-1">
+          <FieldRow label="Игрок" htmlFor={playerInputId}>
+            <TextInput
+              id={playerInputId}
+              value={q}
+              onChange={(e) => {
+                setQ(e.target.value);
+                setPicked(null);
+              }}
+              placeholder="ник или SteamID64"
+            />
+          </FieldRow>
           {hits.length > 0 && !picked ? (
-            <ul className="mt-1 max-h-40 overflow-auto rounded border border-neutral-800">
+            <ul className="max-h-40 divide-y divide-line overflow-auto rounded-ctl border border-line">
               {hits.map((h) => (
                 <li key={h.id}>
                   <button
@@ -323,45 +432,43 @@ function AssignModal({ onClose }: { onClose: () => void }) {
                       setHits([]);
                       setQ(h.canonical_name);
                     }}
-                    className="block w-full px-2 py-1 text-left text-sm hover:bg-neutral-900"
+                    className="flex min-h-8 w-full items-center gap-2 px-2.5 text-left text-xs transition-colors duration-150 hover:bg-raised"
                   >
-                    {h.canonical_name}{' '}
-                    <span className="font-mono text-xs text-neutral-500">{h.steam_id64 ?? ''}</span>
+                    <span>{h.canonical_name}</span>
+                    <span className="font-mono text-2xs text-ink-3">{h.steam_id64 ?? ''}</span>
                   </button>
                 </li>
               ))}
             </ul>
           ) : null}
         </div>
-        <div>
-          <label htmlFor={roleSelectId} className="text-xs uppercase text-neutral-400">
-            Роль
-          </label>
-          <select
-            id={roleSelectId}
-            value={roleId}
-            onChange={(e) => setRoleId(e.target.value)}
-            className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-2 text-sm"
-          >
+
+        <FieldRow label="Роль" htmlFor={roleSelectId}>
+          <Select id={roleSelectId} value={roleId} onChange={(e) => setRoleId(e.target.value)}>
             <option value="">— выберите —</option>
             {assignableRoles.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.name}
               </option>
             ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor={expiresInputId} className="text-xs uppercase text-neutral-400">
-            Срок действия
-          </label>
+          </Select>
+        </FieldRow>
+
+        <FieldRow label="Срок действия" htmlFor={expiresInputId}>
           <RoleExpiryDateField id={expiresInputId} value={expiresAt} onChange={setExpiresAt} />
-        </div>
-        <div>
-          <label htmlFor={commentInputId} className="text-xs uppercase text-neutral-400">
-            Комментарий
-          </label>
-          <textarea
+        </FieldRow>
+
+        <FieldRow
+          label="Комментарий"
+          htmlFor={commentInputId}
+          hint={
+            <span id={`${commentInputId}-hint`}>
+              Необязательно. Причина выдачи видна другим администраторам в карточке игрока и
+              списках.
+            </span>
+          }
+        >
+          <Textarea
             id={commentInputId}
             value={comment}
             onChange={(e) => setComment(e.target.value)}
@@ -369,30 +476,9 @@ function AssignModal({ onClose }: { onClose: () => void }) {
             rows={3}
             placeholder="Например: VIP по заявке"
             aria-describedby={`${commentInputId}-hint`}
-            className="mt-1 w-full resize-none rounded border border-neutral-800 bg-neutral-950 px-2 py-2 text-sm"
           />
-          <p id={`${commentInputId}-hint`} className="mt-1 text-xs leading-5 text-neutral-500">
-            Необязательно. Причина выдачи видна другим администраторам в карточке игрока и списках.
-          </p>
-        </div>
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded border border-neutral-800 px-3 py-1 text-sm hover:border-neutral-600"
-          >
-            Отмена
-          </button>
-          <button
-            type="button"
-            onClick={assign}
-            disabled={busy || !picked || !roleId}
-            className="rounded bg-sky-600 px-3 py-1 text-sm text-white hover:bg-sky-500 disabled:opacity-40"
-          >
-            Назначить
-          </button>
-        </div>
+        </FieldRow>
       </div>
-    </div>
+    </Modal>
   );
 }

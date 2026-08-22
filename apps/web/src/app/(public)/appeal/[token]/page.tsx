@@ -2,6 +2,18 @@
 
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
+import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  CardBody,
+  EmptyState,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Skeleton,
+} from '@/components/ui';
 
 interface AppealStatusView {
   number: number;
@@ -20,11 +32,13 @@ const STATUS_LABELS: Record<string, string> = {
   rejected: 'Отклонена',
 };
 
-const STATUS_CLASSES: Record<string, string> = {
-  pending: 'border-amber-900 bg-amber-950 text-amber-200',
-  in_review: 'border-sky-900 bg-sky-950 text-sky-200',
-  approved: 'border-emerald-900 bg-emerald-950 text-emerald-200',
-  rejected: 'border-neutral-700 bg-neutral-900 text-neutral-300',
+/* Тон — это состояние заявки, а не украшение; смысл всё равно несёт подпись
+   бейджа, поэтому неизвестный статус остаётся нейтральным, но читаемым (§5). */
+const STATUS_TONES: Record<string, BadgeTone> = {
+  pending: 'warn',
+  in_review: 'accent',
+  approved: 'good',
+  rejected: 'neutral',
 };
 
 function formatDate(iso: string | null): string {
@@ -38,6 +52,16 @@ function formatDate(iso: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+/** Служебный ярлык над значением — единственное место, где допустим капслок (§1). */
+function Fact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <dt className="text-2xs uppercase tracking-[0.06em] text-ink-3">{label}</dt>
+      <dd className="text-[13px] text-ink">{value}</dd>
+    </div>
+  );
 }
 
 /**
@@ -88,66 +112,66 @@ export default function AppealStatusPage() {
   }, [load]);
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <header className="space-y-1 border-b border-neutral-900 pb-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Статус апелляции</h1>
-        <p className="text-sm text-neutral-400">
-          Эта страница доступна только по вашей ссылке. Решение появится здесь.
-        </p>
-      </header>
+    <PageContainer width="reading">
+      <PageHeader
+        title="Статус апелляции"
+        subtitle="Эта страница доступна только по вашей ссылке. Решение появится здесь."
+      />
 
-      {state === 'loading' ? <p className="text-sm text-neutral-500">Загрузка…</p> : null}
+      {state === 'loading' ? <Skeleton variant="card" label="Загружаем статус апелляции" /> : null}
 
       {state === 'missing' ? (
-        <p className="rounded border border-neutral-800 bg-neutral-950 px-4 py-6 text-center text-sm text-neutral-400">
-          Апелляция не найдена. Проверьте ссылку.
-        </p>
+        <Card padding="none">
+          <EmptyState
+            title="Апелляция не найдена."
+            description="Проверьте ссылку: она должна совпадать с той, что вы сохранили при отправке."
+          />
+        </Card>
       ) : null}
 
       {state === 'error' ? (
-        <p className="rounded border border-red-900 bg-red-950 p-4 text-sm text-red-200">
-          Не удалось загрузить статус апелляции. Попробуйте позже.
-        </p>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить статус апелляции."
+          description="Попробуйте позже — заявка при этом никуда не делась."
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
       {state === 'ready' && appeal ? (
-        <section className="space-y-4 rounded border border-neutral-800 bg-neutral-950 p-5">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <span className="font-mono text-lg text-neutral-200">{`#${appeal.number}`}</span>
-            <span
-              className={`rounded border px-2 py-0.5 text-xs ${
-                STATUS_CLASSES[appeal.status] ?? STATUS_CLASSES.pending
-              }`}
-            >
-              {STATUS_LABELS[appeal.status] ?? appeal.status}
-            </span>
-          </div>
-
-          <dl className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <dt className="text-[10px] uppercase tracking-[0.16em] text-neutral-500">Подана</dt>
-              <dd className="text-neutral-200">{formatDate(appeal.created_at)}</dd>
+        <Card padding="none">
+          <CardBody className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-mono text-[17px] font-semibold text-ink">{`#${appeal.number}`}</span>
+              <Badge tone={STATUS_TONES[appeal.status] ?? 'neutral'}>
+                {STATUS_LABELS[appeal.status] ?? appeal.status}
+              </Badge>
             </div>
-            <div>
-              <dt className="text-[10px] uppercase tracking-[0.16em] text-neutral-500">Решение</dt>
-              <dd className="text-neutral-200">{formatDate(appeal.decided_at)}</dd>
-            </div>
-          </dl>
 
-          {appeal.decision_note ? (
-            <div className="rounded border border-neutral-800 bg-neutral-900/40 p-3">
-              <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-neutral-500">
-                Ответ администрации
+            <dl className="grid grid-cols-2 gap-3">
+              <Fact label="Подана" value={formatDate(appeal.created_at)} />
+              <Fact label="Решение" value={formatDate(appeal.decided_at)} />
+            </dl>
+
+            {appeal.decision_note ? (
+              <div className="rounded-ctl border border-line bg-raised p-3">
+                <div className="mb-1 text-2xs uppercase tracking-[0.06em] text-ink-3">
+                  Ответ администрации
+                </div>
+                <p className="whitespace-pre-wrap text-[13px] text-ink">{appeal.decision_note}</p>
               </div>
-              <p className="whitespace-pre-wrap text-sm text-neutral-200">{appeal.decision_note}</p>
-            </div>
-          ) : (
-            <p className="text-xs text-neutral-500">
-              Ответ администрации появится здесь после рассмотрения.
-            </p>
-          )}
-        </section>
+            ) : (
+              <p className="text-xs text-ink-3">
+                Ответ администрации появится здесь после рассмотрения.
+              </p>
+            )}
+          </CardBody>
+        </Card>
       ) : null}
-    </div>
+    </PageContainer>
   );
 }

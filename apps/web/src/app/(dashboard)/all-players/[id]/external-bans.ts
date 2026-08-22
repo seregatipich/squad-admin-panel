@@ -28,19 +28,8 @@ export const TRUST_LEVEL_LABELS: Record<string, string> = {
   low: 'Низкий',
 };
 
-export const TRUST_LEVEL_BADGE_CLASSES: Record<string, string> = {
-  trusted: 'border-emerald-800 bg-emerald-950/50 text-emerald-300',
-  normal: 'border-sky-800 bg-sky-950/50 text-sky-300',
-  low: 'border-amber-800 bg-amber-950/50 text-amber-300',
-};
-
 export function trustLevelLabel(level: string): string {
   return TRUST_LEVEL_LABELS[level] ?? level;
-}
-
-export function trustLevelBadgeClass(level: string): string {
-  // biome-ignore lint/style/noNonNullAssertion: 'normal' key is always present
-  return TRUST_LEVEL_BADGE_CLASSES[level] ?? TRUST_LEVEL_BADGE_CLASSES.normal!;
 }
 
 /**
@@ -71,18 +60,17 @@ export interface BanStatusLike {
   is_permanent: boolean;
 }
 
-/** Status badge for a single external ban row: permanent/temporary/inactive. */
-export function banStatusBadge(ban: BanStatusLike): { label: string; className: string } {
-  if (!ban.is_active) {
-    return {
-      label: 'Неактивен',
-      className: 'border-neutral-700 bg-neutral-800 text-neutral-400',
-    };
-  }
-  if (ban.is_permanent) {
-    return { label: 'Перманентный', className: 'border-red-900 bg-red-950/50 text-red-300' };
-  }
-  return { label: 'Временный', className: 'border-amber-900 bg-amber-950/50 text-amber-300' };
+/**
+ * Подпись статуса одного внешнего бана: перманентный, временный или снятый.
+ *
+ * Возвращается только текст: цвет пилюли выбирает разметка через тон `Badge`,
+ * потому что оттенок в дизайн-системе — это состояние, а не строка классов,
+ * которую помощник таскает за собой (§5).
+ */
+export function banStatusBadge(ban: BanStatusLike): { label: string } {
+  if (!ban.is_active) return { label: 'Неактивен' };
+  if (ban.is_permanent) return { label: 'Перманентный' };
+  return { label: 'Временный' };
 }
 
 export function formatDate(iso: string | null): string {

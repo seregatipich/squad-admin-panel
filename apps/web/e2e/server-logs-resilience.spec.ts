@@ -69,11 +69,10 @@ test.describe('docker-logs WS resilience', () => {
     const livePill = page.locator('span:has-text("live")').first();
     await expect(livePill).toBeVisible({ timeout: 8_000 });
 
-    const logViewport = page
-      .locator('div', { hasText: 'Лог контейнера' })
-      .locator('..')
-      .locator('div.font-mono')
-      .first();
+    // Область журнала объявлена как role="log" и названа своим заголовком:
+    // прежний путь через родителя и класс `font-mono` ломался от любой правки
+    // вёрстки.
+    const logViewport = page.getByRole('log', { name: /Лог контейнера/ });
     await expect(logViewport).toBeVisible({ timeout: 8_000 });
 
     await expect

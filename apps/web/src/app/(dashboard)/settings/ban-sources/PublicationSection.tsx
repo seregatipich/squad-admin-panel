@@ -2,6 +2,18 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
+import {
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  GroupedRow,
+  InlineBanner,
+  Skeleton,
+  Switch,
+} from '@/components/ui';
+
 type PublishScope = 'all_active' | 'permanent_only';
 
 interface PublicationSettings {
@@ -9,6 +21,11 @@ interface PublicationSettings {
   publish_scope: PublishScope;
   updated_at: string | null;
 }
+
+const SCOPE_OPTIONS: ReadonlyArray<{ value: PublishScope; label: string }> = [
+  { value: 'all_active', label: 'Все активные баны' },
+  { value: 'permanent_only', label: 'Только перманентные' },
+];
 
 function formatUpdatedAt(iso: string | null): string {
   if (!iso) return 'ещё не изменялось';
@@ -30,6 +47,10 @@ function formatUpdatedAt(iso: string | null): string {
  * инстанса панели — `GET /api/v1/public/banlist`, требующий API-токен со
  * scope `banlist:read`. Скрывается целиком для пользователей без
  * `can_manage_ban_sources` (эндпоинт настроек отвечает 401/403).
+ *
+ * Переключатель и радиокнопки применяются не сразу, а по кнопке «Сохранить»:
+ * выключение публикации мгновенно обрывает выдачу чужому инстансу, и такой
+ * шаг оператор должен подтвердить осознанно.
  */
 export function PublicationSection() {
   const [settings, setSettings] = useState<PublicationSettings | null>(null);
@@ -101,109 +122,94 @@ export function PublicationSection() {
   }
 
   if (hidden) return null;
-  if (loading) return <div className="text-sm text-neutral-500">Загрузка настроек публикации…</div>;
+  if (loading) {
+    return (
+      <Card>
+        <Skeleton variant="block" count={2} label="Загрузка настроек публикации" />
+      </Card>
+    );
+  }
   if (!settings) return null;
 
   return (
-    <section className="space-y-4 rounded-lg border border-neutral-800 bg-neutral-950 p-5">
-      <header>
-        <h2 className="text-lg font-semibold">Публикация банлиста</h2>
-        <p className="mt-1 text-sm text-neutral-500">
-          Отдаёт собственный список банов другому инстансу панели (CBAN-5) — федерация без
-          центрального сервера.
-        </p>
-      </header>
-
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {error}
-        </div>
-      ) : null}
-      {notice ? (
-        <div className="rounded border border-emerald-900 bg-emerald-950 p-3 text-sm text-emerald-200">
-          {notice}
-        </div>
-      ) : null}
-
-      <label className="flex items-center justify-between gap-4">
-        <span>
-          <span className="block text-sm font-medium text-neutral-200">
-            Публиковать банлист наружу
-          </span>
-          <span className="mt-0.5 block text-xs text-neutral-500">
-            Master-свитч. Выключение мгновенно останавливает выдачу — токены со scope «banlist:read»
-            начнут получать 404.
-          </span>
-        </span>
-        <input
-          type="checkbox"
-          aria-label="Публиковать банлист наружу"
-          checked={enabled}
-          onChange={(e) => {
-            setEnabled(e.target.checked);
-            setNotice(null);
-          }}
-          className="h-5 w-11 shrink-0 cursor-pointer appearance-none rounded-full bg-neutral-800 transition-all checked:bg-sky-600"
-          style={{
-            backgroundImage:
-              'radial-gradient(circle 8px at 9px center, white 100%, transparent 100%)',
-          }}
+    <section className="space-y-2">
+      <Card padding="none">
+        <CardHeader
+          title="Публикация банлиста"
+          description="Отдаёт собственный список банов другому инстансу панели (CBAN-5) — федерация без центрального сервера."
         />
-      </label>
 
-      <fieldset className="space-y-2">
-        <legend className="mb-1 text-xs text-neutral-400">Что публиковать</legend>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="radio"
-            name="banlist-publish-scope"
-            value="all_active"
-            checked={scope === 'all_active'}
-            onChange={() => {
-              setScope('all_active');
-              setNotice(null);
-            }}
-          />
-          Все активные баны
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="radio"
-            name="banlist-publish-scope"
-            value="permanent_only"
-            checked={scope === 'permanent_only'}
-            onChange={() => {
-              setScope('permanent_only');
-              setNotice(null);
-            }}
-          />
-          Только перманентные
-        </label>
-      </fieldset>
+        {error || notice ? (
+          <CardBody className="space-y-3 pb-0">
+            {error ? (
+              <InlineBanner tone="crit" title="Не удалось выполнить запрос" description={error} />
+            ) : null}
+            {notice ? <InlineBanner tone="good" title={notice} /> : null}
+          </CardBody>
+        ) : null}
 
-      <div className="rounded border border-neutral-800 bg-neutral-900/60 p-3 text-xs text-neutral-400">
-        <div className="font-mono text-neutral-300">
-          GET /api/v1/public/banlist?format=squad_cfg|json
+        <div className="divide-y divide-line">
+          <GroupedRow
+            label="Публиковать банлист наружу"
+            description="Master-свитч. Выключение мгновенно останавливает выдачу — токены со scope «banlist:read» начнут получать 404."
+            control={
+              <Switch
+                label="Публиковать банлист наружу"
+                checked={enabled}
+                onChange={(next) => {
+                  setEnabled(next);
+                  setNotice(null);
+                }}
+              />
+            }
+          />
         </div>
-        <p className="mt-1">
-          Требуется API-токен со scope <span className="font-mono">banlist:read</span> (Настройки →
-          Токены).
-        </p>
-      </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-900 pt-3">
-        <span className="text-xs text-neutral-500">
-          Последнее изменение: {formatUpdatedAt(settings.updated_at)}
-        </span>
-        <button
-          type="button"
-          onClick={() => void save()}
-          disabled={saving}
-          className="rounded-md border border-sky-700 bg-sky-950 px-4 py-2 text-sm text-sky-200 hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {saving ? 'Сохраняем…' : 'Сохранить'}
-        </button>
-      </div>
+        <CardBody>
+          <fieldset className="space-y-2">
+            <legend className="mb-1 text-2xs uppercase tracking-[0.06em] text-ink-3">
+              Что публиковать
+            </legend>
+            {SCOPE_OPTIONS.map((option) => (
+              <label
+                key={option.value}
+                className="flex min-h-7 cursor-pointer items-center gap-2 text-[13px] text-ink"
+              >
+                <input
+                  type="radio"
+                  name="banlist-publish-scope"
+                  value={option.value}
+                  checked={scope === option.value}
+                  onChange={() => {
+                    setScope(option.value);
+                    setNotice(null);
+                  }}
+                  className="size-3.5 shrink-0 accent-accent"
+                />
+                <span>{option.label}</span>
+              </label>
+            ))}
+          </fieldset>
+        </CardBody>
+
+        <CardFooter>
+          <span className="mr-auto text-xs text-ink-3">
+            Последнее изменение: {formatUpdatedAt(settings.updated_at)}
+          </span>
+          <Button variant="primary" loading={saving} onClick={() => void save()}>
+            Сохранить
+          </Button>
+        </CardFooter>
+      </Card>
+
+      <p className="px-1 text-xs text-ink-3">
+        Список читается запросом{' '}
+        <span className="break-all font-mono">
+          GET /api/v1/public/banlist?format=squad_cfg|json
+        </span>{' '}
+        с API-токеном, имеющим scope <span className="font-mono">banlist:read</span> (Настройки →
+        Токены).
+      </p>
     </section>
   );
 }

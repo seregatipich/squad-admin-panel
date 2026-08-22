@@ -1,8 +1,44 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NickBanSection } from './NickBanSection';
+
+/**
+ * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
+ * а подтверждение «Разбанить ник» построено на примитиве `AlertDialog`.
+ * Полифилл повторяет ровно то, на что опирается примитив: атрибут `open`,
+ * фокус внутрь окна и цепочку Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
 
 afterEach(() => {
   cleanup();
@@ -87,7 +123,7 @@ describe('NickBanSection', () => {
     expect(screen.getByRole('button', { name: /разбанить ник/i })).toBeInTheDocument();
   });
 
-  it('«Разбанить ник» PATCHes is_active:false and the badge disappears after re-check', async () => {
+  it('«Разбанить ник» asks for confirmation, PATCHes is_active:false and the badge disappears', async () => {
     let matched = true;
     vi.stubGlobal(
       'fetch',
@@ -124,12 +160,14 @@ describe('NickBanSection', () => {
         return Promise.reject(new Error(`unexpected fetch: ${url}`));
       }),
     );
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-
     render(<NickBanSection nick="BadNick" />);
     expect(await screen.findByText(/ник забанен/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /разбанить ник/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Разбанить ник' });
+    expect(dialog).toHaveTextContent('правило «BadNick» будет отключено');
+    fireEvent.click(within(dialog).getByRole('button', { name: /разбанить ник/i }));
 
     await waitFor(() => expect(screen.queryByText(/ник забанен/i)).not.toBeInTheDocument());
     expect(await screen.findByRole('button', { name: /забанить ник/i })).toBeInTheDocument();

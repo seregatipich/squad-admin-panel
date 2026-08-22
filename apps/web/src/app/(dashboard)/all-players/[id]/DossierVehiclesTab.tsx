@@ -1,5 +1,6 @@
 'use client';
 
+import { EmptyState, Table, TableBody, TableHead, TableRow, Td, Th } from '@/components/ui';
 import { useLocale } from '@/i18n/LocaleProvider';
 
 import {
@@ -35,71 +36,65 @@ export function DossierVehiclesTab({
 
   if (vehicles.length === 0 && vehicleKills.length === 0) {
     return (
-      <div className="rounded border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
-        Нет данных по технике.
-      </div>
+      <EmptyState
+        title="Нет данных по технике."
+        description="Панель не получила ни одного события с техникой этого игрока."
+      />
     );
   }
 
   return (
-    <div className="space-y-4">
-      <div className="text-xs text-neutral-600">{LIFETIME_ONLY_NOTE}</div>
+    <div className="space-y-6">
+      <p className="text-xs text-ink-3">{LIFETIME_ONLY_NOTE}</p>
 
       {vehicles.length > 0 ? (
-        <div className="space-y-2">
-          <h3 className="text-[11px] uppercase tracking-widest text-neutral-400">На технике</h3>
-          <div className="overflow-x-auto rounded border border-neutral-800">
-            <table className="w-full min-w-[480px] text-sm">
-              <thead className="text-xs uppercase tracking-widest text-neutral-500">
-                <tr>
-                  <th className="p-1.5 text-left">Техника</th>
-                  <th className="p-1.5 text-right">Убийства</th>
-                  <th className="p-1.5 text-right">Урон</th>
-                </tr>
-              </thead>
-              <tbody>
-                {vehicles.map((row) => (
-                  <tr key={row.vehicle_asset_id} className="border-t border-neutral-900">
-                    <td className="p-1.5 text-neutral-200" title={vehicleTitle(row)}>
-                      {vehicleDisplayName(row, locale)}
-                    </td>
-                    <td className="p-1.5 text-right font-mono text-neutral-300 tabular-nums">
-                      {row.kills}
-                    </td>
-                    <td
-                      className="p-1.5 text-right font-mono text-neutral-300 tabular-nums"
-                      title={row.damage === null ? DAMAGE_UNAVAILABLE_HINT : undefined}
-                    >
-                      {formatDamage(row.damage)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <section className="space-y-2">
+          <h3 className="text-[13px] font-semibold text-ink">На технике</h3>
+          <Table ariaLabel="Техника, на которой играл игрок">
+            <TableHead sticky={false}>
+              <tr>
+                <Th>Техника</Th>
+                <Th align="right">Убийства</Th>
+                <Th align="right">Урон</Th>
+              </tr>
+            </TableHead>
+            <TableBody>
+              {vehicles.map((row) => (
+                <TableRow key={row.vehicle_asset_id}>
+                  <Td>
+                    <span title={vehicleTitle(row)}>{vehicleDisplayName(row, locale)}</span>
+                  </Td>
+                  <Td numeric>{row.kills}</Td>
+                  <Td numeric>
+                    {row.damage === null ? (
+                      <span title={DAMAGE_UNAVAILABLE_HINT}>{formatDamage(row.damage)}</span>
+                    ) : (
+                      formatDamage(row.damage)
+                    )}
+                  </Td>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </section>
       ) : null}
 
       {vehicleKills.length > 0 ? (
-        <div className="space-y-2">
-          <h3 className="text-[11px] uppercase tracking-widest text-neutral-400">Уничтожено</h3>
-          <div className="overflow-x-auto rounded border border-neutral-800">
-            <table className="w-full min-w-[480px] text-sm">
-              <thead className="text-xs uppercase tracking-widest text-neutral-500">
-                <tr>
-                  <th className="p-1.5 text-left">Техника</th>
-                  <th className="p-1.5 text-left">Оружие</th>
-                  <th className="p-1.5 text-right">Уничтожено</th>
-                </tr>
-              </thead>
-              <tbody>
-                {vehicleKills.map((row) => (
-                  <tr
-                    key={`${row.victim_vehicle_asset_id}:${row.weapon}`}
-                    className="border-t border-neutral-900"
-                  >
-                    <td
-                      className="p-1.5 text-neutral-200"
+        <section className="space-y-2">
+          <h3 className="text-[13px] font-semibold text-ink">Уничтожено</h3>
+          <Table ariaLabel="Техника, уничтоженная игроком">
+            <TableHead sticky={false}>
+              <tr>
+                <Th>Техника</Th>
+                <Th>Оружие</Th>
+                <Th align="right">Уничтожено</Th>
+              </tr>
+            </TableHead>
+            <TableBody>
+              {vehicleKills.map((row) => (
+                <TableRow key={`${row.victim_vehicle_asset_id}:${row.weapon}`}>
+                  <Td>
+                    <span
                       title={vehicleTitle({
                         vehicle_asset_id: row.victim_vehicle_asset_id,
                         unlocalized: row.unlocalized,
@@ -109,17 +104,15 @@ export function DossierVehiclesTab({
                         { ...row, vehicle_asset_id: row.victim_vehicle_asset_id },
                         locale,
                       )}
-                    </td>
-                    <td className="p-1.5 font-mono text-neutral-300">{row.weapon}</td>
-                    <td className="p-1.5 text-right font-mono text-neutral-300 tabular-nums">
-                      {row.destroyed_count}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                    </span>
+                  </Td>
+                  <Td className="font-mono">{row.weapon}</Td>
+                  <Td numeric>{row.destroyed_count}</Td>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </section>
       ) : null}
     </div>
   );

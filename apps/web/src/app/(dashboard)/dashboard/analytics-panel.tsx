@@ -1,6 +1,19 @@
 'use client';
 import { useCallback, useEffect, useId, useState } from 'react';
 import {
+  Button,
+  Card,
+  CardBody,
+  CardGrid,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  Select,
+  Skeleton,
+  StatTile,
+  Toolbar,
+} from '@/components/ui';
+import {
   buildAnalyticsQuery,
   type DashboardAnalytics,
   formatDurationRu,
@@ -17,6 +30,11 @@ interface ServerOption {
   display_name: string;
 }
 
+/*
+ * Категориальные цвета: они существуют только чтобы соседние доли диаграммы
+ * различались между собой, и ничего не сообщают о состоянии системы (§5).
+ * Смысл каждой доли несёт подпись в легенде, а не её цвет.
+ */
 const OUTCOME_FILL: Record<string, string> = {
   team1: 'bg-sky-500',
   team2: 'bg-emerald-500',
@@ -25,6 +43,14 @@ const OUTCOME_FILL: Record<string, string> = {
 };
 
 const AXIS_HOURS = [0, 6, 12, 18];
+
+/*
+ * Ссылка на выгрузку остаётся обычным `<a download>`, а не `ButtonLink`:
+ * `next/link` перехватывает клик и уводит в клиентскую навигацию, из-за чего
+ * файл не скачивается. Классы повторяют вторичную кнопку размера `sm` (§6).
+ */
+const DOWNLOAD_LINK_CLASS =
+  'inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
 
 export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
   const [serverId, setServerId] = useState<string>('');
@@ -93,71 +119,94 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
   const segments = data ? outcomeSegments(data.match_outcomes) : [];
   const maxMap = data ? Math.max(1, ...data.popular_maps.map((m) => m.matches)) : 1;
   const maxLayer = data ? Math.max(1, ...data.popular_layers.map((l) => l.matches)) : 1;
+  // Первый ответ ещё не пришёл: диапазон считается после монтирования, поэтому
+  // до него запрос даже не уходил (§8 — «что грузится»).
+  const pending = !data && (loading || range === null);
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-900 px-4 py-2.5">
-        <div className="flex items-baseline gap-2">
-          <h2 className="text-xs uppercase tracking-[0.2em] text-neutral-300">Аналитика</h2>
-          {loading ? <span className="text-[10px] text-neutral-500">загрузка…</span> : null}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="sr-only" htmlFor={serverSelectId}>
-            Сервер
-          </label>
-          <select
-            id={serverSelectId}
-            value={serverId}
-            onChange={(e) => setServerId(e.target.value)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200"
-          >
-            <option value="">Все серверы</option>
-            {servers.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.display_name}
-              </option>
-            ))}
-          </select>
-          <label className="sr-only" htmlFor={windowSelectId}>
-            Период
-          </label>
-          <select
-            id={windowSelectId}
-            value={windowDays}
-            onChange={(e) => setWindowDays(Number(e.target.value))}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200"
-          >
-            {WINDOW_PRESETS.map((preset) => (
-              <option key={preset.days} value={preset.days}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
-          <a
-            href={csvHref}
-            download
-            className="rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:border-sky-700 hover:text-sky-300"
-          >
-            CSV
-          </a>
-          <button
-            type="button"
-            onClick={exportJson}
-            disabled={!data}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:border-sky-700 hover:text-sky-300 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            JSON
-          </button>
-        </div>
-      </div>
+    <Card as="section" padding="none">
+      <CardHeader title="Аналитика" />
+      <CardBody padding="sm" className="border-b border-line">
+        <Toolbar
+          filters={
+            <>
+              <label className="sr-only" htmlFor={serverSelectId}>
+                Сервер
+              </label>
+              <div className="w-44">
+                <Select
+                  id={serverSelectId}
+                  size="sm"
+                  value={serverId}
+                  onChange={(e) => setServerId(e.target.value)}
+                >
+                  <option value="">Все серверы</option>
+                  {servers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.display_name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <label className="sr-only" htmlFor={windowSelectId}>
+                Период
+              </label>
+              <div className="w-28">
+                <Select
+                  id={windowSelectId}
+                  size="sm"
+                  value={windowDays}
+                  onChange={(e) => setWindowDays(Number(e.target.value))}
+                >
+                  {WINDOW_PRESETS.map((preset) => (
+                    <option key={preset.days} value={preset.days}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            </>
+          }
+          summary={loading ? 'Обновляем…' : undefined}
+          actions={
+            <>
+              <a href={csvHref} download className={DOWNLOAD_LINK_CLASS}>
+                CSV
+              </a>
+              <Button size="sm" onClick={exportJson} disabled={!data}>
+                JSON
+              </Button>
+            </>
+          }
+        />
+      </CardBody>
 
       {error ? (
-        <div className="px-4 py-6 text-center text-sm text-red-400">{error}</div>
+        <CardBody>
+          <InlineBanner
+            tone="crit"
+            title="Аналитика не загрузилась"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => void load()}>
+                Повторить
+              </Button>
+            }
+          />
+        </CardBody>
+      ) : pending ? (
+        <CardBody className="space-y-4">
+          <Skeleton variant="card" label="Загружаем аналитику" />
+          <Skeleton variant="block" count={2} />
+        </CardBody>
       ) : !data ? (
-        <div className="px-4 py-10 text-center text-sm text-neutral-500">Нет данных.</div>
+        <EmptyState
+          title="Данных за период нет"
+          description="Выберите другой сервер или более длинный период."
+        />
       ) : (
-        <div className="space-y-6 p-4">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <CardBody className="space-y-6">
+          <CardGrid cols={4}>
             <StatTile label="Матчей" value={data.summary.total_matches.toLocaleString('ru-RU')} />
             <StatTile label="Часов онлайн" value={formatHours(data.summary.total_online_hours)} />
             <StatTile
@@ -168,10 +217,10 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
               label="Средняя длительность"
               value={formatDurationRu(data.summary.avg_match_duration_seconds)}
             />
-          </div>
+          </CardGrid>
 
           <figure className="space-y-2">
-            <figcaption className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
+            <figcaption className="text-[13px] font-semibold text-ink">
               Пик игроков по времени суток (UTC)
             </figcaption>
             <div
@@ -196,7 +245,7 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                 );
               })}
             </div>
-            <div className="flex justify-between text-[10px] font-mono text-neutral-600">
+            <div className="flex justify-between text-2xs tabular-nums text-ink-3">
               {AXIS_HOURS.map((hour) => (
                 <span key={hour}>{formatHour(hour)}</span>
               ))}
@@ -205,14 +254,14 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
           </figure>
 
           <figure className="space-y-2">
-            <figcaption className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
+            <figcaption className="text-[13px] font-semibold text-ink">
               Исходы матчей ({data.match_outcomes.total})
             </figcaption>
             {data.match_outcomes.total === 0 ? (
-              <div className="text-xs text-neutral-600">Матчей за период нет.</div>
+              <p className="text-xs text-ink-3">Матчей за период нет.</p>
             ) : (
               <>
-                <div className="flex h-3 w-full gap-[2px] overflow-hidden rounded">
+                <div className="flex h-3 w-full gap-[2px] overflow-hidden rounded-ctl">
                   {segments
                     .filter((seg) => seg.count > 0)
                     .map((seg) => (
@@ -224,12 +273,15 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                       />
                     ))}
                 </div>
-                <ul className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-neutral-400">
+                <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-3">
                   {segments.map((seg) => (
                     <li key={seg.key} className="inline-flex items-center gap-1.5">
-                      <span className={`h-2 w-2 rounded-sm ${OUTCOME_FILL[seg.key]}`} />
+                      <span
+                        aria-hidden="true"
+                        className={`h-1.5 w-1.5 rounded-full ${OUTCOME_FILL[seg.key]}`}
+                      />
                       <span>{seg.label}</span>
-                      <span className="font-mono tabular-nums text-neutral-300">
+                      <span className="tabular-nums text-ink-2">
                         {seg.count} · {seg.percent}%
                       </span>
                     </li>
@@ -253,20 +305,9 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
               fill="bg-violet-500/80"
             />
           </div>
-        </div>
+        </CardBody>
       )}
-    </section>
-  );
-}
-
-function StatTile({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col justify-between rounded border border-neutral-800 bg-neutral-900/40 p-3">
-      <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">{label}</div>
-      <div className="mt-2 text-2xl font-semibold tabular-nums leading-none text-neutral-50">
-        {value}
-      </div>
-    </div>
+    </Card>
   );
 }
 
@@ -283,25 +324,23 @@ function RankedBars({
 }) {
   return (
     <figure className="space-y-2">
-      <figcaption className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-        {title}
-      </figcaption>
+      <figcaption className="text-[13px] font-semibold text-ink">{title}</figcaption>
       {rows.length === 0 ? (
-        <div className="text-xs text-neutral-600">Нет данных.</div>
+        <p className="text-xs text-ink-3">Нет данных.</p>
       ) : (
         <ul className="space-y-1.5">
           {rows.map((row) => (
             <li key={row.label} className="flex items-center gap-2">
-              <span className="w-32 shrink-0 truncate text-xs text-neutral-300" title={row.label}>
+              <span className="w-32 shrink-0 truncate text-xs text-ink-2" title={row.label}>
                 {row.label}
               </span>
-              <span className="flex h-4 flex-1 items-center rounded bg-neutral-900">
+              <span className="flex h-4 flex-1 items-center rounded-ctl bg-raised">
                 <span
-                  className={`h-4 rounded ${fill}`}
+                  className={`h-4 rounded-ctl ${fill}`}
                   style={{ width: `${Math.max(4, Math.round((row.value / max) * 100))}%` }}
                 />
               </span>
-              <span className="w-8 shrink-0 text-right font-mono text-xs tabular-nums text-neutral-300">
+              <span className="w-8 shrink-0 text-right text-xs tabular-nums text-ink-2">
                 {row.value}
               </span>
             </li>

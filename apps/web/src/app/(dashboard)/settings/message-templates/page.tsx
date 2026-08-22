@@ -1,6 +1,32 @@
 'use client';
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { TemplatePicker } from '@/components/TemplatePicker';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  EmptyState,
+  FieldRow,
+  IconButton,
+  InlineBanner,
+  PageHeader,
+  Select,
+  Skeleton,
+  Switch,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Textarea,
+  TextInput,
+  Th,
+  TrashIcon,
+} from '@/components/ui';
 import {
   CATEGORY_LABELS,
   LOCALE_LABELS,
@@ -44,9 +70,8 @@ export default function MessageTemplatesPage() {
   const [samplePlayer, setSamplePlayer] = useState('Игрок42');
   const [sampleServer, setSampleServer] = useState('Squad #1');
   const [composed, setComposed] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<MessageTemplate | null>(null);
 
-  const titleId = useId();
-  const bodyId = useId();
   const canEdit = useMemo(() => me?.permissions.includes('role:edit') ?? false, [me]);
   const sampleContext = useMemo(
     () => ({ player: samplePlayer, server: sampleServer }),
@@ -171,7 +196,6 @@ export default function MessageTemplatesPage() {
   }
 
   async function deleteTemplate(template: MessageTemplate) {
-    if (!confirm(`Удалить шаблон «${template.title}»?`)) return;
     setBusy(true);
     setMsg(null);
     try {
@@ -187,294 +211,264 @@ export default function MessageTemplatesPage() {
       setMsg({ kind: 'err', text: (e as Error).message });
     } finally {
       setBusy(false);
+      setPendingDelete(null);
     }
-  }
-
-  if (loading) {
-    return <div className="text-neutral-500">Загрузка…</div>;
   }
 
   const bodyPreview = substituteTokens(draft.body, sampleContext);
 
   return (
-    <div className="space-y-6 max-w-5xl">
-      <div>
-        <h1 className="text-2xl font-semibold">Шаблоны сообщений</h1>
-        <p className="mt-1 text-sm text-neutral-400">
-          Заготовленные фразы для модерации. Токены{' '}
-          <code className="rounded bg-neutral-800 px-1 text-xs">{'{player}'}</code> и{' '}
-          <code className="rounded bg-neutral-800 px-1 text-xs">{'{server}'}</code> подставляются
-          при отправке. Отключённые шаблоны не показываются в композере.
-        </p>
-      </div>
+    <>
+      <PageHeader
+        title="Шаблоны сообщений"
+        subtitle={
+          <>
+            Заготовленные фразы для модерации. Токены{' '}
+            <code className="rounded-ctl bg-raised px-1 font-mono">{'{player}'}</code> и{' '}
+            <code className="rounded-ctl bg-raised px-1 font-mono">{'{server}'}</code> подставляются
+            при отправке. Отключённые шаблоны не показываются в композере.
+          </>
+        }
+      />
 
-      {msg ? (
-        <div
-          className={`rounded border p-3 text-sm ${
-            msg.kind === 'ok'
-              ? 'border-emerald-900 bg-emerald-950/50 text-emerald-200'
-              : 'border-red-900 bg-red-950 text-red-200'
-          }`}
-        >
-          {msg.text}
-        </div>
-      ) : null}
+      {msg ? <InlineBanner tone={msg.kind === 'ok' ? 'good' : 'crit'} title={msg.text} /> : null}
 
-      {canEdit ? (
-        <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-            {editingId ? 'Редактировать шаблон' : 'Новый шаблон'}
-          </h2>
-          <form onSubmit={submitDraft} className="space-y-3">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-              <div className="sm:col-span-2">
-                <label htmlFor={titleId} className="mb-1 block text-xs text-neutral-500">
-                  Название
-                </label>
-                <input
-                  id={titleId}
-                  type="text"
-                  value={draft.title}
-                  onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
-                  maxLength={120}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-neutral-500" htmlFor={`${titleId}-cat`}>
-                  Категория
-                </label>
-                <select
-                  id={`${titleId}-cat`}
-                  value={draft.category}
-                  onChange={(e) =>
-                    setDraft((d) => ({
-                      ...d,
-                      category: e.target.value as MessageTemplateCategory,
-                    }))
-                  }
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-                >
-                  {MESSAGE_TEMPLATE_CATEGORIES.map((category) => (
-                    <option key={category} value={category}>
-                      {CATEGORY_LABELS[category]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-neutral-500" htmlFor={`${titleId}-loc`}>
-                  Язык
-                </label>
-                <select
-                  id={`${titleId}-loc`}
-                  value={draft.locale}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, locale: e.target.value as MessageTemplateLocale }))
-                  }
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-                >
-                  {MESSAGE_TEMPLATE_LOCALES.map((locale) => (
-                    <option key={locale} value={locale}>
-                      {LOCALE_LABELS[locale]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div>
-              <label
-                htmlFor={bodyId}
-                className="mb-1 flex justify-between text-xs text-neutral-500"
-              >
-                <span>Текст</span>
-                <span className={draft.body.length > MESSAGE_BODY_MAX ? 'text-red-400' : ''}>
-                  {draft.body.length} / {MESSAGE_BODY_MAX}
-                </span>
-              </label>
-              <textarea
-                id={bodyId}
-                value={draft.body}
-                onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
-                maxLength={MESSAGE_BODY_MAX}
-                rows={3}
-                placeholder="{player}, освободите технику без экипажа на {server}."
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
+      {loading ? (
+        <Card>
+          <Skeleton variant="row" count={5} label="Загрузка шаблонов сообщений" />
+        </Card>
+      ) : (
+        <>
+          {canEdit ? (
+            <Card padding="none" as="section">
+              <CardHeader title={editingId ? 'Редактировать шаблон' : 'Новый шаблон'} />
+              <form onSubmit={submitDraft}>
+                <CardBody className="space-y-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+                    <FieldRow label="Название" className="sm:col-span-2">
+                      <TextInput
+                        value={draft.title}
+                        onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+                        maxLength={120}
+                      />
+                    </FieldRow>
+                    <FieldRow label="Категория">
+                      <Select
+                        value={draft.category}
+                        onChange={(e) =>
+                          setDraft((d) => ({
+                            ...d,
+                            category: e.target.value as MessageTemplateCategory,
+                          }))
+                        }
+                      >
+                        {MESSAGE_TEMPLATE_CATEGORIES.map((category) => (
+                          <option key={category} value={category}>
+                            {CATEGORY_LABELS[category]}
+                          </option>
+                        ))}
+                      </Select>
+                    </FieldRow>
+                    <FieldRow label="Язык">
+                      <Select
+                        value={draft.locale}
+                        onChange={(e) =>
+                          setDraft((d) => ({
+                            ...d,
+                            locale: e.target.value as MessageTemplateLocale,
+                          }))
+                        }
+                      >
+                        {MESSAGE_TEMPLATE_LOCALES.map((locale) => (
+                          <option key={locale} value={locale}>
+                            {LOCALE_LABELS[locale]}
+                          </option>
+                        ))}
+                      </Select>
+                    </FieldRow>
+                  </div>
+
+                  <FieldRow
+                    label="Текст"
+                    hint={
+                      <>
+                        <span className={draft.body.length > MESSAGE_BODY_MAX ? 'text-crit' : ''}>
+                          {draft.body.length} / {MESSAGE_BODY_MAX}
+                        </span>
+                        {draft.body ? (
+                          <>
+                            {' · Предпросмотр: '}
+                            <span className="text-ink-2">{bodyPreview}</span>
+                          </>
+                        ) : null}
+                      </>
+                    }
+                  >
+                    <Textarea
+                      value={draft.body}
+                      onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
+                      maxLength={MESSAGE_BODY_MAX}
+                      rows={3}
+                      placeholder="{player}, освободите технику без экипажа на {server}."
+                    />
+                  </FieldRow>
+
+                  <FieldRow label="Порядок" className="max-w-[8rem]">
+                    <TextInput
+                      type="number"
+                      min={0}
+                      value={draft.sortOrder}
+                      onChange={(e) =>
+                        setDraft((d) => ({ ...d, sortOrder: Number(e.target.value) || 0 }))
+                      }
+                    />
+                  </FieldRow>
+                </CardBody>
+                <CardFooter>
+                  {editingId ? (
+                    <Button variant="secondary" onClick={resetDraft}>
+                      Отмена
+                    </Button>
+                  ) : null}
+                  <Button type="submit" variant="primary" loading={busy}>
+                    {editingId ? 'Сохранить' : 'Создать'}
+                  </Button>
+                </CardFooter>
+              </form>
+            </Card>
+          ) : null}
+
+          <Card padding="none" as="section">
+            <CardHeader
+              title="Шаблоны"
+              count={templates.length > 0 ? templates.length : undefined}
+            />
+            {templates.length === 0 ? (
+              <EmptyState
+                title="Шаблонов пока нет"
+                description={
+                  canEdit
+                    ? 'Создайте первый шаблон формой выше — он сразу появится в композере.'
+                    : 'Шаблоны создаёт администратор с правом изменения ролей.'
+                }
               />
-              {draft.body ? (
-                <p className="mt-1 text-xs text-neutral-500">
-                  Предпросмотр: <span className="text-neutral-300">{bodyPreview}</span>
-                </p>
-              ) : null}
-            </div>
-            <div className="flex items-center gap-3">
-              <div>
-                <label className="mb-1 block text-xs text-neutral-500" htmlFor={`${titleId}-sort`}>
-                  Порядок
-                </label>
-                <input
-                  id={`${titleId}-sort`}
-                  type="number"
-                  min={0}
-                  value={draft.sortOrder}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, sortOrder: Number(e.target.value) || 0 }))
-                  }
-                  className="w-24 rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-                />
-              </div>
-              <div className="flex items-end gap-2 self-stretch pt-5">
-                <button
-                  type="submit"
-                  disabled={busy}
-                  className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-                >
-                  {editingId ? 'Сохранить' : 'Создать'}
-                </button>
-                {editingId ? (
-                  <button
-                    type="button"
-                    onClick={resetDraft}
-                    className="rounded border border-neutral-700 px-4 py-1.5 text-sm text-neutral-300 hover:border-neutral-500"
-                  >
-                    Отмена
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          </form>
-        </section>
-      ) : null}
-
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-          Шаблоны ({templates.length})
-        </h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase text-neutral-500">
-              <tr>
-                <th className="py-2 pr-2">Название</th>
-                <th className="py-2 pr-2">Категория</th>
-                <th className="py-2 pr-2">Язык</th>
-                <th className="py-2 pr-2">Текст</th>
-                <th className="py-2 pr-2">Порядок</th>
-                <th className="py-2 pr-2">Статус</th>
-                {canEdit ? <th className="py-2 pr-2"></th> : null}
-              </tr>
-            </thead>
-            <tbody>
-              {templates.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={canEdit ? 7 : 6}
-                    className="py-3 text-center text-xs text-neutral-500"
-                  >
-                    Шаблонов пока нет.
-                  </td>
-                </tr>
-              ) : (
-                templates.map((template) => (
-                  <tr key={template.id} className="border-t border-neutral-900 align-top">
-                    <td className="py-2 pr-2 text-neutral-200">{template.title}</td>
-                    <td className="py-2 pr-2 text-neutral-400">
-                      {CATEGORY_LABELS[template.category]}
-                    </td>
-                    <td className="py-2 pr-2 text-neutral-400">{LOCALE_LABELS[template.locale]}</td>
-                    <td className="max-w-md py-2 pr-2 text-neutral-400">{template.body}</td>
-                    <td className="py-2 pr-2 text-neutral-500">{template.sort_order}</td>
-                    <td className="py-2 pr-2">
-                      {template.is_enabled ? (
-                        <span className="rounded bg-emerald-950/50 px-2 py-0.5 text-xs text-emerald-300">
-                          включён
-                        </span>
-                      ) : (
-                        <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-400">
-                          отключён
-                        </span>
-                      )}
-                    </td>
-                    {canEdit ? (
-                      <td className="py-2 pr-2 text-right">
-                        <div className="flex justify-end gap-1.5">
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => toggleEnabled(template)}
-                            className="rounded border border-neutral-700 px-2 py-0.5 text-xs text-neutral-300 hover:border-neutral-500 disabled:opacity-40"
-                          >
-                            {template.is_enabled ? 'Выкл' : 'Вкл'}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => startEdit(template)}
-                            className="rounded border border-sky-900 px-2 py-0.5 text-xs text-sky-300 hover:border-sky-700 disabled:opacity-40"
-                          >
-                            Изм.
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => deleteTemplate(template)}
-                            className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-400 hover:border-red-700 disabled:opacity-40"
-                          >
-                            Удл.
-                          </button>
-                        </div>
-                      </td>
-                    ) : null}
+            ) : (
+              <Table ariaLabel="Шаблоны сообщений">
+                <TableHead>
+                  <tr>
+                    <Th>Название</Th>
+                    <Th>Категория</Th>
+                    <Th>Язык</Th>
+                    <Th>Текст</Th>
+                    <Th align="right">Порядок</Th>
+                    <Th>Состояние</Th>
+                    {canEdit ? <Th align="right">Действия</Th> : null}
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+                </TableHead>
+                <TableBody>
+                  {templates.map((template) => (
+                    <TableRow key={template.id}>
+                      <Td>{template.title}</Td>
+                      <Td className="text-ink-2">{CATEGORY_LABELS[template.category]}</Td>
+                      <Td className="text-ink-2">{LOCALE_LABELS[template.locale]}</Td>
+                      <Td className="max-w-md text-ink-2">{template.body}</Td>
+                      <Td numeric className="text-ink-3">
+                        {template.sort_order}
+                      </Td>
+                      <Td>
+                        <Badge tone={template.is_enabled ? 'good' : 'neutral'} size="sm">
+                          {template.is_enabled ? 'включён' : 'отключён'}
+                        </Badge>
+                      </Td>
+                      {canEdit ? (
+                        <Td align="right">
+                          <div className="flex items-center justify-end gap-2">
+                            <Switch
+                              label={`Включить шаблон ${template.title}`}
+                              checked={template.is_enabled}
+                              disabled={busy}
+                              onChange={() => void toggleEnabled(template)}
+                            />
+                            <Button size="sm" disabled={busy} onClick={() => startEdit(template)}>
+                              Изменить
+                            </Button>
+                            <IconButton
+                              icon={<TrashIcon />}
+                              label={`Удалить шаблон ${template.title}`}
+                              size="sm"
+                              tone="destructive"
+                              disabled={busy}
+                              onClick={() => setPendingDelete(template)}
+                            />
+                          </div>
+                        </Td>
+                      ) : null}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </Card>
 
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Пробный композер</h2>
-        <p className="text-xs text-neutral-500">
-          Выбор шаблона подставляет токены и заполняет поле. Отключённые шаблоны здесь не
-          показываются.
-        </p>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
-            <label className="mb-1 block text-xs text-neutral-500">
-              {'{player}'}
-              <input
-                type="text"
-                value={samplePlayer}
-                onChange={(e) => setSamplePlayer(e.target.value)}
-                className="mt-1 w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm focus:border-neutral-600 focus:outline-none"
-              />
-            </label>
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-neutral-500">
-              {'{server}'}
-              <input
-                type="text"
-                value={sampleServer}
-                onChange={(e) => setSampleServer(e.target.value)}
-                className="mt-1 w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm focus:border-neutral-600 focus:outline-none"
-              />
-            </label>
-          </div>
-        </div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div className="max-h-80 overflow-y-auto pr-1">
-            <TemplatePicker templates={templates} context={sampleContext} onSelect={setComposed} />
-          </div>
-          <textarea
-            value={composed}
-            onChange={(e) => setComposed(e.target.value)}
-            rows={6}
-            placeholder="Выберите шаблон слева…"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          />
-        </div>
-      </section>
-    </div>
+          <Card padding="none" as="section">
+            <CardHeader
+              title="Пробный композер"
+              description="Выбор шаблона подставляет токены и заполняет поле. Отключённые шаблоны здесь не показываются."
+            />
+            <CardBody className="space-y-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FieldRow label="Имя игрока — {player}">
+                  <TextInput
+                    value={samplePlayer}
+                    onChange={(e) => setSamplePlayer(e.target.value)}
+                  />
+                </FieldRow>
+                <FieldRow label="Название сервера — {server}">
+                  <TextInput
+                    value={sampleServer}
+                    onChange={(e) => setSampleServer(e.target.value)}
+                  />
+                </FieldRow>
+              </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="max-h-80 overflow-y-auto pr-1">
+                  <TemplatePicker
+                    templates={templates}
+                    context={sampleContext}
+                    onSelect={setComposed}
+                  />
+                </div>
+                <FieldRow label="Итоговое сообщение">
+                  <Textarea
+                    value={composed}
+                    onChange={(e) => setComposed(e.target.value)}
+                    rows={6}
+                    placeholder="Выберите шаблон слева…"
+                  />
+                </FieldRow>
+              </div>
+            </CardBody>
+          </Card>
+        </>
+      )}
+
+      <AlertDialog
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title="Удалить шаблон"
+        body={
+          pendingDelete
+            ? `Шаблон «${pendingDelete.title}» будет удалён без возможности восстановления и пропадёт из композера.`
+            : ''
+        }
+        confirmLabel="Удалить шаблон"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={busy && pendingDelete !== null}
+        onConfirm={() => {
+          if (pendingDelete) void deleteTemplate(pendingDelete);
+        }}
+      />
+    </>
   );
 }

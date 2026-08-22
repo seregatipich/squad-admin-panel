@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { LogList, type ServersResponse } from '@/components/LogList';
+import { PageContainer, PageHeader } from '@/components/ui';
 import { apiFetch } from '@/lib/api';
 import { requireSession, SESSION_COOKIE } from '@/lib/dal';
 
@@ -23,14 +24,12 @@ export default async function LogsPage() {
     servers = [];
   }
   return (
-    <div className="space-y-4">
-      <div className="flex items-baseline justify-between">
-        <h1 className="text-lg font-semibold">Логи</h1>
-        <p className="text-xs text-neutral-500">
-          Последние 1000 записей из всех коннекторов панели. Обновление в реальном времени.
-        </p>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="Логи"
+        subtitle="Последние 1000 записей из всех коннекторов панели. Обновление в реальном времени."
+      />
       <LogList servers={servers} />
-    </div>
+    </PageContainer>
   );
 }

@@ -26,7 +26,10 @@ export function LocaleSwitch({ className }: { className?: string }) {
   const t = useTranslator();
 
   return (
-    <fieldset className={className} aria-label={t('localeSwitch.label')}>
+    <fieldset
+      className={`inline-flex items-center gap-0.5${className ? ` ${className}` : ''}`}
+      aria-label={t('localeSwitch.label')}
+    >
       {LOCALES.map((locale) => {
         const isActive = locale === active;
         return (
@@ -39,10 +42,10 @@ export function LocaleSwitch({ className }: { className?: string }) {
               persistLocale(locale);
               router.refresh();
             }}
-            className={`px-2 py-0.5 text-xs uppercase transition-colors ${
+            className={`h-7 rounded-ctl px-2 text-2xs uppercase transition-colors duration-150 ${
               isActive
-                ? 'font-semibold text-neutral-100'
-                : 'text-neutral-500 hover:text-neutral-300'
+                ? 'bg-raised font-semibold text-ink'
+                : 'text-ink-3 hover:bg-raised hover:text-ink'
             }`}
           >
             {t(locale === 'en' ? 'localeSwitch.en' : 'localeSwitch.ru')}

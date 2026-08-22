@@ -1,6 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import {
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Checkbox,
+  EmptyState,
+  FieldRow,
+  InlineBanner,
+  SegmentedControl,
+  Select,
+  TextInput,
+} from '@/components/ui';
 
 interface ApplicationSettings {
   enabled: boolean;
@@ -33,6 +46,12 @@ interface RoleOption {
 }
 
 type StatusFilter = 'pending' | 'approved' | 'rejected';
+
+const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
+  { value: 'pending', label: 'На рассмотрении' },
+  { value: 'approved', label: 'Одобренные' },
+  { value: 'rejected', label: 'Отклонённые' },
+];
 
 /** Approval term presets → an `expires_at` resolver. `default` omits the field
  * so the API applies the portal's `default_days`; `permanent` sends an explicit
@@ -204,178 +223,177 @@ export function ApplicationsSection({ canEdit }: { canEdit: boolean }) {
   }
 
   const assignableRoles = roleOptions.filter((r) => !(r.is_system_role && r.name === 'Owner'));
+  const settingsUnchanged =
+    settings != null &&
+    enabled === settings.enabled &&
+    (defaultDays.trim() === '' ? null : Number.parseInt(defaultDays, 10)) === settings.default_days;
 
   return (
-    <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-5 space-y-4">
-      <h2 className="text-sm font-semibold uppercase tracking-widest text-neutral-500">
-        Заявки на whitelist
-      </h2>
-      <p className="text-xs text-neutral-500">
-        Публичный портал <code>/public/whitelist</code>: любой игрок оставляет заявку, а вы
-        одобряете её с ролью и сроком (по истечении срок снимается автоматически) или отклоняете.
-      </p>
+    <Card padding="none">
+      <CardHeader
+        title="Заявки на whitelist"
+        count={items.length}
+        description={
+          <>
+            Публичный портал <code>/public/whitelist</code>: любой игрок оставляет заявку, а вы
+            одобряете её с ролью и сроком (по истечении срок снимается автоматически) или
+            отклоняете.
+          </>
+        }
+      />
 
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {error}
-        </div>
-      ) : null}
-      {notice ? (
-        <div className="rounded border border-emerald-900 bg-emerald-950 p-3 text-sm text-emerald-200">
-          {notice}
-        </div>
-      ) : null}
+      <CardBody className="space-y-4">
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось выполнить запрос"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => void refresh()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : null}
+        {notice ? (
+          <InlineBanner
+            tone="good"
+            title={notice}
+            onDismiss={() => setNotice(null)}
+            dismissLabel="Скрыть сообщение"
+          />
+        ) : null}
 
-      <div className="flex flex-wrap items-end gap-4 border-b border-neutral-900 pb-4">
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
+        <div className="flex flex-wrap items-end gap-4 border-b border-line pb-4">
+          <Checkbox
+            label="Приём заявок открыт"
             checked={enabled}
             disabled={!canEdit}
             onChange={(e) => setEnabled(e.target.checked)}
           />
-          <span>Приём заявок открыт</span>
-        </label>
-        <label className="text-sm">
-          <span className="mb-1 block text-neutral-400">
-            Срок по умолчанию (дней, пусто = бессрочно)
-          </span>
-          <input
-            type="number"
-            min={1}
-            value={defaultDays}
-            disabled={!canEdit}
-            onChange={(e) => setDefaultDays(e.target.value)}
-            placeholder="бессрочно"
-            className="w-40 rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm disabled:opacity-60"
-          />
-        </label>
-        {canEdit ? (
-          <button
-            type="button"
-            onClick={saveSettings}
-            disabled={
-              savingSettings ||
-              (settings != null &&
-                enabled === settings.enabled &&
-                (defaultDays.trim() === '' ? null : Number.parseInt(defaultDays, 10)) ===
-                  settings.default_days)
-            }
-            className="rounded-md border border-sky-700 bg-sky-950 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {savingSettings ? 'Сохраняем…' : 'Сохранить настройки портала'}
-          </button>
-        ) : null}
-      </div>
-
-      <div className="flex items-center gap-2 text-sm">
-        <span className="text-neutral-400">Статус:</span>
-        {(['pending', 'approved', 'rejected'] as StatusFilter[]).map((s) => (
-          <button
-            key={s}
-            type="button"
-            onClick={() => setStatusFilter(s)}
-            className={`rounded border px-2 py-1 text-xs ${
-              statusFilter === s
-                ? 'border-sky-700 bg-sky-950 text-sky-200'
-                : 'border-neutral-800 text-neutral-400 hover:border-neutral-600'
-            }`}
-          >
-            {s === 'pending' ? 'На рассмотрении' : s === 'approved' ? 'Одобренные' : 'Отклонённые'}
-          </button>
-        ))}
-      </div>
-
-      {items.length === 0 ? (
-        <p className="py-4 text-center text-sm text-neutral-500">Заявок нет.</p>
-      ) : (
-        <ul className="space-y-3">
-          {items.map((app) => (
-            <li
-              key={app.id}
-              className="rounded border border-neutral-800 bg-neutral-900/40 p-4 space-y-2"
+          <FieldRow label="Срок по умолчанию (дней)" hint="Пусто — бессрочно." className="w-52">
+            <TextInput
+              type="number"
+              min={1}
+              value={defaultDays}
+              disabled={!canEdit}
+              onChange={(e) => setDefaultDays(e.target.value)}
+              placeholder="бессрочно"
+            />
+          </FieldRow>
+          {canEdit ? (
+            <Button
+              variant="primary"
+              loading={savingSettings}
+              disabled={settingsUnchanged}
+              onClick={() => void saveSettings()}
             >
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <span className="font-mono text-sm text-neutral-200">{app.steam_id64}</span>
-                <span className="text-xs text-neutral-500">{formatDate(app.created_at)}</span>
-              </div>
-              <div className="text-xs text-neutral-400">
-                {app.player_name ? `Игрок: ${app.player_name}` : 'Игрок не найден в базе'}
-                {app.requested_role_name ? ` · запрошена роль: ${app.requested_role_name}` : ''}
-                {app.contact ? ` · контакт: ${app.contact}` : ''}
-              </div>
-              <p className="whitespace-pre-wrap text-sm text-neutral-200">{app.body}</p>
+              Сохранить настройки портала
+            </Button>
+          ) : null}
+        </div>
 
-              {app.status !== 'pending' ? (
-                <div className="text-xs text-neutral-500">
-                  {app.status === 'approved'
-                    ? `Одобрено${app.granted_role_name ? ` (${app.granted_role_name})` : ''}, до ${formatDate(app.granted_until)}`
-                    : 'Отклонено'}
-                  {app.reviewer_name ? ` · ${app.reviewer_name}` : ''}
-                  {app.review_note ? ` · «${app.review_note}»` : ''}
-                </div>
-              ) : null}
+        <SegmentedControl
+          ariaLabel="Статус заявок"
+          items={STATUS_FILTERS}
+          value={statusFilter}
+          onChange={(next) => setStatusFilter(next as StatusFilter)}
+        />
 
-              {canEdit && app.status === 'pending' ? (
-                <div className="flex flex-wrap items-end gap-2 border-t border-neutral-900 pt-3">
-                  <label className="text-xs">
-                    <span className="mb-1 block text-neutral-500">Роль</span>
-                    <select
-                      value={rolePick[app.id] ?? app.requested_role_id ?? ''}
-                      onChange={(e) => setRolePick((m) => ({ ...m, [app.id]: e.target.value }))}
-                      className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs"
-                    >
-                      <option value="">— роль whitelist —</option>
-                      {assignableRoles.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="text-xs">
-                    <span className="mb-1 block text-neutral-500">Срок</span>
-                    <select
-                      value={termPick[app.id] ?? 'default'}
-                      onChange={(e) => setTermPick((m) => ({ ...m, [app.id]: e.target.value }))}
-                      className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs"
-                    >
-                      {TERM_PRESETS.map((p) => (
-                        <option key={p.value} value={p.value}>
-                          {p.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <input
-                    type="text"
-                    value={notePick[app.id] ?? ''}
-                    onChange={(e) => setNotePick((m) => ({ ...m, [app.id]: e.target.value }))}
-                    placeholder="Комментарий (необязательно)"
-                    className="min-w-40 flex-1 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => decide(app.id, 'approved')}
-                    disabled={busyId === app.id}
-                    className="rounded-md border border-emerald-700 bg-emerald-950 px-3 py-1 text-xs text-emerald-200 hover:bg-emerald-900 disabled:opacity-60"
-                  >
-                    Одобрить
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => decide(app.id, 'rejected')}
-                    disabled={busyId === app.id}
-                    className="rounded-md border border-red-800 bg-red-950 px-3 py-1 text-xs text-red-200 hover:bg-red-900 disabled:opacity-60"
-                  >
-                    Отклонить
-                  </button>
+        {items.length === 0 ? (
+          <EmptyState
+            variant={statusFilter === 'pending' ? 'initial' : 'filtered'}
+            title="Заявок нет"
+            description={
+              statusFilter === 'pending'
+                ? 'Ни одной заявки на рассмотрении.'
+                : 'В выбранном состоянии заявок не нашлось.'
+            }
+          />
+        ) : (
+          <ul className="space-y-3">
+            {items.map((app) => (
+              <li key={app.id} className="space-y-2 rounded-card border border-line bg-raised p-3">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="font-mono text-[13px]">{app.steam_id64}</span>
+                  <span className="text-xs text-ink-3">{formatDate(app.created_at)}</span>
                 </div>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+                <div className="text-xs text-ink-3">
+                  {app.player_name ? `Игрок: ${app.player_name}` : 'Игрок не найден в базе'}
+                  {app.requested_role_name ? ` · запрошена роль: ${app.requested_role_name}` : ''}
+                  {app.contact ? ` · контакт: ${app.contact}` : ''}
+                </div>
+                <p className="whitespace-pre-wrap text-[13px]">{app.body}</p>
+
+                {app.status !== 'pending' ? (
+                  <div className="text-xs text-ink-3">
+                    {app.status === 'approved'
+                      ? `Одобрено${app.granted_role_name ? ` (${app.granted_role_name})` : ''}, до ${formatDate(app.granted_until)}`
+                      : 'Отклонено'}
+                    {app.reviewer_name ? ` · ${app.reviewer_name}` : ''}
+                    {app.review_note ? ` · «${app.review_note}»` : ''}
+                  </div>
+                ) : null}
+
+                {canEdit && app.status === 'pending' ? (
+                  <div className="flex flex-wrap items-end gap-2 border-t border-line pt-3">
+                    <FieldRow label="Роль" className="w-44">
+                      <Select
+                        size="sm"
+                        value={rolePick[app.id] ?? app.requested_role_id ?? ''}
+                        onChange={(e) => setRolePick((m) => ({ ...m, [app.id]: e.target.value }))}
+                      >
+                        <option value="">— роль whitelist —</option>
+                        {assignableRoles.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </FieldRow>
+                    <FieldRow label="Срок" className="w-36">
+                      <Select
+                        size="sm"
+                        value={termPick[app.id] ?? 'default'}
+                        onChange={(e) => setTermPick((m) => ({ ...m, [app.id]: e.target.value }))}
+                      >
+                        {TERM_PRESETS.map((p) => (
+                          <option key={p.value} value={p.value}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </FieldRow>
+                    <FieldRow label="Комментарий (необязательно)" className="min-w-40 flex-1">
+                      <TextInput
+                        size="sm"
+                        type="text"
+                        value={notePick[app.id] ?? ''}
+                        onChange={(e) => setNotePick((m) => ({ ...m, [app.id]: e.target.value }))}
+                      />
+                    </FieldRow>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={busyId === app.id}
+                      onClick={() => void decide(app.id, 'approved')}
+                    >
+                      Одобрить
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={busyId === app.id}
+                      onClick={() => void decide(app.id, 'rejected')}
+                    >
+                      Отклонить
+                    </Button>
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
   );
 }

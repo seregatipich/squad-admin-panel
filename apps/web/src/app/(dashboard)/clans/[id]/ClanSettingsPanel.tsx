@@ -1,7 +1,23 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  AlertDialog,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  FieldRow,
+  GroupedList,
+  GroupedRow,
+  InlineBanner,
+  Select,
+  Switch,
+  Textarea,
+  TextInput,
+} from '@/components/ui';
 
 export interface ClanSettingsInitial {
   name: string;
@@ -37,6 +53,11 @@ function errorMessage(prefix: string, body: { error?: string }): string {
  * accidental clicks. Only rendered for `can_manage_clans` viewers — the API
  * gates rename/slots/server changes and disband to that same flag, so a
  * clan leader without it would just get 403s here.
+ *
+ * Последний шаг расформирования подтверждается диалогом с вводом точного
+ * названия клана: операция необратима, и по дизайн-системе (§6, §8) такое
+ * подтверждение не может быть нативным `confirm()` — оно обязано назвать, что
+ * именно будет уничтожено, и потребовать это набрать.
  */
 export default function ClanSettingsPanel({
   clanId,
@@ -61,12 +82,7 @@ export default function ClanSettingsPanel({
   const [armed, setArmed] = useState(false);
   const [cooldownRemainingMs, setCooldownRemainingMs] = useState(0);
   const [disbanding, setDisbanding] = useState(false);
-
-  const nameId = useId();
-  const descriptionId = useId();
-  const tagsId = useId();
-  const slotsId = useId();
-  const serverId = useId();
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   useEffect(() => {
     setName(initial.name);
@@ -85,47 +101,43 @@ export default function ClanSettingsPanel({
     return () => clearInterval(tick);
   }, [armed, cooldownRemainingMs]);
 
-  const saveCore = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      const trimmedName = name.trim();
-      if (!trimmedName) {
-        setError('Название не может быть пустым.');
+  const saveCore = useCallback(async () => {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setError('Название не может быть пустым.');
+      return;
+    }
+    const slots = Number.parseInt(maxSlots, 10);
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/v1/clans/${clanId}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: trimmedName,
+          description: description.trim() ? description.trim() : null,
+          tags: tags
+            .split(',')
+            .map((tag) => tag.trim())
+            .filter((tag) => tag.length > 0),
+          max_priority_slots: Number.isFinite(slots) ? slots : undefined,
+          primary_server_id: primaryServerId || null,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(errorMessage('Не удалось сохранить изменения', body));
         return;
       }
-      const slots = Number.parseInt(maxSlots, 10);
-      setSaving(true);
-      setError(null);
-      try {
-        const res = await fetch(`/api/v1/clans/${clanId}`, {
-          method: 'PATCH',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            name: trimmedName,
-            description: description.trim() ? description.trim() : null,
-            tags: tags
-              .split(',')
-              .map((tag) => tag.trim())
-              .filter((tag) => tag.length > 0),
-            max_priority_slots: Number.isFinite(slots) ? slots : undefined,
-            primary_server_id: primaryServerId || null,
-          }),
-        });
-        if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { error?: string };
-          setError(errorMessage('Не удалось сохранить изменения', body));
-          return;
-        }
-        onSaved();
-      } catch (e) {
-        setError((e as Error).message);
-      } finally {
-        setSaving(false);
-      }
-    },
-    [clanId, name, description, tags, maxSlots, primaryServerId, onSaved],
-  );
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }, [clanId, name, description, tags, maxSlots, primaryServerId, onSaved]);
 
   const applyExpirePreset = useCallback(
     async (days: number | null) => {
@@ -186,7 +198,6 @@ export default function ClanSettingsPanel({
   }, []);
 
   const disband = useCallback(async () => {
-    if (!window.confirm(`Расформировать клан «${initial.name}»? Это действие необратимо.`)) return;
     setDisbanding(true);
     setError(null);
     try {
@@ -198,190 +209,174 @@ export default function ClanSettingsPanel({
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         setError(errorMessage('Не удалось расформировать клан', body));
         setDisbanding(false);
+        setConfirmOpen(false);
         return;
       }
       router.push('/clans');
     } catch (e) {
       setError((e as Error).message);
       setDisbanding(false);
+      setConfirmOpen(false);
     }
-  }, [clanId, initial.name, router]);
+  }, [clanId, router]);
 
   const cooldownActive = armed && cooldownRemainingMs > 0;
 
   return (
-    <section className="space-y-4 rounded-lg border border-neutral-800 bg-neutral-950 p-5">
-      <h2 className="text-lg font-medium">Настройки клана</h2>
+    <section className="space-y-4">
+      <Card padding="none">
+        <CardHeader title="Настройки клана" />
+        <CardBody className="space-y-4">
+          {error ? (
+            <InlineBanner tone="crit" title="Изменения не применены" description={error} />
+          ) : null}
 
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          {error}
-        </div>
-      ) : null}
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveCore();
+            }}
+            className="space-y-3"
+          >
+            <FieldRow label="Название">
+              <TextInput value={name} maxLength={32} onChange={(e) => setName(e.target.value)} />
+            </FieldRow>
 
-      <form onSubmit={saveCore} className="space-y-3">
-        <div>
-          <label htmlFor={nameId} className="mb-1 block text-xs text-neutral-500">
-            Название
-          </label>
-          <input
-            id={nameId}
-            type="text"
-            value={name}
-            maxLength={32}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          />
-        </div>
+            <FieldRow label="Описание">
+              <Textarea
+                value={description}
+                maxLength={2000}
+                rows={2}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </FieldRow>
 
-        <div>
-          <label htmlFor={descriptionId} className="mb-1 block text-xs text-neutral-500">
-            Описание
-          </label>
-          <textarea
-            id={descriptionId}
-            value={description}
-            maxLength={2000}
-            rows={2}
-            onChange={(e) => setDescription(e.target.value)}
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          />
-        </div>
+            <FieldRow label="Теги через запятую">
+              <TextInput value={tags} onChange={(e) => setTags(e.target.value)} />
+            </FieldRow>
 
-        <div>
-          <label htmlFor={tagsId} className="mb-1 block text-xs text-neutral-500">
-            Теги через запятую
-          </label>
-          <input
-            id={tagsId}
-            type="text"
-            value={tags}
-            onChange={(e) => setTags(e.target.value)}
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          />
-        </div>
+            <div className="grid grid-cols-2 gap-3">
+              <FieldRow label="Слотов приоритета">
+                <TextInput
+                  type="number"
+                  min={0}
+                  max={999}
+                  value={maxSlots}
+                  onChange={(e) => setMaxSlots(e.target.value)}
+                />
+              </FieldRow>
+              <FieldRow label="Основной сервер">
+                <Select
+                  value={primaryServerId}
+                  onChange={(e) => setPrimaryServerId(e.target.value)}
+                >
+                  <option value="">Без привязки</option>
+                  {servers.map((server) => (
+                    <option key={server.id} value={server.id}>
+                      {server.display_name}
+                    </option>
+                  ))}
+                </Select>
+              </FieldRow>
+            </div>
+          </form>
+        </CardBody>
+        <CardFooter>
+          <Button
+            variant="primary"
+            onClick={() => void saveCore()}
+            loading={saving}
+            disabled={!name.trim()}
+          >
+            Сохранить
+          </Button>
+        </CardFooter>
+      </Card>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label htmlFor={slotsId} className="mb-1 block text-xs text-neutral-500">
-              Слотов приоритета
-            </label>
-            <input
-              id={slotsId}
-              type="number"
-              min={0}
-              max={999}
-              value={maxSlots}
-              onChange={(e) => setMaxSlots(e.target.value)}
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-            />
-          </div>
-          <div>
-            <label htmlFor={serverId} className="mb-1 block text-xs text-neutral-500">
-              Основной сервер
-            </label>
-            <select
-              id={serverId}
-              value={primaryServerId}
-              onChange={(e) => setPrimaryServerId(e.target.value)}
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-            >
-              <option value="">Без привязки</option>
-              {servers.map((server) => (
-                <option key={server.id} value={server.id}>
-                  {server.display_name}
-                </option>
+      <GroupedList>
+        <GroupedRow
+          label="Срок приоритета"
+          description="Пресет продлевает слоты приоритета клана от текущего момента."
+          control={
+            <div className="flex flex-wrap items-center gap-2">
+              {EXPIRE_PRESETS.map((preset) => (
+                <Button
+                  key={preset.label}
+                  size="sm"
+                  disabled={saving}
+                  onClick={() => void applyExpirePreset(preset.days)}
+                >
+                  {preset.label}
+                </Button>
               ))}
-            </select>
-          </div>
-        </div>
+              <Button size="sm" disabled={saving} onClick={() => void applyExpirePreset(null)}>
+                Бессрочно
+              </Button>
+            </div>
+          }
+        />
+        <GroupedRow
+          label="Публичный клан"
+          description="Публичные кланы видны всем в директории без ограничений."
+          control={
+            <span className="flex items-center gap-2">
+              {/* Положение тумблера дублируется словом: состояние не кодируется
+                  одной геометрией (§5). */}
+              <span className="text-xs text-ink-2">{isPublic ? 'Публичный' : 'Скрытый'}</span>
+              <Switch
+                checked={isPublic}
+                onChange={() => void togglePublic()}
+                disabled={saving}
+                label="Публичный клан"
+              />
+            </span>
+          }
+        />
+      </GroupedList>
 
-        <div className="flex justify-end">
-          <button
-            type="submit"
-            disabled={saving || !name.trim()}
-            className="rounded bg-sky-700 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {saving ? 'Сохранение…' : 'Сохранить'}
-          </button>
-        </div>
-      </form>
-
-      <div className="space-y-2 border-t border-neutral-900 pt-4">
-        <div className="text-xs uppercase tracking-widest text-neutral-500">Срок приоритета</div>
-        <div className="flex flex-wrap gap-2">
-          {EXPIRE_PRESETS.map((preset) => (
-            <button
-              key={preset.label}
-              type="button"
-              disabled={saving}
-              onClick={() => void applyExpirePreset(preset.days)}
-              className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+      <Card padding="none" className="border-crit/40">
+        <CardHeader
+          title="Опасная зона"
+          description="Расформирование клана необратимо: ростер и приоритет всех участников будут удалены."
+        />
+        <CardBody>
+          {!armed ? (
+            <Button onClick={arm}>Расформировать клан</Button>
+          ) : (
+            <Button
+              variant="destructive"
+              disabled={cooldownActive || disbanding}
+              onClick={() => setConfirmOpen(true)}
             >
-              {preset.label}
-            </button>
-          ))}
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => void applyExpirePreset(null)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
-          >
-            Бессрочно
-          </button>
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between border-t border-neutral-900 pt-4">
-        <div>
-          <div className="text-sm font-medium text-neutral-200">Публичный клан</div>
-          <p className="text-xs text-neutral-500">
-            Публичные кланы видны всем в директории без ограничений.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => void togglePublic()}
-          disabled={saving}
-          aria-pressed={isPublic}
-          className={`shrink-0 rounded px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
-            isPublic
-              ? 'border border-emerald-800 bg-emerald-950 text-emerald-300 hover:bg-emerald-900'
-              : 'border border-neutral-800 bg-neutral-900 text-neutral-300 hover:bg-neutral-800'
-          }`}
-        >
-          {isPublic ? 'Публичный' : 'Скрытый'}
-        </button>
-      </div>
-
-      <div className="space-y-2 rounded border border-red-950 bg-red-950/20 p-4">
-        <div className="text-xs uppercase tracking-widest text-red-400">Опасная зона</div>
-        <p className="text-xs text-neutral-400">
-          Расформирование клана необратимо: ростер и приоритет всех участников будут удалены.
-        </p>
-        {!armed ? (
-          <button
-            type="button"
-            onClick={arm}
-            className="rounded border border-red-900 bg-red-950/40 px-3 py-1.5 text-sm text-red-300 hover:bg-red-900/40"
-          >
-            Расформировать клан
-          </button>
-        ) : (
-          <button
-            type="button"
-            disabled={cooldownActive || disbanding}
-            onClick={() => void disband()}
-            className="rounded border border-red-900 bg-red-950/40 px-3 py-1.5 text-sm text-red-300 hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {disbanding
-              ? 'Расформирование…'
-              : cooldownActive
+              {cooldownActive
                 ? `Подтвердить (${Math.ceil(cooldownRemainingMs / 1000)}с)`
                 : 'Подтвердить расформирование'}
-          </button>
-        )}
-      </div>
+            </Button>
+          )}
+        </CardBody>
+      </Card>
+
+      <AlertDialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        title="Расформировать клан?"
+        body={
+          <>
+            Клан «{initial.name}» будет удалён вместе с ростером и приоритетом всех участников.
+            Отменить это нельзя.
+          </>
+        }
+        confirmLabel="Расформировать навсегда"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={disbanding}
+        onConfirm={() => void disband()}
+        challenge={{
+          expected: initial.name,
+          label: `Введите название клана «${initial.name}», чтобы подтвердить`,
+          hint: 'Название должно совпасть точно, включая регистр.',
+        }}
+      />
     </section>
   );
 }

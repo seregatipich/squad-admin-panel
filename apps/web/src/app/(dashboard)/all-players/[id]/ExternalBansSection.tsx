@@ -1,19 +1,43 @@
 'use client';
 
-import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Badge,
+  type BadgeTone,
+  Button,
+  ButtonLink,
+  Card,
+  CardBody,
+  CardHeader,
+  InlineBanner,
+  Skeleton,
+  StatusBadge,
+} from '@/components/ui';
 import {
   ExternalBanLocalBanModal,
   type ExternalBanLocalBanTarget,
 } from './ExternalBanLocalBanModal';
 import {
+  type BanStatusLike,
   banStatusBadge,
   formatDate,
   foundBadgeLabel,
   type PlayerExternalBansResponse,
-  trustLevelBadgeClass,
   trustLevelLabel,
 } from './external-bans';
+
+/** Доверие к источнику — категория, а не состояние системы: пилюля, а не цвет строки. */
+const TRUST_TONE: Record<string, BadgeTone> = {
+  trusted: 'good',
+  normal: 'accent',
+  low: 'warn',
+};
+
+/** Тон статуса бана. Смысл всё равно несёт подпись из {@link banStatusBadge} (§5). */
+function banStatusTone(ban: BanStatusLike): BadgeTone {
+  if (!ban.is_active) return 'neutral';
+  return ban.is_permanent ? 'crit' : 'warn';
+}
 
 /**
  * "Внешние банлисты" player-card section (CBAN-3, #108): shows whether this
@@ -40,7 +64,7 @@ export function ExternalBansSection({
   const [localBanTarget, setLocalBanTarget] = useState<ExternalBanLocalBanTarget | null>(null);
   const [localBanMessage, setLocalBanMessage] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setHidden(false);
@@ -71,108 +95,101 @@ export function ExternalBansSection({
     };
   }, [playerId]);
 
+  useEffect(() => load(), [load]);
+
   if (hidden) return null;
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Внешние банлисты</h2>
-        <Link
-          href="/external-bans"
-          className="text-xs text-sky-400 no-underline hover:text-sky-300"
-        >
-          Все внешние баны →
-        </Link>
-      </div>
-
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          Ошибка: {error}
-        </div>
-      ) : loading ? (
-        <div className="text-sm text-neutral-500">Загрузка…</div>
-      ) : !data ? null : (
-        <>
-          {localBanMessage ? (
-            <div className="rounded border border-emerald-900 bg-emerald-950/50 p-2 text-xs text-emerald-200">
-              {localBanMessage}
+    <Card padding="none" as="section">
+      <CardHeader
+        title="Внешние банлисты"
+        actions={
+          <ButtonLink href="/external-bans" variant="plain" size="sm">
+            Все внешние баны
+          </ButtonLink>
+        }
+      />
+      <CardBody className="space-y-3">
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить внешние банлисты"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : loading ? (
+          <Skeleton variant="block" label="Загрузка внешних банлистов" />
+        ) : !data ? null : (
+          <>
+            {localBanMessage ? <InlineBanner tone="good" title={localBanMessage} /> : null}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <StatusBadge
+                state={data.active_source_count > 0 ? 'crit' : 'good'}
+                label={foundBadgeLabel(data.active_source_count)}
+              />
+              {data.total > 0 ? (
+                <Button size="sm" aria-expanded={expanded} onClick={() => setExpanded((v) => !v)}>
+                  {expanded ? 'Скрыть' : 'Показать'}
+                </Button>
+              ) : null}
             </div>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            disabled={data.total === 0}
-            className={`flex w-full items-center justify-between rounded border px-3 py-2 text-sm ${
-              data.active_source_count > 0
-                ? 'border-red-900 bg-red-950/30 text-red-300'
-                : 'border-emerald-900 bg-emerald-950/30 text-emerald-300'
-            } ${data.total > 0 ? 'hover:opacity-90' : 'cursor-default'}`}
-          >
-            <span>
-              {data.active_source_count > 0 ? '⚠ ' : '✓ '}
-              {foundBadgeLabel(data.active_source_count)}
-            </span>
-            {data.total > 0 ? (
-              <span className="text-xs text-neutral-400">{expanded ? 'Скрыть' : 'Показать'}</span>
-            ) : null}
-          </button>
 
-          {expanded && data.sources.length > 0 ? (
-            <div className="space-y-3">
-              {data.sources.map((group) => (
-                <div
-                  key={group.source.id}
-                  className="rounded border border-neutral-900 bg-neutral-900/40 p-3 space-y-2"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      {group.source.discord_url ? (
-                        <a
-                          href={group.source.discord_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-sm text-sky-400 hover:text-sky-300"
-                        >
-                          {group.source.name}
-                        </a>
-                      ) : (
-                        <span className="text-sm text-neutral-200">{group.source.name}</span>
-                      )}
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-xs ${trustLevelBadgeClass(group.source.trust_level)}`}
-                      >
-                        {trustLevelLabel(group.source.trust_level)}
+            {expanded && data.sources.length > 0 ? (
+              <div className="space-y-3">
+                {data.sources.map((group) => (
+                  <div
+                    key={group.source.id}
+                    className="space-y-2 rounded-ctl border border-line p-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        {group.source.discord_url ? (
+                          <a
+                            href={group.source.discord_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[13px] text-accent"
+                          >
+                            {group.source.name}
+                          </a>
+                        ) : (
+                          <span className="text-[13px] text-ink">{group.source.name}</span>
+                        )}
+                        <Badge size="sm" tone={TRUST_TONE[group.source.trust_level] ?? 'neutral'}>
+                          {trustLevelLabel(group.source.trust_level)}
+                        </Badge>
+                      </div>
+                      <span className="text-xs text-ink-3">
+                        {group.active_count > 0
+                          ? `Активных банов: ${group.active_count}`
+                          : 'Активных банов нет'}
                       </span>
                     </div>
-                    <span className="text-xs text-neutral-500">
-                      {group.active_count > 0
-                        ? `Активных банов: ${group.active_count}`
-                        : 'Активных банов нет'}
-                    </span>
-                  </div>
-                  <ul className="space-y-1">
-                    {group.bans.map((ban) => {
-                      const status = banStatusBadge(ban);
-                      return (
-                        <li key={ban.id} className="rounded bg-neutral-950/50 p-2 text-xs">
+                    <ul className="divide-y divide-line rounded-ctl border border-line">
+                      {group.bans.map((ban) => (
+                        <li key={ban.id} className="p-2 text-xs">
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span className={`rounded px-1.5 py-0.5 ${status.className}`}>
-                              {status.label}
-                            </span>
-                            <span className="text-neutral-500">
+                            <Badge size="sm" tone={banStatusTone(ban)}>
+                              {banStatusBadge(ban).label}
+                            </Badge>
+                            <span className="text-ink-3">
                               {formatDate(ban.issued_at)}
                               {ban.expires_at ? ` → ${formatDate(ban.expires_at)}` : ''}
                             </span>
                           </div>
-                          {ban.reason ? (
-                            <p className="mt-1 text-neutral-300">{ban.reason}</p>
-                          ) : null}
+                          {ban.reason ? <p className="mt-1 text-ink-2">{ban.reason}</p> : null}
                           {ban.admin_name ? (
-                            <p className="mt-0.5 text-neutral-500">Админ: {ban.admin_name}</p>
+                            <p className="mt-0.5 text-ink-3">Админ: {ban.admin_name}</p>
                           ) : null}
                           {canBan && ban.is_active ? (
-                            <button
-                              type="button"
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              className="mt-2"
                               onClick={() => {
                                 setLocalBanMessage(null);
                                 setLocalBanTarget({
@@ -181,31 +198,30 @@ export function ExternalBansSection({
                                   reason: ban.reason,
                                 });
                               }}
-                              className="mt-2 rounded border border-red-900 px-2 py-1 text-xs text-red-300 hover:border-red-700"
                             >
                               Забанить локально
-                            </button>
+                            </Button>
                           ) : null}
                         </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </>
-      )}
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </>
+        )}
 
-      <ExternalBanLocalBanModal
-        playerId={playerId}
-        target={localBanTarget}
-        onClose={() => setLocalBanTarget(null)}
-        onBanned={(serverName) => {
-          setLocalBanTarget(null);
-          setLocalBanMessage(`Локальный бан отправлен на сервер «${serverName}».`);
-        }}
-      />
-    </section>
+        <ExternalBanLocalBanModal
+          playerId={playerId}
+          target={localBanTarget}
+          onClose={() => setLocalBanTarget(null)}
+          onBanned={(serverName) => {
+            setLocalBanTarget(null);
+            setLocalBanMessage(`Локальный бан отправлен на сервер «${serverName}».`);
+          }}
+        />
+      </CardBody>
+    </Card>
   );
 }

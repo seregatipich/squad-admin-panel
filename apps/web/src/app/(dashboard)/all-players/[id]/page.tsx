@@ -2,14 +2,41 @@
 
 import type { RoleColor } from '@squad/shared-config/role-colors';
 
-import Link from 'next/link';
-import { use, useCallback, useEffect, useState } from 'react';
+import { use, useCallback, useEffect, useId, useState } from 'react';
 
 import { BannedNameRuleModal } from '@/components/BannedNameRuleModal';
 import { DirectMessageButton } from '@/components/DirectMessageModal';
 import { PlayerMarks } from '@/components/PlayerMarks';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import { RoleExpiryDateField } from '@/components/RoleExpiryDateField';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  ButtonLink,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  CopyIcon,
+  EmptyState,
+  FieldRow,
+  GroupedList,
+  GroupedRow,
+  IconButton,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Select,
+  Skeleton,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Textarea,
+  Th,
+} from '@/components/ui';
 import {
   buildRoleAssignPayload,
   DEFAULT_VIP_EXPIRY_WINDOWS_DAYS,
@@ -104,6 +131,8 @@ interface Me {
   squad_permissions?: string[];
 }
 
+const BACK_TO_LIST = { backHref: '/all-players', backLabel: 'К списку игроков' } as const;
+
 export default function PlayerDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id: playerId } = use(params);
   const [data, setData] = useState<PlayerResponse | null>(null);
@@ -119,7 +148,13 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
     return () => clearTimeout(timer);
   }, [eosCopied]);
 
-  useEffect(() => {
+  /**
+   * Загрузка карточки. Та же функция служит и эффектом монтирования, и
+   * обработчиком «Повторить», поэтому повторная попытка повторяет ровно те же
+   * два запроса.
+   */
+  const load = useCallback(() => {
+    setErr(null);
     fetch(`/api/v1/players/${playerId}`, { credentials: 'include', cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(setData)
@@ -130,19 +165,36 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       .catch(() => {});
   }, [playerId]);
 
+  useEffect(() => {
+    load();
+  }, [load]);
+
   if (err) {
     return (
-      <div>
-        <Link href="/all-players" className="text-sky-400 text-xs">
-          ← игроки
-        </Link>
-        <div className="mt-3 rounded border border-red-900 bg-red-950 p-3 text-sm">
-          Ошибка: {err}
-        </div>
-      </div>
+      <PageContainer>
+        <PageHeader {...BACK_TO_LIST} title="Карточка игрока" />
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить карточку игрока"
+          description={err}
+          action={
+            <Button size="sm" onClick={load}>
+              Повторить
+            </Button>
+          }
+        />
+      </PageContainer>
     );
   }
-  if (!data) return <div className="text-neutral-500">Загрузка…</div>;
+
+  if (!data) {
+    return (
+      <PageContainer>
+        <PageHeader {...BACK_TO_LIST} title="Карточка игрока" />
+        <Skeleton variant="card" count={3} label="Загрузка карточки игрока" />
+      </PageContainer>
+    );
+  }
 
   const { player, clan, names, ips, locations, ips_visible, geo_configured } = data;
   const canManageRoles = me?.permissions.includes('user:manage_roles') ?? false;
@@ -163,32 +215,47 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <Link href="/all-players" className="text-sky-400 hover:text-sky-300 text-xs font-mono">
-          ← игроки
-        </Link>
-        {player.avatar_url ? (
-          // INT-1 (#76): the manual route or periodic worker replaces the
-          // initials placeholder once a Steam avatar has been stored.
-          <img
-            data-testid="player-avatar"
-            src={player.avatar_url}
-            alt={`Аватар ${player.canonical_name}`}
-            className="h-10 w-10 shrink-0 rounded-full bg-neutral-800 object-cover"
-          />
-        ) : (
-          <div
-            data-testid="player-avatar"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-neutral-800 text-sm font-semibold text-neutral-300"
-          >
-            {initials(player.canonical_name)}
-          </div>
-        )}
-        <h1 className="text-2xl font-semibold">{player.canonical_name}</h1>
-        <ClanWidget clan={clan} />
-        <DirectMessageButton playerId={playerId} name={player.canonical_name} canChat={canChat} />
-      </div>
+    <PageContainer>
+      <PageHeader
+        {...BACK_TO_LIST}
+        title={
+          <span className="flex items-center gap-3">
+            {player.avatar_url ? (
+              // INT-1 (#76): the manual route or periodic worker replaces the
+              // initials placeholder once a Steam avatar has been stored.
+              // Аватар декоративен — имя игрока стоит рядом в том же заголовке.
+              <img
+                data-testid="player-avatar"
+                src={player.avatar_url}
+                alt=""
+                className="h-9 w-9 shrink-0 rounded-full bg-raised object-cover"
+              />
+            ) : (
+              <span
+                data-testid="player-avatar"
+                aria-hidden="true"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-raised text-[13px] font-semibold text-ink-2"
+              >
+                {initials(player.canonical_name)}
+              </span>
+            )}
+            {player.canonical_name}
+          </span>
+        }
+        status={<ClanWidget clan={clan} />}
+        actions={
+          <>
+            <DirectMessageButton
+              playerId={playerId}
+              name={player.canonical_name}
+              canChat={canChat}
+            />
+            <ButtonLink href={`/all-players/${playerId}/compare`} size="sm">
+              Сравнить онлайн
+            </ButtonLink>
+          </>
+        }
+      />
 
       <NickBanSection nick={player.canonical_name} refreshKey={nickBanRefreshKey} />
 
@@ -198,51 +265,52 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
       <ReportPlayerSection playerId={playerId} />
 
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Профиль</h2>
-        <dl className="grid grid-cols-[160px_1fr] gap-y-1 text-sm">
-          <dt className="text-neutral-500">SteamID64</dt>
-          <dd className="font-mono">
-            {player.steam_id64 ? (
+      <GroupedList title="Профиль">
+        <GroupedRow
+          label="SteamID64"
+          control={
+            player.steam_id64 ? (
               <a
                 href={`https://steamcommunity.com/profiles/${player.steam_id64}`}
                 target="_blank"
                 rel="noreferrer"
-                className="text-sky-400 hover:text-sky-300"
+                className="font-mono text-accent no-underline hover:brightness-110"
               >
                 {player.steam_id64}
               </a>
             ) : (
-              <span className="text-neutral-600">—</span>
-            )}
-          </dd>
-          <dt className="text-neutral-500">EOS ID</dt>
-          <dd className="font-mono">
-            {player.eos_id != null ? (
+              <span className="text-ink-3">—</span>
+            )
+          }
+        />
+        <GroupedRow
+          label="EOS ID"
+          control={
+            player.eos_id != null ? (
               <span className="inline-flex flex-wrap items-center gap-2">
-                {player.eos_id}
-                <button
-                  type="button"
-                  onClick={copyEosId}
-                  aria-label="Скопировать EOS ID"
-                  className="text-sky-400 hover:text-sky-300 text-xs"
-                >
-                  копировать
-                </button>
-                {eosCopied && <span className="text-emerald-400 text-xs">скопировано</span>}
+                <span className="font-mono">{player.eos_id}</span>
+                <IconButton icon={<CopyIcon />} label="Скопировать EOS ID" onClick={copyEosId} />
+                {eosCopied ? <span className="text-xs text-good">скопировано</span> : null}
               </span>
             ) : (
-              '—'
-            )}
-          </dd>
-          <dt className="text-neutral-500">First seen</dt>
-          <dd>{new Date(player.first_seen_at).toLocaleString()}</dd>
-          <dt className="text-neutral-500">Last seen</dt>
-          <dd>{new Date(player.last_seen_at).toLocaleString()}</dd>
-          <dt className="text-neutral-500">Total playtime</dt>
-          <dd className="font-mono">{fmtDuration(player.total_time_played_seconds)}</dd>
-        </dl>
-      </section>
+              <span className="text-ink-3">—</span>
+            )
+          }
+        />
+        <GroupedRow
+          label="Впервые замечен"
+          control={new Date(player.first_seen_at).toLocaleString()}
+        />
+        <GroupedRow label="Был(а)" control={new Date(player.last_seen_at).toLocaleString()} />
+        <GroupedRow
+          label="Наиграно"
+          control={
+            <span className="font-mono tabular-nums">
+              {fmtDuration(player.total_time_played_seconds)}
+            </span>
+          }
+        />
+      </GroupedList>
 
       <SteamProfileSection playerId={playerId} steamId64={player.steam_id64} snapshot={player} />
 
@@ -253,15 +321,6 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
       <BonusSection playerId={playerId} />
 
       <SubscriptionGrantSection playerId={playerId} />
-
-      <div className="flex justify-end">
-        <Link
-          href={`/all-players/${playerId}/compare`}
-          className="text-sky-400 hover:text-sky-300 text-xs"
-        >
-          Сравнить онлайн →
-        </Link>
-      </div>
 
       <SeedContributionSection playerId={playerId} />
 
@@ -288,51 +347,48 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
       <ChatHistorySection playerId={playerId} />
 
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-          История ников ({names.length})
-        </h2>
+      <Card as="section" padding="none">
+        <CardHeader title="История ников" count={names.length > 0 ? names.length : undefined} />
         {names.length === 0 ? (
-          <div className="text-neutral-500 text-sm">только основной ник</div>
+          <EmptyState
+            title="Только основной ник"
+            description="Панель не видела этого игрока ни под каким другим ником."
+          />
         ) : (
-          <table className="w-full text-sm">
-            <thead className="text-xs uppercase tracking-widest text-neutral-500">
+          <Table ariaLabel="История ников игрока">
+            <TableHead sticky={false}>
               <tr>
-                <th className="text-left p-1">Ник</th>
-                <th className="text-left p-1">Виделся N раз</th>
-                <th className="text-left p-1">Первый раз</th>
-                <th className="text-left p-1">Последний раз</th>
-                {canBan ? <th className="text-left p-1"></th> : null}
+                <Th>Ник</Th>
+                <Th align="right">Замечен, раз</Th>
+                <Th>Первый раз</Th>
+                <Th>Последний раз</Th>
+                {canBan ? <Th>Действие</Th> : null}
               </tr>
-            </thead>
-            <tbody>
+            </TableHead>
+            <TableBody>
               {names.map((n) => (
-                <tr key={n.name_normalized} className="border-t border-neutral-900">
-                  <td className="p-1 font-medium">{n.name}</td>
-                  <td className="p-1 font-mono">{n.observation_count}</td>
-                  <td className="p-1 text-neutral-500">
+                <TableRow key={n.name_normalized}>
+                  <Td className="font-medium">{n.name}</Td>
+                  <Td numeric>{n.observation_count}</Td>
+                  <Td className="text-xs text-ink-3">
                     {new Date(n.first_seen_at).toLocaleString()}
-                  </td>
-                  <td className="p-1 text-neutral-500">
+                  </Td>
+                  <Td className="text-xs text-ink-3">
                     {new Date(n.last_seen_at).toLocaleString()}
-                  </td>
+                  </Td>
                   {canBan ? (
-                    <td className="p-1">
-                      <button
-                        type="button"
-                        onClick={() => setBanTarget(n.name)}
-                        className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-400 hover:border-red-700"
-                      >
+                    <Td>
+                      <Button size="sm" onClick={() => setBanTarget(n.name)}>
                         Забанить ник
-                      </button>
-                    </td>
+                      </Button>
+                    </Td>
                   ) : null}
-                </tr>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
-      </section>
+      </Card>
 
       <LocationSection
         playerId={playerId}
@@ -355,7 +411,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
           setNickBanRefreshKey((key) => key + 1);
         }}
       />
-    </div>
+    </PageContainer>
   );
 }
 
@@ -422,41 +478,29 @@ function WhitelistQuickAction({ playerId, canEdit }: { playerId: string; canEdit
   }
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Whitelist</h2>
-          <p className="mt-1 text-sm text-neutral-300">
-            {isWhitelisted ? 'Игрок в whitelist.' : 'Игрок не в whitelist.'}
-          </p>
-        </div>
-        {canEdit ? (
-          <button
-            type="button"
-            onClick={toggle}
-            disabled={busy}
-            className={`rounded px-3 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-40 ${
-              isWhitelisted
-                ? 'border border-red-900 text-red-300 hover:border-red-700'
-                : 'border border-sky-700 bg-sky-950 text-sky-200 hover:bg-sky-900'
-            }`}
-          >
-            {isWhitelisted ? 'Убрать из whitelist' : 'В whitelist'}
-          </button>
-        ) : null}
-      </div>
+    <Card as="section" padding="none">
+      <CardHeader
+        title="Whitelist"
+        description={isWhitelisted ? 'Игрок в whitelist.' : 'Игрок не в whitelist.'}
+        actions={
+          canEdit ? (
+            <Button size="sm" loading={busy} onClick={() => void toggle()}>
+              {isWhitelisted ? 'Убрать из whitelist' : 'В whitelist'}
+            </Button>
+          ) : undefined
+        }
+      />
       {msg ? (
-        <div
-          className={`rounded border p-2 text-xs ${
-            msg.kind === 'ok'
-              ? 'border-emerald-900 bg-emerald-950/50 text-emerald-200'
-              : 'border-red-900 bg-red-950 text-red-200'
-          }`}
-        >
-          {msg.text}
-        </div>
+        <CardBody>
+          <InlineBanner
+            tone={msg.kind === 'ok' ? 'good' : 'crit'}
+            title={msg.text}
+            onDismiss={() => setMsg(null)}
+            dismissLabel="Скрыть сообщение"
+          />
+        </CardBody>
       ) : null}
-    </section>
+    </Card>
   );
 }
 
@@ -469,6 +513,8 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const commentHintId = useId();
 
   const reload = useCallback(async () => {
     const [rRes, listRes] = await Promise.all([
@@ -539,162 +585,161 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
     }
   }
 
+  const isOwner = current?.is_system_role === true && current.name === 'Owner';
+
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">Роль</h2>
-      {msg ? (
-        <div
-          className={`rounded border p-2 text-xs ${
-            msg.kind === 'ok'
-              ? 'border-emerald-900 bg-emerald-950/50 text-emerald-200'
-              : 'border-red-900 bg-red-950 text-red-200'
-          }`}
-        >
-          {msg.text}
-        </div>
-      ) : null}
-      {!editing ? (
-        <div className="flex items-center gap-3 text-sm">
-          {current ? (
-            <span className="min-w-0">
-              <span className="inline-flex items-center gap-2">
-                <RoleColorDot color={current.color} />
-                <span className="font-medium">{current.name}</span>
-                {current.is_system_role && current.name === 'Owner' ? (
-                  <span className="rounded bg-red-950 px-2 py-0.5 text-[10px] uppercase text-red-300">
-                    system
-                  </span>
-                ) : null}
-              </span>
-              <span className="mt-1 block text-xs text-neutral-500">
-                {formatRoleExpiryLabel(current.role_expires_at)}
-                {isRoleExpirySoon(current.role_expires_at, DEFAULT_VIP_EXPIRY_WINDOWS_DAYS) ? (
-                  <span className="ml-2 rounded bg-amber-950 px-2 py-0.5 text-[10px] uppercase text-amber-300">
-                    истекает
-                  </span>
-                ) : null}
-                {current.role_comment ? ` · ${current.role_comment}` : ''}
-              </span>
-            </span>
-          ) : (
-            <span className="text-neutral-500">—</span>
-          )}
-          {canManage ? (
+    <Card as="section" padding="none">
+      <CardHeader
+        title="Роль"
+        actions={
+          canManage ? (
             <>
-              {!(current?.is_system_role && current.name === 'Owner') ? (
-                <button
-                  type="button"
-                  onClick={() => setEditing(true)}
-                  className="rounded border border-neutral-800 px-3 py-0.5 text-xs hover:border-neutral-600"
-                >
+              {!isOwner ? (
+                <Button size="sm" onClick={() => setEditing(true)}>
                   Выдать роль
-                </button>
+                </Button>
               ) : null}
               {current ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!confirm(`Снять роль «${current.name}» с этого игрока?`)) return;
-                    void save(null);
-                  }}
-                  disabled={busy}
-                  className="rounded border border-red-900 px-3 py-0.5 text-xs text-red-400 hover:border-red-700 disabled:opacity-40"
-                >
+                <Button size="sm" disabled={busy} onClick={() => setRemoveOpen(true)}>
                   Снять роль
-                </button>
+                </Button>
               ) : null}
             </>
           ) : (
-            <span className="text-xs text-neutral-600">read-only</span>
-          )}
-        </div>
-      ) : (
-        <div className="space-y-2">
-          <div className="grid gap-3 md:grid-cols-[1fr_320px]">
-            <div>
-              <label
-                htmlFor={`role-select-${playerId}`}
-                className="text-xs uppercase text-neutral-400"
-              >
-                Новая роль
-              </label>
-              <select
-                id={`role-select-${playerId}`}
-                value={picked}
-                onChange={(e) => setPicked(e.target.value)}
-                className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-              >
-                <option value="">— выберите —</option>
-                {assignableRoles.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
+            <span className="text-xs text-ink-3">только просмотр</span>
+          )
+        }
+      />
+
+      <CardBody className="space-y-3">
+        {msg ? (
+          <InlineBanner
+            tone={msg.kind === 'ok' ? 'good' : 'crit'}
+            title={msg.text}
+            onDismiss={() => setMsg(null)}
+            dismissLabel="Скрыть сообщение"
+          />
+        ) : null}
+
+        {!editing ? (
+          current ? (
+            <div className="space-y-1">
+              <span className="inline-flex items-center gap-2">
+                <RoleColorDot color={current.color} />
+                <span className="font-medium">{current.name}</span>
+                {isOwner ? (
+                  <Badge tone="crit" size="sm">
+                    системная
+                  </Badge>
+                ) : null}
+              </span>
+              <span className="block text-xs text-ink-3">
+                {formatRoleExpiryLabel(current.role_expires_at)}
+                {current.role_comment ? ` · ${current.role_comment}` : ''}
+              </span>
+              {isRoleExpirySoon(current.role_expires_at, DEFAULT_VIP_EXPIRY_WINDOWS_DAYS) ? (
+                <Badge tone="warn" size="sm">
+                  истекает
+                </Badge>
+              ) : null}
             </div>
-            <div>
-              <label
-                htmlFor={`role-expiry-${playerId}`}
-                className="text-xs uppercase text-neutral-400"
-              >
-                Срок действия
-              </label>
-              <RoleExpiryDateField
-                id={`role-expiry-${playerId}`}
-                value={expiresAt}
-                onChange={setExpiresAt}
-              />
+          ) : (
+            <p className="text-[13px] text-ink-3">Роль не выдана.</p>
+          )
+        ) : (
+          <div className="space-y-3">
+            <div className="grid gap-3 md:grid-cols-[1fr_320px]">
+              <FieldRow label="Новая роль" htmlFor={`role-select-${playerId}`}>
+                <Select
+                  id={`role-select-${playerId}`}
+                  value={picked}
+                  onChange={(e) => setPicked(e.target.value)}
+                >
+                  <option value="">— выберите —</option>
+                  {assignableRoles.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </Select>
+              </FieldRow>
+
+              <FieldRow label="Срок действия" htmlFor={`role-expiry-${playerId}`}>
+                <RoleExpiryDateField
+                  id={`role-expiry-${playerId}`}
+                  value={expiresAt}
+                  onChange={setExpiresAt}
+                />
+              </FieldRow>
             </div>
-          </div>
-          <div>
-            <label
+
+            <FieldRow
+              label="Комментарий"
               htmlFor={`role-comment-${playerId}`}
-              className="text-xs uppercase text-neutral-400"
+              hint={
+                // Идентификатор нужен, чтобы пояснение читалось скринридером как
+                // описание поля: `FieldRow` связывает с полем только текст ошибки.
+                <span id={commentHintId}>
+                  Необязательно. Причина выдачи видна другим администраторам в карточке игрока и
+                  списках.
+                </span>
+              }
             >
-              Комментарий
-            </label>
-            <textarea
-              id={`role-comment-${playerId}`}
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              maxLength={512}
-              rows={2}
-              aria-describedby={`role-comment-${playerId}-hint`}
-              className="mt-1 w-full resize-none rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm"
-              placeholder="Например: VIP по заявке"
-            />
-            <p
-              id={`role-comment-${playerId}-hint`}
-              className="mt-1 text-xs leading-5 text-neutral-500"
-            >
-              Необязательно. Причина выдачи видна другим администраторам в карточке игрока и
-              списках.
-            </p>
+              <Textarea
+                id={`role-comment-${playerId}`}
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                maxLength={512}
+                rows={2}
+                aria-describedby={commentHintId}
+                placeholder="Например: VIP по заявке"
+                className="resize-none"
+              />
+            </FieldRow>
           </div>
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => picked && save(picked)}
-              disabled={!picked || busy}
-              className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500 disabled:opacity-40"
-            >
-              Сохранить
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setEditing(false);
-                setPicked('');
-              }}
-              disabled={busy}
-              className="rounded border border-neutral-800 px-4 py-2 text-sm hover:border-neutral-600"
-            >
-              Отмена
-            </button>
-          </div>
-        </div>
-      )}
-    </section>
+        )}
+      </CardBody>
+
+      {editing ? (
+        <CardFooter>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setEditing(false);
+              setPicked('');
+            }}
+            disabled={busy}
+          >
+            Отмена
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => picked && save(picked)}
+            disabled={!picked}
+            loading={busy}
+          >
+            Сохранить
+          </Button>
+        </CardFooter>
+      ) : null}
+
+      {current ? (
+        <AlertDialog
+          open={removeOpen}
+          onClose={() => setRemoveOpen(false)}
+          title="Снять роль"
+          body={`Роль «${current.name}» будет снята с этого игрока, вместе с доступом, который она давала. Роль можно выдать заново.`}
+          confirmLabel="Снять роль"
+          cancelLabel="Отмена"
+          tone="destructive"
+          busy={busy}
+          onConfirm={async () => {
+            await save(null);
+            setRemoveOpen(false);
+          }}
+        />
+      ) : null}
+    </Card>
   );
 }
 
@@ -732,24 +777,29 @@ function LocationSection({
 }) {
   if (!ipsVisible) {
     return (
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Локация</h2>
+      <Card as="section" padding="none">
+        <CardHeader
+          title="Локация"
+          description="IP и точная локация доступны только пользователям с доступом к панели."
+        />
         {locations.length === 0 ? (
-          <div className="text-sm text-neutral-500">нет данных о локации</div>
+          <EmptyState
+            title="Нет данных о локации"
+            description="Панель не определила ни одной страны для этого игрока."
+          />
         ) : (
-          <ul className="space-y-1 text-sm">
-            {locations.map((loc) => (
-              <li key={loc.country_code} className="flex items-center gap-2">
-                <span>{flagEmoji(loc.country_code)}</span>
-                <span>{loc.country_name ?? loc.country_code}</span>
-              </li>
-            ))}
-          </ul>
+          <CardBody>
+            <ul className="space-y-1 text-[13px]">
+              {locations.map((loc) => (
+                <li key={loc.country_code} className="flex items-center gap-2">
+                  <span aria-hidden="true">{flagEmoji(loc.country_code)}</span>
+                  <span>{loc.country_name ?? loc.country_code}</span>
+                </li>
+              ))}
+            </ul>
+          </CardBody>
         )}
-        <p className="text-xs text-neutral-600">
-          IP и точная локация доступны только пользователям с доступом к панели.
-        </p>
-      </section>
+      </Card>
     );
   }
 
@@ -757,77 +807,82 @@ function LocationSection({
   const others = ips.slice(1);
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">Локация ({ips.length})</h2>
+    <Card as="section" padding="none">
+      <CardHeader title="Локация" count={ips.length > 0 ? ips.length : undefined} />
 
-      {current === null ? (
-        <div className="text-sm text-neutral-500">пока пусто</div>
-      ) : (
-        <div className="space-y-2">
-          <div className="text-[10px] uppercase tracking-widest text-neutral-500">Текущая</div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-            <span className="text-lg leading-none">{flagEmoji(current.country_code)}</span>
-            {current.country_code ? (
-              <span className="font-medium">{locationLabel(current)}</span>
-            ) : (
-              <span className="text-amber-400/90">
-                гео недоступно
-                {geoConfigured ? '' : ': добавьте MaxMind ключ в настройках'}
+      <CardBody className="space-y-6">
+        {current === null ? (
+          <EmptyState
+            title="Локаций пока нет"
+            description="Панель не записала ни одного подключения этого игрока."
+          />
+        ) : (
+          <div className="space-y-1">
+            <p className="text-2xs uppercase tracking-[0.06em] text-ink-3">Текущая</p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
+              <span aria-hidden="true" className="text-lg leading-none">
+                {flagEmoji(current.country_code)}
               </span>
-            )}
-            <span className="font-mono text-neutral-300">{current.ip}</span>
-            <span className="text-neutral-500">
-              {new Date(current.last_seen_at).toLocaleString()}
-            </span>
-            <span className="font-mono text-neutral-600">×{current.observation_count}</span>
+              {current.country_code ? (
+                <span className="font-medium">{locationLabel(current)}</span>
+              ) : (
+                <span className="text-warn">
+                  гео недоступно
+                  {geoConfigured ? '' : ': добавьте MaxMind ключ в настройках'}
+                </span>
+              )}
+              <span className="font-mono text-ink-2">{current.ip}</span>
+              <span className="text-ink-3">{new Date(current.last_seen_at).toLocaleString()}</span>
+              <span className="font-mono tabular-nums text-ink-3">
+                ×{current.observation_count}
+              </span>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {others.length > 0 ? (
-        <div className="space-y-2">
-          <div className="text-[10px] uppercase tracking-widest text-neutral-500">
-            Другие локации
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="text-xs uppercase tracking-widest text-neutral-500">
+        {others.length > 0 ? (
+          <div className="space-y-2">
+            <p className="text-2xs uppercase tracking-[0.06em] text-ink-3">Другие локации</p>
+            <Table ariaLabel="Другие локации игрока">
+              <TableHead sticky={false}>
                 <tr>
-                  <th className="text-left p-1">Локация</th>
-                  <th className="text-left p-1">IP</th>
-                  <th className="text-left p-1">Заходов</th>
-                  <th className="text-left p-1">Последний раз</th>
+                  <Th>Локация</Th>
+                  <Th>IP</Th>
+                  <Th align="right">Заходов</Th>
+                  <Th>Последний раз</Th>
                 </tr>
-              </thead>
-              <tbody>
+              </TableHead>
+              <TableBody>
                 {others.map((ip) => (
-                  <tr key={ip.ip} className="border-t border-neutral-900">
-                    <td className="p-1">
-                      <span className="mr-1">{flagEmoji(ip.country_code)}</span>
+                  <TableRow key={ip.ip}>
+                    <Td>
+                      <span aria-hidden="true" className="mr-1">
+                        {flagEmoji(ip.country_code)}
+                      </span>
                       {ip.country_code ? (
                         locationLabel(ip)
                       ) : (
-                        <span className="text-amber-400/80">
+                        <span className="text-warn">
                           гео недоступно
                           {geoConfigured ? '' : ': добавьте MaxMind ключ'}
                         </span>
                       )}
-                    </td>
-                    <td className="p-1 font-mono">{ip.ip}</td>
-                    <td className="p-1 font-mono">{ip.observation_count}</td>
-                    <td className="p-1 text-neutral-500">
+                    </Td>
+                    <Td className="font-mono">{ip.ip}</Td>
+                    <Td numeric>{ip.observation_count}</Td>
+                    <Td className="text-xs text-ink-3">
                       {new Date(ip.last_seen_at).toLocaleString()}
-                    </td>
-                  </tr>
+                    </Td>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
-        </div>
-      ) : null}
+        ) : null}
 
-      <GeoAnomaliesSection playerId={playerId} />
-    </section>
+        <GeoAnomaliesSection playerId={playerId} />
+      </CardBody>
+    </Card>
   );
 }
 

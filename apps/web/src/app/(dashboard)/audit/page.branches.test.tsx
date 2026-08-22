@@ -23,7 +23,7 @@ const ITEMS = [
     action_type: 'alpha.action',
     target_type: 'beta',
     target_id: 'gamma-id-0001',
-    status_code: 201, // < 300 → emerald
+    status_code: 201, // < 300 → «успех»
     duration_ms: 12,
     context: { x: 1 },
     row_hash: 'r'.repeat(64),
@@ -37,7 +37,7 @@ const ITEMS = [
     action_type: 'ban',
     target_type: null,
     target_id: null,
-    status_code: 301, // < 400 → sky
+    status_code: 301, // < 400 → «переход»
     duration_ms: null,
     context: {},
     row_hash: null,
@@ -51,7 +51,7 @@ const ITEMS = [
     action_type: 'sync',
     target_type: 'server',
     target_id: null,
-    status_code: 404, // < 500 → amber
+    status_code: 404, // < 500 → «отказ»
     duration_ms: 0,
     context: {},
   },
@@ -63,7 +63,7 @@ const ITEMS = [
     action_type: 'cleanup',
     target_type: null,
     target_id: null,
-    status_code: 500, // >= 500 → red
+    status_code: 500, // >= 500 → «сбой»
     duration_ms: 3,
     context: {},
   },
@@ -114,11 +114,13 @@ describe('AuditPage — branch coverage', () => {
     render(<AuditPage />);
     await screen.findByText('alpha.action');
 
-    // Status-code tones (StatusCode component)
-    expect(screen.getByText('201')).toHaveClass('text-emerald-400');
-    expect(screen.getByText('301')).toHaveClass('text-sky-400');
-    expect(screen.getByText('404')).toHaveClass('text-amber-400');
-    expect(screen.getByText('500')).toHaveClass('text-red-400');
+    // Класс кода ответа назван словом, а не только цветом (StatusCode).
+    expect(screen.getByText('201 · успех')).toBeInTheDocument();
+    expect(screen.getByText('301 · переход')).toBeInTheDocument();
+    expect(screen.getByText('404 · отказ')).toBeInTheDocument();
+    expect(screen.getByText('500 · сбой')).toBeInTheDocument();
+    // Код, которого нет, остаётся прочерком.
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
 
     // Actor cell: user w/ id → 8-char slice; user w/o id / non-user → kind or '—'
     expect(screen.getByText('deltause')).toBeInTheDocument();
@@ -134,8 +136,10 @@ describe('AuditPage — branch coverage', () => {
     fireEvent.change(screen.getByPlaceholderText(/Фильтр по действию/), {
       target: { value: 'alpha' },
     });
+    // Поле поиска отправляет запрос по паузе в наборе — фильтр применяется
+    // не в том же такте, что и ввод.
+    await waitFor(() => expect(screen.queryByText('ban')).not.toBeInTheDocument());
     expect(screen.getByText('alpha.action')).toBeInTheDocument();
-    expect(screen.queryByText('ban')).not.toBeInTheDocument();
   });
 
   it('filters on the target_type operand', async () => {
@@ -144,8 +148,10 @@ describe('AuditPage — branch coverage', () => {
     fireEvent.change(screen.getByPlaceholderText(/Фильтр по действию/), {
       target: { value: 'beta' },
     });
+    // Поле поиска отправляет запрос по паузе в наборе — фильтр применяется
+    // не в том же такте, что и ввод.
+    await waitFor(() => expect(screen.queryByText('cleanup')).not.toBeInTheDocument());
     expect(screen.getByText('alpha.action')).toBeInTheDocument();
-    expect(screen.queryByText('cleanup')).not.toBeInTheDocument();
   });
 
   it('filters on the target_id operand', async () => {
@@ -154,8 +160,10 @@ describe('AuditPage — branch coverage', () => {
     fireEvent.change(screen.getByPlaceholderText(/Фильтр по действию/), {
       target: { value: 'gamma' },
     });
+    // Поле поиска отправляет запрос по паузе в наборе — фильтр применяется
+    // не в том же такте, что и ввод.
+    await waitFor(() => expect(screen.queryByText('noop')).not.toBeInTheDocument());
     expect(screen.getByText('alpha.action')).toBeInTheDocument();
-    expect(screen.queryByText('noop')).not.toBeInTheDocument();
   });
 
   it('filters on the actor_user_id operand', async () => {
@@ -164,8 +172,10 @@ describe('AuditPage — branch coverage', () => {
     fireEvent.change(screen.getByPlaceholderText(/Фильтр по действию/), {
       target: { value: 'deltauser' },
     });
+    // Поле поиска отправляет запрос по паузе в наборе — фильтр применяется
+    // не в том же такте, что и ввод.
+    await waitFor(() => expect(screen.queryByText('sync')).not.toBeInTheDocument());
     expect(screen.getByText('alpha.action')).toBeInTheDocument();
-    expect(screen.queryByText('sync')).not.toBeInTheDocument();
   });
 
   it('shows the no-match empty state when a filter matches nothing', async () => {
@@ -174,7 +184,10 @@ describe('AuditPage — branch coverage', () => {
     fireEvent.change(screen.getByPlaceholderText(/Фильтр по действию/), {
       target: { value: 'zzzz-no-match' },
     });
-    expect(screen.getByText('Нет совпадений.')).toBeInTheDocument();
+    // Поле поиска отправляет запрос по паузе в наборе — фильтр применяется
+    // не в том же такте, что и ввод.
+    await waitFor(() => expect(screen.getByText('Нет совпадений.')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Сбросить фильтр' })).toBeInTheDocument();
   });
 
   it('shows the empty-journal state when there are no entries', async () => {
@@ -183,23 +196,57 @@ describe('AuditPage — branch coverage', () => {
     await waitFor(() => expect(screen.getByText('Журнал пуст.')).toBeInTheDocument());
   });
 
+  it('shows a loading skeleton before the first response, not the empty state', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise(() => {})),
+    );
+    render(<AuditPage />);
+
+    expect(await screen.findByText('Журнал загружается')).toBeInTheDocument();
+    expect(screen.queryByText('Журнал пуст.')).not.toBeInTheDocument();
+  });
+
+  it('surfaces a list error and reloads the journal on «Повторить»', async () => {
+    let failing = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        failing
+          ? Promise.resolve(new Response('nope', { status: 503 }))
+          : Promise.resolve(new Response(JSON.stringify({ items: ITEMS }), { status: 200 })),
+      ),
+    );
+    render(<AuditPage />);
+
+    expect(await screen.findByText('Не удалось загрузить журнал')).toBeInTheDocument();
+
+    failing = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+
+    await waitFor(() => expect(screen.getByText('alpha.action')).toBeInTheDocument());
+  });
+
   it('expands a row with hashes and collapses it again', async () => {
     render(<AuditPage />);
-    const actionCell = await screen.findByText('alpha.action');
+    const disclosure = await screen.findByRole('button', { name: 'alpha.action' });
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
 
     // Expand → context + hash detail visible (prev_hash present branch)
-    fireEvent.click(actionCell);
+    fireEvent.click(disclosure);
     await waitFor(() => expect(document.body.textContent).toContain('r'.repeat(64)));
     expect(document.body.textContent).toContain('p'.repeat(64));
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
 
     // Collapse (expanded === r.id ? null : r.id → null branch)
-    fireEvent.click(actionCell);
+    fireEvent.click(disclosure);
     await waitFor(() => expect(document.body.textContent).not.toContain('r'.repeat(64)));
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('expands a row without a row_hash (no hash detail block)', async () => {
     render(<AuditPage />);
-    const banCell = await screen.findByText('ban');
+    const banCell = await screen.findByRole('button', { name: 'ban' });
     fireEvent.click(banCell);
     // Row expands (context shown) but there is no row_hash dl block.
     await waitFor(() => {

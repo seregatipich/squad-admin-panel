@@ -1,7 +1,19 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  CloseIcon,
+  EmptyState,
+  IconButton,
+  InlineBanner,
+  Skeleton,
+} from '@/components/ui';
 import { type PickedPlayer, PlayerSearchSelect } from '../../../issues/PlayerSearchSelect';
 import { fmtDuration, utcDayKey, weekStartMsForEndDay } from '../presence';
 import { SteamFriendCheck } from '../SteamFriendCheck';
@@ -17,6 +29,14 @@ import {
 
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 const WEEKDAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+const GRID_COLUMNS = '56px repeat(24, minmax(14px, 1fr))';
+
+/** Цвета легенды повторяют заливку ячеек из {@link cellStyle}. */
+const LEGEND = [
+  { color: '#409cff', label: 'Игрок A' },
+  { color: '#ff9f0a', label: 'Игрок B' },
+  { color: '#30d158', label: 'Совместно' },
+];
 
 function dayRowLabel(dayKey: string): string {
   const ms = Date.parse(`${dayKey}T00:00:00.000Z`);
@@ -41,7 +61,7 @@ export function CompareOnlineView({
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (!other) {
       setData(null);
       return;
@@ -81,6 +101,8 @@ export function CompareOnlineView({
     };
   }, [playerId, other, endDay]);
 
+  useEffect(() => load(), [load]);
+
   // Sync the picker label with the real canonical name once it's known — a
   // deep-linked `initialOther` id has no name until the first response.
   useEffect(() => {
@@ -106,141 +128,132 @@ export function CompareOnlineView({
   if (hidden) return null;
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">Сравнение онлайна</h2>
-
-      <div className="max-w-sm">
-        <PlayerSearchSelect
-          placeholder="Найти второго игрока…"
-          onSelect={(player) => setOther(player)}
-        />
-        {other ? (
-          <div className="mt-2 flex items-center gap-2 text-xs text-neutral-300">
-            Игрок B:{' '}
-            <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-neutral-100">
-              {other.canonical_name}
-            </span>
-            <SteamFriendCheck key={other.id} playerId={playerId} otherPlayerId={other.id} />
-            <button
-              type="button"
-              onClick={() => setOther(null)}
-              className="text-neutral-500 hover:text-neutral-300"
-            >
-              ✕
-            </button>
-          </div>
-        ) : null}
-      </div>
-
-      {!other ? (
-        <div className="rounded border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
-          Выберите второго игрока, чтобы сравнить онлайн.
-        </div>
-      ) : error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          Ошибка: {error}
-        </div>
-      ) : loading || !data || !grid ? (
-        <div className="text-sm text-neutral-500">Загрузка…</div>
-      ) : (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setEndDay((prev) => prevWeekEndDay(prev))}
-                className="rounded border border-neutral-800 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-600"
-              >
-                ← Пред. неделя
-              </button>
-              <button
-                type="button"
-                onClick={() => setEndDay((prev) => nextWeekEndDay(prev))}
-                className="rounded border border-neutral-800 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-600"
-              >
-                След. неделя →
-              </button>
+    <Card padding="none" as="section">
+      <CardHeader
+        title="Второй игрок"
+        actions={
+          data && grid ? (
+            <>
+              <Button size="sm" onClick={() => setEndDay((prev) => prevWeekEndDay(prev))}>
+                Пред. неделя
+              </Button>
+              <Button size="sm" onClick={() => setEndDay((prev) => nextWeekEndDay(prev))}>
+                След. неделя
+              </Button>
+            </>
+          ) : undefined
+        }
+      />
+      <CardBody className="space-y-4">
+        <div className="max-w-sm">
+          <PlayerSearchSelect
+            placeholder="Найти второго игрока…"
+            onSelect={(player) => setOther(player)}
+          />
+          {other ? (
+            <div className="mt-2 flex items-center gap-2 text-xs text-ink-2">
+              Игрок B:
+              <Badge>{other.canonical_name}</Badge>
+              <SteamFriendCheck key={other.id} playerId={playerId} otherPlayerId={other.id} />
+              <IconButton
+                size="sm"
+                icon={<CloseIcon />}
+                label="Убрать второго игрока"
+                onClick={() => setOther(null)}
+              />
             </div>
-            <span className="text-[11px] text-neutral-500">
-              Неделя (UTC): {data.window.from} — {data.window.to}
-            </span>
-          </div>
+          ) : null}
+        </div>
 
-          <div className="flex flex-wrap items-center gap-4 text-[11px] text-neutral-400">
-            <span className="flex items-center gap-1">
-              <span
-                className="inline-block h-2.5 w-2.5 rounded-sm"
-                style={{ backgroundColor: '#409cff' }}
-              />
-              Игрок A ({data.players[0].canonical_name})
-            </span>
-            <span className="flex items-center gap-1">
-              <span
-                className="inline-block h-2.5 w-2.5 rounded-sm"
-                style={{ backgroundColor: '#ff9f0a' }}
-              />
-              Игрок B ({data.players[1].canonical_name})
-            </span>
-            <span className="flex items-center gap-1">
-              <span
-                className="inline-block h-2.5 w-2.5 rounded-sm"
-                style={{ backgroundColor: '#30d158' }}
-              />
-              Совместно
-            </span>
-          </div>
+        {!other ? (
+          <EmptyState
+            title="Второй игрок не выбран"
+            description="Выберите второго игрока, чтобы сравнить онлайн."
+          />
+        ) : error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось сравнить онлайн"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : loading || !data || !grid ? (
+          <Skeleton variant="card" label="Загрузка сравнения онлайна" />
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-4 text-2xs text-ink-2">
+                {LEGEND.map((entry, index) => (
+                  <span key={entry.label} className="flex items-center gap-1">
+                    <span
+                      aria-hidden="true"
+                      className="inline-block h-2.5 w-2.5 rounded-sm"
+                      style={{ backgroundColor: entry.color }}
+                    />
+                    {index < 2
+                      ? `${entry.label} (${data.players[index]?.canonical_name ?? '—'})`
+                      : entry.label}
+                  </span>
+                ))}
+              </div>
+              <span className="text-xs text-ink-3">
+                Неделя (UTC): {data.window.from} — {data.window.to}
+              </span>
+            </div>
 
-          <div className="overflow-x-auto">
-            <div className="min-w-[720px] text-[10px] text-neutral-500">
-              <div
-                className="grid gap-px"
-                style={{ gridTemplateColumns: '56px repeat(24, minmax(14px, 1fr))' }}
-              >
-                <div />
-                {HOURS.map((hour) => (
-                  <div key={hour} className="text-center tabular-nums">
-                    {hour % 3 === 0 ? hour : ''}
+            <div className="overflow-x-auto">
+              <div className="min-w-[720px] text-2xs text-ink-3">
+                <div className="grid gap-px" style={{ gridTemplateColumns: GRID_COLUMNS }}>
+                  <div />
+                  {HOURS.map((hour) => (
+                    <div key={hour} className="text-center tabular-nums">
+                      {hour % 3 === 0 ? hour : ''}
+                    </div>
+                  ))}
+                </div>
+
+                {grid.days.map((dayKey, dayIndex) => (
+                  <div
+                    key={dayKey}
+                    className="mt-px grid gap-px"
+                    style={{ gridTemplateColumns: GRID_COLUMNS }}
+                  >
+                    <div className="flex items-center whitespace-nowrap pr-1 text-ink-2">
+                      {dayRowLabel(dayKey)}
+                    </div>
+                    {HOURS.map((hour) => {
+                      const cell = grid.cells[dayIndex]?.[hour];
+                      if (!cell) return <div key={hour} className="h-5" />;
+                      const style = cellStyle(cell);
+                      return (
+                        <div
+                          key={hour}
+                          role="img"
+                          title={cellTitle(cell, dayKey)}
+                          aria-label={cellTitle(cell, dayKey)}
+                          className={`h-5 rounded-sm ${style ? '' : 'bg-raised'}`}
+                          style={style}
+                        />
+                      );
+                    })}
                   </div>
                 ))}
               </div>
-
-              {grid.days.map((dayKey, dayIndex) => (
-                <div
-                  key={dayKey}
-                  className="mt-px grid gap-px"
-                  style={{ gridTemplateColumns: '56px repeat(24, minmax(14px, 1fr))' }}
-                >
-                  <div className="flex items-center pr-1 text-neutral-400 whitespace-nowrap">
-                    {dayRowLabel(dayKey)}
-                  </div>
-                  {HOURS.map((hour) => {
-                    const cell = grid.cells[dayIndex]?.[hour];
-                    if (!cell) return <div key={hour} className="h-5" />;
-                    const style = cellStyle(cell);
-                    return (
-                      <div
-                        key={hour}
-                        role="img"
-                        title={cellTitle(cell, dayKey)}
-                        aria-label={cellTitle(cell, dayKey)}
-                        className={`h-5 rounded-sm ${style ? '' : 'bg-neutral-900/50'}`}
-                        style={style}
-                      />
-                    );
-                  })}
-                </div>
-              ))}
             </div>
-          </div>
 
-          <div className="rounded border border-neutral-800 bg-neutral-900/40 p-3 text-sm text-neutral-200">
-            {summaryLabel(data.overlap.total_seconds, data.overlap.concurrent_count)}
-            <span className="ml-2 text-[11px] text-neutral-500">
-              ({fmtDuration(data.overlap.total_seconds)})
-            </span>
-          </div>
-        </>
-      )}
-    </section>
+            <p className="rounded-ctl border border-line p-3 text-[13px] text-ink">
+              {summaryLabel(data.overlap.total_seconds, data.overlap.concurrent_count)}
+              <span className="ml-2 text-xs text-ink-3">
+                ({fmtDuration(data.overlap.total_seconds)})
+              </span>
+            </p>
+          </>
+        )}
+      </CardBody>
+    </Card>
   );
 }

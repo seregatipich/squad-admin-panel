@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/navigation', () => ({
@@ -131,7 +131,9 @@ const PREVIEW_RESPONSE = {
   missing_placeholders: [] as string[],
 };
 
-function mockFetch(overrides: { test?: () => Promise<Response> } = {}) {
+function mockFetch(
+  overrides: { test?: () => Promise<Response>; onDelete?: (url: string) => Promise<Response> } = {},
+) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
     if (url.endsWith('/api/v1/integrations/discord') && init?.method === undefined) {
@@ -139,6 +141,11 @@ function mockFetch(overrides: { test?: () => Promise<Response> } = {}) {
     }
     if (url.endsWith('/api/v1/integrations/discord/webhooks') && init?.method === undefined) {
       return Promise.resolve(new Response(JSON.stringify([WEBHOOK_ROW]), { status: 200 }));
+    }
+    if (url.includes('/api/v1/integrations/discord/webhooks/') && init?.method === 'DELETE') {
+      return overrides.onDelete
+        ? overrides.onDelete(url)
+        : Promise.resolve(new Response(null, { status: 204 }));
     }
     if (url.endsWith('/test') && init?.method === 'POST') {
       return overrides.test
@@ -243,5 +250,90 @@ describe('Синхронизация ролей', () => {
 
     expect(await screen.findByText('Синхронизация ролей')).toBeInTheDocument();
     expect(await screen.findByText('Маппингов пока нет')).toBeInTheDocument();
+  });
+});
+
+/**
+ * jsdom знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
+ * а подтверждение «Удалить вебхук» построено на примитиве `AlertDialog`.
+ * Полифилл повторяет ровно то, на что опирается примитив: атрибут `open`,
+ * фокус внутрь окна и цепочку Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
+describe('удаление вебхука', () => {
+  it('keeps the webhook when the confirmation dialog is dismissed', async () => {
+    const deleted: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        onDelete: (url) => {
+          deleted.push(url);
+          return Promise.resolve(new Response(null, { status: 204 }));
+        },
+      }),
+    );
+    render(<DiscordIntegrationPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Удалить вебхук «Выдан бан»' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Удалить вебхук' });
+    // «Отмена» носят и крестик окна, и кнопка подвала — нужна вторая.
+    const cancels = within(dialog).getAllByRole('button', { name: 'Отмена' });
+    fireEvent.click(cancels[cancels.length - 1] as HTMLElement);
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(deleted).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Удалить вебхук «Выдан бан»' })).toBeInTheDocument();
+  });
+
+  it('deletes the webhook only after the dialog is confirmed', async () => {
+    const deleted: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        onDelete: (url) => {
+          deleted.push(url);
+          return Promise.resolve(new Response(null, { status: 204 }));
+        },
+      }),
+    );
+    render(<DiscordIntegrationPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Удалить вебхук «Выдан бан»' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Удалить вебхук' });
+    expect(dialog).toHaveTextContent('#bans');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Удалить вебхук' }));
+
+    await waitFor(() => expect(deleted).toHaveLength(1));
+    expect(deleted[0]).toContain('/api/v1/integrations/discord/webhooks/wh-1');
+    expect(await screen.findByText('Вебхук удалён.')).toBeInTheDocument();
   });
 });

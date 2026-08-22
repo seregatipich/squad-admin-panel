@@ -81,7 +81,7 @@ export function ConnectionBanner() {
     <div
       role="alert"
       data-testid="connection-banner"
-      className="fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-lg border border-red-500/30 bg-red-950/90 px-3 py-2 text-xs text-red-200 shadow-lg backdrop-blur"
+      className="pointer-events-auto flex items-center gap-2 rounded-card border border-crit/40 bg-surface px-3 py-2 text-xs text-ink shadow-xl shadow-black/40 backdrop-blur-xl"
     >
       <span>{t('connection.unavailable')}</span>
       <button
@@ -90,17 +90,18 @@ export function ConnectionBanner() {
           failCount.current = 0;
           void probe();
         }}
-        className="rounded border border-red-500/40 px-2 py-0.5 hover:bg-red-500/25"
+        className="h-7 rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink transition-colors hover:bg-line-2"
       >
         {t('connection.retry')}
       </button>
       <button
         type="button"
         onClick={() => setDismissed(true)}
-        className="text-red-300/70 hover:text-red-200"
+        className="grid h-7 w-7 shrink-0 place-items-center rounded-ctl text-ink-3 transition-colors hover:bg-raised hover:text-ink"
         aria-label={t('connection.dismiss')}
+        title={t('connection.dismiss')}
       >
-        ✕
+        <span aria-hidden>✕</span>
       </button>
     </div>
   );

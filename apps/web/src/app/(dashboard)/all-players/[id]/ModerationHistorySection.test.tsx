@@ -55,10 +55,11 @@ describe('ModerationHistorySection', () => {
     stubFetch({ actions: [action()] });
 
     render(<ModerationHistorySection playerId="player-1" viewerPlayerId={VIEWER_ID} />);
-    expect(screen.getByText('Загрузка…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Загрузка истории модерации');
 
     await screen.findByText('Бан');
-    expect(screen.getByText('История модерации (1)')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'История модерации' })).toBeInTheDocument();
+    expect(screen.getByText('1')).toBeInTheDocument();
     expect(screen.getByText('aimbot')).toBeInTheDocument();
     expect(screen.getByText(/Модератор Вася/)).toBeInTheDocument();
     expect(screen.getByText(/Main #1/)).toBeInTheDocument();
@@ -69,7 +70,7 @@ describe('ModerationHistorySection', () => {
     stubFetch({ actions: [] });
 
     render(<ModerationHistorySection playerId="player-1" viewerPlayerId={VIEWER_ID} />);
-    await screen.findByText('Действий модерации нет.');
+    await screen.findByText('Действий модерации нет');
   });
 
   it('hides entirely on 403', async () => {
@@ -85,7 +86,8 @@ describe('ModerationHistorySection', () => {
     stubFetch({ error: 'boom' }, 500);
 
     render(<ModerationHistorySection playerId="player-1" viewerPlayerId={VIEWER_ID} />);
-    await screen.findByText(/Ошибка: HTTP 500/);
+    await screen.findByText('Не удалось загрузить историю модерации');
+    expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
   });
 
   it('labels a system-issued action with its worker label', async () => {

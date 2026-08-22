@@ -1,6 +1,22 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  DateTime,
+  EmptyState,
+  InlineBanner,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
 
 interface LogFile {
   name: string;
@@ -21,18 +37,16 @@ function formatSize(bytes: number): string {
   return `${value.toFixed(value >= 10 || Number.isInteger(value) ? 0 : 1)} ${units[unit]}`;
 }
 
-function formatMtime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
-}
-
 /**
  * Lists the on-disk `SquadGame*.log` files for a server (name, size, mtime,
  * a "live" badge on the active `SquadGame.log`) and offers a streaming download
  * of each one. Renders nothing when the current user lacks
  * `server:download_logs` — callers pass that as `canDownload` (from
  * `GET /api/v1/me`'s `permissions`).
+ *
+ * Скачивание — это обычная ссылка на маршрут API с атрибутом `download`, а не
+ * кнопка и не `ButtonLink`: переход должен уйти в браузер, а не в
+ * клиентскую навигацию Next.
  */
 export function ServerLogFiles({
   serverId,
@@ -44,7 +58,10 @@ export function ServerLogFiles({
   const [files, setFiles] = useState<LogFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** Счётчик повторов: «Повторить» перезапускает тот же эффект загрузки. */
+  const [attempt, setAttempt] = useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` не читается телом эффекта — он и есть кнопка «Повторить»: смена счётчика перезапускает загрузку
   useEffect(() => {
     if (!canDownload) return;
     let cancelled = false;
@@ -70,56 +87,80 @@ export function ServerLogFiles({
     return () => {
       cancelled = true;
     };
-  }, [serverId, canDownload]);
+  }, [serverId, canDownload, attempt]);
 
   if (!canDownload) return null;
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
-      <h2 className="mb-3 text-sm font-semibold text-neutral-200">Логи</h2>
+    <Card as="section" padding="none">
+      <CardHeader title="Логи" />
       {error ? (
-        <p className="text-sm text-red-400">Не удалось загрузить список файлов: {error}</p>
+        <div className="p-4">
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить список файлов"
+            description={error}
+            action={
+              <Button onClick={() => setAttempt((n) => n + 1)} loading={loading}>
+                Повторить
+              </Button>
+            }
+          />
+        </div>
       ) : loading ? (
-        <p className="text-sm text-neutral-500">Загрузка…</p>
+        <div className="p-4">
+          <SkeletonTable rows={3} cols={4} label="Загрузка списка файлов" />
+        </div>
       ) : files.length === 0 ? (
-        <p className="text-sm text-neutral-500">нет файлов</p>
+        <EmptyState
+          title="Нет файлов"
+          description="Сервер ещё не записал ни одного файла журнала."
+        />
       ) : (
-        <table className="w-full text-left text-xs">
-          <thead>
-            <tr className="text-neutral-500">
-              <th className="py-1 pr-2 font-medium">Файл</th>
-              <th className="py-1 pr-2 font-medium">Размер</th>
-              <th className="py-1 pr-2 font-medium">Изменён</th>
-              <th className="py-1 font-medium" />
+        <Table>
+          <TableHead>
+            <tr>
+              <Th>Файл</Th>
+              <Th align="right">Размер</Th>
+              <Th>Изменён</Th>
+              <Th align="right">
+                <span className="sr-only">Скачивание</span>
+              </Th>
             </tr>
-          </thead>
-          <tbody className="font-mono">
+          </TableHead>
+          <TableBody>
             {files.map((f) => (
-              <tr key={f.name} className="border-t border-neutral-900">
-                <td className="py-1 pr-2">
-                  <span className="text-neutral-200">{f.name}</span>
+              <TableRow key={f.name}>
+                <Td className="font-mono text-xs">
+                  {f.name}
                   {f.is_live ? (
-                    <span className="ml-2 rounded bg-emerald-900 px-1 text-[10px] font-semibold text-emerald-200 uppercase">
-                      live
+                    <span className="ml-2 align-middle">
+                      <Badge tone="good" size="sm">
+                        пишется
+                      </Badge>
                     </span>
                   ) : null}
-                </td>
-                <td className="py-1 pr-2 text-neutral-400">{formatSize(f.size)}</td>
-                <td className="py-1 pr-2 text-neutral-400">{formatMtime(f.mtime)}</td>
-                <td className="py-1 text-right">
+                </Td>
+                <Td numeric className="text-ink-2">
+                  {formatSize(f.size)}
+                </Td>
+                <Td className="whitespace-nowrap text-ink-2">
+                  <DateTime value={f.mtime} locale="ru-RU" />
+                </Td>
+                <Td align="right">
                   <a
                     href={`/api/v1/servers/${serverId}/logs/files/${encodeURIComponent(f.name)}/download`}
                     download
-                    className="rounded bg-neutral-800 px-2 py-0.5 text-neutral-200 hover:bg-neutral-700"
+                    className="text-accent transition-colors duration-150 hover:brightness-110"
                   >
-                    ⤓ Скачать
+                    Скачать
                   </a>
-                </td>
-              </tr>
+                </Td>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
-    </section>
+    </Card>
   );
 }

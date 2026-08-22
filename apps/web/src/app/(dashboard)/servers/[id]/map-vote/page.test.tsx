@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Suspense } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -121,6 +121,15 @@ async function renderPage() {
   });
 }
 
+/**
+ * Кандидат ищется внутри собственного списка, а не по строке CSS-классов:
+ * имя слоя встречается ещё в предпросмотре, в истории и в каталоге, и привязка
+ * к оформлению ломалась бы от любой смены вёрстки.
+ */
+async function findCandidate(layer: string) {
+  return within(await screen.findByTestId('candidates-list')).findByText(layer);
+}
+
 function findPutCall(urlPart: string): [string, RequestInit] | undefined {
   const calls = (fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls;
   return calls.find((call) => call[0].includes(urlPart) && call[1] && call[1].method === 'PUT') as
@@ -131,7 +140,7 @@ function findPutCall(urlPart: string): [string, RequestInit] | undefined {
 describe('MapVotePage', () => {
   it('renders candidates and saves settings', async () => {
     await renderPage();
-    await screen.findByText('Yehorivka RAAS v11', { selector: 'span.font-mono.text-sm' });
+    await findCandidate('Yehorivka RAAS v11');
     expect(screen.getByTestId('candidates-list')).toHaveTextContent('Gorodok RAAS v1');
     expect(screen.getByTestId('preview-eligible')).toHaveTextContent('75%');
     expect(screen.getByTestId('picks-list')).toHaveTextContent('Gorodok RAAS v1');
@@ -154,7 +163,7 @@ describe('MapVotePage', () => {
 
   it('shows validation error for weight out of range', async () => {
     await renderPage();
-    await screen.findByText('Yehorivka RAAS v11', { selector: 'span.font-mono.text-sm' });
+    await findCandidate('Yehorivka RAAS v11');
 
     fireEvent.change(screen.getByLabelText('Вес Yehorivka RAAS v11'), {
       target: { value: '0' },
@@ -168,7 +177,7 @@ describe('MapVotePage', () => {
   it('hides mutating controls without the changemap permission', async () => {
     mockFetch([]);
     await renderPage();
-    await screen.findByText('Yehorivka RAAS v11', { selector: 'span.font-mono.text-sm' });
+    await findCandidate('Yehorivka RAAS v11');
     expect(screen.queryByRole('button', { name: 'Сохранить настройки' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Сохранить кандидатов' })).not.toBeInTheDocument();
     expect(screen.getByText(/Только просмотр/)).toBeInTheDocument();
@@ -176,7 +185,7 @@ describe('MapVotePage', () => {
 
   it('saves the candidate list after adding a layer from the catalog', async () => {
     await renderPage();
-    await screen.findByText('Yehorivka RAAS v11', { selector: 'span.font-mono.text-sm' });
+    await findCandidate('Yehorivka RAAS v11');
 
     fireEvent.change(screen.getByLabelText('Слой из каталога'), {
       target: { value: 'Narva Skirmish v1' },

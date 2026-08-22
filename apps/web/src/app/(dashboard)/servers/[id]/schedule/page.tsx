@@ -3,6 +3,28 @@
 import { isValidCron5, minCron5IntervalMinutes } from '@squad/shared-types';
 import { use, useCallback, useEffect, useMemo, useState } from 'react';
 import { TemplatePicker } from '@/components/TemplatePicker';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Checkbox,
+  EmptyState,
+  FieldRow,
+  IconButton,
+  InlineBanner,
+  PageContainer,
+  Select,
+  Skeleton,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  TextInput,
+  Th,
+} from '@/components/ui';
 import type { MessageTemplate } from '@/lib/messageTemplates';
 
 type TaskType = 'restart' | 'set_next_layer' | 'change_layer' | 'broadcast';
@@ -65,6 +87,13 @@ const STATUS_LABELS: Record<RunStatus, string> = {
   executed: 'Выполнено',
   skipped_depot_update: 'Пропущено (обновление)',
   failed: 'Ошибка',
+};
+
+/** Тон результата дублируется словом в той же ячейке (§5). */
+const STATUS_TONE: Record<RunStatus, 'good' | 'warn' | 'crit'> = {
+  executed: 'good',
+  skipped_depot_update: 'warn',
+  failed: 'crit',
 };
 
 const ALL_TASK_TYPES: TaskType[] = ['restart', 'set_next_layer', 'change_layer', 'broadcast'];
@@ -227,6 +256,9 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
     isValidCron5(recurrence) &&
     minCron5IntervalMinutes(recurrence) < MIN_BROADCAST_INTERVAL_MINUTES;
 
+  const cronInvalid =
+    scheduleMode === 'cron' && recurrence.trim() !== '' && !isValidCron5(recurrence);
+
   const scheduleValid =
     scheduleMode === 'one_off'
       ? scheduledAt !== ''
@@ -313,319 +345,300 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
   }
 
   if (loading) {
-    return <div className="text-neutral-500">Загрузка…</div>;
+    return (
+      <PageContainer width="wide">
+        <Skeleton variant="row" count={6} label="Планировщик загружается" />
+      </PageContainer>
+    );
   }
 
   return (
-    <div className="max-w-4xl space-y-4 pb-20">
-      <header>
-        <h1 className="text-xl font-semibold">Планировщик</h1>
-        <p className="mt-1 text-sm text-neutral-400">
-          Задачи по расписанию: рестарт, смена слоя, оповещение. Разовые или по 5-полевому cron
-          (UTC). Во время обновления депота выполнение откладывается.
-        </p>
-      </header>
+    <PageContainer width="wide">
+      <p className="text-xs text-ink-3">
+        Задачи по расписанию: рестарт, смена слоя, оповещение. Разовые или по 5-полевому cron (UTC).
+        Во время обновления депота выполнение откладывается.
+      </p>
 
       {err ? (
-        <div className="rounded border border-red-900 bg-red-950 px-3 py-2 text-sm">{err}</div>
+        <InlineBanner
+          tone="crit"
+          title={err}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
-      {msg ? (
-        <div className="rounded border border-emerald-900 bg-emerald-950 px-3 py-2 text-sm text-emerald-200">
-          {msg}
-        </div>
-      ) : null}
+      {msg ? <InlineBanner tone="good" title={msg} /> : null}
 
       {!canEditAny ? (
-        <div className="rounded border border-neutral-800 bg-neutral-900/60 px-3 py-2 text-xs text-neutral-400">
-          Только просмотр — нужны привилегии на рестарт (server:restart), смену слоя (changemap) или
-          оповещение (chat).
-        </div>
+        <InlineBanner
+          tone="info"
+          title="Только просмотр — нужны привилегии на рестарт (server:restart), смену слоя (changemap) или оповещение (chat)."
+        />
       ) : null}
 
-      <ul className="space-y-2" data-testid="scheduled-tasks-list">
-        {tasks.length === 0 ? (
-          <li className="rounded border border-neutral-800 bg-neutral-950 px-3 py-6 text-center text-sm text-neutral-500">
-            Задач нет.
-          </li>
-        ) : null}
-        {tasks.map((task) => (
-          <li
-            key={task.id}
-            className="flex items-center justify-between gap-3 rounded border border-neutral-800 bg-neutral-950 px-3 py-2"
-          >
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">{task.name}</span>
-                <span className="rounded bg-neutral-800 px-1.5 py-[1px] text-[10px] uppercase tracking-widest text-neutral-300">
-                  {TASK_TYPE_LABELS[task.task_type]}
-                </span>
-                {!task.enabled ? (
-                  <span className="rounded bg-amber-800 px-1.5 py-[1px] text-[10px] uppercase tracking-widest text-amber-100">
-                    Выключена
-                  </span>
-                ) : null}
-              </div>
-              <div className="mt-0.5 font-mono text-xs text-neutral-500">
-                {task.recurrence
-                  ? `cron: ${task.recurrence}`
-                  : `разово: ${task.scheduled_at ?? '—'}`}
-                {task.params.layer ? ` · ${task.params.layer}` : ''}
-                {task.params.messages && task.params.messages.length > 0
-                  ? ` · ротация ${task.params.messages.length} (индекс ${task.rotation_index ?? 0})`
-                  : task.params.message
-                    ? ` · «${task.params.message}»`
-                    : ''}
-              </div>
-              {task.params.messages && task.params.messages.length > 0 ? (
-                <ol className="mt-1 space-y-0.5 text-[11px] text-neutral-500">
-                  {task.params.messages.map((entry, index) => (
-                    <li
-                      key={`${task.id}-${index}`}
-                      className={index === (task.rotation_index ?? 0) ? 'text-emerald-300' : ''}
-                    >
-                      {index + 1}. {entry}
-                    </li>
-                  ))}
-                </ol>
-              ) : null}
-            </div>
-            {canManage(task.task_type) ? (
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => toggle(task)}
-                  aria-label={task.enabled ? 'выключить' : 'включить'}
-                  className="rounded px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-                >
-                  {task.enabled ? 'выключить' : 'включить'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => remove(task)}
-                  aria-label="удалить"
-                  className="rounded px-2 py-1 text-xs text-red-400 hover:bg-neutral-800"
-                >
-                  удалить
-                </button>
-              </div>
-            ) : null}
-          </li>
-        ))}
-      </ul>
-
-      {canEditAny ? (
-        <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-          <h2 className="text-sm font-semibold">Новая задача</h2>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Название задачи"
-              className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
-            />
-            <select
-              aria-label="Тип задачи"
-              value={taskType}
-              onChange={(e) => setTaskType(e.target.value as TaskType)}
-              className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
+      <Card padding="none">
+        <CardHeader title="Задачи" count={tasks.length} />
+        <ul className="divide-y divide-line" data-testid="scheduled-tasks-list">
+          {tasks.length === 0 ? (
+            <li>
+              <EmptyState
+                title="Задач нет"
+                description="Создайте задачу ниже — панель выполнит её разово или по расписанию."
+              />
+            </li>
+          ) : null}
+          {tasks.map((task) => (
+            <li
+              key={task.id}
+              className="flex flex-wrap items-start justify-between gap-3 px-4 py-3"
             >
-              {allowedTypes.map((t) => (
-                <option key={t} value={t}>
-                  {TASK_TYPE_LABELS[t]}
-                </option>
-              ))}
-            </select>
-
-            {isLayerType(taskType) ? (
-              <select
-                aria-label="Слой"
-                value={layer}
-                onChange={(e) => setLayer(e.target.value)}
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
-              >
-                <option value="">— выбрать слой —</option>
-                {pool.map((l) => (
-                  <option key={l.id ?? l.name} value={l.name}>
-                    {l.name}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-            {taskType === 'broadcast' ? (
-              <div className="space-y-3 sm:col-span-2" data-testid="broadcast-editor">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={message}
-                    onChange={(e) => setMessage(e.target.value)}
-                    placeholder="Текст оповещения"
-                    className="flex-1 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={addCustomMessage}
-                    disabled={message.trim() === '' || rotation.length >= MAX_ROTATION_MESSAGES}
-                    aria-label="добавить в ротацию"
-                    className="rounded border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-800 disabled:opacity-40"
-                  >
-                    Добавить
-                  </button>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[13px] font-semibold text-ink">{task.name}</span>
+                  <Badge>{TASK_TYPE_LABELS[task.task_type]}</Badge>
+                  {!task.enabled ? <Badge tone="warn">Выключена</Badge> : null}
                 </div>
-
-                <div className="space-y-1">
-                  <p className="text-xs text-neutral-500">
-                    Шаблоны (подстановка {'{server}'} → «{currentServerName || '—'}»):
-                  </p>
-                  <TemplatePicker
-                    templates={templates}
-                    context={{ server: currentServerName }}
-                    onSelect={addToRotation}
-                  />
+                <div className="mt-0.5 font-mono text-xs text-ink-3">
+                  {task.recurrence
+                    ? `cron: ${task.recurrence}`
+                    : `разово: ${task.scheduled_at ?? '—'}`}
+                  {task.params.layer ? ` · ${task.params.layer}` : ''}
+                  {task.params.messages && task.params.messages.length > 0
+                    ? ` · ротация ${task.params.messages.length} (индекс ${task.rotation_index ?? 0})`
+                    : task.params.message
+                      ? ` · «${task.params.message}»`
+                      : ''}
                 </div>
-
-                <div className="space-y-1">
-                  <p className="text-xs text-neutral-500">
-                    Ротация ({rotation.length}/{MAX_ROTATION_MESSAGES}) — по кругу за каждый запуск:
-                  </p>
-                  <ol
-                    className="space-y-1 text-xs text-neutral-300"
-                    data-testid="broadcast-rotation"
-                  >
-                    {rotation.length === 0 ? (
-                      <li className="text-neutral-600">
-                        Пусто — выберите шаблон или добавьте текст.
-                      </li>
-                    ) : null}
-                    {rotation.map((entry, index) => (
+                {task.params.messages && task.params.messages.length > 0 ? (
+                  <ol className="mt-1 space-y-0.5 text-2xs text-ink-3">
+                    {task.params.messages.map((entry, index) => (
                       <li
-                        key={`${index}-${entry}`}
-                        className="flex items-center justify-between gap-2 rounded border border-neutral-800 bg-neutral-900 px-2 py-1"
+                        key={`${task.id}-${index}`}
+                        className={index === (task.rotation_index ?? 0) ? 'text-good' : ''}
                       >
-                        <span className="truncate">
-                          {index + 1}. {entry}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => removeFromRotation(index)}
-                          aria-label={`убрать из ротации ${index + 1}`}
-                          className="text-red-400 hover:text-red-300"
-                        >
-                          ×
-                        </button>
+                        {index + 1}. {entry}
+                        {index === (task.rotation_index ?? 0) ? ' — следующее' : ''}
                       </li>
                     ))}
                   </ol>
-                </div>
-
-                {otherServers.length > 0 ? (
-                  <fieldset className="space-y-1">
-                    <legend className="text-xs text-neutral-500">Серверы получатели</legend>
-                    <label className="flex items-center gap-2 text-xs text-neutral-300">
-                      <input
-                        type="checkbox"
-                        aria-label="Все серверы"
-                        checked={allServersSelected}
-                        onChange={(e) => toggleAllServers(e.target.checked)}
-                      />
-                      Все серверы
-                    </label>
-                    {otherServers.map((s) => (
-                      <label
-                        key={s.id}
-                        className="flex items-center gap-2 text-xs text-neutral-300"
-                      >
-                        <input
-                          type="checkbox"
-                          aria-label={s.display_name}
-                          checked={selectedServerIds.includes(s.id)}
-                          onChange={() => toggleServer(s.id)}
-                        />
-                        {s.display_name}
-                      </label>
-                    ))}
-                  </fieldset>
                 ) : null}
               </div>
-            ) : null}
-
-            <select
-              aria-label="Тип расписания"
-              value={scheduleMode}
-              onChange={(e) => setScheduleMode(e.target.value as ScheduleMode)}
-              className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
-            >
-              <option value="one_off">Разово</option>
-              <option value="cron">По расписанию (cron)</option>
-            </select>
-
-            {scheduleMode === 'one_off' ? (
-              <input
-                type="datetime-local"
-                aria-label="Дата и время"
-                value={scheduledAt}
-                onChange={(e) => setScheduledAt(e.target.value)}
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
-              />
-            ) : (
-              <input
-                type="text"
-                value={recurrence}
-                onChange={(e) => setRecurrence(e.target.value)}
-                placeholder="* * * * *"
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 font-mono text-sm"
-              />
-            )}
-          </div>
-          {scheduleMode === 'cron' && recurrence.trim() !== '' && !isValidCron5(recurrence) ? (
-            <p className="text-xs text-red-400">Неверное cron-выражение (5 полей, UTC).</p>
-          ) : null}
-          {broadcastIntervalTooShort ? (
-            <p className="text-xs text-red-400" data-testid="broadcast-interval-hint">
-              Слишком часто: минимальный интервал оповещения — {MIN_BROADCAST_INTERVAL_MINUTES} мин.
-            </p>
-          ) : null}
-          <button
-            type="button"
-            onClick={submit}
-            disabled={!canSubmit}
-            className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Создать задачу
-          </button>
-        </section>
-      ) : null}
-
-      <section className="space-y-2">
-        <h2 className="text-sm font-semibold">История выполнений</h2>
-        <ul className="space-y-1" data-testid="scheduled-tasks-history">
-          {runs.length === 0 ? (
-            <li className="rounded border border-neutral-800 bg-neutral-950 px-3 py-4 text-center text-sm text-neutral-500">
-              Выполнений пока нет.
-            </li>
-          ) : null}
-          {runs.map((run) => (
-            <li
-              key={run.id}
-              className="flex items-center justify-between gap-3 rounded border border-neutral-900 bg-neutral-950 px-3 py-1.5 text-xs"
-            >
-              <span className="text-neutral-400">{new Date(run.executed_at).toISOString()}</span>
-              <span className="font-medium">{run.task_name}</span>
-              <span
-                className={
-                  run.status === 'executed'
-                    ? 'text-emerald-300'
-                    : run.status === 'failed'
-                      ? 'text-red-400'
-                      : 'text-amber-300'
-                }
-              >
-                {STATUS_LABELS[run.status]}
-              </span>
+              {canManage(task.task_type) ? (
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button variant="ghost" size="sm" onClick={() => toggle(task)}>
+                    {task.enabled ? 'выключить' : 'включить'}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => remove(task)}>
+                    удалить
+                  </Button>
+                </div>
+              ) : null}
             </li>
           ))}
         </ul>
-      </section>
-    </div>
+      </Card>
+
+      {canEditAny ? (
+        <Card padding="none">
+          <CardHeader title="Новая задача" />
+          <CardBody className="space-y-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <FieldRow label="Название задачи">
+                <TextInput
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Название задачи"
+                />
+              </FieldRow>
+              <FieldRow label="Тип задачи">
+                <Select value={taskType} onChange={(e) => setTaskType(e.target.value as TaskType)}>
+                  {allowedTypes.map((t) => (
+                    <option key={t} value={t}>
+                      {TASK_TYPE_LABELS[t]}
+                    </option>
+                  ))}
+                </Select>
+              </FieldRow>
+
+              {isLayerType(taskType) ? (
+                <FieldRow label="Слой">
+                  <Select value={layer} onChange={(e) => setLayer(e.target.value)}>
+                    <option value="">— выбрать слой —</option>
+                    {pool.map((l) => (
+                      <option key={l.id ?? l.name} value={l.name}>
+                        {l.name}
+                      </option>
+                    ))}
+                  </Select>
+                </FieldRow>
+              ) : null}
+
+              {taskType === 'broadcast' ? (
+                <div className="space-y-3 sm:col-span-2" data-testid="broadcast-editor">
+                  <div className="flex items-end gap-2">
+                    <FieldRow label="Текст оповещения" className="flex-1">
+                      <TextInput
+                        type="text"
+                        value={message}
+                        onChange={(e) => setMessage(e.target.value)}
+                        placeholder="Текст оповещения"
+                      />
+                    </FieldRow>
+                    <Button
+                      onClick={addCustomMessage}
+                      disabled={message.trim() === '' || rotation.length >= MAX_ROTATION_MESSAGES}
+                      aria-label="добавить в ротацию"
+                    >
+                      Добавить
+                    </Button>
+                  </div>
+
+                  <div className="space-y-1">
+                    <p className="text-xs text-ink-3">
+                      Шаблоны (подстановка {'{server}'} → «{currentServerName || '—'}»):
+                    </p>
+                    <TemplatePicker
+                      templates={templates}
+                      context={{ server: currentServerName }}
+                      onSelect={addToRotation}
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <p className="text-xs text-ink-3">
+                      Ротация ({rotation.length}/{MAX_ROTATION_MESSAGES}) — по кругу за каждый
+                      запуск:
+                    </p>
+                    <ol className="space-y-1" data-testid="broadcast-rotation">
+                      {rotation.length === 0 ? (
+                        <li className="text-xs text-ink-3">
+                          Пусто — выберите шаблон или добавьте текст.
+                        </li>
+                      ) : null}
+                      {rotation.map((entry, index) => (
+                        <li
+                          key={`${index}-${entry}`}
+                          className="flex items-center justify-between gap-2 rounded-ctl border border-line bg-raised px-2 py-1 text-xs text-ink"
+                        >
+                          <span className="truncate">
+                            {index + 1}. {entry}
+                          </span>
+                          <IconButton
+                            icon={<span aria-hidden="true">×</span>}
+                            label={`убрать из ротации ${index + 1}`}
+                            tone="destructive"
+                            onClick={() => removeFromRotation(index)}
+                          />
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+
+                  {otherServers.length > 0 ? (
+                    <fieldset className="space-y-1">
+                      <legend className="text-xs text-ink-3">Серверы получатели</legend>
+                      <Checkbox
+                        label="Все серверы"
+                        checked={allServersSelected}
+                        onChange={(e) => toggleAllServers(e.target.checked)}
+                      />
+                      {otherServers.map((s) => (
+                        <Checkbox
+                          key={s.id}
+                          label={s.display_name}
+                          checked={selectedServerIds.includes(s.id)}
+                          onChange={() => toggleServer(s.id)}
+                        />
+                      ))}
+                    </fieldset>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <FieldRow label="Тип расписания">
+                <Select
+                  value={scheduleMode}
+                  onChange={(e) => setScheduleMode(e.target.value as ScheduleMode)}
+                >
+                  <option value="one_off">Разово</option>
+                  <option value="cron">По расписанию (cron)</option>
+                </Select>
+              </FieldRow>
+
+              {scheduleMode === 'one_off' ? (
+                <FieldRow label="Дата и время">
+                  <TextInput
+                    type="datetime-local"
+                    value={scheduledAt}
+                    onChange={(e) => setScheduledAt(e.target.value)}
+                  />
+                </FieldRow>
+              ) : (
+                <FieldRow
+                  label="Расписание (cron, UTC)"
+                  error={cronInvalid ? 'Неверное cron-выражение (5 полей, UTC).' : undefined}
+                >
+                  <TextInput
+                    type="text"
+                    value={recurrence}
+                    onChange={(e) => setRecurrence(e.target.value)}
+                    placeholder="* * * * *"
+                    className="font-mono"
+                  />
+                </FieldRow>
+              )}
+            </div>
+            {broadcastIntervalTooShort ? (
+              <p className="text-xs text-crit" data-testid="broadcast-interval-hint">
+                Слишком часто: минимальный интервал оповещения — {MIN_BROADCAST_INTERVAL_MINUTES}{' '}
+                мин.
+              </p>
+            ) : null}
+            <div className="flex justify-end">
+              <Button variant="primary" onClick={submit} disabled={!canSubmit}>
+                Создать задачу
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
+
+      <Card padding="none">
+        <CardHeader title="История выполнений" count={runs.length} />
+        <div data-testid="scheduled-tasks-history">
+          {runs.length === 0 ? (
+            <EmptyState
+              title="Выполнений пока нет"
+              description="Как только планировщик выполнит задачу, запись появится здесь."
+            />
+          ) : (
+            <Table ariaLabel="История выполнения задач планировщика" dense>
+              <TableHead sticky={false}>
+                <TableRow>
+                  <Th>Когда (UTC)</Th>
+                  <Th>Задача</Th>
+                  <Th>Результат</Th>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {runs.map((run) => (
+                  <TableRow key={run.id}>
+                    <Td>{new Date(run.executed_at).toISOString()}</Td>
+                    <Td>{run.task_name}</Td>
+                    <Td>
+                      <Badge tone={STATUS_TONE[run.status]}>{STATUS_LABELS[run.status]}</Badge>
+                    </Td>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+      </Card>
+    </PageContainer>
   );
 }

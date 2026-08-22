@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { Badge, Button, InlineBanner, Skeleton, StatusBadge } from '@/components/ui';
+import { CHART_FRAME, CHART_GRID, CHART_SURFACE } from '@/lib/chart-tokens';
 
 interface CountrySwitch {
   from_country_code: string;
@@ -37,6 +39,10 @@ interface GeoAnomalies {
   distinct_countries: DistinctCountry[];
   points: GeoPoint[];
 }
+
+/** Точки на карте: свежая — янтарная, остальные — синие; легенда рядом с картой. */
+const POINT_LATEST = '#ff9f0a';
+const POINT_TRAIL = '#409cff';
 
 function flagEmoji(countryCode: string | null): string {
   if (!countryCode || countryCode.length !== 2) return '🏳️';
@@ -85,27 +91,27 @@ function WorldMap({ points }: { points: GeoPoint[] }) {
   return (
     <svg
       viewBox="0 0 360 180"
-      className="w-full rounded border border-neutral-800 bg-neutral-900/40"
+      className="w-full rounded-ctl border border-line"
       role="img"
       aria-label="Карта локаций игрока"
       preserveAspectRatio="xMidYMid meet"
     >
       <title>Карта локаций игрока</title>
       {[30, 60, 90, 120, 150].map((y) => (
-        <line key={`h${y}`} x1={0} y1={y} x2={360} y2={y} stroke="#38383a" strokeWidth={0.4} />
+        <line key={`h${y}`} x1={0} y1={y} x2={360} y2={y} stroke={CHART_GRID} strokeWidth={0.4} />
       ))}
       {[60, 120, 180, 240, 300].map((x) => (
-        <line key={`v${x}`} x1={x} y1={0} x2={x} y2={180} stroke="#38383a" strokeWidth={0.4} />
+        <line key={`v${x}`} x1={x} y1={0} x2={x} y2={180} stroke={CHART_GRID} strokeWidth={0.4} />
       ))}
-      <line x1={0} y1={90} x2={360} y2={90} stroke="#48484a" strokeWidth={0.6} />
+      <line x1={0} y1={90} x2={360} y2={90} stroke={CHART_FRAME} strokeWidth={0.6} />
       {CONTINENTS.map((path) => (
-        <path key={path} d={path} fill="#2c2c2e" stroke="#48484a" strokeWidth={0.5} />
+        <path key={path} d={path} fill={CHART_SURFACE} stroke={CHART_FRAME} strokeWidth={0.5} />
       ))}
       {ordered.length > 1 ? (
         <polyline
           points={trail}
           fill="none"
-          stroke="#409cff"
+          stroke={POINT_TRAIL}
           strokeWidth={0.7}
           strokeDasharray="2 2"
           opacity={0.7}
@@ -119,8 +125,8 @@ function WorldMap({ points }: { points: GeoPoint[] }) {
               cx={projectX(point.longitude)}
               cy={projectY(point.latitude)}
               r={isLatest ? 3.4 : 2.4}
-              fill={isLatest ? '#ff9f0a' : '#409cff'}
-              stroke="#1c1c1e"
+              fill={isLatest ? POINT_LATEST : POINT_TRAIL}
+              stroke={CHART_SURFACE}
               strokeWidth={0.6}
             >
               <title>{`${flagEmoji(point.country_code)} ${point.country_name ?? point.country_code ?? '—'} · ${point.ip}`}</title>
@@ -137,7 +143,7 @@ export function GeoAnomaliesSection({ playerId }: { playerId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -160,12 +166,21 @@ export function GeoAnomaliesSection({ playerId }: { playerId: string }) {
     };
   }, [playerId]);
 
-  if (loading) return <div className="text-sm text-neutral-500">Загрузка аномалий…</div>;
+  useEffect(() => load(), [load]);
+
+  if (loading) return <Skeleton variant="block" label="Загрузка гео-аномалий" />;
   if (error) {
     return (
-      <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-        Ошибка гео-аномалий: {error}
-      </div>
+      <InlineBanner
+        tone="crit"
+        title="Не удалось загрузить гео-аномалии"
+        description={error}
+        action={
+          <Button size="sm" onClick={() => load()}>
+            Повторить
+          </Button>
+        }
+      />
     );
   }
   if (!data) return null;
@@ -174,29 +189,29 @@ export function GeoAnomaliesSection({ playerId }: { playerId: string }) {
   const hasPoints = data.points.length > 0;
 
   return (
-    <div className="space-y-4 border-t border-neutral-800 pt-4">
+    <div className="space-y-4 border-t border-line pt-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-[11px] uppercase tracking-widest text-neutral-400">Гео-аномалии</h3>
+        <h3 className="text-[13px] font-semibold text-ink">Гео-аномалии</h3>
         {data.multi_country ? (
-          <span
-            title={`Более ${data.config.multi_country_threshold} стран в истории IP`}
-            className="inline-flex items-center gap-1.5 rounded border border-amber-800 bg-amber-950/60 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-300"
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-            Мульти-страна ({data.distinct_country_count})
+          <span title={`Более ${data.config.multi_country_threshold} стран в истории IP`}>
+            <StatusBadge
+              state="warn"
+              size="sm"
+              label={`Мульти-страна (${data.distinct_country_count})`}
+            />
           </span>
         ) : null}
         {data.has_recent_switch ? (
-          <span
-            title={`Смена страны за < ${data.config.country_switch_window_hours} ч`}
-            className="inline-flex items-center gap-1.5 rounded border border-red-900 bg-red-950/60 px-2 py-0.5 text-[10px] uppercase tracking-wide text-red-300"
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-            Смена страны &lt;{data.config.country_switch_window_hours}ч
+          <span title={`Смена страны за < ${data.config.country_switch_window_hours} ч`}>
+            <StatusBadge
+              state="crit"
+              size="sm"
+              label={`Смена страны менее чем за ${data.config.country_switch_window_hours} ч`}
+            />
           </span>
         ) : null}
         {!data.multi_country && !data.has_recent_switch ? (
-          <span className="text-xs text-neutral-600">аномалий не обнаружено</span>
+          <StatusBadge state="good" size="sm" label="Аномалий не обнаружено" />
         ) : null}
       </div>
 
@@ -208,50 +223,50 @@ export function GeoAnomaliesSection({ playerId }: { playerId: string }) {
 
       {data.switches.length > 0 ? (
         <div className="space-y-2">
-          <div className="text-[10px] uppercase tracking-widest text-neutral-500">
+          <p className="text-2xs uppercase tracking-[0.06em] text-ink-3">
             Хронология смен ({data.switches.length})
-          </div>
-          <ul className="space-y-1.5">
+          </p>
+          <ul className="divide-y divide-line rounded-ctl border border-line">
             {[...data.switches]
               .sort((a, b) => Date.parse(b.to_observed_at) - Date.parse(a.to_observed_at))
               .map((entry) => (
                 <li
                   key={`${entry.from_country_code}-${entry.to_country_code}-${entry.to_observed_at}`}
-                  className={`flex flex-wrap items-center gap-2 rounded border px-2 py-1 text-sm ${
-                    entry.within_window
-                      ? 'border-red-900/70 bg-red-950/40'
-                      : 'border-neutral-800 bg-neutral-900/40'
+                  className={`flex flex-wrap items-center gap-2 px-3 py-2 text-[13px] ${
+                    entry.within_window ? 'bg-crit/10' : ''
                   }`}
                 >
                   <span className="inline-flex items-center gap-1">
-                    <span>{flagEmoji(entry.from_country_code)}</span>
-                    <span className="text-neutral-300">
+                    <span aria-hidden="true">{flagEmoji(entry.from_country_code)}</span>
+                    <span className="text-ink-2">
                       {entry.from_country_name ?? entry.from_country_code}
                     </span>
                   </span>
-                  <span className="text-neutral-600">→</span>
+                  <span aria-hidden="true" className="text-ink-3">
+                    →
+                  </span>
                   <span className="inline-flex items-center gap-1">
-                    <span>{flagEmoji(entry.to_country_code)}</span>
+                    <span aria-hidden="true">{flagEmoji(entry.to_country_code)}</span>
                     <span className="font-medium">
                       {entry.to_country_name ?? entry.to_country_code}
                     </span>
                   </span>
-                  <span className="font-mono text-xs text-neutral-500">
+                  <span className="tabular-nums text-xs text-ink-3">
                     Δ {formatGap(entry.gap_hours)}
                   </span>
                   {entry.within_window ? (
-                    <span className="rounded bg-red-950 px-1.5 py-0.5 text-[10px] uppercase text-red-300">
-                      алерт
-                    </span>
+                    <Badge size="sm" tone="crit">
+                      Алерт
+                    </Badge>
                   ) : null}
-                  <span className="ml-auto text-xs text-neutral-600">
+                  <span className="ml-auto text-xs text-ink-3">
                     {new Date(entry.to_observed_at).toLocaleString()}
                   </span>
                 </li>
               ))}
           </ul>
           {recentSwitches.length > 0 ? (
-            <p className="text-[11px] text-neutral-600">
+            <p className="text-xs text-ink-3">
               Смена страны за менее чем {data.config.country_switch_window_hours} ч помечена как
               алерт.
             </p>

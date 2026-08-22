@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Suspense } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -18,6 +18,42 @@ vi.mock('@/components/RoleColorDot', () => ({
 }));
 
 import MembersPage from './page';
+
+/**
+ * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
+ * а окна импорта, перемещения и подтверждения построены на примитиве `Modal`.
+ * Полифилл повторяет ровно то, на что опирается примитив: атрибут `open`,
+ * фокус внутрь окна и цепочку Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
 
 // Two members: Alpha has a comment + steamid; Beta has neither (exercises the
 // `steam_id64 ?? '—'` and `role_comment ?? '—'` fallbacks).
@@ -146,10 +182,6 @@ beforeEach(() => {
     permissions: ['user:manage_roles'],
   };
   installFetch();
-  vi.stubGlobal(
-    'confirm',
-    vi.fn(() => true),
-  );
   // jsdom does not implement object URLs; add just the static helpers exportCsv needs
   // without clobbering the URL constructor.
   createObjectURLMock = vi.fn(() => 'blob:mock');
@@ -181,6 +213,23 @@ function fetchMock() {
   return fetch as unknown as ReturnType<typeof vi.fn>;
 }
 
+/** Подтверждает открытый `AlertDialog`: находит окно по имени и жмёт его кнопку. */
+async function confirmDialog(dialogName: string, confirmLabel: string) {
+  const dialog = await screen.findByRole('dialog', { name: dialogName });
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole('button', { name: confirmLabel }));
+  });
+}
+
+/** Отказывается от открытого `AlertDialog` кнопкой «Отмена». */
+async function dismissDialog(dialogName: string) {
+  const dialog = await screen.findByRole('dialog', { name: dialogName });
+  await act(async () => {
+    fireEvent.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]);
+  });
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+}
+
 function callsMatching(pred: (url: string, init?: RequestInit) => boolean) {
   return fetchMock().mock.calls.filter((c) =>
     pred(typeof c[0] === 'string' ? c[0] : String(c[0]), c[1] as RequestInit | undefined),
@@ -202,9 +251,8 @@ describe('MembersPage — branch coverage', () => {
     const toolbar = await screen.findByTestId('bulk-toolbar');
     expect(toolbar).toHaveTextContent('Выбрано: 1');
 
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Удалить выбранных' }));
-    });
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить выбранных' }));
+    await confirmDialog('Снять роль с выбранных', 'Снять роль');
 
     const del = callsMatching((u, i) => u.includes('/members/bulk-delete') && i?.method === 'POST');
     expect(del.length).toBe(1);
@@ -217,17 +265,16 @@ describe('MembersPage — branch coverage', () => {
     handlers.bulkDelete = { status: 500, body: { error: 'bulk_boom' } };
     await renderPage();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Выбрать Alpha' }));
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Удалить выбранных' }));
-    });
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить выбранных' }));
+    await confirmDialog('Снять роль с выбранных', 'Снять роль');
     expect(await screen.findByText('Ошибка: bulk_boom')).toBeInTheDocument();
   });
 
   it('does not bulk-delete when the confirm dialog is dismissed', async () => {
-    (confirm as unknown as ReturnType<typeof vi.fn>).mockReturnValue(false);
     await renderPage();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Выбрать Alpha' }));
     fireEvent.click(screen.getByRole('button', { name: 'Удалить выбранных' }));
+    await dismissDialog('Снять роль с выбранных');
     expect(
       callsMatching((u, i) => u.includes('/members/bulk-delete') && i?.method === 'POST').length,
     ).toBe(0);
@@ -288,7 +335,7 @@ describe('MembersPage — branch coverage', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Выбрать Alpha' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Переместить в роль' }));
     await screen.findByTestId('move-modal');
-    fireEvent.click(screen.getByRole('button', { name: 'закрыть' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
     await waitFor(() => expect(screen.queryByTestId('move-modal')).not.toBeInTheDocument());
     expect(
       callsMatching((u, i) => u.includes('/members/move') && i?.method === 'POST').length,
@@ -316,9 +363,8 @@ describe('MembersPage — branch coverage', () => {
   it('removes a single member on confirm', async () => {
     await renderPage();
     const removeButtons = screen.getAllByRole('button', { name: 'Снять' });
-    await act(async () => {
-      fireEvent.click(removeButtons[0]);
-    });
+    fireEvent.click(removeButtons[0]);
+    await confirmDialog('Снять роль', 'Снять роль');
     const del = callsMatching((u, i) => /\/members\/p1$/.test(u) && i?.method === 'DELETE');
     expect(del.length).toBe(1);
   });
@@ -326,16 +372,15 @@ describe('MembersPage — branch coverage', () => {
   it('surfaces an error when removing a single member fails', async () => {
     handlers.remove = { status: 403, body: { error: 'forbidden' } };
     await renderPage();
-    await act(async () => {
-      fireEvent.click(screen.getAllByRole('button', { name: 'Снять' })[0]);
-    });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Снять' })[0]);
+    await confirmDialog('Снять роль', 'Снять роль');
     expect(await screen.findByText('Ошибка: forbidden')).toBeInTheDocument();
   });
 
   it('does not remove when confirm is dismissed', async () => {
-    (confirm as unknown as ReturnType<typeof vi.fn>).mockReturnValue(false);
     await renderPage();
     fireEvent.click(screen.getAllByRole('button', { name: 'Снять' })[0]);
+    await dismissDialog('Снять роль');
     expect(callsMatching((u, i) => /\/members\/p1$/.test(u) && i?.method === 'DELETE').length).toBe(
       0,
     );
@@ -366,14 +411,14 @@ describe('MembersPage — branch coverage', () => {
   it('paginates to the next page and enables the previous button', async () => {
     handlers.members = membersResponse(150); // total > PAGE_SIZE → "след." enabled
     await renderPage();
-    expect(screen.getByText('Страница 1 / 2')).toBeInTheDocument();
-    const next = screen.getByRole('button', { name: 'след. →' });
+    expect(screen.getByText('Страница 1 из 2')).toBeInTheDocument();
+    const next = screen.getByRole('button', { name: 'Вперёд' });
     expect(next).not.toBeDisabled();
     await act(async () => {
       fireEvent.click(next);
     });
-    expect(await screen.findByText('Страница 2 / 2')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '← пред.' })).not.toBeDisabled();
+    expect(await screen.findByText('Страница 2 из 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Назад' })).not.toBeDisabled();
     // The reload requested offset=100.
     expect(callsMatching((u) => u.includes('offset=100')).length).toBeGreaterThanOrEqual(1);
   });
@@ -398,7 +443,7 @@ describe('MembersPage — branch coverage', () => {
 
   it('searches for a player in the add modal and assigns them', async () => {
     await renderPage();
-    fireEvent.click(screen.getByRole('button', { name: '+ Добавить игрока' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить игрока' }));
     const input = await screen.findByPlaceholderText('Ник или SteamID64…');
     fireEvent.change(input, { target: { value: 'New' } });
     // Debounced search fires after 250ms.
@@ -417,7 +462,7 @@ describe('MembersPage — branch coverage', () => {
   it('surfaces an error when adding a player fails', async () => {
     handlers.add = { status: 409, body: { error: 'already_member' } };
     await renderPage();
-    fireEvent.click(screen.getByRole('button', { name: '+ Добавить игрока' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить игрока' }));
     const input = await screen.findByPlaceholderText('Ник или SteamID64…');
     fireEvent.change(input, { target: { value: 'New' } });
     await act(async () => {
@@ -433,7 +478,7 @@ describe('MembersPage — branch coverage', () => {
     handlers.permissions = ['user:view'];
     await renderPage();
     expect(screen.queryByRole('button', { name: 'Импорт CSV' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '+ Добавить игрока' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Добавить игрока' })).not.toBeInTheDocument();
     // Export stays available to everyone.
     expect(screen.getByRole('button', { name: 'Экспорт CSV' })).toBeInTheDocument();
   });

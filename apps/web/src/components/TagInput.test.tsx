@@ -49,29 +49,28 @@ describe('TagInput', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('removes only the tag whose button was clicked', () => {
+  it('names every remove button after its own tag and removes only that tag', () => {
     const onChange = vi.fn();
     render(<TagInput tags={['one', 'two', 'three']} onChange={onChange} />);
-    const secondRemoveButton = screen.getAllByRole('button')[1];
-    if (!secondRemoveButton) throw new Error('second tag remove button is missing');
 
-    fireEvent.click(secondRemoveButton);
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить тег two' }));
 
     expect(onChange).toHaveBeenCalledOnce();
     expect(onChange).toHaveBeenCalledWith(['one', 'three']);
   });
 
-  it('focuses the input when its container is clicked or receives a key event', () => {
-    render(<TagInput tags={[]} onChange={vi.fn()} />);
-    const input = screen.getByRole('textbox');
-    const container = input.closest('fieldset');
-    if (!container) throw new Error('tag input fieldset is missing');
+  // Раньше поле жило в `<fieldset>` без легенды и оставалось безымянным: имя
+  // ему давал только placeholder, который исчезал, как только появлялся тег.
+  it('gives the input an accessible name that survives the first tag', () => {
+    const { rerender } = render(<TagInput tags={[]} onChange={vi.fn()} />);
+    expect(screen.getByLabelText('Теги')).toBe(screen.getByRole('textbox'));
 
-    fireEvent.click(container);
-    expect(input).toHaveFocus();
+    rerender(<TagInput tags={['one']} onChange={vi.fn()} />);
+    expect(screen.getByRole('textbox', { name: 'Теги' })).toBeInTheDocument();
+  });
 
-    input.blur();
-    fireEvent.keyDown(container, { key: 'ArrowRight' });
-    expect(input).toHaveFocus();
+  it('lets the caller name the field', () => {
+    render(<TagInput tags={[]} onChange={vi.fn()} label="Метки сервера" />);
+    expect(screen.getByRole('textbox', { name: 'Метки сервера' })).toBeInTheDocument();
   });
 });

@@ -42,9 +42,11 @@ describe('PlayerMarkBadge', () => {
 
     render(<PlayerMarkBadge marks={marks} />);
 
+    // Значок самой тяжёлой метки и перечень подписей в подсказке — это и есть
+    // наблюдаемое поведение; тон пилюли задаёт примитив `Badge`.
     expect(screen.getByText('💀')).toBeInTheDocument();
     expect(screen.getByText('метка ×2')).toBeInTheDocument();
-    expect(screen.getByTitle('Наблюдение, Опасность')).toHaveClass('border-red-800');
+    expect(screen.getByTitle('Наблюдение, Опасность')).toBeInTheDocument();
     expect(marks.map((item) => item.slug)).toEqual(originalOrder);
   });
 

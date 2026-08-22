@@ -6,6 +6,27 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import {
+  AlertDialog,
+  type AlertDialogTone,
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  PageContainer,
+  SegmentedControl,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  TextInput,
+  Th,
+} from '@/components/ui';
 import { managedSegmentLineRange } from './managed-segment';
 
 const POLL_MS = 8000;
@@ -67,13 +88,105 @@ interface DriftItem {
  *  reset-to-depot-default button for them. */
 const RESET_EXCLUDED_FILES = ['License.cfg', 'Admins.cfg', 'LayerRotation.cfg'];
 
-const BEHAVIOR_BADGE: Record<FileItem['behavior'], { label: string; className: string }> = {
-  hot_reload: { label: 'live-reload', className: 'bg-green-800 text-green-100' },
-  rotation: { label: 'next match', className: 'bg-sky-800 text-sky-100' },
-  requires_restart: { label: 'рестарт', className: 'bg-amber-800 text-amber-100' },
+/**
+ * Когда правка доедет до игры. Метка русская и короткая, а полное объяснение
+ * живёт в `title`: в списке из двадцати файлов на подпись есть одна строка.
+ */
+const BEHAVIOR_BADGE: Record<
+  FileItem['behavior'],
+  { label: string; hint: string; tone: BadgeTone }
+> = {
+  hot_reload: {
+    label: 'на лету',
+    hint: 'Squad перечитает файл сам, в течение примерно 60 секунд',
+    tone: 'good',
+  },
+  rotation: {
+    label: 'со следующим матчем',
+    hint: 'Правка применится, когда начнётся следующий матч',
+    tone: 'accent',
+  },
+  requires_restart: {
+    label: 'рестарт',
+    hint: 'Правка применится только после перезапуска сервера',
+    tone: 'warn',
+  },
 };
 
 type Tab = 'editor' | 'history' | 'blame';
+
+const TABS = [
+  { value: 'editor', label: 'Редактор' },
+  { value: 'history', label: 'История' },
+  { value: 'blame', label: 'Blame' },
+];
+
+/**
+ * Вопрос, на который оператор ещё не ответил.
+ *
+ * Раньше это был `window.confirm`, и вся ветка была синхронной. Диалог
+ * подтверждения асинхронный, поэтому намерение приходится хранить: пока окно
+ * открыто, страница помнит, что именно она собиралась сделать.
+ */
+type Confirmation =
+  | { kind: 'switch-file'; name: string }
+  | { kind: 'restore'; versionId: string }
+  | { kind: 'restart' }
+  | { kind: 'drift'; name: string; action: 'accept' | 'revert' }
+  | { kind: 'reset'; name: string };
+
+/** Текст диалога подтверждения: что произойдёт и как называется само действие. */
+function confirmationText(c: Confirmation): {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  tone: AlertDialogTone;
+} {
+  switch (c.kind) {
+    case 'switch-file':
+      return {
+        title: 'Открыть другой файл?',
+        body: 'В открытом файле есть несохранённые правки. Если открыть другой файл, они пропадут — на диске и в истории останется прежнее содержимое.',
+        confirmLabel: 'Открыть без сохранения',
+        tone: 'default',
+      };
+    case 'restore':
+      return {
+        title: 'Восстановить эту версию?',
+        body: 'Содержимое версии станет новой версией файла. История сохранится целиком, ничего не удаляется.',
+        confirmLabel: 'Восстановить как новую версию',
+        tone: 'default',
+      };
+    case 'restart':
+      return {
+        title: 'Перезапустить сервер?',
+        body: 'Игроки будут отключены на время рестарта.',
+        confirmLabel: 'Перезапустить сервер',
+        tone: 'default',
+      };
+    case 'drift':
+      return c.action === 'accept'
+        ? {
+            title: `Принять правку ${c.name} с диска?`,
+            body: 'Содержимое файла с диска станет новой версией в панели.',
+            confirmLabel: 'Принять правку с диска',
+            tone: 'default',
+          }
+        : {
+            title: `Откатить ${c.name} к версии панели?`,
+            body: 'Ручные изменения на диске будут перезаписаны. Панель их не сохраняла, восстановить будет нечем.',
+            confirmLabel: 'Откатить к версии панели',
+            tone: 'destructive',
+          };
+    case 'reset':
+      return {
+        title: `Сбросить ${c.name} к депо-дефолту?`,
+        body: 'Текущее содержимое файла будет заменено шаблоном из поставки. Прежнее содержимое останется в истории версий.',
+        confirmLabel: 'Сбросить к дефолту',
+        tone: 'default',
+      };
+  }
+}
 
 export default function ConfigsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -89,11 +202,14 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   const [msg, setMsg] = useState<string | null>(null);
 
   const [versions, setVersions] = useState<Version[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
   const [diffFrom, setDiffFrom] = useState<string | null>(null);
   const [diffFromContent, setDiffFromContent] = useState<string>('');
   const [restoring, setRestoring] = useState<string | null>(null);
 
   const [blame, setBlame] = useState<BlameResponse | null>(null);
+
+  const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
 
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [serverSha, setServerSha] = useState<string | null>(null);
@@ -301,6 +417,7 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
   const loadHistory = useCallback(async () => {
     if (!selected) return;
+    setVersionsLoading(true);
     try {
       const r = await fetch(`/api/v1/servers/${id}/configs/${selected}/history?limit=100`, {
         credentials: 'include',
@@ -310,6 +427,8 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       setVersions(j.items);
     } catch (e) {
       setErr((e as Error).message);
+    } finally {
+      setVersionsLoading(false);
     }
   }, [id, selected]);
 
@@ -390,7 +509,6 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
   async function restore(vid: string) {
     if (!selected) return;
-    if (!confirm('Создать новую версию с этим содержимым? История сохранится.')) return;
     setRestoring(vid);
     try {
       const r = await fetch(`/api/v1/servers/${id}/configs/${selected}/restore/${vid}`, {
@@ -412,7 +530,6 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
 
   async function restartServer() {
     if (restarting) return;
-    if (!confirm('Перезапустить сервер? Игроки будут отключены на время рестарта.')) return;
     setRestarting(true);
     setErr(null);
     setMsg(null);
@@ -431,11 +548,6 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
   }
 
   async function resolveDrift(name: string, action: 'accept' | 'revert') {
-    const question =
-      action === 'accept'
-        ? `Принять ручную правку ${name} с диска как новую версию?`
-        : `Откатить ${name} к версии панели? Ручные изменения на диске будут перезаписаны.`;
-    if (!window.confirm(question)) return;
     setDriftBusy(name);
     setErr(null);
     setMsg(null);
@@ -486,15 +598,8 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     }
   }
 
-  async function resetToDefault() {
-    const name = selected;
-    if (!name || resetting) return;
-    if (
-      !window.confirm(
-        `Сбросить ${name} к депо-дефолту? Текущее содержимое будет заменено шаблоном.`,
-      )
-    )
-      return;
+  async function resetToDefault(name: string) {
+    if (resetting) return;
     setResetting(true);
     setErr(null);
     setMsg(null);
@@ -513,6 +618,47 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
       setErr((e as Error).message);
     } finally {
       setResetting(false);
+    }
+  }
+
+  /** Выполнить то действие, ради которого открывали диалог подтверждения. */
+  async function runConfirmation() {
+    const pending = confirmation;
+    if (!pending) return;
+    switch (pending.kind) {
+      case 'switch-file':
+        setConfirmation(null);
+        await load(pending.name);
+        return;
+      case 'restore':
+        await restore(pending.versionId);
+        break;
+      case 'restart':
+        await restartServer();
+        break;
+      case 'drift':
+        await resolveDrift(pending.name, pending.action);
+        break;
+      case 'reset':
+        await resetToDefault(pending.name);
+        break;
+    }
+    setConfirmation(null);
+  }
+
+  /** Идёт ли уже запрос по открытому вопросу — окно на это время запирается. */
+  function confirmationBusy(pending: Confirmation): boolean {
+    switch (pending.kind) {
+      case 'switch-file':
+        return false;
+      case 'restore':
+        return restoring !== null;
+      case 'restart':
+        return restarting;
+      case 'drift':
+        return driftBusy !== null;
+      case 'reset':
+        return resetting;
     }
   }
 
@@ -560,261 +706,280 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
     [],
   );
 
+  const dialog = confirmation ? confirmationText(confirmation) : null;
+
   return (
-    <div className="space-y-4">
-      <header className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold">Конфигурация сервера</h1>
-          <div className="text-xs font-mono text-neutral-500">{id}</div>
-        </div>
+    <PageContainer>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* Заголовок страницы — имя сервера в layout раздела; здесь h2. */}
+        <h2 className="text-[17px] font-semibold text-ink">Конфигурация сервера</h2>
         <LiveIndicator lastUpdate={lastUpdate} />
-      </header>
+      </div>
 
       {err ? (
-        <div className="rounded border border-red-900 bg-red-950 px-3 py-2 text-sm">{err}</div>
+        <InlineBanner
+          tone="crit"
+          title="Запрос к серверу не прошёл"
+          description={err}
+          action={
+            <Button
+              size="sm"
+              onClick={() => {
+                setErr(null);
+                void refreshFiles();
+                // Открытый файл перечитывается только когда в нём нет правок:
+                // «Повторить» не имеет права молча стереть несохранённое.
+                if (selected && !dirtyRef.current) void load(selected);
+              }}
+            >
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
       {msg ? (
-        <div className="rounded border border-green-900 bg-green-950 px-3 py-2 text-sm">{msg}</div>
+        <InlineBanner
+          tone="good"
+          title={msg}
+          onDismiss={() => setMsg(null)}
+          dismissLabel="Скрыть сообщение"
+        />
       ) : null}
+
       {externalChange ? (
-        <div
-          data-testid="external-change-banner"
-          className="flex items-center justify-between gap-3 rounded border border-amber-900 bg-amber-950/60 px-3 py-2 text-sm"
-        >
-          <span>
-            Файл изменён извне — открыть новую версию?
-            {dirty ? (
-              <span className="ml-2 text-xs text-amber-300">
-                (есть несохранённые правки — они не будут перезаписаны автоматически)
-              </span>
-            ) : null}
-          </span>
-          <span className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={acceptExternalChange}
-              disabled={dirty}
-              className="rounded bg-amber-700 px-2 py-1 text-xs text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Загрузить
-            </button>
-            <button
-              type="button"
-              onClick={dismissExternalChange}
-              className="rounded border border-amber-800 px-2 py-1 text-xs text-amber-200 hover:bg-amber-900/40"
-            >
-              Скрыть
-            </button>
-          </span>
+        <div data-testid="external-change-banner">
+          <InlineBanner
+            tone="warn"
+            title="Файл изменён извне — открыть новую версию?"
+            description={
+              dirty
+                ? 'Есть несохранённые правки, поэтому автоматически ничего не перезаписывается: сначала сохраните или сбросьте их.'
+                : 'На диске появилось содержимое новее того, что открыто в редакторе.'
+            }
+            action={
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="primary" onClick={acceptExternalChange} disabled={dirty}>
+                  Загрузить
+                </Button>
+                <Button size="sm" onClick={dismissExternalChange}>
+                  Скрыть
+                </Button>
+              </div>
+            }
+          />
         </div>
       ) : null}
+
       {driftItems.length > 0 ? (
-        <div
-          data-testid="config-drift-banner"
-          className="space-y-2 rounded border border-red-900 bg-red-950/60 px-3 py-2 text-sm"
-        >
-          <div className="text-red-200">
-            Обнаружены изменения конфигов на диске вне панели ({driftItems.length}):
-          </div>
-          {driftItems.map((item) => (
-            <div key={item.name} className="flex items-center justify-between gap-3">
-              <span className="font-mono text-xs">{item.name}</span>
-              <span className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void openDriftDiff(item)}
-                  className="rounded border border-red-800 px-2 py-1 text-xs text-red-200 hover:bg-red-900/40"
-                >
-                  Diff
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void resolveDrift(item.name, 'accept')}
-                  disabled={driftBusy !== null}
-                  className="rounded bg-sky-700 px-2 py-1 text-xs text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Принять
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void resolveDrift(item.name, 'revert')}
-                  disabled={driftBusy !== null}
-                  className="rounded bg-amber-700 px-2 py-1 text-xs text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Откатить
-                </button>
-              </span>
-            </div>
-          ))}
+        <div data-testid="config-drift-banner" className="space-y-3">
+          <InlineBanner
+            tone="warn"
+            title={`Конфиги изменены на диске вне панели (${driftItems.length})`}
+            description={
+              <ul className="space-y-1">
+                {driftItems.map((item) => (
+                  <li key={item.name} className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-mono text-xs text-ink-2">{item.name}</span>
+                    <span className="flex items-center gap-2">
+                      <Button size="sm" variant="ghost" onClick={() => void openDriftDiff(item)}>
+                        Diff
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        disabled={driftBusy !== null}
+                        onClick={() =>
+                          setConfirmation({ kind: 'drift', name: item.name, action: 'accept' })
+                        }
+                      >
+                        Принять
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={driftBusy !== null}
+                        onClick={() =>
+                          setConfirmation({ kind: 'drift', name: item.name, action: 'revert' })
+                        }
+                      >
+                        Откатить
+                      </Button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            }
+          />
           {driftDiff ? (
-            <div data-testid="config-drift-diff" className="rounded border border-neutral-800">
-              <div className="flex items-center justify-between border-b border-neutral-800 px-3 py-2 text-xs">
-                <div className="font-mono text-neutral-400">
-                  {driftDiff.name}: версия панели → диск
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setDriftDiff(null)}
-                  className="rounded px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-                >
-                  Закрыть diff
-                </button>
-              </div>
-              <MonacoDiff
-                height="45vh"
-                language="ini"
-                theme="vs-dark"
-                original={driftDiff.tip}
-                modified={driftDiff.disk}
-                options={{
-                  readOnly: true,
-                  minimap: { enabled: false },
-                  fontSize: 13,
-                  renderSideBySide: true,
-                  scrollBeyondLastLine: false,
-                }}
-              />
+            <div data-testid="config-drift-diff">
+              <Card padding="none">
+                <CardHeader
+                  title={`${driftDiff.name}: версия панели → диск`}
+                  actions={
+                    <Button size="sm" variant="ghost" onClick={() => setDriftDiff(null)}>
+                      Закрыть сравнение
+                    </Button>
+                  }
+                />
+                <MonacoDiff
+                  height="45vh"
+                  language="ini"
+                  theme="vs-dark"
+                  original={driftDiff.tip}
+                  modified={driftDiff.disk}
+                  options={{
+                    readOnly: true,
+                    minimap: { enabled: false },
+                    fontSize: 13,
+                    renderSideBySide: true,
+                    scrollBeyondLastLine: false,
+                  }}
+                />
+              </Card>
             </div>
           ) : null}
         </div>
       ) : null}
 
-      <div className="grid grid-cols-[260px_1fr] gap-4">
-        <aside className="rounded border border-neutral-800 bg-neutral-950">
-          <div className="border-b border-neutral-800 px-3 py-2 text-xs uppercase tracking-widest text-neutral-400">
-            Файлы ({files.length})
-          </div>
-          <ul className="max-h-[70vh] overflow-y-auto">
+      <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
+        <Card padding="none">
+          <CardHeader title="Файлы" count={files.length} />
+          <ul className="max-h-[70vh] divide-y divide-line overflow-y-auto">
             {files.map((f) => {
               const badge = BEHAVIOR_BADGE[f.behavior];
               return (
                 <li key={f.name}>
                   <button
                     type="button"
+                    aria-current={selected === f.name || undefined}
                     onClick={() => {
-                      if (dirty && !confirm('Есть несохранённые изменения. Сбросить?')) return;
+                      if (dirty) {
+                        setConfirmation({ kind: 'switch-file', name: f.name });
+                        return;
+                      }
                       void load(f.name);
                     }}
-                    className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-xs hover:bg-neutral-900 ${selected === f.name ? 'bg-neutral-900' : ''} ${!f.exists ? 'text-neutral-500' : ''}`}
+                    className={`flex h-9 w-full items-center justify-between gap-2 px-3 text-left text-xs transition-colors duration-150 hover:bg-raised/40 ${
+                      selected === f.name ? 'bg-raised' : ''
+                    } ${f.exists ? '' : 'text-ink-3'}`}
                   >
                     <span className="truncate font-mono">{f.name}</span>
                     <span className="flex shrink-0 items-center gap-1">
                       {driftItems.some((d) => d.name === f.name) ? (
-                        <span
-                          data-testid="file-drift-marker"
-                          title="изменён на диске вне панели"
-                          className="rounded bg-red-800 px-1 py-[1px] text-[10px] uppercase tracking-widest text-red-100"
-                        >
-                          drift
+                        <span data-testid="file-drift-marker">
+                          <Badge tone="crit" size="sm" title="Изменён на диске вне панели">
+                            изменён
+                          </Badge>
                         </span>
                       ) : null}
-                      <span
-                        className={`rounded px-1 py-[1px] text-[10px] uppercase tracking-widest ${badge.className}`}
-                      >
+                      <Badge tone={badge.tone} size="sm" title={badge.hint}>
                         {badge.label}
-                      </span>
+                      </Badge>
                     </span>
                   </button>
                 </li>
               );
             })}
           </ul>
-        </aside>
+        </Card>
 
-        <section className="rounded border border-neutral-800 bg-neutral-950">
+        <Card padding="none" as="section">
           {!selected ? (
-            <div className="p-8 text-center text-sm text-neutral-500">
-              Выберите файл слева чтобы открыть.
-            </div>
+            <EmptyState
+              title="Файл не выбран"
+              description="Выберите файл в списке слева — он откроется в редакторе, вместе с историей версий и авторством строк."
+            />
           ) : (
             <>
-              <div className="flex items-center justify-between gap-2 border-b border-neutral-800 px-3 py-2 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="font-mono">{selected}</span>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-[13px] font-semibold text-ink">{selected}</span>
                   {selectedFile ? (
-                    <span
-                      className={`rounded px-1 py-[1px] text-[10px] uppercase tracking-widest ${BEHAVIOR_BADGE[selectedFile.behavior].className}`}
+                    <Badge
+                      tone={BEHAVIOR_BADGE[selectedFile.behavior].tone}
+                      size="sm"
+                      title={BEHAVIOR_BADGE[selectedFile.behavior].hint}
                     >
                       {BEHAVIOR_BADGE[selectedFile.behavior].label}
-                    </span>
+                    </Badge>
                   ) : null}
                   {dirty ? (
-                    <span className="rounded bg-amber-800 px-1 py-[1px] text-[10px] uppercase tracking-widest text-amber-100">
+                    <Badge tone="warn" size="sm">
                       изменено
-                    </span>
+                    </Badge>
                   ) : null}
                   {showRestart ? (
-                    <button
-                      type="button"
-                      onClick={restartServer}
-                      disabled={restarting}
-                      className="rounded bg-amber-700 px-2 py-1 text-[11px] text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-40"
+                    <Button
+                      size="sm"
+                      loading={restarting}
+                      onClick={() => setConfirmation({ kind: 'restart' })}
                     >
-                      {restarting ? 'Перезапуск…' : 'Рестарт сервера'}
-                    </button>
+                      Рестарт сервера
+                    </Button>
                   ) : null}
                   {showReset ? (
-                    <button
-                      type="button"
-                      onClick={() => void resetToDefault()}
-                      disabled={resetting}
-                      className="rounded border border-neutral-700 px-2 py-1 text-[11px] text-neutral-300 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
+                    <Button
+                      size="sm"
+                      loading={resetting}
+                      onClick={() => setConfirmation({ kind: 'reset', name: selected })}
                     >
-                      {resetting ? 'Сброс…' : 'Сброс к дефолту'}
-                    </button>
+                      Сброс к дефолту
+                    </Button>
                   ) : null}
                 </div>
-                <nav className="flex gap-1 text-xs">
-                  <TabButton active={tab === 'editor'} onClick={() => setTab('editor')}>
-                    Редактор
-                  </TabButton>
-                  <TabButton active={tab === 'history'} onClick={() => setTab('history')}>
-                    История
-                  </TabButton>
-                  <TabButton active={tab === 'blame'} onClick={() => setTab('blame')}>
-                    Blame
-                  </TabButton>
-                </nav>
+                <SegmentedControl
+                  items={TABS}
+                  value={tab}
+                  onChange={(value) => setTab(value as Tab)}
+                  size="sm"
+                  ariaLabel="Что показывать по файлу"
+                />
               </div>
 
               {tab === 'editor' ? (
                 <>
                   {isManagedRotation ? (
-                    <div className="flex items-center justify-between gap-3 border-b border-sky-900 bg-sky-950/40 px-3 py-2 text-xs text-sky-200">
-                      <span>
-                        Managed-сегмент управляется панелью — редактируйте на странице{' '}
-                        <Link
-                          href={`/servers/${id}/rotation`}
-                          className="underline hover:text-sky-100"
-                        >
-                          «Ротация»
-                        </Link>
-                        .
-                      </span>
+                    <div className="border-b border-line p-3">
+                      <InlineBanner
+                        tone="info"
+                        title="Managed-сегмент управляется панелью"
+                        description={
+                          <>
+                            Файл открыт только для чтения — состав слоёв редактируется на странице{' '}
+                            <Link href={`/servers/${id}/rotation`} className="text-accent">
+                              «Ротация»
+                            </Link>
+                            .
+                          </>
+                        }
+                      />
                     </div>
                   ) : null}
                   {isManagedAdmins ? (
-                    <div
-                      data-testid="managed-admins-banner"
-                      className="flex items-center justify-between gap-3 border-b border-amber-900 bg-amber-950/40 px-3 py-2 text-xs text-amber-200"
-                    >
-                      <span>
-                        Блок между маркерами{' '}
-                        <code className="rounded bg-amber-900/50 px-1">{'//SQUAD-PANEL'}</code>{' '}
-                        управляется панелью и доступен только для чтения — меняйте состав через{' '}
-                        <Link href="/settings/groups" className="underline hover:text-amber-100">
-                          «Группы»
-                        </Link>
-                        .
-                      </span>
+                    <div data-testid="managed-admins-banner" className="border-b border-line p-3">
+                      <InlineBanner
+                        tone="warn"
+                        title="Блок //SQUAD-PANEL управляется панелью"
+                        description={
+                          <>
+                            Строки между маркерами{' '}
+                            <code className="rounded-ctl bg-raised px-1">{'//SQUAD-PANEL'}</code>{' '}
+                            доступны только для чтения — состав меняется через{' '}
+                            <Link href="/settings/groups" className="text-accent">
+                              «Группы»
+                            </Link>
+                            . Остальной файл редактируется как обычно.
+                          </>
+                        }
+                      />
                     </div>
                   ) : null}
                   {segmentNotice ? (
-                    <div
-                      data-testid="managed-segment-notice"
-                      className="border-b border-amber-900 bg-amber-900/30 px-3 py-1.5 text-xs text-amber-100"
-                    >
-                      Правка managed-сегмента отменена — этот блок доступен только для чтения.
+                    <div data-testid="managed-segment-notice" className="border-b border-line p-3">
+                      <InlineBanner
+                        tone="warn"
+                        title="Правка managed-сегмента отменена"
+                        description="Этот блок доступен только для чтения."
+                      />
                     </div>
                   ) : null}
                   <EditorView
@@ -838,43 +1003,37 @@ export default function ConfigsPage({ params }: { params: Promise<{ id: string }
               {tab === 'history' ? (
                 <HistoryView
                   versions={versions}
+                  loading={versionsLoading}
                   diffFrom={diffFrom}
                   diffFromContent={diffFromContent}
                   currentContent={serverContent}
                   onOpenDiff={openDiff}
                   onCloseDiff={() => setDiffFrom(null)}
-                  onRestore={restore}
+                  onRestore={(vid) => setConfirmation({ kind: 'restore', versionId: vid })}
                   restoring={restoring}
-                  filename={selected}
                 />
               ) : null}
 
               {tab === 'blame' ? <BlameView blame={blame} /> : null}
             </>
           )}
-        </section>
+        </Card>
       </div>
-    </div>
-  );
-}
 
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded px-2 py-1 ${active ? 'bg-sky-700 text-white' : 'text-neutral-300 hover:bg-neutral-800'}`}
-    >
-      {children}
-    </button>
+      {confirmation && dialog ? (
+        <AlertDialog
+          open
+          onClose={() => setConfirmation(null)}
+          title={dialog.title}
+          body={dialog.body}
+          confirmLabel={dialog.confirmLabel}
+          cancelLabel="Отмена"
+          tone={dialog.tone}
+          busy={confirmationBusy(confirmation)}
+          onConfirm={runConfirmation}
+        />
+      ) : null}
+    </PageContainer>
   );
 }
 
@@ -892,32 +1051,27 @@ function EditorView(props: {
 }) {
   return (
     <>
-      <div className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2 text-xs">
-        <input
-          type="text"
+      <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+        <TextInput
           value={props.commitMessage}
           onChange={(e) => props.setCommitMessage(e.target.value)}
-          placeholder="Комментарий к изменению (опционально)"
+          placeholder="Комментарий к изменению (необязательно)"
+          aria-label="Комментарий к изменению"
           maxLength={500}
           disabled={props.readOnly}
-          className="flex-1 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs disabled:opacity-40"
+          className="flex-1"
         />
-        <button
-          type="button"
-          onClick={props.onDiscard}
-          disabled={props.readOnly || !props.dirty || props.saving}
-          className="rounded px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-40"
-        >
+        <Button onClick={props.onDiscard} disabled={props.readOnly || !props.dirty || props.saving}>
           Сбросить
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="primary"
           onClick={props.onSave}
-          disabled={props.readOnly || !props.dirty || props.saving}
-          className="rounded bg-sky-600 px-3 py-1 text-xs text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+          loading={props.saving}
+          disabled={props.readOnly || !props.dirty}
         >
-          {props.saving ? 'Сохраняю…' : 'Сохранить'}
-        </button>
+          Сохранить
+        </Button>
       </div>
       <MonacoEditor
         height="65vh"
@@ -941,10 +1095,10 @@ function EditorView(props: {
 
 function HistoryView(props: {
   versions: Version[];
+  loading: boolean;
   diffFrom: string | null;
   diffFromContent: string;
   currentContent: string;
-  filename: string | null;
   onOpenDiff: (vid: string) => void;
   onCloseDiff: () => void;
   onRestore: (vid: string) => void;
@@ -953,18 +1107,14 @@ function HistoryView(props: {
   if (props.diffFrom) {
     return (
       <div>
-        <div className="flex items-center justify-between border-b border-neutral-800 px-3 py-2 text-xs">
-          <div className="font-mono text-neutral-400">
-            Сравнение: v{props.diffFrom.slice(0, 8)} → текущая
-          </div>
-          <button
-            type="button"
-            onClick={props.onCloseDiff}
-            className="rounded px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-          >
-            Закрыть diff
-          </button>
-        </div>
+        <CardHeader
+          title={`Сравнение: v${props.diffFrom.slice(0, 8)} → текущая`}
+          actions={
+            <Button size="sm" variant="ghost" onClick={props.onCloseDiff}>
+              Закрыть сравнение
+            </Button>
+          }
+        />
         <MonacoDiff
           height="65vh"
           language="ini"
@@ -982,93 +1132,121 @@ function HistoryView(props: {
       </div>
     );
   }
+
+  if (props.loading && props.versions.length === 0) {
+    return (
+      <div className="p-4">
+        <SkeletonTable rows={6} cols={5} label="Загружаем историю версий" />
+      </div>
+    );
+  }
+
+  if (props.versions.length === 0) {
+    return (
+      <EmptyState
+        title="История пуста"
+        description="Файл ещё ни разу не сохранялся через панель — первая версия появится после первого сохранения."
+      />
+    );
+  }
+
   return (
-    <div className="max-h-[68vh] overflow-y-auto">
-      <table className="w-full text-xs">
-        <thead className="sticky top-0 bg-neutral-950 text-neutral-500">
-          <tr>
-            <th className="px-3 py-2 text-left">Когда</th>
-            <th className="px-3 py-2 text-left">Автор</th>
-            <th className="px-3 py-2 text-left">Сообщение</th>
-            <th className="px-3 py-2 text-left">sha256</th>
-            <th className="px-3 py-2 text-right">Действия</th>
-          </tr>
-        </thead>
-        <tbody>
-          {props.versions.map((v) => (
-            <tr key={v.id} className="border-t border-neutral-900">
-              <td className="px-3 py-1.5 font-mono text-neutral-300">
+    <Table dense maxHeight="68vh" ariaLabel="История версий файла">
+      <TableHead>
+        <TableRow>
+          <Th>Когда</Th>
+          <Th>Автор</Th>
+          <Th>Сообщение</Th>
+          <Th>SHA-256</Th>
+          <Th align="right">Действия</Th>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {props.versions.map((v) => (
+          <TableRow key={v.id}>
+            <Td className="whitespace-nowrap tabular-nums">
+              <time dateTime={v.created_at} suppressHydrationWarning>
                 {new Date(v.created_at).toLocaleString()}
-              </td>
-              <td className="px-3 py-1.5 text-neutral-300">
-                {v.author_email ?? <span className="text-neutral-500">—</span>}
-              </td>
-              <td className="px-3 py-1.5 text-neutral-300">
-                {v.message ?? <span className="text-neutral-500 italic">без сообщения</span>}
-              </td>
-              <td className="px-3 py-1.5 font-mono text-neutral-500">{v.sha256?.slice(0, 12)}</td>
-              <td className="px-3 py-1.5 text-right">
-                <button
-                  type="button"
-                  onClick={() => props.onOpenDiff(v.id)}
-                  className="rounded px-2 py-0.5 text-xs text-sky-400 hover:bg-neutral-900"
-                >
-                  diff
-                </button>
-                <button
-                  type="button"
-                  onClick={() => props.onRestore(v.id)}
+              </time>
+            </Td>
+            <Td>{v.author_email ?? <span className="text-ink-3">—</span>}</Td>
+            <Td>{v.message ?? <span className="text-ink-3">без сообщения</span>}</Td>
+            <Td className="font-mono text-ink-3">{v.sha256?.slice(0, 12)}</Td>
+            <Td align="right">
+              <span className="flex items-center justify-end gap-1">
+                <Button size="sm" variant="plain" onClick={() => props.onOpenDiff(v.id)}>
+                  Сравнить
+                </Button>
+                <Button
+                  size="sm"
+                  loading={props.restoring === v.id}
                   disabled={props.restoring !== null}
-                  className="rounded px-2 py-0.5 text-xs text-amber-400 hover:bg-neutral-900 disabled:opacity-40"
+                  onClick={() => props.onRestore(v.id)}
                 >
-                  {props.restoring === v.id ? '…' : 'restore'}
-                </button>
-              </td>
-            </tr>
-          ))}
-          {props.versions.length === 0 ? (
-            <tr>
-              <td colSpan={5} className="p-8 text-center text-neutral-500">
-                История пуста — файл ещё ни разу не сохранялся через панель.
-              </td>
-            </tr>
-          ) : null}
-        </tbody>
-      </table>
-    </div>
+                  Восстановить
+                </Button>
+              </span>
+            </Td>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }
 
 function BlameView({ blame }: { blame: BlameResponse | null }) {
-  if (!blame) return <div className="p-8 text-center text-sm text-neutral-500">Загрузка…</div>;
-  if (blame.lines.length === 0)
-    return <div className="p-8 text-center text-sm text-neutral-500">Нет истории.</div>;
+  if (!blame) {
+    return (
+      <div className="p-4">
+        <SkeletonTable rows={8} cols={5} label="Загружаем авторство строк" />
+      </div>
+    );
+  }
+  if (blame.lines.length === 0) {
+    return (
+      <EmptyState
+        title="Авторства нет"
+        description="У файла нет ни одной версии в панели, поэтому и приписать строки некому."
+      />
+    );
+  }
   return (
-    <div className="max-h-[68vh] overflow-auto font-mono text-xs">
-      <table className="w-full">
-        <tbody>
-          {blame.lines.map((l, i) => {
-            const email = l.author_user_id ? (blame.authors[l.author_user_id] ?? '?') : '—';
-            return (
-              <tr key={`${l.version_id}-${i}`} className="hover:bg-neutral-900/40">
-                <td className="w-28 border-r border-neutral-900 px-2 py-0.5 text-neutral-500">
-                  {l.version_id.slice(0, 8)}
-                </td>
-                <td className="w-40 border-r border-neutral-900 px-2 py-0.5 text-neutral-400">
-                  {email}
-                </td>
-                <td className="w-36 border-r border-neutral-900 px-2 py-0.5 text-neutral-500">
+    <Table dense layout="fixed" maxHeight="68vh" ariaLabel="Авторство строк файла">
+      <TableHead>
+        <TableRow>
+          <Th width="7rem">Версия</Th>
+          <Th width="10rem">Автор</Th>
+          <Th width="9rem">Когда</Th>
+          <Th width="4rem" align="right">
+            Строка
+          </Th>
+          <Th>Текст</Th>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {blame.lines.map((l, i) => {
+          const email = l.author_user_id ? (blame.authors[l.author_user_id] ?? '?') : '—';
+          return (
+            <TableRow key={`${l.version_id}-${i}`}>
+              <Td truncate className="font-mono text-ink-3">
+                {l.version_id.slice(0, 8)}
+              </Td>
+              <Td truncate className="text-ink-2">
+                {email}
+              </Td>
+              <Td className="whitespace-nowrap tabular-nums text-ink-3">
+                <time dateTime={l.created_at} suppressHydrationWarning>
                   {new Date(l.created_at).toLocaleDateString()}
-                </td>
-                <td className="w-10 border-r border-neutral-900 px-2 py-0.5 text-right text-neutral-600">
-                  {i + 1}
-                </td>
-                <td className="whitespace-pre px-2 py-0.5 text-neutral-200">{l.text || ' '}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+                </time>
+              </Td>
+              <Td numeric className="text-ink-3">
+                {i + 1}
+              </Td>
+              <Td className="whitespace-pre font-mono">{l.text || ' '}</Td>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }

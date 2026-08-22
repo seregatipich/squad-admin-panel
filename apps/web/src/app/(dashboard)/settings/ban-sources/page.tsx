@@ -1,6 +1,27 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
+import {
+  AlertDialog,
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  EmptyState,
+  FieldRow,
+  IconButton,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Select,
+  Skeleton,
+  Switch,
+  TextInput,
+  TrashIcon,
+} from '@/components/ui';
 import { PublicationSection } from './PublicationSection';
 
 interface BanSource {
@@ -46,10 +67,11 @@ const ON_MATCH_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'kick', label: 'Кик (только trusted)' },
 ];
 
-const TRUST_BADGE: Record<string, string> = {
-  trusted: 'border-emerald-800 bg-emerald-950/50 text-emerald-300',
-  normal: 'border-sky-800 bg-sky-950/50 text-sky-300',
-  low: 'border-amber-800 bg-amber-950/50 text-amber-300',
+/** Тон бейджа доверия. Смысл несёт подпись — цвет только ускоряет просмотр (§5). */
+const TRUST_TONE: Record<string, BadgeTone> = {
+  trusted: 'good',
+  normal: 'accent',
+  low: 'warn',
 };
 
 function trustLabel(level: string): string {
@@ -76,6 +98,16 @@ const EMPTY_FORM = {
   poll_interval_minutes: 60,
 };
 
+/** Показатель источника: служебный ярлык над значением (§1). */
+function SourceStat({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-2xs uppercase tracking-[0.06em] text-ink-3">{label}</span>
+      <span className="text-[13px]">{value}</span>
+    </div>
+  );
+}
+
 export default function BanSourcesPage() {
   const [sources, setSources] = useState<BanSource[] | null>(null);
   const [me, setMe] = useState<Me | null>(null);
@@ -83,13 +115,19 @@ export default function BanSourcesPage() {
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<BanSource | null>(null);
+
+  const formId = useId();
 
   const refresh = useCallback(async () => {
     const [sourcesRes, meRes] = await Promise.all([
       fetch('/api/v1/ban-sources', { credentials: 'include', cache: 'no-store' }),
       fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
     ]);
-    if (sourcesRes.ok) setSources((await sourcesRes.json()) as BanSource[]);
+    if (sourcesRes.ok) {
+      setSources((await sourcesRes.json()) as BanSource[]);
+      setError(null);
+    }
     if (meRes.ok) setMe((await meRes.json()) as Me);
   }, []);
 
@@ -176,7 +214,6 @@ export default function BanSourcesPage() {
 
   async function removeSource(source: BanSource) {
     if (!canManage) return;
-    if (!confirm(`Удалить источник «${source.name}» и все его импортированные баны?`)) return;
     setBusyId(source.id);
     setError(null);
     try {
@@ -185,304 +222,324 @@ export default function BanSourcesPage() {
         credentials: 'include',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setPendingDelete(null);
       await refresh();
     } catch (err) {
+      setPendingDelete(null);
       setError(`Не удалось удалить: ${(err as Error).message}`);
     } finally {
       setBusyId(null);
     }
   }
 
-  if (!sources || !me) return <div className="text-neutral-500">Загрузка…</div>;
-
   return (
-    <div className="max-w-4xl space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Источники банов</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Подписки на внешние банлисты сообществ. Синхронизация импортирует записи в общую сеть
-          банов.
-          {!canManage ? ' У вас нет прав на изменение источников — доступен только просмотр.' : ''}
-        </p>
-      </header>
+    <PageContainer width="wide">
+      <PageHeader
+        title="Источники банов"
+        subtitle="Подписки на внешние банлисты сообществ. Синхронизация импортирует записи в общую сеть банов."
+      />
 
       {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {error}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось выполнить запрос"
+          description={error}
+          action={
+            <Button size="sm" onClick={() => void refresh()}>
+              Повторить
+            </Button>
+          }
+        />
+      ) : null}
+      {sources && me && !canManage ? (
+        <InlineBanner
+          tone="info"
+          title="Только просмотр"
+          description="Для изменения источников нужно право на управление источниками банов."
+        />
       ) : null}
 
-      {canManage ? (
-        <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Добавить источник</h2>
-          <form onSubmit={createSource} className="space-y-3">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Имя</span>
-                <input
-                  type="text"
-                  value={form.name}
-                  onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                  placeholder="Ру-Баны (collabans)"
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">URL банлиста</span>
-                <input
-                  type="url"
-                  value={form.url}
-                  onChange={(event) => setForm((prev) => ({ ...prev, url: event.target.value }))}
-                  placeholder="https://example.com/bans.cfg"
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Формат</span>
-                <select
-                  value={form.format}
-                  onChange={(event) => setForm((prev) => ({ ...prev, format: event.target.value }))}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                >
-                  {FORMAT_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Уровень доверия</span>
-                <select
-                  value={form.trust_level}
-                  onChange={(event) =>
-                    setForm((prev) => ({ ...prev, trust_level: event.target.value }))
-                  }
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                >
-                  {TRUST_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Discord (необязательно)</span>
-                <input
-                  type="url"
-                  value={form.discord_url}
-                  onChange={(event) =>
-                    setForm((prev) => ({ ...prev, discord_url: event.target.value }))
-                  }
-                  placeholder="https://discord.gg/…"
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Действие при совпадении</span>
-                <select
-                  value={form.on_match}
-                  onChange={(event) =>
-                    setForm((prev) => ({ ...prev, on_match: event.target.value }))
-                  }
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                >
-                  {ON_MATCH_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-xs">
-                <span className="mb-1 block text-neutral-400">Интервал опроса (мин, ≥15)</span>
-                <input
-                  type="number"
-                  min={15}
-                  value={form.poll_interval_minutes}
-                  onChange={(event) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      poll_interval_minutes: Number(event.target.value) || 60,
-                    }))
-                  }
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                />
-              </label>
-            </div>
-            <label className="block text-xs">
-              <span className="mb-1 block text-neutral-400">
-                Auth-заголовок (секрет, хранится зашифрованным, не отображается)
-              </span>
-              <input
-                type="password"
-                value={form.auth_header}
-                onChange={(event) =>
-                  setForm((prev) => ({ ...prev, auth_header: event.target.value }))
-                }
-                placeholder="Bearer …"
-                autoComplete="new-password"
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-              />
-            </label>
-            <button
-              type="submit"
-              disabled={creating}
-              className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-            >
-              {creating ? 'Создание…' : 'Добавить источник'}
-            </button>
-          </form>
-        </section>
-      ) : null}
-
-      <div className="space-y-3">
-        {sources.length === 0 ? (
-          <div className="rounded border border-neutral-800 bg-neutral-950 p-6 text-center text-sm text-neutral-500">
-            Источников пока нет.
-          </div>
-        ) : (
-          sources.map((source) => (
-            <section
-              key={source.id}
-              className="rounded-lg border border-neutral-800 bg-neutral-950 p-5"
-            >
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-lg font-semibold">{source.name}</h2>
-                    <span
-                      className={`rounded border px-2 py-0.5 text-[10px] uppercase ${
-                        TRUST_BADGE[source.trust_level] ?? TRUST_BADGE.normal
-                      }`}
+      {!sources || !me ? (
+        <Card>
+          <Skeleton variant="card" count={3} label="Загрузка источников банов" />
+        </Card>
+      ) : (
+        <>
+          {canManage ? (
+            <Card padding="none">
+              <CardHeader title="Добавить источник" />
+              <form onSubmit={createSource}>
+                <CardBody className="space-y-3">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <FieldRow label="Имя" htmlFor={`${formId}-name`}>
+                      <TextInput
+                        id={`${formId}-name`}
+                        type="text"
+                        value={form.name}
+                        onChange={(event) =>
+                          setForm((prev) => ({ ...prev, name: event.target.value }))
+                        }
+                        placeholder="Ру-Баны (collabans)"
+                      />
+                    </FieldRow>
+                    <FieldRow label="URL банлиста" htmlFor={`${formId}-url`}>
+                      <TextInput
+                        id={`${formId}-url`}
+                        type="url"
+                        value={form.url}
+                        onChange={(event) =>
+                          setForm((prev) => ({ ...prev, url: event.target.value }))
+                        }
+                        placeholder="https://example.com/bans.cfg"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Формат" htmlFor={`${formId}-format`}>
+                      <Select
+                        id={`${formId}-format`}
+                        value={form.format}
+                        onChange={(event) =>
+                          setForm((prev) => ({ ...prev, format: event.target.value }))
+                        }
+                      >
+                        {FORMAT_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </FieldRow>
+                    <FieldRow label="Уровень доверия" htmlFor={`${formId}-trust`}>
+                      <Select
+                        id={`${formId}-trust`}
+                        value={form.trust_level}
+                        onChange={(event) =>
+                          setForm((prev) => ({ ...prev, trust_level: event.target.value }))
+                        }
+                      >
+                        {TRUST_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </FieldRow>
+                    <FieldRow label="Discord (необязательно)" htmlFor={`${formId}-discord`}>
+                      <TextInput
+                        id={`${formId}-discord`}
+                        type="url"
+                        value={form.discord_url}
+                        onChange={(event) =>
+                          setForm((prev) => ({ ...prev, discord_url: event.target.value }))
+                        }
+                        placeholder="https://discord.gg/…"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Действие при совпадении" htmlFor={`${formId}-on-match`}>
+                      <Select
+                        id={`${formId}-on-match`}
+                        value={form.on_match}
+                        onChange={(event) =>
+                          setForm((prev) => ({ ...prev, on_match: event.target.value }))
+                        }
+                      >
+                        {ON_MATCH_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </FieldRow>
+                    <FieldRow
+                      label="Интервал опроса (мин)"
+                      htmlFor={`${formId}-interval`}
+                      hint="Не чаще одного раза в 15 минут."
                     >
-                      {trustLabel(source.trust_level)}
-                    </span>
-                    <span className="rounded bg-neutral-900 px-2 py-0.5 text-[10px] uppercase text-neutral-400">
-                      {formatLabel(source.format)}
-                    </span>
-                    <span className="rounded bg-neutral-900 px-2 py-0.5 text-[10px] text-neutral-400">
+                      <TextInput
+                        id={`${formId}-interval`}
+                        type="number"
+                        min={15}
+                        value={form.poll_interval_minutes}
+                        onChange={(event) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            poll_interval_minutes: Number(event.target.value) || 60,
+                          }))
+                        }
+                      />
+                    </FieldRow>
+                  </div>
+                  <FieldRow
+                    label="Auth-заголовок"
+                    htmlFor={`${formId}-auth`}
+                    hint="Секрет: хранится зашифрованным и больше не отображается."
+                  >
+                    <TextInput
+                      id={`${formId}-auth`}
+                      type="password"
+                      value={form.auth_header}
+                      onChange={(event) =>
+                        setForm((prev) => ({ ...prev, auth_header: event.target.value }))
+                      }
+                      placeholder="Bearer …"
+                      autoComplete="new-password"
+                    />
+                  </FieldRow>
+                </CardBody>
+                <CardFooter>
+                  <Button type="submit" variant="primary" loading={creating}>
+                    Добавить источник
+                  </Button>
+                </CardFooter>
+              </form>
+            </Card>
+          ) : null}
+
+          {sources.length === 0 ? (
+            <Card padding="none">
+              <EmptyState
+                title="Источников пока нет"
+                description="Подпишитесь на внешний банлист — записи начнут импортироваться по расписанию."
+              />
+            </Card>
+          ) : (
+            sources.map((source) => (
+              <Card key={source.id} padding="none" as="section">
+                <CardHeader
+                  title={source.name}
+                  actions={
+                    canManage ? (
+                      <>
+                        <Button
+                          size="sm"
+                          loading={busyId === source.id}
+                          onClick={() => void syncNow(source)}
+                        >
+                          Синхронизировать
+                        </Button>
+                        <IconButton
+                          icon={<TrashIcon />}
+                          label={`Удалить источник ${source.name}`}
+                          tone="destructive"
+                          disabled={busyId === source.id}
+                          onClick={() => setPendingDelete(source)}
+                        />
+                      </>
+                    ) : null
+                  }
+                />
+                <CardBody className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone={TRUST_TONE[source.trust_level] ?? 'accent'}>
+                      Доверие: {trustLabel(source.trust_level)}
+                    </Badge>
+                    <Badge>{formatLabel(source.format)}</Badge>
+                    <Badge>
                       {ON_MATCH_OPTIONS.find((option) => option.value === source.on_match)?.label ??
                         source.on_match}
-                    </span>
+                    </Badge>
                     {source.has_auth_header ? (
-                      <span
-                        title="Настроен приватный auth-заголовок"
-                        className="rounded bg-neutral-900 px-2 py-0.5 text-[10px] uppercase text-neutral-400"
-                      >
-                        🔒 auth
-                      </span>
+                      <Badge title="Настроен приватный auth-заголовок">Auth-заголовок</Badge>
                     ) : null}
                   </div>
-                  <div className="mt-1 break-all font-mono text-xs text-neutral-500">
-                    {source.url}
-                  </div>
+
+                  <p className="break-all font-mono text-xs text-ink-3">{source.url}</p>
+
                   {source.discord_url ? (
                     <a
                       href={source.discord_url}
                       target="_blank"
                       rel="noreferrer"
-                      className="mt-1 inline-block text-xs text-sky-400 hover:text-sky-300"
+                      className="inline-block text-xs text-accent no-underline hover:brightness-110"
                     >
-                      Discord сообщества →
+                      Discord сообщества
                     </a>
                   ) : null}
-                </div>
-                {canManage ? (
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={busyId === source.id}
-                      onClick={() => syncNow(source)}
-                      className="rounded border border-sky-800 px-3 py-1 text-xs text-sky-300 hover:bg-sky-950 disabled:opacity-40"
-                    >
-                      {busyId === source.id ? '…' : 'Синхронизировать'}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busyId === source.id}
-                      onClick={() => removeSource(source)}
-                      title="Удалить источник"
-                      className="rounded border border-red-900 px-2 py-1 text-xs text-red-300 hover:bg-red-950 disabled:opacity-40"
-                    >
-                      ⌫
-                    </button>
-                  </div>
-                ) : null}
-              </div>
 
-              <div className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
-                <div>
-                  <div className="text-neutral-500">Записей</div>
-                  <div className="mt-0.5 text-sm text-neutral-200">{source.record_count}</div>
-                </div>
-                <div>
-                  <div className="text-neutral-500">Интервал</div>
-                  <div className="mt-0.5 text-sm text-neutral-200">
-                    {source.poll_interval_minutes} мин
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <SourceStat
+                      label="Записей"
+                      value={<span className="tabular-nums">{source.record_count}</span>}
+                    />
+                    <SourceStat
+                      label="Интервал"
+                      value={
+                        <span className="tabular-nums">{source.poll_interval_minutes} мин</span>
+                      }
+                    />
+                    <SourceStat
+                      label="Последняя синхронизация"
+                      value={formatDate(source.last_sync_at)}
+                    />
+                    <SourceStat
+                      label="Состояние"
+                      value={
+                        source.last_sync_status === 'error' ? (
+                          <Badge tone="crit">ошибка</Badge>
+                        ) : source.last_sync_status === 'ok' ? (
+                          <Badge tone="good">успешно</Badge>
+                        ) : (
+                          <span className="text-ink-3">—</span>
+                        )
+                      }
+                    />
                   </div>
-                </div>
-                <div>
-                  <div className="text-neutral-500">Последний синк</div>
-                  <div className="mt-0.5 text-sm text-neutral-200">
-                    {formatDate(source.last_sync_at)}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-neutral-500">Статус</div>
-                  <div className="mt-0.5">
-                    {source.last_sync_status === 'error' ? (
-                      <span className="rounded bg-red-950/60 px-2 py-0.5 text-xs text-red-300">
-                        ошибка
-                      </span>
-                    ) : source.last_sync_status === 'ok' ? (
-                      <span className="rounded bg-emerald-950/60 px-2 py-0.5 text-xs text-emerald-300">
-                        ok
-                      </span>
-                    ) : (
-                      <span className="text-xs text-neutral-500">—</span>
-                    )}
-                  </div>
-                </div>
-              </div>
 
-              {source.last_sync_status === 'error' && source.last_sync_error ? (
-                <div className="mt-3 rounded border border-red-900 bg-red-950/40 p-2 font-mono text-xs text-red-300">
-                  {source.last_sync_error}
-                </div>
-              ) : null}
-
-              <div className="mt-4 flex items-center justify-between border-t border-neutral-900 pt-3">
-                <span className="text-xs text-neutral-500">
-                  {source.enabled ? 'Активен — опрашивается по расписанию' : 'Выключен'}
-                </span>
-                <label
-                  className={`flex items-center gap-2 text-xs ${
-                    canManage ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
-                  }`}
-                >
-                  <span className="text-neutral-400">Включён</span>
-                  <input
-                    type="checkbox"
-                    aria-label={`Включить источник ${source.name}`}
+                  {source.last_sync_status === 'error' && source.last_sync_error ? (
+                    <InlineBanner
+                      tone="crit"
+                      title="Последняя синхронизация не удалась"
+                      description={
+                        <span className="break-all font-mono">{source.last_sync_error}</span>
+                      }
+                    />
+                  ) : null}
+                </CardBody>
+                <CardFooter>
+                  <span className="mr-auto text-xs text-ink-3">
+                    {source.enabled ? 'Активен — опрашивается по расписанию' : 'Выключен'}
+                  </span>
+                  <Switch
+                    label={`Включить источник ${source.name}`}
                     checked={source.enabled}
                     disabled={!canManage || busyId === source.id}
-                    onChange={() => toggleEnabled(source)}
-                    className="h-4 w-9 cursor-pointer appearance-none rounded-full bg-neutral-800 transition-all checked:bg-sky-600 disabled:cursor-not-allowed"
-                    style={{
-                      backgroundImage:
-                        'radial-gradient(circle 7px at 8px center, white 100%, transparent 100%)',
-                    }}
+                    onChange={() => void toggleEnabled(source)}
                   />
-                </label>
-              </div>
-            </section>
-          ))
-        )}
-      </div>
+                </CardFooter>
+              </Card>
+            ))
+          )}
+        </>
+      )}
 
       <PublicationSection />
-    </div>
+
+      <AlertDialog
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title="Удалить источник банов"
+        body={
+          <>
+            Источник «{pendingDelete?.name}» и все импортированные из него баны будут удалены
+            безвозвратно. Восстановить их можно только повторной синхронизацией с внешним списком.
+          </>
+        }
+        confirmLabel="Удалить источник"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={pendingDelete !== null && busyId === pendingDelete.id}
+        challenge={
+          pendingDelete
+            ? {
+                expected: pendingDelete.name,
+                label: 'Повторите имя источника',
+                hint: pendingDelete.name,
+              }
+            : undefined
+        }
+        onConfirm={() => {
+          if (pendingDelete) void removeSource(pendingDelete);
+        }}
+      />
+    </PageContainer>
   );
 }

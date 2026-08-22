@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { InlineBanner, PageContainer, PageHeader } from '@/components/ui';
 import {
   ACCEPTED_UPLOAD_TYPES,
   computeProgress,
@@ -17,6 +18,15 @@ const IDLE_PROGRESS: UploadProgress = {
   total: '0.0 МБ',
   speed: '—',
 };
+
+/**
+ * Выбор файла — это `<label>` вокруг настоящего `<input type="file">`, а не
+ * кнопка: диалог файлов открывает сам браузер, и подменить его кнопкой значит
+ * потерять клавиатурный путь. Поэтому размеры кнопки (§6) выписаны здесь
+ * вручную — примитив `Button` рендерит `<button>` и сюда не подходит.
+ */
+const FILE_LABEL_CLASS =
+  'mt-4 inline-flex h-8 cursor-pointer items-center justify-center rounded-ctl bg-accent px-3 text-xs font-medium text-bg transition-colors duration-150 hover:brightness-110';
 
 /**
  * Public, session-less upload page for a one-time link (VIDEO-3, #159). The
@@ -96,13 +106,11 @@ export function UploadClient({ token }: { token: string }) {
   );
 
   return (
-    <div className="mx-auto max-w-xl space-y-6">
-      <header className="space-y-2">
-        <h1 className="text-xl font-semibold text-neutral-100">Загрузка доказательства</h1>
-        <p className="text-sm text-neutral-400">
-          Эта ссылка одноразовая и действует ограниченное время. Вход в панель не требуется.
-        </p>
-      </header>
+    <PageContainer width="reading">
+      <PageHeader
+        title="Загрузка доказательства"
+        subtitle="Эта ссылка одноразовая и действует ограниченное время. Вход в панель не требуется."
+      />
 
       {/* A labelled region rather than a bare div: drag-and-drop is inherently
           pointer-only, so the region is announced and the keyboard path is the
@@ -117,13 +125,13 @@ export function UploadClient({ token }: { token: string }) {
         }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
-        className={`rounded border border-dashed p-8 text-center transition-colors ${
-          dragging ? 'border-sky-500 bg-sky-950/30' : 'border-neutral-800 bg-neutral-900/40'
+        className={`rounded-card border border-dashed p-8 text-center transition-colors duration-150 ${
+          dragging ? 'border-accent bg-accent-dim' : 'border-line bg-surface'
         }`}
       >
-        <p className="text-sm text-neutral-300">Перетащите файл сюда или выберите его вручную.</p>
-        <p className="mt-1 text-xs text-neutral-500">Поддерживаются MP4, WebM, PNG и JPEG.</p>
-        <label className="mt-4 inline-block cursor-pointer rounded bg-sky-700 px-3 py-1.5 text-sm text-neutral-100 hover:bg-sky-600">
+        <p className="text-[13px] text-ink">Перетащите файл сюда или выберите его вручную.</p>
+        <p className="mt-1 text-xs text-ink-3">Поддерживаются MP4, WebM, PNG и JPEG.</p>
+        <label className={FILE_LABEL_CLASS}>
           Выбрать файл
           <input
             data-testid="upload-input"
@@ -147,11 +155,14 @@ export function UploadClient({ token }: { token: string }) {
             aria-valuemax={100}
             aria-valuenow={progress.percent}
             aria-label="Прогресс загрузки"
-            className="h-2 w-full overflow-hidden rounded bg-neutral-800"
+            className="h-1 w-full overflow-hidden rounded-full bg-raised"
           >
-            <div className="h-full bg-sky-500" style={{ width: `${progress.percent}%` }} />
+            <div
+              className="h-full rounded-full bg-accent transition-[width] duration-150"
+              style={{ width: `${progress.percent}%` }}
+            />
           </div>
-          <p data-testid="upload-progress-text" className="text-xs text-neutral-400">
+          <p data-testid="upload-progress-text" className="text-xs text-ink-3">
             {filename ? `${filename} — ` : ''}
             {progress.loaded} из {progress.total} ({progress.percent}%), {progress.speed}
           </p>
@@ -159,19 +170,14 @@ export function UploadClient({ token }: { token: string }) {
       )}
 
       {phase === 'done' && (
-        <output className="block rounded border border-emerald-900 bg-emerald-950 p-3 text-sm text-emerald-200">
-          Файл загружен. Спасибо — администратор увидит его в деле.
-        </output>
+        <InlineBanner
+          tone="good"
+          title="Файл загружен."
+          description="Спасибо — администратор увидит его в деле."
+        />
       )}
 
-      {phase === 'error' && error && (
-        <div
-          role="alert"
-          className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200"
-        >
-          {error}
-        </div>
-      )}
-    </div>
+      {phase === 'error' && error && <InlineBanner tone="crit" title={error} />}
+    </PageContainer>
   );
 }

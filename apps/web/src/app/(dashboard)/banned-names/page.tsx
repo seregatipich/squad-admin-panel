@@ -14,6 +14,28 @@ import {
   BannedNameRuleModal,
 } from '@/components/BannedNameRuleModal';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Pagination,
+  SearchField,
+  Select,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+  Toolbar,
+  type ToolbarProps,
+} from '@/components/ui';
 
 interface ListResponse {
   items: BannedNameRule[];
@@ -58,8 +80,8 @@ export default function BannedNamesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [modalInitial, setModalInitial] = useState<Partial<BannedNameRuleFormState>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<BannedNameRule | null>(null);
 
-  const searchId = useId();
   const typeFilterId = useId();
   const activeFilterId = useId();
 
@@ -96,6 +118,26 @@ export default function BannedNamesPage() {
   }, [load]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const filtersApplied = search.trim() !== '' || matchTypeFilter !== '' || activeFilter !== '';
+
+  function resetFilters() {
+    setPage(1);
+    setSearch('');
+    setMatchTypeFilter('');
+    setActiveFilter('');
+  }
+
+  // Слот сброса у `Toolbar` — это пара «обработчик + подпись» или ничего:
+  // объект собирается заранее, чтобы union не разъехался при раскрытии в JSX.
+  const resetProps: ToolbarProps = filtersApplied
+    ? { onReset: resetFilters, resetLabel: 'Сбросить фильтр' }
+    : {};
+
+  const createButton = canMutate ? (
+    <Button variant="primary" onClick={openCreate}>
+      Добавить правило
+    </Button>
+  ) : null;
 
   function openCreate() {
     setEditingId(null);
@@ -124,7 +166,6 @@ export default function BannedNamesPage() {
   }
 
   async function remove(rule: BannedNameRule) {
-    if (!confirm(`Удалить правило «${rule.pattern}»?`)) return;
     setDeletingId(rule.id);
     setMsg(null);
     try {
@@ -133,9 +174,11 @@ export default function BannedNamesPage() {
         credentials: 'include',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setPendingDelete(null);
       setMsg({ kind: 'ok', text: 'Правило удалено.' });
       await load();
     } catch (e) {
+      setPendingDelete(null);
       setMsg({ kind: 'err', text: (e as Error).message });
     } finally {
       setDeletingId(null);
@@ -143,226 +186,206 @@ export default function BannedNamesPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-6xl">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Забаненные ники</h1>
-        <LiveIndicator lastUpdate={lastUpdate} />
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="Забаненные ники"
+        subtitle="Чёрный список ников: правила проверяются при подключении игрока. Тип матчинга — точное совпадение, вхождение подстроки или регулярное выражение (регистр игнорируется для точного совпадения и вхождения)."
+        status={<LiveIndicator lastUpdate={lastUpdate} />}
+      />
 
-      <p className="text-sm text-neutral-400">
-        Чёрный список ников: правила проверяются при подключении игрока. Тип матчинга — точное
-        совпадение, вхождение подстроки или регулярное выражение (регистр игнорируется для точного
-        совпадения и вхождения).
-      </p>
-
-      {msg ? (
-        <div
-          className={`rounded border p-3 text-sm ${
-            msg.kind === 'ok'
-              ? 'border-emerald-900 bg-emerald-950/50 text-emerald-200'
-              : 'border-red-900 bg-red-950 text-red-200'
-          }`}
-        >
-          {msg.text}
-        </div>
+      {msg?.kind === 'ok' ? (
+        <InlineBanner
+          tone="good"
+          title={msg.text}
+          onDismiss={() => setMsg(null)}
+          dismissLabel="Скрыть сообщение"
+        />
+      ) : null}
+      {msg?.kind === 'err' ? (
+        <InlineBanner
+          tone="crit"
+          title="Не удалось выполнить запрос"
+          description={msg.text}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex-1 min-w-48">
-          <label className="mb-1 block text-xs text-neutral-500" htmlFor={searchId}>
-            Поиск по паттерну
-          </label>
-          <input
-            id={searchId}
-            type="text"
+      <Toolbar
+        search={
+          <SearchField
             value={search}
-            onChange={(e) => {
+            onCommit={(next) => {
               setPage(1);
-              setSearch(e.target.value);
+              setSearch(next);
             }}
+            label="Поиск по паттерну"
             placeholder="напр. isis"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
+            clearLabel="Очистить поиск"
           />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-neutral-500" htmlFor={typeFilterId}>
-            Тип
-          </label>
-          <select
-            id={typeFilterId}
-            value={matchTypeFilter}
-            onChange={(e) => {
-              setPage(1);
-              setMatchTypeFilter(e.target.value as '' | BannedNameMatchType);
-            }}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          >
-            <option value="">Все</option>
-            {BANNED_NAME_MATCH_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {MATCH_TYPE_LABELS[t]}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-neutral-500" htmlFor={activeFilterId}>
-            Статус
-          </label>
-          <select
-            id={activeFilterId}
-            value={activeFilter}
-            onChange={(e) => {
-              setPage(1);
-              setActiveFilter(e.target.value as '' | 'true' | 'false');
-            }}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          >
-            <option value="">Все</option>
-            <option value="true">Активные</option>
-            <option value="false">Отключённые</option>
-          </select>
-        </div>
-        {canMutate ? (
-          <button
-            type="button"
-            onClick={openCreate}
-            className="ml-auto rounded border border-emerald-900 px-4 py-2 text-sm text-emerald-300 hover:border-emerald-700"
-          >
-            Добавить правило
-          </button>
-        ) : null}
-      </div>
+        }
+        filters={
+          <>
+            <label htmlFor={typeFilterId} className="text-xs text-ink-3">
+              Тип
+            </label>
+            <Select
+              id={typeFilterId}
+              value={matchTypeFilter}
+              onChange={(e) => {
+                setPage(1);
+                setMatchTypeFilter(e.target.value as '' | BannedNameMatchType);
+              }}
+            >
+              <option value="">Все</option>
+              {BANNED_NAME_MATCH_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {MATCH_TYPE_LABELS[t]}
+                </option>
+              ))}
+            </Select>
+            <label htmlFor={activeFilterId} className="text-xs text-ink-3">
+              Статус
+            </label>
+            <Select
+              id={activeFilterId}
+              value={activeFilter}
+              onChange={(e) => {
+                setPage(1);
+                setActiveFilter(e.target.value as '' | 'true' | 'false');
+              }}
+            >
+              <option value="">Все</option>
+              <option value="true">Активные</option>
+              <option value="false">Отключённые</option>
+            </Select>
+          </>
+        }
+        {...resetProps}
+        summary={`Всего: ${total}`}
+        actions={createButton}
+      />
 
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase text-neutral-500">
-              <tr>
-                <th className="py-2 pr-2">Паттерн</th>
-                <th className="py-2 pr-2">Тип</th>
-                <th className="py-2 pr-2">Действие</th>
-                <th className="py-2 pr-2">Причина</th>
-                <th className="py-2 pr-2">Автор</th>
-                <th className="py-2 pr-2">Добавлен</th>
-                <th className="py-2 pr-2">Hits</th>
-                <th className="py-2 pr-2">Срабатывания</th>
-                <th className="py-2 pr-2">Статус</th>
-                {canMutate ? <th className="py-2 pr-2"></th> : null}
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td
-                    colSpan={canMutate ? 10 : 9}
-                    className="py-3 text-center text-xs text-neutral-500"
-                  >
-                    Загрузка…
-                  </td>
-                </tr>
-              ) : rows.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={canMutate ? 10 : 9}
-                    className="py-3 text-center text-xs text-neutral-500"
-                  >
-                    Правил пока нет.
-                  </td>
-                </tr>
+      <Card padding="none">
+        {loading ? (
+          <div className="p-3">
+            <SkeletonTable rows={6} cols={canMutate ? 6 : 5} label="Загрузка правил" />
+          </div>
+        ) : rows.length === 0 ? (
+          <EmptyState
+            variant={filtersApplied ? 'filtered' : 'initial'}
+            title={filtersApplied ? 'Ничего не нашлось' : 'Правил пока нет'}
+            description={
+              filtersApplied
+                ? 'Ни одно правило не подходит под запрос и выбранные фильтры.'
+                : 'Чёрный список ников пуст: ни одно правило ещё не заведено.'
+            }
+            action={
+              filtersApplied ? (
+                <Button onClick={resetFilters}>Сбросить фильтр</Button>
               ) : (
-                rows.map((rule) => (
-                  <tr
-                    key={rule.id}
-                    className={`border-t border-neutral-900 align-top ${
-                      highlightedRuleId === rule.id
-                        ? 'ring-1 ring-inset ring-sky-500 bg-sky-950/20'
-                        : ''
-                    }`}
-                  >
-                    <td className="py-2 pr-2 font-mono text-xs text-neutral-200 break-all">
+                createButton
+              )
+            }
+          />
+        ) : (
+          <Table ariaLabel="Правила чёрного списка ников">
+            <TableHead>
+              <tr>
+                <Th>Паттерн</Th>
+                <Th>Тип</Th>
+                <Th>Действие</Th>
+                <Th>Причина</Th>
+                <Th>Автор</Th>
+                <Th>Добавлен</Th>
+                <Th align="right">Срабатываний</Th>
+                <Th>Журнал</Th>
+                <Th>Статус</Th>
+                {canMutate ? <Th>Действия</Th> : null}
+              </tr>
+            </TableHead>
+            <TableBody>
+              {rows.map((rule) => {
+                const highlighted = highlightedRuleId === rule.id;
+                return (
+                  <TableRow key={rule.id} selected={highlighted}>
+                    <Td className="break-all font-mono text-xs">
                       {rule.pattern}
-                    </td>
-                    <td className="py-2 pr-2 text-neutral-400">
-                      {MATCH_TYPE_LABELS[rule.match_type]}
-                    </td>
-                    <td className="py-2 pr-2 text-neutral-400">{ACTION_LABELS[rule.action]}</td>
-                    <td className="py-2 pr-2 text-neutral-400">{rule.reason ?? '—'}</td>
-                    <td className="py-2 pr-2 text-neutral-400">{rule.author_name ?? '—'}</td>
-                    <td className="py-2 pr-2 text-neutral-400">{formatDate(rule.created_at)}</td>
-                    <td className="py-2 pr-2 text-neutral-400">{rule.hit_count}</td>
-                    <td className="py-2 pr-2">
+                      {/* Подсветка строки, на которую привела ссылка, дублируется
+                          словами: цвет один смысла не несёт (§5). */}
+                      {highlighted ? <span className="sr-only">Выбранное правило</span> : null}
+                    </Td>
+                    <Td className="text-ink-2">{MATCH_TYPE_LABELS[rule.match_type]}</Td>
+                    <Td className="text-ink-2">{ACTION_LABELS[rule.action]}</Td>
+                    <Td className="text-ink-2">{rule.reason ?? '—'}</Td>
+                    <Td className="text-ink-2">{rule.author_name ?? '—'}</Td>
+                    <Td className="whitespace-nowrap text-ink-3">{formatDate(rule.created_at)}</Td>
+                    <Td numeric className="text-ink-2">
+                      {rule.hit_count}
+                    </Td>
+                    <Td>
                       {rule.hit_count > 0 ? (
                         <Link
                           href={`/events?kinds=banname.matched&rule=${rule.id}`}
-                          className="text-sky-400 hover:text-sky-300"
+                          className="text-accent no-underline hover:brightness-110"
                         >
                           Срабатывания
                         </Link>
                       ) : (
-                        <span className="text-neutral-600">—</span>
+                        <span className="text-ink-3">—</span>
                       )}
-                    </td>
-                    <td className="py-2 pr-2">
+                    </Td>
+                    <Td>
                       {rule.is_active ? (
-                        <span className="rounded bg-emerald-950/50 px-2 py-0.5 text-xs text-emerald-300">
-                          активно
-                        </span>
+                        <Badge tone="good">активно</Badge>
                       ) : (
-                        <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-400">
-                          отключено
-                        </span>
+                        <Badge tone="neutral">отключено</Badge>
                       )}
-                    </td>
+                    </Td>
                     {canMutate ? (
-                      <td className="py-2 pr-2 text-right whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => openEdit(rule)}
-                          className="rounded border border-neutral-700 px-3 py-0.5 text-xs text-neutral-300 hover:border-neutral-500"
-                        >
-                          Изменить
-                        </button>
-                        <button
-                          type="button"
-                          disabled={deletingId === rule.id}
-                          onClick={() => remove(rule)}
-                          className="ml-2 rounded border border-red-900 px-3 py-0.5 text-xs text-red-400 hover:border-red-700 disabled:opacity-40"
-                        >
-                          {deletingId === rule.id ? '…' : 'Удалить'}
-                        </button>
-                      </td>
+                      <Td align="right" className="whitespace-nowrap">
+                        <span className="inline-flex items-center gap-2">
+                          <Button size="sm" onClick={() => openEdit(rule)}>
+                            Изменить
+                          </Button>
+                          <Button
+                            size="sm"
+                            disabled={deletingId === rule.id}
+                            onClick={() => setPendingDelete(rule)}
+                          >
+                            Удалить
+                          </Button>
+                        </span>
+                      </Td>
                     ) : null}
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+
+      {/* Пустая страница за пределами выдачи — не повод отнимать навигацию:
+          иначе с page=2, опустевшей после удаления, некуда вернуться. */}
+      {!loading && total > 0 ? (
+        <div className="flex justify-end">
+          <Pagination
+            page={page}
+            pageCount={totalPages}
+            onChange={setPage}
+            allowJump
+            labels={{
+              previous: 'Назад',
+              next: 'Вперёд',
+              page: (current, of) => `Стр. ${current} из ${of}`,
+            }}
+          />
         </div>
-        <div className="mt-3 flex items-center justify-between text-xs text-neutral-500">
-          <span>
-            Всего: {total} · Стр. {page} из {totalPages}
-          </span>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              disabled={page <= 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-30"
-            >
-              Назад
-            </button>
-            <button
-              type="button"
-              disabled={page >= totalPages}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-30"
-            >
-              Вперёд
-            </button>
-          </div>
-        </div>
-      </section>
+      ) : null}
 
       <BannedNameRuleModal
         open={modalOpen}
@@ -371,6 +394,25 @@ export default function BannedNamesPage() {
         onClose={() => setModalOpen(false)}
         onSaved={() => void handleSaved()}
       />
-    </div>
+
+      <AlertDialog
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title="Удалить правило"
+        body={
+          <>
+            Правило «{pendingDelete?.pattern}» перестанет проверяться при подключении игроков.
+            Отменить удаление нельзя.
+          </>
+        }
+        confirmLabel="Удалить правило"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={pendingDelete !== null && deletingId === pendingDelete.id}
+        onConfirm={() => {
+          if (pendingDelete) void remove(pendingDelete);
+        }}
+      />
+    </PageContainer>
   );
 }

@@ -1,6 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Checkbox,
+  FieldRow,
+  IconButton,
+  InlineBanner,
+  Select,
+  Skeleton,
+  Textarea,
+  TextInput,
+  TrashIcon,
+} from '@/components/ui';
 import { eventLabel } from './discord-events';
 
 const PREVIEW_DEBOUNCE_MS = 300;
@@ -128,7 +144,6 @@ function toTemplate(form: FormState): EmbedTemplate {
  * already renders its own «Недостаточно прав» block for the same permission.
  */
 export default function DiscordTemplatesSection() {
-  const baseId = useId();
   const [rows, setRows] = useState<TemplateRow[]>([]);
   const [form, setForm] = useState<FormState | null>(null);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
@@ -258,118 +273,80 @@ export default function DiscordTemplatesSection() {
   if (forbidden) return null;
 
   return (
-    <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-5">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">Шаблоны сообщений</h2>
+    <Card padding="none" as="section">
+      <CardHeader title="Шаблоны сообщений" />
+
       {error ? (
-        <div className="mt-3 rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          {error}
-        </div>
+        <CardBody padding="sm">
+          <InlineBanner tone="crit" title={error} />
+        </CardBody>
       ) : null}
+
       {form === null ? (
-        <p className="mt-3 text-sm text-neutral-500">Загрузка шаблонов…</p>
+        <CardBody>
+          <Skeleton variant="row" count={3} label="Загрузка шаблонов Discord" />
+        </CardBody>
       ) : (
-        <div className="mt-4 grid gap-6 lg:grid-cols-2">
-          <div className="space-y-3">
+        <CardBody className="grid gap-6 lg:grid-cols-2">
+          <div className="space-y-4">
             <div className="flex flex-wrap items-end gap-3">
-              <div className="min-w-48 flex-1">
-                <label htmlFor={`${baseId}-event`} className="block text-xs text-neutral-400 mb-1">
-                  Событие
-                </label>
-                <select
-                  id={`${baseId}-event`}
-                  value={form.eventType}
-                  onChange={(e) => selectEvent(e.target.value)}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-                >
+              <FieldRow label="Событие" className="min-w-48 flex-1">
+                <Select value={form.eventType} onChange={(e) => selectEvent(e.target.value)}>
                   {rows.map((row) => (
                     <option key={row.event_type} value={row.event_type}>
                       {eventLabel(row.event_type)}
                     </option>
                   ))}
-                </select>
-              </div>
-              <div className="w-24">
-                <label htmlFor={`${baseId}-locale`} className="block text-xs text-neutral-400 mb-1">
-                  Локаль
-                </label>
-                <select
-                  id={`${baseId}-locale`}
+                </Select>
+              </FieldRow>
+              <FieldRow label="Локаль" className="w-24">
+                <Select
                   value={form.locale}
                   onChange={(e) => patch({ locale: e.target.value as TemplateLocale })}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
                 >
                   {LOCALES.map((locale) => (
                     <option key={locale} value={locale}>
                       {locale}
                     </option>
                   ))}
-                </select>
-              </div>
-              {form.isDefault ? (
-                <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-400">
-                  дефолтный
-                </span>
-              ) : null}
+                </Select>
+              </FieldRow>
+              {form.isDefault ? <Badge>дефолтный</Badge> : null}
             </div>
 
-            <div>
-              <label htmlFor={`${baseId}-title`} className="block text-xs text-neutral-400 mb-1">
-                Заголовок
-              </label>
-              <input
-                id={`${baseId}-title`}
-                value={form.title}
-                onChange={(e) => patch({ title: e.target.value })}
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-              />
-            </div>
+            <FieldRow label="Заголовок">
+              <TextInput value={form.title} onChange={(e) => patch({ title: e.target.value })} />
+            </FieldRow>
 
-            <div>
-              <label htmlFor={`${baseId}-url`} className="block text-xs text-neutral-400 mb-1">
-                Ссылка (URL)
-              </label>
-              <input
-                id={`${baseId}-url`}
-                value={form.url}
-                onChange={(e) => patch({ url: e.target.value })}
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
-              />
-            </div>
+            <FieldRow label="Ссылка (URL)">
+              <TextInput value={form.url} onChange={(e) => patch({ url: e.target.value })} />
+            </FieldRow>
 
-            <div>
-              <label
-                htmlFor={`${baseId}-description`}
-                className="block text-xs text-neutral-400 mb-1"
-              >
-                Описание
-              </label>
-              <textarea
-                id={`${baseId}-description`}
+            <FieldRow label="Описание">
+              <Textarea
                 rows={4}
                 value={form.description}
                 onChange={(e) => patch({ description: e.target.value })}
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm"
               />
-            </div>
+            </FieldRow>
 
-            <div>
-              <label htmlFor={`${baseId}-color`} className="block text-xs text-neutral-400 mb-1">
-                Цвет
-              </label>
+            <FieldRow label="Цвет">
+              {/* Образец цвета — не текстовое поле: у примитивов панели нет
+                  соответствия нативному `input[type=color]`, поэтому здесь
+                  нативный элемент в токенах дизайн-системы. */}
               <input
-                id={`${baseId}-color`}
                 type="color"
                 value={colorToHex(form.color)}
                 onChange={(e) => patch({ color: hexToColor(e.target.value) ?? form.color })}
-                className="h-8 w-16 rounded border border-neutral-800 bg-neutral-900"
+                className="h-8 w-16 rounded-ctl border border-line bg-raised"
               />
-            </div>
+            </FieldRow>
 
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-3">
-                <h3 className="text-xs uppercase tracking-widest text-neutral-400">Поля</h3>
-                <button
-                  type="button"
+                <h3 className="text-[13px] font-semibold text-ink">Поля</h3>
+                <Button
+                  size="sm"
                   onClick={() =>
                     patch({
                       fields: [
@@ -378,129 +355,126 @@ export default function DiscordTemplatesSection() {
                       ],
                     })
                   }
-                  className="rounded border border-neutral-800 px-2 py-0.5 text-xs text-neutral-300 hover:border-neutral-600"
                 >
                   Добавить поле
-                </button>
+                </Button>
               </div>
               {form.fields.map((field) => (
                 <div
                   key={field.id}
-                  className="rounded border border-neutral-800 bg-neutral-900 p-2 space-y-2"
+                  className="space-y-2 rounded-card border border-line bg-raised p-3"
                 >
-                  <input
-                    aria-label="Имя поля"
-                    value={field.name}
-                    onChange={(e) =>
-                      patch({
-                        fields: form.fields.map((candidate) =>
-                          candidate.id === field.id
-                            ? { ...candidate, name: e.target.value }
-                            : candidate,
-                        ),
-                      })
-                    }
-                    className="w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-sm"
-                  />
-                  <input
-                    aria-label="Значение поля"
-                    value={field.value}
-                    onChange={(e) =>
-                      patch({
-                        fields: form.fields.map((candidate) =>
-                          candidate.id === field.id
-                            ? { ...candidate, value: e.target.value }
-                            : candidate,
-                        ),
-                      })
-                    }
-                    className="w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-sm"
-                  />
+                  <FieldRow label="Имя поля">
+                    <TextInput
+                      value={field.name}
+                      onChange={(e) =>
+                        patch({
+                          fields: form.fields.map((candidate) =>
+                            candidate.id === field.id
+                              ? { ...candidate, name: e.target.value }
+                              : candidate,
+                          ),
+                        })
+                      }
+                    />
+                  </FieldRow>
+                  <FieldRow label="Значение поля">
+                    <TextInput
+                      value={field.value}
+                      onChange={(e) =>
+                        patch({
+                          fields: form.fields.map((candidate) =>
+                            candidate.id === field.id
+                              ? { ...candidate, value: e.target.value }
+                              : candidate,
+                          ),
+                        })
+                      }
+                    />
+                  </FieldRow>
                   <div className="flex items-center justify-between gap-3">
-                    <label className="flex items-center gap-2 text-xs text-neutral-400">
-                      <input
-                        type="checkbox"
-                        checked={field.inline}
-                        onChange={(e) =>
-                          patch({
-                            fields: form.fields.map((candidate) =>
-                              candidate.id === field.id
-                                ? { ...candidate, inline: e.target.checked }
-                                : candidate,
-                            ),
-                          })
-                        }
-                      />
-                      В строку
-                    </label>
-                    <button
-                      type="button"
+                    <Checkbox
+                      label="В строку"
+                      checked={field.inline}
+                      onChange={(e) =>
+                        patch({
+                          fields: form.fields.map((candidate) =>
+                            candidate.id === field.id
+                              ? { ...candidate, inline: e.target.checked }
+                              : candidate,
+                          ),
+                        })
+                      }
+                    />
+                    <IconButton
+                      icon={<TrashIcon />}
+                      label="Удалить поле"
+                      tone="destructive"
                       onClick={() =>
                         patch({
                           fields: form.fields.filter((candidate) => candidate.id !== field.id),
                         })
                       }
-                      className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-400 hover:border-red-700"
-                    >
-                      Удалить поле
-                    </button>
+                    />
                   </div>
                 </div>
               ))}
             </div>
 
             <div className="flex flex-wrap gap-2 pt-1">
-              <button
-                type="button"
-                disabled={saving || resetting}
+              <Button
+                variant="primary"
+                loading={saving}
+                disabled={resetting}
                 onClick={() => void save(form)}
-                className="rounded bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900 hover:bg-white disabled:opacity-40"
               >
-                {saving ? 'Сохранение…' : 'Сохранить шаблон'}
-              </button>
-              <button
-                type="button"
-                disabled={saving || resetting}
+                Сохранить шаблон
+              </Button>
+              <Button
+                loading={resetting}
+                disabled={saving}
                 onClick={() => void resetToDefault(form)}
-                className="rounded border border-neutral-800 px-3 py-1.5 text-sm text-neutral-300 hover:border-neutral-600 disabled:opacity-40"
               >
-                {resetting ? 'Сброс…' : 'Сбросить к дефолту'}
-              </button>
+                Сбросить к дефолту
+              </Button>
             </div>
           </div>
 
           <div className="space-y-2">
-            <h3 className="text-xs uppercase tracking-widest text-neutral-400">Предпросмотр</h3>
+            <h3 className="text-[13px] font-semibold text-ink">Предпросмотр</h3>
             {preview ? (
               <div className="space-y-2">
                 <div
-                  className="rounded border border-neutral-800 bg-neutral-900 p-3 border-l-4"
+                  className="rounded-card border border-l-4 border-line bg-raised p-3"
                   style={{ borderLeftColor: colorToHex(preview.embed.color) }}
                 >
-                  <p className="text-sm font-medium text-neutral-100">{preview.embed.title}</p>
-                  <p className="mt-1 whitespace-pre-wrap text-xs text-neutral-300">
+                  <p className="text-[13px] font-semibold text-ink">{preview.embed.title}</p>
+                  <p className="mt-1 whitespace-pre-wrap text-xs text-ink-2">
                     {preview.embed.description}
                   </p>
                   <div className="mt-2 grid gap-2 sm:grid-cols-2">
                     {preview.embed.fields.map((field) => (
                       <div key={`${field.name}|${field.value}`}>
-                        <p className="text-xs font-medium text-neutral-200">{field.name}</p>
-                        <p className="text-xs text-neutral-400">{field.value}</p>
+                        <p className="text-xs font-medium text-ink">{field.name}</p>
+                        <p className="text-xs text-ink-3">{field.value}</p>
                       </div>
                     ))}
                   </div>
                 </div>
                 {preview.missing_placeholders.length > 0 ? (
-                  <p className="rounded border border-amber-900 bg-amber-950 p-2 text-xs text-amber-200">
-                    <span>Неизвестные плейсхолдеры:</span>{' '}
-                    <span className="font-mono">{preview.missing_placeholders.join(', ')}</span>
-                  </p>
+                  <InlineBanner
+                    tone="warn"
+                    title="Неизвестные плейсхолдеры:"
+                    description={
+                      <span className="font-mono">{preview.missing_placeholders.join(', ')}</span>
+                    }
+                  />
                 ) : null}
               </div>
             ) : null}
           </div>
-        </div>
+        </CardBody>
       )}
-    </section>
+    </Card>
   );
 }

@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useId, useState } from 'react';
+import { useState } from 'react';
+import { AlertDialog } from '@/components/ui';
 
 interface Props {
   open: boolean;
@@ -9,18 +10,17 @@ interface Props {
   onConfirm: () => Promise<void>;
 }
 
+/**
+ * Подтверждение принудительной остановки сервера.
+ *
+ * Собственная модалка из `<div>` заменена на {@link AlertDialog}: нативный
+ * `<dialog>` даёт ловушку фокуса, верхний слой и Escape, которые рукописная
+ * подложка воспроизводила лишь частично. Имя сервера набирается вручную —
+ * остановка без сохранения выбивает из игры всех, кто на сервере сейчас, и
+ * запустить её случайным попаданием по кнопке не должно быть возможно.
+ */
 export function ForceStopDialog({ open, onOpenChange, serverName, onConfirm }: Props) {
-  const titleId = useId();
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onOpenChange(false);
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [open, onOpenChange]);
 
   if (!open) return null;
 
@@ -37,48 +37,29 @@ export function ForceStopDialog({ open, onOpenChange, serverName, onConfirm }: P
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      onClick={() => onOpenChange(false)}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') onOpenChange(false);
+    <AlertDialog
+      open
+      onClose={() => onOpenChange(false)}
+      title="Принудительная остановка"
+      tone="destructive"
+      body={
+        <>
+          <p>
+            Сервер <strong className="font-semibold text-ink">{serverName}</strong> будет немедленно
+            остановлен без сохранения. Все игроки будут отключены.
+          </p>
+          <p className="mt-2 text-crit">Это действие нельзя отменить.</p>
+        </>
+      }
+      challenge={{
+        expected: serverName,
+        label: 'Введите имя сервера для подтверждения',
+        hint: serverName,
       }}
-    >
-      <div
-        className="w-full max-w-md rounded border border-neutral-800 bg-neutral-950 p-6"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-        role="document"
-      >
-        <h2 id={titleId} className="mb-3 text-lg font-semibold text-neutral-100">
-          Принудительная остановка
-        </h2>
-        <p className="mb-4 text-sm text-neutral-300">
-          Сервер <strong>{serverName}</strong> будет немедленно остановлен без сохранения. Все
-          игроки будут отключены.
-        </p>
-        <p className="mb-5 text-xs text-red-400">Это действие нельзя отменить.</p>
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 hover:border-neutral-700"
-          >
-            Отмена
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={handleConfirm}
-            className="rounded bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-600 disabled:opacity-50"
-          >
-            {busy ? 'Остановка...' : 'Остановить принудительно'}
-          </button>
-        </div>
-      </div>
-    </div>
+      confirmLabel="Остановить принудительно"
+      cancelLabel="Отмена"
+      busy={busy}
+      onConfirm={handleConfirm}
+    />
   );
 }

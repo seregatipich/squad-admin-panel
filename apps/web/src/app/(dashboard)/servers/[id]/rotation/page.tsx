@@ -2,6 +2,24 @@
 
 import { use, useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Checkbox,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  EmptyState,
+  IconButton,
+  InlineBanner,
+  PageContainer,
+  SearchField,
+  Select,
+  Skeleton,
+  Toolbar,
+} from '@/components/ui';
+import {
   addLayer,
   buildSavePayload,
   filterPool,
@@ -99,6 +117,22 @@ export default function RotationPage({ params }: { params: Promise<{ id: string 
     [pool, pickerMap, pickerGamemode, pickerSeedOnly, pickerQuery],
   );
 
+  const poolFiltered =
+    pickerQuery !== '' || pickerMap !== '' || pickerGamemode !== '' || pickerSeedOnly;
+
+  function resetPoolFilters() {
+    setPickerQuery('');
+    setPickerMap('');
+    setPickerGamemode('');
+    setPickerSeedOnly(false);
+  }
+
+  /* Сброс приходит парой «обработчик + подпись» или не приходит вовсе:
+     кнопка сброса без подписи была бы безымянной. */
+  const resetProps = poolFiltered
+    ? { onReset: resetPoolFilters, resetLabel: 'Сбросить фильтр' }
+    : {};
+
   function handleMove(from: number, to: number) {
     if (!canEdit) return;
     setEntries((prev) => moveEntry(prev, from, to));
@@ -149,38 +183,50 @@ export default function RotationPage({ params }: { params: Promise<{ id: string 
   }
 
   if (loading) {
-    return <div className="text-neutral-500">Загрузка…</div>;
+    return (
+      <PageContainer width="wide">
+        <Skeleton variant="row" count={8} label="Ротация загружается" />
+      </PageContainer>
+    );
   }
 
   return (
-    <div className="max-w-4xl space-y-4 pb-20">
-      <header>
-        <h1 className="text-xl font-semibold">Ротация</h1>
-        <p className="mt-1 text-sm text-neutral-400">
-          Порядок слоёв в управляемом сегменте <span className="font-mono">LayerRotation.cfg</span>.
-          Комментарии и ручные правки вне сегмента панель не трогает.
-        </p>
-      </header>
+    <PageContainer width="wide">
+      <p className="text-xs text-ink-3">
+        Порядок слоёв в управляемом сегменте <span className="font-mono">LayerRotation.cfg</span>.
+        Комментарии и ручные правки вне сегмента панель не трогает.
+      </p>
 
       {err ? (
-        <div className="rounded border border-red-900 bg-red-950 px-3 py-2 text-sm">{err}</div>
+        <InlineBanner
+          tone="crit"
+          title={err}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
-      {msg ? (
-        <div className="rounded border border-emerald-900 bg-emerald-950 px-3 py-2 text-sm text-emerald-200">
-          {msg}
-        </div>
-      ) : null}
+      {msg ? <InlineBanner tone="good" title={msg} /> : null}
 
       {!canEdit ? (
-        <div className="rounded border border-neutral-800 bg-neutral-900/60 px-3 py-2 text-xs text-neutral-400">
-          Только просмотр — нужна squad-привилегия changemap.
-        </div>
+        <InlineBanner tone="info" title="Только просмотр — нужна squad-привилегия changemap." />
       ) : null}
 
+      {/* Перетаскивание строк остаётся нативным HTML5 drag-and-drop: примитива
+          для переупорядочиваемого списка в дизайн-системе нет, а порядок здесь
+          и есть содержимое страницы. Кнопки «вверх»/«вниз» дублируют его для
+          клавиатуры. */}
       <ul className="space-y-2" data-testid="rotation-list">
         {entries.length === 0 ? (
-          <li className="rounded border border-neutral-800 bg-neutral-950 px-3 py-6 text-center text-sm text-neutral-500">
-            Ротация пуста.
+          <li>
+            <Card padding="none">
+              <EmptyState
+                title="Ротация пуста"
+                description="Добавьте слои из каталога — порядок в списке станет порядком матчей."
+              />
+            </Card>
           </li>
         ) : null}
         {entries.map((entry, index) => (
@@ -192,61 +238,44 @@ export default function RotationPage({ params }: { params: Promise<{ id: string 
               if (canEdit && dragIndex !== null) e.preventDefault();
             }}
             onDrop={() => handleDrop(index)}
-            className={`flex items-center justify-between gap-3 rounded border border-neutral-800 bg-neutral-950 px-3 py-2 ${
+            className={`flex items-center justify-between gap-3 rounded-card border border-line bg-surface px-3 py-2 ${
               dragIndex === index ? 'opacity-40' : ''
             }`}
           >
-            <div className="flex items-center gap-3">
-              <span className="w-6 text-right text-xs text-neutral-600">{index + 1}</span>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-sm">{entry.layer}</span>
-                  {!entry.known ? (
-                    <span className="rounded bg-amber-800 px-1 py-[1px] text-[10px] uppercase tracking-widest text-amber-100">
-                      Нет в каталоге слоёв
-                    </span>
-                  ) : null}
-                  {entry.is_seed ? (
-                    <span className="rounded bg-sky-800 px-1 py-[1px] text-[10px] uppercase tracking-widest text-sky-100">
-                      Seed
-                    </span>
-                  ) : null}
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="w-6 shrink-0 text-right text-2xs tabular-nums text-ink-3">
+                {index + 1}
+              </span>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-[13px] text-ink">{entry.layer}</span>
+                  {!entry.known ? <Badge tone="warn">Нет в каталоге слоёв</Badge> : null}
+                  {entry.is_seed ? <Badge tone="accent">Seed</Badge> : null}
                 </div>
                 {entry.known ? (
-                  <div className="text-xs text-neutral-500">
+                  <div className="text-xs text-ink-3">
                     {entry.map} · {entry.gamemode}
                   </div>
                 ) : null}
               </div>
             </div>
             {canEdit ? (
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
+              <div className="flex shrink-0 items-center gap-1">
+                <IconButton
+                  icon={<ChevronUpIcon />}
+                  label="Переместить вверх"
                   onClick={() => handleMove(index, index - 1)}
                   disabled={index === 0}
-                  aria-label="Переместить вверх"
-                  className="rounded px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-30"
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
+                />
+                <IconButton
+                  icon={<ChevronDownIcon />}
+                  label="Переместить вниз"
                   onClick={() => handleMove(index, index + 1)}
                   disabled={index === entries.length - 1}
-                  aria-label="Переместить вниз"
-                  className="rounded px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-30"
-                >
-                  ↓
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleRemove(index)}
-                  aria-label="Удалить"
-                  className="rounded px-2 py-1 text-xs text-red-400 hover:bg-neutral-800"
-                >
+                />
+                <Button variant="ghost" size="sm" onClick={() => handleRemove(index)}>
                   Удалить
-                </button>
+                </Button>
               </div>
             ) : null}
           </li>
@@ -254,97 +283,109 @@ export default function RotationPage({ params }: { params: Promise<{ id: string 
       </ul>
 
       {canEdit ? (
-        <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-          <button
-            type="button"
-            onClick={() => setPickerOpen((v) => !v)}
-            className="rounded border border-sky-900 px-3 py-1.5 text-sm text-sky-300 hover:border-sky-700"
-          >
-            {pickerOpen ? 'Скрыть пул' : 'Добавить слой'}
-          </button>
+        <Card padding="none">
+          <CardHeader
+            title="Каталог слоёв"
+            description="Слой добавляется в конец ротации; порядок правится стрелками или перетаскиванием."
+            actions={
+              <Button size="sm" onClick={() => setPickerOpen((v) => !v)}>
+                {pickerOpen ? 'Скрыть пул' : 'Добавить слой'}
+              </Button>
+            }
+          />
           {pickerOpen ? (
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
-                <input
-                  type="text"
-                  value={pickerQuery}
-                  onChange={(e) => setPickerQuery(e.target.value)}
-                  placeholder="Поиск по имени"
-                  className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
-                />
-                <select
-                  value={pickerMap}
-                  onChange={(e) => setPickerMap(e.target.value)}
-                  className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
-                >
-                  <option value="">Любая карта</option>
-                  {mapOptions.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={pickerGamemode}
-                  onChange={(e) => setPickerGamemode(e.target.value)}
-                  className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
-                >
-                  <option value="">Любой режим</option>
-                  {GAMEMODE_OPTIONS.map((g) => (
-                    <option key={g} value={g}>
-                      {g}
-                    </option>
-                  ))}
-                </select>
-                <label className="flex items-center gap-2 text-xs text-neutral-400">
-                  <input
-                    type="checkbox"
-                    checked={pickerSeedOnly}
-                    onChange={(e) => setPickerSeedOnly(e.target.checked)}
+            <CardBody className="space-y-3">
+              <Toolbar
+                search={
+                  <SearchField
+                    value={pickerQuery}
+                    onCommit={setPickerQuery}
+                    placeholder="Поиск по имени"
+                    label="Поиск по имени слоя"
+                    clearLabel="Очистить поиск"
                   />
-                  только seed
-                </label>
-              </div>
-              <div className="max-h-64 overflow-y-auto rounded border border-neutral-900">
-                {filteredPool.map((layer) => (
-                  <div
-                    key={layer.id}
-                    className="flex items-center justify-between gap-2 border-b border-neutral-900 px-3 py-1.5 text-xs last:border-b-0"
-                  >
-                    <span className="font-mono">{layer.name}</span>
-                    <button
-                      type="button"
-                      onClick={() => handleAdd(layer)}
-                      className="rounded bg-sky-700 px-2 py-0.5 text-white hover:bg-sky-600"
+                }
+                filters={
+                  <>
+                    <Select
+                      value={pickerMap}
+                      aria-label="Карта"
+                      onChange={(e) => setPickerMap(e.target.value)}
                     >
-                      Добавить
-                    </button>
-                  </div>
-                ))}
-                {filteredPool.length === 0 ? (
-                  <div className="px-3 py-4 text-center text-neutral-500">Ничего не найдено.</div>
-                ) : null}
-              </div>
-            </div>
+                      <option value="">Любая карта</option>
+                      {mapOptions.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </Select>
+                    <Select
+                      value={pickerGamemode}
+                      aria-label="Режим"
+                      onChange={(e) => setPickerGamemode(e.target.value)}
+                    >
+                      <option value="">Любой режим</option>
+                      {GAMEMODE_OPTIONS.map((g) => (
+                        <option key={g} value={g}>
+                          {g}
+                        </option>
+                      ))}
+                    </Select>
+                    <Checkbox
+                      label="Только seed"
+                      checked={pickerSeedOnly}
+                      onChange={(e) => setPickerSeedOnly(e.target.checked)}
+                    />
+                  </>
+                }
+                summary={`Найдено ${filteredPool.length}`}
+                {...resetProps}
+              />
+              {filteredPool.length === 0 ? (
+                <EmptyState
+                  variant={poolFiltered ? 'filtered' : 'initial'}
+                  title={poolFiltered ? 'Ничего не нашлось' : 'Каталог слоёв пуст'}
+                  description={
+                    poolFiltered
+                      ? 'Ни один слой каталога не подходит под текущий фильтр.'
+                      : 'В каталоге ROT-1 пока нет ни одного слоя.'
+                  }
+                  action={
+                    poolFiltered ? (
+                      <Button size="sm" onClick={resetPoolFilters}>
+                        Сбросить фильтр
+                      </Button>
+                    ) : undefined
+                  }
+                />
+              ) : (
+                <ul className="max-h-64 divide-y divide-line overflow-y-auto rounded-ctl border border-line">
+                  {filteredPool.map((layer) => (
+                    <li
+                      key={layer.id}
+                      className="flex items-center justify-between gap-2 px-3 py-1.5"
+                    >
+                      <span className="truncate font-mono text-xs text-ink">{layer.name}</span>
+                      <Button size="sm" onClick={() => handleAdd(layer)}>
+                        Добавить
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardBody>
           ) : null}
-        </section>
+        </Card>
       ) : null}
 
       {canEdit ? (
-        <div className="sticky bottom-0 flex items-center justify-between gap-3 rounded border border-neutral-800 bg-neutral-950 px-4 py-3">
-          <span className="rounded bg-sky-900/60 px-2 py-1 text-xs text-sky-200">
-            Применится со следующего матча
-          </span>
-          <button
-            type="button"
-            onClick={save}
-            disabled={!dirty || saving}
-            className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {saving ? 'Сохраняю…' : 'Сохранить'}
-          </button>
+        <div className="sticky bottom-0 flex items-center justify-between gap-3 rounded-card border border-line bg-surface/80 px-4 py-3 backdrop-blur-xl">
+          <Badge tone="accent">Применится со следующего матча</Badge>
+          <Button variant="primary" onClick={save} disabled={!dirty} loading={saving}>
+            Сохранить
+          </Button>
         </div>
       ) : null}
-    </div>
+    </PageContainer>
   );
 }

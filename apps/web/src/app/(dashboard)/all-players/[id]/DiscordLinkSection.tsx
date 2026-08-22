@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
+import { Button, Card, CardBody, CardHeader, InlineBanner, Skeleton } from '@/components/ui';
 import {
   buildDiscordLinkUrl,
   buildForceUnlinkUrl,
@@ -35,7 +36,12 @@ export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Vie
   const [busy, setBusy] = useState(false);
   const [forceForbidden, setForceForbidden] = useState(false);
 
-  useEffect(() => {
+  /**
+   * Загрузка привязки. Возвращает отмену — та же функция служит и эффектом
+   * монтирования, и обработчиком «Повторить», поэтому повторная попытка
+   * повторяет ровно тот же запрос.
+   */
+  const load = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setHidden(false);
@@ -67,6 +73,8 @@ export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Vie
     };
   }, [playerId]);
 
+  useEffect(() => load(), [load]);
+
   if (hidden) return null;
 
   const isSelf = me !== null && me.player_id === playerId;
@@ -95,67 +103,67 @@ export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Vie
   }
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">Discord</h2>
+    <Card as="section" padding="none">
+      <CardHeader title="Discord" />
+      <CardBody className="space-y-3">
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title={`Ошибка загрузки Discord-линковки: ${error}`}
+            action={
+              <Button size="sm" onClick={() => load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : null}
 
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          Ошибка загрузки Discord-линковки: {error}
-        </div>
-      ) : null}
+        {forceForbidden ? (
+          <InlineBanner tone="warn" title="Недостаточно прав для принудительной отвязки." />
+        ) : null}
 
-      {forceForbidden ? (
-        <div className="rounded border border-amber-900 bg-amber-950 p-3 text-sm text-amber-200">
-          Недостаточно прав для принудительной отвязки.
-        </div>
-      ) : null}
+        {loading && !data ? <Skeleton variant="text" count={2} label="Загрузка привязки" /> : null}
 
-      {loading && !data ? <div className="text-sm text-neutral-500">Загрузка…</div> : null}
-
-      {data?.linked ? (
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="space-y-0.5">
-            <div className="text-sm text-neutral-100">{data.discord_username}</div>
-            <div className="text-xs text-neutral-500">
-              Привязан {formatLinkedAt(data.linked_at)}
+        {data?.linked ? (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="space-y-1">
+              <div className="text-[13px] text-ink">{data.discord_username}</div>
+              <div className="text-xs text-ink-3">Привязан {formatLinkedAt(data.linked_at)}</div>
             </div>
+            {isSelf ? (
+              <Button size="sm" disabled={busy} onClick={() => void unlink(SELF_UNLINK_URL)}>
+                Отвязать
+              </Button>
+            ) : null}
+            {me !== null && !isSelf && !forceForbidden ? (
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => void unlink(buildForceUnlinkUrl(playerId))}
+              >
+                Отвязать принудительно
+              </Button>
+            ) : null}
           </div>
-          {isSelf ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void unlink(SELF_UNLINK_URL)}
-              className="rounded border border-red-900 px-2 py-1 text-xs text-red-300 hover:bg-red-950 disabled:opacity-40"
-            >
-              Отвязать
-            </button>
-          ) : null}
-          {me !== null && !isSelf && !forceForbidden ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void unlink(buildForceUnlinkUrl(playerId))}
-              className="rounded border border-red-900 px-2 py-1 text-xs text-red-300 hover:bg-red-950 disabled:opacity-40"
-            >
-              Отвязать принудительно
-            </button>
-          ) : null}
-        </div>
-      ) : null}
+        ) : null}
 
-      {data && !data.linked ? (
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm text-neutral-500">Discord не привязан.</div>
-          {isSelf ? (
-            <a
-              href={DISCORD_OAUTH_LOGIN_URL}
-              className="rounded bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-500"
-            >
-              Привязать Discord
-            </a>
-          ) : null}
-        </div>
-      ) : null}
-    </section>
+        {data && !data.linked ? (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-[13px] text-ink-3">Discord не привязан.</div>
+            {isSelf ? (
+              // Адрес обслуживает API, а не маршрут Next: `ButtonLink` увёл бы
+              // переход в клиентскую навигацию, поэтому здесь обычный `<a>`
+              // с классами того же размера, что у вторичной кнопки (§6).
+              <a
+                href={DISCORD_OAUTH_LOGIN_URL}
+                className="inline-flex h-7 items-center justify-center rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2"
+              >
+                Привязать Discord
+              </a>
+            ) : null}
+          </div>
+        ) : null}
+      </CardBody>
+    </Card>
   );
 }

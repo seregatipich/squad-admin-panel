@@ -70,7 +70,7 @@ describe('channelMeta', () => {
     expect(channelMeta('ChatTeam').label).toBe('Команда');
     expect(channelMeta('ChatSquad').label).toBe('Отряд');
     expect(channelMeta('ChatAdmin').label).toBe('Админ');
-    expect(channelMeta('ChatAdmin').badgeClass).toContain('red');
+    expect(channelMeta('ChatAdmin').tone).toBe('crit');
   });
 });
 

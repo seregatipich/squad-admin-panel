@@ -1,8 +1,44 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BroadcastComposer } from './BroadcastComposer';
+
+/**
+ * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
+ * а подтверждение отправки построено на примитиве `AlertDialog`. Полифилл
+ * повторяет ровно то, на что опирается примитив: атрибут `open`, фокус внутрь
+ * окна и цепочку Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
 
 const TEST_TIMEOUT_MS = 15_000;
 
@@ -36,12 +72,13 @@ function mockFetch(overrides: { broadcast?: () => Promise<Response> } = {}) {
   });
 }
 
+/** Окно подтверждения — единственный диалог на экране. */
+function confirmDialog(): HTMLElement {
+  return screen.getByRole('dialog', { name: 'Отправить объявление' });
+}
+
 beforeEach(() => {
   vi.stubGlobal('fetch', mockFetch());
-  vi.stubGlobal(
-    'confirm',
-    vi.fn(() => true),
-  );
 });
 
 afterEach(() => {
@@ -61,7 +98,7 @@ describe('BroadcastComposer', () => {
     async () => {
       render(<BroadcastComposer serverId="srv-1" canChat={true} />);
       const input = await screen.findByPlaceholderText(/текст объявления/i);
-      const send = screen.getByRole('button', { name: /отправить/i });
+      const send = screen.getByRole('button', { name: 'Отправить' });
       expect(send).toBeDisabled();
 
       fireEvent.change(input, { target: { value: 'a' } });
@@ -74,14 +111,19 @@ describe('BroadcastComposer', () => {
   );
 
   it(
-    'asks for confirmation and posts the broadcast on send',
+    'asks for confirmation in a dialog and posts the broadcast on confirm',
     async () => {
       render(<BroadcastComposer serverId="srv-1" canChat={true} />);
       const input = await screen.findByPlaceholderText(/текст объявления/i);
       fireEvent.change(input, { target: { value: 'Server restarting soon' } });
-      fireEvent.click(screen.getByRole('button', { name: /отправить/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
 
-      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Server restarting soon'));
+      const dialog = confirmDialog();
+      expect(within(dialog).getByText(/Server restarting soon/)).toBeInTheDocument();
+      expect(fetch).not.toHaveBeenCalledWith('/api/v1/servers/srv-1/broadcast', expect.anything());
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Отправить объявление' }));
+
       await waitFor(() => {
         expect(fetch).toHaveBeenCalledWith(
           '/api/v1/servers/srv-1/broadcast',
@@ -97,18 +139,21 @@ describe('BroadcastComposer', () => {
   );
 
   it(
-    'does not send when the confirm dialog is cancelled',
+    'does not send when the confirmation is cancelled',
     async () => {
-      vi.stubGlobal(
-        'confirm',
-        vi.fn(() => false),
-      );
       render(<BroadcastComposer serverId="srv-1" canChat={true} />);
       const input = await screen.findByPlaceholderText(/текст объявления/i);
       fireEvent.change(input, { target: { value: 'Server restarting soon' } });
-      fireEvent.click(screen.getByRole('button', { name: /отправить/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
 
-      expect(confirm).toHaveBeenCalled();
+      const dialog = confirmDialog();
+      fireEvent.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0] as HTMLElement);
+
+      await waitFor(() => {
+        expect(
+          screen.queryByRole('dialog', { name: 'Отправить объявление' }),
+        ).not.toBeInTheDocument();
+      });
       expect(fetch).not.toHaveBeenCalledWith('/api/v1/servers/srv-1/broadcast', expect.anything());
     },
     TEST_TIMEOUT_MS,

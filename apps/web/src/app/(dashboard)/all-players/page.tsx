@@ -1,8 +1,30 @@
 'use client';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
 import { PlayerMarkBadge } from '@/components/PlayerMarkBadge';
+import {
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  SearchField,
+  SkeletonTable,
+  SortableTh,
+  type SortDirection,
+  StatusDot,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  type TableRowTone,
+  Td,
+  Th,
+  Toolbar,
+} from '@/components/ui';
 import { highestSeverityTone, type MarkTone, type MarkTypeMini } from '@/lib/marks';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
@@ -11,7 +33,6 @@ import {
   nextSortState,
   type PlayerSortKey,
   type PlayerSortState,
-  sortIndicator,
 } from './helpers';
 
 interface Player {
@@ -35,16 +56,36 @@ const POLL_MS = 8000;
 /** Fallback online heuristic used until the open-session status has loaded. */
 const ONLINE_WINDOW_MS = 90_000;
 
-const rowToneClasses: Record<MarkTone, string> = {
-  red: 'bg-red-950/25',
-  amber: 'bg-amber-950/20',
-  neutral: 'bg-neutral-800/30',
+/**
+ * Метка игрока подкрашивает строку. Цвет здесь — только ускоритель просмотра:
+ * что именно за метка, говорит бейдж в колонке ника, поэтому у строки без
+ * подсветки (`neutral`) ничего не теряется (дизайн-система, §5).
+ */
+const ROW_TONE: Record<MarkTone, TableRowTone> = {
+  red: 'crit',
+  amber: 'warn',
+  neutral: 'default',
 };
 
-const SORT_INDICATOR: Record<OnlineSort, string> = {
-  none: '↕',
-  online: '↓',
-  offline: '↑',
+/** Как читается направление сортировки колонок с обычными значениями. */
+const SORT_DIRECTION_TEXT: Record<SortDirection, string> = {
+  asc: 'по возрастанию',
+  desc: 'по убыванию',
+};
+
+/**
+ * У колонки состояния «возрастание» бессмысленно: сортируют не число, а то,
+ * кто сейчас на сервере, — поэтому направление называется словами.
+ */
+const ONLINE_DIRECTION_TEXT: Record<SortDirection, string> = {
+  desc: 'сначала онлайн',
+  asc: 'сначала офлайн',
+};
+
+/** Колонка состояния сортируется тремя состояниями, `SortableTh` — двумя. */
+const ONLINE_SORT_DIRECTION: Record<Exclude<OnlineSort, 'none'>, SortDirection> = {
+  online: 'desc',
+  offline: 'asc',
 };
 
 export default function PlayersPage() {
@@ -59,6 +100,14 @@ export default function PlayersPage() {
   const [markSummary, setMarkSummary] = useState<Record<string, MarkTypeMini[]>>({});
   const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set());
   const [onlineLoaded, setOnlineLoaded] = useState(false);
+  /**
+   * Внеочередное обновление по кнопке «Повторить».
+   *
+   * Ссылка, а не второй путь загрузки: опрос обязан остаться единственным
+   * местом, которое пишет `data`, — иначе ответ на отменённый запрос обгонит
+   * актуальный и вернёт на экран список, отсортированный по прошлой колонке.
+   */
+  const refreshRef = useRef<() => void>(() => {});
 
   const loadMarkSummary = useCallback(async () => {
     try {
@@ -97,7 +146,7 @@ export default function PlayersPage() {
 
   useEffect(() => {
     let cancelled = false;
-    async function load() {
+    async function loadPlayers() {
       try {
         const r = await fetch(`/api/v1/players?${listQuery}`, {
           credentials: 'include',
@@ -113,17 +162,18 @@ export default function PlayersPage() {
         if (!cancelled) setErr((e as Error).message);
       }
     }
-    void load();
-    void loadMarkSummary();
-    void loadOnlineStatus();
-    const t = setInterval(() => {
-      void load();
+    const refresh = () => {
+      void loadPlayers();
       void loadMarkSummary();
       void loadOnlineStatus();
-    }, POLL_MS);
+    };
+    refreshRef.current = refresh;
+    refresh();
+    const t = setInterval(refresh, POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(t);
+      refreshRef.current = () => {};
     };
   }, [loadMarkSummary, loadOnlineStatus, listQuery]);
 
@@ -171,204 +221,191 @@ export default function PlayersPage() {
     setSortOnline((s) => (s === 'none' ? 'online' : s === 'online' ? 'offline' : 'none'));
   }, []);
 
-  const onSort = useCallback((column: PlayerSortKey) => {
-    setSortState((s) => nextSortState(s, column));
+  const onSort = useCallback((column: string) => {
+    setSortState((s) => nextSortState(s, column as PlayerSortKey));
   }, []);
 
-  if (!data && !err) return <div className="text-neutral-500">Загрузка…</div>;
+  const filtersApplied = q.trim() !== '' || onlyOnline || onlyNew;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Все игроки</h1>
-        <div className="flex items-center gap-3">
-          <div className="text-xs text-neutral-500">
-            всего: {data?.total ?? 0} • онлайн сейчас: {onlineCount}
-          </div>
-          <LiveIndicator lastUpdate={lastUpdate} />
-        </div>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="Все игроки"
+        status={<LiveIndicator lastUpdate={lastUpdate} />}
+        meta={
+          <>
+            <span>всего: {data?.total ?? 0}</span>
+            <span>онлайн сейчас: {onlineCount}</span>
+          </>
+        }
+      />
 
       {err ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{err}</div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить список игроков"
+          description={err}
+          action={
+            <Button size="sm" onClick={() => refreshRef.current()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          type="search"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Поиск по нику, SteamID или EOS ID…"
-          className="flex-1 min-w-[260px] rounded border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-sm"
-        />
-        <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={onlyOnline}
-            onChange={(e) => setOnlyOnline(e.target.checked)}
-            className="accent-emerald-500"
+      <Toolbar
+        search={
+          <SearchField
+            value={q}
+            onCommit={setQ}
+            label="Поиск по игрокам"
+            placeholder="Поиск по нику, SteamID или EOS ID…"
+            clearLabel="Очистить поиск"
           />
-          только онлайн
-        </label>
-        <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={onlyNew}
-            onChange={(e) => setOnlyNew(e.target.checked)}
-            className="accent-emerald-500"
-          />
-          новые (&lt;7 дней)
-        </label>
-      </div>
+        }
+        filters={
+          <>
+            <Checkbox
+              label="только онлайн"
+              checked={onlyOnline}
+              onChange={(e) => setOnlyOnline(e.target.checked)}
+            />
+            <Checkbox
+              label="новые (<7 дней)"
+              checked={onlyNew}
+              onChange={(e) => setOnlyNew(e.target.checked)}
+            />
+          </>
+        }
+        summary={data ? `показано: ${rows.length}` : undefined}
+      />
 
-      {rows.length === 0 ? (
-        <div className="rounded border border-neutral-800 bg-neutral-950 p-6 text-center text-neutral-500 text-sm">
-          {data?.items.length
-            ? 'Нет совпадений.'
-            : 'Ни один игрок ещё не подключался. Запустите сервер и подключитесь в Squad-клиенте.'}
-        </div>
-      ) : (
-        <div className="overflow-x-auto rounded border border-neutral-800">
-          <table className="w-full text-sm">
-            <thead className="bg-neutral-950 text-xs uppercase tracking-widest text-neutral-500">
+      <Card padding="none">
+        {data === null ? (
+          err ? null : (
+            <div className="p-3">
+              <SkeletonTable rows={8} cols={7} label="Загрузка списка игроков" />
+            </div>
+          )
+        ) : rows.length === 0 ? (
+          <EmptyState
+            variant={filtersApplied ? 'filtered' : 'initial'}
+            title={filtersApplied ? 'Нет совпадений.' : 'Пока никто не подключался'}
+            description={
+              filtersApplied
+                ? 'Ни один игрок не подходит под запрос и включённые фильтры.'
+                : 'Ни один игрок ещё не подключался. Запустите сервер и подключитесь в Squad-клиенте.'
+            }
+          />
+        ) : (
+          <Table ariaLabel="Все игроки">
+            <TableHead>
               <tr>
-                <th className="text-left p-2">
-                  <button
-                    type="button"
-                    onClick={toggleSort}
-                    aria-label="Сортировать по статусу онлайн"
-                    className="inline-flex items-center gap-1 uppercase tracking-widest hover:text-neutral-300"
-                  >
-                    Статус
-                    <span
-                      className={sortOnline === 'none' ? 'text-neutral-600' : 'text-sky-400'}
-                      aria-hidden="true"
-                    >
-                      {SORT_INDICATOR[sortOnline]}
-                    </span>
-                  </button>
-                </th>
-                <SortHeader label="Ник" column="nickname" state={sortState} onSort={onSort} />
-                <th className="text-left p-2">SteamID64</th>
-                <th className="text-left p-2">EOS ID</th>
-                <SortHeader
-                  label="Total playtime"
-                  column="total_time"
-                  state={sortState}
-                  onSort={onSort}
+                <SortableTh
+                  sortKey="online"
+                  activeKey={sortOnline === 'none' ? null : 'online'}
+                  direction={sortOnline === 'none' ? 'desc' : ONLINE_SORT_DIRECTION[sortOnline]}
+                  onSort={toggleSort}
+                  label="Статус"
+                  directionText={ONLINE_DIRECTION_TEXT}
                 />
-                <SortHeader label="Created" column="created" state={sortState} onSort={onSort} />
-                <SortHeader
-                  label="Last seen"
-                  column="last_seen"
-                  state={sortState}
+                <SortableTh
+                  sortKey="nickname"
+                  activeKey={sortState.key}
+                  direction={sortState.dir}
                   onSort={onSort}
+                  label="Ник"
+                  directionText={SORT_DIRECTION_TEXT}
+                />
+                <Th>SteamID64</Th>
+                <Th>EOS ID</Th>
+                <SortableTh
+                  sortKey="total_time"
+                  activeKey={sortState.key}
+                  direction={sortState.dir}
+                  onSort={onSort}
+                  label="Наиграно"
+                  directionText={SORT_DIRECTION_TEXT}
+                  align="right"
+                />
+                <SortableTh
+                  sortKey="created"
+                  activeKey={sortState.key}
+                  direction={sortState.dir}
+                  onSort={onSort}
+                  label="Создан"
+                  directionText={SORT_DIRECTION_TEXT}
+                />
+                <SortableTh
+                  sortKey="last_seen"
+                  activeKey={sortState.key}
+                  direction={sortState.dir}
+                  onSort={onSort}
+                  label="Был(а)"
+                  directionText={SORT_DIRECTION_TEXT}
                 />
               </tr>
-            </thead>
-            <tbody>
+            </TableHead>
+            <TableBody>
               {rows.map((p) => {
                 const online = isOnline(p);
                 const playerMarks = markSummary[p.id] ?? [];
                 const markTone = highestSeverityTone(playerMarks);
                 return (
-                  <tr
-                    key={p.id}
-                    className={`border-t border-neutral-900 ${markTone ? rowToneClasses[markTone] : ''}`}
-                  >
-                    <td className="p-2">
-                      <span className="inline-flex items-center gap-1.5">
-                        <span
-                          className={`inline-block h-2.5 w-2.5 rounded-full ${online ? 'bg-emerald-500' : 'bg-neutral-600'}`}
-                          title={online ? 'online' : 'offline'}
-                        />
-                        <span
-                          className={`text-xs ${online ? 'text-emerald-400' : 'text-neutral-600'}`}
-                        >
-                          {online ? 'онлайн' : 'офлайн'}
-                        </span>
-                      </span>
-                    </td>
-                    <td className="p-2">
+                  <TableRow key={p.id} interactive tone={markTone ? ROW_TONE[markTone] : 'default'}>
+                    <Td>
+                      <StatusDot
+                        state={online ? 'good' : 'idle'}
+                        label={online ? 'онлайн' : 'офлайн'}
+                      />
+                    </Td>
+                    <Td>
                       <span className="inline-flex items-center gap-2">
                         <Link
                           href={`/all-players/${p.id}`}
-                          className="text-sky-400 hover:text-sky-300 font-medium"
+                          className="font-medium text-accent no-underline hover:brightness-110"
                         >
                           {p.canonical_name}
                         </Link>
                         <PlayerMarkBadge marks={playerMarks} />
                       </span>
-                    </td>
-                    <td className="p-2 font-mono text-xs">
+                    </Td>
+                    <Td className="font-mono text-xs">
                       {p.steam_id64 ? (
                         <a
                           href={`https://steamcommunity.com/profiles/${p.steam_id64}`}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-neutral-300 hover:text-sky-300"
+                          className="text-ink-2 no-underline hover:text-accent"
                         >
                           {p.steam_id64}
                         </a>
                       ) : (
-                        <span className="text-neutral-600">—</span>
+                        <span className="text-ink-3">—</span>
                       )}
-                    </td>
-                    <td className="p-2 font-mono text-[11px] text-neutral-400">
-                      {p.eos_id ?? '—'}
-                    </td>
-                    <td className="p-2 font-mono text-xs">
+                    </Td>
+                    <Td className="font-mono text-2xs text-ink-3">{p.eos_id ?? '—'}</Td>
+                    <Td numeric className="font-mono text-xs">
                       {fmtDuration(p.total_time_played_seconds)}
-                    </td>
-                    <td className="p-2 text-xs text-neutral-500">
+                    </Td>
+                    <Td className="text-xs text-ink-3">
                       {new Date(p.first_seen_at).toLocaleString()}
-                    </td>
-                    <td className="p-2 text-xs text-neutral-500">
+                    </Td>
+                    <Td className="text-xs text-ink-3">
                       {online ? (
-                        <span className="text-emerald-400">сейчас на сервере</span>
+                        <span className="text-good">сейчас на сервере</span>
                       ) : (
                         new Date(p.last_seen_at).toLocaleString()
                       )}
-                    </td>
-                  </tr>
+                    </Td>
+                  </TableRow>
                 );
               })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SortHeader({
-  label,
-  column,
-  state,
-  onSort,
-}: {
-  label: string;
-  column: PlayerSortKey;
-  state: PlayerSortState;
-  onSort: (column: PlayerSortKey) => void;
-}) {
-  return (
-    <th className="text-left p-2">
-      <button
-        type="button"
-        onClick={() => onSort(column)}
-        aria-label={`Сортировать по колонке ${label}`}
-        className="inline-flex items-center gap-1 uppercase tracking-widest hover:text-neutral-300"
-      >
-        {label}
-        <span
-          className={state.key === column ? 'text-sky-400' : 'text-neutral-600'}
-          aria-hidden="true"
-        >
-          {sortIndicator(state, column)}
-        </span>
-      </button>
-    </th>
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+    </PageContainer>
   );
 }
 

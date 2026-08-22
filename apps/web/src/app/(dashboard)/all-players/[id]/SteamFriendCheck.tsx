@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Button } from '@/components/ui';
 
 export type SteamFriendCheckReason = 'private_profile' | 'no_steam_id' | 'api_key_missing';
 
@@ -54,25 +55,20 @@ export function SteamFriendCheck({
   }
 
   if (error) {
-    return <output className="text-xs text-red-300">Ошибка Steam: {error}</output>;
+    return <output className="text-xs text-crit">Ошибка Steam: {error}</output>;
   }
 
   if (result) {
     return (
-      <output className="text-xs text-neutral-400" title={result.cached ? 'Кэш 24 ч' : undefined}>
+      <output className="text-xs text-ink-2" title={result.cached ? 'Кэш 24 ч' : undefined}>
         Steam: {resultLabel(result)}
       </output>
     );
   }
 
   return (
-    <button
-      type="button"
-      onClick={() => void checkFriends()}
-      disabled={loading}
-      className="rounded border border-neutral-800 px-2 py-1 text-xs text-neutral-400 hover:border-neutral-600 disabled:opacity-40"
-    >
-      {loading ? 'Проверка…' : 'Проверить друзей'}
-    </button>
+    <Button size="sm" loading={loading} onClick={() => void checkFriends()}>
+      Проверить друзей
+    </Button>
   );
 }
