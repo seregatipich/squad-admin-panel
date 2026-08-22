@@ -2,6 +2,18 @@
 import { useRouter } from 'next/navigation';
 import { use, useEffect, useState } from 'react';
 import { LogConsole } from '@/components/LogConsole';
+import {
+  Button,
+  Card,
+  FieldRow,
+  GroupedList,
+  GroupedRow,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Skeleton,
+  TextInput,
+} from '@/components/ui';
 
 interface ArchiveDetail {
   server: {
@@ -43,6 +55,17 @@ type WizardStage =
   | 'starting'
   | 'done'
   | 'error';
+
+/** Заголовок страницы для каждого шага мастера, кроме формы. */
+const STAGE_TITLE: Record<Exclude<WizardStage, 'form'>, string> = {
+  creating: 'Создаём сервер…',
+  installing: 'Установка…',
+  'restoring-configs': 'Накладываем бэкап конфигов…',
+  'configs-restored': 'Конфиги восстановлены',
+  starting: 'Запуск сервера…',
+  done: 'Готово',
+  error: 'Ошибка восстановления',
+};
 
 export default function RestoreWizardPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -92,7 +115,7 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
       body: JSON.stringify({ slug, display_name: displayName }),
     });
     if (restoreRes.status === 409) {
-      setError('Этот slug уже занят активным сервером');
+      setError('Этот идентификатор уже занят активным сервером');
       setStage('form');
       return;
     }
@@ -193,81 +216,74 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
     router.push(`/servers/${newServerId}`);
   }
 
-  if (!archive && !error) return <div className="text-neutral-500">Загрузка…</div>;
-  if (!archive)
+  if (!archive) {
     return (
-      <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">Ошибка: {error}</div>
+      <PageContainer width="form">
+        <PageHeader
+          title="Восстановление сервера из архива"
+          backHref="/servers/archive"
+          backLabel="К архиву"
+        />
+        {error ? (
+          <InlineBanner tone="crit" title="Не удалось получить запись архива" description={error} />
+        ) : (
+          <Skeleton variant="card" label="Загружается запись архива" />
+        )}
+      </PageContainer>
     );
+  }
 
   if (stage === 'form') {
     return (
-      <form onSubmit={submit} className="space-y-4 max-w-xl">
-        <h1 className="text-2xl font-semibold">Восстановление сервера из архива</h1>
-        <div className="rounded border border-neutral-800 bg-neutral-950 p-3 text-xs text-neutral-400">
-          Источник: <span className="font-mono">{archive.server.display_name}</span> ·{' '}
-          <span className="font-mono">{archive.server.slug}</span>
-        </div>
-        {error ? (
-          <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{error}</div>
-        ) : null}
-        <label className="block space-y-1">
-          <span className="text-xs uppercase tracking-widest text-neutral-400">
-            Slug нового сервера
-          </span>
-          <input
-            type="text"
-            value={slug}
-            onChange={(e) => setSlug(e.target.value)}
-            pattern="^[a-z0-9-]+$"
-            required
-            className="w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
-          />
-        </label>
-        <label className="block space-y-1">
-          <span className="text-xs uppercase tracking-widest text-neutral-400">
-            Отображаемое имя
-          </span>
-          <input
-            type="text"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            required
-            className="w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
-          />
-        </label>
-        <button
-          type="submit"
-          className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500"
-        >
-          Создать новый сервер из бэкапа
-        </button>
-      </form>
+      <PageContainer width="form">
+        <PageHeader
+          title="Восстановление сервера из архива"
+          backHref="/servers/archive"
+          backLabel="К архиву"
+          subtitle={`Источник: ${archive.server.display_name} · ${archive.server.slug}`}
+        />
+        {error && <InlineBanner tone="crit" title="Восстановление не начато" description={error} />}
+        <Card as="section">
+          <form onSubmit={submit} className="space-y-4">
+            <FieldRow label="Идентификатор нового сервера" required>
+              <TextInput
+                value={slug}
+                onChange={(e) => setSlug(e.target.value)}
+                pattern="^[a-z0-9-]+$"
+                required
+              />
+            </FieldRow>
+            <FieldRow label="Отображаемое имя" required>
+              <TextInput
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                required
+              />
+            </FieldRow>
+            <div className="flex justify-end">
+              <Button type="submit" variant="primary">
+                Создать новый сервер из бэкапа
+              </Button>
+            </div>
+          </form>
+        </Card>
+      </PageContainer>
     );
   }
 
   return (
-    <div className="space-y-4 max-w-3xl">
-      <h1 className="text-2xl font-semibold">
-        {stage === 'creating'
-          ? 'Создаём сервер…'
-          : stage === 'installing'
-            ? 'Установка…'
-            : stage === 'restoring-configs'
-              ? 'Накладываем бэкап конфигов…'
-              : stage === 'configs-restored'
-                ? 'Конфиги восстановлены'
-                : stage === 'starting'
-                  ? 'Запуск сервера…'
-                  : stage === 'done'
-                    ? 'Готово'
-                    : 'Ошибка восстановления'}
-      </h1>
-      {newServerId ? (
-        <div className="text-xs text-neutral-500 font-mono">new server id: {newServerId}</div>
-      ) : null}
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{error}</div>
-      ) : null}
+    <PageContainer width="form">
+      <PageHeader
+        title={STAGE_TITLE[stage]}
+        backHref="/servers/archive"
+        backLabel="К архиву"
+        meta={
+          newServerId ? (
+            <span className="font-mono">ID нового сервера: {newServerId}</span>
+          ) : undefined
+        }
+      />
+      {error && <InlineBanner tone="crit" title="Ошибка восстановления" description={error} />}
       <LogConsole
         lines={lines}
         height="20rem"
@@ -276,48 +292,47 @@ export default function RestoreWizardPage({ params }: { params: Promise<{ id: st
         emptyText="Ожидание первого сообщения…"
       />
       {restoreSummary ? (
-        <div className="rounded border border-neutral-800 bg-neutral-950 p-3 text-sm space-y-1">
-          <div>
-            Восстановлено файлов: <span className="font-mono">{restoreSummary.files_restored}</span>
-          </div>
-          <div>
-            Пропущено (например, Rcon.cfg):{' '}
-            <span className="font-mono">{restoreSummary.files_skipped}</span>
-          </div>
+        <GroupedList title="Итог наложения конфигов">
+          <GroupedRow
+            label="Восстановлено файлов"
+            control={<span className="tabular-nums text-xs">{restoreSummary.files_restored}</span>}
+          />
+          <GroupedRow
+            label="Пропущено"
+            description="Например, Rcon.cfg — он собирается заново."
+            control={<span className="tabular-nums text-xs">{restoreSummary.files_skipped}</span>}
+          />
           {restoreSummary.files_missing ? (
-            <div>
-              Не найдено в бэкапе: <span className="font-mono">{restoreSummary.files_missing}</span>
-            </div>
+            <GroupedRow
+              label="Не найдено в бэкапе"
+              control={<span className="tabular-nums text-xs">{restoreSummary.files_missing}</span>}
+            />
           ) : null}
-          {restoreSummary.errors.length ? (
-            <ul className="text-xs text-red-300">
+        </GroupedList>
+      ) : null}
+      {restoreSummary && restoreSummary.errors.length > 0 ? (
+        <InlineBanner
+          tone="warn"
+          title="Часть файлов не восстановилась"
+          description={
+            <ul>
               {restoreSummary.errors.map((er) => (
                 <li key={er.filename}>
                   {er.filename}: {er.error}
                 </li>
               ))}
             </ul>
-          ) : null}
-        </div>
+          }
+        />
       ) : null}
       {stage === 'configs-restored' && newServerId ? (
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={startServer}
-            className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500"
-          >
+        <div className="flex justify-end gap-2">
+          <Button onClick={() => router.push(`/servers/${newServerId}`)}>Открыть сервер</Button>
+          <Button variant="primary" onClick={startServer}>
             Запустить сервер
-          </button>
-          <button
-            type="button"
-            onClick={() => router.push(`/servers/${newServerId}`)}
-            className="rounded border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-800"
-          >
-            Открыть сервер
-          </button>
+          </Button>
         </div>
       ) : null}
-    </div>
+    </PageContainer>
   );
 }

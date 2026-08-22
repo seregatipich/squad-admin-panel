@@ -223,7 +223,9 @@ describe('AppealsBrowser', () => {
       render(<AppealsBrowser />);
       await screen.findByText('#7');
 
-      fireEvent.click(screen.getByRole('button', { name: 'Одобренные' }));
+      // Фильтр статусов — сегментированный переключатель (`role="tab"`),
+      // а не ряд кнопок: проверяем ту же связь «выбор → адрес».
+      fireEvent.click(screen.getByRole('tab', { name: 'Одобренные' }));
       await waitFor(() => expect(replace).toHaveBeenCalled());
       expect(String(replace.mock.calls.at(-1)?.[0])).toContain('status=approved');
     },

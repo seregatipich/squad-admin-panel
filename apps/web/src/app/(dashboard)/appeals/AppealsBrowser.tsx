@@ -3,6 +3,24 @@
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import {
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  FieldRow,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Pagination,
+  SegmentedControl,
+  Skeleton,
+  StatusBadge,
+  type StatusState,
+  TextInput,
+  Toolbar,
+} from '@/components/ui';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   type AppealFilters,
@@ -15,7 +33,6 @@ import {
   isTerminal,
   NOTE_MAX,
   parseFilters,
-  STATUS_BADGE_CLASSES,
   STATUS_FILTERS,
   STATUS_LABELS,
   totalPages,
@@ -58,11 +75,37 @@ const ACTION_LABELS: Record<AppealStatus, string> = {
   rejected: 'Отклонить',
 };
 
-const ACTION_CLASSES: Record<AppealStatus, string> = {
-  pending: 'border-neutral-700 bg-neutral-900 text-neutral-200 hover:bg-neutral-800',
-  in_review: 'border-sky-700 bg-sky-950 text-sky-200 hover:bg-sky-900',
-  approved: 'border-emerald-700 bg-emerald-950 text-emerald-200 hover:bg-emerald-900',
-  rejected: 'border-red-800 bg-red-950 text-red-200 hover:bg-red-900',
+/**
+ * Одобрение — это разбан, то есть подтверждающее действие карточки, поэтому
+ * оно первично. Отклонение ничего не разрушает необратимо (§5 дизайн-системы
+ * оставляет `destructive` за уничтожением данных), поэтому остаётся вторичным
+ * и отличается от одобрения подписью, а не цветом.
+ */
+const ACTION_VARIANT: Record<AppealStatus, 'primary' | 'secondary'> = {
+  pending: 'secondary',
+  in_review: 'secondary',
+  approved: 'primary',
+  rejected: 'secondary',
+};
+
+/**
+ * Состояние заявки в терминах индикаторов дизайн-системы.
+ *
+ * `in_review` и `rejected` делят тон `idle`: ни то, ни другое не требует от
+ * оператора действия прямо сейчас, а различает их подпись бейджа — состояние
+ * никогда не кодируется одним цветом (§5).
+ */
+const STATUS_STATE: Record<AppealStatus, StatusState> = {
+  pending: 'warn',
+  in_review: 'idle',
+  approved: 'good',
+  rejected: 'idle',
+};
+
+const PAGINATION_LABELS = {
+  previous: 'Назад',
+  next: 'Вперёд',
+  page: (page: number, of: number) => `Страница ${page} из ${of}`,
 };
 
 /**
@@ -88,7 +131,9 @@ export function AppealsBrowser() {
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  // Какое именно решение сейчас уходит на сервер: индикатор обязан остаться на
+  // нажатой кнопке, а не появиться сразу на всех решениях карточки (§8).
+  const [busyAction, setBusyAction] = useState<{ id: string; status: AppealStatus } | null>(null);
   const [decisionNote, setDecisionNote] = useState<Record<string, string>>({});
   const [internalNote, setInternalNote] = useState<Record<string, string>>({});
 
@@ -140,7 +185,7 @@ export function AppealsBrowser() {
   useLiveSubscription('appeal.updated', onAppealChanged);
 
   async function decide(appeal: AppealItem, status: AppealStatus) {
-    setBusyId(appeal.id);
+    setBusyAction({ id: appeal.id, status });
     setError(null);
     try {
       const payload: Record<string, unknown> = { status };
@@ -164,196 +209,231 @@ export function AppealsBrowser() {
     } catch (e) {
       setError(`Ошибка сети: ${(e as Error).message}`);
     } finally {
-      setBusyId(null);
+      setBusyAction(null);
     }
-  }
-
-  if (forbidden) {
-    return (
-      <div className="rounded border border-neutral-800 bg-neutral-950 px-4 py-6 text-center text-sm text-neutral-400">
-        Недостаточно прав для просмотра апелляций.
-      </div>
-    );
   }
 
   const pages = totalPages(total);
 
-  return (
-    <div className="space-y-6">
-      <div className="flex max-w-4xl items-center justify-between gap-3">
-        <div className="flex items-baseline gap-4">
-          <h1 className="text-2xl font-semibold">Апелляции</h1>
-          <span className="text-sm text-neutral-500">всего: {total}</span>
-        </div>
-        <LiveIndicator lastUpdate={lastUpdate} />
-      </div>
+  // Заголовок страницы остаётся на всех ветках, включая отказ в доступе:
+  // единственный `h1` — та опора, по которой оператор понимает, где он.
+  const header = (
+    <PageHeader
+      title="Апелляции"
+      subtitle="Публичный портал /appeal: забаненный игрок оставляет апелляцию без входа в панель и следит за решением по своей ссылке. Одобрение снимает бан и убирает игрока из публикуемого банлиста."
+      status={<LiveIndicator lastUpdate={lastUpdate} />}
+    />
+  );
 
-      <p className="max-w-4xl text-xs text-neutral-500">
-        Публичный портал <code>/appeal</code>: забаненный игрок оставляет апелляцию без входа в
-        панель и следит за решением по своей ссылке. Одобрение снимает бан и убирает игрока из
-        публикуемого банлиста.
-      </p>
+  if (forbidden) {
+    return (
+      <PageContainer width="wide">
+        {header}
+        <Card padding="none">
+          <EmptyState
+            title="Недостаточно прав для просмотра апелляций"
+            description="Очередь открывается по праву mod:unban. Запросите его у администратора панели."
+          />
+        </Card>
+      </PageContainer>
+    );
+  }
+
+  return (
+    <PageContainer width="wide">
+      {header}
+
+      <Toolbar
+        filters={
+          <SegmentedControl
+            ariaLabel="Статус апелляции"
+            value={filters.status}
+            onChange={(value) => navigate({ status: value as '' | AppealStatus })}
+            items={STATUS_FILTERS.map((option) => ({
+              value: option.value,
+              label: option.label,
+            }))}
+          />
+        }
+        summary={`Всего: ${total}`}
+      />
 
       {error ? (
-        <div className="max-w-4xl rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {error}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title="Ошибка запроса"
+          description={error}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-neutral-400">Статус:</span>
-        {STATUS_FILTERS.map((option) => (
-          <button
-            key={option.value || 'all'}
-            type="button"
-            onClick={() => navigate({ status: option.value })}
-            className={`rounded border px-2 py-1 text-xs ${
-              filters.status === option.value
-                ? 'border-sky-700 bg-sky-950 text-sky-200'
-                : 'border-neutral-800 text-neutral-400 hover:border-neutral-600'
-            }`}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-
-      {loading ? <p className="text-sm text-neutral-500">Загрузка…</p> : null}
-
-      {!loading && items.length === 0 ? (
-        <p className="max-w-4xl py-6 text-center text-sm text-neutral-500">Апелляций нет.</p>
+      {loading ? (
+        <Skeleton variant="card" count={3} label="Загрузка апелляций" />
+      ) : items.length === 0 ? (
+        <Card padding="none">
+          {filters.status ? (
+            <EmptyState
+              variant="filtered"
+              title="Апелляций нет"
+              description="По выбранному статусу заявок не нашлось."
+              action={
+                <Button size="sm" onClick={() => navigate({ status: '' })}>
+                  Сбросить фильтр
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              title="Апелляций нет"
+              description="Заявки появятся здесь, как только забаненный игрок отправит апелляцию с публичного портала."
+            />
+          )}
+        </Card>
       ) : (
-        <ul className="max-w-4xl space-y-3">
+        <ul className="space-y-4">
           {items.map((appeal) => (
-            <li
-              key={appeal.id}
-              className="space-y-2 rounded border border-neutral-800 bg-neutral-950 p-4"
-            >
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <div className="flex items-baseline gap-3">
-                  <span className="font-mono text-sm text-neutral-300">
-                    {appealNumberLabel(appeal.number)}
-                  </span>
-                  <span
-                    className={`rounded px-2 py-0.5 text-[11px] ${STATUS_BADGE_CLASSES[appeal.status]}`}
-                  >
-                    {STATUS_LABELS[appeal.status]}
-                  </span>
-                </div>
-                <span className="text-xs text-neutral-500">
-                  {formatDateTime(appeal.created_at)}
-                </span>
-              </div>
-
-              <div className="text-xs text-neutral-400">
-                <span className="font-mono">{appeal.steam_id64}</span>
-                {appeal.player?.name ? ` · ${appeal.player.name}` : ' · игрок не найден в базе'}
-                {appeal.contact ? ` · контакт: ${appeal.contact}` : ''}
-              </div>
-
-              {appeal.moderation_action ? (
-                <div className="text-xs text-neutral-500">
-                  Обжалуемый бан от {formatDateTime(appeal.moderation_action.created_at)}
-                  {appeal.moderation_action.reason
-                    ? ` · причина: ${appeal.moderation_action.reason}`
-                    : ''}
-                  {appeal.moderation_action.ban_length
-                    ? ` · срок: ${appeal.moderation_action.ban_length}`
-                    : ''}
-                </div>
-              ) : (
-                <div className="text-xs text-neutral-500">Активный бан не найден.</div>
-              )}
-
-              <p className="whitespace-pre-wrap text-sm text-neutral-200">{appeal.body}</p>
-
-              {appeal.internal_note ? (
-                <p className="text-xs text-amber-300/80">
-                  Внутренняя заметка: {appeal.internal_note}
-                </p>
-              ) : null}
-
-              {isTerminal(appeal.status) ? (
-                <div className="border-t border-neutral-900 pt-2 text-xs text-neutral-500">
-                  Решение от {formatDateTime(appeal.decided_at)}
-                  {appeal.handler?.name ? ` · ${appeal.handler.name}` : ''}
-                  {appeal.decision_note ? ` · «${appeal.decision_note}»` : ''}
-                </div>
-              ) : (
-                <div className="space-y-2 border-t border-neutral-900 pt-3">
-                  <label className="block text-xs">
-                    <span className="mb-1 block text-neutral-500">
-                      Ответ заявителю — его увидит заявитель на публичной странице
-                    </span>
-                    <input
-                      type="text"
-                      value={decisionNote[appeal.id] ?? ''}
-                      maxLength={NOTE_MAX}
-                      onChange={(e) =>
-                        setDecisionNote((m) => ({ ...m, [appeal.id]: e.target.value }))
-                      }
-                      placeholder="Ответ заявителю (необязательно)"
-                      className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs"
-                    />
-                  </label>
-                  <label className="block text-xs">
-                    <span className="mb-1 block text-neutral-500">
-                      Внутренняя заметка — наружу не отдаётся
-                    </span>
-                    <input
-                      type="text"
-                      value={internalNote[appeal.id] ?? ''}
-                      maxLength={NOTE_MAX}
-                      onChange={(e) =>
-                        setInternalNote((m) => ({ ...m, [appeal.id]: e.target.value }))
-                      }
-                      placeholder="Внутренняя заметка (необязательно)"
-                      className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs"
-                    />
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    {allowedTransitions(appeal.status).map((next) => (
-                      <button
-                        key={next}
-                        type="button"
-                        disabled={busyId === appeal.id}
-                        onClick={() => decide(appeal, next)}
-                        className={`rounded-md border px-3 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-60 ${ACTION_CLASSES[next]}`}
-                      >
-                        {ACTION_LABELS[next]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+            <li key={appeal.id}>
+              <AppealCard
+                appeal={appeal}
+                busyStatus={busyAction?.id === appeal.id ? busyAction.status : null}
+                decisionNote={decisionNote[appeal.id] ?? ''}
+                internalNote={internalNote[appeal.id] ?? ''}
+                onDecisionNoteChange={(value) =>
+                  setDecisionNote((map) => ({ ...map, [appeal.id]: value }))
+                }
+                onInternalNoteChange={(value) =>
+                  setInternalNote((map) => ({ ...map, [appeal.id]: value }))
+                }
+                onDecide={(status) => void decide(appeal, status)}
+              />
             </li>
           ))}
         </ul>
       )}
 
       {pages > 1 ? (
-        <div className="flex max-w-4xl items-center gap-3 text-sm">
-          <button
-            type="button"
-            disabled={filters.page <= 1}
-            onClick={() => navigate({ page: filters.page - 1 })}
-            className="rounded border border-neutral-800 px-3 py-1 text-xs text-neutral-300 disabled:opacity-40"
-          >
-            Назад
-          </button>
-          <span className="text-xs text-neutral-500">
-            {filters.page} / {pages}
-          </span>
-          <button
-            type="button"
-            disabled={filters.page >= pages}
-            onClick={() => navigate({ page: filters.page + 1 })}
-            className="rounded border border-neutral-800 px-3 py-1 text-xs text-neutral-300 disabled:opacity-40"
-          >
-            Вперёд
-          </button>
-        </div>
+        <Pagination
+          page={filters.page}
+          pageCount={pages}
+          onChange={(page) => navigate({ page })}
+          labels={PAGINATION_LABELS}
+          allowJump
+        />
       ) : null}
-    </div>
+    </PageContainer>
+  );
+}
+
+function AppealCard({
+  appeal,
+  busyStatus,
+  decisionNote,
+  internalNote,
+  onDecisionNoteChange,
+  onInternalNoteChange,
+  onDecide,
+}: {
+  appeal: AppealItem;
+  /** Решение, которое сейчас отправляется по этой заявке, или `null`. */
+  busyStatus: AppealStatus | null;
+  decisionNote: string;
+  internalNote: string;
+  onDecisionNoteChange: (value: string) => void;
+  onInternalNoteChange: (value: string) => void;
+  onDecide: (status: AppealStatus) => void;
+}) {
+  const transitions = allowedTransitions(appeal.status);
+
+  return (
+    <Card padding="none">
+      <CardHeader
+        title={appealNumberLabel(appeal.number)}
+        actions={
+          <>
+            <span className="text-xs text-ink-3">{formatDateTime(appeal.created_at)}</span>
+            <StatusBadge
+              state={STATUS_STATE[appeal.status]}
+              label={STATUS_LABELS[appeal.status]}
+              size="sm"
+            />
+          </>
+        }
+      />
+
+      <CardBody className="space-y-3">
+        <p className="text-xs text-ink-2">
+          <span className="font-mono">{appeal.steam_id64}</span>
+          {appeal.player?.name ? ` · ${appeal.player.name}` : ' · игрок не найден в базе'}
+          {appeal.contact ? ` · контакт: ${appeal.contact}` : ''}
+        </p>
+
+        {appeal.moderation_action ? (
+          <p className="text-xs text-ink-3">
+            {`Обжалуемый бан от ${formatDateTime(appeal.moderation_action.created_at)}${
+              appeal.moderation_action.reason
+                ? ` · причина: ${appeal.moderation_action.reason}`
+                : ''
+            }${
+              appeal.moderation_action.ban_length
+                ? ` · срок: ${appeal.moderation_action.ban_length}`
+                : ''
+            }`}
+          </p>
+        ) : (
+          <p className="text-xs text-ink-3">Активный бан не найден.</p>
+        )}
+
+        <p className="whitespace-pre-wrap text-[13px] text-ink">{appeal.body}</p>
+
+        {appeal.internal_note ? (
+          <p className="text-xs text-warn">Внутренняя заметка: {appeal.internal_note}</p>
+        ) : null}
+
+        {isTerminal(appeal.status) ? (
+          <p className="border-t border-line pt-3 text-xs text-ink-3">
+            {`Решение от ${formatDateTime(appeal.decided_at)}${
+              appeal.handler?.name ? ` · ${appeal.handler.name}` : ''
+            }${appeal.decision_note ? ` · «${appeal.decision_note}»` : ''}`}
+          </p>
+        ) : (
+          <div className="space-y-3 border-t border-line pt-3">
+            <FieldRow label="Ответ заявителю" hint="Его увидит заявитель на публичной странице.">
+              <TextInput
+                value={decisionNote}
+                maxLength={NOTE_MAX}
+                onChange={(event) => onDecisionNoteChange(event.target.value)}
+                placeholder="Ответ заявителю (необязательно)"
+              />
+            </FieldRow>
+            <FieldRow label="Внутренняя заметка" hint="Наружу не отдаётся.">
+              <TextInput
+                value={internalNote}
+                maxLength={NOTE_MAX}
+                onChange={(event) => onInternalNoteChange(event.target.value)}
+                placeholder="Внутренняя заметка (необязательно)"
+              />
+            </FieldRow>
+            <div className="flex flex-wrap justify-end gap-2">
+              {transitions.map((next) => (
+                <Button
+                  key={next}
+                  variant={ACTION_VARIANT[next]}
+                  size="sm"
+                  loading={busyStatus === next}
+                  disabled={busyStatus !== null}
+                  onClick={() => onDecide(next)}
+                >
+                  {ACTION_LABELS[next]}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardBody>
+    </Card>
   );
 }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import { matchBannedName, validateBannedNamePattern } from '@squad/shared-config/banned-names';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 let mockSearchParams = new URLSearchParams();
@@ -15,6 +15,42 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 
 import BannedNamesPage from './page';
+
+/**
+ * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
+ * а окна правила и подтверждения построены на примитиве `Modal`. Полифилл повторяет ровно то,
+ * на что опирается примитив: атрибут `open`, фокус внутрь окна и цепочку
+ * Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
 
 const RULE = {
   id: 'rule-1',
@@ -82,12 +118,55 @@ describe('BannedNamesPage', () => {
     expect(screen.queryByRole('link', { name: /срабатывания/i })).not.toBeInTheDocument();
   });
 
-  it('highlights the row matching the ?rule= URL param', async () => {
+  it('marks the row matching the ?rule= URL param in words, not only in colour', async () => {
     mockSearchParams = new URLSearchParams('rule=rule-1');
     vi.stubGlobal('fetch', mockListFetch());
     render(<BannedNamesPage />);
     const row = (await screen.findByText('AdolfHitler')).closest('tr');
-    await waitFor(() => expect(row?.className).toContain('ring-sky-500'));
+    if (!row) throw new Error('Строка правила не отрисована');
+    await waitFor(() => expect(within(row).getByText('Выбранное правило')).toBeInTheDocument());
+  });
+
+  it('asks for confirmation in a dialog before deleting a rule', async () => {
+    const fetchMock = mockListFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<BannedNamesPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Удалить' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/AdolfHitler/)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/v1/banned-names/rule-1',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Удалить правило' }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/v1/banned-names/rule-1',
+        expect.objectContaining({ method: 'DELETE' }),
+      ),
+    );
+  });
+
+  it('keeps the rule when the confirmation is cancelled', async () => {
+    const fetchMock = mockListFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<BannedNamesPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Удалить' }));
+    const dialog = await screen.findByRole('dialog');
+    // «Отмена» носят и кнопка подвала, и крестик окна: нужен именно подвал.
+    const cancels = within(dialog).getAllByRole('button', { name: 'Отмена' });
+    fireEvent.click(cancels[cancels.length - 1] as HTMLElement);
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/v1/banned-names/rule-1',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
   });
 });
 

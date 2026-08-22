@@ -1,6 +1,21 @@
 'use client';
 
-import { use, useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  FieldRow,
+  IconButton,
+  InlineBanner,
+  Modal,
+  PageContainer,
+  PlusIcon,
+  Select,
+  Skeleton,
+  TextInput,
+} from '@/components/ui';
 import {
   bucketByDay,
   dayKey,
@@ -40,6 +55,9 @@ interface ProfileDraft {
 
 const WEEKDAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
+/** Служебный ярлык над значением — единственное место, где §1 допускает капслок. */
+const CHIP_LABEL = 'text-2xs uppercase tracking-[0.06em] text-ink-3';
+
 function emptyForm(date: Date, layer: string): FormState {
   return { scheduled_at: toDatetimeLocalValue(date), layer, mode: 'set_next' };
 }
@@ -78,9 +96,6 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(() => emptyForm(new Date(), ''));
 
-  const startsAtId = useId();
-  const layerId = useId();
-  const modeId = useId();
   const rangeTo = useMemo(() => {
     const end = new Date(weekStart.getTime());
     end.setUTCDate(end.getUTCDate() + 7);
@@ -255,54 +270,45 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
     setProfiles((current) => [...current, { name: 'Новый профиль', weekday, layers: [] }]);
   }
 
-  if (loading) return <div className="text-neutral-500">Загрузка…</div>;
+  if (loading) {
+    return (
+      <PageContainer width="wide">
+        <Skeleton variant="card" count={3} label="Календарь ротации загружается" />
+      </PageContainer>
+    );
+  }
 
   return (
-    <div className="max-w-7xl space-y-5 pb-20">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Календарь ротации</h1>
-          <p className="mt-1 text-sm text-neutral-400">
-            История сыгранных карт, запланированные смены и недельные профили LayerRotation.cfg.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 text-sm">
-          <button
-            type="button"
-            onClick={() => setWeekStart((date) => new Date(date.getTime() - 7 * 86_400_000))}
-            className="rounded border border-neutral-800 px-3 py-1.5 text-neutral-300 hover:border-neutral-600"
-          >
+    <PageContainer width="wide">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-ink-3">
+          История сыгранных карт, запланированные смены и недельные профили LayerRotation.cfg.
+        </p>
+        <div className="flex items-center gap-2">
+          <Button onClick={() => setWeekStart((date) => new Date(date.getTime() - 7 * 86_400_000))}>
             ← Неделя
-          </button>
-          <button
-            type="button"
-            onClick={() => setWeekStart(startOfWeekUtc(new Date()))}
-            className="rounded border border-neutral-800 px-3 py-1.5 text-neutral-300 hover:border-neutral-600"
-          >
-            Сегодня
-          </button>
-          <button
-            type="button"
-            onClick={() => setWeekStart((date) => new Date(date.getTime() + 7 * 86_400_000))}
-            className="rounded border border-neutral-800 px-3 py-1.5 text-neutral-300 hover:border-neutral-600"
-          >
+          </Button>
+          <Button onClick={() => setWeekStart(startOfWeekUtc(new Date()))}>Сегодня</Button>
+          <Button onClick={() => setWeekStart((date) => new Date(date.getTime() + 7 * 86_400_000))}>
             Неделя →
-          </button>
+          </Button>
         </div>
-      </header>
+      </div>
 
       {err ? (
-        <div className="rounded border border-red-900 bg-red-950 px-3 py-2 text-sm">{err}</div>
+        <InlineBanner
+          tone="crit"
+          title={err}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
-      {msg ? (
-        <div className="rounded border border-emerald-900 bg-emerald-950 px-3 py-2 text-sm text-emerald-200">
-          {msg}
-        </div>
-      ) : null}
+      {msg ? <InlineBanner tone="good" title={msg} /> : null}
       {!canEdit ? (
-        <div className="rounded border border-neutral-800 bg-neutral-900/60 px-3 py-2 text-xs text-neutral-400">
-          Только просмотр — нужна squad-привилегия changemap.
-        </div>
+        <InlineBanner tone="info" title="Только просмотр — нужна squad-привилегия changemap." />
       ) : null}
 
       <div data-testid="rotation-calendar-grid" className="grid grid-cols-1 gap-2 sm:grid-cols-7">
@@ -311,298 +317,252 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
           const dayScheduled = scheduledByDay.get(key) ?? [];
           const dayHistory = historyByDay.get(key) ?? [];
           return (
-            <div
-              key={key}
-              className="min-h-[10rem] rounded border border-neutral-800 bg-neutral-950 p-2"
-            >
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-xs font-medium text-neutral-300">
+            <Card key={key} padding="sm" className="min-h-[10rem]">
+              <div className="mb-2 flex items-center justify-between gap-1">
+                <span className="text-xs font-semibold text-ink-2">
                   {formatDayLabel(day, index)}
                 </span>
                 {canEdit ? (
-                  <button
-                    type="button"
+                  <IconButton
+                    icon={<PlusIcon />}
+                    label="Добавить смену ротации"
                     onClick={() => openCreate(day)}
-                    aria-label="Добавить смену ротации"
-                    className="rounded px-1.5 text-xs text-sky-400 hover:bg-neutral-800"
-                  >
-                    +
-                  </button>
+                  />
                 ) : null}
               </div>
               <div className="space-y-1">
                 {dayHistory.map((match) => (
                   <div
                     key={`history-${match.id}`}
-                    className="rounded border border-amber-900 bg-amber-950/60 px-1.5 py-1 text-[11px] text-amber-200"
+                    className="rounded-ctl border border-warn/40 bg-warn/10 px-1.5 py-1 text-2xs text-amber-300"
                   >
+                    <span className={`block ${CHIP_LABEL}`}>Сыграно</span>
                     {formatTime(new Date(match.started_at))} · {match.layer ?? match.map ?? 'карта'}
                   </div>
                 ))}
                 {dayScheduled.map((entry) => (
                   <div
                     key={entry.id}
-                    className="rounded border border-sky-900 bg-sky-950/60 px-1.5 py-1 text-[11px] text-sky-200"
+                    className="rounded-ctl border border-accent/40 bg-accent-dim px-1.5 py-1 text-2xs text-sky-300"
                   >
+                    <span className={`block ${CHIP_LABEL}`}>
+                      {entry.enabled ? 'Запланировано' : 'Выключено'}
+                    </span>
                     <button
                       type="button"
                       onClick={() => openEdit(entry)}
                       disabled={!canEdit}
                       className="block w-full text-left disabled:cursor-default"
                     >
-                      {formatTime(new Date(entry.scheduled_at))} · {entry.layer}
-                      {entry.mode === 'force_change' ? ' ⚡' : ' →'}
+                      {formatTime(new Date(entry.scheduled_at))} · {entry.layer} ·{' '}
+                      {entry.mode === 'force_change' ? 'сменить сразу' : 'следующий матч'}
                     </button>
                     {canEdit ? (
-                      <div className="mt-1 flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => toggleEntry(entry)}
-                          className="text-[10px] text-neutral-400"
-                        >
+                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                        <Button variant="ghost" size="sm" onClick={() => toggleEntry(entry)}>
                           {entry.enabled ? 'выключить' : 'включить'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeEntry(entry)}
-                          className="text-[10px] text-red-400"
-                        >
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => removeEntry(entry)}>
                           удалить
-                        </button>
+                        </Button>
                       </div>
                     ) : null}
                     {(warnings[entry.id] ?? []).map((warning) => (
-                      <div
+                      <p
                         key={`${entry.id}-${warning.type}`}
-                        className="mt-1 text-[10px] text-amber-300"
+                        className="mt-1 text-2xs text-amber-300"
                       >
                         ⚠ {warning.message}
-                      </div>
+                      </p>
                     ))}
                   </div>
                 ))}
                 {dayHistory.length === 0 && dayScheduled.length === 0 ? (
-                  <p className="text-[11px] text-neutral-500">—</p>
+                  <p className="text-2xs text-ink-3">—</p>
                 ) : null}
               </div>
-            </div>
+            </Card>
           );
         })}
       </div>
 
-      <section
-        data-testid="rotation-profiles"
-        className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-sm font-semibold">Недельные профили</h2>
-            <p className="mt-1 text-xs text-neutral-500">
-              Профиль дня применяется в 04:00 по часовому поясу сервера.
-            </p>
-          </div>
-          {canEdit ? (
-            <button
-              type="button"
-              onClick={addProfile}
-              className="rounded border border-sky-900 px-3 py-1.5 text-xs text-sky-300"
-            >
-              Добавить профиль
-            </button>
-          ) : null}
-        </div>
-        <div className="space-y-2">
-          {profiles.map((profile, profileIndex) => (
-            <div
-              key={`${profile.weekday ?? 'default'}-${profileIndex}`}
-              className="grid gap-2 rounded border border-neutral-900 p-3 lg:grid-cols-[1fr_10rem_2fr_auto]"
-            >
-              <input
-                value={profile.name}
-                aria-label="Название профиля"
-                disabled={!canEdit}
+      {/* Обёртка держит `data-testid`: `Card` намеренно не пробрасывает
+          произвольные атрибуты, чтобы поверхность оставалась одной и той же. */}
+      <div data-testid="rotation-profiles">
+        <Card padding="none">
+          <CardHeader
+            title="Недельные профили"
+            description="Профиль дня применяется в 04:00 по часовому поясу сервера."
+            actions={
+              canEdit ? (
+                <Button size="sm" onClick={addProfile}>
+                  Добавить профиль
+                </Button>
+              ) : undefined
+            }
+          />
+          <CardBody className="space-y-3">
+            <div className="space-y-2">
+              {profiles.map((profile, profileIndex) => (
+                <div
+                  key={`${profile.weekday ?? 'default'}-${profileIndex}`}
+                  className="grid gap-2 rounded-ctl border border-line p-3 lg:grid-cols-[1fr_10rem_2fr_auto]"
+                >
+                  <TextInput
+                    value={profile.name}
+                    aria-label="Название профиля"
+                    disabled={!canEdit}
+                    onChange={(event) =>
+                      setProfiles((current) =>
+                        current.map((item, index) =>
+                          index === profileIndex ? { ...item, name: event.target.value } : item,
+                        ),
+                      )
+                    }
+                  />
+                  <Select
+                    value={profile.weekday == null ? 'default' : String(profile.weekday)}
+                    aria-label="День профиля"
+                    disabled={!canEdit}
+                    onChange={(event) =>
+                      setProfiles((current) =>
+                        current.map((item, index) =>
+                          index === profileIndex
+                            ? {
+                                ...item,
+                                weekday:
+                                  event.target.value === 'default'
+                                    ? null
+                                    : Number(event.target.value),
+                              }
+                            : item,
+                        ),
+                      )
+                    }
+                  >
+                    <option value="default">По умолчанию</option>
+                    {WEEKDAY_LABELS.map((label, day) => (
+                      <option key={label} value={day}>
+                        {label}
+                      </option>
+                    ))}
+                  </Select>
+                  {/* Множественный выбор растёт вниз и не помещается в 32px
+                    высоты примитива `Select`, поэтому здесь нативный
+                    `<select multiple>` на тех же токенах поверхности. */}
+                  <select
+                    multiple
+                    value={profile.layers}
+                    aria-label="Слои профиля"
+                    disabled={!canEdit}
+                    onChange={(event) =>
+                      setProfiles((current) =>
+                        current.map((item, index) =>
+                          index === profileIndex
+                            ? {
+                                ...item,
+                                layers: Array.from(
+                                  event.target.selectedOptions,
+                                  (option) => option.value,
+                                ),
+                              }
+                            : item,
+                        ),
+                      )
+                    }
+                    className="min-h-20 w-full rounded-ctl border border-line bg-raised px-2 py-2 font-mono text-xs text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {layerPool.map((layer) => (
+                      <option key={layer.name} value={layer.name}>
+                        {layer.name}
+                      </option>
+                    ))}
+                  </select>
+                  {canEdit ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="self-start"
+                      onClick={() =>
+                        setProfiles((current) =>
+                          current.filter((_, index) => index !== profileIndex),
+                        )
+                      }
+                    >
+                      удалить
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+              {profiles.length === 0 ? (
+                <p className="text-xs text-ink-3">Профили не настроены.</p>
+              ) : null}
+            </div>
+            {canEdit ? (
+              <Button variant="primary" onClick={saveProfiles} loading={profileSaving}>
+                Сохранить профили
+              </Button>
+            ) : null}
+          </CardBody>
+        </Card>
+      </div>
+
+      {modalOpen ? (
+        <Modal
+          open
+          onClose={() => setModalOpen(false)}
+          title={editingId ? 'Изменить смену' : 'Новая смена'}
+          closeLabel="Закрыть"
+        >
+          <form onSubmit={submit} className="space-y-4">
+            <FieldRow label="Время (UTC)">
+              <TextInput
+                type="datetime-local"
+                value={form.scheduled_at}
+                required
                 onChange={(event) =>
-                  setProfiles((current) =>
-                    current.map((item, index) =>
-                      index === profileIndex ? { ...item, name: event.target.value } : item,
-                    ),
-                  )
+                  setForm((current) => ({ ...current, scheduled_at: event.target.value }))
                 }
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
               />
-              <select
-                value={profile.weekday == null ? 'default' : String(profile.weekday)}
-                aria-label="День профиля"
-                disabled={!canEdit}
+            </FieldRow>
+            <FieldRow label="Слой">
+              <Select
+                value={form.layer}
+                required
                 onChange={(event) =>
-                  setProfiles((current) =>
-                    current.map((item, index) =>
-                      index === profileIndex
-                        ? {
-                            ...item,
-                            weekday:
-                              event.target.value === 'default' ? null : Number(event.target.value),
-                          }
-                        : item,
-                    ),
-                  )
+                  setForm((current) => ({ ...current, layer: event.target.value }))
                 }
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
-              >
-                <option value="default">По умолчанию</option>
-                {WEEKDAY_LABELS.map((label, day) => (
-                  <option key={label} value={day}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-              <select
-                multiple
-                value={profile.layers}
-                aria-label="Слои профиля"
-                disabled={!canEdit}
-                onChange={(event) =>
-                  setProfiles((current) =>
-                    current.map((item, index) =>
-                      index === profileIndex
-                        ? {
-                            ...item,
-                            layers: Array.from(
-                              event.target.selectedOptions,
-                              (option) => option.value,
-                            ),
-                          }
-                        : item,
-                    ),
-                  )
-                }
-                className="min-h-20 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 font-mono text-xs"
               >
                 {layerPool.map((layer) => (
                   <option key={layer.name} value={layer.name}>
                     {layer.name}
                   </option>
                 ))}
-              </select>
-              {canEdit ? (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setProfiles((current) => current.filter((_, index) => index !== profileIndex))
-                  }
-                  className="self-start rounded px-2 py-1 text-xs text-red-400"
-                >
-                  удалить
-                </button>
-              ) : null}
-            </div>
-          ))}
-          {profiles.length === 0 ? (
-            <p className="text-sm text-neutral-500">Профили не настроены.</p>
-          ) : null}
-        </div>
-        {canEdit ? (
-          <button
-            type="button"
-            onClick={saveProfiles}
-            disabled={profileSaving}
-            className="rounded bg-emerald-700 px-4 py-2 text-sm text-white disabled:opacity-40"
-          >
-            {profileSaving ? 'Сохраняю…' : 'Сохранить профили'}
-          </button>
-        ) : null}
-      </section>
-
-      {modalOpen ? (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4">
-          <div className="mt-16 w-full max-w-lg space-y-4 rounded border border-neutral-800 bg-neutral-950 p-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">
-                {editingId ? 'Изменить смену' : 'Новая смена'}
-              </h2>
-              <button
-                type="button"
-                onClick={() => setModalOpen(false)}
-                className="text-sm text-neutral-400"
+              </Select>
+            </FieldRow>
+            <FieldRow label="Действие">
+              <Select
+                value={form.mode}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    mode: event.target.value as FormState['mode'],
+                  }))
+                }
               >
-                Закрыть
-              </button>
+                <option value="set_next">Следующий матч (AdminSetNextLayer)</option>
+                <option value="force_change">Сменить сразу (AdminChangeLayer)</option>
+              </Select>
+            </FieldRow>
+            <div className="flex justify-end gap-2">
+              <Button onClick={() => setModalOpen(false)}>Отмена</Button>
+              <Button type="submit" variant="primary" disabled={!form.layer} loading={submitting}>
+                {editingId ? 'Сохранить' : 'Создать'}
+              </Button>
             </div>
-            <form onSubmit={submit} className="space-y-4">
-              <div>
-                <label htmlFor={startsAtId} className="mb-1 block text-xs text-neutral-500">
-                  Время (UTC)
-                </label>
-                <input
-                  id={startsAtId}
-                  type="datetime-local"
-                  value={form.scheduled_at}
-                  required
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, scheduled_at: event.target.value }))
-                  }
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label htmlFor={layerId} className="mb-1 block text-xs text-neutral-500">
-                  Слой
-                </label>
-                <select
-                  id={layerId}
-                  value={form.layer}
-                  required
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, layer: event.target.value }))
-                  }
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm"
-                >
-                  {layerPool.map((layer) => (
-                    <option key={layer.name} value={layer.name}>
-                      {layer.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor={modeId} className="mb-1 block text-xs text-neutral-500">
-                  Действие
-                </label>
-                <select
-                  id={modeId}
-                  value={form.mode}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      mode: event.target.value as FormState['mode'],
-                    }))
-                  }
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm"
-                >
-                  <option value="set_next">Следующий матч (AdminSetNextLayer)</option>
-                  <option value="force_change">Сменить сразу (AdminChangeLayer)</option>
-                </select>
-              </div>
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setModalOpen(false)}
-                  className="rounded border border-neutral-800 px-4 py-1.5 text-sm text-neutral-300"
-                >
-                  Отмена
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting || !form.layer}
-                  className="rounded bg-emerald-700 px-4 py-1.5 text-sm text-white disabled:opacity-40"
-                >
-                  {submitting ? 'Сохраняю…' : editingId ? 'Сохранить' : 'Создать'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+          </form>
+        </Modal>
       ) : null}
-    </div>
+    </PageContainer>
   );
 }

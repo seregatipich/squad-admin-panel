@@ -114,6 +114,41 @@ vi.mock('next/dynamic', () => ({
 }));
 vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 
+/**
+ * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`.
+ * Полифилл живёт только в тестах — `AlertDialog` рассчитан на настоящий
+ * браузер. Воспроизводится то, на что опирается `Modal`: атрибут `open`, фокус
+ * внутрь окна и цепочка Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
 import ConfigsPage from './page';
 
 const MANAGED_ROTATION_CONTENT = [
@@ -176,12 +211,25 @@ interface DriftItemFixture {
   tip_version_id: string | null;
 }
 
+interface VersionFixture {
+  id: string;
+  sha256: string;
+  author_user_id: string | null;
+  author_email: string | null;
+  message: string | null;
+  size: number;
+  created_at: string;
+}
+
 function installFetch(opts: {
   fileName: string;
   content: string;
   behavior: string;
   permissions?: string[];
   drift?: DriftItemFixture[];
+  versions?: VersionFixture[];
+  /** Ответ на сохранение; 500 позволяет тесту получить полосу ошибки. */
+  putStatus?: number;
 }): FetchCall[] {
   const calls: FetchCall[] = [];
   vi.stubGlobal(
@@ -189,6 +237,14 @@ function installFetch(opts: {
     vi.fn((url: string, init?: RequestInit) => {
       const method = (init?.method ?? 'GET').toUpperCase();
       calls.push({ method, url, body: init?.body as string | undefined });
+      if (url.includes('/history')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ items: opts.versions ?? [] }), { status: 200 }),
+        );
+      }
+      if (method === 'POST' && url.includes('/restore/')) {
+        return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      }
       if (url.endsWith('/configs/drift')) {
         return Promise.resolve(
           new Response(
@@ -223,6 +279,10 @@ function installFetch(opts: {
         );
       }
       if (method === 'PUT' && url.endsWith(`/configs/${opts.fileName}`)) {
+        const status = opts.putStatus ?? 200;
+        if (status !== 200) {
+          return Promise.resolve(new Response('boom', { status }));
+        }
         return Promise.resolve(
           new Response(
             JSON.stringify({ behavior: opts.behavior, unchanged: false, sha256: 'def' }),
@@ -295,6 +355,34 @@ async function openFile(name: string) {
   await screen.findByTestId('monaco-stub');
   // flush the onMount effect + the decorations effect it schedules
   await act(async () => {});
+}
+
+/** Нажать кнопку с этим именем и дать React прогнать эффекты. */
+async function clickButton(name: string) {
+  const button = await screen.findByRole('button', { name });
+  await act(async () => {
+    button.click();
+  });
+}
+
+/** Подтвердить открытый диалог его собственной кнопкой действия. */
+async function confirmDialog(confirmLabel: string) {
+  await clickButton(confirmLabel);
+}
+
+/**
+ * Отказаться от открытого диалога.
+ *
+ * «Отмена» — имя сразу двух выходов, крестика и кнопки подвала; оператору
+ * нужна именно кнопка подвала, она в разметке последняя.
+ */
+async function cancelDialog() {
+  const exits = screen.getAllByRole('button', { name: 'Отмена' });
+  const cancel = exits.at(-1);
+  if (!cancel) throw new Error('диалог подтверждения не открылся');
+  await act(async () => {
+    cancel.click();
+  });
 }
 
 describe('ConfigsPage', () => {
@@ -449,7 +537,6 @@ describe('ConfigsPage — restart button', () => {
   });
 
   it('POSTs to /servers/:id/restart after confirmation', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const calls = installFetch({
       fileName: 'Server.cfg',
       content: SERVER_CRLF_CONTENT,
@@ -458,13 +545,32 @@ describe('ConfigsPage — restart button', () => {
     });
     await renderPage();
     await openFile('Server.cfg');
-    const btn = await screen.findByRole('button', { name: 'Рестарт сервера' });
-    await act(async () => {
-      btn.click();
-    });
+    await clickButton('Рестарт сервера');
+
+    expect(screen.getByRole('heading', { name: 'Перезапустить сервер?' })).toBeInTheDocument();
+    await confirmDialog('Перезапустить сервер');
+
     expect(
       calls.some((c) => c.method === 'POST' && c.url.endsWith('/api/v1/servers/abc/restart')),
     ).toBe(true);
+  });
+
+  it('не перезапускает сервер, если оператор отказался в диалоге', async () => {
+    const calls = installFetch({
+      fileName: 'Server.cfg',
+      content: SERVER_CRLF_CONTENT,
+      behavior: 'requires_restart',
+      permissions: ['server:restart'],
+    });
+    await renderPage();
+    await openFile('Server.cfg');
+    await clickButton('Рестарт сервера');
+    await cancelDialog();
+
+    expect(
+      screen.queryByRole('heading', { name: 'Перезапустить сервер?' }),
+    ).not.toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
   });
 });
 
@@ -536,7 +642,6 @@ describe('ConfigsPage — config drift (CFG-2 #64)', () => {
   });
 
   it('accept and revert buttons call their endpoints after confirm', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const calls = installFetch({
       fileName: 'MOTD.cfg',
       content: 'panel text\n',
@@ -544,11 +649,13 @@ describe('ConfigsPage — config drift (CFG-2 #64)', () => {
       drift: [DRIFT_ITEM],
     });
     await renderPage();
-    const banner = await screen.findByTestId('config-drift-banner');
 
     await act(async () => {
-      within(banner).getByRole('button', { name: 'Принять' }).click();
+      within(await screen.findByTestId('config-drift-banner'))
+        .getByRole('button', { name: 'Принять' })
+        .click();
     });
+    await confirmDialog('Принять правку с диска');
     expect(
       calls.some(
         (c) =>
@@ -558,8 +665,11 @@ describe('ConfigsPage — config drift (CFG-2 #64)', () => {
     ).toBe(true);
 
     await act(async () => {
-      within(banner).getByRole('button', { name: 'Откатить' }).click();
+      within(await screen.findByTestId('config-drift-banner'))
+        .getByRole('button', { name: 'Откатить' })
+        .click();
     });
+    await confirmDialog('Откатить к версии панели');
     expect(
       calls.some(
         (c) =>
@@ -570,7 +680,6 @@ describe('ConfigsPage — config drift (CFG-2 #64)', () => {
   });
 
   it('does not call accept/revert when the confirmation is declined', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
     const calls = installFetch({
       fileName: 'MOTD.cfg',
       content: 'panel text\n',
@@ -578,13 +687,21 @@ describe('ConfigsPage — config drift (CFG-2 #64)', () => {
       drift: [DRIFT_ITEM],
     });
     await renderPage();
-    const banner = await screen.findByTestId('config-drift-banner');
+
     await act(async () => {
-      within(banner).getByRole('button', { name: 'Принять' }).click();
+      within(await screen.findByTestId('config-drift-banner'))
+        .getByRole('button', { name: 'Принять' })
+        .click();
     });
+    await cancelDialog();
+
     await act(async () => {
-      within(banner).getByRole('button', { name: 'Откатить' }).click();
+      within(await screen.findByTestId('config-drift-banner'))
+        .getByRole('button', { name: 'Откатить' })
+        .click();
     });
+    await cancelDialog();
+
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
   });
 
@@ -611,7 +728,6 @@ describe('ConfigsPage — config drift (CFG-2 #64)', () => {
   });
 
   it('reset-default calls its endpoint', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const calls = installFetch({
       fileName: 'Server.cfg',
       content: SERVER_CRLF_CONTENT,
@@ -619,10 +735,13 @@ describe('ConfigsPage — config drift (CFG-2 #64)', () => {
     });
     await renderPage();
     await openFile('Server.cfg');
-    const btn = await screen.findByRole('button', { name: 'Сброс к дефолту' });
-    await act(async () => {
-      btn.click();
-    });
+    await clickButton('Сброс к дефолту');
+
+    expect(
+      screen.getByRole('heading', { name: 'Сбросить Server.cfg к депо-дефолту?' }),
+    ).toBeInTheDocument();
+    await confirmDialog('Сбросить к дефолту');
+
     expect(
       calls.some(
         (c) =>
@@ -641,5 +760,200 @@ describe('ConfigsPage — config drift (CFG-2 #64)', () => {
     await renderPage();
     await openFile('Admins.cfg');
     expect(screen.queryByRole('button', { name: 'Сброс к дефолту' })).not.toBeInTheDocument();
+  });
+});
+
+describe('ConfigsPage — вкладки и история версий', () => {
+  const VERSION: VersionFixture = {
+    id: 'ver-0001',
+    sha256: 'abcdef0123456789',
+    author_user_id: 'u1',
+    author_email: 'admin@example.com',
+    message: 'поднял лимит игроков',
+    size: 42,
+    created_at: '2026-07-26T10:00:00.000Z',
+  };
+
+  it('переключатель разделов открывает историю версий таблицей', async () => {
+    installFetch({
+      fileName: 'Server.cfg',
+      content: SERVER_CRLF_CONTENT,
+      behavior: 'requires_restart',
+      versions: [VERSION],
+    });
+    await renderPage();
+    await openFile('Server.cfg');
+
+    await act(async () => {
+      screen.getByRole('tab', { name: 'История' }).click();
+    });
+
+    expect(screen.getByRole('table', { name: 'История версий файла' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Автор' })).toBeInTheDocument();
+    expect(screen.getByText('admin@example.com')).toBeInTheDocument();
+  });
+
+  it('пустая история объявляется отдельным состоянием, а не пустой таблицей', async () => {
+    installFetch({
+      fileName: 'Server.cfg',
+      content: SERVER_CRLF_CONTENT,
+      behavior: 'requires_restart',
+      versions: [],
+    });
+    await renderPage();
+    await openFile('Server.cfg');
+
+    await act(async () => {
+      screen.getByRole('tab', { name: 'История' }).click();
+    });
+
+    expect(screen.getByText('История пуста')).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: 'История версий файла' })).not.toBeInTheDocument();
+  });
+
+  it('восстановление версии проходит только через подтверждение', async () => {
+    const calls = installFetch({
+      fileName: 'Server.cfg',
+      content: SERVER_CRLF_CONTENT,
+      behavior: 'requires_restart',
+      versions: [VERSION],
+    });
+    await renderPage();
+    await openFile('Server.cfg');
+    await act(async () => {
+      screen.getByRole('tab', { name: 'История' }).click();
+    });
+
+    await clickButton('Восстановить');
+    await cancelDialog();
+    expect(calls.some((c) => c.method === 'POST' && c.url.includes('/restore/'))).toBe(false);
+
+    await clickButton('Восстановить');
+    await confirmDialog('Восстановить как новую версию');
+    expect(
+      calls.some(
+        (c) =>
+          c.method === 'POST' &&
+          c.url.endsWith('/api/v1/servers/abc/configs/Server.cfg/restore/ver-0001'),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('ConfigsPage — несохранённые правки при переключении файла', () => {
+  const BODIES: Record<string, string> = {
+    'Server.cfg': '[SquadName]\nServerName="A"\n',
+    'MOTD.cfg': 'добро пожаловать\n',
+  };
+
+  function installTwoFiles(): FetchCall[] {
+    const calls: FetchCall[] = [];
+    const json = (payload: unknown) =>
+      Promise.resolve(new Response(JSON.stringify(payload), { status: 200 }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        const method = (init?.method ?? 'GET').toUpperCase();
+        calls.push({ method, url, body: init?.body as string | undefined });
+        if (url.endsWith('/configs/drift')) return json({ items: [] });
+        if (url.endsWith('/api/v1/me')) return json({ permissions: [] });
+        if (url.endsWith('/configs')) {
+          return json({
+            items: Object.entries(BODIES).map(([name, body]) => ({
+              name,
+              size: body.length,
+              sha256: `sha-${name}`,
+              behavior: 'hot_reload',
+              exists: true,
+            })),
+          });
+        }
+        const hit = Object.keys(BODIES).find((name) => url.endsWith(`/configs/${name}`));
+        if (hit) {
+          return json({
+            name: hit,
+            content: BODIES[hit],
+            sha256: `sha-${hit}`,
+            behavior: 'hot_reload',
+          });
+        }
+        return Promise.resolve(new Response('not found', { status: 404 }));
+      }),
+    );
+    return calls;
+  }
+
+  it('спрашивает подтверждение и открывает соседний файл только после согласия', async () => {
+    const calls = installTwoFiles();
+    await renderPage();
+    await openFile('Server.cfg');
+
+    await act(async () => {
+      editorCapture.onChange?.('[SquadName]\nServerName="B"\n');
+    });
+    expect(screen.getByText('изменено')).toBeInTheDocument();
+
+    await act(async () => {
+      screen.getByText('MOTD.cfg').click();
+    });
+    expect(screen.getByRole('heading', { name: 'Открыть другой файл?' })).toBeInTheDocument();
+
+    await cancelDialog();
+    expect(calls.some((c) => c.url.endsWith('/configs/MOTD.cfg'))).toBe(false);
+    expect(screen.getByText('изменено')).toBeInTheDocument();
+
+    await act(async () => {
+      screen.getByText('MOTD.cfg').click();
+    });
+    await confirmDialog('Открыть без сохранения');
+    expect(calls.some((c) => c.url.endsWith('/api/v1/servers/abc/configs/MOTD.cfg'))).toBe(true);
+    expect(screen.queryByText('изменено')).not.toBeInTheDocument();
+  });
+
+  it('открывает файл сразу, когда несохранённых правок нет', async () => {
+    const calls = installTwoFiles();
+    await renderPage();
+    await openFile('Server.cfg');
+
+    await act(async () => {
+      screen.getByText('MOTD.cfg').click();
+    });
+
+    expect(screen.queryByRole('heading', { name: 'Открыть другой файл?' })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.url.endsWith('/api/v1/servers/abc/configs/MOTD.cfg'))).toBe(true);
+  });
+});
+
+describe('ConfigsPage — полоса ошибки', () => {
+  it('«Повторить» не стирает несохранённые правки открытого файла', async () => {
+    const calls = installFetch({
+      fileName: 'Server.cfg',
+      content: SERVER_CRLF_CONTENT,
+      behavior: 'requires_restart',
+      putStatus: 500,
+    });
+    await renderPage();
+    await openFile('Server.cfg');
+
+    await act(async () => {
+      editorCapture.onChange?.(`${SERVER_CRLF_CONTENT}\r\nExtra=1`);
+    });
+    await clickButton('Сохранить');
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Запрос к серверу не прошёл');
+    const getsBefore = calls.filter(
+      (c) => c.method === 'GET' && c.url.endsWith('/api/v1/servers/abc/configs/Server.cfg'),
+    ).length;
+
+    await clickButton('Повторить');
+
+    // Файл не перечитан, правка на месте: список файлов обновился, редактор — нет.
+    expect(
+      calls.filter(
+        (c) => c.method === 'GET' && c.url.endsWith('/api/v1/servers/abc/configs/Server.cfg'),
+      ).length,
+    ).toBe(getsBefore);
+    expect(screen.getByText('изменено')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

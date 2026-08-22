@@ -1,6 +1,21 @@
 'use client';
 import { ROLE_COLORS, type RoleColor } from '@squad/shared-config/role-colors';
 import { useEffect, useMemo, useState } from 'react';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardGrid,
+  CardHeader,
+  Checkbox,
+  FieldRow,
+  InlineBanner,
+  SearchField,
+  Skeleton,
+  Textarea,
+  TextInput,
+} from '@/components/ui';
 import { RoleColorDot } from './RoleColorDot';
 
 interface PermissionDef {
@@ -74,7 +89,7 @@ export function RoleEditor({ initial, onSubmit, onCancel, submitLabel }: RoleEdi
     fetch('/api/v1/permissions', { credentials: 'include' })
       .then((r) => r.json())
       .then(setRegistry)
-      .catch(() => setErr('Не удалось загрузить список permissions'));
+      .catch(() => setErr('Не удалось загрузить список прав'));
   }, []);
 
   const filtered = useMemo(() => {
@@ -132,142 +147,125 @@ export function RoleEditor({ initial, onSubmit, onCancel, submitLabel }: RoleEdi
   return (
     <div className="space-y-6">
       {readOnly ? (
-        <div className="rounded border border-amber-700/60 bg-amber-950/40 p-3 text-sm text-amber-200">
-          Системная роль <strong>Owner</strong>. Permissions, имя и цвет не редактируются.
-        </div>
+        <InlineBanner
+          tone="warn"
+          title="Системная роль Owner"
+          description="Права, имя и цвет этой роли не редактируются."
+        />
       ) : null}
-      {err ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {err}
-        </div>
-      ) : null}
+      {err ? <InlineBanner tone="crit" title="Ошибка" description={err} /> : null}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <label className="block">
-          <span className="text-xs uppercase tracking-widest text-neutral-400">Имя</span>
-          <input
+        <FieldRow label="Имя">
+          <TextInput
             value={name}
             onChange={(e) => setName(e.target.value)}
             disabled={readOnly}
-            className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm disabled:opacity-50"
+            required
           />
-        </label>
-        <div>
-          <span className="text-xs uppercase tracking-widest text-neutral-400">Цвет</span>
-          <div className="mt-1 flex flex-wrap gap-2">
+        </FieldRow>
+        {/* Цвет роли различает соседние роли в списках и ничего не сообщает
+            сам по себе, поэтому у каждой кнопки написано имя оттенка, а
+            выбранная объявляется `aria-pressed`, а не только рамкой (§5). */}
+        <fieldset className="flex flex-col gap-1">
+          <legend className="text-xs font-medium text-ink-2">Цвет</legend>
+          <div className="flex flex-wrap gap-2">
             {ROLE_COLORS.map((c) => (
               <button
                 key={c}
                 type="button"
                 disabled={readOnly}
+                aria-pressed={color === c}
                 onClick={() => setColor(c)}
-                className={`flex items-center gap-1 rounded border px-2 py-1 text-xs ${
+                className={`inline-flex h-7 items-center gap-1.5 rounded-ctl border px-2.5 text-2xs transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40 ${
                   color === c
-                    ? 'border-sky-400 bg-sky-950/40'
-                    : 'border-neutral-800 hover:border-neutral-600'
-                } disabled:opacity-50`}
+                    ? 'border-accent bg-accent-dim text-ink'
+                    : 'border-line bg-raised text-ink-2 hover:text-ink'
+                }`}
               >
                 <RoleColorDot color={c} size="sm" />
                 <span className="font-mono">{c}</span>
               </button>
             ))}
           </div>
-        </div>
+        </fieldset>
       </div>
 
-      <label className="block">
-        <span className="text-xs uppercase tracking-widest text-neutral-400">Описание</span>
-        <textarea
+      <FieldRow label="Описание">
+        <Textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           disabled={readOnly}
           rows={2}
-          className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm disabled:opacity-50"
         />
-      </label>
+      </FieldRow>
 
-      <div>
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-xs uppercase tracking-widest text-neutral-400">Permissions</span>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="поиск..."
-            className="w-48 rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-xs"
-          />
-        </div>
-        {!grouped ? (
-          <div className="text-sm text-neutral-500">Загрузка…</div>
-        ) : (
-          <div className="grid grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-2 xl:grid-cols-3">
-            {CATEGORY_ORDER.filter((c) => grouped.has(c.id)).map((cat) => (
-              <div key={cat.id}>
-                <h4 className="mb-1 text-xs font-semibold uppercase tracking-widest text-neutral-300">
-                  {cat.label}
-                </h4>
-                <ul className="space-y-1">
-                  {(grouped.get(cat.id) ?? []).map((p) => {
-                    const checked = permissions.has(p.key);
-                    return (
-                      <li key={p.key}>
-                        <label
-                          className={`flex items-start gap-2 text-sm ${
-                            p.unimplemented ? 'opacity-50' : ''
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            disabled={readOnly}
-                            onChange={() => toggle(p.key)}
-                            className="mt-0.5"
-                          />
-                          <span>
-                            {p.label}
-                            {p.dangerous ? <span className="ml-1 text-amber-400">⚠️</span> : null}
-                            {p.unimplemented ? (
-                              <span className="ml-1 text-xs text-neutral-500">(в разработке)</span>
-                            ) : null}
-                            <span className="ml-2 font-mono text-xs text-neutral-500">{p.key}</span>
-                          </span>
-                        </label>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            ))}
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-[17px] font-semibold text-ink">Права</h3>
+          <div className="w-48">
+            <SearchField
+              value={search}
+              onCommit={setSearch}
+              label="Поиск по правам"
+              placeholder="право или ключ"
+              clearLabel="Очистить поиск"
+            />
           </div>
-        )}
-      </div>
-
-      {!readOnly ? (
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={submit}
-            disabled={busy}
-            className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500 disabled:opacity-40"
-          >
-            {submitLabel}
-          </button>
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-            className="rounded border border-neutral-800 px-4 py-2 text-sm hover:border-neutral-600"
-          >
-            Отмена
-          </button>
         </div>
+
+        {!grouped ? (
+          <Skeleton variant="card" count={3} label="Загрузка списка прав" />
+        ) : (
+          <CardGrid cols={3}>
+            {CATEGORY_ORDER.filter((c) => grouped.has(c.id)).map((cat) => (
+              <Card key={cat.id} padding="none">
+                <CardHeader title={cat.label} headingLevel={3} />
+                <CardBody padding="sm">
+                  <ul className="space-y-1">
+                    {(grouped.get(cat.id) ?? []).map((p) => (
+                      <li key={p.key}>
+                        <Checkbox
+                          checked={permissions.has(p.key)}
+                          disabled={readOnly}
+                          onChange={() => toggle(p.key)}
+                          className={p.unimplemented ? 'opacity-60' : undefined}
+                          label={
+                            <span className="inline-flex flex-wrap items-center gap-1.5">
+                              <span>{p.label}</span>
+                              {p.dangerous ? (
+                                <Badge tone="warn" size="sm">
+                                  опасное
+                                </Badge>
+                              ) : null}
+                              {p.unimplemented ? (
+                                <span className="text-2xs text-ink-3">(в разработке)</span>
+                              ) : null}
+                              <span className="font-mono text-2xs text-ink-3">{p.key}</span>
+                            </span>
+                          }
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                </CardBody>
+              </Card>
+            ))}
+          </CardGrid>
+        )}
+      </section>
+
+      {readOnly ? (
+        <Button onClick={onCancel}>Назад</Button>
       ) : (
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded border border-neutral-800 px-4 py-2 text-sm hover:border-neutral-600"
-        >
-          Назад
-        </button>
+        <div className="flex justify-end gap-2">
+          <Button onClick={onCancel} disabled={busy}>
+            Отмена
+          </Button>
+          <Button variant="primary" onClick={submit} loading={busy}>
+            {submitLabel}
+          </Button>
+        </div>
       )}
     </div>
   );

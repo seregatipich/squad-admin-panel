@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { Button, InlineBanner, StatusDot } from '@/components/ui';
 
 export interface LogEntry {
   ts?: string;
@@ -95,57 +96,61 @@ export function LogConsole({
   }, []);
 
   return (
-    <div className="relative space-y-1">
+    <div className="relative space-y-2">
+      {/* Шапка появляется только вместе с подписью: без неё индикатору связи
+          не к чему прислониться, и он висел бы над консолью сам по себе. */}
       {title ? (
-        <div className="flex items-center justify-between">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">{title}</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-[13px] font-semibold text-ink">{title}</h2>
           {live !== undefined ? (
-            <span className="flex items-center gap-1 text-xs text-neutral-500">
-              <span
-                className={`inline-block h-2 w-2 rounded-full ${live ? 'bg-green-600' : 'bg-neutral-600'}`}
-              />
-              {live ? 'live' : 'offline'}
-            </span>
+            <StatusDot
+              state={live ? 'good' : 'idle'}
+              label={live ? 'в эфире' : 'нет связи'}
+              size="sm"
+              pulse={live}
+            />
           ) : null}
         </div>
       ) : null}
       {errorBanner ? (
-        <div
-          data-testid="logconsole-error-banner"
-          className="flex items-center justify-between gap-3 rounded border border-red-900 bg-red-950/60 px-3 py-2 text-xs text-red-200"
-        >
-          <span>{formatErrorBanner(errorBanner)}</span>
-          {errorBanner.onRetry ? (
-            <button
-              type="button"
-              onClick={errorBanner.onRetry}
-              className="rounded border border-red-800 bg-red-900/40 px-2 py-1 text-[11px] text-red-100 hover:bg-red-900"
-            >
-              Переподключиться
-            </button>
-          ) : null}
+        <div data-testid="logconsole-error-banner">
+          <InlineBanner
+            tone="crit"
+            title={formatErrorBanner(errorBanner)}
+            action={
+              errorBanner.onRetry ? (
+                <Button size="sm" onClick={errorBanner.onRetry}>
+                  Переподключиться
+                </Button>
+              ) : undefined
+            }
+          />
         </div>
       ) : null}
       <div
         ref={scrollerRef}
         onScroll={onScroll}
         style={{ height }}
-        className="overflow-y-auto rounded border border-neutral-800 bg-neutral-950 p-3 font-mono text-xs leading-relaxed"
+        className="overflow-y-auto rounded-card border border-line bg-surface p-3 font-mono text-xs leading-relaxed"
       >
         {lines.length === 0 ? (
-          <div className="text-neutral-500">{emptyText}</div>
+          <div className="text-ink-3">{emptyText}</div>
         ) : (
           lines.map((l, i) => {
             const key = l.id ?? `${l.ts ?? ''}:${i}:${l.message.slice(0, 40)}`;
+            const isError = l.stream === 'stderr';
             return (
-              <div
-                key={key}
-                className={l.stream === 'stderr' ? 'text-red-400' : 'text-neutral-300'}
-              >
-                {showStep && l.step ? <span className="text-neutral-500">[{l.step}]</span> : null}
-                {l.ts && !showStep ? (
-                  <span className="text-neutral-500">{formatTime(l.ts)} </span>
-                ) : null}{' '}
+              <div key={key} className={isError ? 'text-crit' : 'text-ink-2'}>
+                {/* Поток ошибок помечен значком и словом, а не только цветом:
+                    красная строка среди серых неразличима без цветового зрения. */}
+                {isError ? (
+                  <>
+                    <span aria-hidden="true">⚠ </span>
+                    <span className="sr-only">поток ошибок: </span>
+                  </>
+                ) : null}
+                {showStep && l.step ? <span className="text-ink-3">[{l.step}]</span> : null}
+                {l.ts && !showStep ? <span className="text-ink-3">{formatTime(l.ts)} </span> : null}{' '}
                 {l.message}
               </div>
             );
@@ -153,13 +158,9 @@ export function LogConsole({
         )}
       </div>
       {!atBottom ? (
-        <button
-          type="button"
-          onClick={jumpToLatest}
-          className="absolute bottom-3 right-3 rounded-full bg-sky-600 px-3 py-1 text-xs text-white shadow hover:bg-sky-500"
-        >
+        <Button size="sm" onClick={jumpToLatest} className="absolute right-3 bottom-3">
           ↓ к последней
-        </button>
+        </Button>
       ) : null}
     </div>
   );

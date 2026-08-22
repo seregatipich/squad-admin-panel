@@ -2,9 +2,37 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
-import type { IssueLabel, IssueView } from '@/lib/live-bus';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  FieldRow,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Pagination,
+  SearchField,
+  SegmentedControl,
+  Select,
+  SkeletonTable,
+  StatusBadge,
+  type StatusState,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Textarea,
+  TextInput,
+  Th,
+  Toolbar,
+} from '@/components/ui';
+import type { IssueLabel, IssueState, IssueView } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   authorLabel,
@@ -17,7 +45,6 @@ import {
   PER_PAGE,
   parseFilters,
   removeIssue,
-  STATE_BADGE_CLASSES,
   STATE_FILTERS,
   STATE_LABELS,
   TITLE_MAX,
@@ -34,6 +61,23 @@ interface IssueListResponse {
   per_page: number;
 }
 
+/**
+ * Состояние тикета в терминах индикаторов дизайн-системы: открытый тикет жив,
+ * взятый в работу ждёт исполнителя, закрытый выведен из наблюдения. Смысл
+ * несёт подпись бейджа, тон её только дублирует (§5).
+ */
+const STATE_STATE: Record<IssueState, StatusState> = {
+  open: 'good',
+  in_progress: 'warn',
+  closed: 'idle',
+};
+
+const PAGINATION_LABELS = {
+  previous: 'Назад',
+  next: 'Вперёд',
+  page: (page: number, of: number) => `Страница ${page} из ${of}`,
+};
+
 export function IssuesBrowser() {
   const router = useRouter();
   const pathname = usePathname();
@@ -48,7 +92,6 @@ export function IssuesBrowser() {
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [assigneeName, setAssigneeName] = useState<string | null>(null);
-  const [searchDraft, setSearchDraft] = useState(filters.q);
   const idsRef = useRef<Set<string>>(new Set());
 
   const navigate = useCallback(
@@ -63,10 +106,6 @@ export function IssuesBrowser() {
     },
     [filters, pathname, router],
   );
-
-  useEffect(() => {
-    setSearchDraft(filters.q);
-  }, [filters.q]);
 
   useEffect(() => {
     let cancelled = false;
@@ -134,32 +173,100 @@ export function IssuesBrowser() {
   useLiveSubscription('issue.updated', onIssueEvent);
 
   const pages = totalPages(total);
+  const filtered = Boolean(filters.state || filters.label || filters.assignee || filters.q);
+
+  const resetFilters = () => {
+    setAssigneeName(null);
+    navigate({ state: '', label: '', assignee: '', q: '' });
+  };
+
+  const searchSlot = (
+    <SearchField
+      value={filters.q}
+      onCommit={(value) => navigate({ q: value })}
+      placeholder="Поиск по тикетам"
+      label="Поиск по тикетам"
+      clearLabel="Очистить поиск"
+    />
+  );
+
+  const filterSlot = (
+    <>
+      <SegmentedControl
+        ariaLabel="Состояние тикета"
+        value={filters.state}
+        onChange={(value) => navigate({ state: value as '' | IssueState })}
+        items={STATE_FILTERS.map((filter) => ({
+          value: filter.value,
+          label: filter.label,
+        }))}
+      />
+      <Select
+        aria-label="Метка"
+        value={filters.label}
+        onChange={(event) => navigate({ label: event.target.value })}
+      >
+        <option value="">Все метки</option>
+        {labels.map((label) => (
+          <option key={label.id} value={label.name}>
+            {label.name}
+          </option>
+        ))}
+      </Select>
+      {filters.assignee ? (
+        <>
+          <Badge tone="accent">
+            Исполнитель: {assigneeName ?? `${filters.assignee.slice(0, 8)}…`}
+          </Badge>
+          <Button
+            variant="plain"
+            size="sm"
+            onClick={() => {
+              setAssigneeName(null);
+              navigate({ assignee: '' });
+            }}
+          >
+            Сбросить исполнителя
+          </Button>
+        </>
+      ) : (
+        <div className="w-52">
+          <PlayerSearchSelect
+            placeholder="Фильтр по исполнителю"
+            onSelect={(player: PickedPlayer) => {
+              setAssigneeName(player.canonical_name);
+              navigate({ assignee: player.id });
+            }}
+          />
+        </div>
+      )}
+    </>
+  );
 
   return (
-    <div className="space-y-6 max-w-5xl">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Тикеты</h1>
-        <div className="flex items-center gap-3">
-          <LiveIndicator lastUpdate={lastUpdate} />
-          <button
-            type="button"
-            onClick={() => setShowCreate((v) => !v)}
-            className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700"
-          >
-            {showCreate ? 'Скрыть форму' : 'Создать'}
-          </button>
-        </div>
-      </div>
-
-      <p className="text-sm text-neutral-400">
-        Внутренний трекер тикетов о панели: баги, предложения и вопросы. Любой пользователь панели
-        может создать тикет и оставить комментарий.
-      </p>
+    <PageContainer>
+      <PageHeader
+        title="Тикеты"
+        subtitle="Внутренний трекер тикетов о панели: баги, предложения и вопросы. Любой пользователь панели может создать тикет и оставить комментарий."
+        status={<LiveIndicator lastUpdate={lastUpdate} />}
+        actions={
+          <Button variant="primary" onClick={() => setShowCreate((v) => !v)}>
+            {showCreate ? 'Скрыть форму' : 'Создать тикет'}
+          </Button>
+        }
+      />
 
       {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          Ошибка: {error}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить тикеты"
+          description={error}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
       {showCreate ? (
@@ -172,229 +279,152 @@ export function IssuesBrowser() {
         />
       ) : null}
 
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Тикеты ({total})</h2>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              navigate({ q: searchDraft.trim() });
-            }}
-            className="flex items-center gap-2"
-          >
-            <input
-              type="search"
-              value={searchDraft}
-              onChange={(e) => setSearchDraft(e.target.value)}
-              placeholder="Поиск по тикетам"
-              className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs focus:border-neutral-600 focus:outline-none"
+      {/* Кнопка сброса существует только в паре со своим обработчиком — это
+          навязывает союз типов `Toolbar`, — поэтому вариантов панели два, а
+          общие слоты вынесены в переменные выше. */}
+      {filtered ? (
+        <Toolbar
+          search={searchSlot}
+          filters={filterSlot}
+          summary={`Найдено: ${total}`}
+          onReset={resetFilters}
+          resetLabel="Сбросить фильтры"
+        />
+      ) : (
+        <Toolbar search={searchSlot} filters={filterSlot} summary={`Найдено: ${total}`} />
+      )}
+
+      {loading ? (
+        <Card padding="sm">
+          <SkeletonTable rows={8} cols={6} label="Загрузка тикетов" />
+        </Card>
+      ) : issues.length === 0 ? (
+        <Card padding="none">
+          {filtered ? (
+            <EmptyState
+              variant="filtered"
+              title="Ничего не нашлось"
+              description="Ни один тикет не подходит под текущие фильтры."
+              action={
+                <Button size="sm" onClick={resetFilters}>
+                  Сбросить фильтры
+                </Button>
+              }
             />
-            <button
-              type="submit"
-              className="rounded border border-neutral-800 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-600"
-            >
-              Найти
-            </button>
-          </form>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex gap-1">
-            {STATE_FILTERS.map((filter) => (
-              <button
-                key={filter.value || 'all'}
-                type="button"
-                onClick={() => navigate({ state: filter.value })}
-                className={`rounded px-2 py-0.5 text-xs ${
-                  filters.state === filter.value
-                    ? 'bg-neutral-800 text-neutral-100'
-                    : 'text-neutral-400 hover:text-neutral-200'
-                }`}
-              >
-                {filter.label}
-              </button>
-            ))}
-          </div>
-
-          <label className="flex items-center gap-1 text-xs text-neutral-500">
-            Метка
-            <select
-              value={filters.label}
-              onChange={(e) => navigate({ label: e.target.value })}
-              className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 focus:border-neutral-600 focus:outline-none"
-            >
-              <option value="">все</option>
-              {labels.map((label) => (
-                <option key={label.id} value={label.name}>
-                  {label.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div className="flex items-center gap-2">
-            {filters.assignee ? (
-              <span className="inline-flex items-center gap-1 rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-200">
-                {assigneeName
-                  ? `Исполнитель: ${assigneeName}`
-                  : `Исполнитель: ${filters.assignee.slice(0, 8)}…`}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAssigneeName(null);
-                    navigate({ assignee: '' });
-                  }}
-                  className="text-neutral-400 hover:text-neutral-200"
-                  aria-label="Сбросить исполнителя"
-                >
-                  ×
-                </button>
-              </span>
-            ) : (
-              <div className="w-52">
-                <PlayerSearchSelect
-                  placeholder="Фильтр по исполнителю"
-                  onSelect={(player: PickedPlayer) => {
-                    setAssigneeName(player.canonical_name);
-                    navigate({ assignee: player.id });
-                  }}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          {loading ? (
-            <div className="py-8 text-center text-sm text-neutral-500">Загрузка…</div>
-          ) : issues.length === 0 ? (
-            <EmptyState onCreate={() => setShowCreate(true)} />
           ) : (
-            <table className="w-full text-sm">
-              <thead className="text-left text-xs uppercase text-neutral-500">
-                <tr>
-                  <th className="py-2 pr-2">#</th>
-                  <th className="py-2 pr-2">Заголовок</th>
-                  <th className="py-2 pr-2">Метки</th>
-                  <th className="py-2 pr-2">Автор</th>
-                  <th className="py-2 pr-2">Исполнитель</th>
-                  <th className="py-2 pr-2">Статус</th>
-                  <th className="py-2 pr-2">Обновлён</th>
-                </tr>
-              </thead>
-              <tbody>
-                {issues.map((issue) => (
-                  <tr
-                    key={issue.id}
-                    className="border-t border-neutral-900 align-top hover:bg-neutral-900/40"
-                  >
-                    <td className="py-2 pr-2 font-mono text-xs text-neutral-500">
-                      #{issue.number}
-                    </td>
-                    <td className="py-2 pr-2">
-                      <Link
-                        href={`/issues/${issue.id}`}
-                        className="text-sky-400 hover:text-sky-300"
-                      >
-                        {issue.title}
-                      </Link>
-                    </td>
-                    <td className="py-2 pr-2">
-                      {issue.labels.length === 0 ? (
-                        <span className="text-xs text-neutral-500">—</span>
-                      ) : (
-                        <div className="flex flex-wrap gap-1">
-                          {issue.labels.map((label) => (
-                            <span
-                              key={label.id}
-                              className="rounded px-1.5 py-0.5 text-[10px] font-medium text-neutral-100"
-                              style={{ backgroundColor: label.color }}
-                            >
-                              {label.name}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </td>
-                    <td className="py-2 pr-2 text-xs">
-                      <Link
-                        href={`/all-players/${issue.author_player_id}`}
-                        className="text-neutral-300 hover:text-neutral-100"
-                      >
-                        {authorLabel(issue.author, issue.author_player_id)}
-                      </Link>
-                    </td>
-                    <td className="py-2 pr-2 text-xs text-neutral-400">
-                      {issue.assignee ? (
-                        <Link
-                          href={`/all-players/${issue.assignee.id}`}
-                          className="hover:text-neutral-100"
-                        >
-                          {issue.assignee.name}
-                        </Link>
-                      ) : (
-                        <span className="text-neutral-500">—</span>
-                      )}
-                    </td>
-                    <td className="py-2 pr-2">
-                      <span
-                        className={`rounded px-2 py-0.5 text-xs ${STATE_BADGE_CLASSES[issue.state]}`}
-                      >
-                        {STATE_LABELS[issue.state]}
-                      </span>
-                    </td>
-                    <td className="py-2 pr-2 text-xs text-neutral-400">
-                      {formatDateTime(issue.updated_at)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <EmptyState
+              title="Тикетов пока нет"
+              description="Заведите первый тикет о баге, предложении или вопросе по панели."
+              action={
+                <Button variant="primary" size="sm" onClick={() => setShowCreate(true)}>
+                  Создать тикет
+                </Button>
+              }
+            />
           )}
-        </div>
+        </Card>
+      ) : (
+        <Card padding="none">
+          <Table ariaLabel="Тикеты">
+            <TableHead>
+              <TableRow>
+                <Th align="right">№</Th>
+                <Th>Заголовок</Th>
+                <Th>Метки</Th>
+                <Th>Автор</Th>
+                <Th>Исполнитель</Th>
+                <Th>Статус</Th>
+                <Th>Обновлён</Th>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {issues.map((issue) => (
+                <TableRow key={issue.id} interactive>
+                  <Td numeric className="text-ink-3">
+                    #{issue.number}
+                  </Td>
+                  <Td>
+                    <Link
+                      href={`/issues/${issue.id}`}
+                      className="text-accent no-underline hover:brightness-110"
+                    >
+                      {issue.title}
+                    </Link>
+                  </Td>
+                  <Td>
+                    {issue.labels.length === 0 ? (
+                      <span className="text-xs text-ink-3">—</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {issue.labels.map((label) => (
+                          <IssueLabelChip key={label.id} label={label} />
+                        ))}
+                      </div>
+                    )}
+                  </Td>
+                  <Td className="text-xs">
+                    <Link
+                      href={`/all-players/${issue.author_player_id}`}
+                      className="text-ink-2 no-underline hover:text-ink"
+                    >
+                      {authorLabel(issue.author, issue.author_player_id)}
+                    </Link>
+                  </Td>
+                  <Td className="text-xs text-ink-2">
+                    {issue.assignee ? (
+                      <Link
+                        href={`/all-players/${issue.assignee.id}`}
+                        className="text-ink-2 no-underline hover:text-ink"
+                      >
+                        {issue.assignee.name}
+                      </Link>
+                    ) : (
+                      <span className="text-ink-3">—</span>
+                    )}
+                  </Td>
+                  <Td>
+                    <StatusBadge
+                      state={STATE_STATE[issue.state]}
+                      label={STATE_LABELS[issue.state]}
+                      size="sm"
+                    />
+                  </Td>
+                  <Td className="whitespace-nowrap text-xs text-ink-2">
+                    {formatDateTime(issue.updated_at)}
+                  </Td>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
 
-        {!loading && issues.length > 0 ? (
-          <div className="flex items-center justify-between text-xs text-neutral-400">
-            <span>
-              Страница {filters.page} из {pages}
-            </span>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                disabled={filters.page <= 1}
-                onClick={() => navigate({ page: filters.page - 1 })}
-                className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-40"
-              >
-                Назад
-              </button>
-              <button
-                type="button"
-                disabled={filters.page >= pages}
-                onClick={() => navigate({ page: filters.page + 1 })}
-                className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-40"
-              >
-                Вперёд
-              </button>
-            </div>
-          </div>
-        ) : null}
-      </section>
-    </div>
+      {!loading && issues.length > 0 && pages > 1 ? (
+        <Pagination
+          page={filters.page}
+          pageCount={pages}
+          onChange={(page) => navigate({ page })}
+          labels={PAGINATION_LABELS}
+          allowJump
+        />
+      ) : null}
+    </PageContainer>
   );
 }
 
-function EmptyState({ onCreate }: { onCreate: () => void }) {
+/**
+ * Метка тикета. Цвет приходит из базы вместе с меткой, поэтому `Badge` здесь
+ * не подходит — его тона перечислены заранее и произвольный `background` он
+ * не принимает. Форма и кегль всё равно повторяют пилюлю дизайн-системы.
+ */
+function IssueLabelChip({ label }: { label: IssueLabel }) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded border border-dashed border-neutral-800 py-12 text-center">
-      <p className="text-sm text-neutral-400">Тикетов пока нет.</p>
-      <button
-        type="button"
-        onClick={onCreate}
-        className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700"
-      >
-        Создать тикет
-      </button>
-    </div>
+    <span
+      className="inline-flex items-center rounded-full px-1.5 py-px text-2xs font-medium text-ink"
+      style={{ backgroundColor: label.color }}
+    >
+      {label.name}
+    </span>
   );
 }
 
@@ -410,8 +440,6 @@ function CreateIssueForm({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const titleId = useId();
-  const bodyId = useId();
 
   function toggleLabel(name: string) {
     setSelected((prev) => {
@@ -458,77 +486,76 @@ function CreateIssueForm({
   const bodyOver = body.length > BODY_MAX;
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">Создать тикет</h2>
-      <form onSubmit={submit} className="space-y-3">
-        <div>
-          <label htmlFor={titleId} className="mb-1 flex justify-between text-xs text-neutral-500">
-            <span>Заголовок</span>
-            <span className={titleOver ? 'text-red-400' : 'text-neutral-500'}>
-              {title.length}/{TITLE_MAX}
-            </span>
-          </label>
-          <input
-            id={titleId}
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Короткое описание проблемы"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          />
-        </div>
-        <div>
-          <label htmlFor={bodyId} className="mb-1 flex justify-between text-xs text-neutral-500">
-            <span>Описание</span>
-            <span className={bodyOver ? 'text-red-400' : 'text-neutral-500'}>
-              {body.length}/{BODY_MAX}
-            </span>
-          </label>
-          <textarea
-            id={bodyId}
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            rows={4}
-            placeholder="Что произошло, как воспроизвести"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          />
-        </div>
-        {labels.length > 0 ? (
-          <div className="space-y-1">
-            <span className="text-xs text-neutral-500">Метки</span>
-            <div className="flex flex-wrap gap-2">
-              {labels.map((label) => {
-                const active = selected.has(label.name);
-                return (
-                  <button
-                    key={label.id}
-                    type="button"
-                    onClick={() => toggleLabel(label.name)}
-                    className={`rounded px-2 py-0.5 text-xs font-medium ${
-                      active ? 'text-neutral-950' : 'text-neutral-300 border border-neutral-700'
-                    }`}
-                    style={active ? { backgroundColor: label.color } : undefined}
-                  >
-                    {label.name}
-                  </button>
-                );
-              })}
-            </div>
+    <Card padding="none" as="section">
+      <CardHeader title="Создать тикет" />
+      <CardBody>
+        <form onSubmit={submit} className="space-y-4">
+          <FieldRow
+            label="Заголовок"
+            hint={`${title.length}/${TITLE_MAX}`}
+            error={titleOver ? 'Заголовок длиннее допустимого.' : undefined}
+          >
+            <TextInput
+              value={title}
+              invalid={titleOver}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Короткое описание проблемы"
+            />
+          </FieldRow>
+
+          <FieldRow
+            label="Описание"
+            hint={`${body.length}/${BODY_MAX}`}
+            error={bodyOver ? 'Описание длиннее допустимого.' : undefined}
+          >
+            <Textarea
+              value={body}
+              invalid={bodyOver}
+              rows={4}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="Что произошло, как воспроизвести"
+            />
+          </FieldRow>
+
+          {labels.length > 0 ? (
+            <fieldset className="space-y-2">
+              <legend className="text-xs font-medium text-ink-2">Метки</legend>
+              <div className="flex flex-wrap gap-2">
+                {labels.map((label) => {
+                  const active = selected.has(label.name);
+                  return (
+                    <button
+                      key={label.id}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => toggleLabel(label.name)}
+                      className={`h-7 rounded-ctl px-2.5 text-2xs font-medium transition-colors duration-150 ${
+                        active ? 'text-bg' : 'border border-line bg-raised text-ink-2'
+                      }`}
+                      style={active ? { backgroundColor: label.color } : undefined}
+                    >
+                      {label.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+          ) : null}
+
+          {error ? <InlineBanner tone="crit" title="Тикет не создан" description={error} /> : null}
+
+          <div className="flex justify-end">
+            <Button
+              type="submit"
+              variant="primary"
+              loading={submitting}
+              disabled={titleOver || bodyOver}
+            >
+              Создать тикет
+            </Button>
           </div>
-        ) : null}
-        {error ? (
-          <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-            {error}
-          </div>
-        ) : null}
-        <button
-          type="submit"
-          disabled={submitting || titleOver || bodyOver}
-          className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-        >
-          {submitting ? 'Создание…' : 'Создать тикет'}
-        </button>
-      </form>
-    </section>
+        </form>
+      </CardBody>
+    </Card>
   );
 }

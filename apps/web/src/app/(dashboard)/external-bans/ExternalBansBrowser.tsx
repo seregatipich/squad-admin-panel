@@ -4,13 +4,30 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Pagination,
+  SearchField,
+  Select,
+  Skeleton,
+  Toolbar,
+  type ToolbarProps,
+} from '@/components/ui';
+import {
+  type BanStatusLike,
   banStatusBadge,
   buildApiQuery,
   buildQueryString,
   formatDate,
   identityLabel,
   parseFilters,
-  trustLevelBadgeClass,
   trustLevelLabel,
 } from './helpers';
 
@@ -51,25 +68,31 @@ interface BanSourceOption {
   name: string;
 }
 
+/** Доверие к источнику — категория, а не состояние системы: пилюля, а не цвет строки. */
+const TRUST_TONE: Record<string, BadgeTone> = {
+  trusted: 'good',
+  normal: 'accent',
+  low: 'warn',
+};
+
+/** Тон статуса бана. Смысл всё равно несёт подпись из {@link banStatusBadge} (§5). */
+function banStatusTone(ban: BanStatusLike): BadgeTone {
+  if (!ban.is_active) return 'neutral';
+  return ban.is_permanent ? 'crit' : 'warn';
+}
+
 export function ExternalBansBrowser() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const filters = parseFilters(searchParams);
 
-  const [qInput, setQInput] = useState(filters.q);
   const [rows, setRows] = useState<RegistryRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sources, setSources] = useState<BanSourceOption[]>([]);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
-
-  useEffect(() => {
-    setQInput(filters.q);
-    // Only re-sync the input when navigation changes q externally (e.g. back button).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.q]);
 
   useEffect(() => {
     let cancelled = false;
@@ -123,175 +146,180 @@ export function ExternalBansBrowser() {
     void load();
   }, [load]);
 
-  function submitSearch(e: React.FormEvent) {
-    e.preventDefault();
-    navigate({ q: qInput.trim() });
+  const filtersApplied = filters.q !== '' || filters.permanentOnly || filters.sourceId !== '';
+  const page = Math.floor(filters.offset / filters.limit) + 1;
+  const pageCount = Math.max(1, Math.ceil(total / filters.limit));
+
+  function resetFilters() {
+    navigate({ q: '', permanentOnly: false, sourceId: '' });
   }
 
-  const hasPrev = filters.offset > 0;
-  const hasNext = filters.offset + filters.limit < total;
+  // Слот сброса у `Toolbar` — пара «обработчик + подпись» или ничего.
+  const resetProps: ToolbarProps = filtersApplied
+    ? { onReset: resetFilters, resetLabel: 'Сбросить фильтр' }
+    : {};
 
   return (
-    <div className="space-y-6 max-w-4xl">
-      <h1 className="text-2xl font-semibold">Внешние баны</h1>
-      <p className="text-sm text-neutral-400">
-        Агрегированный реестр банов из подключённых внешних источников (CBAN-3).
-      </p>
+    <PageContainer width="wide">
+      <PageHeader
+        title="Внешние баны"
+        subtitle="Агрегированный реестр банов из подключённых внешних источников."
+      />
 
       {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          Ошибка: {error}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить реестр"
+          description={error}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
-      <form onSubmit={submitSearch} className="flex flex-wrap items-center gap-2">
-        <input
-          type="text"
-          value={qInput}
-          onChange={(e) => setQInput(e.target.value)}
-          placeholder="Ник, SteamID64, EOS ID или причина"
-          className="w-72 rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm focus:border-neutral-600 focus:outline-none"
-        />
-        <button
-          type="submit"
-          className="rounded border border-neutral-800 px-3 py-1.5 text-sm hover:border-neutral-600"
-        >
-          Искать
-        </button>
-        <label className="flex items-center gap-1.5 text-sm text-neutral-300">
-          <input
-            type="checkbox"
-            checked={filters.permanentOnly}
-            onChange={(e) => navigate({ permanentOnly: e.target.checked })}
+      <Toolbar
+        search={
+          <SearchField
+            value={filters.q}
+            onCommit={(next) => navigate({ q: next.trim() })}
+            label="Поиск по реестру"
+            placeholder="Ник, SteamID64, EOS ID или причина"
+            clearLabel="Очистить поиск"
           />
-          Только перманентные
-        </label>
-        <select
-          value={filters.sourceId}
-          onChange={(e) => navigate({ sourceId: e.target.value })}
-          className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm text-neutral-200 focus:border-neutral-600 focus:outline-none"
-        >
-          <option value="">Все источники</option>
-          {sources.map((source) => (
-            <option key={source.id} value={source.id}>
-              {source.name}
-            </option>
-          ))}
-        </select>
-      </form>
+        }
+        filters={
+          <>
+            <Checkbox
+              label="Только перманентные"
+              checked={filters.permanentOnly}
+              onChange={(e) => navigate({ permanentOnly: e.target.checked })}
+            />
+            <Select
+              aria-label="Источник бана"
+              value={filters.sourceId}
+              onChange={(e) => navigate({ sourceId: e.target.value })}
+            >
+              <option value="">Все источники</option>
+              {sources.map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.name}
+                </option>
+              ))}
+            </Select>
+          </>
+        }
+        {...resetProps}
+        summary={
+          rows.length > 0
+            ? `${filters.offset + 1}–${filters.offset + rows.length} из ${total}`
+            : undefined
+        }
+      />
 
       {loading ? (
-        <div className="py-8 text-center text-sm text-neutral-500">Загрузка…</div>
+        <Skeleton variant="card" count={3} label="Загрузка реестра внешних банов" />
       ) : rows.length === 0 ? (
-        <div className="rounded border border-dashed border-neutral-800 py-12 text-center text-sm text-neutral-500">
-          Ничего не найдено.
-        </div>
+        <Card padding="none">
+          <EmptyState
+            variant={filtersApplied ? 'filtered' : 'initial'}
+            title={filtersApplied ? 'Ничего не нашлось' : 'Реестр пуст'}
+            description={
+              filtersApplied
+                ? 'Ни один игрок не подходит под запрос и выбранные фильтры.'
+                : 'Подключённые источники ещё не прислали ни одного бана.'
+            }
+            action={filtersApplied ? <Button onClick={resetFilters}>Сбросить фильтр</Button> : null}
+          />
+        </Card>
       ) : (
         <div className="space-y-3">
           {rows.map((row) => {
             const key = `${row.steam_id64 ?? ''}:${row.eos_id ?? ''}`;
             const expanded = expandedKey === key;
             return (
-              <div
-                key={key}
-                className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2"
-              >
+              <Card key={key} padding="sm" className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     {row.player_id ? (
                       <Link
                         href={`/all-players/${row.player_id}`}
-                        className="font-medium text-sky-400 hover:text-sky-300"
+                        className="font-medium text-accent no-underline hover:brightness-110"
                       >
                         {identityLabel(row)}
                       </Link>
                     ) : (
-                      <span className="font-medium text-neutral-300">{identityLabel(row)}</span>
+                      <span className="font-medium text-ink">{identityLabel(row)}</span>
                     )}
                     {row.active_source_count > 0 ? (
-                      <span className="rounded border border-red-900 bg-red-950/50 px-1.5 py-0.5 text-xs text-red-300">
-                        Активен в {row.active_source_count}
-                      </span>
+                      <Badge tone="crit">Активен в {row.active_source_count}</Badge>
                     ) : null}
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-neutral-500">
+                  <div className="flex items-center gap-2 text-xs text-ink-3">
                     {row.steam_id64 ? <span className="font-mono">{row.steam_id64}</span> : null}
                     {row.eos_id ? <span className="font-mono">{row.eos_id}</span> : null}
-                    <button
-                      type="button"
+                    <Button
+                      size="sm"
+                      aria-expanded={expanded}
                       onClick={() => setExpandedKey(expanded ? null : key)}
-                      className="rounded border border-neutral-800 px-2 py-0.5 hover:border-neutral-600"
                     >
                       {expanded ? 'Скрыть' : `Показать (${row.bans.length})`}
-                    </button>
+                    </Button>
                   </div>
                 </div>
 
                 {expanded ? (
-                  <ul className="space-y-1">
+                  <ul className="divide-y divide-line rounded-ctl border border-line">
                     {row.bans.map((ban) => {
                       const status = banStatusBadge(ban);
                       return (
-                        <li key={ban.id} className="rounded bg-neutral-900/40 p-2 text-xs">
+                        <li key={ban.id} className="p-2 text-xs">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-1.5">
-                              <span className="text-neutral-300">{ban.source_name}</span>
-                              <span
-                                className={`rounded px-1.5 py-0.5 ${trustLevelBadgeClass(ban.trust_level)}`}
-                              >
+                              <span className="text-ink-2">{ban.source_name}</span>
+                              <Badge size="sm" tone={TRUST_TONE[ban.trust_level] ?? 'neutral'}>
                                 {trustLevelLabel(ban.trust_level)}
-                              </span>
-                              <span className={`rounded px-1.5 py-0.5 ${status.className}`}>
+                              </Badge>
+                              <Badge size="sm" tone={banStatusTone(ban)}>
                                 {status.label}
-                              </span>
+                              </Badge>
                             </div>
-                            <span className="text-neutral-500">
+                            <span className="text-ink-3">
                               {formatDate(ban.issued_at)}
                               {ban.expires_at ? ` → ${formatDate(ban.expires_at)}` : ''}
                             </span>
                           </div>
-                          {ban.reason ? (
-                            <p className="mt-1 text-neutral-300">{ban.reason}</p>
-                          ) : null}
+                          {ban.reason ? <p className="mt-1 text-ink-2">{ban.reason}</p> : null}
                           {ban.admin_name ? (
-                            <p className="mt-0.5 text-neutral-500">Админ: {ban.admin_name}</p>
+                            <p className="mt-0.5 text-ink-3">Админ: {ban.admin_name}</p>
                           ) : null}
                         </li>
                       );
                     })}
                   </ul>
                 ) : null}
-              </div>
+              </Card>
             );
           })}
         </div>
       )}
 
       {!loading && rows.length > 0 ? (
-        <div className="flex items-center justify-between text-xs text-neutral-400">
-          <span>
-            {filters.offset + 1}–{filters.offset + rows.length} из {total}
-          </span>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              disabled={!hasPrev}
-              onClick={() => navigate({ offset: Math.max(0, filters.offset - filters.limit) })}
-              className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-40"
-            >
-              Назад
-            </button>
-            <button
-              type="button"
-              disabled={!hasNext}
-              onClick={() => navigate({ offset: filters.offset + filters.limit })}
-              className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-40"
-            >
-              Вперёд
-            </button>
-          </div>
+        <div className="flex justify-end">
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            onChange={(next) => navigate({ offset: (next - 1) * filters.limit })}
+            allowJump
+            labels={{
+              previous: 'Назад',
+              next: 'Вперёд',
+              page: (current, of) => `Стр. ${current} из ${of}`,
+            }}
+          />
         </div>
       ) : null}
-    </div>
+    </PageContainer>
   );
 }

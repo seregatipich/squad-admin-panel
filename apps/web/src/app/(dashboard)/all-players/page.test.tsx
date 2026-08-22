@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -133,12 +133,29 @@ describe('PlayersPage', () => {
     expect(listUrls[0]).toBe('/api/v1/players?sort=last_seen&dir=desc');
   });
 
-  it('renders a Created column header', async () => {
+  it('renders the first-seen column under its Russian name', async () => {
     await renderPage();
-    expect(
-      screen.getByRole('button', { name: 'Сортировать по колонке Created' }),
-    ).toBeInTheDocument();
-    expect(screen.getByText('Created')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Создан/ })).toBeInTheDocument();
+    expect(screen.getByText('Создан')).toBeInTheDocument();
+    expect(screen.queryByText('Created')).not.toBeInTheDocument();
+  });
+
+  it('names the playtime and last-seen columns in Russian', async () => {
+    await renderPage();
+    expect(screen.getByText('Наиграно')).toBeInTheDocument();
+    expect(screen.getByText('Был(а)')).toBeInTheDocument();
+    expect(screen.queryByText('Total playtime')).not.toBeInTheDocument();
+    expect(screen.queryByText('Last seen')).not.toBeInTheDocument();
+  });
+
+  it('marks the sorted column with aria-sort and leaves the others unsorted', async () => {
+    await renderPage();
+    const sorted = screen.getByRole('button', { name: /^Был\(а\)/ }).closest('th');
+    expect(sorted).toHaveAttribute('aria-sort', 'descending');
+    expect(screen.getByRole('button', { name: /^Ник/ }).closest('th')).toHaveAttribute(
+      'aria-sort',
+      'none',
+    );
   });
 
   it('renders the first_seen_at value in every body row', async () => {
@@ -150,7 +167,7 @@ describe('PlayersPage', () => {
 
   it('clicking the Ник header refetches with sort=nickname&dir=asc', async () => {
     const listUrls = await renderPage();
-    await userEvent.click(screen.getByRole('button', { name: 'Сортировать по колонке Ник' }));
+    await userEvent.click(screen.getByRole('button', { name: /^Ник/ }));
     await waitFor(() => {
       expect(listUrls).toContain('/api/v1/players?sort=nickname&dir=asc');
     });
@@ -158,7 +175,7 @@ describe('PlayersPage', () => {
 
   it('clicking the Ник header twice refetches with sort=nickname&dir=desc', async () => {
     const listUrls = await renderPage();
-    const header = screen.getByRole('button', { name: 'Сортировать по колонке Ник' });
+    const header = screen.getByRole('button', { name: /^Ник/ });
     await userEvent.click(header);
     await waitFor(() => {
       expect(listUrls).toContain('/api/v1/players?sort=nickname&dir=asc');
@@ -171,7 +188,7 @@ describe('PlayersPage', () => {
 
   it('clicking the Created header refetches with sort=created&dir=desc', async () => {
     const listUrls = await renderPage();
-    await userEvent.click(screen.getByRole('button', { name: 'Сортировать по колонке Created' }));
+    await userEvent.click(screen.getByRole('button', { name: /^Создан/ }));
     await waitFor(() => {
       expect(listUrls).toContain('/api/v1/players?sort=created&dir=desc');
     });
@@ -253,7 +270,7 @@ describe('PlayersPage', () => {
 
   it('cycles the Статус header between online-first, offline-first and unsorted', async () => {
     await renderPage({ onlinePlayerIds: ['player-2'] });
-    const statusHeader = screen.getByRole('button', { name: 'Сортировать по статусу онлайн' });
+    const statusHeader = screen.getByRole('button', { name: /^Статус/ });
     const names = () => screen.getAllByRole('link', { name: /zz$/ }).map((a) => a.textContent);
 
     await userEvent.click(statusHeader);
@@ -266,14 +283,26 @@ describe('PlayersPage', () => {
     await waitFor(() => expect(names()).toEqual(['Alphazz', 'Bravozz', 'Charliezz']));
   });
 
-  it('tints the row of a player carrying an active mark', async () => {
+  /**
+   * The tint is a colour-only cue, so it is not what the test may assert:
+   * the row has to *say* the player carries a mark. That is the badge in the
+   * nickname cell, and only the marked row gets one.
+   */
+  it('marks the row of a player carrying an active mark', async () => {
     await renderPage({ markSummary: [{ player_id: 'player-1', marks: [MARK_SUSPECT] }] });
-    const row = await waitFor(() => {
-      const link = screen.getByText('Alphazz').closest('tr');
-      if (!link?.className.includes('bg-')) throw new Error('row not tinted yet');
-      return link;
+
+    const markedRow = await waitFor(() => {
+      const row = screen.getByText('Alphazz').closest('tr');
+      if (!row || within(row).queryByText('метка') === null) {
+        throw new Error('mark badge not rendered yet');
+      }
+      return row;
     });
-    expect(row.className).toContain('bg-red-950/25');
+    expect(within(markedRow).getByTitle('Читер')).toBeInTheDocument();
+
+    const plainRow = screen.getByText('Bravozz').closest('tr');
+    expect(plainRow).not.toBeNull();
+    expect(within(plainRow as HTMLElement).queryByText('метка')).toBeNull();
   });
 
   it('keeps rendering when the marks and online-status requests fail', async () => {

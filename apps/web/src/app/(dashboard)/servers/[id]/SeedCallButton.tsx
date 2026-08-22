@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { Button, Card, CardBody, CardHeader, InlineBanner } from '@/components/ui';
 
 interface SeedCallStatus {
   available: boolean;
@@ -73,28 +74,30 @@ export function SeedCallButton({ serverId, canCall }: { serverId: string; canCal
   if (!canCall) return null;
 
   return (
-    <section className="rounded border border-amber-900 bg-amber-950/30 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold text-amber-200">Нужен сид</h2>
-          <p className="mt-1 text-xs text-neutral-400">
-            Уведомить подписчиков и отправить событие в Discord. Не чаще одного раза в 2 часа.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => void callSeeders()}
-          disabled={busy || remaining > 0}
-          className="rounded border border-amber-700 bg-amber-700/70 px-3 py-1.5 text-sm text-amber-50 hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {busy
-            ? 'Отправляю…'
-            : remaining > 0
-              ? `Повторить через ${formatCooldown(remaining)}`
-              : 'Позвать сидеров'}
-        </button>
-      </div>
-      {message ? <p className="mt-2 text-xs text-neutral-300">{message}</p> : null}
-    </section>
+    <Card padding="none" as="section">
+      <CardHeader
+        title="Нужен сид"
+        description="Уведомить подписчиков и отправить событие в Discord. Не чаще одного раза в 2 часа."
+        actions={
+          <Button
+            variant="primary"
+            onClick={() => void callSeeders()}
+            disabled={busy || remaining > 0}
+            loading={busy}
+          >
+            {busy
+              ? 'Отправляю…'
+              : remaining > 0
+                ? `Повторить через ${formatCooldown(remaining)}`
+                : 'Позвать сидеров'}
+          </Button>
+        }
+      />
+      {message ? (
+        <CardBody>
+          <InlineBanner tone="info" title={message} />
+        </CardBody>
+      ) : null}
+    </Card>
   );
 }

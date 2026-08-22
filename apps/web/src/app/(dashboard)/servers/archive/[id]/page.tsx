@@ -1,6 +1,26 @@
 'use client';
-import Link from 'next/link';
-import { use, useEffect, useState } from 'react';
+import { use, useCallback, useEffect, useState } from 'react';
+import {
+  Badge,
+  Button,
+  ButtonLink,
+  Card,
+  CardHeader,
+  EmptyState,
+  GroupedList,
+  GroupedRow,
+  InlineBanner,
+  Modal,
+  PageContainer,
+  PageHeader,
+  Skeleton,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
 
 interface ArchiveServer {
   id: string;
@@ -56,9 +76,13 @@ export default function ArchiveDetailPage({ params }: { params: Promise<{ id: st
   const [openFile, setOpenFile] = useState<BackupContent | null>(null);
   const [loadingFile, setLoadingFile] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
+  /**
+   * Признак «этот ответ уже никому не нужен» приходит параметром, а не живёт
+   * в замыкании эффекта: тот же запрос запускает и кнопка «Повторить», у
+   * которой отменять нечего.
+   */
+  const loadArchive = useCallback(
+    async (isStale: () => boolean = () => false) => {
       try {
         const r = await fetch(`/api/v1/servers/archive/${id}`, {
           credentials: 'include',
@@ -66,19 +90,24 @@ export default function ArchiveDetailPage({ params }: { params: Promise<{ id: st
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const j = (await r.json()) as ArchiveDetail;
-        if (!cancelled) {
+        if (!isStale()) {
           setData(j);
           setErr(null);
         }
       } catch (e) {
-        if (!cancelled) setErr((e as Error).message);
+        if (!isStale()) setErr((e as Error).message);
       }
-    }
-    void load();
+    },
+    [id],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadArchive(() => cancelled);
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [loadArchive]);
 
   async function viewFile(filename: string) {
     setLoadingFile(filename);
@@ -97,155 +126,137 @@ export default function ArchiveDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
-  if (err && !data) {
-    return (
-      <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">Ошибка: {err}</div>
-    );
-  }
-  if (!data) return <div className="text-neutral-500">Загрузка…</div>;
-
-  const { server, settings, backups } = data;
+  const server = data?.server;
+  const settings = data?.settings ?? null;
+  const backups = data?.backups ?? [];
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold">{server.display_name}</h1>
-            <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs uppercase tracking-widest text-neutral-300">
-              archived
-            </span>
-          </div>
-          <div className="text-xs text-neutral-500 font-mono">{server.id}</div>
-          <div className="text-xs text-neutral-400">
-            Удалён {new Date(server.deleted_at).toLocaleString()}
-            {server.deleted_by_steam_id64 ? ` · ${server.deleted_by_steam_id64}` : ''}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href="/servers/archive"
-            className="rounded border border-neutral-700 px-3 py-1.5 text-xs hover:bg-neutral-800"
-          >
-            ← К архиву
-          </Link>
-          <Link
-            href={`/servers/archive/${server.id}/restore`}
-            className="rounded bg-sky-600 px-3 py-1.5 text-sm text-white hover:bg-sky-500"
-          >
-            Восстановить сервер
-          </Link>
-        </div>
-      </header>
+    <PageContainer width="wide">
+      <PageHeader
+        title={server ? server.display_name : 'Сервер из архива'}
+        backHref="/servers/archive"
+        backLabel="К архиву"
+        status={<Badge>В архиве</Badge>}
+        meta={
+          server ? (
+            <>
+              <span className="font-mono">{server.id}</span>
+              <span>
+                Удалён {new Date(server.deleted_at).toLocaleString()}
+                {server.deleted_by_steam_id64 ? ` · ${server.deleted_by_steam_id64}` : ''}
+              </span>
+            </>
+          ) : undefined
+        }
+        actions={
+          server ? (
+            <ButtonLink href={`/servers/archive/${server.id}/restore`} variant="primary">
+              Восстановить сервер
+            </ButtonLink>
+          ) : undefined
+        }
+      />
 
-      {err ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{err}</div>
-      ) : null}
+      {err && (
+        <InlineBanner
+          tone="crit"
+          title="Не удалось получить запись архива"
+          description={err}
+          action={
+            <Button
+              onClick={() => {
+                void loadArchive();
+              }}
+            >
+              Повторить
+            </Button>
+          }
+        />
+      )}
 
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400 mb-3">Параметры</h2>
-        {settings ? (
-          <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 font-mono text-xs">
-            <dt className="text-neutral-500">Slug</dt>
-            <dd>{server.slug}</dd>
-            <dt className="text-neutral-500">Game</dt>
-            <dd>{settings.game_port}</dd>
-            <dt className="text-neutral-500">Query</dt>
-            <dd>{settings.query_port}</dd>
-            <dt className="text-neutral-500">Beacon</dt>
-            <dd>{settings.beacon_port}</dd>
-            <dt className="text-neutral-500">RCON</dt>
-            <dd>{settings.rcon_port}</dd>
-            <dt className="text-neutral-500">Макс. игроков</dt>
-            <dd>{settings.max_players}</dd>
-            <dt className="text-neutral-500">Tickrate</dt>
-            <dd>{settings.tickrate}</dd>
-          </dl>
-        ) : (
-          <div className="text-neutral-500 text-xs">нет настроек</div>
-        )}
-      </section>
+      {!data ? (
+        err ? null : (
+          <Skeleton variant="card" count={2} label="Загружается запись архива" />
+        )
+      ) : (
+        <>
+          <GroupedList title="Параметры">
+            <GroupedRow label="Идентификатор" control={<Value>{server?.slug}</Value>} />
+            {settings ? (
+              <>
+                <GroupedRow label="Порт Game" control={<Value>{settings.game_port}</Value>} />
+                <GroupedRow label="Порт Query" control={<Value>{settings.query_port}</Value>} />
+                <GroupedRow label="Порт Beacon" control={<Value>{settings.beacon_port}</Value>} />
+                <GroupedRow label="Порт RCON" control={<Value>{settings.rcon_port}</Value>} />
+                <GroupedRow label="Макс. игроков" control={<Value>{settings.max_players}</Value>} />
+                <GroupedRow label="Тикрейт" control={<Value>{settings.tickrate}</Value>} />
+              </>
+            ) : (
+              <GroupedRow label="Настройки не сохранились" />
+            )}
+          </GroupedList>
 
-      <section className="space-y-2">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Бэкап конфигов</h2>
-        {backups.length === 0 ? (
-          <div className="rounded border border-neutral-800 bg-neutral-950 p-4 text-sm text-neutral-500">
-            Бэкап пуст — конфиги не сохранились перед удалением.
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded border border-neutral-800">
-            <table className="w-full text-sm">
-              <thead className="bg-neutral-950 text-xs uppercase tracking-widest text-neutral-500">
-                <tr>
-                  <th className="text-left p-2">Файл</th>
-                  <th className="text-left p-2">SHA-256</th>
-                  <th className="text-left p-2">Сообщение</th>
-                  <th className="text-left p-2">Сохранён</th>
-                </tr>
-              </thead>
-              <tbody>
-                {backups.map((b) => (
-                  <tr key={b.id} className="border-t border-neutral-900">
-                    <td className="p-2">
-                      <button
-                        type="button"
-                        onClick={() => viewFile(b.filename)}
-                        className="text-sky-400 hover:text-sky-300 font-mono text-xs"
-                        disabled={loadingFile === b.filename}
-                      >
-                        {loadingFile === b.filename ? '…' : b.filename}
-                      </button>
-                    </td>
-                    <td className="p-2 font-mono text-[11px] text-neutral-400">
-                      {b.sha256_hex.slice(0, 12)}
-                    </td>
-                    <td className="p-2 text-xs text-neutral-400">{b.message ?? '—'}</td>
-                    <td className="p-2 text-xs text-neutral-500">
-                      {new Date(b.created_at).toLocaleString()}
-                    </td>
+          <Card padding="none" as="section">
+            <CardHeader title="Бэкап конфигов" count={backups.length} />
+            {backups.length === 0 ? (
+              <EmptyState
+                title="Бэкап пуст"
+                description="Конфиги не сохранились перед удалением сервера."
+              />
+            ) : (
+              <Table ariaLabel="Файлы конфигов из бэкапа">
+                <TableHead>
+                  <tr>
+                    <Th>Файл</Th>
+                    <Th>SHA-256</Th>
+                    <Th>Сообщение</Th>
+                    <Th>Сохранён</Th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                </TableHead>
+                <TableBody>
+                  {backups.map((b) => (
+                    <TableRow key={b.id}>
+                      <Td>
+                        <Button
+                          variant="plain"
+                          size="sm"
+                          className="font-mono"
+                          loading={loadingFile === b.filename}
+                          onClick={() => viewFile(b.filename)}
+                        >
+                          {b.filename}
+                        </Button>
+                      </Td>
+                      <Td className="font-mono text-2xs text-ink-3">{b.sha256_hex.slice(0, 12)}</Td>
+                      <Td className="text-xs text-ink-2">{b.message ?? '—'}</Td>
+                      <Td className="text-xs text-ink-3">
+                        {new Date(b.created_at).toLocaleString()}
+                      </Td>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </Card>
+        </>
+      )}
 
-      {openFile ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={openFile.filename}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-        >
-          <button
-            type="button"
-            aria-label="Закрыть"
-            onClick={() => setOpenFile(null)}
-            className="absolute inset-0 bg-black/70"
-          />
-          <div className="relative flex max-h-[80vh] w-full max-w-4xl flex-col rounded border border-neutral-700 bg-neutral-950">
-            <header className="flex items-center justify-between border-b border-neutral-800 p-3">
-              <div className="flex items-baseline gap-3">
-                <h3 className="font-mono text-sm">{openFile.filename}</h3>
-                <span className="font-mono text-[11px] text-neutral-500">
-                  sha256: {openFile.sha256_hex.slice(0, 12)}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setOpenFile(null)}
-                className="rounded border border-neutral-700 px-2 py-0.5 text-xs hover:bg-neutral-800"
-              >
-                Закрыть
-              </button>
-            </header>
-            <pre className="flex-1 overflow-auto p-4 font-mono text-xs whitespace-pre-wrap break-all">
-              {openFile.content}
-            </pre>
-          </div>
-        </div>
-      ) : null}
-    </div>
+      <Modal
+        open={openFile !== null}
+        onClose={() => setOpenFile(null)}
+        size="lg"
+        title={openFile?.filename ?? ''}
+        description={openFile ? `SHA-256: ${openFile.sha256_hex.slice(0, 12)}` : undefined}
+        closeLabel="Закрыть просмотр файла"
+        footer={<Button onClick={() => setOpenFile(null)}>Закрыть</Button>}
+      >
+        <pre className="whitespace-pre-wrap break-all font-mono text-xs">{openFile?.content}</pre>
+      </Modal>
+    </PageContainer>
   );
+}
+
+/** Правая часть строки параметров: значение набирается моноширинным. */
+function Value({ children }: { children: React.ReactNode }) {
+  return <span className="font-mono text-xs text-ink-2">{children}</span>;
 }

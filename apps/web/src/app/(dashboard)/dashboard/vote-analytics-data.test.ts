@@ -27,10 +27,17 @@ describe('formatPassRate', () => {
 });
 
 describe('passRateTone', () => {
-  it('maps rate bands to tone classes', () => {
-    expect(passRateTone(80)).toContain('emerald');
-    expect(passRateTone(50)).toContain('amber');
-    expect(passRateTone(10)).toContain('red');
+  it('maps rate bands to design-system tones', () => {
+    expect(passRateTone(80)).toBe('good');
+    expect(passRateTone(50)).toBe('warn');
+    expect(passRateTone(10)).toBe('crit');
+  });
+
+  it('places the band boundaries on the documented thresholds', () => {
+    expect(passRateTone(66)).toBe('good');
+    expect(passRateTone(65.9)).toBe('warn');
+    expect(passRateTone(33)).toBe('warn');
+    expect(passRateTone(32.9)).toBe('crit');
   });
 });
 

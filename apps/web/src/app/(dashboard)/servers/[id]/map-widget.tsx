@@ -1,5 +1,18 @@
 'use client';
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Checkbox,
+  EmptyState,
+  InlineBanner,
+  Modal,
+  SearchField,
+} from '@/components/ui';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { canSubmitLayer, filterLayers, formatMatchElapsed } from './map-widget-helpers';
 
@@ -37,6 +50,16 @@ async function readJsonError(res: Response): Promise<string> {
   }
 }
 
+/** Служебный ярлык над значением — единственное место, где разрешён капслок (§1). */
+function MapSlot({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="rounded-ctl border border-line bg-raised p-3">
+      <p className="text-2xs uppercase tracking-[0.06em] text-ink-3">{label}</p>
+      {children}
+    </div>
+  );
+}
+
 /**
  * ROT-3 (#146): current/next-map widget for the server detail page. Shows
  * the current layer (map/gamemode/elapsed match time) and the next layer —
@@ -55,10 +78,10 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
   const [pickerQuery, setPickerQuery] = useState('');
   const [pickerSelected, setPickerSelected] = useState<CatalogLayer | null>(null);
   const [confirmDeprecated, setConfirmDeprecated] = useState(false);
+  const [changeConfirmOpen, setChangeConfirmOpen] = useState(false);
   const [endMatchConfirmOpen, setEndMatchConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const searchInputId = useId();
 
   const load = useCallback(async () => {
     try {
@@ -132,7 +155,6 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
 
   async function submitPicker() {
     if (!pickerMode || !pickerSelected || busy) return;
-    if (pickerMode === 'change' && !confirm('Матч будет сброшен. Сменить карту сейчас?')) return;
     setBusy(true);
     setFeedback(null);
     try {
@@ -150,6 +172,7 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
         kind: 'ok',
         text: pickerMode === 'next' ? 'Следующая карта установлена' : 'Карта сменена',
       });
+      setChangeConfirmOpen(false);
       closePicker();
       void load();
     } catch (e) {
@@ -182,210 +205,215 @@ export function MapWidget({ serverId, canChangeMap }: { serverId: string; canCha
   const canSubmit = canSubmitLayer(pickerSelected, confirmDeprecated);
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
-      <h2 className="mb-3 text-xs uppercase tracking-widest text-neutral-400">Карта</h2>
-
-      {err ? <p className="mb-3 text-xs text-red-400">Ошибка загрузки: {err}</p> : null}
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="rounded border border-neutral-800 bg-neutral-900 p-3">
-          <div className="mb-1 text-xs text-neutral-500">Текущая карта</div>
-          {data?.current ? (
+    <Card padding="none" as="section">
+      <CardHeader
+        title="Карта"
+        actions={
+          canChangeMap ? (
             <>
-              <div className="text-sm text-neutral-100">{data.current.layer}</div>
-              <div className="mt-1 text-xs text-neutral-400">
-                {data.current.map ?? '—'}
-                {data.current.gamemode ? ` · ${data.current.gamemode}` : ''}
-              </div>
-              <div className="mt-1 text-xs text-sky-400">
-                идёт {formatMatchElapsed(data.match_started_at, now)}
-              </div>
+              <Button size="sm" onClick={() => openPicker('next')}>
+                Следующая
+              </Button>
+              <Button size="sm" onClick={() => openPicker('change')}>
+                Сменить сейчас
+              </Button>
+              <Button size="sm" onClick={() => setEndMatchConfirmOpen(true)}>
+                Завершить матч
+              </Button>
             </>
-          ) : (
-            <div className="text-sm text-neutral-500">—</div>
-          )}
+          ) : undefined
+        }
+      />
+
+      <CardBody className="space-y-3">
+        {err ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить карту"
+            description={err}
+            action={
+              <Button size="sm" onClick={() => void load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : null}
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <MapSlot label="Текущая карта">
+            {data?.current ? (
+              <>
+                <p className="mt-1 text-[17px] font-semibold text-ink">{data.current.layer}</p>
+                <p className="mt-1 text-xs text-ink-3">
+                  {data.current.map ?? '—'}
+                  {data.current.gamemode ? ` · ${data.current.gamemode}` : ''}
+                </p>
+                <p className="mt-1 text-xs text-ink-2">
+                  идёт {formatMatchElapsed(data.match_started_at, now)}
+                </p>
+              </>
+            ) : (
+              <p className="mt-1 text-[17px] font-semibold text-ink-3">—</p>
+            )}
+          </MapSlot>
+
+          <MapSlot label="Следующая карта">
+            {data?.next ? (
+              <>
+                <p className="mt-1 text-[17px] font-semibold text-ink">{data.next.layer}</p>
+                <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-ink-3">
+                  <span>
+                    {data.next.map ?? '—'}
+                    {data.next.gamemode ? ` · ${data.next.gamemode}` : ''}
+                  </span>
+                  {data.next.deprecated ? (
+                    <Badge tone="warn" size="sm">
+                      устаревший
+                    </Badge>
+                  ) : null}
+                </p>
+              </>
+            ) : (
+              <p className="mt-1 text-[17px] font-semibold text-ink-3">По ротации</p>
+            )}
+          </MapSlot>
         </div>
 
-        <div className="rounded border border-neutral-800 bg-neutral-900 p-3">
-          <div className="mb-1 text-xs text-neutral-500">Следующая карта</div>
-          {data?.next ? (
-            <>
-              <div className="text-sm text-neutral-100">{data.next.layer}</div>
-              <div className="mt-1 text-xs text-neutral-400">
-                {data.next.map ?? '—'}
-                {data.next.gamemode ? ` · ${data.next.gamemode}` : ''}
-                {data.next.deprecated ? (
-                  <span className="ml-2 text-amber-400">устаревший</span>
-                ) : null}
-              </div>
-            </>
-          ) : (
-            <div className="text-sm text-neutral-500">По ротации</div>
-          )}
-        </div>
-      </div>
+        {feedback ? (
+          <InlineBanner
+            tone={feedback.kind === 'ok' ? 'good' : 'crit'}
+            title={feedback.text}
+            onDismiss={() => setFeedback(null)}
+            dismissLabel="Скрыть сообщение"
+          />
+        ) : null}
+      </CardBody>
 
-      {canChangeMap ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => openPicker('next')}
-            className="rounded border border-sky-900 px-3 py-1.5 text-xs text-sky-300 hover:border-sky-700"
-          >
-            Следующая
-          </button>
-          <button
-            type="button"
-            onClick={() => openPicker('change')}
-            className="rounded border border-amber-900 px-3 py-1.5 text-xs text-amber-300 hover:border-amber-700"
-          >
-            Сменить сейчас
-          </button>
-          <button
-            type="button"
-            onClick={() => setEndMatchConfirmOpen(true)}
-            className="rounded border border-red-900 px-3 py-1.5 text-xs text-red-300 hover:border-red-700"
-          >
-            Завершить матч
-          </button>
-        </div>
-      ) : null}
+      <Modal
+        open={pickerMode !== null}
+        onClose={closePicker}
+        title={pickerMode === 'change' ? 'Сменить карту сейчас' : 'Установить следующую карту'}
+        closeLabel="Отмена"
+        size="md"
+        footer={
+          <>
+            <Button onClick={closePicker}>Отмена</Button>
+            <Button
+              variant="primary"
+              disabled={!canSubmit}
+              loading={busy}
+              onClick={() => {
+                // Смена на ходу сбрасывает матч, поэтому она проходит через
+                // отдельный вопрос; постановка следующей карты — нет.
+                if (pickerMode === 'change') setChangeConfirmOpen(true);
+                else void submitPicker();
+              }}
+            >
+              Применить
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          {pickerMode === 'change' ? (
+            <InlineBanner
+              tone="warn"
+              title="Текущий матч будет сброшен немедленно"
+              description="Игроки увидят загрузку новой карты сразу после подтверждения."
+            />
+          ) : null}
 
-      {feedback ? (
-        <p
-          className={`mt-2 text-xs ${feedback.kind === 'ok' ? 'text-emerald-400' : 'text-red-400'}`}
-        >
-          {feedback.text}
-        </p>
-      ) : null}
+          <SearchField
+            value={pickerQuery}
+            // Фильтр идёт по уже загруженному каталогу, запроса за ним нет —
+            // ждать паузы в наборе незачем.
+            delay={0}
+            onCommit={setPickerQuery}
+            label="Поиск слоя"
+            placeholder="напр. Yehorivka"
+            clearLabel="Очистить поиск"
+          />
 
-      {pickerMode ? (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4">
-          <div className="mt-16 w-full max-w-lg rounded border border-neutral-800 bg-neutral-950 p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">
-                {pickerMode === 'next' ? 'Установить следующую карту' : 'Сменить карту сейчас'}
-              </h3>
-              <button
-                type="button"
-                onClick={closePicker}
-                className="text-sm text-neutral-400 hover:text-neutral-200"
-              >
-                Закрыть
-              </button>
-            </div>
-
-            {pickerMode === 'change' ? (
-              <p className="rounded border border-red-900 bg-red-950/40 px-3 py-2 text-xs text-red-300">
-                Внимание: текущий матч будет сброшен немедленно.
-              </p>
-            ) : null}
-
-            <div>
-              <label htmlFor={searchInputId} className="mb-1 block text-xs text-neutral-500">
-                Поиск слоя
-              </label>
-              <input
-                id={searchInputId}
-                type="text"
-                value={pickerQuery}
-                onChange={(e) => setPickerQuery(e.target.value)}
-                placeholder="напр. Yehorivka"
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
+          <div className="max-h-64 space-y-1 overflow-y-auto">
+            {filteredCatalog.length === 0 ? (
+              <EmptyState
+                variant="filtered"
+                title="Ничего не найдено"
+                description="Ни один слой каталога не совпал с запросом."
+                action={
+                  <Button size="sm" onClick={() => setPickerQuery('')}>
+                    Сбросить поиск
+                  </Button>
+                }
               />
-            </div>
-
-            <div className="max-h-64 space-y-1 overflow-y-auto">
-              {filteredCatalog.length === 0 ? (
-                <p className="text-xs text-neutral-500">Ничего не найдено.</p>
-              ) : (
-                filteredCatalog.map((row) => (
+            ) : (
+              filteredCatalog.map((row) => {
+                const selected = pickerSelected?.id === row.id;
+                return (
                   <button
                     key={row.id}
                     type="button"
+                    aria-pressed={selected}
                     onClick={() => {
                       setPickerSelected(row);
                       setConfirmDeprecated(false);
                     }}
-                    className={`flex w-full items-center justify-between rounded border px-3 py-2 text-left text-sm ${
-                      pickerSelected?.id === row.id
-                        ? 'border-sky-600 bg-sky-950/40 text-sky-200'
-                        : 'border-neutral-800 bg-neutral-900 text-neutral-200 hover:border-neutral-600'
+                    className={`flex w-full items-center justify-between gap-2 rounded-ctl border px-3 py-2 text-left text-[13px] transition-colors duration-150 ${
+                      selected
+                        ? 'border-accent bg-accent-dim text-ink'
+                        : 'border-line bg-raised text-ink-2 hover:text-ink'
                     }`}
                   >
                     <span>
                       {row.name}
-                      <span className="ml-2 text-xs text-neutral-500">
+                      <span className="ml-2 text-xs text-ink-3">
                         {row.map} · {row.gamemode}
                       </span>
                     </span>
                     {row.deprecated ? (
-                      <span className="text-xs text-amber-400">устаревший</span>
+                      <Badge tone="warn" size="sm">
+                        устаревший
+                      </Badge>
                     ) : null}
                   </button>
-                ))
-              )}
-            </div>
-
-            {pickerSelected?.deprecated ? (
-              <label className="flex items-center gap-2 text-xs text-amber-300">
-                <input
-                  type="checkbox"
-                  checked={confirmDeprecated}
-                  onChange={(e) => setConfirmDeprecated(e.target.checked)}
-                />
-                Понимаю, слой устаревший
-              </label>
-            ) : null}
-
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={closePicker}
-                className="rounded border border-neutral-800 px-4 py-1.5 text-sm text-neutral-300 hover:border-neutral-600"
-              >
-                Отмена
-              </button>
-              <button
-                type="button"
-                onClick={() => void submitPicker()}
-                disabled={!canSubmit || busy}
-                className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-              >
-                {busy ? 'Отправка…' : 'Применить'}
-              </button>
-            </div>
+                );
+              })
+            )}
           </div>
-        </div>
-      ) : null}
 
-      {endMatchConfirmOpen ? (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4">
-          <div className="mt-16 w-full max-w-sm rounded border border-neutral-800 bg-neutral-950 p-5 space-y-4">
-            <h3 className="text-lg font-semibold">Завершить матч?</h3>
-            <p className="text-xs text-neutral-400">
-              Текущий матч на сервере будет немедленно завершён (AdminEndMatch).
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setEndMatchConfirmOpen(false)}
-                className="rounded border border-neutral-800 px-4 py-1.5 text-sm text-neutral-300 hover:border-neutral-600"
-              >
-                Отмена
-              </button>
-              <button
-                type="button"
-                onClick={() => void submitEndMatch()}
-                disabled={busy}
-                className="rounded border border-red-900 px-4 py-1.5 text-sm text-red-300 hover:border-red-700 disabled:opacity-40"
-              >
-                {busy ? 'Отправка…' : 'Завершить'}
-              </button>
-            </div>
-          </div>
+          {pickerSelected?.deprecated ? (
+            <Checkbox
+              checked={confirmDeprecated}
+              onChange={(event) => setConfirmDeprecated(event.target.checked)}
+              label="Понимаю, слой устаревший"
+            />
+          ) : null}
         </div>
-      ) : null}
-    </section>
+      </Modal>
+
+      <AlertDialog
+        open={changeConfirmOpen}
+        onClose={() => setChangeConfirmOpen(false)}
+        title="Сменить карту сейчас?"
+        body={`Матч будет сброшен, и сервер загрузит «${pickerSelected?.name ?? ''}».`}
+        confirmLabel="Сменить карту"
+        cancelLabel="Отмена"
+        tone="default"
+        busy={busy}
+        onConfirm={submitPicker}
+      />
+
+      <AlertDialog
+        open={endMatchConfirmOpen}
+        onClose={() => setEndMatchConfirmOpen(false)}
+        title="Завершить матч?"
+        body="Текущий матч на сервере будет немедленно завершён (AdminEndMatch)."
+        confirmLabel="Завершить"
+        cancelLabel="Отмена"
+        tone="default"
+        busy={busy}
+        onConfirm={submitEndMatch}
+      />
+    </Card>
   );
 }

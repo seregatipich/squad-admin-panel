@@ -168,6 +168,22 @@ describe('AnalyticsPanel — branch coverage', () => {
     expect(await screen.findByText('ошибка 500')).toBeInTheDocument();
   });
 
+  it('offers a retry that re-runs the request after a failure', async () => {
+    analyticsResponse = { status: 500, body: {} };
+    await mount(<AnalyticsPanel servers={SERVERS} />);
+    await screen.findByText('ошибка 500');
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const before = fetchMock.mock.calls.length;
+    analyticsResponse = { status: 200, body: ANALYTICS };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+    });
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(before);
+    expect(await screen.findByText('Матчей')).toBeInTheDocument();
+  });
+
   it('exports JSON when data is present', async () => {
     await mount(<AnalyticsPanel servers={SERVERS} />);
     await screen.findByText('Матчей');
@@ -208,6 +224,22 @@ describe('VoteAnalyticsPanel — branch coverage', () => {
     votesResponse = { status: 503, body: {} };
     await mount(<VoteAnalyticsPanel servers={SERVERS} />);
     expect(await screen.findByText('ошибка 503')).toBeInTheDocument();
+  });
+
+  it('offers a retry that re-runs the request after a failure', async () => {
+    votesResponse = { status: 503, body: {} };
+    await mount(<VoteAnalyticsPanel servers={SERVERS} />);
+    await screen.findByText('ошибка 503');
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const before = fetchMock.mock.calls.length;
+    votesResponse = { status: 200, body: VOTES };
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+    });
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(before);
+    expect(await screen.findByText('Всего голосований')).toBeInTheDocument();
   });
 
   it('exports JSON when data is present', async () => {

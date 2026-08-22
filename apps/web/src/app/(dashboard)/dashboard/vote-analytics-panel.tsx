@@ -2,6 +2,20 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useId, useState } from 'react';
 import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardGrid,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  Select,
+  Skeleton,
+  StatTile,
+  Toolbar,
+} from '@/components/ui';
+import {
   buildVotesQuery,
   formatPassRate,
   formatTrendDay,
@@ -20,6 +34,14 @@ interface ServerOption {
 }
 
 const AXIS_HOURS = [0, 6, 12, 18];
+
+/*
+ * Ссылка на выгрузку остаётся обычным `<a download>`, а не `ButtonLink`:
+ * `next/link` перехватывает клик и уводит в клиентскую навигацию, из-за чего
+ * файл не скачивается. Классы повторяют вторичную кнопку размера `sm` (§6).
+ */
+const DOWNLOAD_LINK_CLASS =
+  'inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
 
 export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
   const [serverId, setServerId] = useState<string>('');
@@ -80,102 +102,124 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
 
   const trendMax = data ? trendScale(data.trend) : 1;
   const hourMax = data ? hourScale(data.by_hour) : 1;
+  const pending = !data && (loading || range === null);
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-900 px-4 py-2.5">
-        <div className="flex items-baseline gap-2">
-          <h2 className="text-xs uppercase tracking-[0.2em] text-neutral-300">Голосования</h2>
-          {loading ? <span className="text-[10px] text-neutral-500">загрузка…</span> : null}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="sr-only" htmlFor={serverSelectId}>
-            Сервер
-          </label>
-          <select
-            id={serverSelectId}
-            value={serverId}
-            onChange={(e) => setServerId(e.target.value)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200"
-          >
-            <option value="">Все серверы</option>
-            {servers.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.display_name}
-              </option>
-            ))}
-          </select>
-          <label className="sr-only" htmlFor={windowSelectId}>
-            Период
-          </label>
-          <select
-            id={windowSelectId}
-            value={windowDays}
-            onChange={(e) => setWindowDays(Number(e.target.value))}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200"
-          >
-            {VOTE_WINDOW_PRESETS.map((preset) => (
-              <option key={preset.days} value={preset.days}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
-          <a
-            href={csvHref}
-            download
-            className="rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:border-sky-700 hover:text-sky-300"
-          >
-            CSV
-          </a>
-          <button
-            type="button"
-            onClick={exportJson}
-            disabled={!data}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:border-sky-700 hover:text-sky-300 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            JSON
-          </button>
-        </div>
-      </div>
+    <Card as="section" padding="none">
+      <CardHeader title="Голосования" />
+      <CardBody padding="sm" className="border-b border-line">
+        <Toolbar
+          filters={
+            <>
+              <label className="sr-only" htmlFor={serverSelectId}>
+                Сервер
+              </label>
+              <div className="w-44">
+                <Select
+                  id={serverSelectId}
+                  size="sm"
+                  value={serverId}
+                  onChange={(e) => setServerId(e.target.value)}
+                >
+                  <option value="">Все серверы</option>
+                  {servers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.display_name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <label className="sr-only" htmlFor={windowSelectId}>
+                Период
+              </label>
+              <div className="w-28">
+                <Select
+                  id={windowSelectId}
+                  size="sm"
+                  value={windowDays}
+                  onChange={(e) => setWindowDays(Number(e.target.value))}
+                >
+                  {VOTE_WINDOW_PRESETS.map((preset) => (
+                    <option key={preset.days} value={preset.days}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            </>
+          }
+          summary={loading ? 'Обновляем…' : undefined}
+          actions={
+            <>
+              <a href={csvHref} download className={DOWNLOAD_LINK_CLASS}>
+                CSV
+              </a>
+              <Button size="sm" onClick={exportJson} disabled={!data}>
+                JSON
+              </Button>
+            </>
+          }
+        />
+      </CardBody>
 
       {error ? (
-        <div className="px-4 py-6 text-center text-sm text-red-400">{error}</div>
+        <CardBody>
+          <InlineBanner
+            tone="crit"
+            title="Аналитика голосований не загрузилась"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => void load()}>
+                Повторить
+              </Button>
+            }
+          />
+        </CardBody>
+      ) : pending ? (
+        <CardBody className="space-y-4">
+          <Skeleton variant="card" label="Загружаем аналитику голосований" />
+          <Skeleton variant="block" count={2} />
+        </CardBody>
       ) : !data ? (
-        <div className="px-4 py-10 text-center text-sm text-neutral-500">Нет данных.</div>
+        <EmptyState
+          title="Данных за период нет"
+          description="Выберите другой сервер или более длинный период."
+        />
       ) : data.summary.total_votes === 0 ? (
-        <div className="px-4 py-10 text-center text-sm text-neutral-500">
-          За выбранный период голосований нет.
-        </div>
+        <EmptyState
+          title="За выбранный период голосований нет."
+          description="Расширьте период или выберите другой сервер."
+        />
       ) : (
-        <div className="space-y-6 p-4">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <CardBody className="space-y-6">
+          {/*
+            Тон здесь получает только доля успешных: это единственный показатель,
+            у которого есть «хорошо» и «плохо». Остальные три — просто счётчики,
+            и красить их значило бы использовать цвет как украшение (§5).
+          */}
+          <CardGrid cols={4}>
             <StatTile
               label="Всего голосований"
               value={data.summary.total_votes.toLocaleString('ru-RU')}
             />
-            <StatTile
-              label="Прошло"
-              value={data.summary.passed.toLocaleString('ru-RU')}
-              tone="text-emerald-300"
-            />
+            <StatTile label="Прошло" value={data.summary.passed.toLocaleString('ru-RU')} />
             <StatTile
               label="Отклонено / отменено"
               value={(data.summary.failed + data.summary.cancelled).toLocaleString('ru-RU')}
-              tone="text-red-300"
             />
             <StatTile
               label="Доля успешных"
               value={formatPassRate(data.summary.pass_rate)}
               tone={passRateTone(data.summary.pass_rate)}
             />
-          </div>
+          </CardGrid>
 
           <figure className="space-y-2">
-            <figcaption className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
+            <figcaption className="text-[13px] font-semibold text-ink">
               Динамика голосований по дням
             </figcaption>
             {data.trend.length === 0 ? (
-              <div className="text-xs text-neutral-500">Нет данных.</div>
+              <p className="text-xs text-ink-3">Нет данных.</p>
             ) : (
               <>
                 <div
@@ -200,7 +244,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                     );
                   })}
                 </div>
-                <div className="flex justify-between text-[10px] font-mono text-neutral-500">
+                <div className="flex justify-between text-2xs tabular-nums text-ink-3">
                   <span>{formatTrendDay(data.trend[0].day)}</span>
                   <span>{formatTrendDay(data.trend[data.trend.length - 1].day)}</span>
                 </div>
@@ -209,7 +253,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
           </figure>
 
           <figure className="space-y-2">
-            <figcaption className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
+            <figcaption className="text-[13px] font-semibold text-ink">
               Распределение по времени суток (UTC)
             </figcaption>
             <div
@@ -234,7 +278,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                 );
               })}
             </div>
-            <div className="flex justify-between text-[10px] font-mono text-neutral-500">
+            <div className="flex justify-between text-2xs tabular-nums text-ink-3">
               {AXIS_HOURS.map((hour) => (
                 <span key={hour}>{formatVoteHour(hour)}</span>
               ))}
@@ -244,7 +288,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
 
           <div className="grid gap-6 lg:grid-cols-2">
             <PassRateList
-              title="Pass rate по серверам"
+              title="Доля успешных по серверам"
               rows={data.pass_rate_by_server.map((row) => ({
                 key: row.server_id,
                 label: row.server_name ?? row.server_id,
@@ -267,30 +311,30 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
 
           <div className="grid gap-6 lg:grid-cols-2">
             <figure className="space-y-2">
-              <figcaption className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
+              <figcaption className="text-[13px] font-semibold text-ink">
                 Топ инициаторов
               </figcaption>
               {data.top_initiators.length === 0 ? (
-                <div className="text-xs text-neutral-500">Нет данных.</div>
+                <p className="text-xs text-ink-3">Нет данных.</p>
               ) : (
-                <ul className="space-y-1.5">
+                <ul className="divide-y divide-line overflow-hidden rounded-ctl border border-line">
                   {data.top_initiators.map((row) => (
                     <li
                       key={row.player_id}
-                      className="flex items-center justify-between gap-2 rounded border border-neutral-900 bg-neutral-900/40 px-2.5 py-1.5"
+                      className="flex items-center justify-between gap-2 px-2.5 py-2"
                     >
                       <Link
                         href={`/all-players/${row.player_id}`}
-                        className="min-w-0 truncate text-xs text-sky-300 hover:text-sky-200"
+                        className="min-w-0 truncate text-xs text-accent no-underline"
                         title={row.nickname ?? row.player_id}
                       >
                         {row.nickname ?? row.player_id}
                       </Link>
-                      <span className="shrink-0 font-mono text-[11px] tabular-nums text-neutral-300">
-                        {row.passed}/{row.initiated} ·{' '}
-                        <span className={passRateTone(row.success_ratio)}>
+                      <span className="flex shrink-0 items-center gap-1.5 text-xs tabular-nums text-ink-2">
+                        {row.passed}/{row.initiated}
+                        <Badge tone={passRateTone(row.success_ratio)} size="sm">
                           {formatPassRate(row.success_ratio)}
-                        </span>
+                        </Badge>
                       </span>
                     </li>
                   ))}
@@ -299,50 +343,37 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
             </figure>
 
             <figure className="space-y-2">
-              <figcaption className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
+              <figcaption className="text-[13px] font-semibold text-ink">
                 Серийные скиперы
               </figcaption>
               {data.serial_skippers.length === 0 ? (
-                <div className="text-xs text-neutral-500">Порог не достигнут никем.</div>
+                <p className="text-xs text-ink-3">Порог не достигнут никем.</p>
               ) : (
-                <ul className="space-y-1.5">
+                <ul className="divide-y divide-line overflow-hidden rounded-ctl border border-line">
                   {data.serial_skippers.map((row) => (
                     <li
                       key={row.player_id}
-                      className="flex items-center justify-between gap-2 rounded border border-red-950 bg-red-950/30 px-2.5 py-1.5"
+                      className="flex items-center justify-between gap-2 px-2.5 py-2"
                     >
                       <Link
                         href={`/all-players/${row.player_id}`}
-                        className="min-w-0 truncate text-xs text-red-200 hover:text-red-100"
+                        className="min-w-0 truncate text-xs text-accent no-underline"
                         title={row.nickname ?? row.player_id}
                       >
                         {row.nickname ?? row.player_id}
                       </Link>
-                      <span className="shrink-0 rounded bg-red-950 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-red-300">
+                      <Badge tone="crit" size="sm">
                         {row.skip_count} скипов
-                      </span>
+                      </Badge>
                     </li>
                   ))}
                 </ul>
               )}
             </figure>
           </div>
-        </div>
+        </CardBody>
       )}
-    </section>
-  );
-}
-
-function StatTile({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <div className="flex flex-col justify-between rounded border border-neutral-800 bg-neutral-900/40 p-3">
-      <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">{label}</div>
-      <div
-        className={`mt-2 text-2xl font-semibold tabular-nums leading-none ${tone ?? 'text-neutral-50'}`}
-      >
-        {value}
-      </div>
-    </div>
+    </Card>
   );
 }
 
@@ -355,25 +386,23 @@ function PassRateList({
 }) {
   return (
     <figure className="space-y-2">
-      <figcaption className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-        {title}
-      </figcaption>
+      <figcaption className="text-[13px] font-semibold text-ink">{title}</figcaption>
       {rows.length === 0 ? (
-        <div className="text-xs text-neutral-500">Нет данных.</div>
+        <p className="text-xs text-ink-3">Нет данных.</p>
       ) : (
         <ul className="space-y-1.5">
           {rows.map((row) => (
             <li key={row.key} className="flex items-center gap-2">
-              <span className="w-32 shrink-0 truncate text-xs text-neutral-300" title={row.label}>
+              <span className="w-32 shrink-0 truncate text-xs text-ink-2" title={row.label}>
                 {row.label}
               </span>
-              <span className="flex h-4 flex-1 items-center rounded bg-neutral-900">
+              <span className="flex h-4 flex-1 items-center rounded-ctl bg-raised">
                 <span
-                  className="h-4 rounded bg-emerald-500/70"
+                  className="h-4 rounded-ctl bg-good/70"
                   style={{ width: `${Math.max(4, Math.round(row.rate))}%` }}
                 />
               </span>
-              <span className="w-24 shrink-0 text-right font-mono text-[11px] tabular-nums text-neutral-300">
+              <span className="w-24 shrink-0 text-right text-2xs tabular-nums text-ink-2">
                 {row.passed}/{row.total} · {formatPassRate(row.rate)}
               </span>
             </li>

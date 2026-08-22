@@ -1,3 +1,4 @@
+import type { BadgeTone } from '@/components/ui';
 import type { ChatChannel, ChatMessage } from '@/lib/live-bus';
 
 export const CHAT_LOG_CAP = 200;
@@ -16,18 +17,19 @@ export function appendChatMessage(
 
 interface ChannelMeta {
   label: string;
-  badgeClass: string;
+  /** Тон метки: канал — это категория, а не состояние системы (§5). */
+  tone: BadgeTone;
 }
 
 const CHANNEL_META: Record<ChatChannel, ChannelMeta> = {
-  ChatAll: { label: 'Все', badgeClass: 'bg-sky-900 text-sky-200' },
-  ChatTeam: { label: 'Команда', badgeClass: 'bg-emerald-900 text-emerald-200' },
-  ChatSquad: { label: 'Отряд', badgeClass: 'bg-amber-900 text-amber-200' },
-  ChatAdmin: { label: 'Админ', badgeClass: 'bg-red-900 text-red-200' },
+  ChatAll: { label: 'Все', tone: 'accent' },
+  ChatTeam: { label: 'Команда', tone: 'good' },
+  ChatSquad: { label: 'Отряд', tone: 'warn' },
+  ChatAdmin: { label: 'Админ', tone: 'crit' },
 };
 
 export function channelMeta(channel: ChatChannel): ChannelMeta {
-  return CHANNEL_META[channel] ?? { label: channel, badgeClass: 'bg-neutral-800 text-neutral-300' };
+  return CHANNEL_META[channel] ?? { label: channel, tone: 'neutral' };
 }
 
 export function playerHref(message: ChatMessage): string | null {

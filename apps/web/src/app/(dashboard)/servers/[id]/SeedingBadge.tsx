@@ -1,5 +1,6 @@
 'use client';
 import { useCallback, useState } from 'react';
+import { Badge } from '@/components/ui';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { clampProgressPct, formatSeedProgress, type SeedingSummary } from '../seeding-format';
 
@@ -48,22 +49,31 @@ export function SeedingBadge({
   if (summary?.state !== 'seeding') return null;
 
   const progressPct = clampProgressPct(summary.progress_pct);
+  const progressText = `${formatSeedProgress(summary.current_players, summary.live_at)} игроков до live`;
 
   return (
     <div className="flex items-center gap-2">
-      <span className="inline-flex items-center gap-1 rounded bg-amber-900 px-1.5 py-0.5 text-xs font-medium text-amber-200">
+      <Badge tone="warn" size="sm">
         Сидинг
-      </span>
+      </Badge>
       <div className="flex items-center gap-1.5">
-        <div className="h-1.5 w-24 overflow-hidden rounded-full bg-neutral-800">
+        {/* Полоса дублируется текстом справа: состояние не кодируется одной
+            только шириной заливки (§5). */}
+        <div
+          role="progressbar"
+          aria-label="Прогресс сидинга"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progressPct}
+          aria-valuetext={progressText}
+          className="h-1.5 w-24 overflow-hidden rounded-full bg-raised"
+        >
           <div
-            className="h-full rounded-full bg-sky-400 transition-all"
+            className="h-full rounded-full bg-accent transition-all"
             style={{ width: `${progressPct}%` }}
           />
         </div>
-        <span className="text-xs text-neutral-500">
-          {formatSeedProgress(summary.current_players, summary.live_at)} игроков до live
-        </span>
+        <span className="text-xs text-ink-3">{progressText}</span>
       </div>
     </div>
   );

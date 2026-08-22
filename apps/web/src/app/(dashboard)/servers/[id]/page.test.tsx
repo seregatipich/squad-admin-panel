@@ -43,6 +43,21 @@ import ServerDetailPage from './page';
 
 const SERVER_ID = '019dbac8-ceb0-77ab-859b-bfa9a282ee2c';
 
+/**
+ * jsdom знает `<dialog>`, но не реализует `showModal()`/`close()`. Диалог
+ * подтверждения удаления построен на нативном элементе, поэтому тест
+ * воспроизводит ровно то, на что этот примитив опирается.
+ */
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+  };
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
+    this.removeAttribute('open');
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
 function serverResponseFixture(status: string) {
   return {
     server: {
@@ -58,6 +73,29 @@ function serverResponseFixture(status: string) {
     container: null,
     host: null,
   };
+}
+
+/** Отдаёт остановленный сервер и пустые права; всё остальное — ошибка теста. */
+function stubServerFetch() {
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === '/api/v1/me') {
+      return {
+        ok: true,
+        json: async () => ({ squad_permissions: [], permissions: [] }),
+      } as Response;
+    }
+    if (url === `/api/v1/servers/${SERVER_ID}`) {
+      if (init?.method === 'DELETE') return { ok: true, text: async () => '' } as Response;
+      return { ok: true, json: async () => serverResponseFixture('stopped') } as Response;
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+function deleteCalls(fetchMock: ReturnType<typeof stubServerFetch>): number {
+  return fetchMock.mock.calls.filter((call) => call[1]?.method === 'DELETE').length;
 }
 
 afterEach(() => {
@@ -119,5 +157,86 @@ describe('ServerDetailPage', () => {
       expect(screen.queryByText('Обновление... (открыть лог)')).not.toBeInTheDocument(),
     );
     expect(await screen.findByRole('button', { name: 'Обновить игру' })).toBeInTheDocument();
+  });
+
+  it('leaves the only <h1> to the section layout', async () => {
+    stubServerFetch();
+
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ServerDetailPage params={Promise.resolve({ id: SERVER_ID })} />
+        </Suspense>,
+      );
+    });
+
+    await screen.findByRole('heading', { name: 'Состояние' });
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+  });
+
+  it('offers a retry when the server cannot be loaded, and recovers on it', async () => {
+    let failing = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/api/v1/me') {
+          return {
+            ok: true,
+            json: async () => ({ squad_permissions: [], permissions: [] }),
+          } as Response;
+        }
+        if (url === `/api/v1/servers/${SERVER_ID}`) {
+          if (failing) return { ok: false, status: 503, json: async () => ({}) } as Response;
+          return { ok: true, json: async () => serverResponseFixture('stopped') } as Response;
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ServerDetailPage params={Promise.resolve({ id: SERVER_ID })} />
+        </Suspense>,
+      );
+    });
+
+    expect(await screen.findByText('Не удалось загрузить сервер')).toBeInTheDocument();
+
+    failing = false;
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Состояние' })).toBeInTheDocument();
+  });
+
+  it('deletes the server only after its exact name is typed back', async () => {
+    const fetchMock = stubServerFetch();
+
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ServerDetailPage params={Promise.resolve({ id: SERVER_ID })} />
+        </Suspense>,
+      );
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Опасная зона/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Удалить сервер/ }));
+
+    const confirm = await screen.findByRole('button', { name: 'Удалить сервер' });
+    expect(confirm).toBeDisabled();
+    expect(deleteCalls(fetchMock)).toBe(0);
+
+    fireEvent.change(screen.getByLabelText('Введите имя сервера'), {
+      target: { value: 'Test Server' },
+    });
+    expect(confirm).toBeEnabled();
+
+    await act(async () => {
+      fireEvent.click(confirm);
+    });
+    await waitFor(() => expect(deleteCalls(fetchMock)).toBe(1));
   });
 });

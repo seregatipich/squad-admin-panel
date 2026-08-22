@@ -2,16 +2,24 @@
 
 import Link from 'next/link';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
-import type { IssueComment, IssueView } from '@/lib/live-bus';
-import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
-  appendComment,
-  authorLabel,
-  BODY_MAX,
-  formatDateTime,
-  STATE_BADGE_CLASSES,
-  STATE_LABELS,
-} from '../helpers';
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Skeleton,
+  StatusBadge,
+  type StatusState,
+  Textarea,
+} from '@/components/ui';
+import type { IssueComment, IssueLabel, IssueState, IssueView } from '@/lib/live-bus';
+import { useLiveSubscription } from '@/lib/use-live-bus';
+import { appendComment, authorLabel, BODY_MAX, formatDateTime, STATE_LABELS } from '../helpers';
 import { type PickedPlayer, PlayerSearchSelect } from '../PlayerSearchSelect';
 import { IssueLinksBlock } from './IssueLinksBlock';
 import type { IssueLinkView } from './issue-links';
@@ -26,6 +34,13 @@ interface Me {
   permissions: string[];
   can_manage_issues: boolean;
 }
+
+/** См. `IssuesBrowser`: тон дублирует подпись состояния, а не заменяет её (§5). */
+const STATE_STATE: Record<IssueState, StatusState> = {
+  open: 'good',
+  in_progress: 'warn',
+  closed: 'idle',
+};
 
 export default function IssueTicketPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -111,139 +126,134 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
     [id],
   );
 
+  // Заголовок страницы и возврат к списку остаются на всех ветках: без них
+  // экран ошибки и экран загрузки теряют единственный `h1` и путь назад.
   if (error) {
     return (
-      <div>
-        <Link href="/issues" className="text-sky-400 text-xs">
-          ← тикеты
-        </Link>
-        <div className="mt-3 rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          Ошибка: {error}
-        </div>
-      </div>
+      <PageContainer width="reading">
+        <PageHeader title="Тикет" backHref="/issues" backLabel="К списку тикетов" />
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить тикет"
+          description={error}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
+      </PageContainer>
     );
   }
-  if (!issue) return <div className="text-neutral-500">Загрузка…</div>;
+
+  if (!issue) {
+    return (
+      <PageContainer width="reading">
+        <PageHeader title="Тикет" backHref="/issues" backLabel="К списку тикетов" />
+        <Skeleton variant="card" count={2} label="Загрузка тикета" />
+      </PageContainer>
+    );
+  }
 
   const canManage = me?.can_manage_issues ?? false;
 
   return (
-    <div className="space-y-6 max-w-3xl">
-      <div className="flex items-center gap-3">
-        <Link href="/issues" className="text-sky-400 hover:text-sky-300 text-xs font-mono">
-          ← тикеты
-        </Link>
-        <span className="font-mono text-sm text-neutral-500">#{issue.number}</span>
-        <h1 className="text-2xl font-semibold">{issue.title}</h1>
-      </div>
-
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-        <div className="flex flex-wrap items-center gap-3 text-xs">
-          <span className={`rounded px-2 py-0.5 ${STATE_BADGE_CLASSES[issue.state]}`}>
-            {STATE_LABELS[issue.state]}
-          </span>
-          <span className="text-neutral-500">
-            Автор:{' '}
-            <Link
-              href={`/all-players/${issue.author_player_id}`}
-              className="text-sky-400 hover:text-sky-300"
-            >
-              {authorLabel(issue.author, issue.author_player_id)}
-            </Link>
-          </span>
-          <span className="text-neutral-500">
-            Исполнитель:{' '}
-            {issue.assignee ? (
+    <PageContainer width="reading">
+      <PageHeader
+        title={issue.title}
+        backHref="/issues"
+        backLabel="К списку тикетов"
+        status={<StatusBadge state={STATE_STATE[issue.state]} label={STATE_LABELS[issue.state]} />}
+        meta={
+          <>
+            <span className="font-mono">#{issue.number}</span>
+            <span>
+              Автор:{' '}
               <Link
-                href={`/all-players/${issue.assignee.id}`}
-                className="text-sky-400 hover:text-sky-300"
+                href={`/all-players/${issue.author_player_id}`}
+                className="text-accent no-underline hover:brightness-110"
               >
-                {issue.assignee.name}
+                {authorLabel(issue.author, issue.author_player_id)}
               </Link>
-            ) : (
-              <span className="text-neutral-500">не назначен</span>
-            )}
-          </span>
-          <span className="text-neutral-500">Создан: {formatDateTime(issue.created_at)}</span>
-          <span className="text-neutral-500">Обновлён: {formatDateTime(issue.updated_at)}</span>
-        </div>
+            </span>
+            <span>
+              Исполнитель:{' '}
+              {issue.assignee ? (
+                <Link
+                  href={`/all-players/${issue.assignee.id}`}
+                  className="text-accent no-underline hover:brightness-110"
+                >
+                  {issue.assignee.name}
+                </Link>
+              ) : (
+                'не назначен'
+              )}
+            </span>
+            <span>Создан: {formatDateTime(issue.created_at)}</span>
+            <span>Обновлён: {formatDateTime(issue.updated_at)}</span>
+          </>
+        }
+      />
 
-        {issue.labels.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
-            {issue.labels.map((label) => (
-              <span
-                key={label.id}
-                className="rounded px-1.5 py-0.5 text-[10px] font-medium text-neutral-100"
-                style={{ backgroundColor: label.color }}
-              >
-                {label.name}
-              </span>
-            ))}
-          </div>
-        ) : null}
-
-        <p className="whitespace-pre-wrap break-words text-sm text-neutral-100">{issue.body}</p>
-      </section>
-
-      {canManage ? (
-        <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Управление</h2>
-          <div className="flex flex-wrap items-center gap-2">
-            {issue.state !== 'closed' ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void patch({ state: 'closed' })}
-                className="rounded border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:border-neutral-500 disabled:opacity-40"
-              >
-                Закрыть
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void patch({ state: 'open' })}
-                className="rounded border border-emerald-900 px-3 py-1 text-xs text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-              >
-                Переоткрыть
-              </button>
-            )}
-            {issue.state === 'open' ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() =>
-                  void patch({ state: 'in_progress', assignee_player_id: me?.player_id })
-                }
-                className="rounded border border-amber-900 px-3 py-1 text-xs text-amber-300 hover:border-amber-700 disabled:opacity-40"
-              >
-                Взять в работу
-              </button>
-            ) : null}
-            {issue.assignee ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void patch({ assignee_player_id: null })}
-                className="rounded border border-neutral-800 px-3 py-1 text-xs text-neutral-300 hover:border-neutral-600 disabled:opacity-40"
-              >
-                Снять исполнителя
-              </button>
-            ) : null}
-          </div>
-          <div className="w-64">
-            <PlayerSearchSelect
-              placeholder="Назначить исполнителя"
-              disabled={busy}
-              onSelect={(player: PickedPlayer) => void patch({ assignee_player_id: player.id })}
-            />
-          </div>
-          {actionError ? (
-            <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-              {actionError}
+      <Card as="article">
+        <div className="space-y-3">
+          {issue.labels.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {issue.labels.map((label) => (
+                <IssueLabelChip key={label.id} label={label} />
+              ))}
             </div>
           ) : null}
-        </section>
+          <p className="whitespace-pre-wrap break-words text-[13px] text-ink">{issue.body}</p>
+        </div>
+      </Card>
+
+      {canManage ? (
+        <Card padding="none" as="section">
+          <CardHeader title="Управление" />
+          <CardBody className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {issue.state !== 'closed' ? (
+                <Button disabled={busy} onClick={() => void patch({ state: 'closed' })}>
+                  Закрыть
+                </Button>
+              ) : (
+                <Button
+                  variant="primary"
+                  disabled={busy}
+                  onClick={() => void patch({ state: 'open' })}
+                >
+                  Переоткрыть
+                </Button>
+              )}
+              {issue.state === 'open' ? (
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void patch({ state: 'in_progress', assignee_player_id: me?.player_id })
+                  }
+                >
+                  Взять в работу
+                </Button>
+              ) : null}
+              {issue.assignee ? (
+                <Button disabled={busy} onClick={() => void patch({ assignee_player_id: null })}>
+                  Снять исполнителя
+                </Button>
+              ) : null}
+            </div>
+            <div className="w-64">
+              <PlayerSearchSelect
+                placeholder="Назначить исполнителя"
+                disabled={busy}
+                onSelect={(player: PickedPlayer) => void patch({ assignee_player_id: player.id })}
+              />
+            </div>
+            {actionError ? (
+              <InlineBanner tone="crit" title="Действие не выполнено" description={actionError} />
+            ) : null}
+          </CardBody>
+        </Card>
       ) : null}
 
       <IssueLinksBlock
@@ -264,7 +274,22 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
           );
         }}
       />
-    </div>
+    </PageContainer>
+  );
+}
+
+/**
+ * Метка тикета: цвет приходит из базы, поэтому `Badge` с его перечисленными
+ * тонами здесь не подходит — форма и кегль всё равно повторяют пилюлю (§1).
+ */
+function IssueLabelChip({ label }: { label: IssueLabel }) {
+  return (
+    <span
+      className="inline-flex items-center rounded-full px-1.5 py-px text-2xs font-medium text-ink"
+      style={{ backgroundColor: label.color }}
+    >
+      {label.name}
+    </span>
   );
 }
 
@@ -311,35 +336,28 @@ function CommentFeed({
   }
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-        Комментарии
-        <span className="ml-2 rounded-full bg-neutral-800 px-2 py-0.5 text-[11px] text-neutral-200 tabular-nums">
-          {comments.length}
-        </span>
-      </h2>
+    <Card padding="none" as="section">
+      <CardHeader title="Комментарии" count={comments.length} />
 
       {comments.length === 0 ? (
-        <div className="rounded border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
-          Комментариев пока нет.
-        </div>
+        <EmptyState
+          title="Комментариев пока нет"
+          description="Опишите, что выяснилось по тикету, — обсуждение останется в истории."
+        />
       ) : (
-        <ul className="space-y-3">
+        <ul className="divide-y divide-line">
           {comments.map((comment) => (
-            <li
-              key={comment.id}
-              className="rounded border border-neutral-900 bg-neutral-900/40 p-3 space-y-1"
-            >
+            <li key={comment.id} className="space-y-1 px-4 py-3">
               <div className="flex items-center gap-2 text-xs">
                 <Link
                   href={`/all-players/${comment.author_player_id}`}
-                  className="font-medium text-neutral-200 hover:text-neutral-100"
+                  className="font-medium text-ink no-underline hover:text-accent"
                 >
                   {authorLabel(comment.author, comment.author_player_id)}
                 </Link>
-                <span className="text-neutral-500">{formatDateTime(comment.created_at)}</span>
+                <span className="text-ink-3">{formatDateTime(comment.created_at)}</span>
               </div>
-              <p className="whitespace-pre-wrap break-words text-sm text-neutral-100">
+              <p className="whitespace-pre-wrap break-words text-[13px] text-ink-2">
                 {comment.body}
               </p>
             </li>
@@ -347,32 +365,31 @@ function CommentFeed({
         </ul>
       )}
 
-      <div className="space-y-2">
-        <textarea
+      <CardBody className="space-y-2 border-t border-line">
+        <Textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
           rows={2}
           maxLength={BODY_MAX}
+          aria-label="Новый комментарий"
           placeholder="Оставить комментарий… (Enter — отправить, Shift+Enter — новая строка)"
-          className="w-full resize-y rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
         />
         {error ? (
-          <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-            {error}
-          </div>
+          <InlineBanner tone="crit" title="Комментарий не отправлен" description={error} />
         ) : null}
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={() => void submit()}
-            disabled={!draft.trim() || busy}
-            className="rounded bg-sky-600 px-4 py-1.5 text-sm text-white hover:bg-sky-500 disabled:opacity-40"
-          >
-            Отправить
-          </button>
-        </div>
-      </div>
-    </section>
+      </CardBody>
+
+      <CardFooter>
+        <Button
+          variant="primary"
+          onClick={() => void submit()}
+          disabled={!draft.trim()}
+          loading={busy}
+        >
+          Отправить
+        </Button>
+      </CardFooter>
+    </Card>
   );
 }

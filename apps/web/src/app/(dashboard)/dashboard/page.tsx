@@ -8,6 +8,41 @@ import { LiveIndicator } from '@/components/LiveIndicator';
 import { MetricHistoryModal, type MetricKey } from '@/components/MetricHistoryModal';
 import { RestartBridgeButton } from '@/components/RestartBridgeButton';
 import { UpdateProgressModal } from '@/components/UpdateProgressModal';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  ButtonLink,
+  Card,
+  CardBody,
+  CardGrid,
+  CardHeader,
+  DateTime,
+  EmptyState,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  PlusIcon,
+  RefreshIcon,
+  type RelativeLabels,
+  SegmentedControl,
+  Skeleton,
+  SkeletonTable,
+  SortableTh,
+  type SortDirection,
+  StatTile,
+  type StatTileTone,
+  StatusBadge,
+  StatusDot,
+  type StatusState,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+  Toolbar,
+} from '@/components/ui';
 import { formatBytes, formatBytesPerSec, formatPercent, formatUptime, ratio } from '@/lib/format';
 import { computeHostHealth, type HealthLevel, thresholdTone } from '@/lib/host-health';
 import { AnalyticsPanel } from './analytics-panel';
@@ -110,61 +145,73 @@ const HEALTH_LABEL: Record<HealthLevel, string> = {
   critical: 'Критично',
 };
 
-type Tone = 'emerald' | 'amber' | 'red' | 'sky' | 'neutral';
+const HEALTH_STATE: Record<HealthLevel, StatusState> = {
+  healthy: 'good',
+  warning: 'warn',
+  critical: 'crit',
+};
 
-const HEALTH_TONE: Record<HealthLevel, Tone> = {
-  healthy: 'emerald',
-  warning: 'amber',
-  critical: 'red',
+const HEALTH_TILE_TONE: Record<HealthLevel, StatTileTone> = {
+  healthy: 'good',
+  warning: 'warn',
+  critical: 'crit',
+};
+
+/**
+ * `thresholdTone` живёт в `lib/host-health` и говорит на языке палитры
+ * (`emerald`/`amber`/`red`), а плитка — на языке состояний дизайн-системы.
+ * Перевод делается здесь, чтобы не менять общую библиотеку ради одной страницы.
+ */
+const THRESHOLD_TILE_TONE: Record<ReturnType<typeof thresholdTone>, StatTileTone> = {
+  emerald: 'good',
+  amber: 'warn',
+  red: 'crit',
 };
 
 interface StatusStyle {
   label: string;
-  tone: Tone;
+  state: StatusState;
 }
 
 const SERVER_STATUS: Record<string, StatusStyle> = {
-  running: { label: 'Работает', tone: 'emerald' },
-  starting: { label: 'Запускается', tone: 'amber' },
-  stopping: { label: 'Остановка', tone: 'amber' },
-  installing: { label: 'Установка', tone: 'amber' },
-  ready: { label: 'Готов', tone: 'sky' },
-  stopped: { label: 'Остановлен', tone: 'neutral' },
-  pending: { label: 'Ожидает', tone: 'neutral' },
-  failed: { label: 'Сбой', tone: 'red' },
+  running: { label: 'Работает', state: 'good' },
+  starting: { label: 'Запускается', state: 'warn' },
+  stopping: { label: 'Остановка', state: 'warn' },
+  installing: { label: 'Установка', state: 'warn' },
+  ready: { label: 'Готов', state: 'idle' },
+  stopped: { label: 'Остановлен', state: 'idle' },
+  pending: { label: 'Ожидает', state: 'idle' },
+  failed: { label: 'Сбой', state: 'crit' },
 };
 
 const RCON_STATUS: Record<string, StatusStyle> = {
-  connected: { label: 'Подключён', tone: 'emerald' },
-  authenticating: { label: 'Аутентификация', tone: 'amber' },
-  reconnecting: { label: 'Переподключение', tone: 'amber' },
-  disconnected: { label: 'Отключён', tone: 'red' },
-  failed: { label: 'Сбой', tone: 'red' },
-  not_polled: { label: 'Не опрашивается', tone: 'neutral' },
+  connected: { label: 'Подключён', state: 'good' },
+  authenticating: { label: 'Аутентификация', state: 'warn' },
+  reconnecting: { label: 'Переподключение', state: 'warn' },
+  disconnected: { label: 'Отключён', state: 'crit' },
+  failed: { label: 'Сбой', state: 'crit' },
+  not_polled: { label: 'Не опрашивается', state: 'idle' },
 };
 
-const DOT: Record<Tone, string> = {
-  emerald: 'bg-emerald-500',
-  amber: 'bg-amber-500',
-  red: 'bg-red-500',
-  sky: 'bg-sky-500',
-  neutral: 'bg-neutral-600',
+/** Роль инициатора события из журнала; неизвестное значение показывается как есть. */
+const ACTOR_KIND_LABEL: Record<string, string> = {
+  steam: 'Оператор',
+  user: 'Пользователь',
+  system: 'Система',
+  bot: 'Бот',
 };
 
-const TEXT: Record<Tone, string> = {
-  emerald: 'text-emerald-300',
-  amber: 'text-amber-300',
-  red: 'text-red-300',
-  sky: 'text-sky-300',
-  neutral: 'text-neutral-400',
+const SORT_DIRECTION_TEXT: Record<SortDirection, string> = {
+  asc: 'по возрастанию',
+  desc: 'по убыванию',
 };
 
-const ACCENT_BORDER: Record<Tone, string> = {
-  emerald: 'border-l-emerald-600',
-  amber: 'border-l-amber-600',
-  red: 'border-l-red-600',
-  sky: 'border-l-sky-600',
-  neutral: 'border-l-neutral-700',
+const RELATIVE_LABELS: RelativeLabels = {
+  justNow: 'только что',
+  secondsAgo: (n) => `${n} с назад`,
+  minutesAgo: (n) => `${n} мин назад`,
+  hoursAgo: (n) => `${n} ч назад`,
+  daysAgo: (n) => `${n} д назад`,
 };
 
 const ACTIVITY_FILTERS = ['all', 'user', 'server', 'infra', 'errors'] as const;
@@ -183,10 +230,14 @@ export default function DashboardPage() {
   const [info, setInfo] = useState<HostInfo | null>(null);
   const [metrics, setMetrics] = useState<HostMetrics | null>(null);
   const [servers, setServers] = useState<ServerRow[]>([]);
+  const [serversError, setServersError] = useState<string | null>(null);
   const [recent, setRecent] = useState<AuditRow[]>([]);
   const [ready, setReady] = useState<ReadyCheck | null>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  // Первый ответ ещё не пришёл: без этого флага пустой список неотличим от
+  // загрузки, и оператор видит «Серверов нет» там, где идёт первый запрос (§8).
+  const [loaded, setLoaded] = useState(false);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
   const [diskBreakdown, setDiskBreakdown] = useState<DiskBreakdown | null>(null);
   const [diskModalOpen, setDiskModalOpen] = useState(false);
@@ -204,11 +255,17 @@ export default function DashboardPage() {
       fetchJson<{ items: Worker[] }>('/api/v1/health/workers'),
     ]);
     setLastUpdate(new Date());
+    setLoaded(true);
     if (results[0].status === 'fulfilled') setBridge(results[0].value);
     else setBridge({ connected: false, error: (results[0].reason as Error).message });
     if (results[1].status === 'fulfilled') setInfo(results[1].value);
     if (results[2].status === 'fulfilled') setMetrics(results[2].value);
-    if (results[3].status === 'fulfilled') setServers(results[3].value.items);
+    if (results[3].status === 'fulfilled') {
+      setServers(results[3].value.items);
+      setServersError(null);
+    } else {
+      setServersError((results[3].reason as Error).message);
+    }
     if (results[4].status === 'fulfilled') setRecent(results[4].value.items);
     if (results[5].status === 'fulfilled') setReady(results[5].value);
     if (results[6].status === 'fulfilled') setWorkers(results[6].value.items);
@@ -268,7 +325,7 @@ export default function DashboardPage() {
   const playersOnline = servers.reduce((acc, s) => acc + (s.player_count ?? 0), 0);
 
   const alerts: string[] = [];
-  if (bridge && !bridge.connected) alerts.push(`bridge: ${bridge.error ?? 'disconnected'}`);
+  if (bridge && !bridge.connected) alerts.push(`Bridge: ${bridge.error ?? 'нет соединения'}`);
   for (const s of servers) {
     if (s.status === 'failed') alerts.push(`${s.display_name}: сбой`);
     if (s.status === 'running' && s.rcon_state && s.rcon_state !== 'connected') {
@@ -281,66 +338,64 @@ export default function DashboardPage() {
     () => buildConnectionRows(ready, bridge, workers),
     [ready, bridge, workers],
   );
-  const connectionsHealthy = connectionRows.filter((r) => r.tone === 'emerald').length;
+  const connectionsHealthy = connectionRows.filter((r) => r.state === 'good').length;
 
   return (
-    <div className="space-y-5">
-      <header className="flex items-center justify-between gap-3 border-b border-neutral-900 pb-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Дашборд</h1>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setDepotModalOpen(true)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:border-sky-700 hover:text-sky-300"
-            title="Обновить Squad через SteamCMD"
-          >
-            Обновить Squad
-          </button>
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:border-sky-700 hover:text-sky-300"
-            title="Обновить сейчас"
-          >
-            ↻ Обновить
-          </button>
-        </div>
-      </header>
+    <PageContainer>
+      <PageHeader
+        title="Дашборд"
+        actions={
+          <>
+            <Button onClick={() => setDepotModalOpen(true)} title="Обновить Squad через SteamCMD">
+              Обновить Squad
+            </Button>
+            <Button onClick={() => void load()}>
+              <RefreshIcon />
+              Обновить
+            </Button>
+          </>
+        }
+      />
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard
-          title="Серверы"
+      <CardGrid cols={4}>
+        <StatTile
+          label="Серверы"
           value={servers.length.toString()}
           hint={`${runningCount} работает`}
-          tone="sky"
+          tone="accent"
         />
-        <SummaryCard
-          title="Игроков онлайн"
+        <StatTile
+          label="Игроков онлайн"
           value={playersOnline.toString()}
           hint={
             runningCount === 0
               ? 'сервера не запущены'
               : `на ${runningCount} ${pluralize(runningCount, 'сервере', 'серверах', 'серверах')}`
           }
-          tone="emerald"
+          tone="good"
         />
-        <SummaryCard
-          title="Состояние хоста"
+        <StatTile
+          label="Состояние хоста"
           value={HEALTH_LABEL[health.level]}
-          hint={health.reasons[0] ?? (bridge?.connected ? 'все метрики в норме' : 'bridge оффлайн')}
-          tone={HEALTH_TONE[health.level]}
+          hint={health.reasons[0] ?? (bridge?.connected ? 'все метрики в норме' : 'Bridge оффлайн')}
+          tone={HEALTH_TILE_TONE[health.level]}
         />
-        <SummaryCard
-          title="Тревоги"
+        <StatTile
+          label="Тревоги"
           value={alerts.length.toString()}
           hint={alerts[0] ?? 'тревог нет'}
-          tone={alerts.length ? 'amber' : 'neutral'}
+          tone={alerts.length ? 'warn' : 'neutral'}
         />
-      </section>
+      </CardGrid>
 
-      <section className="grid gap-5 lg:grid-cols-12">
+      <div className="grid gap-4 lg:grid-cols-12">
         <div className="lg:col-span-8">
-          <ServersTable servers={servers} onRefresh={() => void load()} />
+          <ServersTable
+            servers={servers}
+            loading={!loaded}
+            error={serversError}
+            onRefresh={() => void load()}
+          />
         </div>
         <div className="lg:col-span-4">
           <HostBlock
@@ -353,11 +408,16 @@ export default function DashboardPage() {
             onDiskClick={() => setDiskModalOpen(true)}
           />
         </div>
-      </section>
+      </div>
 
-      <section className="grid gap-5 lg:grid-cols-12">
+      <div className="grid gap-4 lg:grid-cols-12">
         <div className="lg:col-span-8">
-          <RecentActivity rows={recent} filter={activityFilter} onFilter={setActivityFilter} />
+          <RecentActivity
+            rows={recent}
+            loading={!loaded}
+            filter={activityFilter}
+            onFilter={setActivityFilter}
+          />
         </div>
         <div className="lg:col-span-4">
           <ConnectionsHealth
@@ -367,7 +427,7 @@ export default function DashboardPage() {
             bridgeConnected={bridge?.connected ?? false}
           />
         </div>
-      </section>
+      </div>
 
       <AnalyticsPanel servers={servers.map((s) => ({ id: s.id, display_name: s.display_name }))} />
 
@@ -411,155 +471,166 @@ export default function DashboardPage() {
         title="Обновление Squad"
         onDone={() => void load()}
       />
-    </div>
+    </PageContainer>
   );
 }
 
-function SummaryCard({
-  title,
-  value,
-  hint,
-  tone,
+/** Порядок строк при выбранной колонке; без выбора остаётся порядок ответа API. */
+function sortServers(
+  servers: ServerRow[],
+  key: string | null,
+  direction: SortDirection,
+): ServerRow[] {
+  if (key === null) return servers;
+  const sign = direction === 'asc' ? 1 : -1;
+  return [...servers].sort((a, b) => {
+    if (key === 'players') return sign * ((a.player_count ?? -1) - (b.player_count ?? -1));
+    if (key === 'status') return sign * a.status.localeCompare(b.status, 'ru');
+    return sign * a.display_name.localeCompare(b.display_name, 'ru');
+  });
+}
+
+function ServersTable({
+  servers,
+  loading,
+  error,
+  onRefresh,
 }: {
-  title: string;
-  value: string;
-  hint?: string;
-  tone: Tone;
+  servers: ServerRow[];
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
 }) {
-  return (
-    <div
-      className={`flex h-full flex-col justify-between rounded border border-neutral-800 border-l-2 ${ACCENT_BORDER[tone]} bg-neutral-950 p-4`}
-    >
-      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500">{title}</div>
-      <div className="text-3xl font-semibold tabular-nums leading-none mt-2 text-neutral-50">
-        {value}
-      </div>
-      {hint ? (
-        <div className={`text-xs mt-2 truncate ${TEXT[tone]}`} title={hint}>
-          {hint}
-        </div>
-      ) : null}
-    </div>
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [direction, setDirection] = useState<SortDirection>('asc');
+  const rows = useMemo(
+    () => sortServers(servers, sortKey, direction),
+    [servers, sortKey, direction],
   );
-}
 
-function PaneHeader({
-  title,
-  count,
-  right,
-}: {
-  title: string;
-  count?: string;
-  right?: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-neutral-900 px-4 py-2.5">
-      <div className="flex items-baseline gap-2 min-w-0">
-        <h2 className="text-xs uppercase tracking-[0.2em] text-neutral-300">{title}</h2>
-        {count ? <span className="text-[10px] text-neutral-500 font-mono">{count}</span> : null}
-      </div>
-      {right ? <div className="flex items-center gap-2 shrink-0">{right}</div> : null}
-    </div>
-  );
-}
+  const handleSort = (key: string) => {
+    if (key === sortKey) {
+      setDirection(direction === 'asc' ? 'desc' : 'asc');
+      return;
+    }
+    setSortKey(key);
+    setDirection('asc');
+  };
 
-function ServersTable({ servers, onRefresh }: { servers: ServerRow[]; onRefresh: () => void }) {
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950">
-      <PaneHeader
+    <Card as="section" padding="none" className="h-full">
+      <CardHeader
         title="Серверы"
-        count={servers.length === 0 ? undefined : `${servers.length}`}
-        right={
+        count={servers.length === 0 ? undefined : servers.length}
+        actions={
           <>
-            <Link
-              href="/servers/new"
-              className="rounded border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-[11px] text-neutral-300 hover:border-sky-700 hover:text-sky-300"
-            >
-              + Создать
-            </Link>
-            <Link href="/servers" className="text-[11px] text-sky-400 hover:text-sky-300">
-              все →
-            </Link>
+            <ButtonLink href="/servers/new" size="sm">
+              <PlusIcon />
+              Создать
+            </ButtonLink>
+            <ButtonLink href="/servers" variant="plain" size="sm">
+              Все серверы
+            </ButtonLink>
           </>
         }
       />
-      {servers.length === 0 ? (
-        <div className="px-4 py-8 text-center text-sm text-neutral-500">
-          Серверов нет.{' '}
-          <Link href="/servers/new" className="text-sky-400 hover:text-sky-300">
-            Установить первый
-          </Link>
-        </div>
+      {error ? (
+        <CardBody>
+          <InlineBanner
+            tone="crit"
+            title="Список серверов не загрузился"
+            description={error}
+            action={
+              <Button size="sm" onClick={onRefresh}>
+                Повторить
+              </Button>
+            }
+          />
+        </CardBody>
+      ) : loading ? (
+        <CardBody>
+          <SkeletonTable rows={4} cols={5} label="Загружаем список серверов" />
+        </CardBody>
+      ) : rows.length === 0 ? (
+        <EmptyState
+          title="Серверов нет"
+          description="Установите первый сервер — он появится здесь вместе со статусом и числом игроков."
+          action={
+            <ButtonLink href="/servers/new" variant="primary" size="sm">
+              Установить первый
+            </ButtonLink>
+          }
+        />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-                <Th>Имя</Th>
-                <Th>Статус</Th>
-                <Th className="text-right">Игроки</Th>
-                <Th>RCON</Th>
-                <Th>Последний опрос</Th>
-                <Th>Карта / слой</Th>
-                <Th className="text-right">CPU / RAM</Th>
-                <Th className="text-right pr-3">Действия</Th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-neutral-900">
-              {servers.map((s) => (
-                <ServerTableRow key={s.id} server={s} onAction={onRefresh} />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table ariaLabel="Серверы">
+          <TableHead>
+            <tr>
+              <SortableTh
+                sortKey="name"
+                activeKey={sortKey}
+                direction={direction}
+                onSort={handleSort}
+                label="Имя"
+                directionText={SORT_DIRECTION_TEXT}
+              />
+              <SortableTh
+                sortKey="status"
+                activeKey={sortKey}
+                direction={direction}
+                onSort={handleSort}
+                label="Статус"
+                directionText={SORT_DIRECTION_TEXT}
+              />
+              <SortableTh
+                sortKey="players"
+                activeKey={sortKey}
+                direction={direction}
+                onSort={handleSort}
+                label="Игроки"
+                directionText={SORT_DIRECTION_TEXT}
+                align="right"
+              />
+              <Th>RCON</Th>
+              <Th>Последний опрос</Th>
+              {/*
+                Колонок «Карта / слой» и «CPU / RAM» здесь больше нет: обе
+                печатали константу («не выбрано» и «— / —») — данных под них
+                `/api/v1/servers` не отдаёт. Две колонки, которые никогда ничего
+                не сообщают, отнимали ширину у тех, что сообщают.
+              */}
+              <Th align="right">Действия</Th>
+            </tr>
+          </TableHead>
+          <TableBody>
+            {rows.map((s) => (
+              <ServerTableRow key={s.id} server={s} onAction={onRefresh} />
+            ))}
+          </TableBody>
+        </Table>
       )}
-    </section>
-  );
-}
-
-function Th({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <th className={`font-medium px-3 py-2 border-b border-neutral-900 ${className ?? ''}`}>
-      {children}
-    </th>
-  );
-}
-
-function Td({
-  children,
-  className,
-  title,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  title?: string;
-}) {
-  return (
-    <td className={`px-3 py-2.5 align-middle ${className ?? ''}`} title={title}>
-      {children}
-    </td>
+    </Card>
   );
 }
 
 function ServerTableRow({ server, onAction }: { server: ServerRow; onAction: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const status = SERVER_STATUS[server.status] ?? {
     label: server.status,
-    tone: 'neutral' as Tone,
+    state: 'idle' as StatusState,
   };
   const rcon =
     server.status === 'running'
       ? (RCON_STATUS[server.rcon_state ?? 'not_polled'] ?? {
           label: server.rcon_state ?? 'неизвестно',
-          tone: 'neutral' as Tone,
+          state: 'idle' as StatusState,
         })
-      : { label: '—', tone: 'neutral' as Tone };
+      : { label: '—', state: 'idle' as StatusState };
   const players = server.status === 'running' ? `${server.player_count ?? '—'}` : '—';
 
   async function restart() {
     if (busy) return;
-    if (!confirm(`Перезапустить «${server.display_name}»? Игроки будут отключены.`)) return;
     setBusy(true);
     setError(null);
     try {
@@ -577,97 +648,89 @@ function ServerTableRow({ server, onAction }: { server: ServerRow; onAction: () 
       setError((e as Error).message);
     } finally {
       setBusy(false);
+      setConfirmOpen(false);
     }
   }
 
   return (
-    <tr className="hover:bg-neutral-900/40">
+    <TableRow interactive>
       <Td>
-        <Link href={`/servers/${server.id}`} className="block min-w-0 group">
-          <div className="font-medium truncate text-neutral-100 group-hover:text-sky-300">
-            {server.display_name}
-          </div>
-          <div className="text-[10px] font-mono text-neutral-500 truncate">{server.slug}</div>
+        <Link href={`/servers/${server.id}`} className="block min-w-0 no-underline">
+          <span className="block truncate font-medium text-ink">{server.display_name}</span>
+          <span className="block truncate text-2xs text-ink-3">{server.slug}</span>
         </Link>
       </Td>
       <Td>
-        <StatusDot tone={status.tone} label={status.label} />
+        <StatusDot state={status.state} label={status.label} size="sm" />
       </Td>
-      <Td className="text-right tabular-nums font-mono text-neutral-200">{players}</Td>
+      <Td numeric>{players}</Td>
       <Td>
-        <StatusDot tone={rcon.tone} label={rcon.label} />
+        <StatusDot state={rcon.state} label={rcon.label} size="sm" />
       </Td>
-      <Td className="text-neutral-400 text-xs">
-        {server.last_poll_at ? (
-          <RelativeTime ts={server.last_poll_at} />
-        ) : (
-          <span className="text-neutral-500">—</span>
-        )}
+      <Td className="text-xs text-ink-3">
+        {server.last_poll_at ? <RelativeTime ts={server.last_poll_at} /> : '—'}
       </Td>
-      <Td className="text-neutral-500 text-xs italic">не выбрано</Td>
-      <Td className="text-right tabular-nums font-mono text-neutral-500 text-xs">— / —</Td>
-      <Td className="text-right pr-3">
+      <Td align="right">
         <div className="inline-flex items-center gap-1">
-          <Link
-            href={`/servers/${server.id}`}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-[11px] text-neutral-300 hover:border-sky-700 hover:text-sky-300"
-          >
+          <ButtonLink href={`/servers/${server.id}`} size="sm">
             Открыть
-          </Link>
-          <button
-            type="button"
-            onClick={restart}
-            disabled={busy || server.status !== 'running'}
+          </ButtonLink>
+          <Button
+            size="sm"
+            loading={busy}
+            onClick={() => setConfirmOpen(true)}
+            disabled={server.status !== 'running'}
             title={
               server.status !== 'running'
                 ? 'Доступно только для работающих серверов'
                 : 'Перезапустить контейнер'
             }
-            className="rounded border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-[11px] text-neutral-300 hover:border-amber-700 hover:text-amber-300 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-neutral-800 disabled:hover:text-neutral-300"
           >
-            {busy ? '…' : 'Перезапуск'}
-          </button>
-          <Link
-            href={`/servers/${server.id}`}
-            title="Подробнее"
-            className="rounded border border-neutral-800 bg-neutral-900 px-1.5 py-0.5 text-[11px] text-neutral-400 hover:border-neutral-600 hover:text-neutral-200"
-          >
-            ⋯
-          </Link>
+            Перезапуск
+          </Button>
         </div>
-        {error ? <div className="text-[10px] text-red-400 mt-1 text-right">{error}</div> : null}
+        {error ? (
+          <span role="alert" className="mt-1 block text-2xs text-crit">
+            {error}
+          </span>
+        ) : null}
+        {/*
+          Перезапуск отключает игроков, но ничего не стирает, поэтому тон
+          обычный: критический цвет кнопки дизайн-система оставляет за
+          необратимым разрушением данных (§5).
+        */}
+        <AlertDialog
+          open={confirmOpen}
+          onClose={() => setConfirmOpen(false)}
+          title="Перезапустить сервер"
+          body={`«${server.display_name}» перезапустится, все игроки будут отключены. Сохранённые данные не пострадают.`}
+          confirmLabel="Перезапустить"
+          cancelLabel="Отмена"
+          tone="default"
+          busy={busy}
+          onConfirm={restart}
+        />
       </Td>
-    </tr>
+    </TableRow>
   );
 }
 
-function StatusDot({ tone, label }: { tone: Tone; label: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className={`h-1.5 w-1.5 rounded-full ${DOT[tone]}`} />
-      <span className={`text-xs ${TEXT[tone]}`}>{label}</span>
-    </span>
-  );
-}
-
+/** Относительное время, которое пересчитывается раз в пять секунд. */
 function RelativeTime({ ts }: { ts: string }) {
   const [now, setNow] = useState<number>(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 5000);
     return () => clearInterval(t);
   }, []);
-  const date = new Date(ts);
-  const ageSec = Math.max(0, Math.floor((now - date.getTime()) / 1000));
-  if (!Number.isFinite(date.getTime())) return <span className="text-neutral-500">—</span>;
-  let label: string;
-  if (ageSec < 60) label = `${ageSec}с назад`;
-  else if (ageSec < 3600) label = `${Math.floor(ageSec / 60)}м назад`;
-  else if (ageSec < 86_400) label = `${Math.floor(ageSec / 3600)}ч назад`;
-  else label = `${Math.floor(ageSec / 86_400)}д назад`;
   return (
-    <span className="font-mono" title={date.toLocaleString()}>
-      {label}
-    </span>
+    <DateTime
+      value={ts}
+      locale="ru-RU"
+      mode="relative"
+      now={now}
+      relativeLabels={RELATIVE_LABELS}
+      fallback="—"
+    />
   );
 }
 
@@ -693,43 +756,42 @@ function HostBlock({
   const bridgeConnected = bridge?.connected === true;
 
   return (
-    <section className="flex h-full flex-col rounded border border-neutral-800 bg-neutral-950">
-      <PaneHeader
+    <Card as="section" padding="none" className="flex h-full flex-col">
+      <CardHeader
         title="Хост"
-        right={
-          <span className={`text-[11px] ${TEXT[HEALTH_TONE[health.level]]}`}>
-            <span
-              className={`inline-block h-1.5 w-1.5 rounded-full mr-1.5 align-middle ${DOT[HEALTH_TONE[health.level]]}`}
-            />
-            {HEALTH_LABEL[health.level]}
-          </span>
+        actions={
+          <StatusBadge
+            state={HEALTH_STATE[health.level]}
+            label={HEALTH_LABEL[health.level]}
+            size="sm"
+          />
         }
       />
-      <div className="px-4 pt-3 pb-2 flex flex-col gap-1 border-b border-neutral-900">
-        <div className="text-base font-semibold text-neutral-100 truncate">
-          {info?.hostname ?? <span className="text-neutral-500">—</span>}
-        </div>
-        <div className="text-[11px] text-neutral-400 truncate">
+
+      <CardBody className="space-y-1 border-b border-line">
+        <p className="truncate text-[13px] font-semibold text-ink">
+          {info?.hostname ?? <span className="font-normal text-ink-3">Нет данных</span>}
+        </p>
+        <p className="truncate text-xs text-ink-3">
           {info ? (
             <>
-              {info.os_name} {info.os_version} · <span className="font-mono">{info.arch}</span> ·
-              аптайм {formatUptime(info.uptime_seconds)}
+              {info.os_name} {info.os_version} · {info.arch} · аптайм{' '}
+              {formatUptime(info.uptime_seconds)}
             </>
           ) : (
-            <span className="italic text-neutral-500">загрузка…</span>
+            'Загружаем сведения о хосте…'
           )}
-        </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-neutral-400 mt-1">
-          <span>
-            Bridge:{' '}
-            {bridgeConnected ? (
-              <span className="text-emerald-300">
-                подключён{bridge?.version ? ` (v${bridge.version})` : ''}
-              </span>
-            ) : (
-              <span className="text-red-300">недоступен</span>
-            )}
-          </span>
+        </p>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pt-1 text-xs text-ink-3">
+          <StatusDot
+            state={bridgeConnected ? 'good' : 'crit'}
+            size="sm"
+            label={
+              bridgeConnected
+                ? `Bridge подключён${bridge?.version ? ` (v${bridge.version})` : ''}`
+                : 'Bridge недоступен'
+            }
+          />
           <LiveIndicator
             lastUpdate={metrics?.sampled_at ? new Date(metrics.sampled_at) : lastUpdate}
           />
@@ -742,54 +804,26 @@ function HostBlock({
             disabledReason="Сначала восстановите соединение."
           />
         </div>
-      </div>
+      </CardBody>
 
-      <div className="px-4 py-3 grid gap-3 sm:grid-cols-2">
+      <CardBody className="grid gap-4 sm:grid-cols-2">
         {isLoading ? (
           <>
-            <SkeletonResource />
-            <SkeletonResource />
-            <SkeletonResource />
-            <SkeletonResource />
+            <Skeleton variant="card" count={2} label="Загружаем метрики хоста" />
+            <Skeleton variant="card" count={2} />
           </>
         ) : (
           <>
-            <button
-              type="button"
-              onClick={() => setOpenMetric('cpu')}
-              className="text-left transition hover:ring-2 hover:ring-emerald-700/40 rounded-xl"
-              aria-label="Открыть график CPU за 24 часа"
-            >
-              <CpuCard info={info} metrics={metrics} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setOpenMetric('ram')}
-              className="text-left transition hover:ring-2 hover:ring-blue-700/40 rounded-xl"
-              aria-label="Открыть график RAM за 24 часа"
-            >
-              <RamCard metrics={metrics} />
-            </button>
-            <button
-              type="button"
-              onClick={onDiskClick}
-              data-testid="disk-card"
-              className="text-left transition hover:ring-2 hover:ring-purple-700/40 rounded-xl"
-              aria-label="Открыть детализацию диска"
-            >
-              <DiskCard metrics={metrics} diskBreakdown={diskBreakdown} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setOpenMetric('net')}
-              className="text-left transition hover:ring-2 hover:ring-amber-700/40 rounded-xl"
-              aria-label="Открыть график сети за 24 часа"
-            >
-              <NetworkCard metrics={metrics} />
-            </button>
+            <CpuTile info={info} metrics={metrics} onOpen={() => setOpenMetric('cpu')} />
+            <RamTile metrics={metrics} onOpen={() => setOpenMetric('ram')} />
+            {/* Идентификатор нужен сценарию e2e, который открывает детализацию диска. */}
+            <div data-testid="disk-card">
+              <DiskTile metrics={metrics} diskBreakdown={diskBreakdown} onOpen={onDiskClick} />
+            </div>
+            <NetworkTile metrics={metrics} onOpen={() => setOpenMetric('net')} />
           </>
         )}
-      </div>
+      </CardBody>
 
       <SystemRow info={info} metrics={metrics} />
       {metrics ? (
@@ -801,206 +835,130 @@ function HostBlock({
           diskTotalBytes={metrics.disk_total_bytes}
         />
       ) : null}
-    </section>
+    </Card>
   );
 }
 
-function CpuCard({ info, metrics }: { info: HostInfo; metrics: HostMetrics }) {
+function CpuTile({
+  info,
+  metrics,
+  onOpen,
+}: {
+  info: HostInfo;
+  metrics: HostMetrics;
+  onOpen: () => void;
+}) {
   const pct = Math.max(0, Math.min(100, metrics.cpu_percent));
-  const tone = thresholdTone(pct / 100, 0.8, 0.95);
+  const tone = THRESHOLD_TILE_TONE[thresholdTone(pct / 100, 0.8, 0.95)];
   const cpuLabel = info.cpu_model && info.cpu_model !== 'unknown' ? info.cpu_model : null;
+  const value = `${metrics.cpu_percent.toFixed(1)}%`;
   return (
-    <ResourceCard
-      title="CPU"
-      mainValue={`${metrics.cpu_percent.toFixed(1)}%`}
-      sub={
-        cpuLabel ? (
-          <span className="truncate" title={cpuLabel}>
-            {cpuLabel} · {info.cpu_cores} ядер
-          </span>
-        ) : (
-          <span className="text-neutral-500">{info.cpu_cores} ядер</span>
-        )
-      }
-      progressPct={pct}
-      progressTone={tone}
+    <StatTile
+      label="CPU"
+      size="sm"
+      value={value}
+      hint={cpuLabel ? `${cpuLabel} · ${info.cpu_cores} ядер` : `${info.cpu_cores} ядер`}
+      tone={tone}
+      progress={{ pct }}
+      onClick={onOpen}
+      actionLabel={`CPU ${value} — открыть график за 24 часа`}
     />
   );
 }
 
-function RamCard({ metrics }: { metrics: HostMetrics }) {
+function RamTile({ metrics, onOpen }: { metrics: HostMetrics; onOpen: () => void }) {
   const total = metrics.ram_total_bytes;
   if (total <= 0) {
     return (
-      <ResourceCard
-        title="RAM"
-        mainValue="N/A"
-        sub={<span className="text-neutral-500">данных нет</span>}
+      <StatTile
+        label="RAM"
+        size="sm"
+        value="Нет данных"
+        hint="Метрика не пришла"
+        onClick={onOpen}
+        actionLabel="RAM: нет данных — открыть график за 24 часа"
       />
     );
   }
   const r = ratio(metrics.ram_used_bytes, total);
-  const tone = thresholdTone(r, 0.7, 0.85);
+  const value = formatPercent(metrics.ram_used_bytes, total);
   return (
-    <ResourceCard
-      title="RAM"
-      mainValue={formatPercent(metrics.ram_used_bytes, total)}
-      sub={
-        <span className="font-mono">
-          {formatBytes(metrics.ram_used_bytes)} / {formatBytes(total)}
-        </span>
-      }
-      progressPct={r * 100}
-      progressTone={tone}
+    <StatTile
+      label="RAM"
+      size="sm"
+      value={value}
+      hint={`${formatBytes(metrics.ram_used_bytes)} из ${formatBytes(total)}`}
+      tone={THRESHOLD_TILE_TONE[thresholdTone(r, 0.7, 0.85)]}
+      progress={{ pct: r * 100 }}
+      onClick={onOpen}
+      actionLabel={`RAM ${value} — открыть график за 24 часа`}
     />
   );
 }
 
-function DiskCard({
+function DiskTile({
   metrics,
   diskBreakdown,
+  onOpen,
 }: {
   metrics: HostMetrics;
   diskBreakdown: DiskBreakdown | null;
+  onOpen: () => void;
 }) {
   const total = metrics.disk_total_bytes;
   if (total <= 0) {
     return (
-      <ResourceCard
-        title="Диск"
-        mainValue="N/A"
-        sub={<span className="text-neutral-500">данных нет</span>}
+      <StatTile
+        label="Диск"
+        size="sm"
+        value="Нет данных"
+        hint="Метрика не пришла"
+        onClick={onOpen}
+        actionLabel="Диск: нет данных — открыть детализацию"
       />
     );
   }
   const r = ratio(metrics.disk_used_bytes, total);
   const usedPct = r * 100;
-  const tone = thresholdTone(r, 0.75, 0.9);
+  const tone = THRESHOLD_TILE_TONE[thresholdTone(r, 0.75, 0.9)];
+  const value = formatPercent(metrics.disk_used_bytes, total);
   const panelPct = diskBreakdown ? Math.min(diskBreakdown.panel_pct, usedPct) : 0;
   const otherPct = diskBreakdown ? Math.max(0, usedPct - panelPct) : 0;
-  const splitSegments = diskBreakdown
-    ? [
-        { widthPct: otherPct, className: 'bg-purple-300' },
-        { widthPct: panelPct, className: 'bg-purple-500' },
-      ]
-    : undefined;
-  const legend = diskBreakdown
-    ? [
-        { label: 'Прочее', pct: otherPct, swatchClassName: 'bg-purple-300' },
-        { label: 'Панель', pct: panelPct, swatchClassName: 'bg-purple-500' },
-      ]
-    : undefined;
   return (
-    <ResourceCard
-      title="Диск"
-      mainValue={formatPercent(metrics.disk_used_bytes, total)}
-      sub={
-        <span className="font-mono">
-          {formatBytes(metrics.disk_used_bytes)} / {formatBytes(total)}
-        </span>
+    <StatTile
+      label="Диск"
+      size="sm"
+      value={value}
+      hint={`${formatBytes(metrics.disk_used_bytes)} из ${formatBytes(total)}`}
+      tone={tone}
+      progress={
+        diskBreakdown
+          ? {
+              segments: [
+                { pct: otherPct, tone: 'neutral', label: 'Прочее' },
+                { pct: panelPct, tone: 'accent', label: 'Панель' },
+              ],
+            }
+          : { pct: usedPct }
       }
-      progressPct={usedPct}
-      progressTone={tone}
-      progressSegments={splitSegments}
-      progressLegend={legend}
+      onClick={onOpen}
+      actionLabel={`Диск ${value} — открыть детализацию`}
     />
   );
 }
 
-function NetworkCard({ metrics }: { metrics: HostMetrics }) {
+function NetworkTile({ metrics, onOpen }: { metrics: HostMetrics; onOpen: () => void }) {
+  const rx = formatBytesPerSec(metrics.net_rx_bytes_per_sec);
+  const tx = formatBytesPerSec(metrics.net_tx_bytes_per_sec);
   return (
-    <div className="rounded border border-neutral-900 bg-neutral-950 p-3 flex flex-col justify-between min-h-[110px]">
-      <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">Сеть</div>
-      <div className="flex justify-between items-baseline gap-3 mt-2">
-        <div className="min-w-0">
-          <div className="text-[10px] uppercase text-neutral-500">RX</div>
-          <div className="text-base font-semibold tabular-nums font-mono text-neutral-100 truncate">
-            {formatBytesPerSec(metrics.net_rx_bytes_per_sec)}
-          </div>
-        </div>
-        <div className="min-w-0 text-right">
-          <div className="text-[10px] uppercase text-neutral-500">TX</div>
-          <div className="text-base font-semibold tabular-nums font-mono text-neutral-100 truncate">
-            {formatBytesPerSec(metrics.net_tx_bytes_per_sec)}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ResourceCard({
-  title,
-  mainValue,
-  sub,
-  progressPct,
-  progressTone,
-  progressSegments,
-  progressLegend,
-}: {
-  title: string;
-  mainValue: string;
-  sub: React.ReactNode;
-  progressPct?: number;
-  progressTone?: 'emerald' | 'amber' | 'red';
-  progressSegments?: { widthPct: number; className: string }[];
-  progressLegend?: { label: string; pct: number; swatchClassName: string }[];
-}) {
-  const fill: Record<string, string> = {
-    emerald: 'bg-emerald-500',
-    amber: 'bg-amber-500',
-    red: 'bg-red-500',
-  };
-  return (
-    <div className="rounded border border-neutral-900 bg-neutral-950 p-3 flex flex-col gap-2 min-h-[110px]">
-      <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">{title}</div>
-      <div className="text-2xl font-semibold tabular-nums leading-none text-neutral-50">
-        {mainValue}
-      </div>
-      <div className="text-[11px] text-neutral-400 truncate">{sub}</div>
-      {progressPct !== undefined && progressTone ? (
-        <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-neutral-900 mt-auto">
-          {progressSegments && progressSegments.length > 0 ? (
-            progressSegments.map((seg) => (
-              <div
-                key={seg.className}
-                className={`h-1.5 ${seg.className}`}
-                style={{ width: `${Math.max(0, Math.min(100, seg.widthPct))}%` }}
-              />
-            ))
-          ) : (
-            <div
-              className={`h-1.5 ${fill[progressTone]}`}
-              style={{ width: `${Math.max(0, Math.min(100, progressPct))}%` }}
-            />
-          )}
-        </div>
-      ) : null}
-      {progressLegend && progressLegend.length > 0 ? (
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-neutral-400">
-          {progressLegend.map((entry) => (
-            <span key={entry.label} className="inline-flex items-center gap-1.5">
-              <span className={`h-1.5 w-1.5 rounded-sm ${entry.swatchClassName}`} />
-              <span>
-                {entry.label}{' '}
-                <span className="font-mono tabular-nums">{entry.pct.toFixed(1)}%</span>
-              </span>
-            </span>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function SkeletonResource() {
-  return (
-    <div className="rounded border border-neutral-900 bg-neutral-950 p-3 flex flex-col gap-2 min-h-[110px] animate-pulse">
-      <div className="h-2.5 w-12 rounded bg-neutral-900" />
-      <div className="h-6 w-20 rounded bg-neutral-900" />
-      <div className="h-2.5 w-28 rounded bg-neutral-900" />
-      <div className="h-1.5 rounded-full bg-neutral-900 mt-auto" />
-    </div>
+    <StatTile
+      label="Сеть, приём"
+      size="sm"
+      value={rx}
+      hint={`Отдача ${tx}`}
+      onClick={onOpen}
+      actionLabel={`Сеть: приём ${rx}, отдача ${tx} — открыть график за 24 часа`}
+    />
   );
 }
 
@@ -1013,11 +971,11 @@ function SystemRow({ info, metrics }: { info: HostInfo | null; metrics: HostMetr
     : 'нет данных';
 
   return (
-    <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 px-4 py-3 border-t border-neutral-900 text-[11px]">
+    <dl className="mt-auto grid grid-cols-2 gap-x-4 gap-y-2 border-t border-line px-4 py-3">
       <SystemCell label="Ядро" value={kernel} />
       <SystemCell label="Docker" value={docker} />
       <SystemCell label="IP" value={ip} />
-      <SystemCell label="Load avg" value={load} />
+      <SystemCell label="Средняя загрузка" value={load} />
     </dl>
   );
 }
@@ -1025,12 +983,11 @@ function SystemRow({ info, metrics }: { info: HostInfo | null; metrics: HostMetr
 function SystemCell({ label, value }: { label: string; value: string }) {
   const isMissing = value === 'нет данных';
   return (
-    <div className="flex items-baseline gap-2 min-w-0">
-      <dt className="text-neutral-500 uppercase tracking-[0.16em] text-[9px] shrink-0">{label}</dt>
-      <dd
-        className={`truncate font-mono ${isMissing ? 'text-neutral-500 italic' : 'text-neutral-200'}`}
-        title={value}
-      >
+    <div className="flex min-w-0 flex-col gap-1">
+      {/* Служебный ярлык над значением — единственное место, где §1 разрешает
+          заглавные буквы. */}
+      <dt className="text-2xs uppercase tracking-[0.06em] text-ink-3">{label}</dt>
+      <dd className={`truncate text-xs ${isMissing ? 'text-ink-3' : 'text-ink-2'}`} title={value}>
         {value}
       </dd>
     </div>
@@ -1039,10 +996,12 @@ function SystemCell({ label, value }: { label: string; value: string }) {
 
 function RecentActivity({
   rows,
+  loading,
   filter,
   onFilter,
 }: {
   rows: AuditRow[];
+  loading: boolean;
   filter: ActivityFilter;
   onFilter: (f: ActivityFilter) => void;
 }) {
@@ -1051,60 +1010,72 @@ function RecentActivity({
     [rows, filter],
   );
   return (
-    <section className="flex flex-col rounded border border-neutral-800 bg-neutral-950 max-h-[380px]">
-      <PaneHeader
+    <Card as="section" padding="none" className="flex h-full flex-col">
+      <CardHeader
         title="Последние действия"
         count={`${filtered.length}/${rows.length}`}
-        right={
-          <Link href="/audit" className="text-[11px] text-sky-400 hover:text-sky-300">
-            журнал →
-          </Link>
+        actions={
+          <ButtonLink href="/audit" variant="plain" size="sm">
+            Журнал действий
+          </ButtonLink>
         }
       />
-      <div className="flex items-center gap-1 px-3 py-2 border-b border-neutral-900 overflow-x-auto">
-        {ACTIVITY_FILTERS.map((f) => {
-          const active = f === filter;
-          return (
-            <button
-              key={f}
-              type="button"
-              onClick={() => onFilter(f)}
-              className={`rounded px-2 py-0.5 text-[11px] border whitespace-nowrap ${
-                active
-                  ? 'border-sky-700 bg-sky-950/50 text-sky-200'
-                  : 'border-neutral-800 bg-neutral-900 text-neutral-400 hover:text-neutral-200 hover:border-neutral-700'
-              }`}
-            >
-              {ACTIVITY_FILTER_LABEL[f]}
-            </button>
-          );
-        })}
-      </div>
-      {filtered.length === 0 ? (
-        <div className="px-4 py-8 text-center text-sm text-neutral-500">
-          {rows.length === 0 ? 'пока пусто' : 'под фильтр ничего не подходит'}
-        </div>
+      <CardBody padding="sm" className="border-b border-line">
+        <Toolbar
+          filters={
+            <SegmentedControl
+              ariaLabel="Фильтр событий"
+              size="sm"
+              value={filter}
+              onChange={(value) => onFilter(value as ActivityFilter)}
+              items={ACTIVITY_FILTERS.map((f) => ({
+                value: f,
+                label: ACTIVITY_FILTER_LABEL[f],
+              }))}
+            />
+          }
+        />
+      </CardBody>
+      {loading ? (
+        <CardBody>
+          <SkeletonTable rows={5} cols={4} label="Загружаем последние действия" />
+        </CardBody>
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          variant={rows.length === 0 ? 'initial' : 'filtered'}
+          title={rows.length === 0 ? 'Действий пока нет' : 'Под фильтр ничего не подходит'}
+          description={
+            rows.length === 0
+              ? 'Как только в панели что-то произойдёт, событие появится здесь.'
+              : 'Выберите другой фильтр или покажите все события.'
+          }
+          action={
+            rows.length === 0 ? undefined : (
+              <Button size="sm" onClick={() => onFilter('all')}>
+                Сбросить фильтр
+              </Button>
+            )
+          }
+        />
       ) : (
-        <div className="overflow-y-auto">
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-neutral-950 z-10">
-              <tr className="text-left text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-                <Th>Время</Th>
-                <Th>Кто</Th>
-                <Th>Событие</Th>
-                <Th>Цель</Th>
-                <Th className="text-right pr-3">Тип</Th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-neutral-900">
-              {filtered.map((ev) => (
-                <ActivityRow key={ev.id} ev={ev} />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table dense maxHeight="320px" ariaLabel="Последние действия">
+          <TableHead>
+            <tr>
+              <Th>Время</Th>
+              <Th>Кто</Th>
+              <Th>Событие</Th>
+              <Th>Цель</Th>
+              <Th align="right">Итог</Th>
+            </tr>
+          </TableHead>
+          <TableBody>
+            {filtered.map((ev) => (
+              <ActivityRow key={ev.id} ev={ev} />
+            ))}
+          </TableBody>
+        </Table>
       )}
-    </section>
+    </Card>
   );
 }
 
@@ -1114,22 +1085,24 @@ function ActivityRow({ ev }: { ev: AuditRow }) {
   const targetLabel = ev.target_type
     ? `${ev.target_type}${ev.target_id ? ` · ${ev.target_id.slice(0, 8)}` : ''}`
     : '—';
+  // Без `interactive`: строка журнала никуда не ведёт, а этот флаг примитив
+  // резервирует за строками со ссылкой в первой ячейке.
   return (
-    <tr className="hover:bg-neutral-900/40">
-      <Td className="text-[11px] text-neutral-400 font-mono whitespace-nowrap">
+    <TableRow>
+      <Td className="whitespace-nowrap text-xs tabular-nums text-ink-3">
         {time.toLocaleTimeString()}
       </Td>
-      <Td className="text-xs text-neutral-300 capitalize">{ev.actor_kind}</Td>
-      <Td>
-        <span className="font-mono text-xs text-neutral-100">{ev.action_type}</span>
+      <Td className="text-xs text-ink-2">{ACTOR_KIND_LABEL[ev.actor_kind] ?? ev.actor_kind}</Td>
+      <Td className="text-xs text-ink">{ev.action_type}</Td>
+      <Td className="text-xs text-ink-3">
+        <span className="block max-w-[160px] truncate" title={targetLabel}>
+          {targetLabel}
+        </span>
       </Td>
-      <Td className="text-xs text-neutral-400 font-mono truncate max-w-[160px]" title={targetLabel}>
-        {targetLabel}
-      </Td>
-      <Td className="text-right pr-3">
+      <Td align="right">
         <SeverityBadge severity={severity} statusCode={ev.status_code} />
       </Td>
-    </tr>
+    </TableRow>
   );
 }
 
@@ -1140,16 +1113,13 @@ function SeverityBadge({
   severity: 'info' | 'warning' | 'critical';
   statusCode: number | null;
 }) {
-  const tone: Tone = severity === 'critical' ? 'red' : severity === 'warning' ? 'amber' : 'neutral';
-  const label = severity === 'critical' ? 'критично' : severity === 'warning' ? 'предупр.' : 'инфо';
+  const tone = severity === 'critical' ? 'crit' : severity === 'warning' ? 'warn' : 'neutral';
+  const label =
+    severity === 'critical' ? 'критично' : severity === 'warning' ? 'предупреждение' : 'инфо';
   return (
-    <span
-      className={`inline-flex items-center gap-1 rounded border border-neutral-900 bg-neutral-900/60 px-1.5 py-0.5 text-[10px] ${TEXT[tone]}`}
-      title={statusCode != null ? `HTTP ${statusCode}` : 'нет статуса'}
-    >
-      <span className={`h-1 w-1 rounded-full ${DOT[tone]}`} />
+    <Badge tone={tone} size="sm" title={statusCode != null ? `HTTP ${statusCode}` : 'нет статуса'}>
       {label}
-    </span>
+    </Badge>
   );
 }
 
@@ -1175,9 +1145,9 @@ interface ConnectionRow {
   key: string;
   group: 'core' | 'workers';
   name: string;
-  state: string;
+  state: StatusState;
+  status: string;
   detail?: string;
-  tone: Tone;
 }
 
 function buildConnectionRows(
@@ -1192,8 +1162,8 @@ function buildConnectionRows(
     key: 'postgres',
     group: 'core',
     name: 'PostgreSQL',
-    state: pgState === 'ok' ? 'здоров' : pgState ? 'недоступен' : 'нет данных',
-    tone: pgState === 'ok' ? 'emerald' : pgState ? 'red' : 'neutral',
+    status: pgState === 'ok' ? 'здоров' : pgState ? 'недоступен' : 'нет данных',
+    state: pgState === 'ok' ? 'good' : pgState ? 'crit' : 'idle',
   });
 
   const redisState = ready?.checks.redis;
@@ -1201,19 +1171,19 @@ function buildConnectionRows(
     key: 'redis',
     group: 'core',
     name: 'Redis',
-    state: redisState === 'ok' ? 'здоров' : redisState ? 'недоступен' : 'нет данных',
-    tone: redisState === 'ok' ? 'emerald' : redisState ? 'red' : 'neutral',
+    status: redisState === 'ok' ? 'здоров' : redisState ? 'недоступен' : 'нет данных',
+    state: redisState === 'ok' ? 'good' : redisState ? 'crit' : 'idle',
   });
 
   rows.push({
     key: 'bridge',
     group: 'core',
     name: 'panel-host-bridge',
-    state: bridge?.connected ? 'подключён' : (bridge?.error ?? 'отключён'),
+    status: bridge?.connected ? 'подключён' : (bridge?.error ?? 'отключён'),
     detail: bridge?.connected
       ? `RTT ${bridge.round_trip_ms ?? '?'} мс${bridge.version ? ` · v${bridge.version}` : ''}`
       : undefined,
-    tone: bridge?.connected ? 'emerald' : 'red',
+    state: bridge?.connected ? 'good' : 'crit',
   });
 
   const expected = ['rcon', 'log-ingest', 'audit-archiver', 'event-partition'];
@@ -1225,20 +1195,20 @@ function buildConnectionRows(
         key: `worker-${name}`,
         group: 'workers',
         name: `worker-${name}`,
-        state: 'нет heartbeat',
-        tone: 'red',
+        status: 'нет heartbeat',
+        state: 'crit',
       });
       continue;
     }
-    const tone: Tone =
-      w.age_ms > WORKER_STALE_MS ? 'red' : w.age_ms > WORKER_OK_MS ? 'amber' : 'emerald';
+    const state: StatusState =
+      w.age_ms > WORKER_STALE_MS ? 'crit' : w.age_ms > WORKER_OK_MS ? 'warn' : 'good';
     rows.push({
       key: `worker-${name}`,
       group: 'workers',
       name: `worker-${name}`,
-      state: w.status ?? 'жив',
+      status: w.status ?? 'жив',
       detail: `${Math.round(w.age_ms / 1000)}с назад · pid ${w.pid}`,
-      tone,
+      state,
     });
   }
 
@@ -1256,84 +1226,67 @@ function ConnectionsHealth({
   totalCount: number;
   bridgeConnected: boolean;
 }) {
-  const summaryTone: Tone =
-    healthyCount === totalCount ? 'emerald' : healthyCount > 0 ? 'amber' : 'red';
+  const summaryState: StatusState =
+    healthyCount === totalCount ? 'good' : healthyCount > 0 ? 'warn' : 'crit';
   const core = rows.filter((r) => r.group === 'core');
   const workers = rows.filter((r) => r.group === 'workers');
 
   return (
-    <section className="flex h-full flex-col rounded border border-neutral-800 bg-neutral-950">
-      <PaneHeader
+    <Card as="section" padding="none" className="flex h-full flex-col">
+      <CardHeader
         title="Соединения"
-        right={
-          <span className={`text-[11px] tabular-nums ${TEXT[summaryTone]}`}>
-            <span
-              className={`inline-block h-1.5 w-1.5 rounded-full mr-1.5 align-middle ${DOT[summaryTone]}`}
-            />
-            {healthyCount} / {totalCount} здоровы
-          </span>
+        actions={
+          <StatusBadge
+            state={summaryState}
+            label={`${healthyCount} из ${totalCount} здоровы`}
+            size="sm"
+          />
         }
       />
-      <div className="px-4 py-3 space-y-4 text-sm">
-        <ConnectionGroup label="Core" rows={core} />
+      <CardBody className="space-y-4">
+        <ConnectionGroup label="Базовые службы" rows={core} />
         <ConnectionGroup
-          label="Workers"
+          label="Воркеры"
           rows={workers}
-          actionDisabledReason={!bridgeConnected ? 'bridge оффлайн' : undefined}
+          footnote={
+            bridgeConnected
+              ? 'Перезапуск воркеров выполняется через docker compose.'
+              : 'Bridge оффлайн — состояние воркеров может быть устаревшим.'
+          }
         />
-      </div>
-    </section>
+      </CardBody>
+    </Card>
   );
 }
 
 function ConnectionGroup({
   label,
   rows,
-  actionDisabledReason,
+  footnote,
 }: {
   label: string;
   rows: ConnectionRow[];
-  actionDisabledReason?: string;
+  footnote?: string;
 }) {
   return (
-    <div>
-      <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500 mb-2">{label}</div>
-      <ul className="space-y-1.5">
+    <section className="space-y-2">
+      {/* Смысловой заголовок раздела, поэтому обычный регистр, а не капслок (§1). */}
+      <h3 className="text-xs font-semibold text-ink-2">{label}</h3>
+      <ul className="divide-y divide-line overflow-hidden rounded-ctl border border-line">
         {rows.map((r) => (
-          <ConnectionItem key={r.key} row={r} disabledReason={actionDisabledReason} />
+          <li key={r.key} className="flex items-center gap-2 px-2.5 py-2">
+            <span className="min-w-0 flex-1 truncate text-xs text-ink">{r.name}</span>
+            <StatusDot state={r.state} label={r.status} size="sm" />
+            {r.detail ? (
+              <span className="shrink-0 whitespace-nowrap text-2xs text-ink-3" title={r.detail}>
+                {r.detail}
+              </span>
+            ) : null}
+          </li>
         ))}
       </ul>
-    </div>
-  );
-}
-
-function ConnectionItem({ row, disabledReason }: { row: ConnectionRow; disabledReason?: string }) {
-  return (
-    <li
-      className={`flex items-center gap-2 rounded border border-neutral-900 border-l-2 ${ACCENT_BORDER[row.tone]} bg-neutral-900/40 px-2.5 py-1.5`}
-    >
-      <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${DOT[row.tone]}`} />
-      <div className="flex-1 min-w-0 flex items-baseline gap-2">
-        <span className="text-xs font-medium text-neutral-200 truncate">{row.name}</span>
-        <span className={`text-[11px] truncate ${TEXT[row.tone]}`}>{row.state}</span>
-      </div>
-      {row.detail ? (
-        <span
-          className="text-[10px] font-mono text-neutral-500 whitespace-nowrap"
-          title={row.detail}
-        >
-          {row.detail}
-        </span>
-      ) : null}
-      {row.group === 'workers' ? (
-        <span
-          className="text-[10px] text-neutral-500"
-          title={disabledReason ?? 'Перезапуск workers выполняется через docker compose'}
-        >
-          ⋯
-        </span>
-      ) : null}
-    </li>
+      {footnote ? <p className="text-2xs text-ink-3">{footnote}</p> : null}
+    </section>
   );
 }
 

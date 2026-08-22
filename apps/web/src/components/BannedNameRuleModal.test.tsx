@@ -4,6 +4,42 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BanNickButton, BannedNameRuleModal } from './BannedNameRuleModal';
 
+/**
+ * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
+ * а окно правила построено на примитиве `Modal`. Полифилл повторяет ровно то,
+ * на что опирается примитив: атрибут `open`, фокус внутрь окна и цепочку
+ * Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -115,6 +151,40 @@ describe('BannedNameRuleModal', () => {
       />,
     );
     expect(screen.getByRole('button', { name: /добавить/i })).toBeDisabled();
+  });
+
+  it('closes on Escape — the window is a native <dialog>, not a hand-rolled overlay', () => {
+    const onClose = vi.fn();
+    const { container } = render(
+      <BannedNameRuleModal
+        open
+        initial={{ pattern: 'BadNick' }}
+        onClose={onClose}
+        onSaved={() => {}}
+      />,
+    );
+    const dialog = container.querySelector('dialog');
+    if (!dialog) throw new Error('Окно не отрисовало <dialog>');
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes through the dialog close control', () => {
+    const onClose = vi.fn();
+    render(
+      <BannedNameRuleModal
+        open
+        initial={{ pattern: 'BadNick' }}
+        onClose={onClose}
+        onSaved={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть окно' }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('shows the server error detail on a 409/422 response', async () => {

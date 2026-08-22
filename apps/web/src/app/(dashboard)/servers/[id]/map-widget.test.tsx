@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));
@@ -54,12 +54,23 @@ function mockFetch(
   });
 }
 
+/**
+ * jsdom знает `<dialog>`, но не реализует `showModal()`/`close()`. Выбор слоя и
+ * подтверждения построены на нативном элементе, поэтому тест воспроизводит
+ * ровно то, на что примитивы опираются.
+ */
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+  };
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
+    this.removeAttribute('open');
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
 beforeEach(() => {
   vi.stubGlobal('fetch', mockFetch());
-  vi.stubGlobal(
-    'confirm',
-    vi.fn(() => true),
-  );
 });
 
 afterEach(() => {
@@ -169,6 +180,83 @@ describe('MapWidget', () => {
       fireEvent.click(screen.getByRole('button', { name: /применить/i }));
 
       await waitFor(() => expect(post).toHaveBeenCalledWith('/api/v1/servers/srv-1/map/next'));
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'asks for a separate confirmation before changing the layer mid-match, and only then posts',
+    async () => {
+      const post = vi.fn(() =>
+        Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 })),
+      );
+      vi.stubGlobal('fetch', mockFetch({ post }));
+
+      render(<MapWidget serverId="srv-1" canChangeMap={true} />);
+      fireEvent.click(await screen.findByRole('button', { name: /сменить сейчас/i }));
+      fireEvent.click(await screen.findByText('Yehorivka RAAS v11'));
+      fireEvent.click(screen.getByRole('button', { name: /применить/i }));
+
+      // Матч сбрасывается — вопрос задаётся отдельным диалогом, а не окном браузера.
+      expect(
+        await screen.findByRole('heading', { name: 'Сменить карту сейчас?' }),
+      ).toBeInTheDocument();
+      expect(post).not.toHaveBeenCalled();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Сменить карту' }));
+      });
+      await waitFor(() => expect(post).toHaveBeenCalledWith('/api/v1/servers/srv-1/map/change'));
+      expect(await screen.findByText('Карта сменена')).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'leaves the layer untouched when the mid-match change is declined',
+    async () => {
+      const post = vi.fn(() =>
+        Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 })),
+      );
+      vi.stubGlobal('fetch', mockFetch({ post }));
+
+      render(<MapWidget serverId="srv-1" canChangeMap={true} />);
+      fireEvent.click(await screen.findByRole('button', { name: /сменить сейчас/i }));
+      fireEvent.click(await screen.findByText('Yehorivka RAAS v11'));
+      fireEvent.click(screen.getByRole('button', { name: /применить/i }));
+
+      const heading = await screen.findByRole('heading', { name: 'Сменить карту сейчас?' });
+      const confirmDialog = heading.closest('dialog');
+      expect(confirmDialog).not.toBeNull();
+      await act(async () => {
+        fireEvent.click(
+          within(confirmDialog as HTMLElement).getAllByRole('button', { name: 'Отмена' })[0],
+        );
+      });
+
+      expect(post).not.toHaveBeenCalled();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'ends the match through a confirmation dialog',
+    async () => {
+      const post = vi.fn(() =>
+        Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 })),
+      );
+      vi.stubGlobal('fetch', mockFetch({ post }));
+
+      render(<MapWidget serverId="srv-1" canChangeMap={true} />);
+      fireEvent.click(await screen.findByRole('button', { name: /завершить матч/i }));
+      expect(await screen.findByRole('heading', { name: 'Завершить матч?' })).toBeInTheDocument();
+      expect(post).not.toHaveBeenCalled();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Завершить' }));
+      });
+      await waitFor(() => expect(post).toHaveBeenCalledWith('/api/v1/servers/srv-1/map/end-match'));
+      expect(await screen.findByText('Матч завершён')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

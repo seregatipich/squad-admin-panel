@@ -2,6 +2,29 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import {
+  Badge,
+  Button,
+  ButtonLink,
+  Card,
+  EmptyState,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  PlusIcon,
+  SearchField,
+  Select,
+  SkeletonTable,
+  StatusDot,
+  type StatusState,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+  Toolbar,
+} from '@/components/ui';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { formatSeedProgress, type SeedingSummary } from './seeding-format';
 
@@ -26,6 +49,43 @@ interface ServersResponse {
 
 const POLL_MS = 120_000;
 
+/**
+ * Состояние сервера словами. Точка состояния красит строку, но смысл несёт
+ * подпись: правило «никогда только цветом» (§5 дизайн-системы) действует и
+ * внутри таблицы. Неизвестное значение показывается как есть — так новый
+ * статус из API виден оператору, а не превращается в пустую ячейку.
+ */
+const STATUS_LABEL: Record<string, string> = {
+  pending: 'ожидает',
+  installing: 'установка',
+  ready: 'готов',
+  starting: 'запускается',
+  running: 'работает',
+  stopping: 'останавливается',
+  stopped: 'остановлен',
+  failed: 'ошибка',
+};
+
+const STATUS_STATE: Record<string, StatusState> = {
+  running: 'good',
+  failed: 'crit',
+  starting: 'warn',
+  stopping: 'warn',
+  installing: 'warn',
+};
+
+/** Состояние соединения RCON. Само слово «RCON» — технический идентификатор. */
+const RCON_LABEL: Record<string, string> = {
+  connected: 'подключён',
+  disconnected: 'отключён',
+};
+
+const ACTION_LABEL = {
+  start: 'Пуск',
+  stop: 'Стоп',
+  restart: 'Рестарт',
+} as const;
+
 export default function ServersPage() {
   const [data, setData] = useState<ServersResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -34,29 +94,38 @@ export default function ServersPage() {
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
+  /**
+   * Признак «этот ответ уже никому не нужен» приходит параметром, а не живёт
+   * в замыкании эффекта: тот же запрос запускает и кнопка «Повторить», у
+   * которой отменять нечего.
+   */
+  const loadServers = useCallback(async (isStale: () => boolean = () => false) => {
+    try {
+      const r = await fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = (await r.json()) as ServersResponse;
+      if (!isStale()) {
+        setData(j);
+        setErr(null);
+        setLastUpdate(new Date());
+      }
+    } catch (e) {
+      if (!isStale()) setErr((e as Error).message);
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
-    async function load() {
-      try {
-        const r = await fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const j = (await r.json()) as ServersResponse;
-        if (!cancelled) {
-          setData(j);
-          setErr(null);
-          setLastUpdate(new Date());
-        }
-      } catch (e) {
-        if (!cancelled) setErr((e as Error).message);
-      }
-    }
-    void load();
-    const t = setInterval(load, POLL_MS);
+    const isStale = () => cancelled;
+    void loadServers(isStale);
+    const t = setInterval(() => {
+      void loadServers(isStale);
+    }, POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(t);
     };
-  }, []);
+  }, [loadServers]);
 
   const onStatus = useCallback((event: { data: { server_id: string; status: string } }) => {
     setData((prev) => {
@@ -167,154 +236,202 @@ export default function ServersPage() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({}),
       });
-      if (!r.ok) setErr(`${action} failed: HTTP ${r.status} ${await r.text()}`);
+      if (!r.ok)
+        setErr(
+          `Не удалось выполнить «${ACTION_LABEL[action]}»: HTTP ${r.status} ${await r.text()}`,
+        );
     } finally {
       setActingId(null);
     }
   }
 
-  if (!data && !err) return <div className="text-neutral-500">Загрузка…</div>;
+  const filtered = q.trim() !== '' || tagFilter !== null;
+  const resetFilters = () => {
+    setQ('');
+    setTagFilter(null);
+  };
+
+  const searchField = (
+    <SearchField
+      value={q}
+      onCommit={setQ}
+      label="Поиск серверов"
+      placeholder="Поиск по имени, идентификатору или ID…"
+      clearLabel="Очистить поиск"
+    />
+  );
+
+  const tagSelect =
+    allTags.length > 0 ? (
+      <Select
+        aria-label="Фильтр по тегу"
+        value={tagFilter ?? ''}
+        onChange={(e) => setTagFilter(e.target.value || null)}
+      >
+        <option value="">Все теги</option>
+        {allTags.map((tag) => (
+          <option key={tag} value={tag}>
+            {tag}
+          </option>
+        ))}
+      </Select>
+    ) : undefined;
+
+  const summary = data ? `Показано: ${rows.length} из ${data.total}` : undefined;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Серверы</h1>
-        <div className="flex items-center gap-3">
-          <LiveIndicator lastUpdate={lastUpdate} />
-          <Link
-            href="/servers/new"
-            className="rounded bg-sky-600 px-3 py-1.5 text-sm text-white hover:bg-sky-500"
-          >
-            + Установить новый
-          </Link>
-        </div>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="Серверы"
+        status={<LiveIndicator lastUpdate={lastUpdate} />}
+        actions={
+          <ButtonLink href="/servers/new" variant="primary">
+            <PlusIcon />
+            Установить новый
+          </ButtonLink>
+        }
+      />
 
-      {err ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{err}</div>
-      ) : null}
-
-      <div className="flex items-center gap-2">
-        <input
-          type="search"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Поиск по имени, slug или id…"
-          className="flex-1 rounded border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-sm"
+      {err && (
+        <InlineBanner
+          tone="crit"
+          title="Не удалось получить список серверов"
+          description={err}
+          action={
+            <Button
+              onClick={() => {
+                void loadServers();
+              }}
+            >
+              Повторить
+            </Button>
+          }
         />
-        {allTags.length > 0 && (
-          <select
-            value={tagFilter ?? ''}
-            onChange={(e) => setTagFilter(e.target.value || null)}
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm"
-          >
-            <option value="">Все теги</option>
-            {allTags.map((tag) => (
-              <option key={tag} value={tag}>
-                {tag}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
+      )}
 
-      {rows.length === 0 ? (
-        <div className="rounded border border-neutral-800 bg-neutral-950 p-6 text-center text-neutral-500 text-sm">
-          {data?.items.length ? 'Нет совпадений.' : 'Нет серверов.'}
-        </div>
+      {filtered ? (
+        <Toolbar
+          search={searchField}
+          filters={tagSelect}
+          summary={summary}
+          onReset={resetFilters}
+          resetLabel="Сбросить фильтры"
+        />
       ) : (
-        <div className="overflow-x-auto rounded border border-neutral-800">
-          <table className="w-full text-sm">
-            <thead className="bg-neutral-950 text-xs uppercase tracking-widest text-neutral-500">
+        <Toolbar search={searchField} filters={tagSelect} summary={summary} />
+      )}
+
+      {!data ? (
+        /* Список не загрузился — под полосой ошибки не место приглашению
+           «установите первый сервер»: серверы, возможно, есть. */
+        err ? null : (
+          <SkeletonTable rows={6} cols={6} label="Загружается список серверов" />
+        )
+      ) : rows.length === 0 ? (
+        <Card>
+          {data?.items.length ? (
+            <EmptyState
+              variant="filtered"
+              title="Ничего не нашлось"
+              description="По текущему запросу и фильтру подходящих серверов нет."
+              action={<Button onClick={resetFilters}>Сбросить фильтры</Button>}
+            />
+          ) : (
+            <EmptyState
+              title="Серверов пока нет"
+              description="Установите первый Squad-сервер — он появится в этом списке."
+              action={
+                <ButtonLink href="/servers/new" variant="primary">
+                  Установить новый
+                </ButtonLink>
+              }
+            />
+          )}
+        </Card>
+      ) : (
+        <Card padding="none">
+          <Table ariaLabel="Серверы">
+            <TableHead>
               <tr>
-                <th className="text-left p-2 w-8"></th>
-                <th className="text-left p-2">Имя</th>
-                <th className="text-left p-2">Игроков</th>
-                <th className="text-left p-2">RCON</th>
-                <th className="text-left p-2">Последний опрос</th>
-                <th className="text-left p-2">Действия</th>
+                <Th>Состояние</Th>
+                <Th>Имя</Th>
+                <Th align="right">Игроков</Th>
+                <Th>RCON</Th>
+                <Th>Последний опрос</Th>
+                <Th>Действия</Th>
               </tr>
-            </thead>
-            <tbody>
+            </TableHead>
+            <TableBody>
               {rows.map((row) => (
-                <tr key={row.id} className="border-t border-neutral-900">
-                  <td className="p-2">
-                    <StatusDot status={row.status} />
-                  </td>
-                  <td className="p-2">
+                <TableRow key={row.id} interactive>
+                  <Td>
+                    <StatusDot
+                      state={STATUS_STATE[row.status] ?? 'idle'}
+                      label={STATUS_LABEL[row.status] ?? row.status}
+                      size="sm"
+                    />
+                  </Td>
+                  <Td>
                     <Link
                       href={`/servers/${row.id}`}
-                      className="text-sky-400 hover:text-sky-300 font-medium"
+                      className="font-medium text-accent no-underline"
                     >
                       {row.display_name}
                     </Link>
-                    <div className="text-[11px] text-neutral-500 font-mono">{row.slug}</div>
+                    <div className="font-mono text-2xs text-ink-3">{row.slug}</div>
                     {(row.tags ?? []).length > 0 && (
-                      <div className="mt-0.5 flex flex-wrap gap-1">
+                      <div className="mt-1 flex flex-wrap gap-1">
                         {(row.tags ?? []).map((tag) => (
-                          <span
-                            key={tag}
-                            className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400"
-                          >
+                          <Badge key={tag} size="sm">
                             {tag}
-                          </span>
+                          </Badge>
                         ))}
                       </div>
                     )}
-                  </td>
-                  <td className="p-2 font-mono text-sm">
+                  </Td>
+                  <Td numeric>
                     {row.player_count == null ? '—' : row.player_count}
                     {row.seeding?.state === 'seeding' && (
-                      <div className="mt-1 flex items-center gap-1.5">
-                        <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-[10px] font-sans text-amber-400">
+                      <div className="mt-1 flex items-center justify-end gap-1.5">
+                        <Badge tone="warn" size="sm">
                           Сидинг
-                        </span>
-                        <span className="text-[10px] font-sans text-neutral-500">
+                        </Badge>
+                        <span className="text-2xs text-ink-3">
                           {formatSeedProgress(row.seeding.current_players, row.seeding.live_at)}
                         </span>
                       </div>
                     )}
-                  </td>
-                  <td className="p-2 text-xs">
-                    <span
-                      className={
-                        row.rcon_state === 'connected' ? 'text-emerald-400' : 'text-neutral-500'
-                      }
-                    >
-                      {row.rcon_state ?? '—'}
-                    </span>
-                  </td>
-                  <td className="p-2 text-xs text-neutral-500">
+                  </Td>
+                  <Td>
+                    {row.rcon_state ? (
+                      <StatusDot
+                        state={row.rcon_state === 'connected' ? 'good' : 'idle'}
+                        label={RCON_LABEL[row.rcon_state] ?? row.rcon_state}
+                        size="sm"
+                      />
+                    ) : (
+                      <span className="text-xs text-ink-3">—</span>
+                    )}
+                  </Td>
+                  <Td className="text-xs text-ink-3">
                     {row.last_poll_at ? new Date(row.last_poll_at).toLocaleTimeString() : '—'}
-                  </td>
-                  <td className="p-2">
+                  </Td>
+                  <Td>
                     <ActionButtons
                       status={row.status}
                       id={row.id}
                       actingKey={actingId}
                       run={runAction}
                     />
-                  </td>
-                </tr>
+                  </Td>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </Card>
       )}
-    </div>
+    </PageContainer>
   );
-}
-
-function StatusDot({ status }: { status: string }) {
-  const color =
-    status === 'running'
-      ? 'bg-emerald-500'
-      : status === 'failed'
-        ? 'bg-red-500'
-        : status === 'starting' || status === 'stopping' || status === 'installing'
-          ? 'bg-amber-500'
-          : 'bg-neutral-600';
-  return <span className={`inline-block h-2.5 w-2.5 rounded-full ${color}`} title={status} />;
 }
 
 function ActionButtons({
@@ -332,36 +449,33 @@ function ActionButtons({
   const canStop = status === 'running' || status === 'starting';
   return (
     <div className="flex items-center gap-1">
-      <button
-        type="button"
+      <Button
+        size="sm"
         disabled={!canStart || !!actingKey}
+        loading={actingKey === `${id}:start`}
         onClick={() => run(id, 'start')}
-        className="rounded bg-sky-700 px-2 py-1 text-xs text-white hover:bg-sky-600 disabled:opacity-30 disabled:cursor-not-allowed"
       >
-        {actingKey === `${id}:start` ? '…' : '▶'}
-      </button>
-      <button
-        type="button"
+        {ACTION_LABEL.start}
+      </Button>
+      <Button
+        size="sm"
         disabled={!canStop || !!actingKey}
+        loading={actingKey === `${id}:stop`}
         onClick={() => run(id, 'stop')}
-        className="rounded bg-amber-700 px-2 py-1 text-xs text-white hover:bg-amber-600 disabled:opacity-30 disabled:cursor-not-allowed"
       >
-        {actingKey === `${id}:stop` ? '…' : '■'}
-      </button>
-      <button
-        type="button"
+        {ACTION_LABEL.stop}
+      </Button>
+      <Button
+        size="sm"
         disabled={!canStop || !!actingKey}
+        loading={actingKey === `${id}:restart`}
         onClick={() => run(id, 'restart')}
-        className="rounded bg-neutral-700 px-2 py-1 text-xs text-white hover:bg-neutral-600 disabled:opacity-30 disabled:cursor-not-allowed"
       >
-        {actingKey === `${id}:restart` ? '…' : '↻'}
-      </button>
-      <Link
-        href={`/servers/${id}`}
-        className="rounded bg-neutral-800 px-2 py-1 text-xs hover:bg-neutral-700 ml-1"
-      >
-        открыть
-      </Link>
+        {ACTION_LABEL.restart}
+      </Button>
+      <ButtonLink href={`/servers/${id}`} size="sm" variant="plain">
+        Открыть
+      </ButtonLink>
     </div>
   );
 }

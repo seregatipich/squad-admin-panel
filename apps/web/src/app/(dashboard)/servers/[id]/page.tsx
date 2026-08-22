@@ -1,5 +1,4 @@
 'use client';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { A2SIndicator } from '@/components/A2SIndicator';
@@ -11,6 +10,28 @@ import { LiveIndicator } from '@/components/LiveIndicator';
 import { LogConsole, type LogEntry } from '@/components/LogConsole';
 import { ServerLogFiles } from '@/components/ServerLogFiles';
 import { UpdateProgressModal } from '@/components/UpdateProgressModal';
+import {
+  AlertDialog,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardGrid,
+  CardHeader,
+  ChevronDownIcon,
+  GroupedList,
+  GroupedRow,
+  IconButton,
+  InlineBanner,
+  Menu,
+  PageContainer,
+  Skeleton,
+  SkeletonTable,
+  StatTile,
+  StatusBadge,
+  StatusDot,
+  type StatusState,
+} from '@/components/ui';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { nextBackoffMs } from '@/lib/ws-backoff';
 import type { SeedingSummary } from '../seeding-format';
@@ -93,6 +114,44 @@ interface ServerResponse {
 
 const POLL_INTERVAL_MS = 3000;
 
+/**
+ * Состояние контейнера словами и тоном. Английские `running`/`stopped` в
+ * русском интерфейсе не остаются: тон дублируется подписью (§5), а незнакомое
+ * значение показывается как есть, а не молча теряется.
+ */
+const STATUS_VIEW: Record<string, { state: StatusState; label: string }> = {
+  running: { state: 'good', label: 'работает' },
+  starting: { state: 'warn', label: 'запускается' },
+  stopping: { state: 'warn', label: 'останавливается' },
+  installing: { state: 'warn', label: 'устанавливается' },
+  ready: { state: 'idle', label: 'готов к запуску' },
+  stopped: { state: 'idle', label: 'остановлен' },
+  pending: { state: 'idle', label: 'ожидает' },
+  failed: { state: 'crit', label: 'сбой' },
+};
+
+/** Состояние соединения RCON словами — подпись точки в строке «Порт RCON». */
+function rconView(status: RconStatus): { state: StatusState; label: string } {
+  if (status.state === 'connected') return { state: 'good', label: 'подключён' };
+  if (status.state === 'connecting') {
+    const backoff = status.backoffMs ? ` (пауза ${Math.round(status.backoffMs / 1000)} с)` : '';
+    return { state: 'warn', label: `переподключение${backoff}` };
+  }
+  if (status.state === 'not_polled') return { state: 'idle', label: 'сервер не запущен' };
+  return { state: 'crit', label: 'нет связи' };
+}
+
+/**
+ * Операционный экран сервера: то, на что оператор смотрит во время матча.
+ *
+ * Блоки идут по частоте обращения, а не по истории появления: сначала
+ * состояние сервера и карта, затем ростер и чат, затем то, что оператор
+ * отправляет игрокам, и только внизу — служебное (адрес, порты, журналы),
+ * которое читают один раз при настройке.
+ *
+ * `<h1>` с именем сервера принадлежит `layout.tsx`; здесь только заголовки
+ * разделов.
+ */
 export default function ServerDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
@@ -113,6 +172,8 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
     retryInMs: number | null;
   } | null>(null);
   const [forceStopOpen, setForceStopOpen] = useState(false);
+  const [dangerMenuOpen, setDangerMenuOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [updateRunning, setUpdateRunning] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<number>(() => Date.now());
@@ -355,121 +416,179 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
 
   if (err && !data) {
     return (
-      <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">Ошибка: {err}</div>
+      <PageContainer>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить сервер"
+          description={err}
+          action={
+            <Button size="sm" onClick={() => void refresh()}>
+              Повторить
+            </Button>
+          }
+        />
+      </PageContainer>
     );
   }
-  if (!data) return <div className="text-neutral-500">Загрузка…</div>;
+  if (!data) {
+    return (
+      <PageContainer>
+        <Skeleton variant="block" label="Загружается состояние сервера" />
+        <CardGrid cols={4}>
+          <Skeleton variant="card" />
+          <Skeleton variant="card" />
+          <Skeleton variant="card" />
+          <Skeleton variant="card" />
+        </CardGrid>
+        <SkeletonTable rows={6} cols={6} />
+      </PageContainer>
+    );
+  }
 
   const { server, settings, rcon_status, container, host } = data;
   const canStart = server.status !== 'running' && server.status !== 'starting';
   const canStop = server.status === 'running' || server.status === 'starting';
   const startedAt = container?.running ? container.started_at : null;
   const uptimeMs = startedAt ? Math.max(0, now - new Date(startedAt).getTime()) : null;
+  const statusView = STATUS_VIEW[server.status] ?? {
+    state: 'idle' as StatusState,
+    label: server.status,
+  };
+  const rcon = rconView(rcon_status);
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold">{server.display_name}</h1>
-            <StatusBadge status={server.status} />
-            <A2SIndicator a2sStatus={data.a2s_status ?? null} serverStatus={server.status} />
-            <CrashBadge crashLoop={data.crash_loop ?? false} crashCount={data.crash_count ?? 0} />
-            <SeedingBadge serverId={server.id} initial={data.seeding ?? null} />
-          </div>
-          <div className="flex items-center gap-3 text-xs text-neutral-500">
-            <span className="font-mono">{server.id}</span>
-            {uptimeMs != null && startedAt ? (
-              <>
-                <span className="text-neutral-700">·</span>
-                <span title={`Запущен: ${new Date(startedAt).toLocaleString()}`}>
-                  uptime {formatUptime(uptimeMs)}
-                </span>
-              </>
-            ) : null}
-            {container?.restart_count ? (
-              <>
-                <span className="text-neutral-700">·</span>
-                <span title="Счётчик авто-перезапусков Docker">
-                  рестартов: {container.restart_count}
-                </span>
-              </>
-            ) : null}
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <LiveIndicator lastUpdate={lastRefreshedAt} />
-          <Link
-            href={`/servers/${server.id}/configs`}
-            className="text-xs text-sky-400 hover:text-sky-300"
-          >
-            Конфиги →
-          </Link>
-          <Link
-            href={`/servers/${server.id}/rotation`}
-            className="text-xs text-sky-400 hover:text-sky-300"
-          >
-            Ротация →
-          </Link>
-          <Link
-            href={`/servers/${server.id}/map-vote`}
-            className="text-xs text-sky-400 hover:text-sky-300"
-          >
-            Голосование за карту →
-          </Link>
-          <Link
-            href={`/servers/${server.id}/seed-calendar`}
-            className="text-xs text-sky-400 hover:text-sky-300"
-          >
-            Сид-календарь →
-          </Link>
-          <Link
-            href={`/servers/${server.id}/rotation-calendar`}
-            className="text-xs text-sky-400 hover:text-sky-300"
-          >
-            Календарь ротации →
-          </Link>
-          <Link
-            href={`/servers/${server.id}/schedule`}
-            className="text-xs text-sky-400 hover:text-sky-300"
-          >
-            Планировщик →
-          </Link>
-          <Link
-            href={`/servers/${server.id}/settings`}
-            className="text-xs text-sky-400 hover:text-sky-300"
-          >
-            Настройки →
-          </Link>
-          <Link
-            href={`/servers/${server.id}/monitoring`}
-            className="text-xs text-sky-400 hover:text-sky-300"
-          >
-            Мониторинг →
-          </Link>
-          <Link
-            href={`/servers/${server.id}/events`}
-            className="text-xs text-sky-400 hover:text-sky-300"
-          >
-            События →
-          </Link>
-        </div>
-      </header>
-
+    <PageContainer>
       {err ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{err}</div>
+        <InlineBanner
+          tone="crit"
+          title="Данные на экране могли устареть"
+          description={err}
+          action={
+            <Button size="sm" onClick={() => void refresh()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
       <AdminsCfgDriftBanner serverId={server.id} />
 
-      {data.crash_loop && (
-        <div className="mb-4 rounded border border-red-900 bg-red-950 p-3 text-sm text-red-300">
-          Сервер в цикле аварий — автоперезапуск отключён. Проверьте логи и запустите вручную.
-        </div>
-      )}
+      {data.crash_loop ? (
+        <InlineBanner
+          tone="crit"
+          title="Сервер в цикле аварий — автоперезапуск отключён"
+          description="Проверьте журнал контейнера и запустите сервер вручную."
+        />
+      ) : null}
 
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat
+      {/* 1. Состояние и карта — то, ради чего экран открывают во время матча. */}
+      <Card padding="none" as="section">
+        <CardHeader title="Состояние" actions={<LiveIndicator lastUpdate={lastRefreshedAt} />} />
+        <CardBody>
+          <div className="flex flex-wrap items-center gap-3">
+            <StatusBadge state={statusView.state} label={statusView.label} />
+            <A2SIndicator a2sStatus={data.a2s_status ?? null} serverStatus={server.status} />
+            <CrashBadge crashLoop={data.crash_loop ?? false} crashCount={data.crash_count ?? 0} />
+            <SeedingBadge serverId={server.id} initial={data.seeding ?? null} />
+            {uptimeMs != null && startedAt ? (
+              <span className="text-xs text-ink-3" title={new Date(startedAt).toLocaleString()}>
+                В работе {formatUptime(uptimeMs)}
+              </span>
+            ) : null}
+            {container?.restart_count ? (
+              <span className="text-xs text-ink-3" title="Счётчик авто-перезапусков Docker">
+                Перезапусков: {container.restart_count}
+              </span>
+            ) : null}
+          </div>
+        </CardBody>
+        <CardFooter>
+          {/* Опасное действие отодвинуто в правый край и не соседствует с
+              «Рестартом»: промах мышью не должен стоить сервера. */}
+          <div className="mr-auto flex flex-wrap items-center gap-2">
+            <Button
+              variant="primary"
+              onClick={() => action('start')}
+              disabled={!canStart || !!acting}
+              loading={acting === 'start'}
+            >
+              Старт
+            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                onClick={() => action('stop')}
+                disabled={!canStop || !!acting}
+                loading={acting === 'stop'}
+              >
+                Стоп
+              </Button>
+              <IconButton
+                icon={<ChevronDownIcon />}
+                label="Принудительная остановка"
+                disabled={!canStop || !!acting}
+                onClick={() => setForceStopOpen(true)}
+              />
+            </div>
+            <Button
+              onClick={() => action('restart')}
+              disabled={!canStop || !!acting}
+              loading={acting === 'restart'}
+            >
+              Рестарт
+            </Button>
+            {server.status === 'stopped' || updateRunning ? (
+              <Button
+                onClick={async () => {
+                  if (updateRunning) {
+                    setUpdateModalOpen(true);
+                    return;
+                  }
+                  setActing('update');
+                  try {
+                    const r = await fetch(`/api/v1/servers/${id}/update`, {
+                      method: 'POST',
+                      credentials: 'include',
+                    });
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    setUpdateRunning(true);
+                    setUpdateModalOpen(true);
+                  } catch (e) {
+                    setErr((e as Error).message);
+                  } finally {
+                    setActing(null);
+                  }
+                }}
+                disabled={acting !== null}
+              >
+                {acting === 'update'
+                  ? 'Запуск обновления...'
+                  : updateRunning
+                    ? 'Обновление... (открыть лог)'
+                    : 'Обновить игру'}
+              </Button>
+            ) : null}
+          </div>
+          <Menu
+            trigger={{ label: 'Опасная зона' }}
+            open={dangerMenuOpen}
+            onOpenChange={setDangerMenuOpen}
+            align="end"
+            items={[
+              {
+                kind: 'action',
+                label: 'Удалить сервер',
+                hint: 'Файлы на диске будут стёрты',
+                tone: 'destructive',
+                disabled: !!acting,
+                onSelect: () => setDeleteOpen(true),
+              },
+            ]}
+          />
+        </CardFooter>
+      </Card>
+
+      <CardGrid cols={4}>
+        <StatTile
           label="Игроки"
           value={
             rcon_status.player_count != null
@@ -482,8 +601,8 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
               : 'Доступно при подключении RCON'
           }
         />
-        <Stat
-          label="Tickrate"
+        <StatTile
+          label="Тикрейт"
           value={
             rcon_status.tickrate_rt != null
               ? `${rcon_status.tickrate_rt.toFixed(1)} / ${settings?.tickrate ?? '—'}`
@@ -493,16 +612,16 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           }
           hint={
             rcon_status.tickrate_rt != null
-              ? 'Фактический / целевой tickrate'
-              : 'Целевой tickrate (фактический появится в ServerInfo)'
+              ? 'Фактический / целевой тикрейт'
+              : 'Целевой тикрейт (фактический появится в ServerInfo)'
           }
         />
-        <Stat
+        <StatTile
           label="CPU"
           value={container?.cpu_percent != null ? `${container.cpu_percent.toFixed(1)}%` : '—'}
           hint="Нагрузка контейнера Squad"
         />
-        <Stat
+        <StatTile
           label="RAM"
           value={
             container?.mem_used_bytes != null
@@ -512,45 +631,11 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           }
           hint="Потребление памяти контейнером"
         />
-      </section>
-
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400 mb-3">Подключение</h2>
-        {settings ? (
-          <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 font-mono text-xs">
-            <dt className="text-neutral-500">Адрес</dt>
-            <dd>{host?.address ?? '—'}</dd>
-            <dt className="text-neutral-500">Game</dt>
-            <dd>
-              {settings.game_port} <span className="text-neutral-500">UDP</span>
-            </dd>
-            <dt className="text-neutral-500">Query</dt>
-            <dd>
-              {settings.query_port} <span className="text-neutral-500">UDP</span>
-            </dd>
-            <dt className="text-neutral-500">Beacon</dt>
-            <dd>
-              {settings.beacon_port} <span className="text-neutral-500">UDP</span>
-            </dd>
-            <dt className="text-neutral-500">RCON</dt>
-            <dd className="flex items-center gap-2">
-              <span>
-                {settings.rcon_port} <span className="text-neutral-500">TCP</span>
-              </span>
-              <RconDot status={rcon_status} />
-            </dd>
-          </dl>
-        ) : (
-          <div className="text-neutral-500 text-xs">нет настроек</div>
-        )}
-      </section>
+      </CardGrid>
 
       <MapWidget serverId={server.id} canChangeMap={canChangeMap} />
 
-      <BroadcastComposer serverId={server.id} canChat={canChat} />
-
-      <SeedCallButton serverId={server.id} canCall={canChat || canManageServer} />
-
+      {/* 2. Ростер и чат — работа с людьми, которые сейчас на сервере. */}
       <LivePlayers
         serverId={server.id}
         canChat={canChat}
@@ -558,137 +643,96 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         modPermissions={modPermissions}
       />
 
-      <section className="flex flex-wrap items-center gap-2">
-        <ActionButton
-          label="Старт"
-          onClick={() => action('start')}
-          disabled={!canStart || !!acting}
-          loading={acting === 'start'}
-          tone="sky"
-        />
-        <div className="inline-flex">
-          <ActionButton
-            label="Стоп (graceful)"
-            onClick={() => action('stop')}
-            disabled={!canStop || !!acting}
-            loading={acting === 'stop'}
-            tone="amber"
-          />
-          <button
-            type="button"
-            disabled={!canStop || !!acting}
-            onClick={() => setForceStopOpen(true)}
-            className="rounded-l-none rounded-r border-l border-amber-800 bg-amber-600 px-2 py-2 text-sm text-white hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Принудительная остановка"
-          >
-            ▾
-          </button>
-        </div>
-        <ActionButton
-          label="Рестарт"
-          onClick={() => action('restart')}
-          disabled={!canStop || !!acting}
-          loading={acting === 'restart'}
-          tone="neutral"
-        />
-        {(data?.server.status === 'stopped' || updateRunning) && (
-          <button
-            type="button"
-            onClick={async () => {
-              if (updateRunning) {
-                setUpdateModalOpen(true);
-                return;
+      <ChatPanel serverId={id} canBan={canBan} />
+
+      {/* 3. Объявление — то, что оператор отправляет в игру. */}
+      <BroadcastComposer serverId={server.id} canChat={canChat} />
+
+      <SeedCallButton serverId={server.id} canCall={canChat || canManageServer} />
+
+      {/* 4. Служебное: адрес и порты читают один раз при настройке. */}
+      <GroupedList
+        title="Подключение"
+        footnote="Адрес и порты задаются при установке сервера и меняются в его настройках."
+      >
+        {settings ? (
+          <>
+            <GroupedRow
+              label="Адрес"
+              control={<span className="font-mono">{host?.address ?? '—'}</span>}
+            />
+            <GroupedRow
+              label="Игровой порт"
+              description="UDP"
+              control={<span className="font-mono">{settings.game_port}</span>}
+            />
+            <GroupedRow
+              label="Порт запросов"
+              description="UDP"
+              control={<span className="font-mono">{settings.query_port}</span>}
+            />
+            <GroupedRow
+              label="Порт маяка"
+              description="UDP"
+              control={<span className="font-mono">{settings.beacon_port}</span>}
+            />
+            <GroupedRow
+              label="Порт RCON"
+              description="TCP"
+              control={
+                <>
+                  <span className="font-mono">{settings.rcon_port}</span>
+                  <StatusDot state={rcon.state} label={rcon.label} size="sm" />
+                </>
               }
-              setActing('update');
-              try {
-                const r = await fetch(`/api/v1/servers/${id}/update`, {
-                  method: 'POST',
-                  credentials: 'include',
-                });
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                setUpdateRunning(true);
-                setUpdateModalOpen(true);
-              } catch (e) {
-                setErr((e as Error).message);
-              } finally {
-                setActing(null);
-              }
-            }}
-            disabled={acting !== null}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 hover:border-sky-700 hover:text-sky-300 disabled:opacity-40"
-          >
-            {acting === 'update'
-              ? 'Запуск обновления...'
-              : updateRunning
-                ? 'Обновление... (открыть лог)'
-                : 'Обновить игру'}
-          </button>
+            />
+          </>
+        ) : (
+          <GroupedRow label="Настройки не заданы" description="Сервер ещё не установлен" />
         )}
-        <UpdateProgressModal
-          open={updateModalOpen}
-          onOpenChange={setUpdateModalOpen}
-          wsUrl="/api/v1/depot/progress/ws"
-          title="Обновление игры"
-          onDone={() => {
-            setUpdateRunning(false);
-            void refresh();
-          }}
-        />
-        <div className="ml-auto">
-          <DangerMenu
-            disabled={!!acting}
-            onDelete={() => {
-              if (
-                confirm(
-                  'Удалить сервер? Файлы на диске будут стёрты, бэкап .cfg сохранится в Архиве серверов.',
-                )
-              ) {
-                void action('delete');
+      </GroupedList>
+
+      <LogConsole
+        lines={logs}
+        height="32rem"
+        title="Лог контейнера (docker logs)"
+        live={logsLive}
+        errorBanner={
+          logsError && logsEnabled
+            ? {
+                code: logsError.code,
+                reason: logsError.reason,
+                retryInMs: logsError.retryInMs,
+                onRetry: () => reconnectNowRef.current?.(),
               }
-            }}
-            deleting={acting === 'delete'}
-          />
-        </div>
-      </section>
+            : null
+        }
+        emptyText={
+          !logsEnabled
+            ? `Сервер в состоянии «${statusView.label}» — контейнер ещё не создан. Запустите установку, чтобы журнал появился.`
+            : server.status === 'running' || server.status === 'starting'
+              ? 'Подключение к логу контейнера…'
+              : 'Сервер остановлен — здесь будут последние 200 строк после запуска.'
+        }
+      />
 
-      <section>
-        <LogConsole
-          lines={logs}
-          height="32rem"
-          title="Лог контейнера (docker logs)"
-          live={logsLive}
-          errorBanner={
-            logsError && logsEnabled
-              ? {
-                  code: logsError.code,
-                  reason: logsError.reason,
-                  retryInMs: logsError.retryInMs,
-                  onRetry: () => reconnectNowRef.current?.(),
-                }
-              : null
-          }
-          emptyText={
-            !logsEnabled
-              ? `Сервер в состоянии "${server.status}" — контейнер ещё не создан. Запустите установку, чтобы журнал появился.`
-              : server.status === 'running' || server.status === 'starting'
-                ? 'Подключение к логу контейнера…'
-                : 'Сервер остановлен — здесь будут последние 200 строк после запуска.'
-          }
-        />
-      </section>
+      <ServerLogFiles serverId={id} canDownload={canDownloadLogs} />
 
-      <section>
-        <ServerLogFiles serverId={id} canDownload={canDownloadLogs} />
-      </section>
-
-      <section>
-        <ChatPanel serverId={id} canBan={canBan} />
-      </section>
+      <UpdateProgressModal
+        open={updateModalOpen}
+        onOpenChange={setUpdateModalOpen}
+        wsUrl="/api/v1/depot/progress/ws"
+        title="Обновление игры"
+        onDone={() => {
+          setUpdateRunning(false);
+          void refresh();
+        }}
+      />
 
       <ForceStopDialog
         open={forceStopOpen}
         onOpenChange={setForceStopOpen}
-        serverName={data?.server.display_name ?? ''}
+        serverName={server.display_name}
         onConfirm={async () => {
           const r = await fetch(`/api/v1/servers/${id}/force-stop`, {
             method: 'POST',
@@ -698,148 +742,29 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
           void refresh();
         }}
       />
-    </div>
-  );
-}
 
-function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className="rounded border border-neutral-800 bg-neutral-950 p-3" title={hint}>
-      <div className="text-[10px] uppercase tracking-widest text-neutral-500">{label}</div>
-      <div className="mt-1 text-lg font-mono">{value}</div>
-    </div>
-  );
-}
-
-function RconDot({ status }: { status: RconStatus }) {
-  const color =
-    status.state === 'connected'
-      ? 'bg-green-500'
-      : status.state === 'connecting'
-        ? 'bg-amber-500'
-        : 'bg-neutral-600';
-  const label =
-    status.state === 'not_polled'
-      ? 'сервер не запущен'
-      : status.state === 'connecting'
-        ? `переподключение${status.backoffMs ? ` (backoff ${Math.round(status.backoffMs / 1000)}с)` : ''}`
-        : status.state;
-  return (
-    <span
-      className="flex items-center gap-1.5 text-[11px] text-neutral-400"
-      title={`RCON: ${label}`}
-    >
-      <span className={`inline-block h-1.5 w-1.5 rounded-full ${color}`} />
-      <span>{status.state === 'connected' ? 'connected' : label}</span>
-    </span>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    running: 'bg-green-700 text-green-100',
-    starting: 'bg-amber-700 text-amber-100',
-    stopping: 'bg-amber-700 text-amber-100',
-    ready: 'bg-sky-700 text-sky-100',
-    stopped: 'bg-neutral-800 text-neutral-300',
-    installing: 'bg-amber-700 text-amber-100',
-    failed: 'bg-red-800 text-red-100',
-    pending: 'bg-neutral-800 text-neutral-300',
-  };
-  return (
-    <span
-      className={`rounded px-2 py-0.5 text-xs font-mono uppercase tracking-widest ${colors[status] ?? 'bg-neutral-800 text-neutral-300'}`}
-    >
-      {status}
-    </span>
-  );
-}
-
-function ActionButton(props: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  loading?: boolean;
-  tone: 'sky' | 'amber' | 'neutral' | 'red';
-}) {
-  const toneClass = {
-    sky: 'bg-sky-600 hover:bg-sky-500',
-    amber: 'bg-amber-600 hover:bg-amber-500',
-    neutral: 'bg-neutral-700 hover:bg-neutral-600',
-    red: 'bg-red-700 hover:bg-red-600',
-  }[props.tone];
-  return (
-    <button
-      type="button"
-      disabled={props.disabled}
-      onClick={props.onClick}
-      className={`rounded px-4 py-2 text-sm text-white ${toneClass} disabled:opacity-40 disabled:cursor-not-allowed`}
-    >
-      {props.loading ? '…' : props.label}
-    </button>
-  );
-}
-
-function DangerMenu({
-  disabled,
-  onDelete,
-  deleting,
-}: {
-  disabled: boolean;
-  onDelete: () => void;
-  deleting: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onDocClick);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDocClick);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => setOpen((v) => !v)}
-        className="rounded border border-neutral-700 px-3 py-2 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-40"
-        aria-haspopup="menu"
-        aria-expanded={open}
-      >
-        Опасная зона ▾
-      </button>
-      {open ? (
-        <div
-          role="menu"
-          className="absolute right-0 top-full z-10 mt-1 min-w-[12rem] rounded border border-neutral-700 bg-neutral-900 shadow-lg"
-        >
-          <button
-            type="button"
-            role="menuitem"
-            disabled={deleting}
-            onClick={() => {
-              setOpen(false);
-              onDelete();
-            }}
-            className="block w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-red-950 disabled:opacity-40"
-          >
-            {deleting ? 'Удаление…' : 'Удалить сервер'}
-          </button>
-        </div>
-      ) : null}
-    </div>
+      {/* Удаление стирает файлы сервера с диска, поэтому здесь стоит ввод
+          точного имени — необратимую операцию нельзя запустить не глядя. */}
+      <AlertDialog
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        title="Удалить сервер"
+        body="Файлы сервера на диске будут стёрты. Резервная копия .cfg останется в архиве серверов."
+        confirmLabel="Удалить сервер"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={acting === 'delete'}
+        challenge={{
+          expected: server.display_name,
+          label: 'Введите имя сервера',
+          hint: `Ожидается: ${server.display_name}`,
+        }}
+        onConfirm={async () => {
+          await action('delete');
+          setDeleteOpen(false);
+        }}
+      />
+    </PageContainer>
   );
 }
 

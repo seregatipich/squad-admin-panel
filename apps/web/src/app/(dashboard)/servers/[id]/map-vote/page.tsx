@@ -2,6 +2,29 @@
 
 import { use, useCallback, useEffect, useState } from 'react';
 import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Checkbox,
+  EmptyState,
+  GroupedList,
+  GroupedRow,
+  InlineBanner,
+  PageContainer,
+  Select,
+  Skeleton,
+  Switch,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  TextInput,
+  Th,
+} from '@/components/ui';
+import {
   addCandidate,
   buildCandidatesPayload,
   buildSettingsPayload,
@@ -191,276 +214,327 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
   }
 
   if (loading) {
-    return <div className="text-neutral-500">Загрузка…</div>;
+    return (
+      <PageContainer width="wide">
+        <Skeleton variant="card" count={3} label="Голосование за карту загружается" />
+      </PageContainer>
+    );
   }
 
   return (
-    <div className="max-w-4xl space-y-4 pb-20">
-      <header>
-        <h1 className="text-xl font-semibold">Голосование за карту</h1>
-        <p className="mt-1 text-sm text-neutral-400">
-          Автовыбор следующего слоя: панель выбирает из пула кандидатов и отправляет{' '}
-          <span className="font-mono">AdminSetNextLayer</span> раз в матч.
-        </p>
-      </header>
+    <PageContainer width="wide">
+      <p className="text-xs text-ink-3">
+        Автовыбор следующего слоя: панель выбирает из пула кандидатов и отправляет{' '}
+        <span className="font-mono">AdminSetNextLayer</span> раз в матч.
+      </p>
 
       {err ? (
-        <div className="rounded border border-red-900 bg-red-950 px-3 py-2 text-sm">{err}</div>
+        <InlineBanner
+          tone="crit"
+          title={err}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
-      {msg ? (
-        <div className="rounded border border-emerald-900 bg-emerald-950 px-3 py-2 text-sm text-emerald-200">
-          {msg}
-        </div>
-      ) : null}
+      {msg ? <InlineBanner tone="good" title={msg} /> : null}
 
       {!canEdit ? (
-        <div className="rounded border border-neutral-800 bg-neutral-900/60 px-3 py-2 text-xs text-neutral-400">
-          Только просмотр — нужна squad-привилегия changemap.
-        </div>
+        <InlineBanner tone="info" title="Только просмотр — нужна squad-привилегия changemap." />
       ) : null}
 
-      <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-sm font-semibold text-neutral-300">Настройки</h2>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={form.enabled}
-            disabled={!canEdit}
-            onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))}
+      <div className="space-y-3">
+        <GroupedList
+          title="Настройки"
+          footnote="Кулдаун считается в матчах: слой или карта не повторяются, пока не пройдёт указанное число матчей."
+        >
+          <GroupedRow
+            label="Автовыбор включён"
+            description={form.enabled ? 'Панель выбирает слой сама' : 'Выбор слоя остаётся ручным'}
+            control={
+              <Switch
+                checked={form.enabled}
+                disabled={!canEdit}
+                label="Автовыбор включён"
+                onChange={(next) => setForm((f) => ({ ...f, enabled: next }))}
+              />
+            }
           />
-          Автовыбор включён
-        </label>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <label className="space-y-1 text-xs text-neutral-400">
-            Правило выбора
-            <select
-              value={form.selection}
-              disabled={!canEdit}
-              onChange={(e) =>
-                setForm((f) => ({
-                  ...f,
-                  selection: e.target.value as MapVoteSettingsForm['selection'],
-                }))
-              }
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm text-neutral-200"
-            >
-              <option value="weighted_random">Взвешенный случайный</option>
-              <option value="least_recently_played">Давно не игравшийся</option>
-            </select>
-          </label>
-          <label className="space-y-1 text-xs text-neutral-400">
-            Кулдаун слоя (матчей)
-            <input
-              type="number"
-              value={form.layerCooldown}
-              disabled={!canEdit}
-              onChange={(e) => setForm((f) => ({ ...f, layerCooldown: Number(e.target.value) }))}
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm text-neutral-200"
-            />
-          </label>
-          <label className="space-y-1 text-xs text-neutral-400">
-            Кулдаун карты (матчей)
-            <input
-              type="number"
-              value={form.mapCooldown}
-              disabled={!canEdit}
-              onChange={(e) => setForm((f) => ({ ...f, mapCooldown: Number(e.target.value) }))}
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm text-neutral-200"
-            />
-          </label>
-        </div>
-        <label className="block space-y-1 text-xs text-neutral-400">
-          Шаблон объявления (необязательно)
-          <input
-            type="text"
-            value={form.broadcastTemplate}
-            disabled={!canEdit}
-            placeholder="Следующая карта: {layer}"
-            onChange={(e) => setForm((f) => ({ ...f, broadcastTemplate: e.target.value }))}
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm text-neutral-200"
+          <GroupedRow
+            label="Правило выбора"
+            control={
+              <div className="w-56">
+                <Select
+                  value={form.selection}
+                  disabled={!canEdit}
+                  aria-label="Правило выбора"
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      selection: e.target.value as MapVoteSettingsForm['selection'],
+                    }))
+                  }
+                >
+                  <option value="weighted_random">Взвешенный случайный</option>
+                  <option value="least_recently_played">Давно не игравшийся</option>
+                </Select>
+              </div>
+            }
           />
-        </label>
+          <GroupedRow
+            label="Кулдаун слоя"
+            description="В матчах"
+            control={
+              <div className="w-24">
+                <TextInput
+                  type="number"
+                  value={form.layerCooldown}
+                  disabled={!canEdit}
+                  aria-label="Кулдаун слоя (матчей)"
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, layerCooldown: Number(e.target.value) }))
+                  }
+                />
+              </div>
+            }
+          />
+          <GroupedRow
+            label="Кулдаун карты"
+            description="В матчах"
+            control={
+              <div className="w-24">
+                <TextInput
+                  type="number"
+                  value={form.mapCooldown}
+                  disabled={!canEdit}
+                  aria-label="Кулдаун карты (матчей)"
+                  onChange={(e) => setForm((f) => ({ ...f, mapCooldown: Number(e.target.value) }))}
+                />
+              </div>
+            }
+          />
+          <GroupedRow
+            label="Шаблон объявления"
+            description="Необязательно"
+            control={
+              <div className="w-72">
+                <TextInput
+                  type="text"
+                  value={form.broadcastTemplate}
+                  disabled={!canEdit}
+                  aria-label="Шаблон объявления"
+                  placeholder="Следующая карта: {layer}"
+                  onChange={(e) => setForm((f) => ({ ...f, broadcastTemplate: e.target.value }))}
+                />
+              </div>
+            }
+          />
+        </GroupedList>
         {canEdit ? (
-          <button
-            type="button"
-            onClick={saveSettings}
-            disabled={saving}
-            className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {saving ? 'Сохраняю…' : 'Сохранить настройки'}
-          </button>
+          <div className="flex justify-end">
+            <Button variant="primary" onClick={saveSettings} loading={saving}>
+              Сохранить настройки
+            </Button>
+          </div>
         ) : null}
-      </section>
+      </div>
 
-      <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-sm font-semibold text-neutral-300">Кандидаты</h2>
-        <ul className="space-y-2" data-testid="candidates-list">
+      <Card padding="none">
+        <CardHeader title="Кандидаты" count={candidates.length} />
+        <ul className="divide-y divide-line" data-testid="candidates-list">
           {candidates.length === 0 ? (
-            <li className="rounded border border-neutral-800 bg-neutral-950 px-3 py-4 text-center text-sm text-neutral-500">
-              Пул кандидатов пуст.
+            <li>
+              <EmptyState
+                title="Пул кандидатов пуст"
+                description="Добавьте слои из каталога — панель выбирает следующую карту только из этого списка."
+              />
             </li>
           ) : null}
           {candidates.map((candidate, index) => (
             <li
               key={candidate.layer}
-              className="flex items-center justify-between gap-3 rounded border border-neutral-800 bg-neutral-950 px-3 py-2"
+              className="flex flex-wrap items-center justify-between gap-3 px-4 py-2"
             >
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-sm">{candidate.layer}</span>
-                  {candidate.deprecated ? (
-                    <span className="rounded bg-amber-800 px-1 py-[1px] text-[10px] uppercase tracking-widest text-amber-100">
-                      Устаревший
-                    </span>
-                  ) : null}
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-[13px] text-ink">{candidate.layer}</span>
+                  {candidate.deprecated ? <Badge tone="warn">Устаревший</Badge> : null}
                 </div>
                 {candidate.map ? (
-                  <div className="text-xs text-neutral-500">
+                  <div className="text-xs text-ink-3">
                     {candidate.map} · {candidate.gamemode}
                   </div>
                 ) : null}
               </div>
-              <div className="flex items-center gap-3">
-                <label className="flex items-center gap-1 text-xs text-neutral-400">
-                  Вес
-                  <input
+              <div className="flex shrink-0 items-center gap-3">
+                <div className="w-20">
+                  <TextInput
                     type="number"
                     value={candidate.weight}
                     disabled={!canEdit}
                     aria-label={`Вес ${candidate.layer}`}
                     onChange={(e) => updateCandidate(index, { weight: Number(e.target.value) })}
-                    className="w-16 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm text-neutral-200"
                   />
-                </label>
-                <label className="flex items-center gap-1 text-xs text-neutral-400">
-                  <input
-                    type="checkbox"
-                    checked={candidate.enabled}
-                    disabled={!canEdit}
-                    onChange={(e) => updateCandidate(index, { enabled: e.target.checked })}
-                  />
-                  вкл
-                </label>
+                </div>
+                <Checkbox
+                  label="Участвует"
+                  checked={candidate.enabled}
+                  disabled={!canEdit}
+                  onChange={(e) => updateCandidate(index, { enabled: e.target.checked })}
+                />
                 {canEdit ? (
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => setCandidates((prev) => removeCandidateAt(prev, index))}
-                    className="rounded px-2 py-1 text-xs text-red-400 hover:bg-neutral-800"
                   >
                     Удалить
-                  </button>
+                  </Button>
                 ) : null}
               </div>
             </li>
           ))}
         </ul>
         {canEdit ? (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <select
-                value={selectedLayer}
-                onChange={(e) => setSelectedLayer(e.target.value)}
-                aria-label="Слой из каталога"
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm text-neutral-200"
-              >
-                <option value="">Выберите слой…</option>
-                {pool.map((layer) => (
-                  <option key={layer.id} value={layer.name}>
-                    {layer.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={handleAddCandidate}
-                disabled={selectedLayer === ''}
-                className="rounded border border-sky-900 px-3 py-1.5 text-sm text-sky-300 hover:border-sky-700 disabled:opacity-40"
-              >
+          <CardBody className="space-y-3 border-t border-line">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="w-64">
+                <Select
+                  value={selectedLayer}
+                  onChange={(e) => setSelectedLayer(e.target.value)}
+                  aria-label="Слой из каталога"
+                >
+                  <option value="">Выберите слой…</option>
+                  {pool.map((layer) => (
+                    <option key={layer.id} value={layer.name}>
+                      {layer.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <Button onClick={handleAddCandidate} disabled={selectedLayer === ''}>
                 Добавить слой
-              </button>
+              </Button>
             </div>
-            <label className="flex items-center gap-2 text-xs text-neutral-400">
-              <input
-                type="checkbox"
-                checked={confirmDeprecated}
-                onChange={(e) => setConfirmDeprecated(e.target.checked)}
-              />
-              подтвердить устаревшие слои
-            </label>
-            <button
-              type="button"
-              onClick={saveCandidates}
-              disabled={saving}
-              className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {saving ? 'Сохраняю…' : 'Сохранить кандидатов'}
-            </button>
-          </div>
+            <Checkbox
+              label="Подтвердить устаревшие слои"
+              checked={confirmDeprecated}
+              onChange={(e) => setConfirmDeprecated(e.target.checked)}
+            />
+            <div className="flex justify-end">
+              <Button variant="primary" onClick={saveCandidates} loading={saving}>
+                Сохранить кандидатов
+              </Button>
+            </div>
+          </CardBody>
         ) : null}
-      </section>
+      </Card>
 
-      <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-sm font-semibold text-neutral-300">Предпросмотр выбора</h2>
-        {preview ? (
-          <div className="space-y-2 text-sm">
-            <div>
-              Будет выбран:{' '}
-              {preview.would_pick ? (
-                <span className="font-mono text-emerald-300">{preview.would_pick}</span>
-              ) : (
-                <span className="text-neutral-500">нет подходящих кандидатов</span>
-              )}
+      <Card padding="none">
+        <CardHeader
+          title="Предпросмотр выбора"
+          description={
+            preview?.would_pick
+              ? `Сейчас был бы выбран слой ${preview.would_pick}`
+              : 'Подходящих кандидатов нет'
+          }
+        />
+        <CardBody className="space-y-4">
+          {preview && preview.eligible.length > 0 ? (
+            <div data-testid="preview-eligible">
+              <Table ariaLabel="Кандидаты, участвующие в выборе">
+                <TableHead sticky={false}>
+                  <TableRow>
+                    <Th>Слой</Th>
+                    <Th align="right">Вес</Th>
+                    <Th align="right">Вероятность</Th>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {preview.eligible.map((row) => (
+                    <TableRow key={row.layer}>
+                      <Td>
+                        <span className="font-mono">{row.layer}</span>
+                      </Td>
+                      <Td numeric>{row.weight}</Td>
+                      <Td numeric>{Math.round(row.probability * 100)}%</Td>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </div>
-            {preview.eligible.length > 0 ? (
-              <ul className="space-y-1 text-xs text-neutral-400" data-testid="preview-eligible">
-                {preview.eligible.map((row) => (
-                  <li key={row.layer}>
-                    <span className="font-mono">{row.layer}</span> — вес {row.weight},{' '}
-                    {Math.round(row.probability * 100)}%
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            {preview.excluded.length > 0 ? (
-              <ul className="space-y-1 text-xs text-neutral-500" data-testid="preview-excluded">
-                {preview.excluded.map((row) => (
-                  <li key={row.layer}>
-                    <span className="font-mono">{row.layer}</span> — исключён (
-                    {EXCLUSION_LABELS[row.reason] ?? row.reason})
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        ) : (
-          <div className="text-sm text-neutral-500">Нет данных.</div>
-        )}
-      </section>
+          ) : null}
+          {preview && preview.excluded.length > 0 ? (
+            <div data-testid="preview-excluded">
+              <Table ariaLabel="Кандидаты, исключённые из выбора">
+                <TableHead sticky={false}>
+                  <TableRow>
+                    <Th>Слой</Th>
+                    <Th>Почему исключён</Th>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {preview.excluded.map((row) => (
+                    <TableRow key={row.layer}>
+                      <Td>
+                        <span className="font-mono">{row.layer}</span>
+                      </Td>
+                      <Td>{EXCLUSION_LABELS[row.reason] ?? row.reason}</Td>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : null}
+          {!preview ? (
+            <EmptyState
+              title="Предпросмотр недоступен"
+              description="Панель ещё не рассчитала, какой слой был бы выбран следующим."
+            />
+          ) : null}
+        </CardBody>
+      </Card>
 
-      <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-sm font-semibold text-neutral-300">История выборов</h2>
+      <Card padding="none">
+        <CardHeader title="История выборов" count={picks.length} />
         {picks.length === 0 ? (
-          <div className="text-sm text-neutral-500">Выборов ещё не было.</div>
+          <EmptyState
+            title="Выборов ещё не было"
+            description="Как только панель выберет слой, запись появится здесь."
+          />
         ) : (
-          <ul className="space-y-1 text-xs" data-testid="picks-list">
-            {picks.map((pick) => (
-              <li key={pick.id} className="flex items-center gap-2 text-neutral-400">
-                <span className="font-mono text-neutral-200">{pick.layer}</span>
-                <span>{new Date(pick.created_at).toLocaleString('ru-RU')}</span>
-                {pick.applied ? (
-                  <span className="rounded bg-emerald-900/60 px-1 py-[1px] text-[10px] uppercase tracking-widest text-emerald-200">
-                    Применён
-                  </span>
-                ) : (
-                  <span className="rounded bg-amber-900/60 px-1 py-[1px] text-[10px] uppercase tracking-widest text-amber-200">
-                    {pick.failure_reason ?? 'не применён'}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
+          <div data-testid="picks-list">
+            <Table ariaLabel="История автоматических выборов слоя">
+              <TableHead sticky={false}>
+                <TableRow>
+                  <Th>Слой</Th>
+                  <Th>Когда</Th>
+                  <Th>Результат</Th>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {picks.map((pick) => (
+                  <TableRow key={pick.id}>
+                    <Td>
+                      <span className="font-mono">{pick.layer}</span>
+                    </Td>
+                    <Td>{new Date(pick.created_at).toLocaleString('ru-RU')}</Td>
+                    <Td>
+                      {pick.applied ? (
+                        <Badge tone="good">Применён</Badge>
+                      ) : (
+                        <Badge tone="warn">{pick.failure_reason ?? 'не применён'}</Badge>
+                      )}
+                    </Td>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
-      </section>
-    </div>
+      </Card>
+    </PageContainer>
   );
 }

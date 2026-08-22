@@ -4,6 +4,27 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import {
+  Badge,
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  FieldRow,
+  InlineBanner,
+  Modal,
+  PageContainer,
+  PageHeader,
+  Pagination,
+  SegmentedControl,
+  Select,
+  Skeleton,
+  StatusBadge,
+  type StatusState,
+  Textarea,
+  TextInput,
+  Toolbar,
+} from '@/components/ui';
 import type {
   ReportEvidenceItem,
   ReportListItem,
@@ -30,18 +51,14 @@ import {
   parseFilters,
   playerLabel,
   REASON_MAX,
-  REPORTER_SPAM_BADGE_CLASS,
   REPORTER_SPAM_LABEL,
-  REPORTER_TRUSTED_BADGE_CLASS,
   REPORTER_TRUSTED_LABEL,
   type ReportActionType,
   type ReporterNotifyTemplate,
   type ReportTargetGroup,
   recidivistBadgeLabel,
-  STATUS_BADGE_CLASSES,
   STATUS_FILTERS,
   STATUS_LABELS,
-  TARGET_RECIDIVIST_BADGE_CLASS,
   totalPages,
 } from './helpers';
 import { ReportsAnalytics } from './ReportsAnalytics';
@@ -84,6 +101,26 @@ interface BanAltWarning {
   confirmed: BanAltWarningItem[];
   candidates: BanAltWarningItem[];
 }
+
+/**
+ * Состояние жалобы в терминах индикаторов дизайн-системы.
+ *
+ * `in_review` и `rejected` делят тон `idle`: ни одна из этих жалоб не ждёт
+ * действия оператора прямо сейчас, а различает их подпись бейджа — состояние
+ * никогда не кодируется одним цветом (§5).
+ */
+const STATUS_STATE: Record<ReportStatus, StatusState> = {
+  pending: 'warn',
+  in_review: 'idle',
+  resolved: 'good',
+  rejected: 'idle',
+};
+
+const PAGINATION_LABELS = {
+  previous: 'Назад',
+  next: 'Вперёд',
+  page: (page: number, of: number) => `Страница ${page} из ${of}`,
+};
 
 function upsertReport(list: ReportListItem[], incoming: ReportListItem): ReportListItem[] {
   const index = list.findIndex((report) => report.id === incoming.id);
@@ -183,78 +220,83 @@ export function ReportsBrowser() {
   const showGroups = filters.status === 'pending' && multiGroups.length > 0;
   const renderedGroupTargets = new Set<string>();
 
+  // Аналитике нужна вся ширина операционного экрана, очереди карточек — нет:
+  // строка текста жалобы на 1600px читается хуже, чем на 1150px.
   return (
-    <div className="space-y-6">
-      <div className="flex max-w-4xl items-center justify-between gap-3">
-        <div className="flex items-baseline gap-4">
-          <h1 className="text-2xl font-semibold">Жалобы</h1>
-          <div className="flex gap-1">
-            <button
-              type="button"
-              onClick={() => setView('queue')}
-              className={`rounded px-2 py-0.5 text-xs ${
-                view === 'queue'
-                  ? 'bg-neutral-800 text-neutral-100'
-                  : 'text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              Очередь
-            </button>
-            <button
-              type="button"
-              onClick={() => setView('analytics')}
-              className={`rounded px-2 py-0.5 text-xs ${
-                view === 'analytics'
-                  ? 'bg-neutral-800 text-neutral-100'
-                  : 'text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              Аналитика
-            </button>
-          </div>
-        </div>
-        <LiveIndicator lastUpdate={lastUpdate} />
-      </div>
+    <PageContainer width={view === 'analytics' ? 'full' : 'wide'}>
+      <PageHeader
+        title="Жалобы"
+        subtitle="Очередь модерации жалоб игроков, отправленных из игры или через панель."
+        status={<LiveIndicator lastUpdate={lastUpdate} />}
+        actions={
+          <SegmentedControl
+            ariaLabel="Представление жалоб"
+            value={view}
+            onChange={(value) => setView(value as 'queue' | 'analytics')}
+            items={[
+              { value: 'queue', label: 'Очередь' },
+              { value: 'analytics', label: 'Аналитика' },
+            ]}
+          />
+        }
+      />
 
       {view === 'analytics' ? <ReportsAnalytics /> : null}
 
       {view !== 'queue' ? null : (
-        <div className="max-w-4xl space-y-6">
-          <p className="text-sm text-neutral-400">
-            Очередь модерации жалоб игроков, отправленных из игры или через панель.
-          </p>
+        <>
+          <Toolbar
+            filters={
+              <SegmentedControl
+                ariaLabel="Статус жалобы"
+                value={filters.status}
+                onChange={(value) => navigate({ status: value as '' | ReportStatus })}
+                items={STATUS_FILTERS.map((filter) => ({
+                  value: filter.value,
+                  label: filter.label,
+                }))}
+              />
+            }
+            summary={`Найдено: ${total}`}
+          />
 
           {error ? (
-            <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-              Ошибка: {error}
-            </div>
+            <InlineBanner
+              tone="crit"
+              title="Не удалось загрузить жалобы"
+              description={error}
+              action={
+                <Button size="sm" onClick={() => void load()}>
+                  Повторить
+                </Button>
+              }
+            />
           ) : null}
 
-          <div className="flex gap-1">
-            {STATUS_FILTERS.map((filter) => (
-              <button
-                key={filter.value || 'all'}
-                type="button"
-                onClick={() => navigate({ status: filter.value })}
-                className={`rounded px-2 py-0.5 text-xs ${
-                  filters.status === filter.value
-                    ? 'bg-neutral-800 text-neutral-100'
-                    : 'text-neutral-400 hover:text-neutral-200'
-                }`}
-              >
-                {filter.label}
-              </button>
-            ))}
-          </div>
-
           {loading ? (
-            <div className="py-8 text-center text-sm text-neutral-500">Загрузка…</div>
+            <Skeleton variant="card" count={3} label="Загрузка жалоб" />
           ) : reports.length === 0 ? (
-            <div className="rounded border border-dashed border-neutral-800 py-12 text-center text-sm text-neutral-500">
-              Жалоб не найдено.
-            </div>
+            <Card padding="none">
+              {filters.status ? (
+                <EmptyState
+                  variant="filtered"
+                  title="Жалоб не найдено"
+                  description="По выбранному статусу жалоб нет."
+                  action={
+                    <Button size="sm" onClick={() => navigate({ status: '' })}>
+                      Сбросить фильтр
+                    </Button>
+                  }
+                />
+              ) : (
+                <EmptyState
+                  title="Жалоб нет"
+                  description="Жалобы игроков появятся здесь сразу после отправки из игры или через панель."
+                />
+              )}
+            </Card>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-4">
               {reports.map((report) => {
                 if (
                   showGroups &&
@@ -288,34 +330,18 @@ export function ReportsBrowser() {
             </div>
           )}
 
-          {!loading && reports.length > 0 ? (
-            <div className="flex items-center justify-between text-xs text-neutral-400">
-              <span>
-                Страница {filters.page} из {pages} ({total})
-              </span>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={filters.page <= 1}
-                  onClick={() => navigate({ page: filters.page - 1 })}
-                  className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-40"
-                >
-                  Назад
-                </button>
-                <button
-                  type="button"
-                  disabled={filters.page >= pages}
-                  onClick={() => navigate({ page: filters.page + 1 })}
-                  className="rounded border border-neutral-800 px-3 py-1 hover:border-neutral-600 disabled:opacity-40"
-                >
-                  Вперёд
-                </button>
-              </div>
-            </div>
+          {!loading && reports.length > 0 && pages > 1 ? (
+            <Pagination
+              page={filters.page}
+              pageCount={pages}
+              onChange={(page) => navigate({ page })}
+              labels={PAGINATION_LABELS}
+              allowJump
+            />
           ) : null}
-        </div>
+        </>
       )}
-    </div>
+    </PageContainer>
   );
 }
 
@@ -324,6 +350,10 @@ export function ReportsBrowser() {
  * groups every pending/in-review report against one target under a single
  * "Закрыть группу" action that resolves them all in one request, each still
  * getting its own audit entry server-side.
+ *
+ * Заметка закрытия спрашивается в модальном окне, а не через `window.prompt`:
+ * системный запрос не поддаётся стилю, не показывает, какую именно группу
+ * закрывают, и в браузере может быть отключён пользователем целиком.
  */
 function ReportGroupBlock({
   group,
@@ -336,13 +366,16 @@ function ReportGroupBlock({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [askNote, setAskNote] = useState(false);
+  const [note, setNote] = useState('');
+  const [noteError, setNoteError] = useState<string | null>(null);
+
+  const targetLabel = playerLabel(group.target_player_id, group.target_name);
 
   async function closeGroup() {
-    const note = window.prompt('Заметка для закрытия группы жалоб (обязательна):', '');
-    if (note === null) return;
     const trimmed = note.trim();
     if (!trimmed) {
-      setError('Нужна заметка для закрытия группы.');
+      setNoteError('Нужна заметка для закрытия группы.');
       return;
     }
     setBusy(true);
@@ -362,6 +395,8 @@ function ReportGroupBlock({
         const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
         throw new Error(`HTTP ${res.status}: ${body.error ?? 'unknown'}`);
       }
+      setAskNote(false);
+      setNote('');
       onSaved();
     } catch (e) {
       setError((e as Error).message);
@@ -371,30 +406,75 @@ function ReportGroupBlock({
   }
 
   return (
-    <div className="rounded border border-amber-900/60 bg-amber-950/10 p-3 space-y-3">
+    /* Поверхность предупреждающего тона, а не `Card`: тон карточки задаётся
+       её собственными `border-line`/`bg-surface`, и переопределение тех же
+       свойств утилитами Tailwind разрешается порядком правил в готовом CSS,
+       а не порядком классов здесь. */
+    <section className="space-y-3 rounded-card border border-warn/40 bg-warn/10 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-medium text-amber-200">
-          {group.reports.length} жалоб на игрока{' '}
-          {playerLabel(group.target_player_id, group.target_name)}
-        </h3>
+        <h2 className="text-[13px] font-semibold text-ink">
+          {group.reports.length} жалоб на игрока {targetLabel}
+        </h2>
         {canHandle ? (
-          <button
-            type="button"
-            onClick={closeGroup}
-            disabled={busy}
-            className="rounded border border-amber-800 px-3 py-1 text-xs text-amber-300 hover:border-amber-600 disabled:opacity-40"
+          <Button
+            size="sm"
+            onClick={() => {
+              setNoteError(null);
+              setAskNote(true);
+            }}
           >
-            {busy ? 'Закрытие…' : 'Закрыть группу'}
-          </button>
+            Закрыть группу
+          </Button>
         ) : null}
       </div>
-      {error ? <p className="text-xs text-red-400">{error}</p> : null}
+
+      {error ? <InlineBanner tone="crit" title="Группа не закрыта" description={error} /> : null}
+
       <div className="space-y-3">
         {group.reports.map((report) => (
           <ReportCard key={report.id} report={report} canHandle={canHandle} onSaved={onSaved} />
         ))}
       </div>
-    </div>
+
+      {askNote ? (
+        <Modal
+          open
+          onClose={() => setAskNote(false)}
+          title="Закрыть группу жалоб"
+          description={`Все жалобы на игрока ${targetLabel} будут помечены решёнными.`}
+          size="sm"
+          closeLabel="Отмена"
+          dismissible={!busy}
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setAskNote(false)} disabled={busy}>
+                Отмена
+              </Button>
+              <Button variant="primary" onClick={closeGroup} loading={busy}>
+                Закрыть группу
+              </Button>
+            </>
+          }
+        >
+          <FieldRow
+            label="Заметка для закрытия группы"
+            hint="Останется в журнале по каждой жалобе группы."
+            error={noteError ?? undefined}
+            required
+          >
+            <Textarea
+              value={note}
+              maxLength={NOTE_MAX}
+              invalid={Boolean(noteError)}
+              onChange={(event) => {
+                setNote(event.target.value);
+                setNoteError(null);
+              }}
+            />
+          </FieldRow>
+        </Modal>
+      ) : null}
+    </section>
   );
 }
 
@@ -583,157 +663,119 @@ function ReportCard({
   }
 
   return (
-    <div className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
+    <Card as="article" className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-xs text-neutral-500">
-          <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-neutral-300">
-            {report.server_slug ?? report.server_name ?? report.server_id.slice(0, 8)}
-          </span>
+        <div className="flex items-center gap-2 text-xs text-ink-3">
+          <Badge>{report.server_slug ?? report.server_name ?? report.server_id.slice(0, 8)}</Badge>
           <span>{formatDateTime(report.created_at)}</span>
         </div>
         <div className="flex items-center gap-2">
           {report.evidence.length > 0 ? (
-            <span
-              className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-300"
-              title="Есть вложения"
-            >
-              {evidenceBadgeLabel(report.evidence)}
-            </span>
+            <Badge title="Есть вложения">{evidenceBadgeLabel(report.evidence)}</Badge>
           ) : null}
-          <span className={`rounded px-2 py-0.5 text-xs ${STATUS_BADGE_CLASSES[report.status]}`}>
-            {STATUS_LABELS[report.status]}
-          </span>
+          <StatusBadge
+            state={STATUS_STATE[report.status]}
+            label={STATUS_LABELS[report.status]}
+            size="sm"
+          />
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-1.5 text-sm">
+      {/* Пара «кто на кого» — это и есть заголовок карточки: он даёт блоку имя
+          в дереве заголовков и подчиняет себе «Доказательства» уровнем ниже. */}
+      <h2 className="flex flex-wrap items-center gap-1.5 text-[13px] font-semibold">
         <PlayerRef id={report.reporter_player_id} name={report.reporter_name} />
-        {report.reporter_trusted ? (
-          <span className={`rounded px-1.5 py-0.5 text-[10px] ${REPORTER_TRUSTED_BADGE_CLASS}`}>
-            {REPORTER_TRUSTED_LABEL}
-          </span>
-        ) : null}
-        {report.reporter_spam_flagged ? (
-          <span className={`rounded px-1.5 py-0.5 text-[10px] ${REPORTER_SPAM_BADGE_CLASS}`}>
-            {REPORTER_SPAM_LABEL}
-          </span>
-        ) : null}
-        <span className="mx-1 text-neutral-500">→</span>
+        {report.reporter_trusted ? <Badge tone="good">{REPORTER_TRUSTED_LABEL}</Badge> : null}
+        {report.reporter_spam_flagged ? <Badge tone="crit">{REPORTER_SPAM_LABEL}</Badge> : null}
+        <span aria-hidden="true" className="mx-1 font-normal text-ink-3">
+          →
+        </span>
+        <span className="sr-only">жалуется на</span>
         <PlayerRef
           id={report.target_player_id}
           name={report.target_name}
           fallbackRaw={report.target_raw}
         />
         {isRecidivist(report.target_report_count_90d ?? 0) ? (
-          <span className={`rounded px-1.5 py-0.5 text-[10px] ${TARGET_RECIDIVIST_BADGE_CLASS}`}>
-            {recidivistBadgeLabel(report.target_report_count_90d ?? 0)}
-          </span>
+          <Badge tone="warn">{recidivistBadgeLabel(report.target_report_count_90d ?? 0)}</Badge>
         ) : null}
-      </div>
+      </h2>
 
-      <p className="whitespace-pre-wrap text-sm text-neutral-300">{report.body}</p>
+      <p className="whitespace-pre-wrap text-[13px] text-ink-2">{report.body}</p>
 
       {report.evidence.length > 0 ? <ReportEvidenceBlock evidence={report.evidence} /> : null}
 
       {report.handler_name || report.handler_player_id ? (
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-ink-3">
           Обработчик: {playerLabel(report.handler_player_id, report.handler_name)}
         </p>
       ) : null}
 
       {canHandle ? (
-        <div className="flex flex-wrap items-center gap-2 border-t border-neutral-900 pt-2">
+        <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
           {report.target_player_id
             ? (Object.keys(ACTION_LABELS) as ReportActionType[]).map((type) => (
-                <button
-                  key={type}
-                  type="button"
-                  onClick={() => openActionModal(type)}
-                  className={`rounded border px-3 py-1 text-xs hover:opacity-80 ${
-                    type === 'ban'
-                      ? 'border-red-900 text-red-300'
-                      : type === 'kick'
-                        ? 'border-amber-900 text-amber-300'
-                        : 'border-sky-900 text-sky-300'
-                  }`}
-                >
+                <Button key={type} size="sm" onClick={() => openActionModal(type)}>
                   {ACTION_LABELS[type]}
-                </button>
+                </Button>
               ))
             : null}
           {report.reporter_player_id ? (
             <>
-              <select
+              <Select
+                size="sm"
+                aria-label="Шаблон уведомления"
                 value={notifyTemplate}
                 onChange={(e) => setNotifyTemplate(e.target.value as ReporterNotifyTemplate)}
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 focus:border-neutral-600 focus:outline-none"
               >
                 {(Object.keys(NOTIFY_TEMPLATE_LABELS) as ReporterNotifyTemplate[]).map((tpl) => (
                   <option key={tpl} value={tpl}>
                     {NOTIFY_TEMPLATE_LABELS[tpl]}
                   </option>
                 ))}
-              </select>
-              <button
-                type="button"
-                onClick={submitNotify}
-                disabled={notifyBusy}
-                className="rounded border border-neutral-800 px-3 py-1 text-xs text-neutral-300 hover:border-neutral-600 disabled:opacity-40"
-              >
-                {notifyBusy ? 'Отправка…' : 'Уведомить репортёра'}
-              </button>
+              </Select>
+              <Button size="sm" onClick={submitNotify} loading={notifyBusy}>
+                Уведомить репортёра
+              </Button>
             </>
           ) : null}
-          <button
-            type="button"
-            onClick={toggleActions}
-            className="rounded border border-neutral-800 px-3 py-1 text-xs text-neutral-300 hover:border-neutral-600"
-          >
+          <Button size="sm" onClick={toggleActions} aria-expanded={actionsOpen}>
             Связанные действия
-          </button>
-          <button
-            type="button"
-            onClick={() => setEditing((v) => !v)}
-            className="rounded border border-neutral-800 px-3 py-1 text-xs text-neutral-300 hover:border-neutral-600"
-          >
+          </Button>
+          <Button size="sm" onClick={() => setEditing((v) => !v)} aria-expanded={editing}>
             Обработать
-          </button>
+          </Button>
         </div>
       ) : null}
 
       {notifyMsg ? (
-        <div
-          className={`rounded border p-2 text-xs ${
-            notifyMsg.kind === 'ok'
-              ? 'border-emerald-900 bg-emerald-950/50 text-emerald-200'
-              : 'border-red-900 bg-red-950 text-red-200'
-          }`}
-        >
-          {notifyMsg.text}
-        </div>
+        <InlineBanner
+          tone={notifyMsg.kind === 'ok' ? 'good' : 'crit'}
+          title={notifyMsg.text}
+          onDismiss={() => setNotifyMsg(null)}
+          dismissLabel="Скрыть сообщение"
+        />
       ) : null}
 
       {actionsOpen ? (
-        <div className="space-y-1 border-t border-neutral-900 pt-2">
+        <div className="border-t border-line pt-3">
           {actionsLoading ? (
-            <p className="text-xs text-neutral-500">Загрузка действий…</p>
+            <Skeleton variant="text" count={2} label="Загрузка связанных действий" />
           ) : !actions || actions.length === 0 ? (
-            <p className="text-xs text-neutral-500">Связанных действий пока нет.</p>
+            <p className="text-xs text-ink-3">Связанных действий пока нет.</p>
           ) : (
             <ul className="space-y-1">
               {actions.map((action) => (
                 <li
                   key={action.id}
-                  className="flex flex-wrap items-center gap-2 text-xs text-neutral-400"
+                  className="flex flex-wrap items-center gap-2 text-xs text-ink-3"
                 >
-                  <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-neutral-200">
-                    {actionTypeBadge(action.action_type)}
-                  </span>
+                  <Badge size="sm">{actionTypeBadge(action.action_type)}</Badge>
                   <span>{formatDateTime(action.created_at)}</span>
-                  <span className="text-neutral-500">
+                  <span>
                     {action.author.kind === 'player' ? action.author.name : action.author.label}
                   </span>
-                  {action.reason ? <span className="text-neutral-300">{action.reason}</span> : null}
+                  {action.reason ? <span className="text-ink-2">{action.reason}</span> : null}
                 </li>
               ))}
             </ul>
@@ -742,133 +784,106 @@ function ReportCard({
       ) : null}
 
       {editing ? (
-        <div className="space-y-2 border-t border-neutral-900 pt-2">
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value as ReportStatus)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 focus:border-neutral-600 focus:outline-none"
-          >
-            {(Object.keys(STATUS_LABELS) as ReportStatus[]).map((value) => (
-              <option key={value} value={value}>
-                {STATUS_LABELS[value]}
-              </option>
-            ))}
-          </select>
-          <textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            rows={2}
-            maxLength={NOTE_MAX}
-            placeholder="Заметка обработчика"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          />
-          {error ? <p className="text-xs text-red-400">{error}</p> : null}
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={save}
-              disabled={saving}
-              className="rounded border border-emerald-900 px-3 py-1 text-xs text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-            >
-              {saving ? 'Сохранение…' : 'Сохранить'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setEditing(false)}
-              className="rounded border border-neutral-800 px-3 py-1 text-xs text-neutral-400 hover:border-neutral-600"
-            >
+        <div className="space-y-3 border-t border-line pt-3">
+          <FieldRow label="Статус жалобы">
+            <Select value={status} onChange={(e) => setStatus(e.target.value as ReportStatus)}>
+              {(Object.keys(STATUS_LABELS) as ReportStatus[]).map((value) => (
+                <option key={value} value={value}>
+                  {STATUS_LABELS[value]}
+                </option>
+              ))}
+            </Select>
+          </FieldRow>
+          <FieldRow label="Заметка обработчика">
+            <Textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              maxLength={NOTE_MAX}
+              placeholder="Заметка обработчика"
+            />
+          </FieldRow>
+          {error ? <InlineBanner tone="crit" title="Не сохранено" description={error} /> : null}
+          <div className="flex justify-end gap-2">
+            <Button size="sm" onClick={() => setEditing(false)}>
               Отмена
-            </button>
+            </Button>
+            <Button variant="primary" size="sm" onClick={save} loading={saving}>
+              Сохранить
+            </Button>
           </div>
         </div>
       ) : null}
 
       {actionModal ? (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4">
-          <div className="mt-16 w-full max-w-md rounded border border-neutral-800 bg-neutral-950 p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">{ACTION_LABELS[actionModal]}</h2>
-              <button
-                type="button"
+        <Modal
+          open
+          onClose={() => setActionModal(null)}
+          title={ACTION_LABELS[actionModal]}
+          size="md"
+          closeLabel="Отмена"
+          dismissible={!actionBusy}
+          footer={
+            <>
+              <Button
+                variant="secondary"
                 onClick={() => setActionModal(null)}
-                className="text-sm text-neutral-400 hover:text-neutral-200"
+                disabled={actionBusy}
               >
-                Закрыть
-              </button>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <label
-                  htmlFor={`action-reason-${report.id}`}
-                  className="mb-1 block text-xs text-neutral-500"
+                Отмена
+              </Button>
+              <Button variant="primary" onClick={submitAction} loading={actionBusy}>
+                {ACTION_LABELS[actionModal]}
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-3">
+            <FieldRow label="Причина" htmlFor={`action-reason-${report.id}`}>
+              <Textarea
+                id={`action-reason-${report.id}`}
+                value={actionReason}
+                onChange={(e) => setActionReason(e.target.value)}
+                rows={3}
+                maxLength={REASON_MAX}
+              />
+            </FieldRow>
+            {actionModal === 'ban' ? (
+              <>
+                <FieldRow
+                  label="Срок бана"
+                  htmlFor={`action-ban-length-${report.id}`}
+                  hint="0 — навсегда; иначе, например, 3d или 12h."
                 >
-                  Причина
-                </label>
-                <textarea
-                  id={`action-reason-${report.id}`}
-                  value={actionReason}
-                  onChange={(e) => setActionReason(e.target.value)}
-                  rows={3}
-                  maxLength={REASON_MAX}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-                />
-              </div>
-              {actionModal === 'ban' ? (
-                <>
-                  <div>
-                    <label
-                      htmlFor={`action-ban-length-${report.id}`}
-                      className="mb-1 block text-xs text-neutral-500"
-                    >
-                      Срок бана (0 = навсегда, напр. 3d, 12h)
-                    </label>
-                    <input
-                      id={`action-ban-length-${report.id}`}
-                      type="text"
-                      value={banLength}
-                      onChange={(e) => setBanLength(e.target.value)}
-                      className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm font-mono focus:border-neutral-600 focus:outline-none"
-                    />
-                  </div>
-                  <BanAltWarningBlock
-                    warning={banAltWarning}
-                    loading={banAltWarningLoading}
-                    error={banAltWarningError}
-                    selectedAltIds={selectedAltIds}
-                    onToggleAlt={(playerId) =>
-                      setSelectedAltIds((current) =>
-                        current.includes(playerId)
-                          ? current.filter((id) => id !== playerId)
-                          : [...current, playerId],
-                      )
-                    }
+                  <TextInput
+                    id={`action-ban-length-${report.id}`}
+                    value={banLength}
+                    onChange={(e) => setBanLength(e.target.value)}
+                    className="font-mono"
                   />
-                </>
-              ) : null}
-              {actionError ? <p className="text-xs text-red-400">{actionError}</p> : null}
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={submitAction}
-                  disabled={actionBusy}
-                  className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500 disabled:opacity-40"
-                >
-                  {actionBusy ? 'Отправка…' : ACTION_LABELS[actionModal]}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActionModal(null)}
-                  disabled={actionBusy}
-                  className="rounded border border-neutral-800 px-4 py-2 text-sm hover:border-neutral-600"
-                >
-                  Отмена
-                </button>
-              </div>
-            </div>
+                </FieldRow>
+                <BanAltWarningBlock
+                  warning={banAltWarning}
+                  loading={banAltWarningLoading}
+                  error={banAltWarningError}
+                  selectedAltIds={selectedAltIds}
+                  onToggleAlt={(playerId) =>
+                    setSelectedAltIds((current) =>
+                      current.includes(playerId)
+                        ? current.filter((id) => id !== playerId)
+                        : [...current, playerId],
+                    )
+                  }
+                />
+              </>
+            ) : null}
+            {actionError ? (
+              <InlineBanner tone="crit" title="Действие не выполнено" description={actionError} />
+            ) : null}
           </div>
-        </div>
+        </Modal>
       ) : null}
-    </div>
+    </Card>
   );
 }
 
@@ -885,56 +900,65 @@ function BanAltWarningBlock({
   selectedAltIds: string[];
   onToggleAlt: (playerId: string) => void;
 }) {
-  if (loading) return <p className="text-xs text-neutral-500">Проверка связанных аккаунтов…</p>;
+  if (loading) return <Skeleton variant="text" count={2} label="Проверка связанных аккаунтов" />;
   if (error) {
     return (
-      <p className="rounded border border-amber-900/60 bg-amber-950/20 p-2 text-xs text-amber-200">
-        Проверка альтов недоступна ({error}). Бан можно продолжить.
-      </p>
+      <InlineBanner
+        tone="warn"
+        title={`Проверка альтов недоступна (${error}). Бан можно продолжить.`}
+      />
     );
   }
   if (!warning) return null;
   if (!warning.can_view_ips) {
     return warning.confirmed_count > 0 ? (
-      <p className="rounded border border-amber-900/60 bg-amber-950/20 p-2 text-xs text-amber-200">
-        У игрока есть {warning.confirmed_count} подтверждённых связанных аккаунтов.
-      </p>
+      <InlineBanner
+        tone="warn"
+        title={`У игрока есть ${warning.confirmed_count} подтверждённых связанных аккаунтов.`}
+      />
     ) : null;
   }
   if (warning.confirmed.length === 0 && warning.candidates.length === 0) return null;
 
   return (
-    <div className="rounded border border-amber-900/60 bg-amber-950/20 p-3 text-xs text-amber-100 space-y-2">
-      <h3 className="font-medium text-amber-200">У игрока есть связанные аккаунты</h3>
+    /* Предупреждающая поверхность вместо `InlineBanner`: внутри живут флажки,
+       а `warn` у полосы означает `role="alert"` — интерактивный список в
+       живой области объявлялся бы целиком при каждом переключении. */
+    <div className="space-y-3 rounded-card border border-warn/40 bg-warn/10 p-3">
+      <h3 className="text-[13px] font-semibold text-ink">У игрока есть связанные аккаунты</h3>
       {warning.confirmed.length > 0 ? (
         <div className="space-y-1">
-          <p className="text-amber-300">Подтверждённые связи</p>
+          <p className="text-xs text-ink-2">Подтверждённые связи</p>
           {warning.confirmed.map((alt) => (
-            <label key={alt.player_id} className="flex items-center gap-2 text-neutral-200">
-              <input
-                type="checkbox"
-                checked={selectedAltIds.includes(alt.player_id)}
-                onChange={() => onToggleAlt(alt.player_id)}
-              />
-              <span>{alt.name}</span>
-              <span className="text-neutral-500">({alt.link_type ?? 'alt'})</span>
-              {alt.online ? <span className="text-emerald-300">онлайн</span> : null}
-              {alt.has_active_ban ? <span className="text-red-300">активный бан</span> : null}
-              <span className="text-neutral-500">— забанить также</span>
-            </label>
+            <Checkbox
+              key={alt.player_id}
+              checked={selectedAltIds.includes(alt.player_id)}
+              onChange={() => onToggleAlt(alt.player_id)}
+              label={
+                <span className="inline-flex flex-wrap items-center gap-1.5">
+                  <span>{alt.name}</span>
+                  <span className="text-ink-3">({alt.link_type ?? 'alt'})</span>
+                  {alt.online ? <Badge tone="good">онлайн</Badge> : null}
+                  {alt.has_active_ban ? <Badge tone="crit">активный бан</Badge> : null}
+                  <span className="text-ink-3">— забанить также</span>
+                </span>
+              }
+            />
           ))}
         </div>
       ) : null}
       {warning.candidates.length > 0 ? (
         <div className="space-y-1">
-          <p className="text-amber-300">Кандидаты с высокой уверенностью</p>
+          <p className="text-xs text-ink-2">Кандидаты с высокой уверенностью</p>
           {warning.candidates.map((candidate) => (
-            <p key={candidate.player_id} className="text-neutral-300">
-              {candidate.name} <span className="text-neutral-500">(уверенность: высокая)</span>
-              {candidate.online ? <span className="ml-2 text-emerald-300">онлайн</span> : null}
-              {candidate.has_active_ban ? (
-                <span className="ml-2 text-red-300">активный бан</span>
-              ) : null}
+            <p
+              key={candidate.player_id}
+              className="flex flex-wrap items-center gap-1.5 text-xs text-ink-2"
+            >
+              <span>{candidate.name}</span>
+              <span className="text-ink-3">(уверенность: высокая)</span>
+              {candidate.online ? <Badge tone="good">онлайн</Badge> : null}
+              {candidate.has_active_ban ? <Badge tone="crit">активный бан</Badge> : null}
             </p>
           ))}
         </div>
@@ -945,8 +969,8 @@ function BanAltWarningBlock({
 
 function ReportEvidenceBlock({ evidence }: { evidence: ReportEvidenceItem[] }) {
   return (
-    <div className="space-y-2 border-t border-neutral-900 pt-2">
-      <h3 className="text-xs uppercase tracking-widest text-neutral-500">Доказательства</h3>
+    <div className="space-y-2 border-t border-line pt-3">
+      <h3 className="text-[13px] font-semibold text-ink">Доказательства</h3>
       <div className="flex flex-wrap gap-3">
         {evidence.map((item) => (
           <div key={item.id} className="max-w-[220px] space-y-1">
@@ -954,21 +978,21 @@ function ReportEvidenceBlock({ evidence }: { evidence: ReportEvidenceItem[] }) {
               <img
                 src={`/api/v1/media/${item.id}/stream`}
                 alt={evidenceLabel(item)}
-                className="max-h-40 rounded border border-neutral-800 object-cover"
+                className="max-h-40 rounded-ctl border border-line object-cover"
               />
             ) : isVideoEvidence(item) ? (
               // biome-ignore lint/a11y/useMediaCaption: user-submitted evidence has no captions
               <video
                 controls
                 src={`/api/v1/media/${item.id}/stream`}
-                className="max-h-40 rounded border border-neutral-800"
+                className="max-h-40 rounded-ctl border border-line"
               />
             ) : isExternalLinkEvidence(item) && item.external_url ? (
               <a
                 href={item.external_url}
                 target="_blank"
                 rel="noreferrer"
-                className="block truncate text-xs text-sky-400 hover:text-sky-300"
+                className="block truncate text-xs text-accent no-underline hover:brightness-110"
               >
                 {evidenceLabel(item)}
               </a>
@@ -991,10 +1015,10 @@ function PlayerRef({
 }) {
   if (id) {
     return (
-      <Link href={`/all-players/${id}`} className="text-sky-400 hover:text-sky-300">
+      <Link href={`/all-players/${id}`} className="text-accent no-underline hover:brightness-110">
         {playerLabel(id, name)}
       </Link>
     );
   }
-  return <span className="text-neutral-400">{playerLabel(id, name, fallbackRaw ?? null)}</span>;
+  return <span className="text-ink-2">{playerLabel(id, name, fallbackRaw ?? null)}</span>;
 }

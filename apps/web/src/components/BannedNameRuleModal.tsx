@@ -10,6 +10,16 @@ import {
   validateBannedNamePattern,
 } from '@squad/shared-config/banned-names';
 import { useEffect, useId, useMemo, useState } from 'react';
+import {
+  Button,
+  Card,
+  Checkbox,
+  FieldRow,
+  InlineBanner,
+  Modal,
+  Select,
+  TextInput,
+} from '@/components/ui';
 
 export interface BannedNameRule {
   id: string;
@@ -69,6 +79,11 @@ export interface BannedNameRuleModalProps {
  * card, live roster, and chat viewers all open this same modal pre-seeded
  * with a nickname so an admin can create a rule in two clicks while still
  * reviewing/adjusting match type, action and reason before saving.
+ *
+ * Окно построено на примитиве `Modal`, то есть на нативном `<dialog>`: отсюда
+ * ловушка фокуса, верхний слой и Escape, которых у рукописной подложки не было.
+ * Escape разрешён (`dismissible` по умолчанию), потому что форма короткая и
+ * восстанавливается двумя кликами из той же точки входа.
  */
 export function BannedNameRuleModal({
   open,
@@ -82,6 +97,7 @@ export function BannedNameRuleModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const formId = useId();
   const patternInputId = useId();
   const testInputId = useId();
   const matchTypeId = useId();
@@ -112,8 +128,7 @@ export function BannedNameRuleModal({
 
   if (!open) return null;
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function save() {
     if (!trimmedPattern) {
       setError('Паттерн не может быть пустым.');
       return;
@@ -155,148 +170,127 @@ export function BannedNameRuleModal({
     }
   }
 
+  const patternError =
+    trimmedPattern !== '' && !patternValidation.ok ? patternValidation.error : undefined;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4">
-      <div className="mt-16 w-full max-w-lg rounded border border-neutral-800 bg-neutral-950 p-5 space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">
-            {editingId ? 'Изменить правило' : 'Новое правило'}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm text-neutral-400 hover:text-neutral-200"
+    <Modal
+      open
+      onClose={onClose}
+      title={editingId ? 'Изменить правило' : 'Новое правило'}
+      closeLabel="Закрыть окно"
+      footer={
+        <>
+          <Button onClick={onClose} disabled={submitting}>
+            Отмена
+          </Button>
+          <Button
+            type="submit"
+            form={formId}
+            variant="primary"
+            loading={submitting}
+            disabled={!trimmedPattern || !patternValidation.ok}
           >
-            Закрыть
-          </button>
+            {editingId ? 'Сохранить' : 'Добавить'}
+          </Button>
+        </>
+      }
+    >
+      {/* Подтверждающая кнопка живёт в подвале окна и связана с формой атрибутом
+          `form`: и клик по ней, и Enter в любом поле идут одним путём. */}
+      <form
+        id={formId}
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save();
+        }}
+        className="space-y-4"
+      >
+        <FieldRow label="Паттерн" htmlFor={patternInputId} error={patternError}>
+          <TextInput
+            id={patternInputId}
+            value={form.pattern}
+            maxLength={BANNED_NAME_PATTERN_MAX}
+            invalid={patternError !== undefined}
+            onChange={(e) => setForm((f) => ({ ...f, pattern: e.target.value }))}
+            placeholder="напр. AdolfHitler или ^\\[ISIS\\]"
+            className="font-mono"
+          />
+        </FieldRow>
+
+        <div className="grid grid-cols-2 gap-3">
+          <FieldRow label="Тип матчинга" htmlFor={matchTypeId}>
+            <Select
+              id={matchTypeId}
+              value={form.match_type}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, match_type: e.target.value as BannedNameMatchType }))
+              }
+            >
+              {BANNED_NAME_MATCH_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {MATCH_TYPE_LABELS[t]}
+                </option>
+              ))}
+            </Select>
+          </FieldRow>
+          <FieldRow label="Действие" htmlFor={actionId}>
+            <Select
+              id={actionId}
+              value={form.action}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, action: e.target.value as BannedNameAction }))
+              }
+            >
+              {BANNED_NAME_ACTIONS.map((a) => (
+                <option key={a} value={a}>
+                  {ACTION_LABELS[a]}
+                </option>
+              ))}
+            </Select>
+          </FieldRow>
         </div>
-        <form onSubmit={submit} className="space-y-4">
-          <div>
-            <label htmlFor={patternInputId} className="mb-1 block text-xs text-neutral-500">
-              Паттерн
-            </label>
-            <input
-              id={patternInputId}
-              type="text"
-              value={form.pattern}
-              maxLength={BANNED_NAME_PATTERN_MAX}
-              onChange={(e) => setForm((f) => ({ ...f, pattern: e.target.value }))}
-              placeholder="напр. AdolfHitler или ^\\[ISIS\\]"
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 font-mono text-sm focus:border-neutral-600 focus:outline-none"
-            />
-            {trimmedPattern && !patternValidation.ok ? (
-              <p className="mt-1 text-xs text-red-400">{patternValidation.error}</p>
-            ) : null}
-          </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label htmlFor={matchTypeId} className="mb-1 block text-xs text-neutral-500">
-                Тип матчинга
-              </label>
-              <select
-                id={matchTypeId}
-                value={form.match_type}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, match_type: e.target.value as BannedNameMatchType }))
-                }
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-              >
-                {BANNED_NAME_MATCH_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {MATCH_TYPE_LABELS[t]}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label htmlFor={actionId} className="mb-1 block text-xs text-neutral-500">
-                Действие
-              </label>
-              <select
-                id={actionId}
-                value={form.action}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, action: e.target.value as BannedNameAction }))
-                }
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-              >
-                {BANNED_NAME_ACTIONS.map((a) => (
-                  <option key={a} value={a}>
-                    {ACTION_LABELS[a]}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+        <FieldRow label="Причина" htmlFor={reasonId} hint="Необязательно.">
+          <TextInput
+            id={reasonId}
+            value={form.reason}
+            maxLength={512}
+            onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))}
+          />
+        </FieldRow>
 
-          <div>
-            <label htmlFor={reasonId} className="mb-1 block text-xs text-neutral-500">
-              Причина (необязательно)
-            </label>
-            <input
-              id={reasonId}
-              type="text"
-              value={form.reason}
-              maxLength={512}
-              onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))}
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-            />
-          </div>
+        <Checkbox
+          label="Активно"
+          checked={form.is_active}
+          onChange={(e) => setForm((f) => ({ ...f, is_active: e.target.checked }))}
+        />
 
-          <label className="flex items-center gap-2 text-sm text-neutral-300">
-            <input
-              type="checkbox"
-              checked={form.is_active}
-              onChange={(e) => setForm((f) => ({ ...f, is_active: e.target.checked }))}
-            />
-            Активно
-          </label>
-
-          <div className="rounded border border-neutral-800 bg-neutral-900 p-3 space-y-2">
-            <label htmlFor={testInputId} className="block text-xs text-neutral-500">
-              Проверить ник против правила
-            </label>
-            <input
+        <Card padding="sm" className="space-y-2">
+          <FieldRow label="Проверить ник против правила" htmlFor={testInputId}>
+            <TextInput
               id={testInputId}
-              type="text"
               value={testNick}
               onChange={(e) => setTestNick(e.target.value)}
               placeholder="Введите тестовый ник"
-              className="w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
             />
-            {previewMatches === null ? (
-              <p className="text-xs text-neutral-500">
-                Введите паттерн и тестовый ник, чтобы увидеть результат.
-              </p>
-            ) : previewMatches ? (
-              <p className="text-xs text-red-300">Совпадение — ник будет заблокирован.</p>
-            ) : (
-              <p className="text-xs text-emerald-300">Нет совпадения — ник пройдёт.</p>
-            )}
-          </div>
+          </FieldRow>
+          {previewMatches === null ? (
+            <p className="text-xs text-ink-3">
+              Введите паттерн и тестовый ник, чтобы увидеть результат.
+            </p>
+          ) : previewMatches ? (
+            <p className="text-xs text-crit">Совпадение — ник будет заблокирован.</p>
+          ) : (
+            <p className="text-xs text-good">Нет совпадения — ник пройдёт.</p>
+          )}
+        </Card>
 
-          {error ? <p className="text-xs text-red-400">{error}</p> : null}
-
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded border border-neutral-800 px-4 py-1.5 text-sm text-neutral-300 hover:border-neutral-600"
-            >
-              Отмена
-            </button>
-            <button
-              type="submit"
-              disabled={submitting || !trimmedPattern || !patternValidation.ok}
-              className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-            >
-              {submitting ? 'Сохранение…' : editingId ? 'Сохранить' : 'Добавить'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        {error ? (
+          <InlineBanner tone="crit" title="Не удалось сохранить правило" description={error} />
+        ) : null}
+      </form>
+    </Modal>
   );
 }
 
@@ -305,6 +299,11 @@ export function BannedNameRuleModal({
  * *create* a rule from a nickname (live roster, chat viewers) — hidden
  * without the `ban` squad permission, opens {@link BannedNameRuleModal}
  * prefilled with `pattern: nick, match_type: 'exact'` and closes it on save.
+ *
+ * `className` остаётся полной заменой оформления, а не добавкой к нему: кнопка
+ * встраивается в чужие строки — живой ростер, ленту чата — и там её вид задаёт
+ * вмещающая строка. Своего оформления у кнопки поэтому ровно одно, штатное:
+ * `Button size="sm"` из дизайн-системы.
  */
 export function BanNickButton({
   nick,
@@ -321,20 +320,26 @@ export function BanNickButton({
 
   if (!canBan) return null;
 
+  const label = `Забанить ник «${nick}»`;
+  const trigger = className ? (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={() => setOpen(true)}
+      className={className}
+    >
+      Забанить ник
+    </button>
+  ) : (
+    <Button size="sm" title={label} aria-label={label} onClick={() => setOpen(true)}>
+      Забанить ник
+    </Button>
+  );
+
   return (
     <>
-      <button
-        type="button"
-        title={`Забанить ник «${nick}»`}
-        aria-label={`Забанить ник «${nick}»`}
-        onClick={() => setOpen(true)}
-        className={
-          className ??
-          'rounded border border-red-900 px-1.5 py-0.5 text-[10px] text-red-400 hover:border-red-700'
-        }
-      >
-        Забанить ник
-      </button>
+      {trigger}
       <BannedNameRuleModal
         open={open}
         initial={{ pattern: nick, match_type: 'exact' }}
