@@ -198,10 +198,16 @@
 
 @layer base {
   :root {
-    /* Height of the sticky top navigation. Anything else that sticks — table
-       headers above all — offsets by this instead of hard-coding 46px, so the
-       bar and everything pinned under it can never drift apart. */
-    --chrome-h: 46px;
+    /* Height of the sticky top navigation. The server strip pins to this. */
+    --nav-h: 46px;
+
+    /* Height of *all* sticky chrome — the bar, plus the server strip when a
+       page shows one. Table headers offset by this rather than by a literal
+       46px, so nothing pinned underneath can drift out from under the bar.
+       `ServerBar` overwrites it while it is mounted, because the strip wraps
+       onto a second row once there are enough servers and its height is
+       therefore not a constant. */
+    --chrome-h: var(--nav-h);
   }
 
   html {
