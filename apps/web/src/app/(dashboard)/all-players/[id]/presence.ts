@@ -48,10 +48,10 @@ export const MODE_LABELS: Record<SessionMode, string> = {
 };
 
 export const MODE_HEX: Record<SessionMode, string> = {
-  online: '#10b981',
-  boost: '#f59e0b',
-  queue: '#38bdf8',
-  seed: '#a855f7',
+  online: '#30d158',
+  boost: '#ff9f0a',
+  queue: '#409cff',
+  seed: '#bf5af2',
 };
 
 export function bonusValueSeconds(totals: PresenceTotals): number {

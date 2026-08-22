@@ -8,16 +8,20 @@
  * re-fetches and independent of the current selection.
  */
 
-/** Chart palette, ordered; readable on the panel's dark background. */
+/**
+ * Chart palette, ordered. The HIG system colours in their dark-appearance
+ * variants, so a series line matches the accent and state colours the rest of
+ * the panel paints with instead of sitting next to them in a different family.
+ */
 export const SERVER_COLORS = [
-  '#38bdf8',
-  '#34d399',
-  '#fbbf24',
-  '#f472b6',
-  '#a78bfa',
-  '#fb7185',
-  '#2dd4bf',
-  '#facc15',
+  '#409cff',
+  '#30d158',
+  '#ff9f0a',
+  '#ff375f',
+  '#bf5af2',
+  '#ff6961',
+  '#40c8e0',
+  '#ffd60a',
 ] as const;
 
 const FALLBACK = SERVER_COLORS[0];

@@ -21,8 +21,11 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/components/connection-banner', () => ({
   ConnectionBanner: () => null,
 }));
-vi.mock('@/components/SidebarNav', () => ({
-  SidebarNav: () => null,
+vi.mock('@/components/TopNav', () => ({
+  TopNav: () => null,
+}));
+vi.mock('@/components/ServerBar', () => ({
+  ServerBar: () => null,
 }));
 vi.mock('@/components/CommandPalette', () => ({
   CommandPalette: () => null,

@@ -170,21 +170,21 @@ export function CompareOnlineView({
             <span className="flex items-center gap-1">
               <span
                 className="inline-block h-2.5 w-2.5 rounded-sm"
-                style={{ backgroundColor: '#38bdf8' }}
+                style={{ backgroundColor: '#409cff' }}
               />
               Игрок A ({data.players[0].canonical_name})
             </span>
             <span className="flex items-center gap-1">
               <span
                 className="inline-block h-2.5 w-2.5 rounded-sm"
-                style={{ backgroundColor: '#f59e0b' }}
+                style={{ backgroundColor: '#ff9f0a' }}
               />
               Игрок B ({data.players[1].canonical_name})
             </span>
             <span className="flex items-center gap-1">
               <span
                 className="inline-block h-2.5 w-2.5 rounded-sm"
-                style={{ backgroundColor: '#10b981' }}
+                style={{ backgroundColor: '#30d158' }}
               />
               Совместно
             </span>

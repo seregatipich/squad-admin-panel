@@ -17,8 +17,8 @@ import {
 
 import { type DossierTrendPoint, trendKd, trendMonthLabel } from './dossier';
 
-const KILLS_COLOR = '#38bdf8';
-const DEATHS_COLOR = '#f87171';
+const KILLS_COLOR = '#409cff';
+const DEATHS_COLOR = '#ff6961';
 const KILLS_LABEL = 'Убийства';
 const DEATHS_LABEL = 'Смерти';
 
@@ -93,9 +93,9 @@ export default function DossierSkillChart({
       <div className="h-56" data-testid="dossier-skill-trend">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={bars}>
-            <CartesianGrid stroke="#262626" vertical={false} />
-            <XAxis dataKey="month" stroke="#737373" fontSize={11} />
-            <YAxis stroke="#737373" fontSize={11} />
+            <CartesianGrid stroke="#38383a" vertical={false} />
+            <XAxis dataKey="month" stroke="#a1a1a8" fontSize={11} />
+            <YAxis stroke="#a1a1a8" fontSize={11} />
             <Tooltip labelFormatter={(label: ReactNode) => trendTooltipLabel(label, bars)} />
             <Legend />
             <Bar dataKey="kills" name={KILLS_LABEL} stackId="kd" fill={KILLS_COLOR} />

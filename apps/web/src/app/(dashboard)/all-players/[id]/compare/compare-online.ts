@@ -144,9 +144,9 @@ export function buildCompareWeekGrid(
   return { days: gridA.days, cells };
 }
 
-const PLAYER_A_HEX = '#38bdf8'; // sky
-const PLAYER_B_HEX = '#f59e0b'; // amber
-const OVERLAP_HEX = '#10b981'; // emerald
+const PLAYER_A_HEX = '#409cff'; // sky
+const PLAYER_B_HEX = '#ff9f0a'; // amber
+const OVERLAP_HEX = '#30d158'; // emerald
 
 function hexWithAlpha(hex: string, alpha: number): string {
   const clamped = Math.max(0, Math.min(1, alpha));

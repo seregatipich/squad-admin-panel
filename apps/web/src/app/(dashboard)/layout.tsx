@@ -4,9 +4,11 @@ import { ConnectionBanner } from '@/components/connection-banner';
 import { ForcedLogout } from '@/components/ForcedLogout';
 import { RoleExpiryToast } from '@/components/RoleExpiryToast';
 import { SeedNotificationToast } from '@/components/SeedNotificationToast';
-import { SidebarNav } from '@/components/SidebarNav';
+import { ServerBar } from '@/components/ServerBar';
+import { TopNav } from '@/components/TopNav';
 import { apiFetch } from '@/lib/api';
 import { requireSession } from '@/lib/dal';
+import { NAV_GROUPS } from '@/lib/nav';
 
 interface SetupStatus {
   setup_completed: boolean;
@@ -43,21 +45,24 @@ export default async function DashboardLayout({ children }: { children: React.Re
   }
   if (!setupCompleted) redirect('/setup');
 
+  // Navigation is a top bar, not a side column: the panel's work is wide
+  // tables, and a sidebar would spend a fixed slice of every screen on links
+  // that are read once per session.
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="min-h-screen">
       <ConnectionBanner />
       <ForcedLogout />
       <SeedNotificationToast />
       <RoleExpiryToast />
-      <div className="flex flex-1">
-        <SidebarNav
-          permissions={me.permissions}
-          displayName={me.canonical_name}
-          economyEnabled={me.economy_enabled ?? false}
-        />
-        <CommandPalette permissions={me.permissions} economyEnabled={me.economy_enabled ?? false} />
-        <main className="flex-1 space-y-6 p-8">{children}</main>
-      </div>
+      <TopNav
+        permissions={me.permissions}
+        displayName={me.canonical_name}
+        groups={NAV_GROUPS}
+        economyEnabled={me.economy_enabled ?? false}
+      />
+      <ServerBar />
+      <CommandPalette permissions={me.permissions} economyEnabled={me.economy_enabled ?? false} />
+      <main className="mx-auto w-full max-w-[1600px] space-y-6 px-5 py-5">{children}</main>
     </div>
   );
 }

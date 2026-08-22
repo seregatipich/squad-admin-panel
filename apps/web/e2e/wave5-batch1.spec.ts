@@ -19,11 +19,17 @@ test.describe('wave-5 batch 1 pages (Owner)', () => {
     await expect(ownerPage.locator('body')).toContainText(/тикет/i, { timeout: 10_000 });
   });
 
-  test('sidebar exposes all three new nav entries', async ({ ownerPage }) => {
+  test('the top bar exposes all three new nav entries', async ({ ownerPage }) => {
     await ownerPage.goto('/dashboard');
-    const nav = ownerPage.locator('nav');
-    await expect(nav).toContainText('Забаненные ники');
-    await expect(nav).toContainText('Тикеты');
-    await expect(nav).toContainText('Шаблоны сообщений');
+    const bar = ownerPage.getByRole('navigation', { name: 'Основная навигация' });
+
+    await bar.getByRole('button', { name: /^Игроки/ }).click();
+    await expect(bar.getByRole('link', { name: /Забаненные ники/ })).toBeVisible();
+
+    await bar.getByRole('button', { name: /^Инструменты/ }).click();
+    await expect(bar.getByRole('link', { name: /Тикеты/ })).toBeVisible();
+
+    await bar.getByRole('button', { name: /^Настройки/ }).click();
+    await expect(bar.getByRole('link', { name: /Шаблоны сообщений/ })).toBeVisible();
   });
 });

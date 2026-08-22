@@ -198,10 +198,10 @@ function DailyBarChart({ bars }: { bars: DailyBar[] }) {
                 y1={y}
                 x2={PAD.left + INNER_W}
                 y2={y}
-                stroke="#262626"
+                stroke="#38383a"
                 strokeWidth="0.5"
               />
-              <text x={PAD.left - 4} y={y + 3} textAnchor="end" fontSize="9" fill="#737373">
+              <text x={PAD.left - 4} y={y + 3} textAnchor="end" fontSize="9" fill="#a1a1a8">
                 {Math.round(frac * hourMax)}ч
               </text>
             </g>
@@ -245,7 +245,7 @@ function DailyBarChart({ bars }: { bars: DailyBar[] }) {
           y1={PAD.top + INNER_H}
           x2={PAD.left + INNER_W}
           y2={PAD.top + INNER_H}
-          stroke="#404040"
+          stroke="#48484a"
           strokeWidth="1"
         />
 
@@ -257,7 +257,7 @@ function DailyBarChart({ bars }: { bars: DailyBar[] }) {
               y={VIEW_H - 6}
               textAnchor="middle"
               fontSize="9"
-              fill="#737373"
+              fill="#a1a1a8"
             >
               {bar.day.slice(5)}
             </text>

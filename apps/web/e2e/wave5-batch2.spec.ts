@@ -30,9 +30,11 @@ test.describe('wave-5 batch 2 pages (Owner)', () => {
     }
   });
 
-  test('sidebar exposes new integration + ban-source nav', async ({ ownerPage }) => {
+  test('the top bar exposes the new integration + ban-source pages', async ({ ownerPage }) => {
     await ownerPage.goto('/dashboard');
-    const body = ownerPage.locator('body');
-    await expect(body).toContainText(/discord|интеграц/i, { timeout: 10_000 });
+    const bar = ownerPage.getByRole('navigation', { name: 'Основная навигация' });
+    await bar.getByRole('button', { name: /^Настройки/ }).click();
+    await expect(bar.getByRole('link', { name: /Discord/ })).toBeVisible({ timeout: 10_000 });
+    await expect(bar.getByRole('link', { name: /Источники банов/ })).toBeVisible();
   });
 });
