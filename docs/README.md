@@ -18,7 +18,7 @@ Open-source, self-hosted control panel for Squad dedicated servers. Owns the ful
 - [`api`](components/api/README.md) — Fastify HTTP/WebSocket
 - [`api-tokens`](components/api-tokens/README.md) — Bearer auth + per-user API tokens
 - [`live-bus`](components/live-bus/README.md) — typed WebSocket push channel + Redis pub/sub fan-out
-- [`web`](components/web/README.md) — Next.js dashboard
+- [`web`](components/web/README.md) — Next.js dashboard ([design system](components/web/design-system.md))
 - [`bridge`](components/bridge/README.md) — Go host daemon (the only privileged component)
 - [`workers`](components/workers/README.md) — RCON, log-ingest, archiver, partitioner, stubs
 - [`db`](components/db/README.md) — Drizzle schema + Postgres migrations
