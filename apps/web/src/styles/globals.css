@@ -21,11 +21,12 @@
  * and stays comfortable for hours, which is the point of an admin panel that
  * is watched rather than visited.
  *
- * Every content level clears WCAG AA on every surface it is used on:
+ * Every content level clears WCAG AA on every surface it is used on. Measured
+ * against a card (`surface`), the tightest of the three:
  *
- *   ink   #FFFFFF          13.9:1 on bg
- *   ink-2 white-ish 85%     8.9:1 on bg, 7.4:1 on raised
- *   ink-3 secondaryLabel    5.3:1 on bg, 4.6:1 on raised
+ *   ink   #FFFFFF          13.9:1 on surface, 11.4:1 on raised
+ *   ink-2 white-ish 85%     8.9:1 on surface,  7.4:1 on raised
+ *   ink-3 secondaryLabel    5.3:1 on surface,  4.6:1 on raised
  *
  * The accent is systemBlue in its increased-contrast dark variant (#409CFF,
  * 4.9:1 on a card); plain #0A84FF measures 3.8:1 there and fails for small
