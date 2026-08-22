@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button, Checkbox, EmptyState, Modal } from '@/components/ui';
 
 interface ServerEntry {
@@ -28,6 +28,14 @@ interface Props {
 export function DepotUpdateModal({ open, onOpenChange, servers, onStart }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+
+  // Окно не размонтируется при закрытии, поэтому выбор надо снимать явно.
+  // Иначе галочки, поставленные и передуманные в прошлый раз, дожидаются
+  // следующего открытия и уезжают в запрос — а он останавливает боевые
+  // серверы и выкидывает с них игроков.
+  useEffect(() => {
+    if (open) setSelected(new Set());
+  }, [open]);
 
   const runnableServers = servers.filter((s) => ['running', 'starting'].includes(s.status));
 

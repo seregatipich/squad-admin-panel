@@ -86,6 +86,31 @@ describe('DepotUpdateModal', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it('forgets the previous selection when reopened', async () => {
+    // Окно больше не размонтируется при закрытии — нативный `<dialog>` должен
+    // остаться в разметке, чтобы вернуть фокус на кнопку, которая его открыла.
+    // Поэтому выбор обязан сбрасываться явно: иначе галочки, поставленные и
+    // передуманные час назад, уедут в запрос на остановку боевых серверов.
+    const onStart = vi.fn(async () => {});
+    const { rerender } = render(
+      <DepotUpdateModal open onOpenChange={() => {}} servers={SERVERS} onStart={onStart} />,
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Первый' }));
+    expect(screen.getByRole('checkbox', { name: 'Первый' })).toBeChecked();
+
+    rerender(
+      <DepotUpdateModal open={false} onOpenChange={() => {}} servers={SERVERS} onStart={onStart} />,
+    );
+    rerender(<DepotUpdateModal open onOpenChange={() => {}} servers={SERVERS} onStart={onStart} />);
+
+    expect(screen.getByRole('checkbox', { name: 'Первый' })).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Второй' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Начать обновление' }));
+    await waitFor(() => expect(onStart).toHaveBeenCalledWith(['srv-2']));
+  });
+
   it('explains the empty case instead of showing a bare list', () => {
     render(
       <DepotUpdateModal
