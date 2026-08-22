@@ -2,6 +2,13 @@
 import { useState } from 'react';
 import { useTranslator } from '@/i18n/LocaleProvider';
 
+/**
+ * Выход из панели.
+ *
+ * Не красный: по дизайн-системе (§5) критический цвет закреплён за
+ * необратимым разрушением данных, а выход — обычное обратимое действие,
+ * и красная подпись в меню только оттягивает на себя внимание.
+ */
 export function LogoutButton() {
   const [pending, setPending] = useState(false);
   const t = useTranslator();
@@ -9,7 +16,7 @@ export function LogoutButton() {
     <button
       type="button"
       disabled={pending}
-      className="whitespace-nowrap text-crit hover:brightness-110 disabled:opacity-50"
+      className="whitespace-nowrap text-ink-2 transition-colors hover:text-ink disabled:opacity-40"
       onClick={async () => {
         setPending(true);
         try {
