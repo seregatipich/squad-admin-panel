@@ -1,5 +1,7 @@
 'use client';
 
+import { CHART_AXIS, CHART_FRAME, CHART_GRID } from '@/lib/chart-tokens';
+
 interface Point {
   timestamp: string;
   value: number;
@@ -62,8 +64,9 @@ export function MetricsChart({ points, label, unit, color, maxY, formatValue }: 
       </div>
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="w-full"
-        preserveAspectRatio="none"
+        // Без «none»: растянутый по ширине график врёт наклоном — одна и та же
+        // нагрузка выглядит обвалом на узкой карточке и полкой на широкой.
+        className="h-auto w-full"
         role="img"
         aria-label={label}
       >
@@ -73,7 +76,7 @@ export function MetricsChart({ points, label, unit, color, maxY, formatValue }: 
           y1={PAD.top + INNER_H}
           x2={PAD.left + INNER_W}
           y2={PAD.top + INNER_H}
-          stroke="#48484a"
+          stroke={CHART_FRAME}
           strokeWidth="1"
         />
         {[0, 0.25, 0.5, 0.75, 1].map((frac) => {
@@ -86,10 +89,10 @@ export function MetricsChart({ points, label, unit, color, maxY, formatValue }: 
                 y1={y}
                 x2={PAD.left + INNER_W}
                 y2={y}
-                stroke="#38383a"
+                stroke={CHART_GRID}
                 strokeWidth="0.5"
               />
-              <text x={PAD.left - 4} y={y + 3} textAnchor="end" fill="#a1a1a8" fontSize="9">
+              <text x={PAD.left - 4} y={y + 3} textAnchor="end" fill={CHART_AXIS} fontSize="9">
                 {fmt(val)}
               </text>
             </g>
