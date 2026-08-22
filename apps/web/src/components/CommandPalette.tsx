@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import {
   filterPageResults,
@@ -55,6 +55,7 @@ export function CommandPalette({
   const [players, setPlayers] = useState<PlayerSearchResult[]>([]);
   const [servers, setServers] = useState<ServerResult[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listId = useId();
 
   // Global hotkey: Ctrl/Cmd+K toggles the palette from anywhere in the app.
   useEffect(() => {
@@ -174,7 +175,7 @@ export function CommandPalette({
   if (!open) return null;
 
   let rowIndex = -1;
-  const activeId = `cmdk-option-${selectedIndex}`;
+  const activeId = `${listId}-option-${selectedIndex}`;
 
   return (
     <div
@@ -205,14 +206,14 @@ export function CommandPalette({
           aria-label="Командная панель: поиск"
           role="combobox"
           aria-expanded
-          aria-controls="cmdk-results"
+          aria-controls={listId}
           aria-activedescendant={sections.length > 0 ? activeId : undefined}
           aria-autocomplete="list"
           autoComplete="off"
           className="w-full border-b border-line bg-transparent px-4 py-3 text-[13px] text-ink focus-visible:outline-offset-[-2px]"
         />
         <div
-          id="cmdk-results"
+          id={listId}
           role="listbox"
           aria-label="Результаты"
           className="max-h-96 overflow-auto py-2"
@@ -231,7 +232,7 @@ export function CommandPalette({
                   return (
                     <button
                       key={`${result.kind}-${result.kind === 'page' ? result.href : result.id}`}
-                      id={`cmdk-option-${rowIndex}`}
+                      id={`${listId}-option-${rowIndex}`}
                       type="button"
                       role="option"
                       aria-selected={active}

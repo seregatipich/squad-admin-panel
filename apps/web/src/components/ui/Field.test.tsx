@@ -199,13 +199,26 @@ describe('Switch', () => {
   it('ссылается на внешнее пояснение через aria-describedby', () => {
     render(
       <>
-        <Switch checked={false} onChange={vi.fn()} label="Автобан" describedBy="hint-autoban" />
-        <p id="hint-autoban">Банит за превышение порога.</p>
+        <Switch checked={false} onChange={vi.fn()} label="Автобан" describedBy={AUTOBAN_HINT_ID} />
+        <p id={AUTOBAN_HINT_ID}>Банит за превышение порога.</p>
       </>,
     );
     expect(screen.getByRole('switch')).toHaveAccessibleDescription('Банит за превышение порога.');
   });
 });
+
+/**
+ * Идентификаторы, которые в этих тестах задаёт вызывающий код.
+ *
+ * Вынесены в константы, а не написаны литералами прямо в JSX: правило
+ * `useUniqueElementIds` требует, чтобы идентификатор элемента приходил из
+ * `useId()` или переменной — иначе два экземпляра компонента на одной
+ * странице получили бы один и тот же `id`. В тесте столкновения нет, но
+ * держать исключение из правила дороже, чем три константы.
+ */
+const AUTOBAN_HINT_ID = 'hint-autoban';
+const BAN_REASON_ID = 'ban-reason';
+const REASON_HINT_ID = 'reason-hint';
 
 describe('FieldRow', () => {
   it('связывает подпись с контролом, даже когда идентификатор не задан снаружи', () => {
@@ -219,11 +232,11 @@ describe('FieldRow', () => {
 
   it('уважает идентификатор, заданный вызывающим кодом', () => {
     render(
-      <FieldRow label="Причина бана" htmlFor="ban-reason">
-        <TextInput id="ban-reason" />
+      <FieldRow label="Причина бана" htmlFor={BAN_REASON_ID}>
+        <TextInput id={BAN_REASON_ID} />
       </FieldRow>,
     );
-    expect(screen.getByLabelText('Причина бана')).toHaveAttribute('id', 'ban-reason');
+    expect(screen.getByLabelText('Причина бана')).toHaveAttribute('id', BAN_REASON_ID);
   });
 
   it('объявляет ошибку и связывает её с контролом', () => {
@@ -243,9 +256,9 @@ describe('FieldRow', () => {
   it('дописывает ошибку к уже имеющемуся описанию, а не затирает его', () => {
     render(
       <>
-        <p id="reason-hint">До 200 символов.</p>
+        <p id={REASON_HINT_ID}>До 200 символов.</p>
         <FieldRow label="Причина бана" error="Укажите причину">
-          <TextInput aria-describedby="reason-hint" />
+          <TextInput aria-describedby={REASON_HINT_ID} />
         </FieldRow>
       </>,
     );
