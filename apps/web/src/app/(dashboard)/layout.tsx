@@ -67,7 +67,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       />
       <ServerBar />
       <CommandPalette permissions={me.permissions} economyEnabled={me.economy_enabled ?? false} />
-      <main className="mx-auto w-full max-w-[1600px] space-y-6 px-5 py-5">{children}</main>
+      <main className="mx-auto w-full max-w-[1600px] space-y-6 px-6 py-6">{children}</main>
     </div>
   );
 }
