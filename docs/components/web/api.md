@@ -2,7 +2,7 @@
 
 ## App Router pages
 
-All pages live under `apps/web/src/app/`. The `(dashboard)` route group requires an active session cookie (`__Host-sid`) **and** panel access; the layout at `apps/web/src/app/(dashboard)/layout.tsx` calls `requireSession()`, redirects a session with an empty `permissions` array to `/me`, and otherwise renders the sidebar.
+All pages live under `apps/web/src/app/`. The `(dashboard)` route group requires an active session cookie (`__Host-sid`) **and** panel access; the layout at `apps/web/src/app/(dashboard)/layout.tsx` calls `requireSession()`, redirects a session with an empty `permissions` array to `/me`, and otherwise renders the top bar and server switcher.
 
 ### Unauthenticated pages
 
@@ -14,7 +14,7 @@ All pages live under `apps/web/src/app/`. The `(dashboard)` route group requires
 
 ### Self-service pages
 
-The `(me)` route group requires a session cookie but **not** panel access — its layout (`app/(me)/layout.tsx`) calls `requireSession()` and renders only a header with the display name and a logout button, no sidebar and no live-bus widgets.
+The `(me)` route group requires a session cookie but **not** panel access — its layout (`app/(me)/layout.tsx`) calls `requireSession()` and renders only a header with the display name and a logout button, no top bar and no live-bus widgets.
 
 | Route | File | What it does |
 |---|---|---|
@@ -38,7 +38,7 @@ All require a valid session. Permission gating is noted where applicable.
 | `/players` | `(dashboard)/players/page.tsx` | none | Paginated player list; search by name, SteamID64, EOS ID. Server-driven sorting on Ник, Total playtime, Created, and Last seen — each header is a button that sets `?sort=`/`?dir=` on `GET /api/v1/players` and shows a direction indicator (`↑`/`↓` active, `↕` inactive); clicking the active column flips its direction. New **Created** column rendering `first_seen_at`. A `новые (<7 дней)` checkbox sets `filter=new`. The pure sort/filter state machine lives in `(dashboard)/players/helpers.ts`. The "Online" filter (last_seen_at within 90 s) and the search box stay client-side. Polls every 8 s. |
 | `/players/[steam_id64]` | `(dashboard)/players/[steam_id64]/page.tsx` | none | Player profile: SteamID64, EOS ID, playtime, name history, IP history (hidden unless `player:view_ips`). `PanelAccessSection` (assign/remove panel role) shown when caller has `user:manage_roles`. |
 | `/audit` | `(dashboard)/audit/page.tsx` | none | Full audit log (last 200 entries), filterable by action_type, target, or actor. Expandable context JSON per row. Polls every 6 s. |
-| `/logs` | `(dashboard)/logs/page.tsx` | `host:view` (sidebar link gated) | Live log stream from `GET /api/v1/logs`. `LogList` component with source, level, server, and text filters. Export button. |
+| `/logs` | `(dashboard)/logs/page.tsx` | `host:view` (top-bar link gated) | Live log stream from `GET /api/v1/logs`. `LogList` component with source, level, server, and text filters. Export button. |
 | `/roles` | `(dashboard)/roles/page.tsx` | `role:view` | Role list with color dot, description, user count. Create link (requires `role:create`). Edit/Delete buttons gated by `role:edit` / `role:delete`. Owner role is protected. |
 | `/roles/new` | `(dashboard)/roles/new/page.tsx` | `role:create` (API-enforced) | `RoleEditor` component in create mode. POST /api/v1/roles on submit. |
 | `/roles/[id]` | `(dashboard)/roles/[id]/page.tsx` | `role:edit` (API-enforced) | `RoleEditor` in edit mode; read-only for the Owner system role. PUT /api/v1/roles/:id on submit. |
@@ -128,7 +128,7 @@ Fetches log entries from `GET /api/v1/logs` and polls for new entries every 1 s 
 function LogoutButton(): JSX.Element
 ```
 
-Calls `POST /api/v1/auth/logout` then redirects to `/login`. Renders as a text button in the sidebar footer.
+Calls `POST /api/v1/auth/logout` then redirects to `/login`. Renders as a text button inside the top bar's user menu.
 
 ### `MetricHistoryChart`
 

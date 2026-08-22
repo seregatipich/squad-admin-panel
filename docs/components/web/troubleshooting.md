@@ -16,9 +16,9 @@ docker compose up -d web
 
 ## Sidebar link for /roles or /users is missing
 
-**Symptom:** The Roles or Users link does not appear in the left sidebar.
+**Symptom:** The Roles or Users link does not appear in the top-bar menus.
 
-**Cause:** The sidebar renders these links conditionally based on `me.permissions`. The links require `role:view` and `user:view` respectively. If the current user's role does not include those keys, the links are hidden.
+**Cause:** The top bar renders these links conditionally based on `me.permissions`. The links require `role:view` and `user:view` respectively. If the current user's role does not include those keys, the links are hidden.
 
 **Diagnostics:**
 1. Open `/settings/account` to see how many permission keys the current role has.

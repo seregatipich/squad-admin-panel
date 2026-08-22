@@ -53,7 +53,7 @@ Controls which Steam users can log into the panel and what they can do once insi
 
 - Every RBAC-gated API route — relies on `req.user.permissions` populated by `loadUserPermissions`.
 - `apps/api/src/lib/api-tokens.ts` — intersects token scopes with the player's current role permissions; see [`docs/components/api-tokens/`](../api-tokens/README.md).
-- Web nav — sidebar items filtered by `user.permissions`.
+- Web nav — top-bar items filtered by `user.permissions`.
 
 ## Basic example
 
