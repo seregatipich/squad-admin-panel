@@ -6,6 +6,7 @@ import { RoleExpiryToast } from '@/components/RoleExpiryToast';
 import { SeedNotificationToast } from '@/components/SeedNotificationToast';
 import { ServerBar } from '@/components/ServerBar';
 import { TopNav } from '@/components/TopNav';
+import { ToastRegion } from '@/components/ui/ToastRegion';
 import { apiFetch } from '@/lib/api';
 import { requireSession } from '@/lib/dal';
 import { NAV_GROUPS } from '@/lib/nav';
@@ -50,10 +51,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // that are read once per session.
   return (
     <div className="min-h-screen">
-      <ConnectionBanner />
       <ForcedLogout />
-      <SeedNotificationToast />
-      <RoleExpiryToast />
+      {/* Все всплывающие уведомления живут в одной области: раньше каждое
+          прибивалось к правому нижнему углу само и накрывало соседнее. */}
+      <ToastRegion>
+        <ConnectionBanner />
+        <SeedNotificationToast />
+        <RoleExpiryToast />
+      </ToastRegion>
       <TopNav
         permissions={me.permissions}
         displayName={me.canonical_name}

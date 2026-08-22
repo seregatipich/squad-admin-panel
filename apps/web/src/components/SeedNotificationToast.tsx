@@ -44,7 +44,7 @@ export function SeedNotificationToast() {
   if (!notification) return null;
 
   return (
-    <output className="fixed bottom-4 right-4 z-50 w-80 rounded border border-amber-700 bg-neutral-950 p-4 shadow-xl">
+    <output className="pointer-events-auto w-80 rounded-card border border-warn/40 bg-surface p-4 shadow-xl shadow-black/40">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="font-semibold text-amber-200">{notification.message}</p>
