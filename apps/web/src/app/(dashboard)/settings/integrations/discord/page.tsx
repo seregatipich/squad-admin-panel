@@ -1,6 +1,31 @@
 'use client';
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import {
+  AlertDialog,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  Checkbox,
+  EmptyState,
+  FieldRow,
+  IconButton,
+  InlineBanner,
+  PageHeader,
+  Select,
+  Skeleton,
+  Switch,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  TextInput,
+  Th,
+  TrashIcon,
+} from '@/components/ui';
 import DiscordRoleMappingsSection from './DiscordRoleMappingsSection';
 import DiscordStatusChannelsSection from './DiscordStatusChannelsSection';
 import DiscordTemplatesSection from './DiscordTemplatesSection';
@@ -66,10 +91,7 @@ export default function DiscordIntegrationPage() {
   const [banner, setBanner] = useState<Banner>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [forbidden, setForbidden] = useState(false);
-
-  const guildInputId = useId();
-  const botInputId = useId();
-  const urlInputId = useId();
+  const [pendingDelete, setPendingDelete] = useState<WebhookRow | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -187,7 +209,6 @@ export default function DiscordIntegrationPage() {
   }
 
   async function deleteWebhook(id: string) {
-    if (!confirm('Удалить вебхук?')) return;
     setBusyId(id);
     setBanner(null);
     try {
@@ -202,6 +223,7 @@ export default function DiscordIntegrationPage() {
       setBanner({ kind: 'err', text: (err as Error).message });
     } finally {
       setBusyId(null);
+      setPendingDelete(null);
     }
   }
 
@@ -231,262 +253,236 @@ export default function DiscordIntegrationPage() {
 
   if (forbidden) {
     return (
-      <div className="max-w-2xl rounded border border-red-900 bg-red-950 p-4 text-sm text-red-200">
-        Недостаточно прав. Для управления интеграциями нужен доступ «Управлять интеграциями».
-      </div>
+      <InlineBanner
+        tone="warn"
+        title="Недостаточно прав"
+        description="Для управления интеграциями нужен доступ «Управлять интеграциями»."
+      />
     );
   }
 
-  if (!integration) {
-    return <div className="text-neutral-500">Загрузка…</div>;
-  }
-
   return (
-    <div className="max-w-4xl space-y-6">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Discord-интеграция</h1>
-        <LiveIndicator lastUpdate={lastUpdate} />
-      </div>
-
-      <p className="text-sm text-neutral-400">
-        Настройте бота и вебхуки для уведомлений о событиях серверов. Токен бота и URL вебхуков
-        хранятся в зашифрованном виде и никогда не показываются целиком — только маска.
-      </p>
+    <>
+      <PageHeader
+        title="Discord-интеграция"
+        subtitle="Настройте бота и вебхуки для уведомлений о событиях серверов. Токен бота и URL вебхуков хранятся в зашифрованном виде и никогда не показываются целиком — только маска."
+        status={<LiveIndicator lastUpdate={lastUpdate} />}
+      />
 
       {banner ? (
-        <div
-          className={`rounded border p-3 text-sm ${
-            banner.kind === 'ok'
-              ? 'border-emerald-900 bg-emerald-950/50 text-emerald-200'
-              : 'border-red-900 bg-red-950 text-red-200'
-          }`}
-        >
-          {banner.text}
-        </div>
+        <InlineBanner tone={banner.kind === 'ok' ? 'good' : 'crit'} title={banner.text} />
       ) : null}
 
-      <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Бот и сервер Discord</h2>
-        <form onSubmit={saveIntegration} className="space-y-3">
-          <div>
-            <label htmlFor={guildInputId} className="mb-1 block text-xs text-neutral-500">
-              Guild ID
-            </label>
-            <input
-              id={guildInputId}
-              type="text"
-              value={guildId}
-              onChange={(e) => setGuildId(e.target.value)}
-              inputMode="numeric"
-              placeholder="напр. 123456789012345678"
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-            />
-          </div>
-          <div>
-            <label htmlFor={botInputId} className="mb-1 block text-xs text-neutral-500">
-              Токен бота{' '}
-              {integration.bot_token_configured ? (
-                <span className="ml-1 rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-[10px] text-neutral-300">
-                  задан: {integration.bot_token_mask}
-                </span>
-              ) : (
-                <span className="ml-1 text-neutral-500">не задан</span>
-              )}
-            </label>
-            <input
-              id={botInputId}
-              type="password"
-              value={botToken}
-              onChange={(e) => setBotToken(e.target.value)}
-              autoComplete="new-password"
-              placeholder={
-                integration.bot_token_configured
-                  ? 'Оставьте пустым, чтобы не менять'
-                  : 'Вставьте токен бота'
-              }
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-            />
-          </div>
-          <label className="flex items-center gap-2 text-sm text-neutral-300">
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
-            Интеграция включена
-          </label>
-          <button
-            type="submit"
-            disabled={savingIntegration}
-            className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-          >
-            {savingIntegration ? 'Сохранение…' : 'Сохранить'}
-          </button>
-        </form>
-      </section>
+      {!integration ? (
+        <Card>
+          <Skeleton variant="row" count={4} label="Загрузка настроек Discord" />
+        </Card>
+      ) : (
+        <>
+          <Card padding="none" as="section">
+            <CardHeader title="Бот и сервер Discord" />
+            <form onSubmit={saveIntegration}>
+              <CardBody className="space-y-4">
+                <FieldRow label="Guild ID">
+                  <TextInput
+                    value={guildId}
+                    onChange={(e) => setGuildId(e.target.value)}
+                    inputMode="numeric"
+                    placeholder="напр. 123456789012345678"
+                  />
+                </FieldRow>
+                <FieldRow
+                  label="Токен бота"
+                  hint={
+                    integration.bot_token_configured ? (
+                      <>
+                        Задан: <span className="font-mono">{integration.bot_token_mask}</span>.
+                        Оставьте поле пустым, чтобы не менять.
+                      </>
+                    ) : (
+                      'Токен ещё не задан.'
+                    )
+                  }
+                >
+                  <TextInput
+                    type="password"
+                    value={botToken}
+                    onChange={(e) => setBotToken(e.target.value)}
+                    autoComplete="new-password"
+                    placeholder={
+                      integration.bot_token_configured
+                        ? 'Оставьте пустым, чтобы не менять'
+                        : 'Вставьте токен бота'
+                    }
+                  />
+                </FieldRow>
+                <Checkbox
+                  label="Интеграция включена"
+                  checked={enabled}
+                  onChange={(e) => setEnabled(e.target.checked)}
+                />
+              </CardBody>
+              <CardFooter>
+                <Button type="submit" variant="primary" loading={savingIntegration}>
+                  Сохранить
+                </Button>
+              </CardFooter>
+            </form>
+          </Card>
 
-      <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Добавить вебхук</h2>
-        <form onSubmit={createWebhook} className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label htmlFor={`${urlInputId}-type`} className="mb-1 block text-xs text-neutral-500">
-                Тип события
-              </label>
-              <select
-                id={`${urlInputId}-type`}
-                value={newEventType}
-                onChange={(e) => setNewEventType(e.target.value as DiscordEventType)}
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-              >
-                {DISCORD_EVENT_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {eventLabel(type)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label
-                htmlFor={`${urlInputId}-label`}
-                className="mb-1 block text-xs text-neutral-500"
-              >
-                Метка канала
-              </label>
-              <input
-                id={`${urlInputId}-label`}
-                type="text"
-                value={newLabel}
-                onChange={(e) => setNewLabel(e.target.value)}
-                maxLength={100}
-                placeholder="напр. #bans"
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
+          <Card padding="none" as="section">
+            <CardHeader title="Добавить вебхук" />
+            <form onSubmit={createWebhook}>
+              <CardBody className="space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FieldRow label="Тип события">
+                    <Select
+                      value={newEventType}
+                      onChange={(e) => setNewEventType(e.target.value as DiscordEventType)}
+                    >
+                      {DISCORD_EVENT_TYPES.map((type) => (
+                        <option key={type} value={type}>
+                          {eventLabel(type)}
+                        </option>
+                      ))}
+                    </Select>
+                  </FieldRow>
+                  <FieldRow label="Метка канала">
+                    <TextInput
+                      value={newLabel}
+                      onChange={(e) => setNewLabel(e.target.value)}
+                      maxLength={100}
+                      placeholder="напр. #bans"
+                    />
+                  </FieldRow>
+                </div>
+                <FieldRow
+                  label="Webhook URL"
+                  hint="Записывается, но никогда не показывается целиком."
+                >
+                  <TextInput
+                    type="password"
+                    className="font-mono"
+                    value={newUrl}
+                    onChange={(e) => setNewUrl(e.target.value)}
+                    autoComplete="off"
+                    placeholder="https://discord.com/api/webhooks/…"
+                  />
+                </FieldRow>
+                <Checkbox
+                  label="Упоминать @everyone"
+                  checked={newMention}
+                  onChange={(e) => setNewMention(e.target.checked)}
+                />
+              </CardBody>
+              <CardFooter>
+                <Button type="submit" variant="primary" loading={creating}>
+                  Добавить вебхук
+                </Button>
+              </CardFooter>
+            </form>
+          </Card>
+
+          <Card padding="none" as="section">
+            <CardHeader title="Вебхуки" count={webhooks.length > 0 ? webhooks.length : undefined} />
+            {webhooks.length === 0 ? (
+              <EmptyState
+                title="Вебхуков пока нет"
+                description="Добавьте первый вебхук формой выше — до этого события никуда не уходят."
               />
-            </div>
-          </div>
-          <div>
-            <label htmlFor={urlInputId} className="mb-1 block text-xs text-neutral-500">
-              Webhook URL (только запись)
-            </label>
-            <input
-              id={urlInputId}
-              type="password"
-              value={newUrl}
-              onChange={(e) => setNewUrl(e.target.value)}
-              autoComplete="off"
-              placeholder="https://discord.com/api/webhooks/…"
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 font-mono text-xs focus:border-neutral-600 focus:outline-none"
-            />
-          </div>
-          <label className="flex items-center gap-2 text-sm text-neutral-300">
-            <input
-              type="checkbox"
-              checked={newMention}
-              onChange={(e) => setNewMention(e.target.checked)}
-            />
-            Упоминать @everyone
-          </label>
-          <button
-            type="submit"
-            disabled={creating}
-            className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-          >
-            {creating ? 'Добавление…' : 'Добавить вебхук'}
-          </button>
-        </form>
-      </section>
-
-      <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Вебхуки</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase text-neutral-500">
-              <tr>
-                <th className="py-2 pr-2">Событие</th>
-                <th className="py-2 pr-2">Канал</th>
-                <th className="py-2 pr-2">URL</th>
-                <th className="py-2 pr-2">@everyone</th>
-                <th className="py-2 pr-2">Статус</th>
-                <th className="py-2 pr-2">Тест</th>
-                <th className="py-2 pr-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {webhooks.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="py-3 text-center text-xs text-neutral-500">
-                    Вебхуков пока нет.
-                  </td>
-                </tr>
-              ) : (
-                webhooks.map((row) => (
-                  <tr key={row.id} className="border-t border-neutral-900 align-top">
-                    <td className="py-2 pr-2">{eventLabel(row.event_type)}</td>
-                    <td className="py-2 pr-2 text-neutral-400">{row.channel_label ?? '—'}</td>
-                    <td className="py-2 pr-2 font-mono text-[10px] text-neutral-400">
-                      {row.url_mask}
-                    </td>
-                    <td className="py-2 pr-2 text-neutral-400">
-                      {row.mention_everyone ? 'да' : '—'}
-                    </td>
-                    <td className="py-2 pr-2">
-                      <button
-                        type="button"
-                        disabled={busyId === row.id}
-                        onClick={() => toggleWebhook(row)}
-                        className={`rounded px-2 py-0.5 text-xs disabled:opacity-40 ${
-                          row.enabled
-                            ? 'bg-emerald-950/50 text-emerald-300'
-                            : 'bg-neutral-800 text-neutral-400'
-                        }`}
-                      >
-                        {row.enabled ? 'вкл' : 'выкл'}
-                      </button>
-                    </td>
-                    <td className="py-2 pr-2">
-                      <div className="flex flex-col items-start gap-1">
-                        <button
-                          type="button"
-                          disabled={testingId === row.id}
-                          onClick={() => testWebhook(row.id)}
-                          className="rounded border border-sky-900 px-3 py-0.5 text-xs text-sky-300 hover:border-sky-700 disabled:opacity-40"
-                        >
-                          {testingId === row.id ? 'Отправка…' : 'Тест'}
-                        </button>
-                        {testResults[row.id] ? (
-                          <span
-                            className={`text-[11px] ${
-                              testResults[row.id]?.kind === 'ok'
-                                ? 'text-emerald-400'
-                                : 'text-red-400'
-                            }`}
-                          >
-                            {testResults[row.id]?.text}
-                          </span>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td className="py-2 pr-2 text-right">
-                      <button
-                        type="button"
-                        disabled={busyId === row.id}
-                        onClick={() => deleteWebhook(row.id)}
-                        className="rounded border border-red-900 px-3 py-0.5 text-xs text-red-400 hover:border-red-700 disabled:opacity-40"
-                      >
-                        Удалить
-                      </button>
-                    </td>
+            ) : (
+              <Table ariaLabel="Вебхуки Discord">
+                <TableHead>
+                  <tr>
+                    <Th>Событие</Th>
+                    <Th>Канал</Th>
+                    <Th>URL</Th>
+                    <Th>@everyone</Th>
+                    <Th>Состояние</Th>
+                    <Th>Проверка</Th>
+                    <Th align="right">Действия</Th>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+                </TableHead>
+                <TableBody>
+                  {webhooks.map((row) => (
+                    <TableRow key={row.id}>
+                      <Td>{eventLabel(row.event_type)}</Td>
+                      <Td className="text-ink-2">{row.channel_label ?? '—'}</Td>
+                      <Td className="font-mono text-2xs text-ink-3">{row.url_mask}</Td>
+                      <Td className="text-ink-2">{row.mention_everyone ? 'да' : '—'}</Td>
+                      <Td>
+                        <span className="flex items-center gap-2">
+                          <span className="text-xs text-ink-3">{row.enabled ? 'Вкл' : 'Выкл'}</span>
+                          <Switch
+                            label={`Включить вебхук «${eventLabel(row.event_type)}»`}
+                            checked={row.enabled}
+                            disabled={busyId === row.id}
+                            onChange={() => void toggleWebhook(row)}
+                          />
+                        </span>
+                      </Td>
+                      <Td>
+                        <div className="flex flex-col items-start gap-1">
+                          <Button
+                            size="sm"
+                            loading={testingId === row.id}
+                            onClick={() => void testWebhook(row.id)}
+                          >
+                            Тест
+                          </Button>
+                          {testResults[row.id] ? (
+                            <span
+                              className={
+                                testResults[row.id]?.kind === 'ok'
+                                  ? 'text-2xs text-good'
+                                  : 'text-2xs text-crit'
+                              }
+                            >
+                              {testResults[row.id]?.text}
+                            </span>
+                          ) : null}
+                        </div>
+                      </Td>
+                      <Td align="right">
+                        <IconButton
+                          icon={<TrashIcon />}
+                          label={`Удалить вебхук «${eventLabel(row.event_type)}»`}
+                          size="sm"
+                          tone="destructive"
+                          disabled={busyId === row.id}
+                          onClick={() => setPendingDelete(row)}
+                        />
+                      </Td>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </Card>
+        </>
+      )}
+
       <DiscordTemplatesSection />
       <DiscordRoleMappingsSection />
-
       <DiscordStatusChannelsSection />
-    </div>
+
+      <AlertDialog
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title="Удалить вебхук"
+        body={
+          pendingDelete
+            ? `Вебхук «${eventLabel(pendingDelete.event_type)}»${pendingDelete.channel_label ? ` (${pendingDelete.channel_label})` : ''} будет удалён вместе с сохранённым адресом. Уведомления по этому событию перестанут уходить.`
+            : ''
+        }
+        confirmLabel="Удалить вебхук"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={pendingDelete !== null && busyId === pendingDelete.id}
+        onConfirm={() => {
+          if (pendingDelete) void deleteWebhook(pendingDelete.id);
+        }}
+      />
+    </>
   );
 }

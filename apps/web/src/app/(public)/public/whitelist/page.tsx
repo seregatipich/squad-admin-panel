@@ -1,6 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import {
+  Button,
+  Card,
+  CardBody,
+  EmptyState,
+  FieldRow,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Skeleton,
+  Textarea,
+  TextInput,
+} from '@/components/ui';
 
 const STEAM_ID64_RE = /^\d{17}$/;
 
@@ -23,6 +36,7 @@ export default function PublicWhitelistPage() {
   const [submitted, setSubmitted] = useState(false);
 
   const refresh = useCallback(async () => {
+    setState('loading');
     try {
       const res = await fetch('/api/v1/public/whitelist/settings', { cache: 'no-store' });
       if (!res.ok) {
@@ -91,90 +105,86 @@ export default function PublicWhitelistPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <header className="space-y-1 border-b border-neutral-900 pb-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Заявка на whitelist / VIP</h1>
-        <p className="text-sm text-neutral-400">
-          Оставьте заявку на добавление в whitelist. Заявку рассмотрят администраторы.
-        </p>
-      </header>
+    <PageContainer width="reading">
+      <PageHeader
+        title="Заявка на whitelist / VIP"
+        subtitle="Оставьте заявку на добавление в whitelist. Заявку рассмотрят администраторы."
+      />
 
-      {state === 'loading' ? <p className="text-sm text-neutral-500">Загрузка…</p> : null}
+      {state === 'loading' ? <Skeleton variant="card" label="Проверяем, открыт ли приём" /> : null}
 
       {state === 'error' ? (
-        <p className="rounded border border-red-900 bg-red-950 p-4 text-sm text-red-200">
-          Не удалось загрузить портал заявок. Попробуйте позже.
-        </p>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить портал заявок."
+          description="Попробуйте позже."
+          action={
+            <Button size="sm" onClick={() => void refresh()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
       {state === 'closed' ? (
-        <p className="rounded border border-neutral-800 bg-neutral-950 px-4 py-6 text-center text-sm text-neutral-400">
-          Приём заявок сейчас закрыт.
-        </p>
+        <Card padding="none">
+          <EmptyState
+            title="Приём заявок сейчас закрыт."
+            description="Администрация закрыла набор. Загляните позже — форма появится здесь сама."
+          />
+        </Card>
       ) : null}
 
       {state === 'open' && submitted ? (
-        <div className="rounded border border-emerald-900 bg-emerald-950 p-4 text-sm text-emerald-200">
-          Заявка отправлена. Спасибо! Мы свяжемся с вами после рассмотрения.
-        </div>
+        <InlineBanner
+          tone="good"
+          title="Заявка отправлена."
+          description="Спасибо! Мы свяжемся с вами после рассмотрения."
+        />
       ) : null}
 
       {state === 'open' && !submitted ? (
-        <form
-          onSubmit={submit}
-          className="space-y-4 rounded-lg border border-neutral-800 bg-neutral-950 p-5"
-        >
-          {error ? (
-            <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-              {error}
-            </div>
-          ) : null}
+        <Card padding="none">
+          <CardBody>
+            <form onSubmit={submit} className="space-y-4">
+              {error ? <InlineBanner tone="crit" title={error} /> : null}
 
-          <label className="block text-sm">
-            <span className="mb-1 block text-neutral-400">SteamID64</span>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={steamId64}
-              onChange={(e) => setSteamId64(e.target.value)}
-              placeholder="76561198000000000"
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 font-mono text-sm"
-            />
-          </label>
+              <FieldRow label="SteamID64" required>
+                <TextInput
+                  inputMode="numeric"
+                  value={steamId64}
+                  onChange={(e) => setSteamId64(e.target.value)}
+                  placeholder="76561198000000000"
+                  className="font-mono"
+                />
+              </FieldRow>
 
-          <label className="block text-sm">
-            <span className="mb-1 block text-neutral-400">Сообщение</span>
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              rows={5}
-              maxLength={2000}
-              placeholder="Расскажите о себе: сколько играете, за что хотите whitelist…"
-              className="w-full resize-y rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm"
-            />
-          </label>
+              <FieldRow label="Сообщение" required>
+                <Textarea
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  rows={5}
+                  maxLength={2000}
+                  placeholder="Расскажите о себе: сколько играете, за что хотите whitelist…"
+                />
+              </FieldRow>
 
-          <label className="block text-sm">
-            <span className="mb-1 block text-neutral-400">Контакт (необязательно)</span>
-            <input
-              type="text"
-              value={contact}
-              onChange={(e) => setContact(e.target.value)}
-              maxLength={128}
-              placeholder="Discord, Steam-профиль…"
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm"
-            />
-          </label>
+              <FieldRow label="Контакт (необязательно)">
+                <TextInput
+                  value={contact}
+                  onChange={(e) => setContact(e.target.value)}
+                  maxLength={128}
+                  placeholder="Discord, Steam-профиль…"
+                />
+              </FieldRow>
 
-          <button
-            type="submit"
-            disabled={submitting}
-            className="rounded-md border border-sky-700 bg-sky-950 px-4 py-2 text-sm text-sky-200 hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {submitting ? 'Отправляем…' : 'Отправить заявку'}
-          </button>
-        </form>
+              <Button type="submit" variant="primary" loading={submitting}>
+                Отправить заявку
+              </Button>
+            </form>
+          </CardBody>
+        </Card>
       ) : null}
-    </div>
+    </PageContainer>
   );
 }

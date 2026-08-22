@@ -1,8 +1,19 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useState } from 'react';
 
+import {
+  Badge,
+  Card,
+  CardHeader,
+  CloseIcon,
+  EmptyState,
+  FieldRow,
+  IconButton,
+  InlineBanner,
+  Select,
+} from '@/components/ui';
 import { type PickedPlayer, PlayerSearchSelect } from '../PlayerSearchSelect';
 import {
   canRemoveLink,
@@ -40,7 +51,6 @@ export function IssueLinksBlock({
   viewer: IssueLinkViewer | null;
   onChanged: () => void;
 }) {
-  const entityTypeSelectId = useId();
   const [servers, setServers] = useState<ServerOption[]>([]);
   const [entityType, setEntityType] = useState<IssueLinkEntityType>('player');
   const [busy, setBusy] = useState(false);
@@ -101,102 +111,91 @@ export function IssueLinksBlock({
   const ordered = sortLinks(links);
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-        Связанные объекты
-        <span className="ml-2 rounded-full bg-neutral-800 px-2 py-0.5 text-[11px] text-neutral-200 tabular-nums">
-          {ordered.length}
-        </span>
-      </h2>
+    <Card as="section" padding="none">
+      <CardHeader title="Связанные объекты" count={ordered.length} />
 
       {ordered.length === 0 ? (
-        <div className="rounded border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
-          Связанных объектов нет.
-        </div>
+        <EmptyState
+          title="Связанных объектов нет"
+          description="Свяжите тикет с игроком или сервером — связь появится в этом списке."
+        />
       ) : (
-        <ul className="space-y-1">
+        <ul className="divide-y divide-line">
           {ordered.map((link) => (
-            <li
-              key={link.id}
-              className="flex items-center gap-2 rounded border border-neutral-900 bg-neutral-900/40 px-3 py-1.5 text-sm"
-            >
-              <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-neutral-400">
-                {entityTypeLabel(link.entity_type)}
-              </span>
+            <li key={link.id} className="flex min-h-9 items-center gap-2 px-4 py-1.5 text-[13px]">
+              <Badge size="sm">{entityTypeLabel(link.entity_type)}</Badge>
               {link.ref ? (
-                <Link href={link.ref} className="text-sky-400 hover:text-sky-300">
+                <Link href={link.ref} className="truncate text-accent no-underline hover:underline">
                   {link.label}
                 </Link>
               ) : (
-                <span className="text-neutral-500 line-through">{link.label}</span>
+                <span className="truncate text-ink-3 line-through">{link.label}</span>
               )}
               {canRemoveLink(link, viewer) ? (
-                <button
-                  type="button"
-                  aria-label={`Удалить связь: ${link.label}`}
+                <IconButton
+                  className="ml-auto"
+                  icon={<CloseIcon />}
+                  label={`Удалить связь: ${link.label}`}
+                  tone="destructive"
                   disabled={busy}
                   onClick={() => void detach(link.id)}
-                  className="ml-auto rounded border border-neutral-800 px-2 py-0.5 text-xs text-neutral-400 hover:border-red-900 hover:text-red-300 disabled:opacity-40"
-                >
-                  ✕
-                </button>
+                />
               ) : null}
             </li>
           ))}
         </ul>
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="text-xs text-neutral-500" htmlFor={entityTypeSelectId}>
-          Тип объекта
-        </label>
-        <select
-          id={entityTypeSelectId}
-          value={entityType}
-          disabled={busy}
-          onChange={(e) => {
-            setEntityType(e.target.value as IssueLinkEntityType);
-            setError(null);
-          }}
-          className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-xs outline-none focus:border-neutral-600"
-        >
-          <option value="player">{entityTypeLabel('player')}</option>
-          {servers.length > 0 ? <option value="server">{entityTypeLabel('server')}</option> : null}
-        </select>
-
-        {entityType === 'player' ? (
-          <div className="w-64">
-            <PlayerSearchSelect
-              placeholder="Связать с игроком"
+      <div className="space-y-3 border-t border-line px-4 py-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <FieldRow label="Тип объекта" className="w-44">
+            <Select
+              value={entityType}
               disabled={busy}
-              onSelect={(player: PickedPlayer) => void attach('player', player.id)}
-            />
-          </div>
-        ) : (
-          <select
-            aria-label="Сервер для связи"
-            defaultValue=""
-            disabled={busy}
-            onChange={(e) => {
-              if (e.target.value) void attach('server', e.target.value);
-            }}
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-xs outline-none focus:border-neutral-600"
-          >
-            <option value="">Выберите сервер…</option>
-            {servers.map((server) => (
-              <option key={server.id} value={server.id}>
-                {server.display_name}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
+              onChange={(e) => {
+                setEntityType(e.target.value as IssueLinkEntityType);
+                setError(null);
+              }}
+            >
+              <option value="player">{entityTypeLabel('player')}</option>
+              {servers.length > 0 ? (
+                <option value="server">{entityTypeLabel('server')}</option>
+              ) : null}
+            </Select>
+          </FieldRow>
 
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          {error}
+          {entityType === 'player' ? (
+            <div className="w-64">
+              <PlayerSearchSelect
+                placeholder="Связать с игроком"
+                disabled={busy}
+                onSelect={(player: PickedPlayer) => void attach('player', player.id)}
+              />
+            </div>
+          ) : (
+            <FieldRow label="Сервер для связи" className="w-64">
+              <Select
+                defaultValue=""
+                disabled={busy}
+                onChange={(e) => {
+                  if (e.target.value) void attach('server', e.target.value);
+                }}
+              >
+                <option value="">Выберите сервер…</option>
+                {servers.map((server) => (
+                  <option key={server.id} value={server.id}>
+                    {server.display_name}
+                  </option>
+                ))}
+              </Select>
+            </FieldRow>
+          )}
         </div>
-      ) : null}
-    </section>
+
+        {error ? (
+          <InlineBanner tone="crit" title="Не удалось изменить связи" description={error} />
+        ) : null}
+      </div>
+    </Card>
   );
 }

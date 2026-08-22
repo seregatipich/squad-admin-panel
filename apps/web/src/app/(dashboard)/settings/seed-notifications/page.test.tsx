@@ -90,7 +90,7 @@ describe('SeedNotificationsPage', () => {
       }),
     );
     render(<SeedNotificationsPage />);
-    expect(await screen.findByText('Нет серверов.')).toBeInTheDocument();
+    expect(await screen.findByText('Серверов пока нет')).toBeInTheDocument();
   });
 
   it('shows a toggle error', async () => {

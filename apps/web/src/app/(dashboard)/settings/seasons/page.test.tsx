@@ -141,7 +141,7 @@ describe('seasons settings page', () => {
     'renders the empty state when there are no seasons',
     async () => {
       await renderPage({ items: [] });
-      expect(await screen.findByText('Сезонов пока нет.')).toBeInTheDocument();
+      expect(await screen.findByText('Сезонов пока нет')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
@@ -159,7 +159,7 @@ describe('seasons settings page', () => {
     'creates a season and posts ISO instants derived from the date inputs',
     async () => {
       const { calls } = await renderPage({ items: [] });
-      await screen.findByText('Сезонов пока нет.');
+      await screen.findByText('Сезонов пока нет');
 
       fillForm({ name: 'Весна 2027', start: '2027-03-01', end: '2027-05-31' });
       fireEvent.click(screen.getByRole('button', { name: 'Создать' }));
@@ -181,7 +181,7 @@ describe('seasons settings page', () => {
     'refuses to submit an incomplete form without calling the API',
     async () => {
       const { calls } = await renderPage({ items: [] });
-      await screen.findByText('Сезонов пока нет.');
+      await screen.findByText('Сезонов пока нет');
 
       fillForm({ name: 'Без дат' });
       fireEvent.click(screen.getByRole('button', { name: 'Создать' }));
@@ -196,7 +196,7 @@ describe('seasons settings page', () => {
     'translates a server error code into Russian',
     async () => {
       await renderPage({ items: [], mutationStatus: 409, mutationError: 'active_season_exists' });
-      await screen.findByText('Сезонов пока нет.');
+      await screen.findByText('Сезонов пока нет');
 
       fillForm({ name: 'Второй активный', start: '2027-03-01', end: '2027-05-31' });
       fireEvent.click(screen.getByRole('button', { name: 'Создать' }));
@@ -212,7 +212,7 @@ describe('seasons settings page', () => {
     'falls back to the status code for an unrecognised error',
     async () => {
       await renderPage({ items: [], mutationStatus: 500, mutationError: 'kaboom' });
-      await screen.findByText('Сезонов пока нет.');
+      await screen.findByText('Сезонов пока нет');
 
       fillForm({ name: 'Ошибка', start: '2027-03-01', end: '2027-05-31' });
       fireEvent.click(screen.getByRole('button', { name: 'Создать' }));

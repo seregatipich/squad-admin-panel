@@ -1,5 +1,22 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
+import {
+  Badge,
+  Card,
+  CardBody,
+  CardGrid,
+  CardHeader,
+  EmptyState,
+  PageContainer,
+  PageHeader,
+  StatTile,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
 import { formatOnlineHours, getPublicClan, type PublicClan } from '../clan-data';
 
 export const dynamic = 'force-dynamic';
@@ -34,104 +51,104 @@ export default async function PublicClanPage({ params }: PublicClanPageProps) {
     notFound();
   }
 
+  const activityPeak = Math.max(...clan.activity.map((item) => item.online_seconds), 1);
+
   return (
-    <div className="space-y-8">
-      <header className="space-y-2 border-b border-neutral-900 pb-5">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-          {clan.tags.map((tag) => (
-            <span key={tag} className="rounded bg-neutral-900 px-2 py-1">
-              {tag}
-            </span>
-          ))}
-        </div>
-        <h1 className="text-2xl font-semibold tracking-tight">{clan.name}</h1>
-        {clan.description ? <p className="text-sm text-neutral-400">{clan.description}</p> : null}
-      </header>
+    <PageContainer width="wide">
+      <PageHeader
+        title={clan.name}
+        subtitle={clan.description ?? undefined}
+        backHref="/public/clans"
+        backLabel="К списку кланов"
+        meta={clan.tags.map((tag) => (
+          <Badge key={tag} size="sm">
+            {tag}
+          </Badge>
+        ))}
+      />
 
-      <section className="grid gap-3 sm:grid-cols-4">
-        <Stat title="Участников" value={String(clan.stats.roster_size)} />
-        <Stat title="Матчей" value={String(clan.stats.matches_total)} />
-        <Stat title="Онлайн за 30 дней" value={formatOnlineHours(clan.stats.online_seconds)} />
-        <Stat title="K/D" value={clan.stats.kd.toFixed(2)} />
-      </section>
+      <CardGrid cols={4}>
+        <StatTile label="Участников" value={clan.stats.roster_size} />
+        <StatTile label="Матчей" value={clan.stats.matches_total} />
+        <StatTile label="Онлайн за 30 дней" value={formatOnlineHours(clan.stats.online_seconds)} />
+        <StatTile label="K/D" value={clan.stats.kd.toFixed(2)} />
+      </CardGrid>
 
-      <section className="space-y-3">
-        <h2 className="text-xs uppercase tracking-[0.2em] text-neutral-300">Ростер</h2>
-        <div className="overflow-hidden rounded border border-neutral-800 bg-neutral-950">
-          <table className="w-full text-sm">
-            <tbody className="divide-y divide-neutral-900">
+      <Card padding="none">
+        <CardHeader title="Ростер" count={clan.roster.length} />
+        {clan.roster.length === 0 ? (
+          <EmptyState
+            title="Ростер пуст."
+            description="Клан ещё не показал состав на публичной странице."
+          />
+        ) : (
+          <Table ariaLabel={`Состав клана ${clan.name}`}>
+            <TableHead sticky={false}>
+              <TableRow>
+                <Th>Игрок</Th>
+                <Th>Роль</Th>
+              </TableRow>
+            </TableHead>
+            <TableBody>
               {clan.roster.map((member, index) => (
-                <tr key={`${member.nickname}-${index}`}>
-                  <td className="px-4 py-2 text-neutral-200">{member.nickname}</td>
-                  <td className="px-4 py-2 text-right text-neutral-500">{member.role}</td>
-                </tr>
+                <TableRow key={`${member.nickname}-${index}`}>
+                  <Td>{member.nickname}</Td>
+                  <Td className="text-ink-3">{member.role}</Td>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-          {clan.roster.length === 0 ? (
-            <p className="px-4 py-5 text-sm text-neutral-500">Ростер пуст.</p>
-          ) : null}
-        </div>
-      </section>
+            </TableBody>
+          </Table>
+        )}
+      </Card>
 
-      <section className="space-y-3">
-        <h2 className="text-xs uppercase tracking-[0.2em] text-neutral-300">Активность</h2>
-        <div className="flex h-28 items-end gap-1 rounded border border-neutral-800 bg-neutral-950 px-4 py-4">
-          {clan.activity.map((point) => {
-            const max = Math.max(...clan.activity.map((item) => item.online_seconds), 1);
-            return (
+      <Card padding="none">
+        <CardHeader title="Активность" description="Онлайн клана по дням за последний месяц." />
+        <CardBody>
+          {/* Столбики — иллюстрация распределения: число за каждый день живёт в
+              подсказке, поэтому программе чтения с экрана полоса не нужна. */}
+          <div aria-hidden="true" className="flex h-28 items-end gap-1">
+            {clan.activity.map((point) => (
               <div
                 key={point.day}
-                className="flex-1 rounded-t bg-sky-600"
+                className="flex-1 rounded-t bg-accent"
                 title={`${point.day} · ${formatOnlineHours(point.online_seconds)}`}
-                style={{ height: `${Math.max(2, (point.online_seconds / max) * 100)}%` }}
+                style={{ height: `${Math.max(2, (point.online_seconds / activityPeak) * 100)}%` }}
               />
-            );
-          })}
-        </div>
-      </section>
+            ))}
+          </div>
+        </CardBody>
+      </Card>
 
-      <section className="space-y-3">
-        <h2 className="text-xs uppercase tracking-[0.2em] text-neutral-300">Последние матчи</h2>
-        <div className="overflow-x-auto rounded border border-neutral-800 bg-neutral-950">
-          <table className="w-full min-w-[38rem] text-sm">
-            <thead className="border-b border-neutral-900 text-left text-xs text-neutral-500">
-              <tr>
-                <th className="px-4 py-2 font-normal">Дата</th>
-                <th className="px-4 py-2 font-normal">Карта</th>
-                <th className="px-4 py-2 font-normal">Слой</th>
-                <th className="px-4 py-2 font-normal">Результат</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-neutral-900">
+      <Card padding="none">
+        <CardHeader title="Последние матчи" count={clan.matches.length} />
+        {clan.matches.length === 0 ? (
+          <EmptyState
+            title="Истории матчей пока нет."
+            description="Первый сыгранный матч появится здесь автоматически."
+          />
+        ) : (
+          <Table ariaLabel={`Последние матчи клана ${clan.name}`}>
+            <TableHead sticky={false}>
+              <TableRow>
+                <Th>Дата</Th>
+                <Th>Карта</Th>
+                <Th>Слой</Th>
+                <Th>Результат</Th>
+              </TableRow>
+            </TableHead>
+            <TableBody>
               {clan.matches.map((match) => (
-                <tr key={match.id}>
-                  <td className="px-4 py-2 text-neutral-400">
-                    {new Date(match.started_at).toLocaleDateString('ru-RU')}
-                  </td>
-                  <td className="px-4 py-2 text-neutral-200">{match.map ?? '—'}</td>
-                  <td className="px-4 py-2 font-mono text-xs text-neutral-400">
-                    {match.layer ?? '—'}
-                  </td>
-                  <td className="px-4 py-2 text-neutral-400">{match.winner ?? '—'}</td>
-                </tr>
+                <TableRow key={match.id}>
+                  <Td>{new Date(match.started_at).toLocaleDateString('ru-RU')}</Td>
+                  <Td>{match.map ?? '—'}</Td>
+                  <Td className="font-mono text-xs">{match.layer ?? '—'}</Td>
+                  <Td>{match.winner ?? '—'}</Td>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-          {clan.matches.length === 0 ? (
-            <p className="px-4 py-5 text-sm text-neutral-500">Истории матчей пока нет.</p>
-          ) : null}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function Stat({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="rounded border border-neutral-800 bg-neutral-950 p-4">
-      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500">{title}</div>
-      <div className="mt-2 text-2xl font-semibold tabular-nums text-neutral-50">{value}</div>
-    </div>
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+    </PageContainer>
   );
 }

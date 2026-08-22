@@ -5,6 +5,42 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BulkModerationModal, type BulkModerationTarget } from './BulkModerationModal';
 
+/**
+ * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
+ * а окно построено на примитиве `Modal`. Полифилл повторяет ровно то, на что
+ * опирается примитив: атрибут `open`, фокус внутрь окна и цепочку
+ * Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
 const TARGETS: BulkModerationTarget[] = [
   { playerId: '019e2000-0000-7000-8000-0000000000a1', name: 'Alpha' },
   { playerId: '019e2000-0000-7000-8000-0000000000a2', name: 'Bravo' },
@@ -316,5 +352,78 @@ describe('BulkModerationModal', () => {
       />,
     );
     expect(screen.getByText('Нет прав на массовые действия модерации.')).toBeInTheDocument();
+  });
+  it('names the current step so the three screens do not blur into one', () => {
+    render(
+      <BulkModerationModal
+        serverId="srv-1"
+        targets={TARGETS}
+        permissions={ALL_PERMS}
+        onOpenChange={() => undefined}
+      />,
+    );
+    expect(screen.getByText('Шаг 1 из 3 · Параметры')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Причина'), { target: { value: 'Читы' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+    expect(screen.getByText('Шаг 2 из 3 · Подтверждение')).toBeInTheDocument();
+  });
+
+  // Регрессия дизайна: клик мимо панели закрывал окно и безвозвратно стирал
+  // набранную причину и выбранный срок.
+  it('refuses the soft dismiss gestures once a reason has been typed', () => {
+    const onOpenChange = vi.fn();
+    render(
+      <BulkModerationModal
+        serverId="srv-1"
+        targets={TARGETS}
+        permissions={ALL_PERMS}
+        onOpenChange={onOpenChange}
+      />,
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Массовое действие' });
+
+    fireEvent.change(screen.getByLabelText('Причина'), { target: { value: 'Читы' } });
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    // Явный выход из окна при этом остаётся.
+    fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('still closes on Escape while the form holds nothing worth losing', () => {
+    const onOpenChange = vi.fn();
+    render(
+      <BulkModerationModal
+        serverId="srv-1"
+        targets={TARGETS}
+        permissions={ALL_PERMS}
+        onOpenChange={onOpenChange}
+      />,
+    );
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Массовое действие' }), {
+      key: 'Escape',
+    });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('asks the count challenge only for a bulk ban', () => {
+    render(
+      <BulkModerationModal
+        serverId="srv-1"
+        targets={TARGETS}
+        permissions={ALL_PERMS}
+        onOpenChange={() => undefined}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText('Причина'), { target: { value: 'Читы' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+    expect(screen.queryByLabelText('Введите количество целей')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Назад' }));
+    fireEvent.change(screen.getByLabelText('Действие'), { target: { value: 'ban' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }));
+    expect(screen.getByLabelText('Введите количество целей')).toBeInTheDocument();
   });
 });

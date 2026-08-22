@@ -1,5 +1,6 @@
 'use client';
 
+import { Card, EmptyState } from '@/components/ui';
 import { CHART_AXIS, CHART_FRAME, CHART_GRID } from '@/lib/chart-tokens';
 
 interface Point {
@@ -29,15 +30,24 @@ function defaultFormat(v: number): string {
   return `${v.toFixed(1)}`;
 }
 
+/** Служебный ярлык над значением — единственное место, где §1 разрешает капслок. */
+const LABEL_CLASS = 'text-2xs uppercase tracking-[0.06em] text-ink-3';
+
+/**
+ * Карточка одной метрики: ярлык, текущее значение и линия за период.
+ *
+ * Цвет линии приходит пропсом и различает соседние метрики, а не оценивает их
+ * (§5); оценку даёт шкала слева.
+ */
 export function MetricsChart({ points, label, unit, color, maxY, formatValue }: Props) {
   const fmt = formatValue ?? defaultFormat;
 
   if (points.length === 0) {
     return (
-      <div className="rounded border border-neutral-800 bg-neutral-950 p-4">
-        <span className="text-xs uppercase tracking-widest text-neutral-400">{label}</span>
-        <p className="mt-2 text-sm text-neutral-500">Нет данных</p>
-      </div>
+      <Card>
+        <span className={LABEL_CLASS}>{label}</span>
+        <EmptyState title="Нет данных" description="За выбранный период измерений не было." />
+      </Card>
     );
   }
 
@@ -55,10 +65,10 @@ export function MetricsChart({ points, label, unit, color, maxY, formatValue }: 
   const currentValue = values[values.length - 1] ?? 0;
 
   return (
-    <div className="rounded border border-neutral-800 bg-neutral-950 p-4">
-      <div className="mb-2 flex items-baseline justify-between">
-        <span className="text-xs uppercase tracking-widest text-neutral-400">{label}</span>
-        <span className="text-lg font-semibold" style={{ color }}>
+    <Card>
+      <div className="mb-2 flex items-baseline justify-between gap-3">
+        <span className={LABEL_CLASS}>{label}</span>
+        <span className="text-[17px] font-semibold tabular-nums" style={{ color }}>
           {fmt(currentValue)} {unit}
         </span>
       </div>
@@ -92,7 +102,7 @@ export function MetricsChart({ points, label, unit, color, maxY, formatValue }: 
                 stroke={CHART_GRID}
                 strokeWidth="0.5"
               />
-              <text x={PAD.left - 4} y={y + 3} textAnchor="end" fill={CHART_AXIS} fontSize="9">
+              <text x={PAD.left - 4} y={y + 3} textAnchor="end" fill={CHART_AXIS} fontSize="11">
                 {fmt(val)}
               </text>
             </g>
@@ -100,6 +110,6 @@ export function MetricsChart({ points, label, unit, color, maxY, formatValue }: 
         })}
         <path d={pathD} fill="none" stroke={color} strokeWidth="1.5" />
       </svg>
-    </div>
+    </Card>
   );
 }

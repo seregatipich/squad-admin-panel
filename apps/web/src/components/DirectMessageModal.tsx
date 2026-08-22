@@ -1,5 +1,15 @@
 'use client';
 import { useEffect, useId, useState } from 'react';
+import {
+  AlertDialog,
+  Button,
+  Checkbox,
+  FieldRow,
+  InlineBanner,
+  Modal,
+  Select,
+  Textarea,
+} from '@/components/ui';
 import { type MessageTemplate, pickableTemplates } from '@/lib/messageTemplates';
 import { TemplatePicker } from './TemplatePicker';
 
@@ -27,6 +37,10 @@ export interface DirectMessageTarget {
  * `target.serverId` is null the modal loads the server list and requires the
  * moderator to pick one before sending. `Записать в карточку` additionally
  * stores the message in the addressee's chat history.
+ *
+ * Отправку подтверждает `AlertDialog`, а не системный `confirm()`: последний
+ * останавливает поток выполнения, не даёт ловушки фокуса и выглядит по-разному
+ * в разных браузерах.
  */
 export function DirectMessageModal({
   target,
@@ -41,11 +55,10 @@ export function DirectMessageModal({
   const [message, setMessage] = useState('');
   const [logToCard, setLogToCard] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const titleId = useId();
   const textareaId = useId();
   const serverSelectId = useId();
-  const logToCardId = useId();
 
   const needsServerPick = target != null && target.serverId === null;
 
@@ -55,6 +68,7 @@ export function DirectMessageModal({
     setLogToCard(false);
     setSelectedServerId('');
     setFeedback(null);
+    setConfirming(false);
     let cancelled = false;
     void (async () => {
       try {
@@ -90,15 +104,6 @@ export function DirectMessageModal({
     };
   }, [needsServerPick]);
 
-  useEffect(() => {
-    if (!target) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onOpenChange(false);
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [target, onOpenChange]);
-
   if (!target) return null;
 
   const trimmed = message.trim();
@@ -107,7 +112,6 @@ export function DirectMessageModal({
 
   async function handleSend() {
     if (!target || tooShort || busy || !serverId) return;
-    if (!confirm(`Отправить сообщение игроку «${target.playerName}»?\n\n"${trimmed}"`)) return;
     setBusy(true);
     setFeedback(null);
     try {
@@ -127,118 +131,105 @@ export function DirectMessageModal({
       setFeedback({ kind: 'err', text: (err as Error).message });
     } finally {
       setBusy(false);
+      setConfirming(false);
     }
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      onClick={() => onOpenChange(false)}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') onOpenChange(false);
-      }}
-    >
-      <div
-        className="w-full max-w-md rounded border border-neutral-800 bg-neutral-950 p-6"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-        role="document"
-      >
-        <h2 id={titleId} className="mb-3 text-lg font-semibold text-neutral-100">
-          Сообщение игроку «{target.playerName}»
-        </h2>
-
-        {needsServerPick ? (
-          <div className="mb-3">
-            <label htmlFor={serverSelectId} className="mb-1 block text-xs text-neutral-400">
-              Сервер
-            </label>
-            <select
-              id={serverSelectId}
-              value={selectedServerId}
-              onChange={(e) => setSelectedServerId(e.target.value)}
-              className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200"
+    <>
+      <Modal
+        open
+        onClose={() => onOpenChange(false)}
+        title={`Сообщение игроку «${target.playerName}»`}
+        closeLabel="Закрыть"
+        dismissible={trimmed.length === 0 && !busy}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={busy}>
+              Отмена
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => setConfirming(true)}
+              disabled={tooShort || !serverId}
+              loading={busy}
             >
-              <option value="">— выберите сервер —</option>
-              {servers.map((server) => (
-                <option key={server.id} value={server.id}>
-                  {server.display_name}
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : null}
+              Отправить
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          {needsServerPick ? (
+            <FieldRow label="Сервер" htmlFor={serverSelectId}>
+              <Select
+                id={serverSelectId}
+                value={selectedServerId}
+                onChange={(e) => setSelectedServerId(e.target.value)}
+              >
+                <option value="">— выберите сервер —</option>
+                {servers.map((server) => (
+                  <option key={server.id} value={server.id}>
+                    {server.display_name}
+                  </option>
+                ))}
+              </Select>
+            </FieldRow>
+          ) : null}
 
-        {pickableTemplates(templates).length > 0 ? (
-          <div className="mb-3">
+          {pickableTemplates(templates).length > 0 ? (
             <TemplatePicker
               templates={templates}
               context={{ player: target.playerName }}
               onSelect={(text) => setMessage(text.slice(0, MESSAGE_MAX))}
             />
+          ) : null}
+
+          <div>
+            <label htmlFor={textareaId} className="sr-only">
+              Текст сообщения
+            </label>
+            <Textarea
+              id={textareaId}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              maxLength={MESSAGE_MAX}
+              rows={3}
+              placeholder="Текст сообщения (мин. 2 символа)"
+            />
+            <p className="mt-1 text-right text-xs tabular-nums text-ink-3">
+              {trimmed.length}/{MESSAGE_MAX}
+            </p>
           </div>
-        ) : null}
 
-        <label htmlFor={textareaId} className="sr-only">
-          Текст сообщения
-        </label>
-        <textarea
-          id={textareaId}
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          maxLength={MESSAGE_MAX}
-          rows={3}
-          placeholder="Текст сообщения (мин. 2 символа)"
-          className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-500"
-        />
-        <p className="mt-1 text-right text-xs text-neutral-500">
-          {trimmed.length}/{MESSAGE_MAX}
-        </p>
-
-        <label
-          htmlFor={logToCardId}
-          className="mt-2 flex items-center gap-2 text-xs text-neutral-300"
-        >
-          <input
-            id={logToCardId}
-            type="checkbox"
+          <Checkbox
+            label="Записать в карточку"
             checked={logToCard}
             onChange={(e) => setLogToCard(e.target.checked)}
-            className="rounded border-neutral-700 bg-neutral-900"
           />
-          Записать в карточку
-        </label>
 
-        {feedback ? (
-          <p
-            className={`mt-2 text-xs ${feedback.kind === 'ok' ? 'text-green-400' : 'text-red-400'}`}
-          >
-            {feedback.text}
-          </p>
-        ) : null}
-
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 hover:border-neutral-700"
-          >
-            Отмена
-          </button>
-          <button
-            type="button"
-            disabled={tooShort || busy || !serverId}
-            onClick={() => void handleSend()}
-            className="rounded bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {busy ? 'Отправка…' : 'Отправить'}
-          </button>
+          {feedback ? (
+            <InlineBanner
+              tone={feedback.kind === 'ok' ? 'good' : 'crit'}
+              title={feedback.kind === 'ok' ? feedback.text : 'Сообщение не отправлено'}
+              description={feedback.kind === 'ok' ? undefined : feedback.text}
+            />
+          ) : null}
         </div>
-      </div>
-    </div>
+      </Modal>
+
+      <AlertDialog
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        title="Отправить сообщение игроку"
+        body={`Игрок «${target.playerName}» получит: «${trimmed}»`}
+        confirmLabel="Отправить сообщение"
+        cancelLabel="Отмена"
+        tone="default"
+        busy={busy}
+        onConfirm={() => void handleSend()}
+      />
+    </>
   );
 }
 
@@ -247,6 +238,10 @@ export function DirectMessageModal({
  * call site adds exactly one JSX line. Renders nothing without the Squad
  * `chat` permission or for a roster entry that never resolved to a panel
  * player (`playerId` null).
+ *
+ * @param className Собственное оформление кнопки. Нужно строке живого состава,
+ *   где действие ужато до 24px, а примитив кнопки начинается с 28px; там, где
+ *   его не передали, кнопка берётся из дизайн-системы.
  */
 export function DirectMessageButton({
   playerId,
@@ -267,17 +262,20 @@ export function DirectMessageButton({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-label={`Сообщение игроку: ${name}`}
-        className={
-          className ??
-          'rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-700'
-        }
-      >
-        Сообщение
-      </button>
+      {className ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-label={`Сообщение игроку: ${name}`}
+          className={className}
+        >
+          Сообщение
+        </button>
+      ) : (
+        <Button size="sm" onClick={() => setOpen(true)} aria-label={`Сообщение игроку: ${name}`}>
+          Сообщение
+        </Button>
+      )}
       <DirectMessageModal
         target={open ? { serverId, playerId, playerName: name } : null}
         onOpenChange={setOpen}

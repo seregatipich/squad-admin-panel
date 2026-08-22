@@ -3,6 +3,26 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import {
+  AlertDialog,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  GroupedRow,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Skeleton,
+  StatTile,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
+import {
   activeSubscription,
   bonusTypeLabel,
   daysUntil,
@@ -49,6 +69,10 @@ export function MeBrowser({ displayName }: { displayName: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /* Подписка, отмену которой оператор запросил, но ещё не подтвердил. Хранится
+     сама строка, а не флаг: диалог продолжает называть тариф даже в тот момент,
+     когда перезагруженный список уже не считает подписку активной. */
+  const [cancelTarget, setCancelTarget] = useState<MeSubscription | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -147,172 +171,190 @@ export function MeBrowser({ displayName }: { displayName: string }) {
       'Подписка оформлена.',
     );
 
-  const cancel = (subscriptionId: string) => {
-    if (!confirm('Отменить подписку? Оплаченный период сохранится.')) return;
-    return mutate(
+  /* Отмена не разрушает данные: оплаченный период остаётся, подписку можно
+     оформить заново — поэтому подтверждение обычное, а не критическое (§5). */
+  async function confirmCancel(): Promise<void> {
+    if (!cancelTarget) return;
+    await mutate(
       () =>
-        fetch(`/api/v1/me/subscriptions/${subscriptionId}`, {
+        fetch(`/api/v1/me/subscriptions/${cancelTarget.id}`, {
           method: 'DELETE',
           credentials: 'include',
         }),
       'Подписка отменена. Оплаченный период сохранён.',
     );
-  };
+    setCancelTarget(null);
+  }
 
   const current = activeSubscription(subscriptions);
   const vipDaysLeft = daysUntil(balance?.role_expires_at ?? null);
+  const firstLoad = loading && balance === null;
 
   return (
-    <div className="space-y-6">
-      <header className="space-y-1">
-        <h1 className="text-xl font-semibold text-neutral-100">Мой VIP</h1>
-        <p className="text-sm text-neutral-400">{displayName}</p>
-      </header>
+    <PageContainer width="reading">
+      <PageHeader title="Мой VIP" subtitle={displayName} />
 
       {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {error}
+        <InlineBanner
+          tone="crit"
+          title={error}
+          action={
+            <Button size="sm" onClick={() => void load()} disabled={busy}>
+              Повторить
+            </Button>
+          }
+        />
+      ) : null}
+      {notice ? <InlineBanner tone="good" title={notice} /> : null}
+
+      {firstLoad ? (
+        <div className="space-y-6">
+          <Skeleton variant="card" label="Загружаем данные вашего VIP" />
+          <Skeleton variant="card" count={2} />
         </div>
-      ) : null}
-      {notice ? (
-        <div className="rounded border border-emerald-900 bg-emerald-950 p-3 text-sm text-emerald-200">
-          {notice}
-        </div>
-      ) : null}
+      ) : (
+        <>
+          <StatTile
+            label="Баланс"
+            value={balance?.balance ?? 0}
+            hint={
+              balance?.role_expires_at
+                ? `VIP активен до ${formatDateTime(balance.role_expires_at)} (осталось ${vipDaysLeft} дн.)`
+                : 'VIP сейчас не активен.'
+            }
+          />
 
-      {loading && !balance ? (
-        <div className="py-6 text-center text-sm text-neutral-500">Загрузка…</div>
-      ) : null}
-
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Баланс</h2>
-        <div className="font-mono text-3xl text-emerald-300">{balance?.balance ?? 0}</div>
-        <p className="text-sm text-neutral-400">
-          {balance?.role_expires_at
-            ? `VIP активен до ${formatDateTime(balance.role_expires_at)} (осталось ${vipDaysLeft} дн.)`
-            : 'VIP сейчас не активен.'}
-        </p>
-      </section>
-
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Подписка</h2>
-        {current ? (
-          <div className="space-y-2">
-            <p className="text-sm text-neutral-200">
-              {current.tier_name ?? 'Тариф'} — {current.price_bonuses} бонусов каждые{' '}
-              {current.renews_every_days} дн.
-            </p>
-            <p className="text-sm text-neutral-400">
-              Следующее списание: {formatDateTime(current.next_renewal_at)}
-            </p>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => cancel(current.id)}
-              className="rounded border border-red-900 px-3 py-1 text-sm text-red-200 disabled:opacity-50"
-            >
-              Отменить подписку
-            </button>
-          </div>
-        ) : (
-          <p className="text-sm text-neutral-500">Активной подписки нет.</p>
-        )}
-
-        {subscriptions.length > 0 ? (
-          <ul className="space-y-1 text-xs text-neutral-500">
-            {subscriptions.map((row) => (
-              <li key={row.id}>
-                {row.tier_name ?? row.tier_id} — {subscriptionStatusLabel(row.status)} (с{' '}
-                {formatDateTime(row.created_at)})
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </section>
-
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Тарифы</h2>
-        {tiers.length === 0 ? (
-          <p className="text-sm text-neutral-500">Тарифы сейчас недоступны.</p>
-        ) : (
-          <ul className="space-y-2">
-            {tiers.map((tier) => (
-              <li
-                key={tier.tier_id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded border border-neutral-800 bg-neutral-900/40 p-3"
-              >
-                <div>
-                  <div className="text-sm text-neutral-100">{tier.name}</div>
-                  <div className="text-xs text-neutral-500">
-                    {tier.price_bonuses} бонусов за {tier.days} дн.
-                    {tier.description ? ` — ${tier.description}` : ''}
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
+          <Card padding="none">
+            <CardHeader title="Подписка" />
+            <CardBody className="space-y-3">
+              {current ? (
+                <div className="space-y-2">
+                  <p className="text-[13px] text-ink">
+                    {current.tier_name ?? 'Тариф'} — {current.price_bonuses} бонусов каждые{' '}
+                    {current.renews_every_days} дн.
+                  </p>
+                  <p className="text-xs text-ink-3">
+                    Следующее списание: {formatDateTime(current.next_renewal_at)}
+                  </p>
+                  <Button
+                    variant="secondary"
                     disabled={busy}
-                    onClick={() => buy(tier.tier_id)}
-                    className="rounded border border-neutral-700 px-3 py-1 text-sm text-neutral-200 disabled:opacity-50"
+                    onClick={() => setCancelTarget(current)}
                   >
-                    Купить разово
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy || current !== null}
-                    onClick={() => subscribe(tier.tier_id)}
-                    className="rounded border border-emerald-800 px-3 py-1 text-sm text-emerald-200 disabled:opacity-50"
-                  >
-                    Подписаться
-                  </button>
+                    Отменить подписку
+                  </Button>
                 </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+              ) : (
+                <p className="text-xs text-ink-3">Активной подписки нет.</p>
+              )}
 
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">История бонусов</h2>
-        {history.length === 0 ? (
-          <p className="text-sm text-neutral-500">Операций пока нет.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[420px] text-sm">
-              <thead className="text-xs uppercase tracking-widest text-neutral-500">
-                <tr>
-                  <th className="p-1 text-left">Дата</th>
-                  <th className="p-1 text-left">Тип</th>
-                  <th className="p-1 text-right">Сумма</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((row) => (
-                  <tr key={row.id} className="border-t border-neutral-900">
-                    <td className="p-1 text-neutral-400">{formatDateTime(row.created_at)}</td>
-                    <td className="p-1 text-neutral-300">{bonusTypeLabel(row.type)}</td>
-                    <td
-                      className={`p-1 text-right font-mono ${row.amount >= 0 ? 'text-emerald-300' : 'text-red-300'}`}
-                    >
-                      {formatAmount(row.amount)}
-                    </td>
-                  </tr>
+              {subscriptions.length > 0 ? (
+                <ul className="space-y-1 text-xs text-ink-3">
+                  {subscriptions.map((row) => (
+                    <li key={row.id}>
+                      {row.tier_name ?? row.tier_id} — {subscriptionStatusLabel(row.status)} (с{' '}
+                      {formatDateTime(row.created_at)})
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </CardBody>
+          </Card>
+
+          <Card padding="none">
+            <CardHeader title="Тарифы" count={tiers.length > 0 ? tiers.length : undefined} />
+            {tiers.length === 0 ? (
+              <EmptyState
+                title="Тарифы сейчас недоступны."
+                description="Продажа VIP закрыта администрацией. Загляните позже."
+              />
+            ) : (
+              <div className="divide-y divide-line">
+                {tiers.map((tier) => (
+                  <GroupedRow
+                    key={tier.tier_id}
+                    label={tier.name}
+                    description={`${tier.price_bonuses} бонусов за ${tier.days} дн.${
+                      tier.description ? ` — ${tier.description}` : ''
+                    }`}
+                    control={
+                      <>
+                        <Button size="sm" disabled={busy} onClick={() => buy(tier.tier_id)}>
+                          Купить разово
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          disabled={busy || current !== null}
+                          onClick={() => subscribe(tier.tier_id)}
+                        >
+                          Подписаться
+                        </Button>
+                      </>
+                    }
+                  />
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {cursor !== null ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void loadMore()}
-            className="rounded border border-neutral-700 px-3 py-1 text-sm text-neutral-200 disabled:opacity-50"
-          >
-            Показать ещё
-          </button>
-        ) : null}
-      </section>
-    </div>
+              </div>
+            )}
+          </Card>
+
+          <Card padding="none">
+            <CardHeader title="История бонусов" />
+            {history.length === 0 ? (
+              <EmptyState
+                title="Операций пока нет."
+                description="Здесь появятся начисления за онлайн и списания за VIP."
+              />
+            ) : (
+              <Table ariaLabel="История начислений и списаний бонусов">
+                <TableHead sticky={false}>
+                  <TableRow>
+                    <Th>Дата</Th>
+                    <Th>Тип</Th>
+                    <Th align="right">Сумма</Th>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {history.map((row) => (
+                    <TableRow key={row.id}>
+                      <Td>{formatDateTime(row.created_at)}</Td>
+                      <Td>{bonusTypeLabel(row.type)}</Td>
+                      {/* Знак «+»/«−» уже несёт смысл сам по себе: цвет здесь
+                          дублирует его, а не заменяет (§5). */}
+                      <Td numeric className={row.amount >= 0 ? 'text-good' : 'text-crit'}>
+                        {formatAmount(row.amount)}
+                      </Td>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+            {cursor !== null ? (
+              <div className="border-t border-line px-4 py-3">
+                <Button onClick={() => void loadMore()} loading={busy}>
+                  Показать ещё
+                </Button>
+              </div>
+            ) : null}
+          </Card>
+        </>
+      )}
+
+      <AlertDialog
+        open={cancelTarget !== null}
+        onClose={() => setCancelTarget(null)}
+        title="Отменить подписку?"
+        body={
+          cancelTarget
+            ? `Списания за «${cancelTarget.tier_name ?? 'тариф'}» прекратятся. Оплаченный период сохранится — VIP будет действовать до ${formatDateTime(cancelTarget.next_renewal_at)}.`
+            : ''
+        }
+        confirmLabel="Отменить подписку"
+        cancelLabel="Оставить подписку"
+        tone="default"
+        busy={busy}
+        onConfirm={() => void confirmCancel()}
+      />
+    </PageContainer>
   );
 }

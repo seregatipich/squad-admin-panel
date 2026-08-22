@@ -2,6 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import { useEffect, useState } from 'react';
+import { Button, EmptyState, InlineBanner, Modal, Skeleton } from '@/components/ui';
 import type { MetricKey, MetricPoint } from './MetricHistoryChart';
 
 interface UnpackedMetrics {
@@ -24,9 +25,7 @@ function unpackHostMetrics(v: number[]): UnpackedMetrics {
 
 const Chart = dynamic(() => import('./MetricHistoryChart'), {
   ssr: false,
-  loading: () => (
-    <div className="flex h-72 items-center justify-center text-neutral-500">Загрузка графика…</div>
-  ),
+  loading: () => <Skeleton variant="card" label="Загрузка графика" />,
 });
 
 const METRIC_TITLES: Record<MetricKey, string> = {
@@ -43,6 +42,14 @@ interface HistoryResponse {
 
 export type { MetricKey };
 
+/**
+ * История метрики хоста за сутки.
+ *
+ * Окно — {@link Modal} на нативном `<dialog>`; состояния экрана отвечают на
+ * все четыре вопроса §8: заглушка на время запроса, `EmptyState` при пустой
+ * истории и `InlineBanner` с «Повторить» при отказе. Повтор перезапускает тот
+ * же запрос через счётчик попыток, а не перемонтирование окна.
+ */
 export function MetricHistoryModal(props: {
   open: boolean;
   onClose: () => void;
@@ -53,7 +60,9 @@ export function MetricHistoryModal(props: {
   const { open, onClose, metric, ramTotalBytes, diskTotalBytes } = props;
   const [data, setData] = useState<MetricPoint[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` телом эффекта не читается — он и есть команда «выполнить запрос заново», которую даёт кнопка «Повторить»
   useEffect(() => {
     if (!open) return;
     setData(null);
@@ -85,59 +94,39 @@ export function MetricHistoryModal(props: {
       }
     })();
     return () => controller.abort();
-  }, [open, ramTotalBytes, diskTotalBytes]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, ramTotalBytes, diskTotalBytes, attempt]);
 
   if (!open) return null;
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') onClose();
-      }}
+    <Modal
+      open
+      onClose={onClose}
+      title={`${METRIC_TITLES[metric]} · 24 часа`}
+      size="lg"
+      closeLabel="Закрыть"
     >
-      <div
-        className="w-[90vw] max-w-4xl rounded-lg border border-neutral-800 bg-neutral-950 p-6"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-        role="document"
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-sm font-semibold uppercase tracking-widest text-neutral-300">
-            {METRIC_TITLES[metric]} · 24 часа
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-neutral-400 hover:text-neutral-200"
-            aria-label="Закрыть"
-          >
-            ✕
-          </button>
-        </div>
-        {error ? (
-          <div className="text-red-400">Ошибка: {error}</div>
-        ) : data === null ? (
-          <div className="flex h-72 items-center justify-center text-neutral-500">Загрузка…</div>
-        ) : data.length === 0 ? (
-          <div className="flex h-72 items-center justify-center text-neutral-500">
-            Нет данных за 24 часа
-          </div>
-        ) : (
-          <Chart metric={metric} data={data} />
-        )}
-      </div>
-    </div>
+      {error ? (
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить историю"
+          description={error}
+          action={
+            <Button variant="secondary" onClick={() => setAttempt((n) => n + 1)}>
+              Повторить
+            </Button>
+          }
+        />
+      ) : data === null ? (
+        <Skeleton variant="card" label="Загрузка истории метрики" />
+      ) : data.length === 0 ? (
+        <EmptyState
+          title="Нет данных за 24 часа"
+          description="Агент не присылал измерений за последние сутки."
+        />
+      ) : (
+        <Chart metric={metric} data={data} />
+      )}
+    </Modal>
   );
 }

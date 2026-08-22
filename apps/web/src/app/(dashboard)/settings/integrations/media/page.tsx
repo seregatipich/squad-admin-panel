@@ -1,6 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Badge,
+  Button,
+  GroupedList,
+  GroupedRow,
+  InlineBanner,
+  PageHeader,
+  Switch,
+} from '@/components/ui';
 
 interface MediaPublishingStatus {
   youtube_configured: boolean;
@@ -10,15 +19,15 @@ interface MediaPublishingStatus {
 
 const ENDPOINT = '/api/v1/integrations/media-publishing';
 
+/**
+ * Наличие учётных данных направления. Смысл несёт подпись, а не тон: «настроено»
+ * и «не настроено» читаются одинаково при любом различении цветов (§5).
+ */
 function ConfiguredBadge({ configured }: { configured: boolean }) {
-  return configured ? (
-    <span className="rounded bg-emerald-950 px-1.5 py-0.5 text-[11px] text-emerald-300">
-      настроено
-    </span>
-  ) : (
-    <span className="rounded bg-neutral-900 px-1.5 py-0.5 text-[11px] text-neutral-400">
-      не настроено
-    </span>
+  return (
+    <Badge tone={configured ? 'good' : 'neutral'}>
+      {configured ? 'настроено' : 'не настроено'}
+    </Badge>
   );
 }
 
@@ -32,7 +41,6 @@ function ConfiguredBadge({ configured }: { configured: boolean }) {
  * and are read exclusively by `worker-media-publisher`.
  */
 export default function MediaPublishingIntegrationPage() {
-  const releaseToggleId = useId();
   const [status, setStatus] = useState<MediaPublishingStatus | null>(null);
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,63 +93,57 @@ export default function MediaPublishingIntegrationPage() {
   if (hidden) return null;
 
   return (
-    <main className="space-y-4 p-6">
-      <h1 className="text-sm uppercase tracking-widest text-neutral-300">Публикация медиа</h1>
+    <>
+      <PageHeader
+        title="Публикация медиа"
+        subtitle="Куда уходят записи и что происходит с локальной копией после публикации."
+      />
 
       {error && (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          {error}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title={error}
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       )}
 
-      <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Подключения</h2>
-        <p className="text-xs text-neutral-500">
-          Учётные данные задаются только переменными окружения и читаются воркером media-publisher.
-          Панель показывает лишь факт их наличия. Пока направление не настроено, публикации для него
-          откладываются, а не помечаются ошибкой.
-        </p>
-        <ul className="space-y-2 text-sm">
-          <li className="flex items-center justify-between gap-2">
-            <span className="text-neutral-300">YouTube</span>
-            <ConfiguredBadge configured={status?.youtube_configured ?? false} />
-          </li>
-          <li className="flex items-center justify-between gap-2">
-            <span className="text-neutral-300">Telegram</span>
-            <ConfiguredBadge configured={status?.telegram_configured ?? false} />
-          </li>
-        </ul>
-      </section>
+      <GroupedList
+        title="Подключения"
+        footnote="Учётные данные задаются только переменными окружения и читаются воркером media-publisher. Панель показывает лишь факт их наличия. Пока направление не настроено, публикации для него откладываются, а не помечаются ошибкой."
+      >
+        <GroupedRow
+          label="YouTube"
+          control={<ConfiguredBadge configured={status?.youtube_configured ?? false} />}
+        />
+        <GroupedRow
+          label="Telegram"
+          control={<ConfiguredBadge configured={status?.telegram_configured ?? false} />}
+        />
+      </GroupedList>
 
-      <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Хранение</h2>
-        <label
-          htmlFor={releaseToggleId}
-          className="flex items-start gap-2 text-sm text-neutral-300"
-        >
-          <input
-            id={releaseToggleId}
-            type="checkbox"
-            className="mt-1"
-            checked={status?.release_local_file ?? false}
-            disabled={saving || !status}
-            onChange={(event) => void setReleaseLocalFile(event.target.checked)}
-          />
-          <span>
-            Освобождать локальный файл после публикации
-            <span className="mt-1 block text-xs text-neutral-500">
-              После успешной публикации локальная копия удаляется, а запись начинает ссылаться на
-              внешний URL. Файл освобождается только если опубликованы все направления, внешняя
-              ссылка получена и на этот же файл не ссылается другая запись. По умолчанию выключено.
-            </span>
-          </span>
-        </label>
-        {saveError && (
-          <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-            {saveError}
-          </div>
-        )}
-      </section>
-    </main>
+      <GroupedList
+        title="Хранение"
+        footnote="Файл освобождается только если опубликованы все направления, внешняя ссылка получена и на этот же файл не ссылается другая запись. По умолчанию выключено."
+      >
+        <GroupedRow
+          label="Освобождать локальный файл после публикации"
+          description="После успешной публикации локальная копия удаляется, а запись начинает ссылаться на внешний URL."
+          control={
+            <Switch
+              label="Освобождать локальный файл после публикации"
+              checked={status?.release_local_file ?? false}
+              disabled={saving || !status}
+              onChange={(next) => void setReleaseLocalFile(next)}
+            />
+          }
+        />
+      </GroupedList>
+
+      {saveError && <InlineBanner tone="crit" title={saveError} />}
+    </>
   );
 }

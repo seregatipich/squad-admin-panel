@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Badge, Button, Modal } from '@/components/ui';
 import { LogConsole, type LogEntry } from './LogConsole';
 
 interface Props {
@@ -15,15 +16,33 @@ interface Props {
 
 type Status = 'connecting' | 'running' | 'done' | 'error';
 
+const STATUS_TEXT: Record<Status, string> = {
+  connecting: 'Подключение…',
+  running: 'Обновление…',
+  done: 'Готово',
+  error: 'Ошибка обновления',
+};
+
+const STATUS_TONE = {
+  connecting: 'neutral',
+  running: 'accent',
+  done: 'good',
+  error: 'crit',
+} as const;
+
 /**
  * Watches a depot-update progress WebSocket (see apps/api/src/routes/depot.ts)
  * and streams its lines into a LogConsole until the terminal {done,final}
  * frame arrives. Reconnecting (e.g. reopening after a close) simply replays
  * the backend's buffered history, so this never needs to track state across
  * mounts itself.
+ *
+ * Пока обновление идёт, окно не закрывается ни Escape, ни кликом по подложке
+ * (`dismissible={false}`): случайный промах мимо панели прятал бы от оператора
+ * единственное место, где видно, чем кончилась операция. Явный выход остаётся —
+ * крестик работает всегда, а по завершении в подвале появляется «Готово».
  */
 export function UpdateProgressModal({ open, onOpenChange, wsUrl, title, onDone }: Props) {
-  const titleId = useId();
   const [lines, setLines] = useState<LogEntry[]>([]);
   const [status, setStatus] = useState<Status>('connecting');
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -80,60 +99,28 @@ export function UpdateProgressModal({ open, onOpenChange, wsUrl, title, onDone }
     };
   }, [open, wsUrl]);
 
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onOpenChange(false);
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [open, onOpenChange]);
-
-  if (!open) return null;
-
-  const statusText =
-    status === 'connecting'
-      ? 'Подключение…'
-      : status === 'running'
-        ? 'Обновление…'
-        : status === 'done'
-          ? 'Готово ✓'
-          : 'Ошибка обновления';
+  const finished = status === 'done' || status === 'error';
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      onClick={() => onOpenChange(false)}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') onOpenChange(false);
-      }}
+    <Modal
+      open={open}
+      onClose={() => onOpenChange(false)}
+      title={title}
+      size="lg"
+      closeLabel="Закрыть"
+      dismissible={finished}
+      footer={
+        finished ? (
+          <Button variant="primary" onClick={() => onOpenChange(false)}>
+            Готово
+          </Button>
+        ) : undefined
+      }
     >
-      <div
-        className="w-full max-w-2xl rounded border border-neutral-800 bg-neutral-950 p-6"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-        role="document"
-      >
-        <div className="mb-3 flex items-center justify-between">
-          <h2 id={titleId} className="text-lg font-semibold text-neutral-100">
-            {title}
-          </h2>
-          <span
-            className={
-              status === 'error'
-                ? 'text-sm text-red-400'
-                : status === 'done'
-                  ? 'text-sm text-green-400'
-                  : 'text-sm text-neutral-400'
-            }
-          >
-            {statusText}
-          </span>
-        </div>
-
+      <div className="space-y-3">
+        <p>
+          <Badge tone={STATUS_TONE[status]}>{STATUS_TEXT[status]}</Badge>
+        </p>
         <LogConsole
           lines={lines}
           height="20rem"
@@ -141,17 +128,7 @@ export function UpdateProgressModal({ open, onOpenChange, wsUrl, title, onDone }
           emptyText="Ожидание первого сообщения…"
           errorBanner={connectionError ? { code: null, reason: connectionError } : null}
         />
-
-        <div className="mt-4 flex justify-end">
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 hover:border-neutral-700"
-          >
-            Закрыть
-          </button>
-        </div>
       </div>
-    </div>
+    </Modal>
   );
 }

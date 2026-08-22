@@ -1,5 +1,6 @@
 'use client';
-import { useMemo } from 'react';
+import { useId, useMemo } from 'react';
+import { Badge } from '@/components/ui';
 import {
   CATEGORY_LABELS,
   type MessageTemplate,
@@ -8,6 +9,19 @@ import {
   type TokenContext,
 } from '@/lib/messageTemplates';
 
+/**
+ * Список готовых сообщений: заголовок шаблона, категория и предпросмотр с уже
+ * подставленными подстановками.
+ *
+ * Нажатие на шаблон немедленно подставляет его текст в поле сообщения и
+ * ничего не отправляет. Это сказано подписью над списком: без неё оператор не
+ * знает, чем кончится нажатие, и в окне, где соседняя кнопка шлёт сообщение
+ * на сервер, догадываться об этом он не должен.
+ *
+ * @param context Значения подстановок (`{player}` и прочие) для предпросмотра.
+ * @param onSelect Получает текст шаблона с уже выполненными подстановками.
+ * @param emptyLabel Что показать, когда включённых шаблонов нет.
+ */
 export function TemplatePicker({
   templates,
   context,
@@ -20,33 +34,37 @@ export function TemplatePicker({
   emptyLabel?: string;
 }) {
   const pickable = useMemo(() => pickableTemplates(templates), [templates]);
+  const hintId = useId();
 
   if (pickable.length === 0) {
-    return <div className="text-xs text-neutral-500">{emptyLabel}</div>;
+    return <p className="text-xs text-ink-3">{emptyLabel}</p>;
   }
 
   return (
-    <ul className="space-y-1.5" aria-label="Шаблоны сообщений">
-      {pickable.map((template) => {
-        const preview = substituteTokens(template.body, context);
-        return (
-          <li key={template.id}>
-            <button
-              type="button"
-              onClick={() => onSelect(preview)}
-              className="block w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-left hover:border-neutral-600"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm text-neutral-200">{template.title}</span>
-                <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase text-neutral-400">
-                  {CATEGORY_LABELS[template.category]}
+    <div className="space-y-2">
+      <p id={hintId} className="text-xs text-ink-3">
+        Нажмите шаблон — его текст сразу подставится в поле сообщения.
+      </p>
+      <ul className="space-y-1.5" aria-label="Шаблоны сообщений" aria-describedby={hintId}>
+        {pickable.map((template) => {
+          const preview = substituteTokens(template.body, context);
+          return (
+            <li key={template.id}>
+              <button
+                type="button"
+                onClick={() => onSelect(preview)}
+                className="block w-full rounded-ctl border border-line bg-raised px-3 py-2 text-left transition-colors duration-150 hover:bg-line-2"
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-[13px] font-medium text-ink">{template.title}</span>
+                  <Badge size="sm">{CATEGORY_LABELS[template.category]}</Badge>
                 </span>
-              </div>
-              <p className="mt-1 line-clamp-2 text-xs text-neutral-400">{preview}</p>
-            </button>
-          </li>
-        );
-      })}
-    </ul>
+                <span className="mt-1 line-clamp-2 block text-xs text-ink-3">{preview}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }

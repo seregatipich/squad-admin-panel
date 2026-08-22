@@ -1,5 +1,14 @@
 'use client';
 import { useEffect, useId, useState } from 'react';
+import {
+  AlertDialog,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  InlineBanner,
+  TextInput,
+} from '@/components/ui';
 import { type MessageTemplate, pickableTemplates } from '@/lib/messageTemplates';
 import { TemplatePicker } from './TemplatePicker';
 
@@ -12,12 +21,17 @@ const BROADCAST_MAX = 300;
  * Inline composer for sending a server-wide RCON `AdminBroadcast`. Renders
  * nothing when the current user lacks the 'chat' squad permission — callers
  * pass that down as `canChat` (from `GET /api/v1/me`'s `squad_permissions`).
+ *
+ * Объявление уходит всем игрокам сервера и отменить его нельзя, поэтому отправку
+ * подтверждает `AlertDialog` с полным текстом: системный `confirm()` не даёт ни
+ * ловушки фокуса, ни возврата фокуса на кнопку, а его вид зависит от браузера.
  */
 export function BroadcastComposer({ serverId, canChat }: { serverId: string; canChat: boolean }) {
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [showTemplates, setShowTemplates] = useState(false);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const inputId = useId();
 
@@ -47,7 +61,6 @@ export function BroadcastComposer({ serverId, canChat }: { serverId: string; can
 
   async function handleSend() {
     if (tooShort || busy) return;
-    if (!confirm(`Отправить объявление всем игрокам на сервере?\n\n"${trimmed}"`)) return;
     setBusy(true);
     setFeedback(null);
     try {
@@ -67,27 +80,24 @@ export function BroadcastComposer({ serverId, canChat }: { serverId: string; can
       setFeedback({ kind: 'err', text: (err as Error).message });
     } finally {
       setBusy(false);
+      setConfirming(false);
     }
   }
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-          Объявление всем игрокам
-        </h2>
-        {pickableTemplates(templates).length > 0 ? (
-          <button
-            type="button"
-            onClick={() => setShowTemplates((v) => !v)}
-            className="text-xs text-sky-400 hover:text-sky-300"
-          >
-            {showTemplates ? 'Скрыть шаблоны' : 'Шаблоны'}
-          </button>
-        ) : null}
-      </div>
-      {showTemplates ? (
-        <div className="mb-3">
+    <Card as="section" padding="none">
+      <CardHeader
+        title="Объявление всем игрокам"
+        actions={
+          pickableTemplates(templates).length > 0 ? (
+            <Button variant="plain" size="sm" onClick={() => setShowTemplates((v) => !v)}>
+              {showTemplates ? 'Скрыть шаблоны' : 'Шаблоны'}
+            </Button>
+          ) : null
+        }
+      />
+      <CardBody className="space-y-3">
+        {showTemplates ? (
           <TemplatePicker
             templates={templates}
             context={{}}
@@ -96,35 +106,49 @@ export function BroadcastComposer({ serverId, canChat }: { serverId: string; can
               setShowTemplates(false);
             }}
           />
+        ) : null}
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <label htmlFor={inputId} className="sr-only">
+              Текст объявления
+            </label>
+            <TextInput
+              id={inputId}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Текст объявления (мин. 2 символа)"
+              maxLength={BROADCAST_MAX}
+            />
+          </div>
+          <Button
+            variant="primary"
+            onClick={() => setConfirming(true)}
+            disabled={tooShort}
+            loading={busy}
+          >
+            Отправить
+          </Button>
         </div>
-      ) : null}
-      <div className="flex gap-2">
-        <label htmlFor={inputId} className="sr-only">
-          Текст объявления
-        </label>
-        <input
-          id={inputId}
-          type="text"
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder="Текст объявления (мин. 2 символа)"
-          maxLength={BROADCAST_MAX}
-          className="flex-1 rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 placeholder:text-neutral-500"
-        />
-        <button
-          type="button"
-          onClick={() => void handleSend()}
-          disabled={tooShort || busy}
-          className="rounded bg-sky-600 px-4 py-1.5 text-sm text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {busy ? 'Отправка…' : 'Отправить'}
-        </button>
-      </div>
-      {feedback ? (
-        <p className={`mt-2 text-xs ${feedback.kind === 'ok' ? 'text-green-400' : 'text-red-400'}`}>
-          {feedback.text}
-        </p>
-      ) : null}
-    </section>
+        {feedback ? (
+          <InlineBanner
+            tone={feedback.kind === 'ok' ? 'good' : 'crit'}
+            title={feedback.kind === 'ok' ? feedback.text : 'Объявление не отправлено'}
+            description={feedback.kind === 'ok' ? undefined : feedback.text}
+          />
+        ) : null}
+      </CardBody>
+
+      <AlertDialog
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        title="Отправить объявление"
+        body={`Объявление увидят все игроки на сервере: «${trimmed}»`}
+        confirmLabel="Отправить объявление"
+        cancelLabel="Отмена"
+        tone="default"
+        busy={busy}
+        onConfirm={() => void handleSend()}
+      />
+    </Card>
   );
 }

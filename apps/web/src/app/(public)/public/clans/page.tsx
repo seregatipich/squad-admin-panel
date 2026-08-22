@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { Card, CardGrid, EmptyState, PageContainer, PageHeader } from '@/components/ui';
 import { getPublicClans } from './clan-data';
 
 export const metadata: Metadata = {
@@ -9,40 +10,51 @@ export const metadata: Metadata = {
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Карточка-ссылка: весь прямоугольник ведёт на страницу клана, поэтому это
+ * настоящий `<a>` целиком, а не карточка с ссылкой внутри. Готового примитива
+ * для такой роли нет — отсюда единственная строка классов на этой странице,
+ * собранная из тех же токенов, что и `Card`.
+ */
+const CLAN_CARD_CLASS =
+  'block rounded-card border border-line bg-surface p-4 no-underline transition-colors duration-150 hover:border-line-2 hover:bg-raised/40';
+
 /** Public, no-session directory of clans whose visibility flag is enabled. */
 export default async function PublicClansPage() {
   const { items } = await getPublicClans();
 
   return (
-    <div className="space-y-6">
-      <header className="space-y-1 border-b border-neutral-900 pb-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Публичные кланы</h1>
-        <p className="text-sm text-neutral-400">Кланы, открытые для просмотра без входа.</p>
-      </header>
+    <PageContainer width="wide">
+      <PageHeader
+        title="Публичные кланы"
+        subtitle="Кланы, открытые для просмотра без входа."
+        meta={items.length > 0 ? `Всего: ${items.length}` : undefined}
+      />
 
       {items.length === 0 ? (
-        <p className="rounded border border-neutral-800 bg-neutral-950 px-4 py-6 text-center text-sm text-neutral-500">
-          Публичных кланов пока нет.
-        </p>
+        <Card padding="none">
+          <EmptyState
+            title="Публичных кланов пока нет."
+            description="Клан появится здесь, когда его администрация откроет страницу для всех."
+          />
+        </Card>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <CardGrid cols={2}>
           {items.map((clan) => (
-            <Link
-              key={clan.id}
-              href={`/public/clans/${clan.id}`}
-              className="rounded border border-neutral-800 bg-neutral-950 p-4 hover:border-sky-800"
-            >
+            <Link key={clan.id} href={`/public/clans/${clan.id}`} className={CLAN_CARD_CLASS}>
               <div className="flex items-start justify-between gap-3">
-                <h2 className="font-semibold text-neutral-100">{clan.name}</h2>
-                <span className="text-xs text-neutral-500">{clan.tags.join(' · ')}</span>
+                {/* Заголовок оставлен настоящим `h2`: по списку кланов удобнее
+                    всего идти именно навигацией по заголовкам. */}
+                <h2 className="text-[13px] font-semibold text-ink">{clan.name}</h2>
+                <span className="shrink-0 text-2xs text-ink-3">{clan.tags.join(' · ')}</span>
               </div>
               {clan.description ? (
-                <p className="mt-2 line-clamp-3 text-sm text-neutral-400">{clan.description}</p>
+                <p className="mt-2 line-clamp-3 text-xs text-ink-3">{clan.description}</p>
               ) : null}
             </Link>
           ))}
-        </div>
+        </CardGrid>
       )}
-    </div>
+    </PageContainer>
   );
 }

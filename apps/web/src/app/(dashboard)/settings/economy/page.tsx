@@ -2,6 +2,34 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  AlertDialog,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Checkbox,
+  EmptyState,
+  FieldRow,
+  GroupedList,
+  GroupedRow,
+  IconButton,
+  InlineBanner,
+  PageHeader,
+  Select,
+  Skeleton,
+  Switch,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Textarea,
+  TextInput,
+  Th,
+  TrashIcon,
+} from '@/components/ui';
+import {
   COEFFICIENT_FIELDS,
   type EconomyFormState,
   type EconomySettings,
@@ -63,6 +91,8 @@ export default function EconomySettingsPage() {
   const [tierErrors, setTierErrors] = useState<TierFieldErrors>({});
   const [tierErr, setTierErr] = useState<string | null>(null);
   const [tierSaving, setTierSaving] = useState(false);
+  const [pendingTierDelete, setPendingTierDelete] = useState<VipTier | null>(null);
+  const [tierDeleting, setTierDeleting] = useState(false);
 
   const refresh = useCallback(async () => {
     const [settingsRes, meRes, tiersRes, rolesRes] = await Promise.all([
@@ -194,459 +224,367 @@ export default function EconomySettingsPage() {
 
   async function removeTier(tier: VipTier) {
     if (!canEditTiers) return;
-    if (!confirm(`Удалить тир «${tier.name}»? Уже выданные роли останутся у игроков.`)) return;
     setTierErr(null);
-    const res = await fetch(`/api/v1/vip-tiers/${tier.id}`, {
-      method: 'DELETE',
-      credentials: 'include',
-    });
-    if (!res.ok) {
-      const err = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-      setTierErr(`Ошибка удаления тира: ${tierErrorText(err.error, res.status)}`);
-      return;
+    setTierDeleting(true);
+    try {
+      const res = await fetch(`/api/v1/vip-tiers/${tier.id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        setTierErr(`Ошибка удаления тира: ${tierErrorText(err.error, res.status)}`);
+        return;
+      }
+      await refresh();
+    } finally {
+      setTierDeleting(false);
+      setPendingTierDelete(null);
     }
-    await refresh();
   }
 
-  if (!settings || !form || !me) {
-    return <div className="text-neutral-500">Загрузка…</div>;
-  }
-
+  const loading = !settings || !form || !me;
   const roleNameById = new Map(roleOptions.map((r) => [r.id, r.name]));
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Экономика организации</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Коэффициенты начисления бонусов и порог сида. Изменения влияют только на будущие
-          начисления — уже начисленные бонусы не пересчитываются.
-        </p>
-      </header>
+    <>
+      <PageHeader
+        title="Экономика организации"
+        subtitle="Коэффициенты начисления бонусов и порог сида. Изменения влияют только на будущие начисления — уже начисленные бонусы не пересчитываются."
+      />
 
-      <div className="rounded-lg border border-amber-900 bg-amber-950/40 p-4 text-sm text-amber-200">
-        <div className="font-semibold">Монетизационная механика</div>
-        <p className="mt-1 text-amber-200/80">
-          Экономика бонусов — это механика монетизации. По умолчанию она{' '}
-          <span className="font-semibold">выключена</span>. Пока переключатель ниже выключен, воркер
-          начислений не работает и связанные блоки интерфейса скрыты.
-        </p>
-      </div>
+      <InlineBanner
+        tone="warn"
+        title="Монетизационная механика"
+        description={
+          <>
+            Экономика бонусов — это механика монетизации. По умолчанию она{' '}
+            <span className="font-semibold">выключена</span>. Пока переключатель ниже выключен,
+            воркер начислений не работает и связанные блоки интерфейса скрыты.
+          </>
+        }
+      />
 
-      {globalErr ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {globalErr}
-        </div>
-      ) : null}
-      {notice ? (
-        <div className="rounded border border-emerald-900 bg-emerald-950 p-3 text-sm text-emerald-200">
-          {notice}
-        </div>
-      ) : null}
-      {!canManage ? (
-        <div className="rounded border border-neutral-800 bg-neutral-900/60 p-3 text-sm text-neutral-400">
-          Просмотр доступен, но для изменения настроек нужно право «Управление экономикой».
-        </div>
+      {globalErr ? <InlineBanner tone="crit" title={globalErr} /> : null}
+      {notice ? <InlineBanner tone="good" title={notice} /> : null}
+      {!loading && !canManage ? (
+        <InlineBanner
+          tone="info"
+          title="Только просмотр"
+          description="Просмотр доступен, но для изменения настроек нужно право «Управление экономикой»."
+        />
       ) : null}
 
-      <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-5">
-        <label className="flex items-center justify-between gap-4">
-          <span>
-            <span className="block text-sm font-medium text-neutral-200">Экономика включена</span>
-            <span className="mt-0.5 block text-xs text-neutral-500">
-              Разрешить воркеру начислять бонусы игрокам за онлайн, буст и сид.
-            </span>
-          </span>
-          <input
-            type="checkbox"
-            aria-label="Экономика включена"
-            checked={form.economyEnabled}
-            disabled={!canManage}
-            onChange={(e) => updateField('economyEnabled', e.target.checked)}
-            className="h-5 w-11 shrink-0 cursor-pointer appearance-none rounded-full bg-neutral-800 transition-all checked:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
-            style={{
-              backgroundImage:
-                'radial-gradient(circle 8px at 9px center, white 100%, transparent 100%)',
-            }}
-          />
-        </label>
-        <div className="mt-3 text-xs">
-          <span
-            className={`rounded px-2 py-0.5 ${
-              form.economyEnabled
-                ? 'bg-emerald-950 text-emerald-300'
-                : 'bg-neutral-800 text-neutral-400'
-            }`}
-          >
-            {form.economyEnabled ? 'Начисления активны' : 'Начисления выключены'}
-          </span>
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-neutral-500">
-          Коэффициенты начисления
-        </h2>
-        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
-          {COEFFICIENT_FIELDS.map((field) => (
-            <label key={field.key} className="block text-xs">
-              <span className="mb-1 block text-neutral-400">{field.label}</span>
-              <input
-                type="number"
-                inputMode="decimal"
-                step="0.1"
-                min={0}
-                value={form[field.key]}
-                disabled={!canManage}
-                onChange={(e) => updateField(field.key, e.target.value)}
-                className={`w-full rounded border bg-neutral-900 px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                  errors[field.key] ? 'border-red-800' : 'border-neutral-800'
-                }`}
-              />
-              <span className="mt-1 block text-[11px] text-neutral-500">{field.hint}</span>
-              {errors[field.key] ? (
-                <span className="mt-1 block text-[11px] text-red-400">{errors[field.key]}</span>
-              ) : null}
-            </label>
-          ))}
-        </div>
-
-        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-          <label className="block text-xs">
-            <span className="mb-1 block text-neutral-400">
-              Порог сида (игроков), seed_threshold
-            </span>
-            <input
-              type="number"
-              inputMode="numeric"
-              step="1"
-              min={SEED_THRESHOLD_MIN}
-              max={SEED_THRESHOLD_MAX}
-              value={form.seedThreshold}
-              disabled={!canManage}
-              onChange={(e) => updateField('seedThreshold', e.target.value)}
-              className={`w-full rounded border bg-neutral-900 px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                errors.seedThreshold ? 'border-red-800' : 'border-neutral-800'
-              }`}
+      {loading || !form || !settings ? (
+        <Card>
+          <Skeleton variant="row" count={4} label="Загрузка настроек экономики" />
+        </Card>
+      ) : (
+        <>
+          <GroupedList>
+            <GroupedRow
+              label="Экономика включена"
+              description="Разрешить воркеру начислять бонусы игрокам за онлайн, буст и сид."
+              control={
+                <>
+                  <Badge tone={form.economyEnabled ? 'good' : 'neutral'}>
+                    {form.economyEnabled ? 'Начисления активны' : 'Начисления выключены'}
+                  </Badge>
+                  <Switch
+                    label="Экономика включена"
+                    checked={form.economyEnabled}
+                    disabled={!canManage}
+                    onChange={(next) => updateField('economyEnabled', next)}
+                  />
+                </>
+              }
             />
-            <span className="mt-1 block text-[11px] text-neutral-500">
-              Если на сервере меньше этого числа игроков, время засчитывается как сид.
-            </span>
-            {errors.seedThreshold ? (
-              <span className="mt-1 block text-[11px] text-red-400">{errors.seedThreshold}</span>
-            ) : null}
-          </label>
-        </div>
-      </section>
+          </GroupedList>
 
-      <section
-        aria-label="Напоминания об истечении VIP"
-        className="rounded-lg border border-neutral-800 bg-neutral-950 p-5"
-      >
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-neutral-500">
-          Напоминания об истечении VIP
-        </h2>
-        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-          <label className="block text-xs">
-            <span className="mb-1 block text-neutral-400">
-              Окна напоминаний (дней, через запятую)
-            </span>
-            <input
-              type="text"
-              aria-label="Окна напоминаний (дней, через запятую)"
-              value={form.vipExpiryWindows}
-              disabled={!canManage}
-              onChange={(e) => updateField('vipExpiryWindows', e.target.value)}
-              className={`w-full rounded border bg-neutral-900 px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                errors.vipExpiryWindows ? 'border-red-800' : 'border-neutral-800'
-              }`}
-            />
-            <span className="mt-1 block text-[11px] text-neutral-500">
-              За сколько дней до истечения VIP напоминать. Каждое окно срабатывает один раз;
-              продление роли выдаёт напоминания заново.
-            </span>
-            {errors.vipExpiryWindows ? (
-              <span className="mt-1 block text-[11px] text-red-400">{errors.vipExpiryWindows}</span>
-            ) : null}
-          </label>
-          <label className="flex items-start gap-2 text-xs text-neutral-300">
-            <input
-              type="checkbox"
-              aria-label="Предупреждать игрока в игре"
-              checked={form.vipExpiryWarnInGame}
-              disabled={!canManage}
-              onChange={(e) => updateField('vipExpiryWarnInGame', e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-neutral-700 bg-neutral-900 text-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
-            />
-            <span>
-              Предупреждать игрока в игре
-              <span className="mt-0.5 block text-[11px] text-neutral-500">
-                Разовый AdminWarn «VIP истекает через N дн.» при следующем заходе на сервер.
-              </span>
-            </span>
-          </label>
-        </div>
-      </section>
+          <Card padding="none" as="section">
+            <CardHeader title="Коэффициенты начисления" />
+            <CardBody className="space-y-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                {COEFFICIENT_FIELDS.map((field) => (
+                  <FieldRow
+                    key={field.key}
+                    label={field.label}
+                    hint={field.hint}
+                    error={errors[field.key]}
+                  >
+                    <TextInput
+                      type="number"
+                      inputMode="decimal"
+                      step="0.1"
+                      min={0}
+                      value={form[field.key]}
+                      disabled={!canManage}
+                      invalid={Boolean(errors[field.key])}
+                      onChange={(e) => updateField(field.key, e.target.value)}
+                    />
+                  </FieldRow>
+                ))}
+              </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <span className="text-xs text-neutral-500">
-          Последнее изменение: {formatUpdatedAt(settings.updated_at)}
-        </span>
-        {canManage ? (
-          <button
-            type="button"
-            onClick={save}
-            disabled={saving}
-            className="rounded-md border border-sky-700 bg-sky-950 px-4 py-2 text-sm text-sky-200 hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {saving ? 'Сохраняем…' : 'Сохранить'}
-          </button>
-        ) : null}
-      </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <FieldRow
+                  label="Порог сида (игроков), seed_threshold"
+                  hint="Если на сервере меньше этого числа игроков, время засчитывается как сид."
+                  error={errors.seedThreshold}
+                >
+                  <TextInput
+                    type="number"
+                    inputMode="numeric"
+                    step="1"
+                    min={SEED_THRESHOLD_MIN}
+                    max={SEED_THRESHOLD_MAX}
+                    value={form.seedThreshold}
+                    disabled={!canManage}
+                    invalid={Boolean(errors.seedThreshold)}
+                    onChange={(e) => updateField('seedThreshold', e.target.value)}
+                  />
+                </FieldRow>
+              </div>
+            </CardBody>
+          </Card>
 
-      {canEditTiers ? (
-        <section
-          aria-label="VIP-тиры"
-          className="rounded-lg border border-neutral-800 bg-neutral-950 p-5"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold uppercase tracking-widest text-neutral-500">
-                VIP-тиры
-              </h2>
-              <p className="mt-1 text-xs text-neutral-500">
-                Каталог VIP-привилегий. Тир связывает роль с описанием и сроком по умолчанию;
-                деактивация скрывает тир из магазина, не снимая уже выданные роли.
-              </p>
-            </div>
-            {tierForm === null ? (
-              <button
-                type="button"
-                onClick={startTierCreate}
-                className="shrink-0 rounded-md border border-sky-700 bg-sky-950 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-900"
-              >
-                + Добавить тир
-              </button>
+          <section aria-label="Напоминания об истечении VIP">
+            <Card padding="none">
+              <CardHeader title="Напоминания об истечении VIP" />
+              <CardBody className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <FieldRow
+                  label="Окна напоминаний (дней, через запятую)"
+                  hint="За сколько дней до истечения VIP напоминать. Каждое окно срабатывает один раз; продление роли выдаёт напоминания заново."
+                  error={errors.vipExpiryWindows}
+                >
+                  <TextInput
+                    value={form.vipExpiryWindows}
+                    disabled={!canManage}
+                    invalid={Boolean(errors.vipExpiryWindows)}
+                    onChange={(e) => updateField('vipExpiryWindows', e.target.value)}
+                  />
+                </FieldRow>
+                <div className="space-y-1">
+                  <Checkbox
+                    label="Предупреждать игрока в игре"
+                    checked={form.vipExpiryWarnInGame}
+                    disabled={!canManage}
+                    onChange={(e) => updateField('vipExpiryWarnInGame', e.target.checked)}
+                  />
+                  <p className="text-xs text-ink-3">
+                    Разовый AdminWarn «VIP истекает через N дн.» при следующем заходе на сервер.
+                  </p>
+                </div>
+              </CardBody>
+            </Card>
+          </section>
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="text-xs text-ink-3">
+              Последнее изменение: {formatUpdatedAt(settings.updated_at)}
+            </span>
+            {canManage ? (
+              <Button variant="primary" onClick={save} loading={saving}>
+                Сохранить
+              </Button>
             ) : null}
           </div>
 
-          {tierErr ? (
-            <div className="mt-3 rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-              {tierErr}
-            </div>
-          ) : null}
-
-          {tiers.length === 0 && tierForm === null ? (
-            <p className="mt-4 text-sm text-neutral-500">Тиров пока нет.</p>
-          ) : null}
-
-          {tiers.length > 0 ? (
-            <div className="mt-4 overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-neutral-800 text-xs uppercase tracking-wider text-neutral-500">
-                    <th className="py-2 pr-3 font-medium">Название</th>
-                    <th className="py-2 pr-3 font-medium">Роль</th>
-                    <th className="py-2 pr-3 font-medium">Срок</th>
-                    <th className="py-2 pr-3 font-medium">Порядок</th>
-                    <th className="py-2 pr-3 font-medium">Статус</th>
-                    <th className="py-2 font-medium">
-                      <span className="sr-only">Действия</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {tiers.map((tier) => (
-                    <tr key={tier.id} className="border-b border-neutral-900">
-                      <td className="py-2 pr-3">
-                        <span className="font-medium text-neutral-200">{tier.name}</span>
-                        {tier.description ? (
-                          <span className="mt-0.5 block text-xs text-neutral-500">
-                            {tier.description}
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="py-2 pr-3 text-neutral-300">
-                        {roleNameById.get(tier.role_id) ?? tier.role_id}
-                      </td>
-                      <td className="py-2 pr-3 text-neutral-300">
-                        {formatTierDuration(tier.default_days)}
-                      </td>
-                      <td className="py-2 pr-3 text-neutral-400">{tier.sort_order}</td>
-                      <td className="py-2 pr-3">
-                        <span
-                          className={`rounded px-2 py-0.5 text-xs ${
-                            tier.is_active
-                              ? 'bg-emerald-950 text-emerald-300'
-                              : 'bg-neutral-800 text-neutral-400'
-                          }`}
-                        >
-                          {tier.is_active ? 'Активен' : 'Скрыт'}
-                        </span>
-                      </td>
-                      <td className="py-2 text-right">
-                        <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => startTierEdit(tier)}
-                            className="rounded border border-neutral-800 px-2 py-0.5 text-xs text-neutral-300 hover:bg-neutral-900"
-                          >
-                            Редактировать
-                          </button>
-                          <button
-                            type="button"
-                            aria-label={`Удалить тир «${tier.name}»`}
-                            onClick={() => removeTier(tier)}
-                            className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-300 hover:bg-red-950"
-                          >
-                            Удалить
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-
-          {tierForm ? (
-            <div className="mt-4 rounded border border-neutral-800 bg-neutral-900/40 p-4">
-              <h3 className="text-sm font-medium text-neutral-200">
-                {editingTierId ? 'Редактирование тира' : 'Новый тир'}
-              </h3>
-              <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Название</span>
-                  <input
-                    type="text"
-                    aria-label="Название тира"
-                    maxLength={VIP_TIER_NAME_MAX}
-                    value={tierForm.name}
-                    onChange={(e) => updateTierField('name', e.target.value)}
-                    className={`w-full rounded border bg-neutral-900 px-2 py-1.5 text-sm ${
-                      tierErrors.name ? 'border-red-800' : 'border-neutral-800'
-                    }`}
-                  />
-                  {tierErrors.name ? (
-                    <span className="mt-1 block text-[11px] text-red-400">{tierErrors.name}</span>
-                  ) : null}
-                </label>
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Роль</span>
-                  <select
-                    aria-label="Роль тира"
-                    value={tierForm.roleId}
-                    onChange={(e) => updateTierField('roleId', e.target.value)}
-                    className={`w-full rounded border bg-neutral-900 px-2 py-1.5 text-sm ${
-                      tierErrors.roleId ? 'border-red-800' : 'border-neutral-800'
-                    }`}
-                  >
-                    <option value="">— выберите роль —</option>
-                    {roleOptions.map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.name}
-                      </option>
-                    ))}
-                  </select>
-                  {tierErrors.roleId ? (
-                    <span className="mt-1 block text-[11px] text-red-400">{tierErrors.roleId}</span>
-                  ) : null}
-                </label>
-                <label className="block text-xs md:col-span-2">
-                  <span className="mb-1 block text-neutral-400">Описание</span>
-                  <textarea
-                    aria-label="Описание тира"
-                    rows={2}
-                    value={tierForm.description}
-                    onChange={(e) => updateTierField('description', e.target.value)}
-                    className={`w-full rounded border bg-neutral-900 px-2 py-1.5 text-sm ${
-                      tierErrors.description ? 'border-red-800' : 'border-neutral-800'
-                    }`}
-                  />
-                  {tierErrors.description ? (
-                    <span className="mt-1 block text-[11px] text-red-400">
-                      {tierErrors.description}
-                    </span>
-                  ) : null}
-                </label>
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Срок по умолчанию (дней)</span>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    step="1"
-                    min={VIP_TIER_DEFAULT_DAYS_MIN}
-                    max={VIP_TIER_DEFAULT_DAYS_MAX}
-                    aria-label="Срок по умолчанию (дней)"
-                    value={tierForm.defaultDays}
-                    onChange={(e) => updateTierField('defaultDays', e.target.value)}
-                    className={`w-full rounded border bg-neutral-900 px-2 py-1.5 text-sm ${
-                      tierErrors.defaultDays ? 'border-red-800' : 'border-neutral-800'
-                    }`}
-                  />
-                  <span className="mt-1 block text-[11px] text-neutral-500">
-                    Пустое поле — бессрочный тир.
-                  </span>
-                  {tierErrors.defaultDays ? (
-                    <span className="mt-1 block text-[11px] text-red-400">
-                      {tierErrors.defaultDays}
-                    </span>
-                  ) : null}
-                </label>
-                <label className="block text-xs">
-                  <span className="mb-1 block text-neutral-400">Порядок сортировки</span>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    step="1"
-                    min={VIP_TIER_SORT_ORDER_MIN}
-                    max={VIP_TIER_SORT_ORDER_MAX}
-                    aria-label="Порядок сортировки"
-                    value={tierForm.sortOrder}
-                    onChange={(e) => updateTierField('sortOrder', e.target.value)}
-                    className={`w-full rounded border bg-neutral-900 px-2 py-1.5 text-sm ${
-                      tierErrors.sortOrder ? 'border-red-800' : 'border-neutral-800'
-                    }`}
-                  />
-                  {tierErrors.sortOrder ? (
-                    <span className="mt-1 block text-[11px] text-red-400">
-                      {tierErrors.sortOrder}
-                    </span>
-                  ) : null}
-                </label>
-              </div>
-              <label className="mt-3 flex items-center gap-2 text-xs text-neutral-300">
-                <input
-                  type="checkbox"
-                  aria-label="Тир активен"
-                  checked={tierForm.isActive}
-                  onChange={(e) => updateTierField('isActive', e.target.checked)}
-                  className="h-4 w-4 rounded border-neutral-700 bg-neutral-900 text-sky-500"
+          {canEditTiers ? (
+            <section aria-label="VIP-тиры" className="space-y-4">
+              <Card padding="none">
+                <CardHeader
+                  title="VIP-тиры"
+                  count={tiers.length > 0 ? tiers.length : undefined}
+                  description="Каталог VIP-привилегий. Тир связывает роль с описанием и сроком по умолчанию; деактивация скрывает тир из магазина, не снимая уже выданные роли."
+                  actions={
+                    tierForm === null ? (
+                      <Button variant="primary" size="sm" onClick={startTierCreate}>
+                        Добавить тир
+                      </Button>
+                    ) : null
+                  }
                 />
-                Тир активен (виден в магазине)
-              </label>
-              <div className="mt-4 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={saveTier}
-                  disabled={tierSaving}
-                  className="rounded-md border border-sky-700 bg-sky-950 px-4 py-2 text-sm text-sky-200 hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {tierSaving ? 'Сохраняем…' : 'Сохранить тир'}
-                </button>
-                <button
-                  type="button"
-                  onClick={cancelTierForm}
-                  className="rounded-md border border-neutral-800 px-4 py-2 text-sm text-neutral-300 hover:bg-neutral-900"
-                >
-                  Отмена
-                </button>
-              </div>
-            </div>
+
+                {tierErr ? (
+                  <CardBody padding="sm">
+                    <InlineBanner tone="crit" title={tierErr} />
+                  </CardBody>
+                ) : null}
+
+                {tiers.length === 0 ? (
+                  <EmptyState
+                    title="Тиров пока нет"
+                    description="Добавьте первый тир — до этого магазин VIP пуст."
+                  />
+                ) : (
+                  <Table ariaLabel="VIP-тиры">
+                    <TableHead>
+                      <tr>
+                        <Th>Название</Th>
+                        <Th>Роль</Th>
+                        <Th>Срок</Th>
+                        <Th align="right">Порядок</Th>
+                        <Th>Состояние</Th>
+                        <Th align="right">Действия</Th>
+                      </tr>
+                    </TableHead>
+                    <TableBody>
+                      {tiers.map((tier) => (
+                        <TableRow key={tier.id}>
+                          <Td>
+                            <span className="font-medium">{tier.name}</span>
+                            {tier.description ? (
+                              <span className="mt-0.5 block text-xs text-ink-3">
+                                {tier.description}
+                              </span>
+                            ) : null}
+                          </Td>
+                          <Td className="text-ink-2">
+                            {roleNameById.get(tier.role_id) ?? tier.role_id}
+                          </Td>
+                          <Td className="text-ink-2">{formatTierDuration(tier.default_days)}</Td>
+                          <Td numeric className="text-ink-3">
+                            {tier.sort_order}
+                          </Td>
+                          <Td>
+                            <Badge tone={tier.is_active ? 'good' : 'neutral'} size="sm">
+                              {tier.is_active ? 'Активен' : 'Скрыт'}
+                            </Badge>
+                          </Td>
+                          <Td align="right">
+                            <div className="flex items-center justify-end gap-2">
+                              <Button size="sm" onClick={() => startTierEdit(tier)}>
+                                Редактировать
+                              </Button>
+                              <IconButton
+                                icon={<TrashIcon />}
+                                label={`Удалить тир «${tier.name}»`}
+                                size="sm"
+                                tone="destructive"
+                                onClick={() => setPendingTierDelete(tier)}
+                              />
+                            </div>
+                          </Td>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </Card>
+
+              {tierForm ? (
+                <Card padding="none">
+                  <CardHeader
+                    title={editingTierId ? 'Редактирование тира' : 'Новый тир'}
+                    headingLevel={3}
+                  />
+                  <CardBody className="space-y-4">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <FieldRow label="Название" error={tierErrors.name}>
+                        <TextInput
+                          maxLength={VIP_TIER_NAME_MAX}
+                          value={tierForm.name}
+                          invalid={Boolean(tierErrors.name)}
+                          onChange={(e) => updateTierField('name', e.target.value)}
+                        />
+                      </FieldRow>
+                      <FieldRow label="Роль" error={tierErrors.roleId}>
+                        <Select
+                          value={tierForm.roleId}
+                          invalid={Boolean(tierErrors.roleId)}
+                          onChange={(e) => updateTierField('roleId', e.target.value)}
+                        >
+                          <option value="">— выберите роль —</option>
+                          {roleOptions.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </FieldRow>
+                      <FieldRow
+                        label="Описание"
+                        error={tierErrors.description}
+                        className="md:col-span-2"
+                      >
+                        <Textarea
+                          rows={2}
+                          value={tierForm.description}
+                          invalid={Boolean(tierErrors.description)}
+                          onChange={(e) => updateTierField('description', e.target.value)}
+                        />
+                      </FieldRow>
+                      <FieldRow
+                        label="Срок по умолчанию (дней)"
+                        hint="Пустое поле — бессрочный тир."
+                        error={tierErrors.defaultDays}
+                      >
+                        <TextInput
+                          type="number"
+                          inputMode="numeric"
+                          step="1"
+                          min={VIP_TIER_DEFAULT_DAYS_MIN}
+                          max={VIP_TIER_DEFAULT_DAYS_MAX}
+                          value={tierForm.defaultDays}
+                          invalid={Boolean(tierErrors.defaultDays)}
+                          onChange={(e) => updateTierField('defaultDays', e.target.value)}
+                        />
+                      </FieldRow>
+                      <FieldRow label="Порядок сортировки" error={tierErrors.sortOrder}>
+                        <TextInput
+                          type="number"
+                          inputMode="numeric"
+                          step="1"
+                          min={VIP_TIER_SORT_ORDER_MIN}
+                          max={VIP_TIER_SORT_ORDER_MAX}
+                          value={tierForm.sortOrder}
+                          invalid={Boolean(tierErrors.sortOrder)}
+                          onChange={(e) => updateTierField('sortOrder', e.target.value)}
+                        />
+                      </FieldRow>
+                    </div>
+                    <div className="space-y-1">
+                      <Checkbox
+                        label="Тир активен"
+                        checked={tierForm.isActive}
+                        onChange={(e) => updateTierField('isActive', e.target.checked)}
+                      />
+                      <p className="text-xs text-ink-3">Активный тир виден в магазине.</p>
+                    </div>
+                    <div className="flex items-center justify-end gap-2">
+                      <Button variant="secondary" onClick={cancelTierForm}>
+                        Отмена
+                      </Button>
+                      <Button variant="primary" onClick={saveTier} loading={tierSaving}>
+                        Сохранить тир
+                      </Button>
+                    </div>
+                  </CardBody>
+                </Card>
+              ) : null}
+            </section>
           ) : null}
-        </section>
-      ) : null}
-    </div>
+        </>
+      )}
+
+      <AlertDialog
+        open={pendingTierDelete !== null}
+        onClose={() => setPendingTierDelete(null)}
+        title="Удалить VIP-тир"
+        body={
+          pendingTierDelete
+            ? `Тир «${pendingTierDelete.name}» будет удалён из каталога без возможности восстановления. Уже выданные роли останутся у игроков.`
+            : ''
+        }
+        confirmLabel="Удалить тир"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={tierDeleting}
+        onConfirm={() => {
+          if (pendingTierDelete) void removeTier(pendingTierDelete);
+        }}
+      />
+    </>
   );
 }

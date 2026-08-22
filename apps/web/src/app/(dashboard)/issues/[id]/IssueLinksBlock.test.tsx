@@ -127,7 +127,7 @@ describe('IssueLinksBlock', () => {
       stubRoutes([SERVERS_OK]);
       render(<IssueLinksBlock issueId="issue-1" links={[]} viewer={null} onChanged={vi.fn()} />);
 
-      await screen.findByText('Связанных объектов нет.');
+      await screen.findByText('Связанных объектов нет');
     },
     TEST_TIMEOUT_MS,
   );
@@ -215,7 +215,7 @@ describe('IssueLinksBlock', () => {
       stubRoutes([SERVERS_FORBIDDEN]);
       render(<IssueLinksBlock issueId="issue-1" links={[]} viewer={null} onChanged={vi.fn()} />);
 
-      await screen.findByText('Связанных объектов нет.');
+      await screen.findByText('Связанных объектов нет');
       const typeSelect = screen.getByLabelText('Тип объекта');
       await waitFor(() =>
         expect(
@@ -277,11 +277,63 @@ describe('IssueLinksBlock', () => {
       fireEvent.change(await screen.findByPlaceholderText('Связать с игроком'), {
         target: { value: 'Vasya' },
       });
-      fireEvent.click(await screen.findByText('Vasya Pupkin', {}, { timeout: 5000 }));
+      fireEvent.click(
+        await screen.findByRole('option', { name: 'Vasya Pupkin' }, { timeout: 5000 }),
+      );
 
       await waitFor(() => expect(onChanged).toHaveBeenCalled());
       const post = calls.find((c) => c.method === 'POST');
       expect(post?.body).toBe(JSON.stringify({ entity_type: 'player', entity_id: 'p-7' }));
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'lets the keyboard drive the player suggestions as a combobox',
+    async () => {
+      const calls: Array<{ url: string; method?: string; body?: string }> = [];
+      stubRoutes(
+        [
+          [/\/api\/v1\/issues\/issue-1\/links$/, { status: 201, body: { id: 'new-link' } }],
+          [
+            /\/api\/v1\/players\?q=/,
+            {
+              status: 200,
+              body: {
+                items: [
+                  { id: 'p-1', canonical_name: 'Vasya Pupkin' },
+                  { id: 'p-2', canonical_name: 'Vasya Second' },
+                ],
+              },
+            },
+          ],
+          SERVERS_OK,
+        ],
+        (url, init) =>
+          calls.push({ url, method: init?.method, body: init?.body as string | undefined }),
+      );
+      const onChanged = vi.fn();
+      render(<IssueLinksBlock issueId="issue-1" links={[]} viewer={null} onChanged={onChanged} />);
+
+      const field = await screen.findByRole('combobox', { name: 'Связать с игроком' });
+      expect(field).toHaveAttribute('aria-expanded', 'false');
+      fireEvent.change(field, { target: { value: 'Vasya' } });
+
+      const first = await screen.findByRole('option', { name: 'Vasya Pupkin' }, { timeout: 5000 });
+      expect(field).toHaveAttribute('aria-expanded', 'true');
+      expect(first).toHaveAttribute('aria-selected', 'true');
+      expect(field).toHaveAttribute('aria-activedescendant', first.id);
+
+      fireEvent.keyDown(field, { key: 'ArrowDown' });
+      const second = screen.getByRole('option', { name: 'Vasya Second' });
+      expect(second).toHaveAttribute('aria-selected', 'true');
+      expect(field).toHaveAttribute('aria-activedescendant', second.id);
+
+      fireEvent.keyDown(field, { key: 'Enter' });
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalled());
+      const post = calls.find((c) => c.method === 'POST');
+      expect(post?.body).toBe(JSON.stringify({ entity_type: 'player', entity_id: 'p-2' }));
     },
     TEST_TIMEOUT_MS,
   );

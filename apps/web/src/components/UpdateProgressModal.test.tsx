@@ -4,6 +4,42 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UpdateProgressModal } from './UpdateProgressModal';
 
+/**
+ * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
+ * а окно построено на примитиве `Modal`. Полифилл повторяет ровно то, на что
+ * опирается примитив: атрибут `open`, фокус внутрь окна и цепочку
+ * Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   static OPEN = 1;
@@ -161,6 +197,42 @@ describe('UpdateProgressModal', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+  // Регрессия дизайна: раньше клик по фону и Escape закрывали окно прямо во
+  // время обновления, и оператор терял единственное место, где виден результат.
+  it('refuses to close on Escape while the update is still running', () => {
+    const onOpenChange = vi.fn();
+    render(
+      <UpdateProgressModal
+        open
+        onOpenChange={onOpenChange}
+        wsUrl="/api/v1/depot/progress/ws"
+        title="Обновление"
+      />,
+    );
+    act(() => latestSocket().emitOpen());
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it('accepts Escape and offers «Готово» once the run has settled', () => {
+    const onOpenChange = vi.fn();
+    render(
+      <UpdateProgressModal
+        open
+        onOpenChange={onOpenChange}
+        wsUrl="/api/v1/depot/progress/ws"
+        title="Обновление"
+      />,
+    );
+    const ws = latestSocket();
+    act(() => ws.emitOpen());
+    act(() => ws.emitMessage({ backfill_complete: true }));
+    act(() => ws.emitMessage({ done: true, final: 'done' }));
+
+    expect(screen.getByRole('button', { name: 'Готово' })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });

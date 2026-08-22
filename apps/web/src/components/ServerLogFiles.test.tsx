@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServerLogFiles } from './ServerLogFiles';
 
@@ -51,13 +51,13 @@ describe('ServerLogFiles', () => {
       const liveName = await screen.findByText('SquadGame.log');
       const liveRow = liveName.closest('tr');
       if (!liveRow) throw new Error('live row not found');
-      // "live" badge is present on the active file only.
-      expect(within(liveRow).getByText(/live/i)).toBeInTheDocument();
+      // Метка активного файла стоит только на нём.
+      expect(within(liveRow).getByText('пишется')).toBeInTheDocument();
 
       const rotatedName = screen.getByText('SquadGame-2026.07.23-11.00.00.log');
       const rotatedRow = rotatedName.closest('tr');
       if (!rotatedRow) throw new Error('rotated row not found');
-      expect(within(rotatedRow).queryByText(/live/i)).toBeNull();
+      expect(within(rotatedRow).queryByText('пишется')).toBeNull();
       // Human-readable size for the 10 MiB rotated file.
       expect(within(rotatedRow).getByText(/10(\.0)?\s?MB/i)).toBeInTheDocument();
 
@@ -78,6 +78,16 @@ describe('ServerLogFiles', () => {
   );
 
   it(
+    'names the size column as a number column so the digits line up',
+    async () => {
+      render(<ServerLogFiles serverId={SERVER_ID} canDownload={true} />);
+      const header = await screen.findByRole('columnheader', { name: 'Размер' });
+      expect(header).toBeInTheDocument();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'shows an empty-state when there are no log files',
     async () => {
       vi.stubGlobal('fetch', mockFetch([]));
@@ -85,6 +95,25 @@ describe('ServerLogFiles', () => {
       await waitFor(() => {
         expect(screen.getByText(/нет файлов/i)).toBeInTheDocument();
       });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'reports a failed request as an alert and reloads the list on «Повторить»',
+    async () => {
+      const failing = vi.fn(() => Promise.resolve(new Response('nope', { status: 500 })));
+      vi.stubGlobal('fetch', failing);
+      render(<ServerLogFiles serverId={SERVER_ID} canDownload={true} />);
+
+      const banner = await screen.findByRole('alert');
+      expect(within(banner).getByText('Не удалось загрузить список файлов')).toBeInTheDocument();
+
+      vi.stubGlobal('fetch', mockFetch());
+      fireEvent.click(within(banner).getByRole('button', { name: 'Повторить' }));
+
+      expect(await screen.findByText('SquadGame.log')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );

@@ -1,6 +1,17 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import {
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  GroupedList,
+  GroupedRow,
+  InlineBanner,
+  PageHeader,
+  Skeleton,
+} from '@/components/ui';
 
 type SeedChannel = 'email' | 'webpush';
 
@@ -83,48 +94,61 @@ export default function SeedNotificationsPage() {
     }
   }
 
-  if (loading) return <div className="text-neutral-500">Загрузка…</div>;
-
   return (
-    <div className="max-w-3xl space-y-4 pb-20">
-      <header>
-        <h1 className="text-xl font-semibold">Уведомления «Нужен сид»</h1>
-        <p className="mt-1 text-sm text-neutral-400">
-          Выберите серверы и каналы, в которых хотите получать приглашения на сидинг.
-        </p>
-      </header>
+    <>
+      <PageHeader
+        title="Уведомления «Нужен сид»"
+        subtitle="Выберите серверы и каналы, в которых хотите получать приглашения на сидинг."
+      />
+
       {error ? (
-        <div className="rounded border border-red-900 bg-red-950 px-3 py-2 text-sm">{error}</div>
+        <InlineBanner
+          tone="crit"
+          title={error}
+          description="Подписки могли не сохраниться. Обновите список и повторите."
+          action={
+            <Button size="sm" onClick={() => void load()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
-      <div className="divide-y divide-neutral-800 rounded border border-neutral-800 bg-neutral-950">
-        {servers.map((server) => (
-          <div key={server.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
-            <div>
-              <div className="font-medium">{server.display_name}</div>
-              <div className="text-xs text-neutral-500">{server.status}</div>
-            </div>
-            <div className="flex gap-4 text-sm">
-              {CHANNELS.map((channel) => {
-                const key = `${server.id}:${channel.value}`;
-                return (
-                  <label key={channel.value} className="flex items-center gap-2 text-neutral-300">
-                    <input
-                      type="checkbox"
+
+      {loading ? (
+        <Card>
+          <Skeleton variant="row" count={4} label="Загрузка списка серверов" />
+        </Card>
+      ) : servers.length === 0 ? (
+        <Card>
+          <EmptyState
+            title="Серверов пока нет"
+            description="Подписаться на приглашения к сидингу можно, когда в панели появится хотя бы один сервер."
+          />
+        </Card>
+      ) : (
+        <GroupedList footnote="Подписка включается сразу — отдельной кнопки «Сохранить» здесь нет.">
+          {servers.map((server) => (
+            <GroupedRow
+              key={server.id}
+              label={server.display_name}
+              description={server.status}
+              control={
+                <span className="flex items-center gap-4">
+                  {CHANNELS.map((channel) => (
+                    <Checkbox
+                      key={channel.value}
+                      label={channel.label}
                       checked={isSubscribed(server.id, channel.value)}
-                      disabled={busy === key}
+                      disabled={busy === `${server.id}:${channel.value}`}
                       onChange={() => void toggle(server.id, channel.value)}
                     />
-                    {channel.label}
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-        {servers.length === 0 ? (
-          <p className="p-4 text-sm text-neutral-500">Нет серверов.</p>
-        ) : null}
-      </div>
-    </div>
+                  ))}
+                </span>
+              }
+            />
+          ))}
+        </GroupedList>
+      )}
+    </>
   );
 }

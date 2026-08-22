@@ -13,6 +13,55 @@ vi.mock('next/navigation', () => ({
 import type { EconomySettings, VipTier } from './helpers';
 import EconomySettingsPage from './page';
 
+/**
+ * jsdom знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
+ * а подтверждение «Удалить тир» построено на примитиве `AlertDialog`.
+ * Полифилл повторяет ровно то, на что опирается примитив: атрибут `open`,
+ * фокус внутрь окна и цепочку Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
+/** Подтвердить удаление тира в диалоге, который открыла кнопка-корзина. */
+async function confirmTierDeletion() {
+  const dialog = await screen.findByRole('dialog', { name: 'Удалить VIP-тир' });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Удалить тир' }));
+}
+
+/** Отказаться от удаления тира: «Отмена» подвала, а не крестик окна. */
+async function declineTierDeletion() {
+  const dialog = await screen.findByRole('dialog', { name: 'Удалить VIP-тир' });
+  const cancels = within(dialog).getAllByRole('button', { name: 'Отмена' });
+  fireEvent.click(cancels[cancels.length - 1] as HTMLElement);
+}
+
 function makeSettings(): EconomySettings {
   return {
     k_online: 1,
@@ -195,8 +244,8 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     const scope = within(section);
 
     fireEvent.click(scope.getByRole('button', { name: /добавить тир/i }));
-    fireEvent.change(scope.getByLabelText('Название тира'), { target: { value: 'VIP Silver' } });
-    fireEvent.change(scope.getByLabelText('Роль тира'), { target: { value: 'role-2' } });
+    fireEvent.change(scope.getByLabelText('Название'), { target: { value: 'VIP Silver' } });
+    fireEvent.change(scope.getByLabelText('Роль'), { target: { value: 'role-2' } });
     fireEvent.change(scope.getByLabelText('Срок по умолчанию (дней)'), {
       target: { value: '90' },
     });
@@ -211,10 +260,8 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     });
   });
 
-  it('delete asks for confirmation and calls DELETE', async () => {
+  it('delete asks for confirmation in a dialog and only then calls DELETE', async () => {
     const deleted: string[] = [];
-    const confirmMock = vi.fn(() => true);
-    vi.stubGlobal('confirm', confirmMock);
     stubFetch({
       tiers: [makeTier({ id: 'tier-1', name: 'VIP Bronze' })],
       onDelete: (u) => deleted.push(u),
@@ -223,8 +270,13 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     const section = await screen.findByRole('region', { name: 'VIP-тиры' });
     fireEvent.click(within(section).getByRole('button', { name: /удалить тир «VIP Bronze»/i }));
 
+    // Пока диалог не подтверждён, запроса на удаление нет.
+    const dialog = await screen.findByRole('dialog', { name: 'Удалить VIP-тир' });
+    expect(dialog).toHaveTextContent('VIP Bronze');
+    expect(deleted).toHaveLength(0);
+
+    await confirmTierDeletion();
     await waitFor(() => expect(deleted).toHaveLength(1));
-    expect(confirmMock).toHaveBeenCalledTimes(1);
     expect(deleted[0]).toContain('/api/v1/vip-tiers/tier-1');
   });
 
@@ -262,10 +314,10 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
 
     fireEvent.click(scope.getByRole('button', { name: 'Редактировать' }));
     expect(scope.getByText('Редактирование тира')).toBeInTheDocument();
-    expect(scope.getByLabelText('Название тира')).toHaveValue('VIP Bronze');
+    expect(scope.getByLabelText('Название')).toHaveValue('VIP Bronze');
     expect(scope.getByLabelText('Срок по умолчанию (дней)')).toHaveValue(null);
     expect(scope.getByLabelText('Тир активен')).not.toBeChecked();
-    fireEvent.change(scope.getByLabelText('Название тира'), { target: { value: 'VIP Platinum' } });
+    fireEvent.change(scope.getByLabelText('Название'), { target: { value: 'VIP Platinum' } });
     fireEvent.click(scope.getByRole('button', { name: /сохранить тир/i }));
 
     await waitFor(() => expect(puts).toHaveLength(1));
@@ -285,7 +337,7 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     render(<EconomySettingsPage />);
     const section = await screen.findByRole('region', { name: 'VIP-тиры' });
     const scope = within(section);
-    expect(scope.getByText('Тиров пока нет.')).toBeInTheDocument();
+    expect(scope.getByText('Тиров пока нет')).toBeInTheDocument();
 
     fireEvent.click(scope.getByRole('button', { name: /добавить тир/i }));
     expect(scope.getByText('Новый тир')).toBeInTheDocument();
@@ -304,7 +356,7 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     const scope = within(section);
 
     fireEvent.click(scope.getByRole('button', { name: /добавить тир/i }));
-    fireEvent.change(scope.getByLabelText('Описание тира'), {
+    fireEvent.change(scope.getByLabelText('Описание'), {
       target: { value: 'x'.repeat(1025) },
     });
     fireEvent.change(scope.getByLabelText('Срок по умолчанию (дней)'), { target: { value: '0' } });
@@ -333,8 +385,8 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     const scope = within(section);
 
     fireEvent.click(scope.getByRole('button', { name: /добавить тир/i }));
-    fireEvent.change(scope.getByLabelText('Название тира'), { target: { value: 'VIP Bronze' } });
-    fireEvent.change(scope.getByLabelText('Роль тира'), { target: { value: 'role-1' } });
+    fireEvent.change(scope.getByLabelText('Название'), { target: { value: 'VIP Bronze' } });
+    fireEvent.change(scope.getByLabelText('Роль'), { target: { value: 'role-1' } });
     fireEvent.click(scope.getByRole('button', { name: /сохранить тир/i }));
 
     expect(
@@ -353,8 +405,8 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     const scope = within(section);
 
     fireEvent.click(scope.getByRole('button', { name: /добавить тир/i }));
-    fireEvent.change(scope.getByLabelText('Название тира'), { target: { value: 'VIP Bronze' } });
-    fireEvent.change(scope.getByLabelText('Роль тира'), { target: { value: 'role-1' } });
+    fireEvent.change(scope.getByLabelText('Название'), { target: { value: 'VIP Bronze' } });
+    fireEvent.change(scope.getByLabelText('Роль'), { target: { value: 'role-1' } });
     fireEvent.click(scope.getByRole('button', { name: /сохранить тир/i }));
 
     expect(await scope.findByText('Ошибка сохранения тира: weird_code')).toBeInTheDocument();
@@ -367,18 +419,14 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     const scope = within(section);
 
     fireEvent.click(scope.getByRole('button', { name: /добавить тир/i }));
-    fireEvent.change(scope.getByLabelText('Название тира'), { target: { value: 'VIP Bronze' } });
-    fireEvent.change(scope.getByLabelText('Роль тира'), { target: { value: 'role-1' } });
+    fireEvent.change(scope.getByLabelText('Название'), { target: { value: 'VIP Bronze' } });
+    fireEvent.change(scope.getByLabelText('Роль'), { target: { value: 'role-1' } });
     fireEvent.click(scope.getByRole('button', { name: /сохранить тир/i }));
 
     expect(await scope.findByText('Ошибка сети: offline')).toBeInTheDocument();
   });
 
   it('maps vip_tier_has_active_assignments on delete', async () => {
-    vi.stubGlobal(
-      'confirm',
-      vi.fn(() => true),
-    );
     stubFetch({
       tiers: [makeTier({ id: 'tier-1', name: 'VIP Bronze' })],
       tierMutationError: { status: 409, body: { error: 'vip_tier_has_active_assignments' } },
@@ -386,6 +434,7 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     render(<EconomySettingsPage />);
     const section = await screen.findByRole('region', { name: 'VIP-тиры' });
     fireEvent.click(within(section).getByRole('button', { name: /удалить тир «VIP Bronze»/i }));
+    await confirmTierDeletion();
 
     expect(
       await within(section).findByText(
@@ -395,10 +444,6 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
   });
 
   it('shows the HTTP status when a delete error has no code', async () => {
-    vi.stubGlobal(
-      'confirm',
-      vi.fn(() => true),
-    );
     stubFetch({
       tiers: [makeTier({ id: 'tier-1', name: 'VIP Bronze' })],
       tierMutationError: { status: 500, body: {} },
@@ -406,13 +451,12 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     render(<EconomySettingsPage />);
     const section = await screen.findByRole('region', { name: 'VIP-тиры' });
     fireEvent.click(within(section).getByRole('button', { name: /удалить тир «VIP Bronze»/i }));
+    await confirmTierDeletion();
 
     expect(await within(section).findByText('Ошибка удаления тира: 500')).toBeInTheDocument();
   });
 
-  it('does not delete when confirmation is declined', async () => {
-    const confirmMock = vi.fn(() => false);
-    vi.stubGlobal('confirm', confirmMock);
+  it('does not delete when the confirmation dialog is dismissed', async () => {
     const deleted: string[] = [];
     stubFetch({
       tiers: [makeTier({ id: 'tier-1', name: 'VIP Bronze' })],
@@ -421,18 +465,21 @@ describe('EconomySettingsPage — VIP tiers section (VIPSUB-3)', () => {
     render(<EconomySettingsPage />);
     const section = await screen.findByRole('region', { name: 'VIP-тиры' });
     fireEvent.click(within(section).getByRole('button', { name: /удалить тир «VIP Bronze»/i }));
+    await declineTierDeletion();
 
-    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(deleted).toHaveLength(0);
   });
 });
 
 describe('EconomySettingsPage — economy settings form', () => {
-  it('keeps the loading placeholder when settings fail to load', async () => {
+  it('reports the failure and keeps the skeleton when settings fail to load', async () => {
     const fetchMock = stubFetch({ settingsStatus: 500 });
     render(<EconomySettingsPage />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
-    expect(screen.getByText('Загрузка…')).toBeInTheDocument();
+    expect(await screen.findByText('Не удалось загрузить настройки: 500')).toBeInTheDocument();
+    expect(screen.getByText('Загрузка настроек экономики')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Сохранить' })).not.toBeInTheDocument();
   });
 
   it('shows read-only notice and no save button without manage permission', async () => {

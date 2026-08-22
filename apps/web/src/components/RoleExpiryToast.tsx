@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
+import { Card, CloseIcon, IconButton } from '@/components/ui';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 
@@ -30,6 +31,10 @@ function readRoleExpiryNotification(event: AlertTriggeredEvent): RoleExpiryNotif
  * VIPSUB-4 (#170): surfaces `role_expiring` reminder frames from the live bus.
  * The server only fans these frames out to sockets holding `can_assign_roles`
  * (`apps/api/src/routes/live.ts`); this client-side filter is defense-in-depth.
+ *
+ * Позицию задаёт общая область `ToastRegion` в layout панели, поэтому здесь
+ * остаётся только `pointer-events-auto` — область намеренно не перехватывает
+ * указатель, и вернуть перехват обязано каждое уведомление.
  */
 export function RoleExpiryToast() {
   const [notification, setNotification] = useState<RoleExpiryNotification | null>(null);
@@ -43,25 +48,25 @@ export function RoleExpiryToast() {
   if (!notification) return null;
 
   return (
-    <output className="pointer-events-auto w-80 rounded-card border border-accent/40 bg-surface p-4 shadow-xl shadow-black/40">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="font-semibold text-sky-200">
-            VIP истекает через {notification.windowDays} дн.
-          </p>
-          <p className="mt-1 text-sm text-neutral-300">
-            {notification.playerName} — {notification.roleName}
-          </p>
+    <output className="pointer-events-auto block w-80">
+      <Card>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold text-ink">
+              VIP истекает через {notification.windowDays} дн.
+            </p>
+            <p className="mt-1 text-xs text-ink-3">
+              {notification.playerName} — {notification.roleName}
+            </p>
+          </div>
+          <IconButton
+            icon={<CloseIcon />}
+            label="Закрыть уведомление об истечении VIP"
+            onClick={() => setNotification(null)}
+            className="-mr-1 -mt-1 shrink-0"
+          />
         </div>
-        <button
-          type="button"
-          onClick={() => setNotification(null)}
-          aria-label="Закрыть уведомление об истечении VIP"
-          className="text-neutral-500 hover:text-neutral-200"
-        >
-          ×
-        </button>
-      </div>
+      </Card>
     </output>
   );
 }
