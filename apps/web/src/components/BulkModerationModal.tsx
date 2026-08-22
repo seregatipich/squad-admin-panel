@@ -254,7 +254,7 @@ export function BulkModerationModal({
                 maxLength={REASON_MAX}
                 rows={3}
                 placeholder="Причина (обязательно)"
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600"
+                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-500"
               />
             </div>
 
@@ -303,7 +303,7 @@ export function BulkModerationModal({
                   onChange={(e) => setChallenge(e.target.value)}
                   inputMode="numeric"
                   placeholder={String(targetCount)}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600"
+                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-500"
                 />
               </div>
             ) : null}

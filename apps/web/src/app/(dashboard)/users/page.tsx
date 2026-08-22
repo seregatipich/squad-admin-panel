@@ -191,7 +191,7 @@ export default function UsersPage() {
                 {canManage ? (
                   <td className="p-2 text-right">
                     {u.role.is_system_role && u.role.name === 'Owner' ? (
-                      <span className="text-xs text-neutral-600">—</span>
+                      <span className="text-xs text-neutral-500">—</span>
                     ) : (
                       <button
                         type="button"

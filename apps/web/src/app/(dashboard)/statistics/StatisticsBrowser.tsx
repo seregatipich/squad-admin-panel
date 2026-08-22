@@ -312,7 +312,7 @@ export function StatisticsBrowser() {
                 Режимы
               </figcaption>
               {data.matches.modes.length === 0 ? (
-                <p className="py-10 text-center text-xs text-neutral-600">Нет данных.</p>
+                <p className="py-10 text-center text-xs text-neutral-500">Нет данных.</p>
               ) : (
                 <ModesDoughnut modes={data.matches.modes} />
               )}
@@ -398,7 +398,7 @@ function ServerLegend({
   knownServerIds: string[];
 }) {
   if (servers.length === 0) {
-    return <p className="text-xs text-neutral-600">Ни один сервер не попал в выборку.</p>;
+    return <p className="text-xs text-neutral-500">Ни один сервер не попал в выборку.</p>;
   }
   return (
     <ul className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-neutral-400">
@@ -443,7 +443,7 @@ function ChartCard({
         </span>
       </figcaption>
       {series.totals.length === 0 || servers.length === 0 ? (
-        <p className="py-10 text-center text-xs text-neutral-600">Нет данных.</p>
+        <p className="py-10 text-center text-xs text-neutral-500">Нет данных.</p>
       ) : (
         <StackedSeriesChart
           series={series}
@@ -484,7 +484,7 @@ function RankedBars({
         {title}
       </figcaption>
       {rows.length === 0 ? (
-        <p className="py-10 text-center text-xs text-neutral-600">Нет данных.</p>
+        <p className="py-10 text-center text-xs text-neutral-500">Нет данных.</p>
       ) : (
         <ul className="mt-2 space-y-1.5">
           {rows.slice(0, 12).map((row) => (

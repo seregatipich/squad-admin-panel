@@ -262,7 +262,7 @@ export function AppealsBrowser() {
                     : ''}
                 </div>
               ) : (
-                <div className="text-xs text-neutral-600">Активный бан не найден.</div>
+                <div className="text-xs text-neutral-500">Активный бан не найден.</div>
               )}
 
               <p className="whitespace-pre-wrap text-sm text-neutral-200">{appeal.body}</p>

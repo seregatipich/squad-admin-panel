@@ -301,7 +301,7 @@ export function IssuesBrowser() {
                     </td>
                     <td className="py-2 pr-2">
                       {issue.labels.length === 0 ? (
-                        <span className="text-xs text-neutral-600">—</span>
+                        <span className="text-xs text-neutral-500">—</span>
                       ) : (
                         <div className="flex flex-wrap gap-1">
                           {issue.labels.map((label) => (
@@ -333,7 +333,7 @@ export function IssuesBrowser() {
                           {issue.assignee.name}
                         </Link>
                       ) : (
-                        <span className="text-neutral-600">—</span>
+                        <span className="text-neutral-500">—</span>
                       )}
                     </td>
                     <td className="py-2 pr-2">
@@ -464,7 +464,7 @@ function CreateIssueForm({
         <div>
           <label htmlFor={titleId} className="mb-1 flex justify-between text-xs text-neutral-500">
             <span>Заголовок</span>
-            <span className={titleOver ? 'text-red-400' : 'text-neutral-600'}>
+            <span className={titleOver ? 'text-red-400' : 'text-neutral-500'}>
               {title.length}/{TITLE_MAX}
             </span>
           </label>
@@ -480,7 +480,7 @@ function CreateIssueForm({
         <div>
           <label htmlFor={bodyId} className="mb-1 flex justify-between text-xs text-neutral-500">
             <span>Описание</span>
-            <span className={bodyOver ? 'text-red-400' : 'text-neutral-600'}>
+            <span className={bodyOver ? 'text-red-400' : 'text-neutral-500'}>
               {body.length}/{BODY_MAX}
             </span>
           </label>

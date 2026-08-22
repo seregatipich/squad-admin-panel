@@ -161,11 +161,11 @@ export default function IssueTicketPage({ params }: { params: Promise<{ id: stri
                 {issue.assignee.name}
               </Link>
             ) : (
-              <span className="text-neutral-600">не назначен</span>
+              <span className="text-neutral-500">не назначен</span>
             )}
           </span>
-          <span className="text-neutral-600">Создан: {formatDateTime(issue.created_at)}</span>
-          <span className="text-neutral-600">Обновлён: {formatDateTime(issue.updated_at)}</span>
+          <span className="text-neutral-500">Создан: {formatDateTime(issue.created_at)}</span>
+          <span className="text-neutral-500">Обновлён: {formatDateTime(issue.updated_at)}</span>
         </div>
 
         {issue.labels.length > 0 ? (

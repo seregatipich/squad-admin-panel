@@ -382,7 +382,7 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
                   </div>
                 ))}
                 {dayHistory.length === 0 && dayScheduled.length === 0 ? (
-                  <p className="text-[11px] text-neutral-600">—</p>
+                  <p className="text-[11px] text-neutral-500">—</p>
                 ) : null}
               </div>
             </div>

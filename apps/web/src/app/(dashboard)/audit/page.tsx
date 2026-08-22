@@ -194,11 +194,11 @@ export default function AuditPage() {
                         {r.row_hash ? (
                           <dl className="mt-2 space-y-0.5 text-[11px] font-mono text-neutral-500 break-all">
                             <div>
-                              <span className="text-neutral-600">row_hash: </span>
+                              <span className="text-neutral-500">row_hash: </span>
                               {r.row_hash}
                             </div>
                             <div>
-                              <span className="text-neutral-600">prev_hash: </span>
+                              <span className="text-neutral-500">prev_hash: </span>
                               {r.prev_hash ?? '—'}
                             </div>
                           </dl>

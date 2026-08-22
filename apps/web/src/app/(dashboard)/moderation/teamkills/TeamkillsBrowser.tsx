@@ -267,7 +267,7 @@ function TeamkillTable({
                   >
                     {row.current_name ?? row.player_id.slice(0, 8)}
                   </Link>
-                  <div className="font-mono text-[11px] text-neutral-600">
+                  <div className="font-mono text-[11px] text-neutral-500">
                     {row.steam_id64 ?? row.eos_id ?? row.player_id}
                   </div>
                 </td>
@@ -313,7 +313,7 @@ function TeamkillTable({
                 >
                   {row.current_name ?? row.player_id.slice(0, 8)}
                 </Link>
-                <div className="font-mono text-[11px] text-neutral-600">
+                <div className="font-mono text-[11px] text-neutral-500">
                   {row.steam_id64 ?? row.eos_id ?? row.player_id}
                 </div>
               </div>

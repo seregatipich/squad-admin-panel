@@ -175,7 +175,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
               Динамика голосований по дням
             </figcaption>
             {data.trend.length === 0 ? (
-              <div className="text-xs text-neutral-600">Нет данных.</div>
+              <div className="text-xs text-neutral-500">Нет данных.</div>
             ) : (
               <>
                 <div
@@ -200,7 +200,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                     );
                   })}
                 </div>
-                <div className="flex justify-between text-[10px] font-mono text-neutral-600">
+                <div className="flex justify-between text-[10px] font-mono text-neutral-500">
                   <span>{formatTrendDay(data.trend[0].day)}</span>
                   <span>{formatTrendDay(data.trend[data.trend.length - 1].day)}</span>
                 </div>
@@ -234,7 +234,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                 );
               })}
             </div>
-            <div className="flex justify-between text-[10px] font-mono text-neutral-600">
+            <div className="flex justify-between text-[10px] font-mono text-neutral-500">
               {AXIS_HOURS.map((hour) => (
                 <span key={hour}>{formatVoteHour(hour)}</span>
               ))}
@@ -271,7 +271,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                 Топ инициаторов
               </figcaption>
               {data.top_initiators.length === 0 ? (
-                <div className="text-xs text-neutral-600">Нет данных.</div>
+                <div className="text-xs text-neutral-500">Нет данных.</div>
               ) : (
                 <ul className="space-y-1.5">
                   {data.top_initiators.map((row) => (
@@ -303,7 +303,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                 Серийные скиперы
               </figcaption>
               {data.serial_skippers.length === 0 ? (
-                <div className="text-xs text-neutral-600">Порог не достигнут никем.</div>
+                <div className="text-xs text-neutral-500">Порог не достигнут никем.</div>
               ) : (
                 <ul className="space-y-1.5">
                   {data.serial_skippers.map((row) => (
@@ -359,7 +359,7 @@ function PassRateList({
         {title}
       </figcaption>
       {rows.length === 0 ? (
-        <div className="text-xs text-neutral-600">Нет данных.</div>
+        <div className="text-xs text-neutral-500">Нет данных.</div>
       ) : (
         <ul className="space-y-1.5">
           {rows.map((row) => (

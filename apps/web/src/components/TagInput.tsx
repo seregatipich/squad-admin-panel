@@ -59,7 +59,7 @@ export function TagInput({ tags, onChange, maxTags = 20 }: Props) {
           }
         }}
         placeholder={tags.length === 0 ? 'Введите тег и нажмите Enter' : ''}
-        className="min-w-[80px] flex-1 border-none bg-transparent text-sm text-neutral-200 outline-none placeholder:text-neutral-600"
+        className="min-w-[80px] flex-1 border-none bg-transparent text-sm text-neutral-200 outline-none placeholder:text-neutral-500"
       />
     </fieldset>
   );

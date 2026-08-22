@@ -196,7 +196,7 @@ export function GeoAnomaliesSection({ playerId }: { playerId: string }) {
           </span>
         ) : null}
         {!data.multi_country && !data.has_recent_switch ? (
-          <span className="text-xs text-neutral-600">аномалий не обнаружено</span>
+          <span className="text-xs text-neutral-500">аномалий не обнаружено</span>
         ) : null}
       </div>
 
@@ -229,7 +229,7 @@ export function GeoAnomaliesSection({ playerId }: { playerId: string }) {
                       {entry.from_country_name ?? entry.from_country_code}
                     </span>
                   </span>
-                  <span className="text-neutral-600">→</span>
+                  <span className="text-neutral-500">→</span>
                   <span className="inline-flex items-center gap-1">
                     <span>{flagEmoji(entry.to_country_code)}</span>
                     <span className="font-medium">
@@ -244,14 +244,14 @@ export function GeoAnomaliesSection({ playerId }: { playerId: string }) {
                       алерт
                     </span>
                   ) : null}
-                  <span className="ml-auto text-xs text-neutral-600">
+                  <span className="ml-auto text-xs text-neutral-500">
                     {new Date(entry.to_observed_at).toLocaleString()}
                   </span>
                 </li>
               ))}
           </ul>
           {recentSwitches.length > 0 ? (
-            <p className="text-[11px] text-neutral-600">
+            <p className="text-[11px] text-neutral-500">
               Смена страны за менее чем {data.config.country_switch_window_hours} ч помечена как
               алерт.
             </p>

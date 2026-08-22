@@ -533,7 +533,7 @@ function FilterSidebar({
             onChange={onToggleLive}
             className="h-3.5 w-3.5 accent-green-500"
           />
-          <span className={liveAvailable ? '' : 'text-neutral-600'}>Live</span>
+          <span className={liveAvailable ? '' : 'text-neutral-500'}>Live</span>
         </label>
         {hasActiveFilters(filters) ? (
           <button
@@ -546,7 +546,7 @@ function FilterSidebar({
         ) : null}
       </div>
       {!liveAvailable ? (
-        <p className="text-[11px] text-neutral-600">
+        <p className="text-[11px] text-neutral-500">
           Live недоступен при фильтре по дате — очистите даты, чтобы получать новые сообщения.
         </p>
       ) : null}

@@ -422,7 +422,7 @@ export default function MapVotePage({ params }: { params: Promise<{ id: string }
               </ul>
             ) : null}
             {preview.excluded.length > 0 ? (
-              <ul className="space-y-1 text-xs text-neutral-600" data-testid="preview-excluded">
+              <ul className="space-y-1 text-xs text-neutral-500" data-testid="preview-excluded">
                 {preview.excluded.map((row) => (
                   <li key={row.layer}>
                     <span className="font-mono">{row.layer}</span> — исключён (

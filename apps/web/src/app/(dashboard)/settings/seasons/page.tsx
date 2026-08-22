@@ -249,7 +249,7 @@ export default function SeasonsSettingsPage() {
                         ) : null}
                       </span>
                     ) : (
-                      <span className="text-xs text-neutral-600">только просмотр</span>
+                      <span className="text-xs text-neutral-500">только просмотр</span>
                     )}
                   </td>
                 </tr>

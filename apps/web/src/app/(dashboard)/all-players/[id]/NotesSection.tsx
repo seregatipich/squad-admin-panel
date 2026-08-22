@@ -277,7 +277,7 @@ function NoteItem({
           <RoleColorDot color={note.author.role_color ?? 'neutral'} size="sm" />
           <span className="font-medium text-neutral-200">{note.author.name}</span>
           <span className="text-neutral-500">{formatRelativeNote(note.created_at)}</span>
-          {note.edited ? <span className="text-neutral-600">(изменено)</span> : null}
+          {note.edited ? <span className="text-neutral-500">(изменено)</span> : null}
         </span>
         {(canEdit || canDelete) && !editing ? (
           <span className="flex gap-2">

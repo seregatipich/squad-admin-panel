@@ -234,7 +234,7 @@ export function VotesBrowser() {
               </button>
             </div>
           ) : !loading && items.length > 0 ? (
-            <div className="py-2 text-center text-xs text-neutral-600">Больше голосований нет</div>
+            <div className="py-2 text-center text-xs text-neutral-500">Больше голосований нет</div>
           ) : null}
         </div>
       </div>
@@ -402,7 +402,7 @@ function FilterPanel({
       <div className="space-y-1.5">
         <span className="text-xs uppercase tracking-widest text-neutral-500">Серверы</span>
         {servers.length === 0 ? (
-          <p className="text-xs text-neutral-600">Нет доступных серверов</p>
+          <p className="text-xs text-neutral-500">Нет доступных серверов</p>
         ) : (
           <div className="max-h-48 space-y-1 overflow-y-auto rounded border border-neutral-900 p-1">
             {servers.map((server) => {
@@ -536,7 +536,7 @@ function VoteCard({ vote }: { vote: VoteListItem }) {
             <div className="flex flex-wrap items-center gap-1.5 font-mono text-xs text-neutral-300">
               {chain.map((entry, index) => (
                 <span key={`${vote.id}-map-${index}`} className="flex items-center gap-1.5">
-                  {index > 0 ? <span className="text-neutral-600">→</span> : null}
+                  {index > 0 ? <span className="text-neutral-500">→</span> : null}
                   <span className="rounded bg-neutral-900 px-1.5 py-0.5">{entry}</span>
                 </span>
               ))}

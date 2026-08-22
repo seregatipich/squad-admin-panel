@@ -246,7 +246,7 @@ export function ReportsAnalytics() {
                 Топ целей
               </h3>
               {data.top_targets.length === 0 ? (
-                <p className="text-xs text-neutral-600">Нет данных.</p>
+                <p className="text-xs text-neutral-500">Нет данных.</p>
               ) : (
                 <table className="w-full text-xs">
                   <thead>
@@ -286,7 +286,7 @@ export function ReportsAnalytics() {
                 Топ репортёров
               </h3>
               {data.top_reporters.length === 0 ? (
-                <p className="text-xs text-neutral-600">Нет данных.</p>
+                <p className="text-xs text-neutral-500">Нет данных.</p>
               ) : (
                 <table className="w-full text-xs">
                   <thead>

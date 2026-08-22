@@ -367,7 +367,7 @@ export default function SeedCalendarPage({ params }: { params: Promise<{ id: str
                   );
                 })}
                 {dayOccurrences.length === 0 && dayWindows.length === 0 ? (
-                  <p className="text-[11px] text-neutral-600">—</p>
+                  <p className="text-[11px] text-neutral-500">—</p>
                 ) : null}
               </div>
             </div>

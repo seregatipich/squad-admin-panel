@@ -522,20 +522,20 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
             <dd>{host?.address ?? '—'}</dd>
             <dt className="text-neutral-500">Game</dt>
             <dd>
-              {settings.game_port} <span className="text-neutral-600">UDP</span>
+              {settings.game_port} <span className="text-neutral-500">UDP</span>
             </dd>
             <dt className="text-neutral-500">Query</dt>
             <dd>
-              {settings.query_port} <span className="text-neutral-600">UDP</span>
+              {settings.query_port} <span className="text-neutral-500">UDP</span>
             </dd>
             <dt className="text-neutral-500">Beacon</dt>
             <dd>
-              {settings.beacon_port} <span className="text-neutral-600">UDP</span>
+              {settings.beacon_port} <span className="text-neutral-500">UDP</span>
             </dd>
             <dt className="text-neutral-500">RCON</dt>
             <dd className="flex items-center gap-2">
               <span>
-                {settings.rcon_port} <span className="text-neutral-600">TCP</span>
+                {settings.rcon_port} <span className="text-neutral-500">TCP</span>
               </span>
               <RconDot status={rcon_status} />
             </dd>

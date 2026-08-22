@@ -133,7 +133,7 @@ export function LogConsole({
         className="overflow-y-auto rounded border border-neutral-800 bg-neutral-950 p-3 font-mono text-xs leading-relaxed"
       >
         {lines.length === 0 ? (
-          <div className="text-neutral-600">{emptyText}</div>
+          <div className="text-neutral-500">{emptyText}</div>
         ) : (
           lines.map((l, i) => {
             const key = l.id ?? `${l.ts ?? ''}:${i}:${l.message.slice(0, 40)}`;
@@ -144,7 +144,7 @@ export function LogConsole({
               >
                 {showStep && l.step ? <span className="text-neutral-500">[{l.step}]</span> : null}
                 {l.ts && !showStep ? (
-                  <span className="text-neutral-600">{formatTime(l.ts)} </span>
+                  <span className="text-neutral-500">{formatTime(l.ts)} </span>
                 ) : null}{' '}
                 {l.message}
               </div>

@@ -290,7 +290,7 @@ export default function DiscordIntegrationPage() {
                   задан: {integration.bot_token_mask}
                 </span>
               ) : (
-                <span className="ml-1 text-neutral-600">не задан</span>
+                <span className="ml-1 text-neutral-500">не задан</span>
               )}
             </label>
             <input

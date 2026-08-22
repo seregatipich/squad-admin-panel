@@ -197,6 +197,13 @@
 }
 
 @layer base {
+  :root {
+    /* Height of the sticky top navigation. Anything else that sticks — table
+       headers above all — offsets by this instead of hard-coding 46px, so the
+       bar and everything pinned under it can never drift apart. */
+    --chrome-h: 46px;
+  }
+
   html {
     color-scheme: dark;
   }
@@ -220,8 +227,10 @@
     @apply outline-2 outline-offset-2 outline-accent;
   }
 
+  /* A placeholder is often the only label a field has, so it has to be
+     readable: tertiaryLabel measures 5.3:1 on a card, quaternary only 2.5:1. */
   ::placeholder {
-    color: var(--color-ink-4);
+    color: var(--color-ink-3);
   }
 
   ::-webkit-scrollbar {

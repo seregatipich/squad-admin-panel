@@ -197,7 +197,7 @@ export default function RotationPage({ params }: { params: Promise<{ id: string 
             }`}
           >
             <div className="flex items-center gap-3">
-              <span className="w-6 text-right text-xs text-neutral-600">{index + 1}</span>
+              <span className="w-6 text-right text-xs text-neutral-500">{index + 1}</span>
               <div>
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-sm">{entry.layer}</span>

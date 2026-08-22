@@ -85,7 +85,7 @@ function ChatRow({ message, canBan }: { message: ChatMessage; canBan: boolean })
   const href = playerHref(message);
   return (
     <li className="flex items-baseline gap-2 text-sm">
-      <span className="w-16 shrink-0 font-mono text-[11px] text-neutral-600">
+      <span className="w-16 shrink-0 font-mono text-[11px] text-neutral-500">
         {formatChatTime(message.ts)}
       </span>
       <span

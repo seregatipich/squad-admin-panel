@@ -135,7 +135,7 @@ export function DossierSection({ playerId }: { playerId: string }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xs uppercase tracking-widest text-neutral-400">Досье</h2>
         {lifetimeOnly ? (
-          <span className="text-[11px] text-neutral-600">{LIFETIME_ONLY_NOTE}</span>
+          <span className="text-[11px] text-neutral-500">{LIFETIME_ONLY_NOTE}</span>
         ) : null}
         {!lifetimeOnly && servers.length > 0 ? (
           <div className="flex items-center gap-1.5">

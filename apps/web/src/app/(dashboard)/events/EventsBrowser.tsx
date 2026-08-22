@@ -254,7 +254,7 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
               </button>
             </div>
           ) : !loading && items.length > 0 ? (
-            <div className="py-2 text-center text-xs text-neutral-600">Больше событий нет</div>
+            <div className="py-2 text-center text-xs text-neutral-500">Больше событий нет</div>
           ) : null}
         </div>
       </div>
@@ -439,7 +439,7 @@ function FilterPanel({
         <div className="space-y-1.5">
           <span className="text-xs uppercase tracking-widest text-neutral-500">Серверы</span>
           {servers.length === 0 ? (
-            <p className="text-xs text-neutral-600">Нет доступных серверов</p>
+            <p className="text-xs text-neutral-500">Нет доступных серверов</p>
           ) : (
             <div className="max-h-48 space-y-1 overflow-y-auto rounded border border-neutral-900 p-1">
               {servers.map((server) => {
@@ -537,7 +537,7 @@ function EventList({
             {event.actor_nickname ? (
               <span className="truncate text-xs text-neutral-300">{event.actor_nickname}</span>
             ) : null}
-            <span className="ml-auto font-mono text-[10px] text-neutral-600">
+            <span className="ml-auto font-mono text-[10px] text-neutral-500">
               {event.event_id.slice(0, 8)}
             </span>
           </button>
@@ -603,7 +603,7 @@ function EnvelopeModal({ event, onClose }: { event: EventListItem; onClose: () =
               </span>
               <span className="text-xs text-neutral-500">{formatDateTime(event.occurred_at)}</span>
             </div>
-            <div className="truncate font-mono text-[11px] text-neutral-600">{event.event_id}</div>
+            <div className="truncate font-mono text-[11px] text-neutral-500">{event.event_id}</div>
           </div>
           <button
             type="button"

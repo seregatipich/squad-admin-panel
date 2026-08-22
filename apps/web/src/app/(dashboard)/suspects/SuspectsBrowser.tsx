@@ -293,7 +293,7 @@ export function SuspectsBrowser() {
                           забанен
                         </span>
                       ) : (
-                        <span className="text-xs text-neutral-600">—</span>
+                        <span className="text-xs text-neutral-500">—</span>
                       )}
                     </td>
                   </tr>

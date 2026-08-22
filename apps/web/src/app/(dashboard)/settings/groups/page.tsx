@@ -478,7 +478,7 @@ function RoleCard({
             onChange={(e) => setPermFilter(e.target.value)}
             placeholder="Фильтр прав…"
             aria-label="Фильтр прав"
-            className="w-40 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 placeholder:text-neutral-600"
+            className="w-40 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 placeholder:text-neutral-500"
           />
         </div>
         {permGrid.filtered.length === 0 ? (
@@ -538,7 +538,7 @@ function RoleCard({
             }).body
           }
         </pre>
-        <p className="mt-1 text-[11px] text-neutral-600">
+        <p className="mt-1 text-[11px] text-neutral-500">
           Рендер из того же генератора, что и config-sync (SYNC-2) — побайтно совпадает с файлом.
           {role.squad_permissions.length === 0
             ? ' У роли нет Squad permissions, поэтому строка Group= не пишется.'

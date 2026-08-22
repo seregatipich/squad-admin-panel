@@ -269,11 +269,11 @@ function RosterColumn({
         <StatBlock label="Время" value={formatDuration(summary.play_seconds)} />
       </div>
       {entries.length === 0 ? (
-        <p className="text-sm text-neutral-600">Нет данных о составе.</p>
+        <p className="text-sm text-neutral-500">Нет данных о составе.</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[560px] border-collapse text-sm">
-            <thead className="text-left text-[11px] uppercase tracking-widest text-neutral-600">
+            <thead className="text-left text-[11px] uppercase tracking-widest text-neutral-500">
               <tr>
                 <th className="py-2 pr-3 font-medium">
                   <RosterSortHeader field="player" label="Игрок" sort={sort} onSort={applySort} />
@@ -413,7 +413,7 @@ function RosterSortHeader({
 function StatBlock({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-widest text-neutral-600">{label}</div>
+      <div className="text-[10px] uppercase tracking-widest text-neutral-500">{label}</div>
       <div className="mt-0.5 truncate font-mono text-neutral-200">{value}</div>
     </div>
   );
@@ -437,9 +437,9 @@ export function MatchTimeline({
         </Link>
       </div>
       {events === null ? (
-        <p className="text-sm text-neutral-600">Нет доступа к боевым событиям.</p>
+        <p className="text-sm text-neutral-500">Нет доступа к боевым событиям.</p>
       ) : events.length === 0 ? (
-        <p className="text-sm text-neutral-600">Боевые события не найдены.</p>
+        <p className="text-sm text-neutral-500">Боевые события не найдены.</p>
       ) : (
         <ol className="space-y-2">
           {events.map((event) => (
@@ -469,7 +469,7 @@ export function MatchTimeline({
                   {event.is_teamkill ? 'Тимкилл' : timelineEventLabel(event.event_type)}
                 </span>
                 <TimelinePlayer player={event.attacker} />
-                <span className="text-neutral-600">→</span>
+                <span className="text-neutral-500">→</span>
                 <TimelinePlayer player={event.victim} />
               </div>
               {event.weapon || event.attacker_vehicle || event.victim_vehicle ? (

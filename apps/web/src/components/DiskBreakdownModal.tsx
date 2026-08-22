@@ -214,7 +214,7 @@ export function DiskBreakdownModal({
                       <span className="font-mono text-xs tabular-nums text-neutral-500">
                         {fmt(groupTotal)}
                         {total > 0 ? (
-                          <span className="ml-2 text-neutral-600">
+                          <span className="ml-2 text-neutral-500">
                             {((groupTotal / total) * 100).toFixed(1)}%
                           </span>
                         ) : null}
@@ -231,7 +231,7 @@ export function DiskBreakdownModal({
                               </span>
                               <span className="shrink-0 font-mono text-xs tabular-nums text-neutral-400">
                                 <span className="text-neutral-200">{fmt(row.bytes)}</span>
-                                <span className="ml-2 text-neutral-600">{pct.toFixed(1)}%</span>
+                                <span className="ml-2 text-neutral-500">{pct.toFixed(1)}%</span>
                               </span>
                             </div>
                             <div className="h-1 w-full overflow-hidden rounded-full bg-neutral-900">

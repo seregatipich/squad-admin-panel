@@ -113,7 +113,7 @@ export function PrimetimeSection({ playerId }: { playerId: string }) {
             <span className="text-sky-300">{fmtDuration(data.histogram[hoverHour] ?? 0)}</span>
           </span>
         ) : (
-          <span className="text-neutral-600">
+          <span className="text-neutral-500">
             Активность по часам суток за {data.window.days} дней
           </span>
         )}
@@ -149,7 +149,7 @@ export function PrimetimeSection({ playerId }: { playerId: string }) {
         })}
       </div>
 
-      <div className="flex justify-between text-[10px] tabular-nums text-neutral-600">
+      <div className="flex justify-between text-[10px] tabular-nums text-neutral-500">
         {[0, 6, 12, 18, 23].map((hour) => (
           <span key={hour}>{String(hour).padStart(2, '0')}</span>
         ))}

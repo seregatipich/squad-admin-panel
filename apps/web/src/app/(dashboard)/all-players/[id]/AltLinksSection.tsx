@@ -124,7 +124,7 @@ export function AltLinksSection({ playerId }: { playerId: string }) {
                     </span>
                     <span className="font-medium">{link.other_player?.current_name ?? '—'}</span>
                     {link.note ? <span className="text-neutral-400">— {link.note}</span> : null}
-                    <span className="ml-auto text-xs text-neutral-600">
+                    <span className="ml-auto text-xs text-neutral-500">
                       {link.created_by ? `подтвердил ${link.created_by.name}, ` : ''}
                       {new Date(link.updated_at).toLocaleDateString('ru-RU')}
                     </span>

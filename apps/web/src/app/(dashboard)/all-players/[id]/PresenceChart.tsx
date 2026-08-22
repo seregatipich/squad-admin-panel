@@ -175,7 +175,7 @@ function DailyBarChart({ bars }: { bars: DailyBar[] }) {
             {active.queue_seconds > 0 ? ` · очередь ${fmtDuration(active.queue_seconds)}` : ''}
           </span>
         ) : (
-          <span className="text-neutral-600">Наведите на столбец для точных чисел</span>
+          <span className="text-neutral-500">Наведите на столбец для точных чисел</span>
         )}
       </div>
 

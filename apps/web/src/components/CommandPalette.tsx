@@ -211,7 +211,7 @@ export function CommandPalette({
           ) : (
             sections.map((section) => (
               <div key={section.title} className="mb-1.5 last:mb-0">
-                <div className="px-4 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-600">
+                <div className="px-4 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-500">
                   {section.title}
                 </div>
                 {section.results.map((result) => {

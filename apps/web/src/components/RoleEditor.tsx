@@ -228,7 +228,7 @@ export function RoleEditor({ initial, onSubmit, onCancel, submitLabel }: RoleEdi
                             {p.unimplemented ? (
                               <span className="ml-1 text-xs text-neutral-500">(в разработке)</span>
                             ) : null}
-                            <span className="ml-2 font-mono text-xs text-neutral-600">{p.key}</span>
+                            <span className="ml-2 font-mono text-xs text-neutral-500">{p.key}</span>
                           </span>
                         </label>
                       </li>

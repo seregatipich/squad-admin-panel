@@ -1060,7 +1060,7 @@ function BlameView({ blame }: { blame: BlameResponse | null }) {
                 <td className="w-36 border-r border-neutral-900 px-2 py-0.5 text-neutral-500">
                   {new Date(l.created_at).toLocaleDateString()}
                 </td>
-                <td className="w-10 border-r border-neutral-900 px-2 py-0.5 text-right text-neutral-600">
+                <td className="w-10 border-r border-neutral-900 px-2 py-0.5 text-right text-neutral-500">
                   {i + 1}
                 </td>
                 <td className="whitespace-pre px-2 py-0.5 text-neutral-200">{l.text || ' '}</td>

@@ -530,7 +530,7 @@ export default function AutomationPage() {
                   <span className="rounded bg-neutral-900 px-2 py-0.5 text-[10px] uppercase text-neutral-400">
                     {conditionLabel(rule.condition_type)}
                   </span>
-                  <span className="text-neutral-600">→</span>
+                  <span className="text-neutral-500">→</span>
                   <span className="rounded bg-neutral-900 px-2 py-0.5 text-[10px] uppercase text-neutral-400">
                     {actionLabel(rule.action_type)}
                   </span>

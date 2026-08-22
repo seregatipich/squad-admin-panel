@@ -43,7 +43,7 @@ export function DossierVehiclesTab({
 
   return (
     <div className="space-y-4">
-      <div className="text-xs text-neutral-600">{LIFETIME_ONLY_NOTE}</div>
+      <div className="text-xs text-neutral-500">{LIFETIME_ONLY_NOTE}</div>
 
       {vehicles.length > 0 ? (
         <div className="space-y-2">

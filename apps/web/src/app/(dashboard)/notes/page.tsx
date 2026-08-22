@@ -317,7 +317,7 @@ export default function NotesFeedPage() {
                     <tr key={note.id} className="border-t border-neutral-900 align-top">
                       <td className="py-2 pr-3 whitespace-nowrap text-neutral-400">
                         {formatDate(note.created_at)}
-                        {note.edited ? <span className="ml-1 text-neutral-600">(изм.)</span> : null}
+                        {note.edited ? <span className="ml-1 text-neutral-500">(изм.)</span> : null}
                       </td>
                       <td className="py-2 pr-3 whitespace-nowrap">
                         <span className="inline-flex items-center gap-2">

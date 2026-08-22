@@ -493,7 +493,7 @@ export default function SchedulePage({ params }: { params: Promise<{ id: string 
                     data-testid="broadcast-rotation"
                   >
                     {rotation.length === 0 ? (
-                      <li className="text-neutral-600">
+                      <li className="text-neutral-500">
                         Пусто — выберите шаблон или добавьте текст.
                       </li>
                     ) : null}

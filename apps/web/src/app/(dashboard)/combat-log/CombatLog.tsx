@@ -291,7 +291,7 @@ export function CombatLog({ lockedServerId }: { lockedServerId?: string }) {
               </button>
             </div>
           ) : !loading && displayRows.length > 0 ? (
-            <div className="py-2 text-center text-xs text-neutral-600">Больше событий нет</div>
+            <div className="py-2 text-center text-xs text-neutral-500">Больше событий нет</div>
           ) : null}
         </div>
       </div>
@@ -478,7 +478,7 @@ function CombatTable({
               </div>
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <PlayerLink player={row.attacker} />
-                <span className="text-neutral-600">→</span>
+                <span className="text-neutral-500">→</span>
                 <PlayerLink player={row.victim} />
                 {row.isTeamkill ? <TeamkillBadge /> : null}
               </div>
@@ -564,7 +564,7 @@ function FilterPanel({
         <div className="space-y-1.5">
           <span className="text-xs uppercase tracking-widest text-neutral-500">Серверы</span>
           {servers.length === 0 ? (
-            <p className="text-xs text-neutral-600">Нет доступных серверов</p>
+            <p className="text-xs text-neutral-500">Нет доступных серверов</p>
           ) : (
             <div className="max-h-48 space-y-1 overflow-y-auto rounded border border-neutral-900 p-1">
               {servers.map((server) => {

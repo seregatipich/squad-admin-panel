@@ -171,7 +171,7 @@ export default function GeoipIntegrationPage() {
             }
             className="w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm font-mono"
           />
-          <p className="text-xs text-neutral-600">
+          <p className="text-xs text-neutral-500">
             Оставьте поле пустым, чтобы сохранить текущий ключ.
           </p>
         </div>
@@ -208,7 +208,7 @@ export default function GeoipIntegrationPage() {
         </div>
 
         {settings?.last_refreshed_at ? (
-          <p className="text-xs text-neutral-600">
+          <p className="text-xs text-neutral-500">
             База обновлена: {new Date(settings.last_refreshed_at).toLocaleString()}
           </p>
         ) : null}

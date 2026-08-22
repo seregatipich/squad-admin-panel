@@ -241,7 +241,7 @@ export default function PlayersPage() {
                   >
                     Статус
                     <span
-                      className={sortOnline === 'none' ? 'text-neutral-600' : 'text-sky-400'}
+                      className={sortOnline === 'none' ? 'text-neutral-500' : 'text-sky-400'}
                       aria-hidden="true"
                     >
                       {SORT_INDICATOR[sortOnline]}
@@ -283,7 +283,7 @@ export default function PlayersPage() {
                           title={online ? 'online' : 'offline'}
                         />
                         <span
-                          className={`text-xs ${online ? 'text-emerald-400' : 'text-neutral-600'}`}
+                          className={`text-xs ${online ? 'text-emerald-400' : 'text-neutral-500'}`}
                         >
                           {online ? 'онлайн' : 'офлайн'}
                         </span>
@@ -311,7 +311,7 @@ export default function PlayersPage() {
                           {p.steam_id64}
                         </a>
                       ) : (
-                        <span className="text-neutral-600">—</span>
+                        <span className="text-neutral-500">—</span>
                       )}
                     </td>
                     <td className="p-2 font-mono text-[11px] text-neutral-400">
@@ -362,7 +362,7 @@ function SortHeader({
       >
         {label}
         <span
-          className={state.key === column ? 'text-sky-400' : 'text-neutral-600'}
+          className={state.key === column ? 'text-sky-400' : 'text-neutral-500'}
           aria-hidden="true"
         >
           {sortIndicator(state, column)}

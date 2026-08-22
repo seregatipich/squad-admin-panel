@@ -109,7 +109,7 @@ export function BroadcastComposer({ serverId, canChat }: { serverId: string; can
           onChange={(e) => setMessage(e.target.value)}
           placeholder="Текст объявления (мин. 2 символа)"
           maxLength={BROADCAST_MAX}
-          className="flex-1 rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 placeholder:text-neutral-600"
+          className="flex-1 rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 placeholder:text-neutral-500"
         />
         <button
           type="button"

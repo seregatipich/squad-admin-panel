@@ -618,7 +618,7 @@ function ReportCard({
             {REPORTER_SPAM_LABEL}
           </span>
         ) : null}
-        <span className="mx-1 text-neutral-600">→</span>
+        <span className="mx-1 text-neutral-500">→</span>
         <PlayerRef
           id={report.target_player_id}
           name={report.target_name}
@@ -718,7 +718,7 @@ function ReportCard({
           {actionsLoading ? (
             <p className="text-xs text-neutral-500">Загрузка действий…</p>
           ) : !actions || actions.length === 0 ? (
-            <p className="text-xs text-neutral-600">Связанных действий пока нет.</p>
+            <p className="text-xs text-neutral-500">Связанных действий пока нет.</p>
           ) : (
             <ul className="space-y-1">
               {actions.map((action) => (

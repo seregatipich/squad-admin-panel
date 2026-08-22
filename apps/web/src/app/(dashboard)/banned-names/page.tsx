@@ -300,7 +300,7 @@ export default function BannedNamesPage() {
                           Срабатывания
                         </Link>
                       ) : (
-                        <span className="text-neutral-600">—</span>
+                        <span className="text-neutral-500">—</span>
                       )}
                     </td>
                     <td className="py-2 pr-2">

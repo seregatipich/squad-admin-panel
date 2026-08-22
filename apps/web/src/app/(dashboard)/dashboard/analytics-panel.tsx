@@ -196,7 +196,7 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                 );
               })}
             </div>
-            <div className="flex justify-between text-[10px] font-mono text-neutral-600">
+            <div className="flex justify-between text-[10px] font-mono text-neutral-500">
               {AXIS_HOURS.map((hour) => (
                 <span key={hour}>{formatHour(hour)}</span>
               ))}
@@ -209,7 +209,7 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
               Исходы матчей ({data.match_outcomes.total})
             </figcaption>
             {data.match_outcomes.total === 0 ? (
-              <div className="text-xs text-neutral-600">Матчей за период нет.</div>
+              <div className="text-xs text-neutral-500">Матчей за период нет.</div>
             ) : (
               <>
                 <div className="flex h-3 w-full gap-[2px] overflow-hidden rounded">
@@ -287,7 +287,7 @@ function RankedBars({
         {title}
       </figcaption>
       {rows.length === 0 ? (
-        <div className="text-xs text-neutral-600">Нет данных.</div>
+        <div className="text-xs text-neutral-500">Нет данных.</div>
       ) : (
         <ul className="space-y-1.5">
           {rows.map((row) => (

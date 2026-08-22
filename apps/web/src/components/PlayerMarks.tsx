@@ -269,7 +269,7 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
                     </td>
                     <td className="p-1 text-neutral-400">
                       {mark.created_by_name ?? '—'}
-                      <div className="text-neutral-600">{formatWhen(mark.created_at)}</div>
+                      <div className="text-neutral-500">{formatWhen(mark.created_at)}</div>
                     </td>
                     <td className="p-1 text-neutral-400">
                       {mark.active ? (
@@ -277,7 +277,7 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
                       ) : (
                         <>
                           {mark.cleared_by_name ?? '—'}
-                          <div className="text-neutral-600">{formatWhen(mark.cleared_at)}</div>
+                          <div className="text-neutral-500">{formatWhen(mark.cleared_at)}</div>
                         </>
                       )}
                     </td>

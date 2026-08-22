@@ -523,7 +523,7 @@ function MatchHistoryRow({
           <span className={TICKET_TONE[ticketTone('team1', match.winner)]}>
             {match.team1_tickets ?? '—'}
           </span>
-          <span className="text-neutral-600"> : </span>
+          <span className="text-neutral-500"> : </span>
           <span className={TICKET_TONE[ticketTone('team2', match.winner)]}>
             {match.team2_tickets ?? '—'}
           </span>

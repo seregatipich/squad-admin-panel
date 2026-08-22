@@ -409,7 +409,7 @@ export default function MarkTypesPage() {
                       } ${type.is_active ? '' : 'text-neutral-500'}`}
                     >
                       {canEdit ? (
-                        <td className="cursor-grab py-2 pr-1 text-neutral-600" aria-hidden>
+                        <td className="cursor-grab py-2 pr-1 text-neutral-500" aria-hidden>
                           ⠿
                         </td>
                       ) : null}

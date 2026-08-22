@@ -213,7 +213,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
                 {player.steam_id64}
               </a>
             ) : (
-              <span className="text-neutral-600">—</span>
+              <span className="text-neutral-500">—</span>
             )}
           </dd>
           <dt className="text-neutral-500">EOS ID</dt>
@@ -605,7 +605,7 @@ function PanelAccessSection({ playerId, canManage }: { playerId: string; canMana
               ) : null}
             </>
           ) : (
-            <span className="text-xs text-neutral-600">read-only</span>
+            <span className="text-xs text-neutral-500">read-only</span>
           )}
         </div>
       ) : (
@@ -746,7 +746,7 @@ function LocationSection({
             ))}
           </ul>
         )}
-        <p className="text-xs text-neutral-600">
+        <p className="text-xs text-neutral-500">
           IP и точная локация доступны только пользователям с доступом к панели.
         </p>
       </section>
@@ -779,7 +779,7 @@ function LocationSection({
             <span className="text-neutral-500">
               {new Date(current.last_seen_at).toLocaleString()}
             </span>
-            <span className="font-mono text-neutral-600">×{current.observation_count}</span>
+            <span className="font-mono text-neutral-500">×{current.observation_count}</span>
           </div>
         </div>
       )}

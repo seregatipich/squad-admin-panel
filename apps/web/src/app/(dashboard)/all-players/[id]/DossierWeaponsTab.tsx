@@ -73,7 +73,7 @@ export function DossierWeaponsTab({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-xs text-neutral-400">
           {weaponsCountLabel(weapons.length, weaponsTotal)}
-          <span className="ml-2 text-neutral-600">{LIFETIME_ONLY_NOTE}</span>
+          <span className="ml-2 text-neutral-500">{LIFETIME_ONLY_NOTE}</span>
         </div>
         <div className="flex items-center gap-1.5">
           <SortButton active={sortKey === 'kills'} onClick={() => setSortKey('kills')}>

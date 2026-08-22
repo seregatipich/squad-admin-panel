@@ -77,7 +77,7 @@ export function RecentMatchesSection({ playerId }: { playerId: string }) {
       ) : !summary || summary.recent.length === 0 ? (
         <div className="rounded border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
           <p>У этого игрока пока нет сыгранных матчей.</p>
-          <p className="mt-1 text-xs text-neutral-600">
+          <p className="mt-1 text-xs text-neutral-500">
             История матчей ведётся с момента, когда панель начала учитывать матчи на серверах.
           </p>
         </div>

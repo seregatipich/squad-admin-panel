@@ -601,7 +601,7 @@ function ServerTableRow({ server, onAction }: { server: ServerRow; onAction: () 
         {server.last_poll_at ? (
           <RelativeTime ts={server.last_poll_at} />
         ) : (
-          <span className="text-neutral-600">—</span>
+          <span className="text-neutral-500">—</span>
         )}
       </Td>
       <Td className="text-neutral-500 text-xs italic">не выбрано</Td>
@@ -658,7 +658,7 @@ function RelativeTime({ ts }: { ts: string }) {
   }, []);
   const date = new Date(ts);
   const ageSec = Math.max(0, Math.floor((now - date.getTime()) / 1000));
-  if (!Number.isFinite(date.getTime())) return <span className="text-neutral-600">—</span>;
+  if (!Number.isFinite(date.getTime())) return <span className="text-neutral-500">—</span>;
   let label: string;
   if (ageSec < 60) label = `${ageSec}с назад`;
   else if (ageSec < 3600) label = `${Math.floor(ageSec / 60)}м назад`;
@@ -707,7 +707,7 @@ function HostBlock({
       />
       <div className="px-4 pt-3 pb-2 flex flex-col gap-1 border-b border-neutral-900">
         <div className="text-base font-semibold text-neutral-100 truncate">
-          {info?.hostname ?? <span className="text-neutral-600">—</span>}
+          {info?.hostname ?? <span className="text-neutral-500">—</span>}
         </div>
         <div className="text-[11px] text-neutral-400 truncate">
           {info ? (
@@ -716,7 +716,7 @@ function HostBlock({
               аптайм {formatUptime(info.uptime_seconds)}
             </>
           ) : (
-            <span className="italic text-neutral-600">загрузка…</span>
+            <span className="italic text-neutral-500">загрузка…</span>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-neutral-400 mt-1">
@@ -819,7 +819,7 @@ function CpuCard({ info, metrics }: { info: HostInfo; metrics: HostMetrics }) {
             {cpuLabel} · {info.cpu_cores} ядер
           </span>
         ) : (
-          <span className="text-neutral-600">{info.cpu_cores} ядер</span>
+          <span className="text-neutral-500">{info.cpu_cores} ядер</span>
         )
       }
       progressPct={pct}
@@ -835,7 +835,7 @@ function RamCard({ metrics }: { metrics: HostMetrics }) {
       <ResourceCard
         title="RAM"
         mainValue="N/A"
-        sub={<span className="text-neutral-600">данных нет</span>}
+        sub={<span className="text-neutral-500">данных нет</span>}
       />
     );
   }
@@ -869,7 +869,7 @@ function DiskCard({
       <ResourceCard
         title="Диск"
         mainValue="N/A"
-        sub={<span className="text-neutral-600">данных нет</span>}
+        sub={<span className="text-neutral-500">данных нет</span>}
       />
     );
   }
@@ -1028,7 +1028,7 @@ function SystemCell({ label, value }: { label: string; value: string }) {
     <div className="flex items-baseline gap-2 min-w-0">
       <dt className="text-neutral-500 uppercase tracking-[0.16em] text-[9px] shrink-0">{label}</dt>
       <dd
-        className={`truncate font-mono ${isMissing ? 'text-neutral-600 italic' : 'text-neutral-200'}`}
+        className={`truncate font-mono ${isMissing ? 'text-neutral-500 italic' : 'text-neutral-200'}`}
         title={value}
       >
         {value}
@@ -1327,7 +1327,7 @@ function ConnectionItem({ row, disabledReason }: { row: ConnectionRow; disabledR
       ) : null}
       {row.group === 'workers' ? (
         <span
-          className="text-[10px] text-neutral-600"
+          className="text-[10px] text-neutral-500"
           title={disabledReason ?? 'Перезапуск workers выполняется через docker compose'}
         >
           ⋯

@@ -114,7 +114,7 @@ export function LivePlayers({
         <h2 className="text-xs uppercase tracking-widest text-neutral-400">
           Игроки онлайн{roster ? ` · ${players.length}` : ''}
         </h2>
-        <span className="text-[10px] text-neutral-600">обновление каждые 30 с</span>
+        <span className="text-[10px] text-neutral-500">обновление каждые 30 с</span>
       </div>
 
       {canBulk && bulkTargets.length > 0 ? (
@@ -286,7 +286,7 @@ function SquadGroupRows({
                   className="accent-red-600"
                 />
               ) : null}
-              {label} <span className="text-neutral-600">· {group.players.length}</span>
+              {label} <span className="text-neutral-500">· {group.players.length}</span>
             </span>
             {messageable ? (
               <button

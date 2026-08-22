@@ -192,7 +192,7 @@ export function DirectMessageModal({
           maxLength={MESSAGE_MAX}
           rows={3}
           placeholder="Текст сообщения (мин. 2 символа)"
-          className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600"
+          className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-500"
         />
         <p className="mt-1 text-right text-xs text-neutral-500">
           {trimmed.length}/{MESSAGE_MAX}

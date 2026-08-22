@@ -296,7 +296,7 @@ export default function ClanStatsPanel({ clanId }: { clanId: string }) {
                 );
               })}
             </div>
-            <div className="flex justify-between text-[10px] tabular-nums text-neutral-600">
+            <div className="flex justify-between text-[10px] tabular-nums text-neutral-500">
               {[0, 6, 12, 18, 23].map((hour) => (
                 <span key={hour}>{String(hour).padStart(2, '0')}</span>
               ))}
@@ -451,7 +451,7 @@ function ActivityChart({
           );
         })}
       </div>
-      <div className="flex text-[10px] tabular-nums text-neutral-600">
+      <div className="flex text-[10px] tabular-nums text-neutral-500">
         {chart.map((point, index) => (
           <span key={point.day} className="flex-1 text-center">
             {index % labelStep === 0 ? point.day.slice(5) : ''}
