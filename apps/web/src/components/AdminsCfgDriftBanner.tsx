@@ -1,6 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { Button } from '@/components/ui/Button';
+import { InlineBanner } from '@/components/ui/InlineBanner';
 
 interface AdminsCfgStatus {
   state: 'unknown' | 'in_sync' | 'drift' | 'unreachable' | 'syncing';
@@ -111,51 +113,43 @@ export function AdminsCfgDriftBanner({ serverId }: { serverId: string }) {
     }
     const longOutage = Date.now() - since >= LONG_OUTAGE_MS;
     return (
-      <div className="rounded border border-amber-900 bg-amber-950 p-3 text-sm text-amber-200">
-        <div className="font-semibold">
-          {longOutage
-            ? `Server не получил последние изменения Admins.cfg уже ${formatOutageDuration(
+      <InlineBanner
+        tone="warn"
+        title={
+          longOutage
+            ? `Сервер не получает изменения Admins.cfg уже ${formatOutageDuration(
                 status.unreachable_since as string,
               )}`
-            : 'Admins.cfg недоступен на этом сервере'}
-        </div>
-        <div className="mt-1 text-xs text-amber-300/80">
-          {status.error ?? 'bridge вернул ошибку при чтении файла.'}
-        </div>
-        <div className="mt-2 flex gap-2">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={forceSync}
-            className="rounded border border-amber-700 bg-amber-950 px-3 py-1 text-xs disabled:opacity-50"
-          >
+            : 'Admins.cfg недоступен на этом сервере'
+        }
+        description={status.error ?? 'bridge вернул ошибку при чтении файла.'}
+        action={
+          <Button size="sm" onClick={forceSync} loading={busy}>
             Повторить синхронизацию
-          </button>
-        </div>
-      </div>
+          </Button>
+        }
+      />
     );
   }
 
   if (driftDetected) {
     return (
-      <div className="rounded border border-amber-900 bg-amber-950 p-3 text-sm text-amber-100">
-        <div className="font-semibold">Admins.cfg на этом сервере изменён вне панели</div>
-        <div className="mt-1 text-xs text-amber-300/80">
-          Managed-сегмент в файле не совпадает с базой панели. Принудительно синхронизировать
-          (перезаписать файл управляемым сегментом из БД)?
-        </div>
-        {err ? <div className="mt-2 text-xs text-red-300">{err}</div> : null}
-        <div className="mt-2 flex gap-2">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={forceSync}
-            className="rounded border border-amber-700 bg-amber-950 px-3 py-1 text-xs disabled:opacity-50"
-          >
-            {busy ? 'Синхронизируем…' : 'Force sync'}
-          </button>
-        </div>
-      </div>
+      <InlineBanner
+        tone="warn"
+        title="Admins.cfg на этом сервере изменён вне панели"
+        description={
+          <>
+            Управляемый сегмент в файле не совпадает с базой панели. Синхронизация перезапишет
+            сегмент в файле данными из панели.
+            {err ? <span className="mt-1 block text-crit">{err}</span> : null}
+          </>
+        }
+        action={
+          <Button size="sm" onClick={forceSync} loading={busy}>
+            Синхронизировать
+          </Button>
+        }
+      />
     );
   }
 
