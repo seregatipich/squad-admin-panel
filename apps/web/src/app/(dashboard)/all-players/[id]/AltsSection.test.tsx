@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AltsSection } from './AltsSection';
 
@@ -39,6 +39,11 @@ const candidate = (id: string, score: number) => ({
   link: null,
 });
 
+/** Раскрывает секцию тем же способом, что и оператор — кнопкой раскрытия. */
+function expand() {
+  fireEvent.click(screen.getByRole('button', { name: 'Показать' }));
+}
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -50,6 +55,10 @@ describe('AltsSection', () => {
     vi.stubGlobal('fetch', fetchMock);
     render(<AltsSection playerId="player-1" />);
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Показать' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
   });
 
   it('puts confirmed links first and shows the candidate signal details', async () => {
@@ -68,11 +77,17 @@ describe('AltsSection', () => {
       }),
     );
     render(<AltsSection playerId="player-1" />);
-    fireEvent.click(screen.getByText('Возможные альты'));
+    expand();
     expect(await screen.findByText('Подтверждённый')).toBeInTheDocument();
-    expect(screen.getByText('Alt-1')).toBeInTheDocument();
-    expect(screen.getByText('Общих IP: 2')).toBeInTheDocument();
-    expect(screen.getByText('перманентный бан')).toBeInTheDocument();
+
+    const row = screen.getByRole('link', { name: 'Alt-1' }).closest('tr');
+    if (!row) throw new Error('candidate row not found');
+    const cells = within(row).getAllByRole('cell');
+    // Ник, уверенность, общих IP, разница во времени.
+    expect(cells[1]).toHaveTextContent('высокая (100)');
+    expect(cells[2]).toHaveTextContent('2');
+    expect(cells[3]).toHaveTextContent('1 мин');
+    expect(within(row).getByText('перманентный бан')).toBeInTheDocument();
   });
 
   it('hides entirely when a protected ALT endpoint returns 403', async () => {
@@ -83,7 +98,7 @@ describe('AltsSection', () => {
       ),
     );
     const { container } = render(<AltsSection playerId="player-1" />);
-    fireEvent.click(screen.getByText('Возможные альты'));
+    expand();
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 
@@ -126,20 +141,20 @@ describe('AltsSection', () => {
       ),
     );
     render(<AltsSection playerId="player-1" />);
-    fireEvent.click(screen.getByText('Возможные альты'));
+    expand();
     expect(await screen.findByRole('link', { name: '—' })).toHaveAttribute(
       'href',
       '/all-players/NoName-1',
     );
-    expect(screen.getByText(/Δ: 10 с/)).toBeInTheDocument();
-    expect(screen.getByText(/Δ: 1 ч 0 мин/)).toBeInTheDocument();
-    expect(screen.getByText('Все кандидаты →')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Все кандидаты →'));
+    expect(screen.getByText('10 с')).toBeInTheDocument();
+    expect(screen.getByText('1 ч 0 мин')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Все кандидаты' }));
     expect(await screen.findByText(/Отклонено админом неизвестным админом/)).toBeInTheDocument();
-    expect(screen.getByText('Свернуть список')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Свернуть список' })).toBeInTheDocument();
   });
 
-  it('shows a load error when an ALT endpoint fails', async () => {
+  it('shows a load error with a retry action when an ALT endpoint fails', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL) =>
@@ -151,7 +166,10 @@ describe('AltsSection', () => {
       ),
     );
     render(<AltsSection playerId="player-1" />);
-    fireEvent.click(screen.getByText('Возможные альты'));
-    expect(await screen.findByText('Ошибка: HTTP 503')).toBeInTheDocument();
+    expand();
+    const banner = await screen.findByRole('alert');
+    expect(banner).toHaveTextContent('Не удалось загрузить возможные альты');
+    expect(banner).toHaveTextContent('HTTP 503');
+    expect(within(banner).getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
   });
 });

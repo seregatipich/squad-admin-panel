@@ -1,5 +1,29 @@
 'use client';
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  Checkbox,
+  EmptyState,
+  FieldRow,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Select,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  TextInput,
+  Th,
+} from '@/components/ui';
 import {
   CHAT_FLAG_LOCALES,
   CHAT_FLAG_PATTERN_TYPES,
@@ -40,6 +64,7 @@ export default function ChatFlagsPage() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [reindexDays, setReindexDays] = useState(7);
+  const [pendingDelete, setPendingDelete] = useState<ChatFlagRule | null>(null);
 
   const patternId = useId();
   const canEdit = useMemo(() => me?.permissions.includes('role:edit') ?? false, [me]);
@@ -53,30 +78,28 @@ export default function ChatFlagsPage() {
     setRules((await res.json()).items as ChatFlagRule[]);
   }
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const [meRes, rulesRes] = await Promise.all([
-          fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-          fetch('/api/v1/settings/chat-flag-rules', { credentials: 'include', cache: 'no-store' }),
-        ]);
-        if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
-        if (!rulesRes.ok) throw new Error(`HTTP ${rulesRes.status}`);
-        if (cancelled) return;
-        setMe((await meRes.json()) as Me);
-        setRules((await rulesRes.json()).items as ChatFlagRule[]);
-      } catch (e) {
-        if (!cancelled) setMsg({ kind: 'err', text: (e as Error).message });
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [meRes, rulesRes] = await Promise.all([
+        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/settings/chat-flag-rules', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
+      if (!rulesRes.ok) throw new Error(`HTTP ${rulesRes.status}`);
+      setMe((await meRes.json()) as Me);
+      setRules((await rulesRes.json()).items as ChatFlagRule[]);
+      setMsg(null);
+    } catch (e) {
+      setMsg({ kind: 'err', text: (e as Error).message });
+    } finally {
+      setLoading(false);
     }
-    void load();
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  useEffect(() => {
+    void loadAll();
+  }, [loadAll]);
 
   function resetDraft() {
     setDraft(EMPTY_DRAFT);
@@ -160,7 +183,6 @@ export default function ChatFlagsPage() {
   }
 
   async function deleteRule(rule: ChatFlagRule) {
-    if (!confirm(`Удалить правило «${rule.pattern}»?`)) return;
     setBusy(true);
     setMsg(null);
     try {
@@ -170,9 +192,11 @@ export default function ChatFlagsPage() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       if (editingId === rule.id) resetDraft();
+      setPendingDelete(null);
       await loadRules();
       setMsg({ kind: 'ok', text: 'Правило удалено.' });
     } catch (e) {
+      setPendingDelete(null);
       setMsg({ kind: 'err', text: (e as Error).message });
     } finally {
       setBusy(false);
@@ -199,250 +223,214 @@ export default function ChatFlagsPage() {
     }
   }
 
-  if (loading) {
-    return <div className="text-neutral-500">Загрузка…</div>;
-  }
-
   return (
-    <div className="space-y-6 max-w-5xl">
-      <div>
-        <h1 className="text-2xl font-semibold">Флаги чата</h1>
-        <p className="mt-1 text-sm text-neutral-400">
-          Настраиваемые правила для серверной пометки токсичных сообщений. Новые сообщения
-          проверяются воркером при записи; кнопка «переиндексировать» пере-помечает историю после
-          изменения правил. Включено {countEnabled(rules)} из {rules.length}.
-        </p>
-      </div>
+    <PageContainer width="wide">
+      <PageHeader
+        title="Флаги чата"
+        subtitle="Настраиваемые правила для серверной пометки токсичных сообщений. Новые сообщения проверяются воркером при записи; переиндексация пере-помечает историю после изменения правил."
+        meta={loading ? undefined : `Включено ${countEnabled(rules)} из ${rules.length}`}
+      />
 
-      {msg ? (
-        <div
-          className={`rounded border p-3 text-sm ${
-            msg.kind === 'ok'
-              ? 'border-emerald-900 bg-emerald-950/50 text-emerald-200'
-              : 'border-red-900 bg-red-950 text-red-200'
-          }`}
-        >
-          {msg.text}
-        </div>
+      {msg?.kind === 'ok' ? (
+        <InlineBanner
+          tone="good"
+          title={msg.text}
+          onDismiss={() => setMsg(null)}
+          dismissLabel="Скрыть сообщение"
+        />
+      ) : null}
+      {msg?.kind === 'err' ? (
+        <InlineBanner
+          tone="crit"
+          title="Не удалось выполнить запрос"
+          description={msg.text}
+          action={
+            <Button size="sm" onClick={() => void loadAll()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
-      {canEdit ? (
-        <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-            {editingId ? 'Редактировать правило' : 'Новое правило'}
-          </h2>
-          <form onSubmit={submitDraft} className="space-y-3">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-              <div className="sm:col-span-2">
-                <label htmlFor={patternId} className="mb-1 block text-xs text-neutral-500">
-                  Паттерн
-                </label>
-                <input
-                  id={patternId}
-                  type="text"
-                  value={draft.pattern}
-                  onChange={(e) => setDraft((d) => ({ ...d, pattern: e.target.value }))}
-                  maxLength={200}
-                  placeholder={draft.patternType === 'regex' ? 'сволоч[ьи]' : 'мудак'}
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-                />
-              </div>
-              <div>
-                <label
-                  className="mb-1 block text-xs text-neutral-500"
-                  htmlFor={`${patternId}-type`}
-                >
-                  Тип
-                </label>
-                <select
-                  id={`${patternId}-type`}
-                  value={draft.patternType}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, patternType: e.target.value as ChatFlagPatternType }))
-                  }
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-                >
-                  {CHAT_FLAG_PATTERN_TYPES.map((type) => (
-                    <option key={type} value={type}>
-                      {PATTERN_TYPE_LABELS[type]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-neutral-500" htmlFor={`${patternId}-loc`}>
-                  Язык
-                </label>
-                <select
-                  id={`${patternId}-loc`}
-                  value={draft.locale}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, locale: e.target.value as ChatFlagLocale }))
-                  }
-                  className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-                >
-                  {CHAT_FLAG_LOCALES.map((locale) => (
-                    <option key={locale} value={locale}>
-                      {LOCALE_LABELS[locale]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-2 text-sm text-neutral-300">
-                <input
-                  type="checkbox"
-                  checked={draft.enabled}
-                  onChange={(e) => setDraft((d) => ({ ...d, enabled: e.target.checked }))}
-                  className="h-4 w-4"
-                />
-                Включено
-              </label>
-              <div className="ml-auto flex gap-2">
-                <button
-                  type="submit"
-                  disabled={busy}
-                  className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-                >
-                  {editingId ? 'Сохранить' : 'Создать'}
-                </button>
-                {editingId ? (
-                  <button
-                    type="button"
-                    onClick={resetDraft}
-                    className="rounded border border-neutral-700 px-4 py-1.5 text-sm text-neutral-300 hover:border-neutral-500"
+      {canEdit && !loading ? (
+        <Card padding="none">
+          <CardHeader title={editingId ? 'Редактировать правило' : 'Новое правило'} />
+          <form onSubmit={submitDraft}>
+            <CardBody className="space-y-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                <FieldRow label="Паттерн" htmlFor={patternId} className="sm:col-span-2">
+                  <TextInput
+                    id={patternId}
+                    type="text"
+                    value={draft.pattern}
+                    onChange={(e) => setDraft((d) => ({ ...d, pattern: e.target.value }))}
+                    maxLength={200}
+                    placeholder={draft.patternType === 'regex' ? 'сволоч[ьи]' : 'мудак'}
+                  />
+                </FieldRow>
+                <FieldRow label="Тип" htmlFor={`${patternId}-type`}>
+                  <Select
+                    id={`${patternId}-type`}
+                    value={draft.patternType}
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        patternType: e.target.value as ChatFlagPatternType,
+                      }))
+                    }
                   >
-                    Отмена
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          </form>
-        </section>
-      ) : null}
-
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-          Правила ({rules.length})
-        </h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase text-neutral-500">
-              <tr>
-                <th className="py-2 pr-2">Паттерн</th>
-                <th className="py-2 pr-2">Тип</th>
-                <th className="py-2 pr-2">Язык</th>
-                <th className="py-2 pr-2">Статус</th>
-                <th className="py-2 pr-2">Автор</th>
-                {canEdit ? <th className="py-2 pr-2"></th> : null}
-              </tr>
-            </thead>
-            <tbody>
-              {rules.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={canEdit ? 6 : 5}
-                    className="py-3 text-center text-xs text-neutral-500"
+                    {CHAT_FLAG_PATTERN_TYPES.map((type) => (
+                      <option key={type} value={type}>
+                        {PATTERN_TYPE_LABELS[type]}
+                      </option>
+                    ))}
+                  </Select>
+                </FieldRow>
+                <FieldRow label="Язык" htmlFor={`${patternId}-loc`}>
+                  <Select
+                    id={`${patternId}-loc`}
+                    value={draft.locale}
+                    onChange={(e) =>
+                      setDraft((d) => ({ ...d, locale: e.target.value as ChatFlagLocale }))
+                    }
                   >
-                    Правил пока нет.
-                  </td>
-                </tr>
-              ) : (
-                rules.map((rule) => (
-                  <tr key={rule.id} className="border-t border-neutral-900 align-top">
-                    <td className="py-2 pr-2 font-mono text-[12px] text-neutral-200">
-                      {rule.pattern}
-                    </td>
-                    <td className="py-2 pr-2 text-neutral-400">
-                      {PATTERN_TYPE_LABELS[rule.pattern_type]}
-                    </td>
-                    <td className="py-2 pr-2 text-neutral-400">{LOCALE_LABELS[rule.locale]}</td>
-                    <td className="py-2 pr-2">
-                      {rule.enabled ? (
-                        <span className="rounded bg-emerald-950/50 px-2 py-0.5 text-xs text-emerald-300">
-                          включено
-                        </span>
-                      ) : (
-                        <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-400">
-                          отключено
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2 pr-2 text-neutral-500">{rule.author_name ?? 'Система'}</td>
-                    {canEdit ? (
-                      <td className="py-2 pr-2 text-right">
-                        <div className="flex justify-end gap-1.5">
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => toggleEnabled(rule)}
-                            className="rounded border border-neutral-700 px-2 py-0.5 text-xs text-neutral-300 hover:border-neutral-500 disabled:opacity-40"
-                          >
-                            {rule.enabled ? 'Выкл' : 'Вкл'}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => startEdit(rule)}
-                            className="rounded border border-sky-900 px-2 py-0.5 text-xs text-sky-300 hover:border-sky-700 disabled:opacity-40"
-                          >
-                            Изм.
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => deleteRule(rule)}
-                            className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-400 hover:border-red-700 disabled:opacity-40"
-                          >
-                            Удл.
-                          </button>
-                        </div>
-                      </td>
-                    ) : null}
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {canEdit ? (
-        <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Переиндексация</h2>
-          <p className="text-xs text-neutral-500">
-            Пере-помечает уже сохранённые сообщения за выбранный период по текущим правилам.
-            Операция идемпотентна — повторный запуск не меняет уже согласованные строки.
-          </p>
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <label className="mb-1 block text-xs text-neutral-500" htmlFor={`${patternId}-days`}>
-                Дней назад
-              </label>
-              <input
-                id={`${patternId}-days`}
-                type="number"
-                min={1}
-                max={365}
-                value={reindexDays}
-                onChange={(e) =>
-                  setReindexDays(Math.min(365, Math.max(1, Number(e.target.value) || 1)))
-                }
-                className="w-28 rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
+                    {CHAT_FLAG_LOCALES.map((locale) => (
+                      <option key={locale} value={locale}>
+                        {LOCALE_LABELS[locale]}
+                      </option>
+                    ))}
+                  </Select>
+                </FieldRow>
+              </div>
+              <Checkbox
+                label="Включено"
+                checked={draft.enabled}
+                onChange={(e) => setDraft((d) => ({ ...d, enabled: e.target.checked }))}
               />
-            </div>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={runReindex}
-              className="rounded border border-amber-900 px-4 py-1.5 text-sm text-amber-300 hover:border-amber-700 disabled:opacity-40"
-            >
-              Переиндексировать
-            </button>
-          </div>
-        </section>
+            </CardBody>
+            <CardFooter>
+              {editingId ? (
+                <Button type="button" onClick={resetDraft}>
+                  Отмена
+                </Button>
+              ) : null}
+              <Button type="submit" variant="primary" loading={busy}>
+                {editingId ? 'Сохранить' : 'Создать'}
+              </Button>
+            </CardFooter>
+          </form>
+        </Card>
       ) : null}
-    </div>
+
+      <Card padding="none">
+        <CardHeader title="Правила" count={loading ? undefined : rules.length} />
+        {loading ? (
+          <div className="p-3">
+            <SkeletonTable rows={6} cols={canEdit ? 6 : 5} label="Загрузка правил" />
+          </div>
+        ) : rules.length === 0 ? (
+          <EmptyState
+            title="Правил пока нет"
+            description="Заведите первое правило — воркер начнёт помечать новые сообщения сразу после сохранения."
+          />
+        ) : (
+          <Table ariaLabel="Правила пометки чата">
+            <TableHead>
+              <tr>
+                <Th>Паттерн</Th>
+                <Th>Тип</Th>
+                <Th>Язык</Th>
+                <Th>Статус</Th>
+                <Th>Кто добавил</Th>
+                {canEdit ? (
+                  <Th align="right">
+                    <span className="sr-only">Действия</span>
+                  </Th>
+                ) : null}
+              </tr>
+            </TableHead>
+            <TableBody>
+              {rules.map((rule) => (
+                <TableRow key={rule.id}>
+                  <Td className="break-all font-mono text-xs">{rule.pattern}</Td>
+                  <Td className="text-ink-2">{PATTERN_TYPE_LABELS[rule.pattern_type]}</Td>
+                  <Td className="text-ink-2">{LOCALE_LABELS[rule.locale]}</Td>
+                  <Td>
+                    {rule.enabled ? (
+                      <Badge tone="good">включено</Badge>
+                    ) : (
+                      <Badge tone="neutral">отключено</Badge>
+                    )}
+                  </Td>
+                  <Td className="text-ink-3">{rule.author_name ?? 'Система'}</Td>
+                  {canEdit ? (
+                    <Td align="right" className="whitespace-nowrap">
+                      <span className="inline-flex items-center gap-2">
+                        <Button size="sm" disabled={busy} onClick={() => void toggleEnabled(rule)}>
+                          {rule.enabled ? 'Выключить' : 'Включить'}
+                        </Button>
+                        <Button size="sm" disabled={busy} onClick={() => startEdit(rule)}>
+                          Изменить
+                        </Button>
+                        <Button size="sm" disabled={busy} onClick={() => setPendingDelete(rule)}>
+                          Удалить
+                        </Button>
+                      </span>
+                    </Td>
+                  ) : null}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+
+      {canEdit && !loading ? (
+        <Card padding="none">
+          <CardHeader
+            title="Переиндексация"
+            description="Пере-помечает уже сохранённые сообщения за выбранный период по текущим правилам. Операция идемпотентна — повторный запуск не меняет уже согласованные строки."
+          />
+          <CardBody>
+            <div className="flex flex-wrap items-end gap-3">
+              <FieldRow label="Дней назад" htmlFor={`${patternId}-days`} className="w-28">
+                <TextInput
+                  id={`${patternId}-days`}
+                  type="number"
+                  min={1}
+                  max={365}
+                  value={reindexDays}
+                  onChange={(e) =>
+                    setReindexDays(Math.min(365, Math.max(1, Number(e.target.value) || 1)))
+                  }
+                />
+              </FieldRow>
+              <Button loading={busy} onClick={() => void runReindex()}>
+                Переиндексировать
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
+      ) : null}
+
+      <AlertDialog
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title="Удалить правило"
+        body={
+          <>
+            Правило «{pendingDelete?.pattern}» перестанет помечать новые сообщения. Уже
+            проставленные пометки останутся до следующей переиндексации.
+          </>
+        }
+        confirmLabel="Удалить правило"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={busy && pendingDelete !== null}
+        onConfirm={() => {
+          if (pendingDelete) void deleteRule(pendingDelete);
+        }}
+      />
+    </PageContainer>
   );
 }

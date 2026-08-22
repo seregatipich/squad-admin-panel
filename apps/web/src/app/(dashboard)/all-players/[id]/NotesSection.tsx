@@ -3,6 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { RoleColorDot } from '@/components/RoleColorDot';
+import {
+  AlertDialog,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  Skeleton,
+  Textarea,
+} from '@/components/ui';
 import type { LiveEvent, PlayerNote } from '@/lib/live-bus';
 import { formatRelativeNote, prependNote, removeNote, replaceNote } from '@/lib/player-notes';
 import { useLiveSubscription } from '@/lib/use-live-bus';
@@ -126,88 +137,84 @@ export function NotesSection({ playerId, me }: { playerId: string; me: Viewer | 
   }
 
   return (
-    // biome-ignore lint/correctness/useUniqueElementIds: stable anchor for /all-players/{id}#notes deep-links
-    <section
-      id="notes"
-      className="scroll-mt-6 rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4"
-    >
-      <div className="flex items-center justify-between">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-          Заметки
-          <span className="ml-2 rounded-full bg-neutral-800 px-2 py-0.5 text-[11px] text-neutral-200 tabular-nums">
-            {total}
-          </span>
-        </h2>
-      </div>
-
-      <div className="space-y-2">
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onComposerKeyDown}
-          rows={2}
-          maxLength={2000}
-          placeholder="Добавить заметку… (Enter — отправить, Shift+Enter — новая строка)"
-          className="w-full resize-y rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
-        />
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={() => void submit()}
-            disabled={!draft.trim() || busy}
-            className="rounded bg-sky-600 px-4 py-1.5 text-sm text-white hover:bg-sky-500 disabled:opacity-40"
-          >
-            Отправить
-          </button>
-        </div>
-      </div>
-
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          Ошибка: {error}
-        </div>
-      ) : null}
-
-      {loading ? (
-        <div className="text-sm text-neutral-500">Загрузка…</div>
-      ) : notes.length === 0 ? (
-        <div className="rounded border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
-          Нет заметок
-        </div>
-      ) : (
-        <ul className="space-y-3">
-          {notes.map((note) => (
-            <NoteItem
-              key={note.id}
-              note={note}
-              canDelete={note.author.id === me?.player_id || canModerate}
-              canEdit={note.author.id === me?.player_id}
-              onChanged={(updated) => {
-                setNotes((prev) => replaceNote(prev, updated));
-              }}
-              onRemoved={(noteId) => {
-                idsRef.current.delete(noteId);
-                setNotes((prev) => removeNote(prev, noteId));
-                setTotal((prev) => Math.max(0, prev - 1));
-              }}
-              onError={setError}
+    // Идентификатор постоянный намеренно: на него ведёт ссылка
+    // /all-players/{id}#notes из уведомлений.
+    <section id="notes" className="scroll-mt-6">
+      <Card padding="none">
+        <CardHeader title="Заметки" count={total} />
+        <CardBody className="space-y-4">
+          <div className="space-y-2">
+            <Textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={onComposerKeyDown}
+              rows={2}
+              maxLength={2000}
+              aria-label="Текст заметки"
+              placeholder="Добавить заметку… (Enter — отправить, Shift+Enter — новая строка)"
             />
-          ))}
-        </ul>
-      )}
+            <div className="flex justify-end">
+              <Button
+                variant="primary"
+                onClick={() => void submit()}
+                disabled={!draft.trim() || busy}
+              >
+                Отправить
+              </Button>
+            </div>
+          </div>
 
-      {nextCursor ? (
-        <div className="flex justify-center">
-          <button
-            type="button"
-            onClick={() => void loadMore()}
-            disabled={busy}
-            className="rounded border border-neutral-800 px-3 py-1 text-xs hover:border-neutral-600 disabled:opacity-40"
-          >
-            Показать ещё
-          </button>
-        </div>
-      ) : null}
+          {error ? (
+            <InlineBanner
+              tone="crit"
+              title="Не удалось загрузить заметки"
+              description={error}
+              action={
+                <Button size="sm" onClick={() => void load()}>
+                  Повторить
+                </Button>
+              }
+            />
+          ) : null}
+
+          {loading ? (
+            <Skeleton variant="block" count={3} label="Загрузка заметок" />
+          ) : notes.length === 0 ? (
+            <EmptyState
+              title="Заметок нет"
+              description="Здесь появятся заметки, которые оставят о нём модераторы."
+            />
+          ) : (
+            <ul className="space-y-3">
+              {notes.map((note) => (
+                <NoteItem
+                  key={note.id}
+                  note={note}
+                  canDelete={note.author.id === me?.player_id || canModerate}
+                  canEdit={note.author.id === me?.player_id}
+                  onChanged={(updated) => {
+                    setNotes((prev) => replaceNote(prev, updated));
+                  }}
+                  onRemoved={(noteId) => {
+                    idsRef.current.delete(noteId);
+                    setNotes((prev) => removeNote(prev, noteId));
+                    setTotal((prev) => Math.max(0, prev - 1));
+                  }}
+                  onError={setError}
+                />
+              ))}
+            </ul>
+          )}
+
+          {nextCursor ? (
+            <div className="flex justify-center">
+              <Button size="sm" onClick={() => void loadMore()} disabled={busy}>
+                Показать ещё
+              </Button>
+            </div>
+          ) : null}
+        </CardBody>
+      </Card>
     </section>
   );
 }
@@ -230,6 +237,7 @@ function NoteItem({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note.body);
   const [busy, setBusy] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   async function saveEdit() {
     const body = draft.trim();
@@ -254,7 +262,6 @@ function NoteItem({
 
   async function remove() {
     if (busy) return;
-    if (!confirm('Удалить заметку?')) return;
     setBusy(true);
     try {
       const res = await fetch(`/api/v1/notes/${note.id}`, {
@@ -262,6 +269,7 @@ function NoteItem({
         credentials: 'include',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setConfirmOpen(false);
       onRemoved(note.id);
     } catch (e) {
       onError((e as Error).message);
@@ -271,72 +279,81 @@ function NoteItem({
   }
 
   return (
-    <li className="rounded border border-neutral-900 bg-neutral-900/40 p-3 space-y-2">
+    <li className="space-y-2 rounded-ctl border border-line p-3">
       <div className="flex items-center justify-between gap-2 text-xs">
         <span className="inline-flex items-center gap-2">
           <RoleColorDot color={note.author.role_color ?? 'neutral'} size="sm" />
-          <span className="font-medium text-neutral-200">{note.author.name}</span>
-          <span className="text-neutral-500">{formatRelativeNote(note.created_at)}</span>
-          {note.edited ? <span className="text-neutral-500">(изменено)</span> : null}
+          <span className="font-medium text-ink">{note.author.name}</span>
+          <span className="text-ink-3">{formatRelativeNote(note.created_at)}</span>
+          {note.edited ? <span className="text-ink-3">(изменено)</span> : null}
         </span>
         {(canEdit || canDelete) && !editing ? (
           <span className="flex gap-2">
             {canEdit ? (
-              <button
-                type="button"
+              <Button
+                size="sm"
+                variant="ghost"
                 onClick={() => {
                   setDraft(note.body);
                   setEditing(true);
                 }}
-                className="text-neutral-400 hover:text-neutral-200"
               >
-                изменить
-              </button>
+                Изменить
+              </Button>
             ) : null}
             {canDelete ? (
-              <button
-                type="button"
-                onClick={() => void remove()}
+              <Button
+                size="sm"
+                variant="ghost"
                 disabled={busy}
-                className="text-red-400 hover:text-red-300 disabled:opacity-40"
+                onClick={() => setConfirmOpen(true)}
               >
-                удалить
-              </button>
+                Удалить
+              </Button>
             ) : null}
           </span>
         ) : null}
       </div>
       {editing ? (
         <div className="space-y-2">
-          <textarea
+          <Textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             rows={2}
             maxLength={2000}
-            className="w-full resize-y rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
+            aria-label="Текст заметки"
           />
           <div className="flex gap-2">
-            <button
-              type="button"
+            <Button
+              size="sm"
+              variant="primary"
               onClick={() => void saveEdit()}
-              disabled={!draft.trim() || busy}
-              className="rounded bg-sky-600 px-3 py-1 text-xs text-white hover:bg-sky-500 disabled:opacity-40"
+              disabled={!draft.trim()}
+              loading={busy}
             >
               Сохранить
-            </button>
-            <button
-              type="button"
-              onClick={() => setEditing(false)}
-              disabled={busy}
-              className="rounded border border-neutral-800 px-3 py-1 text-xs hover:border-neutral-600"
-            >
+            </Button>
+            <Button size="sm" onClick={() => setEditing(false)} disabled={busy}>
               Отмена
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
-        <p className="whitespace-pre-wrap break-words text-sm text-neutral-100">{note.body}</p>
+        <p className="whitespace-pre-wrap break-words text-[13px] text-ink">{note.body}</p>
       )}
+
+      {/* Заметка удаляется безвозвратно — тон критический (§5). */}
+      <AlertDialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        title="Удалить заметку"
+        body="Заметка исчезнет у всех, кто видит карточку игрока. Отменить удаление нельзя."
+        confirmLabel="Удалить заметку"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={busy}
+        onConfirm={remove}
+      />
     </li>
   );
 }

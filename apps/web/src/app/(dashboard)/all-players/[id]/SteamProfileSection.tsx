@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Button, Card, CardBody, CardHeader, GroupedRow, InlineBanner } from '@/components/ui';
 
 /**
  * Steam Web API snapshot as `GET /api/v1/players/:playerId` returns it
@@ -88,49 +89,78 @@ export function SteamProfileSection({
   }
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Steam</h2>
-        {hasSteam && (
-          <button
-            type="button"
-            onClick={refresh}
-            disabled={loading}
-            className="rounded border border-neutral-700 px-2 py-1 text-xs text-sky-400 hover:text-sky-300 disabled:opacity-50"
-          >
-            {loading ? 'Обновление…' : 'Обновить из Steam'}
-          </button>
-        )}
+    <Card padding="none" as="section">
+      <CardHeader
+        title="Steam"
+        actions={
+          hasSteam ? (
+            <Button size="sm" loading={loading} onClick={refresh}>
+              Обновить из Steam
+            </Button>
+          ) : undefined
+        }
+      />
+      {error ? (
+        <CardBody>
+          <InlineBanner tone="crit" title="Не удалось обновить данные Steam" description={error} />
+        </CardBody>
+      ) : null}
+      <div className="divide-y divide-line">
+        <GroupedRow
+          label="Ник в Steam"
+          control={<span data-testid="steam-persona">{current.persona_name ?? DASH}</span>}
+        />
+        <GroupedRow
+          label="VAC-бан"
+          control={
+            <span data-testid="steam-vac">
+              {!hasSteam ? DASH : current.vac_banned ? `Да (${current.vac_ban_count ?? 0})` : 'Нет'}
+            </span>
+          }
+        />
+        <GroupedRow
+          label="Game-баны"
+          control={
+            <span data-testid="steam-game-bans">
+              {hasSteam ? (current.game_ban_count ?? 0) : DASH}
+            </span>
+          }
+        />
+        <GroupedRow
+          label="Дней с последнего бана"
+          control={
+            <span data-testid="steam-days-since-ban">
+              {hasSteam && daysSinceLastBan != null ? daysSinceLastBan : DASH}
+            </span>
+          }
+        />
+        <GroupedRow
+          label="Владеет Squad"
+          control={
+            <span data-testid="steam-owns-squad">
+              {hasSteam ? ownershipLabel(current.owns_squad) : DASH}
+            </span>
+          }
+        />
+        <GroupedRow
+          label="Наиграно в Squad"
+          control={
+            <span data-testid="steam-playtime">
+              {hasSteam && playtimeMinutes != null ? `${Math.round(playtimeMinutes / 60)} ч` : DASH}
+            </span>
+          }
+        />
+        <GroupedRow
+          label="Проверено"
+          control={
+            <span data-testid="steam-checked-at">
+              {current.steam_checked_at
+                ? new Date(current.steam_checked_at).toLocaleString()
+                : 'не проверялся'}
+            </span>
+          }
+        />
       </div>
-      {error && <p className="text-xs text-red-300">{error}</p>}
-      <dl className="grid grid-cols-[160px_1fr] gap-y-1 text-sm">
-        <dt className="text-neutral-500">Ник в Steam</dt>
-        <dd data-testid="steam-persona">{current.persona_name ?? DASH}</dd>
-        <dt className="text-neutral-500">VAC-бан</dt>
-        <dd data-testid="steam-vac">
-          {!hasSteam ? DASH : current.vac_banned ? `Да (${current.vac_ban_count ?? 0})` : 'Нет'}
-        </dd>
-        <dt className="text-neutral-500">Game-баны</dt>
-        <dd data-testid="steam-game-bans">{hasSteam ? (current.game_ban_count ?? 0) : DASH}</dd>
-        <dt className="text-neutral-500">Дней с последнего бана</dt>
-        <dd data-testid="steam-days-since-ban">
-          {hasSteam && daysSinceLastBan != null ? daysSinceLastBan : DASH}
-        </dd>
-        <dt className="text-neutral-500">Владеет Squad</dt>
-        <dd data-testid="steam-owns-squad">
-          {hasSteam ? ownershipLabel(current.owns_squad) : DASH}
-        </dd>
-        <dt className="text-neutral-500">Наиграно в Squad</dt>
-        <dd data-testid="steam-playtime">
-          {hasSteam && playtimeMinutes != null ? `${Math.round(playtimeMinutes / 60)} ч` : DASH}
-        </dd>
-        <dt className="text-neutral-500">Проверено</dt>
-        <dd data-testid="steam-checked-at">
-          {current.steam_checked_at
-            ? new Date(current.steam_checked_at).toLocaleString()
-            : 'не проверялся'}
-        </dd>
-      </dl>
-    </section>
+    </Card>
   );
 }

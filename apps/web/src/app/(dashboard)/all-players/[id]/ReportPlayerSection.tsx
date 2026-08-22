@@ -3,6 +3,17 @@
 import Link from 'next/link';
 import { useEffect, useId, useRef, useState } from 'react';
 import {
+  Button,
+  FieldRow,
+  IconButton,
+  InlineBanner,
+  Modal,
+  Select,
+  Textarea,
+  TextInput,
+  TrashIcon,
+} from '@/components/ui';
+import {
   buildReportPayload,
   mapUploadError,
   REPORT_BODY_MAX,
@@ -195,149 +206,129 @@ export function ReportPlayerSection({ playerId }: { playerId: string }) {
   }
 
   return (
-    <div>
-      <button
-        type="button"
-        onClick={openModal}
-        className="rounded border border-amber-900 px-3 py-1.5 text-xs text-amber-300 hover:border-amber-700"
-      >
+    <div className="space-y-2">
+      <Button size="sm" onClick={openModal}>
         Пожаловаться
-      </button>
+      </Button>
 
       {success ? (
-        <p className="mt-2 text-xs text-emerald-300">
-          {success}{' '}
-          <Link href="/reports" className="text-sky-400 hover:text-sky-300">
-            Перейти к жалобам →
-          </Link>
-        </p>
+        <InlineBanner
+          tone="good"
+          title={success}
+          action={
+            <Link href="/reports" className="text-xs text-accent">
+              Перейти к жалобам
+            </Link>
+          }
+        />
       ) : null}
 
-      {modalOpen ? (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4">
-          <div className="mt-16 w-full max-w-lg rounded border border-neutral-800 bg-neutral-950 p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Пожаловаться на игрока</h2>
-              <button
-                type="button"
-                onClick={() => setModalOpen(false)}
-                className="text-sm text-neutral-400 hover:text-neutral-200"
-              >
-                Закрыть
-              </button>
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Пожаловаться на игрока"
+        closeLabel="Закрыть"
+        dismissible={!submitting}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setModalOpen(false)} disabled={submitting}>
+              Отмена
+            </Button>
+            <Button
+              variant="primary"
+              loading={submitting}
+              disabled={!serverId || !body.trim()}
+              onClick={() => void submit()}
+            >
+              Отправить жалобу
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <FieldRow label="Сервер" htmlFor={serverSelectId}>
+            <Select
+              id={serverSelectId}
+              value={serverId}
+              onChange={(e) => setServerId(e.target.value)}
+            >
+              <option value="">Выберите сервер</option>
+              {servers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.display_name ?? s.slug ?? s.id.slice(0, 8)}
+                </option>
+              ))}
+            </Select>
+          </FieldRow>
+
+          <FieldRow label="Текст жалобы" htmlFor={bodyTextareaId}>
+            <Textarea
+              id={bodyTextareaId}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={4}
+              maxLength={REPORT_BODY_MAX}
+              placeholder="Опишите нарушение…"
+            />
+          </FieldRow>
+
+          <div className="space-y-2 rounded-ctl border border-line p-3">
+            <p className="text-xs font-medium text-ink-2">Доказательства (необязательно)</p>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="video/mp4,video/webm,image/png,image/jpeg"
+              disabled={uploading}
+              aria-label="Файл доказательства"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void uploadFile(file);
+              }}
+              className="block w-full text-xs text-ink-2"
+            />
+
+            <div className="flex gap-2">
+              <TextInput
+                id={urlInputId}
+                type="text"
+                value={evidenceUrl}
+                onChange={(e) => setEvidenceUrl(e.target.value)}
+                aria-label="Ссылка на доказательство"
+                placeholder="Ссылка на доказательство"
+                className="flex-1"
+              />
+              <Button onClick={() => void attachUrl()} disabled={uploading || !evidenceUrl.trim()}>
+                Добавить
+              </Button>
             </div>
 
-            <div>
-              <label htmlFor={serverSelectId} className="mb-1 block text-xs text-neutral-500">
-                Сервер
-              </label>
-              <select
-                id={serverSelectId}
-                value={serverId}
-                onChange={(e) => setServerId(e.target.value)}
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-              >
-                <option value="">Выберите сервер</option>
-                {servers.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.display_name ?? s.slug ?? s.id.slice(0, 8)}
-                  </option>
+            {attached.length > 0 ? (
+              <ul className="space-y-1">
+                {attached.map((item) => (
+                  <li
+                    key={item.id}
+                    className="flex items-center justify-between gap-2 text-xs text-ink-2"
+                  >
+                    <span className="truncate">{item.label}</span>
+                    <IconButton
+                      size="sm"
+                      tone="destructive"
+                      icon={<TrashIcon />}
+                      label={`Убрать вложение ${item.label}`}
+                      onClick={() => removeAttached(item.id)}
+                    />
+                  </li>
                 ))}
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor={bodyTextareaId} className="mb-1 block text-xs text-neutral-500">
-                Текст жалобы
-              </label>
-              <textarea
-                id={bodyTextareaId}
-                value={body}
-                onChange={(e) => setBody(e.target.value)}
-                rows={4}
-                maxLength={REPORT_BODY_MAX}
-                placeholder="Опишите нарушение…"
-                className="w-full resize-y rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-              />
-            </div>
-
-            <div className="space-y-2 rounded border border-neutral-800 bg-neutral-900 p-3">
-              <p className="text-xs text-neutral-500">Доказательства (необязательно)</p>
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="video/mp4,video/webm,image/png,image/jpeg"
-                disabled={uploading}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) void uploadFile(file);
-                }}
-                className="block w-full text-xs text-neutral-400"
-              />
-
-              <div className="flex gap-2">
-                <input
-                  id={urlInputId}
-                  type="text"
-                  value={evidenceUrl}
-                  onChange={(e) => setEvidenceUrl(e.target.value)}
-                  placeholder="Ссылка на доказательство"
-                  className="flex-1 rounded border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-sm focus:border-neutral-600 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => void attachUrl()}
-                  disabled={uploading || !evidenceUrl.trim()}
-                  className="rounded border border-neutral-700 px-3 py-1.5 text-xs text-neutral-300 hover:border-neutral-500 disabled:opacity-40"
-                >
-                  Добавить
-                </button>
-              </div>
-
-              {attached.length > 0 ? (
-                <ul className="space-y-1">
-                  {attached.map((item) => (
-                    <li
-                      key={item.id}
-                      className="flex items-center justify-between gap-2 text-xs text-neutral-300"
-                    >
-                      <span className="truncate">{item.label}</span>
-                      <button
-                        type="button"
-                        onClick={() => removeAttached(item.id)}
-                        className="text-red-400 hover:text-red-300"
-                      >
-                        убрать
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-
-            {error ? <p className="text-xs text-red-400">{error}</p> : null}
-
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setModalOpen(false)}
-                className="rounded border border-neutral-800 px-4 py-1.5 text-sm text-neutral-300 hover:border-neutral-600"
-              >
-                Отмена
-              </button>
-              <button
-                type="button"
-                onClick={() => void submit()}
-                disabled={submitting || !serverId || !body.trim()}
-                className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-              >
-                {submitting ? 'Отправка…' : 'Отправить жалобу'}
-              </button>
-            </div>
+              </ul>
+            ) : null}
           </div>
+
+          {error ? (
+            <InlineBanner tone="crit" title="Жалоба не отправлена" description={error} />
+          ) : null}
         </div>
-      ) : null}
+      </Modal>
     </div>
   );
 }

@@ -1,16 +1,34 @@
 'use client';
 
-import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Badge,
+  type BadgeTone,
+  Button,
+  ButtonLink,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  Skeleton,
+} from '@/components/ui';
 import {
   excerpt,
   formatReportDate,
-  REPORT_STATUS_BADGE_CLASSES,
   REPORT_STATUS_LABELS,
   type ReportSummaryStatus,
 } from './reports-summary';
 
 const PAGE_SIZE = 10;
+
+/** Ход разбора жалобы — состояние, а не категория: тон повторяет подпись (§5). */
+const STATUS_TONE: Record<ReportSummaryStatus, BadgeTone> = {
+  pending: 'warn',
+  in_review: 'accent',
+  resolved: 'good',
+  rejected: 'neutral',
+};
 
 interface ReportSummaryItem {
   id: string;
@@ -37,7 +55,7 @@ export function ReportsSection({ playerId }: { playerId: string }) {
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setHidden(false);
@@ -71,49 +89,56 @@ export function ReportsSection({ playerId }: { playerId: string }) {
     };
   }, [playerId]);
 
+  useEffect(() => load(), [load]);
+
   if (hidden) return null;
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-          Жалобы на игрока{total > 0 ? ` (${total})` : ''}
-        </h2>
-        <Link href="/reports" className="text-xs text-sky-400 no-underline hover:text-sky-300">
-          Все жалобы →
-        </Link>
-      </div>
-
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          Ошибка: {error}
-        </div>
-      ) : loading ? (
-        <div className="text-sm text-neutral-500">Загрузка…</div>
-      ) : !items || items.length === 0 ? (
-        <div className="text-sm text-neutral-500">Жалоб на этого игрока нет.</div>
-      ) : (
-        <ul className="space-y-2">
-          {items.map((report) => (
-            <li
-              key={report.id}
-              className="rounded border border-neutral-900 bg-neutral-900/40 p-2 text-sm"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span
-                  className={`rounded px-2 py-0.5 text-xs ${REPORT_STATUS_BADGE_CLASSES[report.status]}`}
-                >
-                  {REPORT_STATUS_LABELS[report.status]}
-                </span>
-                <span className="text-xs text-neutral-500">
-                  {formatReportDate(report.created_at)}
-                </span>
-              </div>
-              <p className="mt-1 text-neutral-300">{excerpt(report.body)}</p>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+    <Card padding="none" as="section">
+      <CardHeader
+        title="Жалобы на игрока"
+        count={total > 0 ? total : undefined}
+        actions={
+          <ButtonLink href="/reports" variant="plain" size="sm">
+            Все жалобы
+          </ButtonLink>
+        }
+      />
+      <CardBody>
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить жалобы"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : loading ? (
+          <Skeleton variant="block" count={2} label="Загрузка жалоб" />
+        ) : !items || items.length === 0 ? (
+          <EmptyState
+            title="Жалоб нет"
+            description="На этого игрока никто не жаловался через панель."
+          />
+        ) : (
+          <ul className="space-y-2">
+            {items.map((report) => (
+              <li key={report.id} className="rounded-ctl border border-line p-2 text-[13px]">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Badge size="sm" tone={STATUS_TONE[report.status]}>
+                    {REPORT_STATUS_LABELS[report.status]}
+                  </Badge>
+                  <span className="text-xs text-ink-3">{formatReportDate(report.created_at)}</span>
+                </div>
+                <p className="mt-1 text-ink-2">{excerpt(report.body)}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
   );
 }

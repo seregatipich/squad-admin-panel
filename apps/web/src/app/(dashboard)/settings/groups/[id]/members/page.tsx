@@ -4,6 +4,29 @@ import type { RoleColor } from '@squad/shared-config/role-colors';
 import Link from 'next/link';
 import { use, useCallback, useEffect, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
+import {
+  AlertDialog,
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  InlineBanner,
+  Modal,
+  PageHeader,
+  Pagination,
+  SearchField,
+  Select,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Textarea,
+  TextInput,
+  Th,
+  Toolbar,
+} from '@/components/ui';
 
 interface Member {
   id: string;
@@ -47,6 +70,12 @@ interface Me {
 
 const PAGE_SIZE = 100;
 
+const PAGINATION_LABELS = {
+  previous: 'Назад',
+  next: 'Вперёд',
+  page: (page: number, of: number) => `Страница ${page} из ${of}`,
+};
+
 const IMPORT_REASON_LABELS: Record<string, string> = {
   invalid_steam_id64: 'некорректный SteamID64',
   duplicate_steam_id64: 'дубликат SteamID64 в файле',
@@ -67,6 +96,8 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
   const [importOpen, setImportOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pendingRemove, setPendingRemove] = useState<Member | null>(null);
+  const [pendingBulkRemove, setPendingBulkRemove] = useState(false);
 
   const load = useCallback(async () => {
     const url = new URL(`/api/v1/roles/${id}/members`, window.location.origin);
@@ -115,10 +146,10 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
     });
   }
 
-  async function removeMember(playerId: string, name: string) {
+  async function removeMember(playerId: string) {
     if (!canManage) return;
-    if (!confirm(`Снять роль с игрока «${name}»?`)) return;
     setErr(null);
+    setPendingRemove(null);
     const r = await fetch(`/api/v1/roles/${id}/members/${playerId}`, {
       method: 'DELETE',
       credentials: 'include',
@@ -150,8 +181,8 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
 
   async function bulkDelete() {
     if (!canManage || selected.size === 0) return;
-    if (!confirm(`Снять роль с выбранных игроков (${selected.size})?`)) return;
     setErr(null);
+    setPendingBulkRemove(false);
     const r = await fetch(`/api/v1/roles/${id}/members/bulk-delete`, {
       method: 'POST',
       credentials: 'include',
@@ -186,187 +217,222 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
 
   if (err) {
     return (
-      <div className="space-y-3">
-        <Link href="/settings/groups" className="text-sky-400 text-xs">
+      <>
+        <Link href="/settings/groups" className="text-xs text-accent no-underline">
           ← Назад к списку ролей
         </Link>
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {err}
-        </div>
-      </div>
+        <InlineBanner
+          tone="crit"
+          title={err}
+          description="Запрос к API не выполнился."
+          action={
+            <Button
+              size="sm"
+              onClick={() => {
+                setErr(null);
+                void load();
+              }}
+            >
+              Повторить
+            </Button>
+          }
+        />
+      </>
     );
   }
-  if (!data) return <div className="text-neutral-500">Загрузка…</div>;
 
-  const totalPages = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
+  const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
-  const allOnPageSelected = data.items.length > 0 && data.items.every((m) => selected.has(m.id));
+  const allOnPageSelected =
+    data !== null && data.items.length > 0 && data.items.every((m) => selected.has(m.id));
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Link href="/settings/groups" className="text-sky-400 text-xs">
-            ← Назад к списку ролей
-          </Link>
-          <RoleColorDot color={data.role.color as RoleColor | string} />
-          <h1 className="text-2xl font-semibold">{data.role.name}</h1>
-          <span className="text-sm text-neutral-500">— {data.total} участников</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={exportCsv}
-            className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 hover:bg-neutral-800"
-          >
-            Экспорт CSV
-          </button>
-          {canManage ? (
-            <>
-              <button
-                type="button"
-                onClick={() => setImportOpen(true)}
-                className="rounded-md border border-emerald-700 bg-emerald-950 px-3 py-1.5 text-sm text-emerald-200 hover:bg-emerald-900"
-              >
-                Импорт CSV
-              </button>
-              <button
-                type="button"
-                onClick={() => setAddOpen(true)}
-                className="rounded-md border border-sky-700 bg-sky-950 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-900"
-              >
-                + Добавить игрока
-              </button>
-            </>
-          ) : null}
-        </div>
-      </div>
+    <>
+      <PageHeader
+        backHref="/settings/groups"
+        backLabel="Назад к списку ролей"
+        title={
+          <span className="inline-flex items-center gap-2">
+            <RoleColorDot color={(data?.role.color ?? 'neutral') as RoleColor | string} />
+            {data?.role.name ?? 'Роль'}
+          </span>
+        }
+        meta={data ? <span>{data.total} участников</span> : null}
+        actions={
+          <>
+            <Button onClick={() => void exportCsv()}>Экспорт CSV</Button>
+            {canManage ? (
+              <>
+                <Button onClick={() => setImportOpen(true)}>Импорт CSV</Button>
+                <Button variant="primary" onClick={() => setAddOpen(true)}>
+                  Добавить игрока
+                </Button>
+              </>
+            ) : null}
+          </>
+        }
+      />
 
-      <div className="flex items-center gap-2">
-        <input
-          type="text"
-          placeholder="Поиск по нику или SteamID64…"
-          value={q}
-          onChange={(e) => {
-            setQ(e.target.value);
-            setOffset(0);
-          }}
-          className="w-80 rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm"
-        />
-      </div>
+      <Toolbar
+        search={
+          <SearchField
+            value={q}
+            onCommit={(next) => {
+              setQ(next);
+              setOffset(0);
+            }}
+            label="Поиск по участникам роли"
+            placeholder="Поиск по нику или SteamID64…"
+            clearLabel="Очистить поиск"
+          />
+        }
+        summary={data ? `Найдено: ${data.total}` : undefined}
+      />
 
       {canManage && selected.size > 0 ? (
         <div
           data-testid="bulk-toolbar"
-          className="flex items-center gap-2 rounded border border-neutral-800 bg-neutral-900/60 px-3 py-2 text-sm"
+          className="flex items-center gap-2 rounded-card border border-line bg-surface px-3 py-2"
         >
-          <span className="text-neutral-300">Выбрано: {selected.size}</span>
-          <button
-            type="button"
-            onClick={bulkDelete}
-            className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-300 hover:bg-red-950"
-          >
+          <span className="text-xs text-ink-2">Выбрано: {selected.size}</span>
+          {/* Снятие роли обратимо — её выдают заново тем же экраном, — поэтому
+              кнопки вторичные, а не критические (дизайн-система, §5). */}
+          <Button size="sm" onClick={() => setPendingBulkRemove(true)}>
             Удалить выбранных
-          </button>
-          <button
-            type="button"
-            onClick={() => setMoveOpen(true)}
-            className="rounded border border-amber-800 px-2 py-0.5 text-xs text-amber-200 hover:bg-amber-950"
-          >
+          </Button>
+          <Button size="sm" onClick={() => setMoveOpen(true)}>
             Переместить в роль
-          </button>
+          </Button>
         </div>
       ) : null}
 
-      <table className="w-full table-fixed border-collapse text-sm">
-        <thead className="text-left text-xs uppercase tracking-widest text-neutral-500">
-          <tr>
-            {canManage ? (
-              <th className="w-8 border-b border-neutral-800 px-2 py-2">
-                <input
-                  type="checkbox"
-                  aria-label="Выбрать всех на странице"
-                  checked={allOnPageSelected}
-                  onChange={() => toggleAll(data.items)}
-                />
-              </th>
-            ) : null}
-            <th className="border-b border-neutral-800 px-2 py-2">Никнейм</th>
-            <th className="w-44 border-b border-neutral-800 px-2 py-2">SteamID64</th>
-            <th className="w-52 border-b border-neutral-800 px-2 py-2">Комментарий</th>
-            <th className="w-44 border-b border-neutral-800 px-2 py-2">Last seen</th>
-            <th className="w-28 border-b border-neutral-800 px-2 py-2 text-right">Действие</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.items.length === 0 ? (
-            <tr>
-              <td colSpan={canManage ? 6 : 5} className="px-2 py-3 text-neutral-500">
-                Нет участников
-              </td>
-            </tr>
-          ) : null}
-          {data.items.map((m) => (
-            <tr key={m.id} className="border-b border-neutral-900 hover:bg-neutral-900/40">
-              {canManage ? (
-                <td className="px-2 py-2">
-                  <input
-                    type="checkbox"
-                    aria-label={`Выбрать ${m.canonical_name}`}
-                    checked={selected.has(m.id)}
-                    onChange={() => toggleOne(m.id)}
-                  />
-                </td>
-              ) : null}
-              <td className="px-2 py-2">
-                <Link href={`/all-players/${m.id}`} className="text-sky-400 hover:text-sky-300">
-                  {m.canonical_name}
-                </Link>
-              </td>
-              <td className="px-2 py-2 font-mono text-xs">{m.steam_id64 ?? '—'}</td>
-              <td className="px-2 py-2 text-xs text-neutral-400">{m.role_comment ?? '—'}</td>
-              <td className="px-2 py-2 text-xs text-neutral-400">
-                {new Date(m.last_seen_at).toLocaleString('ru-RU')}
-              </td>
-              <td className="px-2 py-2 text-right">
+      <Card padding="none">
+        {data === null ? (
+          <div className="p-3">
+            <SkeletonTable rows={6} cols={5} label="Загрузка списка участников" />
+          </div>
+        ) : data.items.length === 0 ? (
+          <EmptyState
+            variant={q.trim() ? 'filtered' : 'initial'}
+            title={q.trim() ? 'Никто не найден по запросу' : 'Нет участников'}
+            description={
+              q.trim()
+                ? 'Ни один участник роли не подходит под запрос.'
+                : 'Роль ещё никому не выдана. Добавьте игрока, чтобы он получил её права.'
+            }
+            action={
+              q.trim() ? (
+                <Button size="sm" onClick={() => setQ('')}>
+                  Сбросить фильтр
+                </Button>
+              ) : null
+            }
+          />
+        ) : (
+          <Table layout="fixed" ariaLabel="Участники роли">
+            <TableHead>
+              <tr>
                 {canManage ? (
-                  <button
-                    type="button"
-                    onClick={() => removeMember(m.id, m.canonical_name)}
-                    className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-300 hover:bg-red-950"
-                  >
-                    Снять
-                  </button>
+                  <Th width="2.75rem">
+                    <Checkbox
+                      label={<span className="sr-only">Выбрать всех на странице</span>}
+                      checked={allOnPageSelected}
+                      onChange={() => toggleAll(data.items)}
+                    />
+                  </Th>
                 ) : null}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                <Th>Никнейм</Th>
+                <Th width="11rem">SteamID64</Th>
+                <Th width="13rem">Комментарий</Th>
+                <Th width="11rem">Был(а)</Th>
+                <Th align="right" width="7rem">
+                  Действие
+                </Th>
+              </tr>
+            </TableHead>
+            <TableBody>
+              {data.items.map((m) => (
+                <TableRow key={m.id} interactive selected={selected.has(m.id)}>
+                  {canManage ? (
+                    <Td>
+                      <Checkbox
+                        label={<span className="sr-only">{`Выбрать ${m.canonical_name}`}</span>}
+                        checked={selected.has(m.id)}
+                        onChange={() => toggleOne(m.id)}
+                      />
+                    </Td>
+                  ) : null}
+                  <Td truncate>
+                    <Link
+                      href={`/all-players/${m.id}`}
+                      className="text-accent no-underline hover:brightness-110"
+                    >
+                      {m.canonical_name}
+                    </Link>
+                  </Td>
+                  <Td className="font-mono text-xs">{m.steam_id64 ?? '—'}</Td>
+                  <Td truncate className="text-xs text-ink-3">
+                    {m.role_comment ?? '—'}
+                  </Td>
+                  <Td className="text-xs text-ink-3">
+                    {new Date(m.last_seen_at).toLocaleString('ru-RU')}
+                  </Td>
+                  <Td align="right">
+                    {canManage ? (
+                      <Button size="sm" onClick={() => setPendingRemove(m)}>
+                        Снять
+                      </Button>
+                    ) : null}
+                  </Td>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
 
-      <div className="flex items-center justify-between">
-        <div className="text-xs text-neutral-500">
-          Страница {currentPage} / {totalPages}
+      {/* Пустая страница за пределами выдачи — не повод отнимать навигацию:
+          иначе со второй страницы, опустевшей после снятия ролей, некуда
+          вернуться. А вот пока список ещё грузится, показывать нечем. */}
+      {data !== null && data.total > 0 ? (
+        <div className="flex justify-end">
+          <Pagination
+            page={currentPage}
+            pageCount={totalPages}
+            onChange={(page) => setOffset((page - 1) * PAGE_SIZE)}
+            labels={PAGINATION_LABELS}
+            allowJump
+          />
         </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            disabled={offset === 0}
-            onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-            className="rounded border border-neutral-800 px-2 py-0.5 text-xs disabled:opacity-40"
-          >
-            ← пред.
-          </button>
-          <button
-            type="button"
-            disabled={offset + PAGE_SIZE >= data.total}
-            onClick={() => setOffset(offset + PAGE_SIZE)}
-            className="rounded border border-neutral-800 px-2 py-0.5 text-xs disabled:opacity-40"
-          >
-            след. →
-          </button>
-        </div>
-      </div>
+      ) : null}
+
+      <AlertDialog
+        open={pendingRemove !== null}
+        onClose={() => setPendingRemove(null)}
+        title="Снять роль"
+        body={
+          pendingRemove
+            ? `Игрок «${pendingRemove.canonical_name}» потеряет эту роль. Выдать её заново можно в любой момент.`
+            : ''
+        }
+        confirmLabel="Снять роль"
+        cancelLabel="Отмена"
+        tone="default"
+        onConfirm={() => {
+          if (pendingRemove) void removeMember(pendingRemove.id);
+        }}
+      />
+
+      <AlertDialog
+        open={pendingBulkRemove}
+        onClose={() => setPendingBulkRemove(false)}
+        title="Снять роль с выбранных"
+        body={`Роль потеряют ${selected.size} игроков. Выдать её заново можно в любой момент.`}
+        confirmLabel="Снять роль"
+        cancelLabel="Отмена"
+        tone="default"
+        onConfirm={() => void bulkDelete()}
+      />
 
       {addOpen ? (
         <AddMemberModal onClose={() => setAddOpen(false)} onAdd={(p) => addMember(p.id)} />
@@ -407,7 +473,7 @@ export default function RoleMembersPage({ params }: { params: Promise<{ id: stri
           }}
         />
       ) : null}
-    </div>
+    </>
   );
 }
 
@@ -453,74 +519,63 @@ function ImportModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
-      <div
-        data-testid="import-modal"
-        className="w-full max-w-lg rounded-lg border border-neutral-800 bg-neutral-950 p-5"
-      >
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Импорт из CSV</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-xs text-neutral-400 hover:text-neutral-200"
+    <Modal
+      open
+      onClose={onClose}
+      title="Импорт из CSV"
+      closeLabel="Закрыть"
+      // Внутри окна лежит набранный файл: случайный Escape стёр бы его без
+      // единого вопроса, поэтому мягкие жесты закрытия выключены.
+      dismissible={false}
+      footer={
+        <>
+          <Button onClick={onClose}>Отмена</Button>
+          <Button
+            variant="primary"
+            onClick={() => void submit()}
+            loading={busy}
+            disabled={csv.trim().length === 0}
           >
-            закрыть
-          </button>
-        </div>
-        <p className="mb-2 text-xs text-neutral-500">
+            Импортировать
+          </Button>
+        </>
+      }
+    >
+      <div data-testid="import-modal" className="space-y-2">
+        <p className="text-xs text-ink-3">
           Одна строка на игрока: <code>SteamID64</code>, необязательный комментарий после{' '}
           <code>;</code>. Если хотя бы одна строка некорректна, не импортируется ничего.
         </p>
-        <textarea
+        <Textarea
           data-testid="import-textarea"
           value={csv}
           onChange={(e) => setCsv(e.target.value)}
           placeholder={'76561198000000000;основной состав\n76561198000000001'}
           rows={8}
-          className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 font-mono text-xs"
+          aria-label="Строки CSV"
+          className="font-mono"
         />
-        {topError ? (
-          <div className="mt-2 rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-            Ошибка: {topError}
-          </div>
-        ) : null}
+        {topError ? <InlineBanner tone="crit" title={`Ошибка: ${topError}`} /> : null}
         {errors.length > 0 ? (
-          <div
-            data-testid="import-errors"
-            className="mt-2 rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200"
-          >
-            <div className="mb-1 font-semibold">
-              Файл отклонён — исправьте {errors.length} строк(и) и повторите:
-            </div>
-            <ul className="space-y-0.5">
-              {errors.map((e) => (
-                <li key={`${e.line}-${e.steam_id64}`}>
-                  Строка {e.line} («{e.steam_id64}»): {IMPORT_REASON_LABELS[e.reason] ?? e.reason}
-                </li>
-              ))}
-            </ul>
+          <div data-testid="import-errors">
+            <InlineBanner
+              tone="crit"
+              title={`Файл отклонён — исправьте ${errors.length} строк(и) и повторите:`}
+              description={
+                <ul className="space-y-0.5">
+                  {errors.map((e) => (
+                    <li key={`${e.line}-${e.steam_id64}`}>
+                      Строка {e.line} («{e.steam_id64}»):{' '}
+                      {IMPORT_REASON_LABELS[e.reason] ?? e.reason}
+                    </li>
+                  ))}
+                </ul>
+              }
+            />
           </div>
         ) : null}
-        <div className="mt-3 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded border border-neutral-800 px-3 py-1.5 text-sm text-neutral-300"
-          >
-            Отмена
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={busy || csv.trim().length === 0}
-            className="rounded border border-emerald-700 bg-emerald-950 px-3 py-1.5 text-sm text-emerald-200 hover:bg-emerald-900 disabled:opacity-40"
-          >
-            Импортировать
-          </button>
-        </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -539,26 +594,30 @@ function MoveModal({
   const [target, setTarget] = useState('');
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
-      <div
-        data-testid="move-modal"
-        className="w-full max-w-md rounded-lg border border-neutral-800 bg-neutral-950 p-5"
-      >
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Переместить в роль ({count})</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-xs text-neutral-400 hover:text-neutral-200"
+    <Modal
+      open
+      onClose={onClose}
+      title={`Переместить в роль (${count})`}
+      size="sm"
+      closeLabel="Закрыть"
+      footer={
+        <>
+          <Button onClick={onClose}>Отмена</Button>
+          <Button
+            variant="primary"
+            onClick={() => target && void onMove(target)}
+            disabled={target === ''}
           >
-            закрыть
-          </button>
-        </div>
-        <select
+            Переместить
+          </Button>
+        </>
+      }
+    >
+      <div data-testid="move-modal">
+        <Select
           aria-label="Целевая роль"
           value={target}
           onChange={(e) => setTarget(e.target.value)}
-          className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm"
         >
           <option value="">— выберите роль —</option>
           {roles.map((r) => (
@@ -566,26 +625,9 @@ function MoveModal({
               {r.name}
             </option>
           ))}
-        </select>
-        <div className="mt-3 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded border border-neutral-800 px-3 py-1.5 text-sm text-neutral-300"
-          >
-            Отмена
-          </button>
-          <button
-            type="button"
-            onClick={() => target && onMove(target)}
-            disabled={target === ''}
-            className="rounded border border-amber-800 bg-amber-950 px-3 py-1.5 text-sm text-amber-200 hover:bg-amber-900 disabled:opacity-40"
-          >
-            Переместить
-          </button>
-        </div>
+        </Select>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -620,48 +662,32 @@ function AddMemberModal({
   }, [q]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
-      <div className="w-full max-w-lg rounded-lg border border-neutral-800 bg-neutral-950 p-5">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Добавить игрока</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-xs text-neutral-400 hover:text-neutral-200"
-          >
-            закрыть
-          </button>
-        </div>
-        <input
-          type="text"
+    <Modal open onClose={onClose} title="Добавить игрока" closeLabel="Закрыть">
+      <div className="space-y-3">
+        <TextInput
+          type="search"
           placeholder="Ник или SteamID64…"
+          aria-label="Поиск игрока"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm"
         />
-        <ul className="mt-3 max-h-80 divide-y divide-neutral-900 overflow-auto">
+        <ul className="max-h-80 divide-y divide-line overflow-auto">
           {results.length === 0 ? (
-            <li className="py-2 text-xs text-neutral-500">Введите хотя бы 2 символа для поиска…</li>
+            <li className="py-2 text-xs text-ink-3">Введите хотя бы 2 символа для поиска…</li>
           ) : null}
           {results.map((r) => (
-            <li key={r.id} className="flex items-center justify-between py-2">
-              <div className="flex flex-col">
-                <span className="text-sm">{r.canonical_name}</span>
-                <span className="font-mono text-[11px] text-neutral-500">
-                  {r.steam_id64 ?? '—'}
-                </span>
+            <li key={r.id} className="flex items-center justify-between gap-3 py-2">
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate text-[13px]">{r.canonical_name}</span>
+                <span className="font-mono text-2xs text-ink-3">{r.steam_id64 ?? '—'}</span>
               </div>
-              <button
-                type="button"
-                onClick={() => onAdd(r)}
-                className="rounded border border-sky-700 bg-sky-950 px-2 py-0.5 text-xs text-sky-200 hover:bg-sky-900"
-              >
+              <Button size="sm" variant="primary" onClick={() => onAdd(r)}>
                 Назначить
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
       </div>
-    </div>
+    </Modal>
   );
 }

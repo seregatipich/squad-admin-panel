@@ -144,6 +144,37 @@ describe('BackupPage', () => {
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(3));
   });
 
+  it('offers a retry on the error banner and reloads the list', async () => {
+    let failing = true;
+    const fetchSpy = mockFetchOnce(() =>
+      failing
+        ? Promise.resolve(new Response(JSON.stringify({ detail: 'bridge down' }), { status: 502 }))
+        : Promise.resolve(
+            snapshotList([
+              {
+                id: 'full-4',
+                short_id: 'cafebabe',
+                time: '2026-07-24T03:00:00Z',
+                hostname: 'tk104',
+                paths: ['/data'],
+                tags: [],
+              },
+            ]),
+          ),
+    );
+    render(<BackupPage />);
+    await waitFor(() =>
+      expect(screen.getByText(/Не удалось загрузить список бэкапов/)).toBeInTheDocument(),
+    );
+
+    failing = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+
+    await waitFor(() => expect(screen.getByText('cafebabe')).toBeInTheDocument());
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/Не удалось загрузить список бэкапов/)).not.toBeInTheDocument();
+  });
+
   it('polls the snapshot list on the interval', async () => {
     vi.useFakeTimers();
     try {

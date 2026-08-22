@@ -1,8 +1,28 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
+import {
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  CardHeader,
+  FieldRow,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Select,
+  Skeleton,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Textarea,
+  Th,
+} from '@/components/ui';
 import { ApplicationsSection } from './ApplicationsSection';
 
 interface WhitelistSettings {
@@ -51,6 +71,9 @@ export default function WhitelistSettingsPage() {
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const roleSelectId = useId();
+  const csvId = useId();
+
   const refresh = useCallback(async () => {
     const [settingsRes, rolesRes, meRes] = await Promise.all([
       fetch('/api/v1/whitelist/settings', { credentials: 'include', cache: 'no-store' }),
@@ -61,6 +84,7 @@ export default function WhitelistSettingsPage() {
       const loaded = (await settingsRes.json()) as WhitelistSettings;
       setSettings(loaded);
       setPicked(loaded.whitelist_role_id ?? '');
+      setErr(null);
     } else {
       setErr(`Не удалось загрузить настройки: ${settingsRes.status}`);
     }
@@ -127,164 +151,202 @@ export default function WhitelistSettingsPage() {
     }
   }
 
-  if (!settings || !me) {
-    return <div className="text-neutral-500">Загрузка…</div>;
-  }
-
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Whitelist</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Выберите роль, которая используется для whitelist. Добавление и снятие игрока с whitelist
-          — это выдача/снятие этой роли (та же модель, что и обычные роли панели).
-        </p>
-      </header>
+    <PageContainer width="reading">
+      <PageHeader
+        title="Whitelist"
+        subtitle="Выберите роль, которая используется для whitelist. Добавление и снятие игрока с whitelist — это выдача/снятие этой роли (та же модель, что и обычные роли панели)."
+      />
 
       {err ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {err}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось выполнить запрос"
+          description={err}
+          action={
+            <Button size="sm" onClick={() => void refresh()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
       {notice ? (
-        <div className="rounded border border-emerald-900 bg-emerald-950 p-3 text-sm text-emerald-200">
-          {notice}
-        </div>
-      ) : null}
-      {!canEdit ? (
-        <div className="rounded border border-neutral-800 bg-neutral-900/60 p-3 text-sm text-neutral-400">
-          Просмотр доступен, но для изменения whitelist нужно право «Управлять whitelist».
-        </div>
-      ) : null}
-
-      <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-5 space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-neutral-500">
-          Роль whitelist
-        </h2>
-        <div className="flex flex-wrap items-center gap-3">
-          {settings.whitelist_role_id ? (
-            <span className="inline-flex items-center gap-2 text-sm">
-              <RoleColorDot
-                color={roleOptions.find((r) => r.id === settings.whitelist_role_id)?.color ?? ''}
-              />
-              <span className="font-medium">{settings.whitelist_role_name}</span>
-            </span>
-          ) : (
-            <span className="text-sm text-neutral-500">роль не выбрана</span>
-          )}
-          {settings.whitelist_role_id ? (
-            <Link
-              href={`/settings/groups/${settings.whitelist_role_id}/members`}
-              className="text-xs text-sky-400 hover:text-sky-300"
-            >
-              Список участников →
-            </Link>
-          ) : null}
-        </div>
-
-        {canEdit ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={picked}
-              onChange={(e) => setPicked(e.target.value)}
-              className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm"
-            >
-              <option value="">— не выбрана —</option>
-              {assignableRoles.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={saveRole}
-              disabled={saving || picked === (settings.whitelist_role_id ?? '')}
-              className="rounded-md border border-sky-700 bg-sky-950 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {saving ? 'Сохраняем…' : 'Сохранить'}
-            </button>
-          </div>
-        ) : null}
-      </section>
-
-      <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-5 space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-neutral-500">
-          Импорт CSV
-        </h2>
-        <p className="text-xs text-neutral-500">
-          Формат: одна строка на игрока — <code>SteamID64[,комментарий]</code>. Строки без валидного
-          SteamID64 или с неизвестным игроком будут пропущены и показаны ниже.
-        </p>
-        <textarea
-          value={csv}
-          onChange={(e) => setCsv(e.target.value)}
-          disabled={!canEdit}
-          rows={6}
-          placeholder={'76561198000000001,комментарий\n76561198000000002'}
-          className="w-full resize-y rounded border border-neutral-800 bg-neutral-900 px-3 py-2 font-mono text-xs disabled:cursor-not-allowed disabled:opacity-60"
+        <InlineBanner
+          tone="good"
+          title={notice}
+          onDismiss={() => setNotice(null)}
+          dismissLabel="Скрыть сообщение"
         />
-        {canEdit ? (
-          <button
-            type="button"
-            onClick={importCsv}
-            disabled={importing || !csv.trim() || !settings.whitelist_role_id}
-            className="rounded-md border border-sky-700 bg-sky-950 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {importing ? 'Импортируем…' : 'Импортировать'}
-          </button>
-        ) : null}
-        {canEdit && !settings.whitelist_role_id ? (
-          <p className="text-xs text-amber-400/90">
-            Сначала выберите роль whitelist — импорт недоступен без неё.
-          </p>
-        ) : null}
+      ) : null}
+      {settings && me && !canEdit ? (
+        <InlineBanner
+          tone="info"
+          title="Только просмотр"
+          description="Для изменения whitelist нужно право «Управлять whitelist»."
+        />
+      ) : null}
 
-        {importResult ? (
-          <div className="space-y-2 text-sm">
-            <div className="text-neutral-300">
-              Импортировано {importResult.imported} из {importResult.total_rows}
-              {importResult.skipped.length > 0 ? `, пропущено ${importResult.skipped.length}` : ''}.
-            </div>
-            {importResult.skipped.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="text-left uppercase tracking-widest text-neutral-500">
-                    <tr>
-                      <th className="p-1">Строка</th>
-                      <th className="p-1">Содержимое</th>
-                      <th className="p-1">Причина</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {importResult.skipped.map((row) => (
-                      <tr key={row.line} className="border-t border-neutral-900">
-                        <td className="p-1 font-mono">{row.line}</td>
-                        <td className="p-1 font-mono">{row.raw}</td>
-                        <td className="p-1 text-amber-400/90">{SKIP_REASON_LABEL[row.reason]}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+      {!settings || !me ? (
+        <Card>
+          <Skeleton variant="block" count={3} label="Загрузка настроек whitelist" />
+        </Card>
+      ) : (
+        <>
+          <Card padding="none">
+            <CardHeader title="Роль whitelist" />
+            <CardBody className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                {settings.whitelist_role_id ? (
+                  <span className="inline-flex items-center gap-2 text-[13px]">
+                    <RoleColorDot
+                      color={
+                        roleOptions.find((r) => r.id === settings.whitelist_role_id)?.color ?? ''
+                      }
+                    />
+                    <span className="font-medium">{settings.whitelist_role_name}</span>
+                  </span>
+                ) : (
+                  <span className="text-xs text-ink-3">Роль не выбрана</span>
+                )}
+                {settings.whitelist_role_id ? (
+                  <Link
+                    href={`/settings/groups/${settings.whitelist_role_id}/members`}
+                    className="text-xs text-accent no-underline hover:brightness-110"
+                  >
+                    Список участников
+                  </Link>
+                ) : null}
               </div>
+
+              {canEdit ? (
+                <FieldRow label="Роль для whitelist" htmlFor={roleSelectId}>
+                  <Select
+                    id={roleSelectId}
+                    value={picked}
+                    onChange={(e) => setPicked(e.target.value)}
+                  >
+                    <option value="">— не выбрана —</option>
+                    {assignableRoles.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </Select>
+                </FieldRow>
+              ) : null}
+            </CardBody>
+            {canEdit ? (
+              <CardFooter>
+                <Button
+                  variant="primary"
+                  loading={saving}
+                  disabled={picked === (settings.whitelist_role_id ?? '')}
+                  onClick={() => void saveRole()}
+                >
+                  Сохранить
+                </Button>
+              </CardFooter>
             ) : null}
-          </div>
-        ) : null}
-      </section>
+          </Card>
 
-      <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-5 space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-neutral-500">
-          Экспорт CSV
-        </h2>
-        <a
-          href="/api/v1/whitelist/export"
-          className="inline-block rounded border border-neutral-800 px-3 py-1.5 text-sm text-neutral-200 no-underline hover:border-neutral-600"
-        >
-          Скачать whitelist.csv
-        </a>
-      </section>
+          <Card padding="none">
+            <CardHeader title="Импорт CSV" />
+            <CardBody className="space-y-3">
+              <FieldRow
+                label="Строки CSV"
+                htmlFor={csvId}
+                hint={
+                  <>
+                    Формат: одна строка на игрока — <code>SteamID64[,комментарий]</code>. Строки без
+                    корректного SteamID64 или с неизвестным игроком будут пропущены и показаны ниже.
+                  </>
+                }
+              >
+                <Textarea
+                  id={csvId}
+                  value={csv}
+                  onChange={(e) => setCsv(e.target.value)}
+                  disabled={!canEdit}
+                  rows={6}
+                  placeholder={'76561198000000001,комментарий\n76561198000000002'}
+                  className="resize-y font-mono"
+                />
+              </FieldRow>
 
-      <ApplicationsSection canEdit={canEdit} />
-    </div>
+              {canEdit && !settings.whitelist_role_id ? (
+                <InlineBanner
+                  tone="warn"
+                  title="Сначала выберите роль whitelist"
+                  description="Без выбранной роли импорт недоступен."
+                />
+              ) : null}
+
+              {importResult ? (
+                <div className="space-y-3">
+                  <p className="text-[13px]">
+                    Импортировано {importResult.imported} из {importResult.total_rows}
+                    {importResult.skipped.length > 0
+                      ? `, пропущено ${importResult.skipped.length}`
+                      : ''}
+                    .
+                  </p>
+                  {importResult.skipped.length > 0 ? (
+                    <Table dense ariaLabel="Пропущенные строки импорта">
+                      <TableHead>
+                        <tr>
+                          <Th align="right" width="5rem">
+                            Строка
+                          </Th>
+                          <Th>Содержимое</Th>
+                          <Th>Причина</Th>
+                        </tr>
+                      </TableHead>
+                      <TableBody>
+                        {importResult.skipped.map((row) => (
+                          <TableRow key={row.line} tone="warn">
+                            <Td numeric className="font-mono">
+                              {row.line}
+                            </Td>
+                            <Td className="break-all font-mono text-xs">{row.raw}</Td>
+                            <Td className="text-ink-2">{SKIP_REASON_LABEL[row.reason]}</Td>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  ) : null}
+                </div>
+              ) : null}
+            </CardBody>
+            {canEdit ? (
+              <CardFooter>
+                <Button
+                  variant="primary"
+                  loading={importing}
+                  disabled={!csv.trim() || !settings.whitelist_role_id}
+                  onClick={() => void importCsv()}
+                >
+                  Импортировать
+                </Button>
+              </CardFooter>
+            ) : null}
+          </Card>
+
+          <Card padding="none">
+            <CardHeader title="Экспорт CSV" />
+            <CardBody>
+              {/* Настоящий `<a>`: адрес отдаёт файл, а не страницу приложения. */}
+              <a
+                href="/api/v1/whitelist/export"
+                className="inline-flex h-8 items-center rounded-ctl border border-line bg-raised px-3 text-xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2"
+              >
+                Скачать whitelist.csv
+              </a>
+            </CardBody>
+          </Card>
+
+          <ApplicationsSection canEdit={canEdit} />
+        </>
+      )}
+    </PageContainer>
   );
 }

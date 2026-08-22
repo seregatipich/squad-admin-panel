@@ -144,7 +144,7 @@ describe('ApplicationsSection', () => {
       render(<ApplicationsSection canEdit={true} />);
       await screen.findByText('76561198000000001');
 
-      fireEvent.change(screen.getByPlaceholderText(/комментарий/i), {
+      fireEvent.change(screen.getByLabelText(/комментарий/i), {
         target: { value: 'нет мест' },
       });
       fireEvent.click(screen.getByRole('button', { name: /отклонить/i }));

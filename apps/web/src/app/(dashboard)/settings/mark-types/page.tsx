@@ -1,6 +1,27 @@
 'use client';
 
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  FieldRow,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  Select,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  TextInput,
+  Th,
+} from '@/components/ui';
 import { getLiveBus } from '@/lib/live-bus';
 import {
   isSameOrder,
@@ -67,33 +88,31 @@ export default function MarkTypesPage() {
     setTypes(sortByOrder((await res.json()) as MarkType[]));
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const [meRes, typesRes] = await Promise.all([
-          fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-          fetch('/api/v1/mark-types?include_inactive=true', {
-            credentials: 'include',
-            cache: 'no-store',
-          }),
-        ]);
-        if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
-        if (!typesRes.ok) throw new Error(`HTTP ${typesRes.status}`);
-        if (cancelled) return;
-        setMe((await meRes.json()) as Me);
-        setTypes(sortByOrder((await typesRes.json()) as MarkType[]));
-      } catch (e) {
-        if (!cancelled) setMsg({ kind: 'err', text: (e as Error).message });
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [meRes, typesRes] = await Promise.all([
+        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/mark-types?include_inactive=true', {
+          credentials: 'include',
+          cache: 'no-store',
+        }),
+      ]);
+      if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
+      if (!typesRes.ok) throw new Error(`HTTP ${typesRes.status}`);
+      setMe((await meRes.json()) as Me);
+      setTypes(sortByOrder((await typesRes.json()) as MarkType[]));
+      setMsg(null);
+    } catch (e) {
+      setMsg({ kind: 'err', text: (e as Error).message });
+    } finally {
+      setLoading(false);
     }
-    void load();
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  useEffect(() => {
+    void loadAll();
+  }, [loadAll]);
 
   useEffect(() => {
     const bus = getLiveBus();
@@ -105,7 +124,10 @@ export default function MarkTypesPage() {
   async function createType(e: React.FormEvent) {
     e.preventDefault();
     if (!isValidSlug(draft.slug)) {
-      setMsg({ kind: 'err', text: 'Слаг: 2–40 символов, только a–z, 0–9 и подчёркивание.' });
+      setMsg({
+        kind: 'err',
+        text: 'Идентификатор: 2–40 символов, только a–z, 0–9 и подчёркивание.',
+      });
       return;
     }
     if (!draft.label_en.trim() || !draft.label_ru.trim()) {
@@ -128,7 +150,7 @@ export default function MarkTypesPage() {
         }),
       });
       if (res.status === 409) {
-        setMsg({ kind: 'err', text: 'Тип с таким слагом уже существует.' });
+        setMsg({ kind: 'err', text: 'Тип с таким идентификатором уже существует.' });
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -240,312 +262,290 @@ export default function MarkTypesPage() {
     if (!isSameOrder(next, types)) void persistOrder(next);
   }
 
-  if (loading) {
-    return <div className="text-neutral-500">Загрузка…</div>;
-  }
-
   return (
-    <div className="max-w-5xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Типы меток</h1>
-        <p className="mt-1 text-sm text-neutral-400">
-          Справочник причин для меток подозрения. Порядок задаёт очерёдность в модалке установки.
-          Деактивированный тип исчезает из модалки, но остаётся в истории игроков и фильтрах
-          вотчлиста.
-        </p>
-      </div>
+    <PageContainer width="wide">
+      <PageHeader
+        title="Типы меток"
+        subtitle="Справочник причин для меток подозрения. Порядок задаёт очерёдность в модалке установки. Деактивированный тип исчезает из модалки, но остаётся в истории игроков и фильтрах вотчлиста."
+      />
 
-      {msg ? (
-        <div
-          className={`rounded border p-3 text-sm ${
-            msg.kind === 'ok'
-              ? 'border-emerald-900 bg-emerald-950/50 text-emerald-200'
-              : 'border-red-900 bg-red-950 text-red-200'
-          }`}
-        >
-          {msg.text}
-        </div>
+      {msg?.kind === 'ok' ? (
+        <InlineBanner
+          tone="good"
+          title={msg.text}
+          onDismiss={() => setMsg(null)}
+          dismissLabel="Скрыть сообщение"
+        />
+      ) : null}
+      {msg?.kind === 'err' ? (
+        <InlineBanner
+          tone="crit"
+          title="Не удалось выполнить запрос"
+          description={msg.text}
+          action={
+            <Button size="sm" onClick={() => void loadAll()}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
-      {canEdit ? (
-        <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Новый тип</h2>
-          <form onSubmit={createType} className="grid grid-cols-1 gap-3 sm:grid-cols-6">
-            <div className="sm:col-span-2">
-              <label htmlFor={slugId} className="mb-1 block text-xs text-neutral-500">
-                Слаг (лат.)
-              </label>
-              <input
-                id={slugId}
-                type="text"
-                value={draft.slug}
-                onChange={(e) => setDraft((d) => ({ ...d, slug: e.target.value }))}
-                maxLength={40}
-                placeholder="ghost_peek"
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="mb-1 block text-xs text-neutral-500" htmlFor={`${slugId}-en`}>
-                Название (EN)
-              </label>
-              <input
-                id={`${slugId}-en`}
-                type="text"
-                value={draft.label_en}
-                onChange={(e) => setDraft((d) => ({ ...d, label_en: e.target.value }))}
-                maxLength={64}
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="mb-1 block text-xs text-neutral-500" htmlFor={`${slugId}-ru`}>
-                Название (RU)
-              </label>
-              <input
-                id={`${slugId}-ru`}
-                type="text"
-                value={draft.label_ru}
-                onChange={(e) => setDraft((d) => ({ ...d, label_ru: e.target.value }))}
-                maxLength={64}
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="mb-1 block text-xs text-neutral-500" htmlFor={`${slugId}-icon`}>
-                Иконка
-              </label>
-              <select
-                id={`${slugId}-icon`}
-                value={draft.icon}
-                onChange={(e) => setDraft((d) => ({ ...d, icon: e.target.value }))}
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-              >
-                {MARK_TYPE_ICONS.map((icon) => (
-                  <option key={icon} value={icon}>
-                    {icon}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="sm:col-span-2">
-              <label className="mb-1 block text-xs text-neutral-500" htmlFor={`${slugId}-sev`}>
-                Тяжесть
-              </label>
-              <select
-                id={`${slugId}-sev`}
-                value={draft.severity}
-                onChange={(e) => setDraft((d) => ({ ...d, severity: Number(e.target.value) }))}
-                className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-              >
-                {SEVERITY_OPTIONS.map((severity) => (
-                  <option key={severity} value={severity}>
-                    {severity} — {severityLabel(severity)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-end sm:col-span-2">
-              <button
-                type="submit"
-                disabled={busy}
-                className="rounded border border-emerald-900 px-4 py-2 text-sm text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-              >
-                Создать тип
-              </button>
-            </div>
-          </form>
-        </section>
+      {canEdit && !loading ? (
+        <Card padding="none">
+          <CardHeader title="Новый тип" />
+          <CardBody>
+            <form onSubmit={createType} className="grid grid-cols-1 gap-3 sm:grid-cols-6">
+              <FieldRow label="Идентификатор (лат.)" htmlFor={slugId} className="sm:col-span-2">
+                <TextInput
+                  id={slugId}
+                  type="text"
+                  value={draft.slug}
+                  onChange={(e) => setDraft((d) => ({ ...d, slug: e.target.value }))}
+                  maxLength={40}
+                  placeholder="ghost_peek"
+                />
+              </FieldRow>
+              <FieldRow label="Название (EN)" htmlFor={`${slugId}-en`} className="sm:col-span-2">
+                <TextInput
+                  id={`${slugId}-en`}
+                  type="text"
+                  value={draft.label_en}
+                  onChange={(e) => setDraft((d) => ({ ...d, label_en: e.target.value }))}
+                  maxLength={64}
+                />
+              </FieldRow>
+              <FieldRow label="Название (RU)" htmlFor={`${slugId}-ru`} className="sm:col-span-2">
+                <TextInput
+                  id={`${slugId}-ru`}
+                  type="text"
+                  value={draft.label_ru}
+                  onChange={(e) => setDraft((d) => ({ ...d, label_ru: e.target.value }))}
+                  maxLength={64}
+                />
+              </FieldRow>
+              <FieldRow label="Иконка" htmlFor={`${slugId}-icon`} className="sm:col-span-2">
+                <Select
+                  id={`${slugId}-icon`}
+                  value={draft.icon}
+                  onChange={(e) => setDraft((d) => ({ ...d, icon: e.target.value }))}
+                >
+                  {MARK_TYPE_ICONS.map((icon) => (
+                    <option key={icon} value={icon}>
+                      {icon}
+                    </option>
+                  ))}
+                </Select>
+              </FieldRow>
+              <FieldRow label="Тяжесть" htmlFor={`${slugId}-sev`} className="sm:col-span-2">
+                <Select
+                  id={`${slugId}-sev`}
+                  value={draft.severity}
+                  onChange={(e) => setDraft((d) => ({ ...d, severity: Number(e.target.value) }))}
+                >
+                  {SEVERITY_OPTIONS.map((severity) => (
+                    <option key={severity} value={severity}>
+                      {severity} — {severityLabel(severity)}
+                    </option>
+                  ))}
+                </Select>
+              </FieldRow>
+              <div className="flex items-end sm:col-span-2">
+                <Button type="submit" variant="primary" loading={busy}>
+                  Создать тип
+                </Button>
+              </div>
+            </form>
+          </CardBody>
+        </Card>
       ) : null}
 
-      <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-          Таксономия ({types.length})
-        </h2>
-        {canEdit ? (
-          <p className="text-xs text-neutral-500">
-            Перетаскивайте строки за <span className="text-neutral-300">⠿</span>, чтобы изменить
-            порядок.
-          </p>
-        ) : null}
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase text-neutral-500">
+      <Card padding="none">
+        <CardHeader
+          title="Таксономия"
+          count={types.length}
+          description={
+            canEdit && types.length > 0
+              ? 'Перетаскивайте строки за рукоятку слева, чтобы изменить порядок.'
+              : undefined
+          }
+        />
+        {loading ? (
+          <div className="p-3">
+            <SkeletonTable rows={6} cols={canEdit ? 8 : 6} label="Загрузка типов меток" />
+          </div>
+        ) : types.length === 0 ? (
+          <EmptyState
+            title="Типов пока нет"
+            description="Заведите первый тип метки — он сразу появится в модалке установки метки."
+          />
+        ) : (
+          <Table ariaLabel="Типы меток">
+            <TableHead>
               <tr>
-                {canEdit ? <th className="w-6 py-2" /> : null}
-                <th className="py-2 pr-2">Слаг</th>
-                <th className="py-2 pr-2">EN</th>
-                <th className="py-2 pr-2">RU</th>
-                <th className="py-2 pr-2">Иконка</th>
-                <th className="py-2 pr-2">Тяжесть</th>
-                <th className="py-2 pr-2">Статус</th>
-                {canEdit ? <th className="py-2 pr-2" /> : null}
+                {canEdit ? (
+                  <Th width="2rem">
+                    <span className="sr-only">Порядок</span>
+                  </Th>
+                ) : null}
+                <Th>Идентификатор</Th>
+                <Th>EN</Th>
+                <Th>RU</Th>
+                <Th>Иконка</Th>
+                <Th>Тяжесть</Th>
+                <Th>Статус</Th>
+                {canEdit ? (
+                  <Th align="right">
+                    <span className="sr-only">Действия</span>
+                  </Th>
+                ) : null}
               </tr>
-            </thead>
-            <tbody>
-              {types.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={canEdit ? 8 : 6}
-                    className="py-3 text-center text-xs text-neutral-500"
-                  >
-                    Типов пока нет.
-                  </td>
-                </tr>
-              ) : (
-                types.map((type, index) => {
-                  const isEditing = editingId === type.id;
-                  return (
-                    <tr
-                      key={type.id}
-                      draggable={canEdit && !isEditing}
-                      onDragStart={() => setDragIndex(index)}
-                      onDragOver={(e) => {
-                        if (dragIndex !== null) e.preventDefault();
-                      }}
-                      onDrop={() => handleDrop(index)}
-                      className={`border-t border-neutral-900 align-top ${
-                        dragIndex === index ? 'opacity-40' : ''
-                      } ${type.is_active ? '' : 'text-neutral-500'}`}
-                    >
-                      {canEdit ? (
-                        <td className="cursor-grab py-2 pr-1 text-neutral-500" aria-hidden>
-                          ⠿
-                        </td>
-                      ) : null}
-                      <td className="py-2 pr-2 font-mono text-xs text-neutral-400">{type.slug}</td>
-                      {isEditing ? (
-                        <>
-                          <td className="py-2 pr-2">
-                            <input
-                              value={editDraft.label_en}
-                              onChange={(e) =>
-                                setEditDraft((d) => ({ ...d, label_en: e.target.value }))
-                              }
-                              maxLength={64}
-                              className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
-                            />
-                          </td>
-                          <td className="py-2 pr-2">
-                            <input
-                              value={editDraft.label_ru}
-                              onChange={(e) =>
-                                setEditDraft((d) => ({ ...d, label_ru: e.target.value }))
-                              }
-                              maxLength={64}
-                              className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
-                            />
-                          </td>
-                          <td className="py-2 pr-2">
-                            <select
-                              value={editDraft.icon}
-                              onChange={(e) =>
-                                setEditDraft((d) => ({ ...d, icon: e.target.value }))
-                              }
-                              className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
-                            >
-                              {MARK_TYPE_ICONS.map((icon) => (
-                                <option key={icon} value={icon}>
-                                  {icon}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="py-2 pr-2">
-                            <select
-                              value={editDraft.severity}
-                              onChange={(e) =>
-                                setEditDraft((d) => ({ ...d, severity: Number(e.target.value) }))
-                              }
-                              className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm"
-                            >
-                              {SEVERITY_OPTIONS.map((severity) => (
-                                <option key={severity} value={severity}>
-                                  {severity}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                        </>
+            </TableHead>
+            <TableBody>
+              {types.map((type, index) => {
+                const isEditing = editingId === type.id;
+                const cells = (
+                  <>
+                    {canEdit ? (
+                      <Td className="cursor-grab text-ink-4">
+                        <span aria-hidden="true">⠿</span>
+                      </Td>
+                    ) : null}
+                    <Td className="font-mono text-xs text-ink-2">{type.slug}</Td>
+                    {isEditing ? (
+                      <>
+                        <Td>
+                          <TextInput
+                            size="sm"
+                            aria-label={`Название (EN) для ${type.slug}`}
+                            value={editDraft.label_en}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({ ...d, label_en: e.target.value }))
+                            }
+                            maxLength={64}
+                          />
+                        </Td>
+                        <Td>
+                          <TextInput
+                            size="sm"
+                            aria-label={`Название (RU) для ${type.slug}`}
+                            value={editDraft.label_ru}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({ ...d, label_ru: e.target.value }))
+                            }
+                            maxLength={64}
+                          />
+                        </Td>
+                        <Td>
+                          <Select
+                            size="sm"
+                            aria-label={`Иконка для ${type.slug}`}
+                            value={editDraft.icon}
+                            onChange={(e) => setEditDraft((d) => ({ ...d, icon: e.target.value }))}
+                          >
+                            {MARK_TYPE_ICONS.map((icon) => (
+                              <option key={icon} value={icon}>
+                                {icon}
+                              </option>
+                            ))}
+                          </Select>
+                        </Td>
+                        <Td>
+                          <Select
+                            size="sm"
+                            aria-label={`Тяжесть для ${type.slug}`}
+                            value={editDraft.severity}
+                            onChange={(e) =>
+                              setEditDraft((d) => ({ ...d, severity: Number(e.target.value) }))
+                            }
+                          >
+                            {SEVERITY_OPTIONS.map((severity) => (
+                              <option key={severity} value={severity}>
+                                {severity}
+                              </option>
+                            ))}
+                          </Select>
+                        </Td>
+                      </>
+                    ) : (
+                      <>
+                        <Td className="text-ink-2">{type.label_en}</Td>
+                        <Td>{type.label_ru}</Td>
+                        <Td className="font-mono text-xs text-ink-2">{type.icon}</Td>
+                        <Td className="text-ink-2">
+                          {type.severity} — {severityLabel(type.severity)}
+                        </Td>
+                      </>
+                    )}
+                    <Td>
+                      {type.is_active ? (
+                        <Badge tone="good">активен</Badge>
                       ) : (
-                        <>
-                          <td className="py-2 pr-2 text-neutral-300">{type.label_en}</td>
-                          <td className="py-2 pr-2 text-neutral-200">{type.label_ru}</td>
-                          <td className="py-2 pr-2 font-mono text-xs text-neutral-400">
-                            {type.icon}
-                          </td>
-                          <td className="py-2 pr-2 text-neutral-400">
-                            {type.severity} — {severityLabel(type.severity)}
-                          </td>
-                        </>
+                        <Badge tone="neutral">деактивирован</Badge>
                       )}
-                      <td className="py-2 pr-2">
-                        {type.is_active ? (
-                          <span className="rounded bg-emerald-950/50 px-2 py-0.5 text-xs text-emerald-300">
-                            активен
-                          </span>
-                        ) : (
-                          <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-400">
-                            деактивирован
-                          </span>
-                        )}
-                      </td>
-                      {canEdit ? (
-                        <td className="py-2 pr-2 text-right">
-                          <div className="flex justify-end gap-1.5">
-                            {isEditing ? (
-                              <>
-                                <button
-                                  type="button"
-                                  disabled={busy}
-                                  onClick={() => saveEdit(type.id)}
-                                  className="rounded border border-emerald-900 px-2 py-0.5 text-xs text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-                                >
-                                  Сохранить
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setEditingId(null)}
-                                  className="rounded border border-neutral-700 px-2 py-0.5 text-xs text-neutral-300 hover:border-neutral-500"
-                                >
-                                  Отмена
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button
-                                  type="button"
-                                  disabled={busy}
-                                  onClick={() => startEdit(type)}
-                                  className="rounded border border-sky-900 px-2 py-0.5 text-xs text-sky-300 hover:border-sky-700 disabled:opacity-40"
-                                >
-                                  Изм.
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={busy}
-                                  onClick={() => toggleActive(type)}
-                                  className={`rounded border px-2 py-0.5 text-xs disabled:opacity-40 ${
-                                    type.is_active
-                                      ? 'border-amber-900 text-amber-300 hover:border-amber-700'
-                                      : 'border-emerald-900 text-emerald-300 hover:border-emerald-700'
-                                  }`}
-                                >
-                                  {type.is_active ? 'Деактивировать' : 'Активировать'}
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      ) : null}
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </div>
+                    </Td>
+                    {canEdit ? (
+                      <Td align="right" className="whitespace-nowrap">
+                        <span className="inline-flex items-center gap-2">
+                          {isEditing ? (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="primary"
+                                disabled={busy}
+                                onClick={() => void saveEdit(type.id)}
+                              >
+                                Сохранить
+                              </Button>
+                              <Button size="sm" onClick={() => setEditingId(null)}>
+                                Отмена
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Button size="sm" disabled={busy} onClick={() => startEdit(type)}>
+                                Изменить
+                              </Button>
+                              <Button
+                                size="sm"
+                                disabled={busy}
+                                onClick={() => void toggleActive(type)}
+                              >
+                                {type.is_active ? 'Деактивировать' : 'Активировать'}
+                              </Button>
+                            </>
+                          )}
+                        </span>
+                      </Td>
+                    ) : null}
+                  </>
+                );
+
+                // Перетаскивание живёт на самой строке, а `TableRow` обработчиков
+                // не принимает — поэтому подвижная строка собрана вручную, с теми
+                // же классами, что даёт примитив.
+                return canEdit && !isEditing ? (
+                  <tr
+                    key={type.id}
+                    draggable
+                    onDragStart={() => setDragIndex(index)}
+                    onDragOver={(e) => {
+                      if (dragIndex !== null) e.preventDefault();
+                    }}
+                    onDrop={() => handleDrop(index)}
+                    className={`h-9 transition-colors hover:bg-raised/40 ${
+                      dragIndex === index ? 'opacity-40' : ''
+                    }`}
+                  >
+                    {cells}
+                  </tr>
+                ) : (
+                  <TableRow key={type.id}>{cells}</TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+    </PageContainer>
   );
 }

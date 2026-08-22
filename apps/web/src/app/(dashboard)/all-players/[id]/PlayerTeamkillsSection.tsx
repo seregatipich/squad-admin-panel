@@ -1,7 +1,20 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Badge,
+  Button,
+  ButtonLink,
+  Card,
+  CardBody,
+  CardGrid,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  Skeleton,
+  StatTile,
+} from '@/components/ui';
 import {
   buildCombatLogTeamkillHref,
   buildPlayerTeamkillApiPath,
@@ -22,7 +35,7 @@ export function PlayerTeamkillsSection({ playerId }: { playerId: string }) {
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setHidden(false);
@@ -53,116 +66,105 @@ export function PlayerTeamkillsSection({ playerId }: { playerId: string }) {
     };
   }, [playerId]);
 
+  useEffect(() => load(), [load]);
+
   if (hidden) return null;
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Тимкиллы</h2>
-        <Link
-          href={buildCombatLogTeamkillHref({ role: 'attacker', playerId })}
-          className="text-xs text-sky-400 no-underline hover:text-sky-300"
-        >
-          Боевой лог
-        </Link>
-      </div>
+    <Card padding="none" as="section">
+      <CardHeader
+        title="Тимкиллы"
+        actions={
+          <ButtonLink
+            href={buildCombatLogTeamkillHref({ role: 'attacker', playerId })}
+            variant="plain"
+            size="sm"
+          >
+            Боевой лог
+          </ButtonLink>
+        }
+      />
+      <CardBody className="space-y-4">
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить тимкиллы"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : null}
 
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          Ошибка загрузки тимкиллов: {error}
-        </div>
-      ) : null}
+        {loading && !data ? (
+          <Skeleton variant="card" label="Загрузка тимкиллов" />
+        ) : data ? (
+          <>
+            <CardGrid cols={3}>
+              <StatTile size="sm" label="7 дней" value={formatTeamkillCount(data.stats.tk_7d)} />
+              <StatTile size="sm" label="30 дней" value={formatTeamkillCount(data.stats.tk_30d)} />
+              <StatTile size="sm" label="Всего" value={formatTeamkillCount(data.stats.tk_total)} />
+              <StatTile
+                size="sm"
+                label="Получал TK"
+                value={formatTeamkillCount(data.stats.victim_of_tk_total)}
+              />
+              <StatTile
+                size="sm"
+                label="Модерация"
+                value={formatTeamkillCount(data.stats.moderation_total)}
+                tone={data.stats.moderation_total > 0 ? 'warn' : 'neutral'}
+                hint={
+                  data.stats.moderation_total > 0 ? formatModerationSubline(data.stats) : undefined
+                }
+              />
+            </CardGrid>
 
-      {loading && !data ? (
-        <div className="py-6 text-center text-sm text-neutral-500">Загрузка…</div>
-      ) : data ? (
-        <>
-          <dl className="grid gap-2 sm:grid-cols-5">
-            <Metric label="7 дней" value={data.stats.tk_7d} />
-            <Metric label="30 дней" value={data.stats.tk_30d} />
-            <Metric label="Всего" value={data.stats.tk_total} />
-            <Metric label="Получал TK" value={data.stats.victim_of_tk_total} muted />
-            <Metric
-              label="Модерация"
-              value={data.stats.moderation_total}
-              muted={data.stats.moderation_total === 0}
-            />
-          </dl>
-
-          {data.stats.moderation_total > 0 ? (
-            <div className="text-xs text-amber-300">{formatModerationSubline(data.stats)}</div>
-          ) : null}
-
-          {data.recent.length === 0 ? (
-            <div className="rounded border border-dashed border-neutral-800 py-8 text-center text-sm text-neutral-500">
-              TK-событий нет.
-            </div>
-          ) : (
-            <ul className="divide-y divide-neutral-900 overflow-hidden rounded border border-neutral-900">
-              {data.recent.map((event) => (
-                <RecentEvent key={event.id} event={event} playerId={playerId} />
-              ))}
-            </ul>
-          )}
-        </>
-      ) : null}
-    </section>
-  );
-}
-
-function Metric({
-  label,
-  value,
-  muted = false,
-}: {
-  label: string;
-  value: number;
-  muted?: boolean;
-}) {
-  return (
-    <div className="rounded border border-neutral-900 bg-neutral-900/50 p-2">
-      <dt className="text-[10px] uppercase tracking-widest text-neutral-500">{label}</dt>
-      <dd className={`mt-1 font-mono ${muted ? 'text-neutral-400' : 'text-neutral-100'}`}>
-        {formatTeamkillCount(value)}
-      </dd>
-    </div>
+            {data.recent.length === 0 ? (
+              <EmptyState title="TK-событий нет" description="Этот игрок не убивал своих." />
+            ) : (
+              <ul className="divide-y divide-line overflow-hidden rounded-ctl border border-line">
+                {data.recent.map((event) => (
+                  <RecentEvent key={event.id} event={event} playerId={playerId} />
+                ))}
+              </ul>
+            )}
+          </>
+        ) : null}
+      </CardBody>
+    </Card>
   );
 }
 
 function RecentEvent({ event, playerId }: { event: TeamkillPlayerEvent; playerId: string }) {
   const roleLabel = event.role === 'attacker' ? 'нанёс' : 'получил';
-  const other = event.role === 'attacker' ? event.victim : event.attacker;
   const logHref = buildCombatLogTeamkillHref({ role: event.role, playerId });
+  const other = event.role === 'attacker' ? event.victim : event.attacker;
 
   return (
-    <li className="flex flex-wrap items-center justify-between gap-3 bg-neutral-950 px-3 py-2 text-sm">
+    <li className="flex flex-wrap items-center justify-between gap-3 px-3 py-2 text-[13px]">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <span
-            className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-              event.role === 'attacker' ? 'bg-red-950 text-red-200' : 'bg-amber-950 text-amber-200'
-            }`}
-          >
+          <Badge size="sm" tone={event.role === 'attacker' ? 'crit' : 'warn'}>
             {roleLabel}
-          </span>
+          </Badge>
           {other?.player_id ? (
-            <Link
-              href={`/all-players/${other.player_id}`}
-              className="truncate text-sky-300 no-underline hover:text-sky-200"
-            >
+            <Link href={`/all-players/${other.player_id}`} className="truncate text-accent">
               {other.current_name ?? other.player_id.slice(0, 8)}
             </Link>
           ) : (
-            <span className="text-neutral-500">неизвестный игрок</span>
+            <span className="text-ink-3">неизвестный игрок</span>
           )}
         </div>
-        <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-neutral-500">
+        <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-ink-3">
           <span>{formatTeamkillDate(event.occurred_at)}</span>
           <span className="font-mono">{event.weapon ?? '—'}</span>
-          {event.match_id ? <span className="font-mono">match {event.match_id}</span> : null}
+          {event.match_id ? <span className="font-mono">Матч {event.match_id}</span> : null}
         </div>
       </div>
-      <Link href={logHref} className="text-xs text-sky-400 no-underline hover:text-sky-300">
+      <Link href={logHref} className="text-xs text-accent">
         Лог
       </Link>
     </li>

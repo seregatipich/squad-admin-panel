@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { fmtDuration } from './presence';
+import { Badge, Button, InlineBanner, Skeleton } from '@/components/ui';
+import { fmtDuration, MODE_HEX } from './presence';
 
 interface PrimetimeRange {
   label: string;
@@ -23,8 +24,9 @@ interface PrimetimeResponse {
 }
 
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
-const BAR_COLOR = '#409cff';
-const PEAK_COLOR = '#ff9f0a';
+/** Столбцы — обычные часы, пик — те же цвета, что у режимов присутствия. */
+const BAR_COLOR = MODE_HEX.queue;
+const PEAK_COLOR = MODE_HEX.boost;
 
 function offsetLabel(offsetMinutes: number): string {
   const sign = offsetMinutes < 0 ? '-' : '+';
@@ -47,7 +49,7 @@ export function PrimetimeSection({ playerId }: { playerId: string }) {
   const [loading, setLoading] = useState(true);
   const [hoverHour, setHoverHour] = useState<number | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -67,55 +69,55 @@ export function PrimetimeSection({ playerId }: { playerId: string }) {
     };
   }, [playerId]);
 
+  useEffect(() => load(), [load]);
+
   const maxSeconds = useMemo(() => (data ? Math.max(1, ...data.histogram) : 1), [data]);
 
   if (error) {
     return (
-      <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-        Праймтайм — ошибка: {error}
-      </div>
+      <InlineBanner
+        tone="crit"
+        title="Не удалось загрузить праймтайм"
+        description={error}
+        action={
+          <Button size="sm" onClick={() => load()}>
+            Повторить
+          </Button>
+        }
+      />
     );
   }
 
   if (loading || !data) {
-    return <div className="text-sm text-neutral-500">Загрузка праймтайма…</div>;
+    return <Skeleton variant="card" label="Загрузка праймтайма" />;
   }
 
   const range = data.primetime;
   const tzLabel = data.timezone ?? `${offsetLabel(data.offset_minutes)} (по умолчанию)`;
 
   return (
-    <div className="space-y-3 rounded border border-neutral-800 bg-neutral-900/40 p-3">
+    <div className="space-y-3 rounded-ctl border border-line p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs uppercase tracking-widest text-neutral-500">Праймтайм</div>
-        <span className="text-[11px] text-neutral-500">
-          Часовой пояс: <span className="text-neutral-400">{tzLabel}</span>
+        <h3 className="text-[13px] font-semibold text-ink">Праймтайм</h3>
+        <span className="text-xs text-ink-3">
+          Часовой пояс: <span className="text-ink-2">{tzLabel}</span>
         </span>
       </div>
 
       {range ? (
-        <div className="inline-flex items-center gap-2 rounded-full border border-amber-900 bg-amber-950/40 px-3 py-1">
-          <span
-            className="inline-block h-2 w-2 rounded-full"
-            style={{ backgroundColor: PEAK_COLOR }}
-          />
-          <span className="font-mono text-sm text-amber-200">{range.label}</span>
-        </div>
+        <Badge tone="warn">{range.label}</Badge>
       ) : (
-        <div className="text-sm text-neutral-500">Недостаточно данных для расчёта праймтайма.</div>
+        <p className="text-xs text-ink-3">Недостаточно данных для расчёта праймтайма.</p>
       )}
 
-      <div className="h-4 text-[11px] text-neutral-400">
+      <div className="h-4 text-xs text-ink-2">
         {hoverHour !== null ? (
           <span className="tabular-nums">
             {String(hoverHour).padStart(2, '0')}:00–{String((hoverHour + 1) % 24).padStart(2, '0')}
-            :00 ·{' '}
-            <span className="text-sky-300">{fmtDuration(data.histogram[hoverHour] ?? 0)}</span>
+            :00 · <span className="text-accent">{fmtDuration(data.histogram[hoverHour] ?? 0)}</span>
           </span>
         ) : (
-          <span className="text-neutral-500">
-            Активность по часам суток за {data.window.days} дней
-          </span>
+          <span className="text-ink-3">Активность по часам суток за {data.window.days} дней</span>
         )}
       </div>
 
@@ -149,7 +151,7 @@ export function PrimetimeSection({ playerId }: { playerId: string }) {
         })}
       </div>
 
-      <div className="flex justify-between text-[10px] tabular-nums text-neutral-500">
+      <div className="flex justify-between text-2xs tabular-nums text-ink-3">
         {[0, 6, 12, 18, 23].map((hour) => (
           <span key={hour}>{String(hour).padStart(2, '0')}</span>
         ))}

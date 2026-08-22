@@ -157,8 +157,20 @@ function stubFetch(options: {
   return impl;
 }
 
-function clickTab(tab: 'skill' | 'weapons' | 'vehicles' | 'kits') {
-  fireEvent.click(screen.getByTestId(`dossier-tab-${tab}`));
+const TAB_LABELS = {
+  skill: 'Скилл',
+  weapons: 'Оружие',
+  vehicles: 'Техника',
+  kits: 'Киты',
+} as const;
+
+/** Вкладки досье — сегментированный переключатель; ищем их так же, как скринридер. */
+function dossierTabs(): HTMLElement {
+  return screen.getByRole('tablist', { name: 'Раздел досье' });
+}
+
+function clickTab(tab: keyof typeof TAB_LABELS) {
+  fireEvent.click(within(dossierTabs()).getByRole('tab', { name: TAB_LABELS[tab] }));
 }
 
 /** First column of every body row of `table`, in render order. */
@@ -183,13 +195,20 @@ describe('DossierSection', () => {
 
       await screen.findByText('K/D');
       expect(screen.getByRole('heading', { name: 'Досье' })).toBeInTheDocument();
-      expect(screen.getByTestId('dossier-tab-skill')).toHaveTextContent('Скилл');
-      expect(screen.getByTestId('dossier-tab-weapons')).toHaveTextContent('Оружие');
-      expect(screen.getByTestId('dossier-tab-vehicles')).toHaveTextContent('Техника');
-      expect(screen.getByTestId('dossier-tab-kits')).toHaveTextContent('Киты');
-      // Active tab is the sky-underlined one, and its body is what rendered.
-      expect(screen.getByTestId('dossier-tab-skill').className).toContain('border-sky-500');
-      expect(screen.getByTestId('dossier-tab-weapons').className).toContain('border-transparent');
+      expect(
+        within(dossierTabs())
+          .getAllByRole('tab')
+          .map((tab) => tab.textContent),
+      ).toEqual(['Скилл', 'Оружие', 'Техника', 'Киты']);
+      // Активная вкладка объявлена состоянием, а не оформлением подчёркивания.
+      expect(within(dossierTabs()).getByRole('tab', { name: 'Скилл' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+      expect(within(dossierTabs()).getByRole('tab', { name: 'Оружие' })).toHaveAttribute(
+        'aria-selected',
+        'false',
+      );
       expect(screen.getByText('Винрейт')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
@@ -231,8 +250,7 @@ describe('DossierSection', () => {
       const { container } = render(<DossierSection playerId={PLAYER_ID} />);
 
       await waitFor(() => expect(container).toBeEmptyDOMElement());
-      expect(screen.queryByText('Досье')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('dossier-section')).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Досье' })).not.toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
@@ -244,7 +262,7 @@ describe('DossierSection', () => {
       const { container } = render(<DossierSection playerId={PLAYER_ID} />);
 
       await waitFor(() => expect(container).toBeEmptyDOMElement());
-      expect(screen.queryByTestId('dossier-section')).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Досье' })).not.toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
@@ -276,13 +294,16 @@ describe('DossierSection', () => {
       expect(screen.getByText('90')).toBeInTheDocument();
       expect(screen.getByText('1200')).toBeInTheDocument();
 
-      const damageTile = screen.getByText('Урон').closest('div[title]');
+      // Причина прочерка написана словами под значением, а не спрятана в подсказке.
+      const damageTile = screen.getByText('Урон').closest('div');
       expect(damageTile).not.toBeNull();
-      expect(damageTile).toHaveAttribute('title', DAMAGE_UNAVAILABLE_HINT);
       expect(within(damageTile as HTMLElement).getByText('—')).toBeInTheDocument();
+      expect(
+        within(damageTile as HTMLElement).getByText(DAMAGE_UNAVAILABLE_HINT),
+      ).toBeInTheDocument();
 
       for (const period of ['3 мес', '6 мес', '12 мес', 'Всё время']) {
-        expect(screen.getByRole('button', { name: period })).toBeInTheDocument();
+        expect(screen.getByRole('tab', { name: period })).toBeInTheDocument();
       }
     },
     TEST_TIMEOUT_MS,
@@ -319,12 +340,13 @@ describe('DossierSection', () => {
       await screen.findByText('K/D');
       clickTab('weapons');
 
-      await screen.findByRole('button', { name: 'По убийствам' });
-      expect(screen.queryByRole('button', { name: 'По урону' })).not.toBeInTheDocument();
+      // Колонка убийств упорядочивает таблицу и объявляет это через aria-sort;
+      // колонка урона без данных перестаёт быть сортируемой вовсе.
+      const killsHeader = await screen.findByRole('button', { name: /Убийства/ });
+      expect(killsHeader.closest('th')).toHaveAttribute('aria-sort', 'descending');
+      expect(screen.queryByRole('button', { name: /Урон/ })).not.toBeInTheDocument();
 
-      const damageCells = screen
-        .getAllByTitle(DAMAGE_UNAVAILABLE_HINT)
-        .filter((cell) => cell.tagName === 'TD');
+      const damageCells = screen.getAllByTitle(DAMAGE_UNAVAILABLE_HINT);
       expect(damageCells).toHaveLength(3);
       for (const cell of damageCells) {
         expect(cell).toHaveTextContent('—');
@@ -342,12 +364,16 @@ describe('DossierSection', () => {
       await screen.findByText('K/D');
       clickTab('weapons');
 
-      await screen.findByRole('button', { name: 'По урону' });
+      const damageHeader = await screen.findByRole('button', { name: 'Урон' });
       expect(firstColumn(screen.getByRole('table'))).toEqual(['BP_AK74', 'BP_M4A1', 'BP_RPG7']);
 
-      fireEvent.click(screen.getByRole('button', { name: 'По урону' }));
+      fireEvent.click(damageHeader);
       // Damage desc, and the null-damage weapon sinks to the end.
       expect(firstColumn(screen.getByRole('table'))).toEqual(['BP_RPG7', 'BP_AK74', 'BP_M4A1']);
+      expect(screen.getByRole('button', { name: /Урон/ }).closest('th')).toHaveAttribute(
+        'aria-sort',
+        'descending',
+      );
     },
     TEST_TIMEOUT_MS,
   );
@@ -515,9 +541,13 @@ describe('DossierSection', () => {
       stubFetch({ dossier: EMPTY, status: 500 });
       render(<DossierSection playerId={PLAYER_ID} />);
 
-      expect(await screen.findByText(/Ошибка: HTTP 500/)).toBeInTheDocument();
-      expect(screen.getByTestId('dossier-section')).toBeInTheDocument();
-      expect(screen.getByTestId('dossier-tab-skill')).toBeInTheDocument();
+      const banner = await screen.findByRole('alert');
+      expect(banner).toHaveTextContent('Не удалось загрузить досье');
+      expect(banner).toHaveTextContent('HTTP 500');
+      expect(within(banner).getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
+      // Шапка и вкладки остаются на месте — сбой не прячет навигацию блока.
+      expect(screen.getByRole('heading', { name: 'Досье' })).toBeInTheDocument();
+      expect(within(dossierTabs()).getByRole('tab', { name: 'Скилл' })).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
@@ -530,7 +560,7 @@ describe('DossierSection', () => {
 
       await screen.findByText('K/D');
       expect(screen.queryByLabelText('Сервер')).not.toBeInTheDocument();
-      expect(screen.getByTestId('dossier-section')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Досье' })).toBeInTheDocument();
 
       clickTab('kits');
       await screen.findByText('Кит');
@@ -542,7 +572,7 @@ describe('DossierSection', () => {
       render(<DossierSection playerId={PLAYER_ID} />);
       await screen.findByText('K/D');
       expect(screen.queryByLabelText('Сервер')).not.toBeInTheDocument();
-      expect(screen.getByTestId('dossier-section')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Досье' })).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
@@ -554,7 +584,7 @@ describe('DossierSection', () => {
       render(<DossierSection playerId={PLAYER_ID} />);
 
       await screen.findByText('K/D');
-      fireEvent.click(screen.getByRole('button', { name: '3 мес' }));
+      fireEvent.click(screen.getByRole('tab', { name: '3 мес' }));
 
       await waitFor(() => {
         const dossierCalls = fetchMock.mock.calls.filter((call) =>

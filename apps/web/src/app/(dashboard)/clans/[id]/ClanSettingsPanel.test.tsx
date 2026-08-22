@@ -11,6 +11,42 @@ vi.mock('next/navigation', () => ({
 
 import ClanSettingsPanel, { type ClanSettingsInitial } from './ClanSettingsPanel';
 
+/**
+ * jsdom знает элемент `<dialog>`, но не реализует `showModal()`/`close()`, а
+ * подтверждение расформирования построено на примитиве `AlertDialog`. Полифилл
+ * повторяет ровно то, на что опирается примитив: атрибут `open`, фокус внутрь
+ * окна и цепочку Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
 const INITIAL: ClanSettingsInitial = {
   name: 'Альфа',
   description: 'Описание клана',
@@ -52,7 +88,9 @@ describe('ClanSettingsPanel', () => {
     expect(screen.getByDisplayValue('Описание клана')).toBeInTheDocument();
     expect(screen.getByDisplayValue('ALF, ONE')).toBeInTheDocument();
     expect(screen.getByDisplayValue('10')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Публичный' })).toBeInTheDocument();
+    // Видимость названа словом, а не только положением тумблера.
+    expect(screen.getByRole('switch', { name: 'Публичный клан' })).toBeChecked();
+    expect(screen.getByText('Публичный')).toBeInTheDocument();
   });
 
   it('shows a Russian error banner when the core PATCH fails', async () => {
@@ -88,8 +126,30 @@ describe('ClanSettingsPanel', () => {
     expect(screen.getByRole('button', { name: 'Подтвердить расформирование' })).not.toBeDisabled();
   });
 
+  it('требует набрать название клана в диалоге, прежде чем расформировать', async () => {
+    vi.stubGlobal('fetch', mockFetch({}));
+    vi.useFakeTimers();
+    render(<ClanSettingsPanel clanId="clan-1" initial={INITIAL} servers={[]} onSaved={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Расформировать клан' }));
+    await vi.advanceTimersByTimeAsync(3000);
+    fireEvent.click(screen.getByRole('button', { name: 'Подтвердить расформирование' }));
+
+    const confirm = screen.getByRole('button', { name: 'Расформировать навсегда' });
+    expect(confirm).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/Введите название клана/), {
+      target: { value: 'Бета' },
+    });
+    expect(screen.getByRole('button', { name: 'Расформировать навсегда' })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/Введите название клана/), {
+      target: { value: 'Альфа' },
+    });
+    expect(screen.getByRole('button', { name: 'Расформировать навсегда' })).not.toBeDisabled();
+  });
+
   it('redirects to /clans after a successful disband', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     vi.stubGlobal(
       'fetch',
       mockFetch({
@@ -103,6 +163,10 @@ describe('ClanSettingsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Расформировать клан' }));
     await vi.advanceTimersByTimeAsync(3000);
     fireEvent.click(screen.getByRole('button', { name: 'Подтвердить расформирование' }));
+    fireEvent.change(screen.getByLabelText(/Введите название клана/), {
+      target: { value: 'Альфа' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Расформировать навсегда' }));
     await vi.advanceTimersByTimeAsync(0);
 
     expect(pushMock).toHaveBeenCalledWith('/clans');

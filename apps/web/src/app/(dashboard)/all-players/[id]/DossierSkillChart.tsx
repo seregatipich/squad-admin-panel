@@ -17,8 +17,12 @@ import {
 
 import { type DossierTrendPoint, trendKd, trendMonthLabel } from './dossier';
 
-const KILLS_COLOR = '#409cff';
-const DEATHS_COLOR = '#ff6961';
+// Recharts красит фигуры атрибутами SVG, а не классами, поэтому цвета берутся
+// прямо из токенов темы — иначе график разъехался бы с остальной панелью.
+const KILLS_COLOR = 'var(--color-accent)';
+const DEATHS_COLOR = 'var(--color-crit)';
+const GRID_COLOR = 'var(--color-line)';
+const AXIS_COLOR = 'var(--color-ink-3)';
 const KILLS_LABEL = 'Убийства';
 const DEATHS_LABEL = 'Смерти';
 
@@ -93,9 +97,9 @@ export default function DossierSkillChart({
       <div className="h-56" data-testid="dossier-skill-trend">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={bars}>
-            <CartesianGrid stroke="#38383a" vertical={false} />
-            <XAxis dataKey="month" stroke="#a1a1a8" fontSize={11} />
-            <YAxis stroke="#a1a1a8" fontSize={11} />
+            <CartesianGrid stroke={GRID_COLOR} vertical={false} />
+            <XAxis dataKey="month" stroke={AXIS_COLOR} fontSize={11} />
+            <YAxis stroke={AXIS_COLOR} fontSize={11} />
             <Tooltip labelFormatter={(label: ReactNode) => trendTooltipLabel(label, bars)} />
             <Legend />
             <Bar dataKey="kills" name={KILLS_LABEL} stackId="kd" fill={KILLS_COLOR} />

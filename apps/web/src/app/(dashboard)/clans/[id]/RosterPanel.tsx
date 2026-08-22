@@ -1,7 +1,33 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  Checkbox,
+  EmptyState,
+  IconButton,
+  InlineBanner,
+  Modal,
+  Pagination,
+  SearchField,
+  Select,
+  Skeleton,
+  SortableTh,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+  Toolbar,
+  type ToolbarProps,
+  TrashIcon,
+} from '@/components/ui';
 
 export interface RosterMember {
   player_id: string;
@@ -77,6 +103,17 @@ const SEARCH_DEBOUNCE_MS = 300;
 const SEARCH_MIN_CHARS = 3;
 const PRIORITY_LOCK_MS = 3000;
 
+/** Подписи направления сортировки — часть доступного имени заголовка колонки. */
+const SORT_DIRECTION_TEXT = { asc: 'по возрастанию', desc: 'по убыванию' } as const;
+
+/*
+ * Ссылка на выгрузку остаётся обычным `<a>`, а не `ButtonLink`: `next/link`
+ * перехватывает клик и уводит в клиентскую навигацию, из-за чего файл не
+ * скачивается. Классы повторяют вторичную кнопку размера `sm` (§6).
+ */
+const DOWNLOAD_LINK_CLASS =
+  'inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
+
 export type SortField = 'name' | 'role' | 'priority' | 'joined_at' | 'last_seen' | 'online';
 
 export function memberRoleLabel(role: string): string {
@@ -91,7 +128,8 @@ export function formatOnlineDuration(seconds: number): string {
   return `${minutes} мин`;
 }
 
-export function formatLastSeen(iso: string | null): string {
+/** Формат даты в колонках «Вступил» и «Был(а)»: один и тот же для обеих. */
+export function formatMemberDate(iso: string | null): string {
   if (!iso) return '—';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '—';
@@ -125,6 +163,13 @@ export function deriveCapabilities(me: MeResponse | null, members: RosterMember[
   };
 }
 
+/**
+ * Ростер клана: состав, роли, слоты приоритета и действия над участниками.
+ *
+ * Удаление участника и передача лидерства подтверждаются `AlertDialog`, а не
+ * нативным `confirm()`: диалог называет игрока по имени, ставит подтверждающую
+ * кнопку справа и возвращает фокус на строку, из которой был вызван.
+ */
 export default function RosterPanel({ clanId }: { clanId: string }) {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [roster, setRoster] = useState<RosterResponse | null>(null);
@@ -135,6 +180,8 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
   const [page, setPage] = useState(1);
   const [busyPlayerId, setBusyPlayerId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [pendingRemove, setPendingRemove] = useState<RosterMember | null>(null);
+  const [pendingTransfer, setPendingTransfer] = useState<RosterMember | null>(null);
   const [lockedPlayerIds, setLockedPlayerIds] = useState<Set<string>>(new Set());
   const lockTimeoutsRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
@@ -243,33 +290,31 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
     [clanId, mutate],
   );
 
-  const removeMember = useCallback(
-    (member: RosterMember) => {
-      if (!window.confirm(`Удалить ${member.canonical_name} из клана?`)) return;
-      void mutate(member.player_id, () =>
-        fetch(`/api/v1/clans/${clanId}/members/${member.player_id}`, {
-          method: 'DELETE',
-          credentials: 'include',
-        }),
-      );
-    },
-    [clanId, mutate],
-  );
+  const confirmRemove = useCallback(async () => {
+    const member = pendingRemove;
+    if (!member) return;
+    await mutate(member.player_id, () =>
+      fetch(`/api/v1/clans/${clanId}/members/${member.player_id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      }),
+    );
+    setPendingRemove(null);
+  }, [clanId, mutate, pendingRemove]);
 
-  const transferLeadership = useCallback(
-    (member: RosterMember) => {
-      if (!window.confirm(`Передать лидерство игроку ${member.canonical_name}?`)) return;
-      void mutate(member.player_id, () =>
-        fetch(`/api/v1/clans/${clanId}/transfer-leadership`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ player_id: member.player_id }),
-        }),
-      );
-    },
-    [clanId, mutate],
-  );
+  const confirmTransfer = useCallback(async () => {
+    const member = pendingTransfer;
+    if (!member) return;
+    await mutate(member.player_id, () =>
+      fetch(`/api/v1/clans/${clanId}/transfer-leadership`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ player_id: member.player_id }),
+      }),
+    );
+    setPendingTransfer(null);
+  }, [clanId, mutate, pendingTransfer]);
 
   const togglePriority = useCallback(
     async (member: RosterMember, enabled: boolean) => {
@@ -306,146 +351,232 @@ export default function RosterPanel({ clanId }: { clanId: string }) {
     [clanId, mutate],
   );
 
+  // Повторное нажатие по активной колонке разворачивает порядок, переход на
+  // другую — начинает с возрастания.
+  const changeSort = useCallback(
+    (key: string) => {
+      const field = key as SortField;
+      setPage(1);
+      if (field === sort) {
+        setOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+        return;
+      }
+      setSort(field);
+      setOrder('asc');
+    },
+    [sort],
+  );
+
   const total = roster?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_LIMIT));
+  const searching = q.trim().length > 0;
+  const resetProps: ToolbarProps = searching
+    ? { onReset: () => setQ(''), resetLabel: 'Сбросить фильтр' }
+    : {};
 
   return (
-    <section className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-baseline gap-3">
-          <h2 className="text-lg font-medium">Ростер</h2>
-          {roster ? (
-            <span className="text-sm text-neutral-400">
-              Приоритет: {roster.priority_count} из {roster.max_priority_slots}
-            </span>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-2">
-          <a
-            href={`/api/v1/clans/${clanId}/roster/export?format=csv`}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-800"
-          >
-            Экспорт CSV
-          </a>
-          {caps.canAdd ? (
-            <button
-              type="button"
-              onClick={() => setAddOpen(true)}
-              className="rounded bg-sky-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-600"
-            >
-              Добавить участника
-            </button>
-          ) : null}
-        </div>
-      </div>
-
-      {err ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm">{err}</div>
-      ) : null}
-
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          type="search"
-          value={q}
-          onChange={(e) => {
-            setPage(1);
-            setQ(e.target.value);
-          }}
-          placeholder="Поиск участника по нику / SteamID / EOS…"
-          className="flex-1 min-w-[240px] rounded border border-neutral-800 bg-neutral-950 px-3 py-1.5 text-sm"
+    <section className="space-y-4">
+      <Card padding="none">
+        <CardHeader
+          title="Ростер"
+          count={roster ? total : undefined}
+          description={
+            roster
+              ? `Приоритет: ${roster.priority_count} из ${roster.max_priority_slots}`
+              : undefined
+          }
+          actions={
+            <>
+              <a
+                href={`/api/v1/clans/${clanId}/roster/export?format=csv`}
+                className={DOWNLOAD_LINK_CLASS}
+              >
+                Экспорт CSV
+              </a>
+              {caps.canAdd ? (
+                <Button variant="primary" size="sm" onClick={() => setAddOpen(true)}>
+                  Добавить участника
+                </Button>
+              ) : null}
+            </>
+          }
         />
-        <label className="flex items-center gap-2 text-sm text-neutral-400">
-          Сортировка
-          <select
-            value={sort}
-            onChange={(e) => setSort(e.target.value as SortField)}
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-sm text-neutral-200"
-          >
-            <option value="role">Роль</option>
-            <option value="name">Имя</option>
-            <option value="priority">Приоритет</option>
-            <option value="joined_at">Дата вступления</option>
-            <option value="last_seen">Последний онлайн</option>
-            <option value="online">Онлайн 60 дней</option>
-          </select>
-        </label>
-        <button
-          type="button"
-          onClick={() => setOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-          className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm text-neutral-300 hover:bg-neutral-800"
-          title="Направление сортировки"
-        >
-          {order === 'asc' ? '↑' : '↓'}
-        </button>
-      </div>
 
-      <div className="overflow-x-auto rounded border border-neutral-800">
-        <table className="w-full text-sm">
-          <thead className="bg-neutral-950 text-xs uppercase tracking-widest text-neutral-500">
-            <tr>
-              <th className="text-left p-2">Участник</th>
-              <th className="text-left p-2">Роль</th>
-              <th className="text-left p-2">Приоритет</th>
-              <th className="text-left p-2">Последний онлайн</th>
-              <th className="text-left p-2">Онлайн (60 дн.)</th>
-              <th className="text-right p-2">Действия</th>
-            </tr>
-          </thead>
-          <tbody>
-            {members.map((member) => (
-              <RosterRow
-                key={member.player_id}
-                member={member}
-                caps={caps}
-                busy={busyPlayerId === member.player_id}
-                locked={lockedPlayerIds.has(member.player_id)}
-                onChangeRole={changeRole}
-                onRemove={removeMember}
-                onTransfer={transferLeadership}
-                onTogglePriority={togglePriority}
+        <div className="space-y-3 p-3">
+          {err ? (
+            <InlineBanner
+              tone="crit"
+              title="Действие не выполнено"
+              description={err}
+              action={
+                <Button size="sm" onClick={() => void loadRoster()}>
+                  Повторить
+                </Button>
+              }
+            />
+          ) : null}
+
+          <Toolbar
+            search={
+              <SearchField
+                value={q}
+                onCommit={(next) => {
+                  setPage(1);
+                  setQ(next);
+                }}
+                label="Поиск участника"
+                placeholder="Ник, SteamID64 или EOS ID"
+                clearLabel="Очистить поиск"
               />
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {members.length === 0 ? (
-        <div className="rounded border border-neutral-800 bg-neutral-950 p-6 text-center text-neutral-500 text-sm">
-          {q.trim() ? 'Нет совпадений.' : 'В клане пока нет участников.'}
+            }
+            {...resetProps}
+            summary={roster ? `Найдено ${total}` : undefined}
+          />
         </div>
-      ) : null}
 
-      {pageCount > 1 ? (
-        <div className="flex items-center justify-center gap-3 text-sm text-neutral-400">
-          <button
-            type="button"
-            onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-            disabled={page <= 1}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1 hover:bg-neutral-800 disabled:opacity-40"
-          >
-            Назад
-          </button>
-          <span>
-            Стр. {page} из {pageCount}
-          </span>
-          <button
-            type="button"
-            onClick={() => setPage((prev) => Math.min(pageCount, prev + 1))}
-            disabled={page >= pageCount}
-            className="rounded border border-neutral-800 bg-neutral-900 px-3 py-1 hover:bg-neutral-800 disabled:opacity-40"
-          >
-            Вперёд
-          </button>
-        </div>
-      ) : null}
+        {roster === null ? (
+          <div className="p-3">
+            <Skeleton variant="row" count={6} label="Загружаем ростер" />
+          </div>
+        ) : members.length === 0 ? (
+          <EmptyState
+            variant={searching ? 'filtered' : 'initial'}
+            title={searching ? 'Ничего не нашлось' : 'В клане пока нет участников'}
+            description={
+              searching
+                ? 'Ни один участник не подходит под запрос.'
+                : 'Добавьте игроков, чтобы вести состав и раздавать слоты приоритета.'
+            }
+            action={searching ? <Button onClick={() => setQ('')}>Сбросить фильтр</Button> : null}
+          />
+        ) : (
+          <Table ariaLabel="Участники клана">
+            <TableHead>
+              <TableRow>
+                <SortableTh
+                  sortKey="name"
+                  activeKey={sort}
+                  direction={order}
+                  onSort={changeSort}
+                  label="Участник"
+                  directionText={SORT_DIRECTION_TEXT}
+                />
+                <SortableTh
+                  sortKey="role"
+                  activeKey={sort}
+                  direction={order}
+                  onSort={changeSort}
+                  label="Роль"
+                  directionText={SORT_DIRECTION_TEXT}
+                />
+                <SortableTh
+                  sortKey="priority"
+                  activeKey={sort}
+                  direction={order}
+                  onSort={changeSort}
+                  label="Приоритет"
+                  directionText={SORT_DIRECTION_TEXT}
+                />
+                <SortableTh
+                  sortKey="joined_at"
+                  activeKey={sort}
+                  direction={order}
+                  onSort={changeSort}
+                  label="Вступил"
+                  directionText={SORT_DIRECTION_TEXT}
+                />
+                <SortableTh
+                  sortKey="last_seen"
+                  activeKey={sort}
+                  direction={order}
+                  onSort={changeSort}
+                  label="Был(а)"
+                  directionText={SORT_DIRECTION_TEXT}
+                />
+                <SortableTh
+                  sortKey="online"
+                  activeKey={sort}
+                  direction={order}
+                  onSort={changeSort}
+                  label="Наиграно (60 дн.)"
+                  directionText={SORT_DIRECTION_TEXT}
+                  align="right"
+                />
+                <Th align="right">Действия</Th>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {members.map((member) => (
+                <RosterRow
+                  key={member.player_id}
+                  member={member}
+                  caps={caps}
+                  busy={busyPlayerId === member.player_id}
+                  locked={lockedPlayerIds.has(member.player_id)}
+                  onChangeRole={changeRole}
+                  onRemove={setPendingRemove}
+                  onTransfer={setPendingTransfer}
+                  onTogglePriority={togglePriority}
+                />
+              ))}
+            </TableBody>
+          </Table>
+        )}
 
-      {addOpen ? (
-        <AddMemberModal
-          onClose={() => setAddOpen(false)}
-          onAdd={addMember}
-          allowDeputy={caps.canManageFull}
-        />
-      ) : null}
+        {pageCount > 1 ? (
+          <div className="flex justify-end border-t border-line p-3">
+            <Pagination
+              page={page}
+              pageCount={pageCount}
+              onChange={setPage}
+              labels={{
+                previous: 'Назад',
+                next: 'Вперёд',
+                page: (current, of) => `Стр. ${current} из ${of}`,
+              }}
+            />
+          </div>
+        ) : null}
+      </Card>
+
+      <AddMemberModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onAdd={addMember}
+        allowDeputy={caps.canManageFull}
+      />
+
+      <AlertDialog
+        open={pendingRemove !== null}
+        onClose={() => setPendingRemove(null)}
+        title="Удалить участника?"
+        body={
+          pendingRemove
+            ? `${pendingRemove.canonical_name} потеряет место в ростере и слот приоритета клана.`
+            : ''
+        }
+        confirmLabel="Удалить"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={pendingRemove !== null && busyPlayerId === pendingRemove.player_id}
+        onConfirm={() => void confirmRemove()}
+      />
+
+      <AlertDialog
+        open={pendingTransfer !== null}
+        onClose={() => setPendingTransfer(null)}
+        title="Передать лидерство?"
+        body={
+          pendingTransfer
+            ? `${pendingTransfer.canonical_name} станет главой клана, а вы — заместителем.`
+            : ''
+        }
+        confirmLabel="Передать"
+        cancelLabel="Отмена"
+        tone="default"
+        busy={pendingTransfer !== null && busyPlayerId === pendingTransfer.player_id}
+        onConfirm={() => void confirmTransfer()}
+      />
     </section>
   );
 }
@@ -476,97 +607,91 @@ export function RosterRow({
     !isLeader && (caps.canManageFull || (caps.canRemoveMembers && member.member_role === 'member'));
 
   return (
-    <tr className="border-t border-neutral-900">
-      <td className="p-2">
-        <Link href={`/all-players/${member.player_id}`} className="text-sky-400 hover:text-sky-300">
+    <TableRow interactive>
+      <Td>
+        <Link
+          href={`/all-players/${member.player_id}`}
+          className="text-accent no-underline hover:brightness-110"
+        >
           {member.canonical_name}
         </Link>
-      </td>
-      <td className="p-2">
+      </Td>
+      <Td>
         {canEditThisRole ? (
-          <select
+          <Select
+            size="sm"
+            aria-label={`Роль участника ${member.canonical_name}`}
             value={member.member_role}
             disabled={busy}
             onChange={(e) => onChangeRole(member.player_id, e.target.value)}
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-sm text-neutral-200 disabled:opacity-50"
           >
             <option value="deputy">Зам</option>
             <option value="member">Участник</option>
-          </select>
+          </Select>
+        ) : isLeader ? (
+          <Badge tone="warn">{memberRoleLabel(member.member_role)}</Badge>
         ) : (
-          <span
-            className={
-              isLeader
-                ? 'rounded bg-amber-950 px-2 py-0.5 text-xs text-amber-300'
-                : 'text-neutral-400'
-            }
-          >
-            {memberRoleLabel(member.member_role)}
-          </span>
+          <span className="text-ink-2">{memberRoleLabel(member.member_role)}</span>
         )}
-      </td>
-      <td className="p-2">
+      </Td>
+      <Td>
         {member.reserve_from_role ? (
           <span
-            className="inline-flex items-center gap-1.5 text-neutral-500"
+            className="inline-flex items-center gap-1.5 text-ink-3"
             title="Приоритет из другого источника"
           >
-            <input type="checkbox" checked disabled className="h-4 w-4 accent-neutral-600" />
+            <input type="checkbox" checked disabled readOnly className="size-3.5 accent-ink-3" />
             <span className="text-xs">роль</span>
           </span>
         ) : caps.canTogglePriority ? (
-          <input
-            type="checkbox"
+          // Подпись скрыта визуально: колонка уже названа заголовком, но без
+          // доступного имени флажок нем для скринридера.
+          <Checkbox
+            label={<span className="sr-only">Приоритет в очереди</span>}
             checked={member.has_priority}
             disabled={busy || locked}
             onChange={(e) => onTogglePriority(member, e.target.checked)}
-            className="h-4 w-4 accent-sky-500 disabled:opacity-50"
-            aria-label="Приоритет в очереди"
             title={locked ? 'Подождите несколько секунд перед следующим изменением' : undefined}
           />
         ) : (
-          <span className="text-neutral-400">{member.has_priority ? 'да' : '—'}</span>
+          <span className="text-ink-2">{member.has_priority ? 'да' : '—'}</span>
         )}
-      </td>
-      <td className="p-2 whitespace-nowrap text-neutral-400">
-        {formatLastSeen(member.last_seen_at)}
-      </td>
-      <td className="p-2 tabular-nums text-neutral-300">
+      </Td>
+      <Td className="whitespace-nowrap text-ink-2">{formatMemberDate(member.joined_at)}</Td>
+      <Td className="whitespace-nowrap text-ink-2">{formatMemberDate(member.last_seen_at)}</Td>
+      <Td numeric className="text-ink-2">
         {formatOnlineDuration(member.online_60d_seconds)}
-      </td>
-      <td className="p-2">
+      </Td>
+      <Td align="right">
         <div className="flex items-center justify-end gap-2">
           {caps.canManageFull && !isLeader ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => onTransfer(member)}
-              className="rounded border border-amber-800 bg-amber-950/40 px-2 py-1 text-xs text-amber-300 hover:bg-amber-900/40 disabled:opacity-50"
-            >
+            <Button size="sm" disabled={busy} onClick={() => onTransfer(member)}>
               Передать лидерство
-            </button>
+            </Button>
           ) : null}
           {canRemoveThis ? (
-            <button
-              type="button"
+            <IconButton
+              size="sm"
+              tone="destructive"
+              icon={<TrashIcon />}
+              label={`Удалить ${member.canonical_name} из клана`}
               disabled={busy}
               onClick={() => onRemove(member)}
-              className="rounded border border-red-900 bg-red-950/40 px-2 py-1 text-xs text-red-300 hover:bg-red-900/40 disabled:opacity-50"
-            >
-              Удалить
-            </button>
+            />
           ) : null}
         </div>
-      </td>
-    </tr>
+      </Td>
+    </TableRow>
   );
 }
 
 function AddMemberModal({
+  open,
   onClose,
   onAdd,
   allowDeputy,
 }: {
+  open: boolean;
   onClose: () => void;
   onAdd: (playerId: string, role: string) => void;
   allowDeputy: boolean;
@@ -575,6 +700,7 @@ function AddMemberModal({
   const [results, setResults] = useState<SearchCandidate[]>([]);
   const [searching, setSearching] = useState(false);
   const [role, setRole] = useState('member');
+  const addRoleId = useId();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -608,82 +734,80 @@ function AddMemberModal({
   }, [term]);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 pt-20"
-      role="dialog"
-      aria-modal="true"
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Добавить участника"
+      closeLabel="Закрыть"
+      footer={
+        <Button variant="secondary" onClick={onClose}>
+          Отмена
+        </Button>
+      }
     >
-      <div className="w-full max-w-lg space-y-3 rounded-lg border border-neutral-800 bg-neutral-950 p-4 shadow-xl">
-        <div className="flex items-center justify-between">
-          <h3 className="text-base font-medium">Добавить участника</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-neutral-500 hover:text-neutral-300"
-            aria-label="Закрыть"
-          >
-            ✕
-          </button>
-        </div>
-
-        <input
-          type="search"
+      <div className="space-y-3">
+        <SearchField
           value={term}
-          onChange={(e) => setTerm(e.target.value)}
-          placeholder="Ник, SteamID64 или EOS ID (мин. 3 символа)…"
-          className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm"
+          onCommit={setTerm}
+          label="Поиск игрока"
+          placeholder="Ник, SteamID64 или EOS ID (мин. 3 символа)"
+          clearLabel="Очистить поиск"
         />
 
-        <label className="flex items-center gap-2 text-sm text-neutral-400">
-          Роль при добавлении
-          <select
+        <div className="flex items-center gap-2 text-xs text-ink-2">
+          <label htmlFor={addRoleId}>Роль при добавлении</label>
+          <Select
+            id={addRoleId}
+            size="sm"
             value={role}
             onChange={(e) => setRole(e.target.value)}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-sm text-neutral-200"
+            className="w-auto"
           >
             <option value="member">Участник</option>
             {allowDeputy ? <option value="deputy">Зам</option> : null}
-          </select>
-        </label>
+          </Select>
+        </div>
 
         <div className="max-h-72 space-y-1 overflow-y-auto">
-          {searching ? <div className="p-2 text-sm text-neutral-500">Поиск…</div> : null}
+          {searching ? <Skeleton variant="block" count={2} label="Ищем игроков" /> : null}
           {!searching && term.trim().length >= SEARCH_MIN_CHARS && results.length === 0 ? (
-            <div className="p-2 text-sm text-neutral-500">Ничего не найдено.</div>
+            <EmptyState
+              variant="filtered"
+              title="Ничего не нашлось"
+              description="Ни один игрок не подходит под запрос."
+            />
           ) : null}
           {results.map((candidate) => {
             const alreadyInClan = candidate.clan_id !== null;
             return (
               <div
                 key={candidate.id}
-                className="flex items-center justify-between gap-2 rounded border border-neutral-900 bg-neutral-900/40 px-3 py-2"
+                className="flex items-center justify-between gap-2 rounded-ctl border border-line bg-raised px-3 py-2"
               >
                 <div className="min-w-0">
-                  <div className="truncate text-sm text-neutral-200">
-                    {candidate.canonical_name}
-                  </div>
-                  <div className="truncate text-xs text-neutral-500">
+                  <div className="truncate text-[13px] text-ink">{candidate.canonical_name}</div>
+                  <div className="truncate text-xs text-ink-3">
                     {candidate.steam_id64 ?? candidate.eos_id ?? '—'}
                     {alreadyInClan ? (
-                      <span className="ml-2 text-amber-400">
+                      <span className="ml-2 text-warn">
                         уже в клане{candidate.clan_name ? ` «${candidate.clan_name}»` : ''}
                       </span>
                     ) : null}
                   </div>
                 </div>
-                <button
-                  type="button"
+                <Button
+                  size="sm"
+                  variant="primary"
                   disabled={alreadyInClan}
                   onClick={() => onAdd(candidate.id, role)}
-                  className="shrink-0 rounded bg-sky-700 px-3 py-1 text-xs font-medium text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Добавить
-                </button>
+                </Button>
               </div>
             );
           })}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

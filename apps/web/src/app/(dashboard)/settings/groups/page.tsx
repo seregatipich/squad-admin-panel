@@ -7,9 +7,30 @@ import {
   type SquadPermissionDef,
   type SquadPermissionKey,
 } from '@squad/shared-config/squad-permissions';
-import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { RoleColorDot } from '@/components/RoleColorDot';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  ButtonLink,
+  Card,
+  CardBody,
+  CardHeader,
+  Checkbox,
+  EmptyState,
+  FieldRow,
+  GroupedList,
+  GroupedRow,
+  IconButton,
+  InlineBanner,
+  PageHeader,
+  Select,
+  Skeleton,
+  Switch,
+  TextInput,
+  TrashIcon,
+} from '@/components/ui';
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const SAVE_DEBOUNCE_MS = 500;
@@ -35,6 +56,30 @@ interface Me {
   permissions: string[];
 }
 
+/** Флаги доступа роли в панели. `panel_access` — ворота ко всем остальным. */
+type FlagKey =
+  | 'panel_access'
+  | 'can_view_ips'
+  | 'can_assign_roles'
+  | 'can_edit_roles'
+  | 'can_manage_ban_sources'
+  | 'can_manage_clans'
+  | 'can_manage_economy';
+
+const ACCESS_FLAGS: ReadonlyArray<{ key: FlagKey; label: string; description?: string }> = [
+  {
+    key: 'panel_access',
+    label: 'Доступ к панели',
+    description: 'Без него остальные флаги ничего не дают и выключаются вместе с ним.',
+  },
+  { key: 'can_view_ips', label: 'Видит историю IP' },
+  { key: 'can_assign_roles', label: 'Может выдавать роли' },
+  { key: 'can_edit_roles', label: 'Может редактировать роли' },
+  { key: 'can_manage_ban_sources', label: 'Может управлять источниками банов' },
+  { key: 'can_manage_clans', label: 'Может управлять кланами' },
+  { key: 'can_manage_economy', label: 'Может управлять экономикой' },
+];
+
 function chunk<T>(arr: readonly T[], cols: number): T[][] {
   const perCol = Math.ceil(arr.length / cols);
   const out: T[][] = Array.from({ length: cols }, () => []);
@@ -51,6 +96,8 @@ export default function GroupsPage() {
   const [globalErr, setGlobalErr] = useState<string | null>(null);
   const [savingByRole, setSavingByRole] = useState<Record<string, boolean>>({});
   const [presetRoleId, setPresetRoleId] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<RoleRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const refresh = useCallback(async () => {
     const [rolesRes, meRes] = await Promise.all([
@@ -153,37 +200,35 @@ export default function GroupsPage() {
 
   async function removeRole(role: RoleRow) {
     if (!canDelete) return;
-    if (
-      !confirm(
-        `Удалить роль «${role.name}»? Это снимет роль у ${role.assigned_users_count} пользователей и пересинхронизирует Admins.cfg на всех серверах.`,
-      )
-    )
-      return;
+    setDeleting(true);
     setGlobalErr(null);
-    const res = await fetch(`/api/v1/roles/${role.id}`, {
-      method: 'DELETE',
-      credentials: 'include',
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}) as Record<string, unknown>);
-      setGlobalErr(`Ошибка удаления: ${err.error ?? res.status}`);
-      return;
+    try {
+      const res = await fetch(`/api/v1/roles/${role.id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}) as Record<string, unknown>);
+        setGlobalErr(`Ошибка удаления: ${err.error ?? res.status}`);
+        return;
+      }
+      await refresh();
+    } finally {
+      setDeleting(false);
+      setPendingDelete(null);
     }
-    await refresh();
   }
 
-  if (!rows || !me) return <div className="text-neutral-500">Загрузка…</div>;
-
   return (
-    <div className="space-y-6">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Группы и роли</h1>
-          <p className="mt-1 text-sm text-neutral-500">
+    <>
+      <PageHeader
+        title="Группы и роли"
+        subtitle={
+          <>
             Inline-редактор ролей и прав. Изменения сразу синхронизируются с Admins.cfg на всех
             серверах.{' '}
             <a
-              className="text-sky-400 hover:text-sky-300"
+              className="text-accent no-underline hover:brightness-110"
               href="https://squad.fandom.com/wiki/Server_Administration"
               target="_blank"
               rel="noreferrer"
@@ -191,45 +236,52 @@ export default function GroupsPage() {
               Больше информации по правам
             </a>
             .
-          </p>
-        </div>
-        {canCreate ? (
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-neutral-400">
-              <span className="sr-only">Скопировать права из роли</span>
-              <select
+          </>
+        }
+        actions={
+          canCreate ? (
+            <>
+              <Select
                 aria-label="Скопировать права из роли"
                 value={presetRoleId}
                 onChange={(e) => setPresetRoleId(e.target.value)}
-                className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm text-neutral-200"
+                className="w-64"
               >
                 <option value="">Без пресета (пустая)</option>
-                {rows.map((r) => (
+                {(rows ?? []).map((r) => (
                   <option key={r.id} value={r.id}>
                     Скопировать права из «{r.name}»
                   </option>
                 ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              onClick={createRole}
-              className="rounded-md border border-sky-700 bg-sky-950 px-3 py-1.5 text-sm text-sky-200 hover:bg-sky-900"
-            >
-              + Создать роль
-            </button>
-          </div>
-        ) : null}
-      </header>
+              </Select>
+              <Button variant="primary" onClick={() => void createRole()}>
+                Создать роль
+              </Button>
+            </>
+          ) : null
+        }
+      />
 
       {globalErr ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {globalErr}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title={globalErr}
+          onDismiss={() => setGlobalErr(null)}
+          dismissLabel="Скрыть сообщение"
+        />
       ) : null}
 
-      <div className="space-y-4">
-        {rows.map((role) => (
+      {!rows || !me ? (
+        <Skeleton variant="card" count={3} label="Загрузка списка ролей" />
+      ) : rows.length === 0 ? (
+        <Card>
+          <EmptyState
+            title="Ролей пока нет"
+            description="Создайте первую роль, чтобы выдавать доступ к панели и права на серверах."
+          />
+        </Card>
+      ) : (
+        rows.map((role) => (
           <RoleCard
             key={role.id}
             role={role}
@@ -238,11 +290,45 @@ export default function GroupsPage() {
             saving={!!savingByRole[role.id]}
             onLocal={(patch) => applyLocalUpdate(role.id, patch)}
             onSave={(patch) => saveRolePatch(role, patch)}
-            onDelete={() => removeRole(role)}
+            onDelete={() => setPendingDelete(role)}
           />
-        ))}
-      </div>
-    </div>
+        ))
+      )}
+
+      {/* Единственное необратимо разрушающее действие раздела: роль исчезает
+          вместе с назначениями, и Admins.cfg переписывается на всех серверах.
+          Поэтому и критический тон, и ввод имени роли — набрать его случайно
+          нельзя (дизайн-система, §5). */}
+      <AlertDialog
+        open={pendingDelete !== null}
+        onClose={() => {
+          if (deleting) return;
+          setPendingDelete(null);
+        }}
+        title="Удалить роль"
+        body={
+          pendingDelete
+            ? `Роль «${pendingDelete.name}» будет удалена. Её потеряют ${pendingDelete.assigned_users_count} пользователей, и Admins.cfg пересинхронизируется на всех серверах. Восстановить роль нельзя.`
+            : ''
+        }
+        confirmLabel="Удалить роль"
+        cancelLabel="Отмена"
+        tone="destructive"
+        busy={deleting}
+        challenge={
+          pendingDelete
+            ? {
+                expected: pendingDelete.name,
+                label: 'Введите имя роли, чтобы подтвердить',
+                hint: `Ожидается: ${pendingDelete.name}`,
+              }
+            : undefined
+        }
+        onConfirm={() => {
+          if (pendingDelete) void removeRole(pendingDelete);
+        }}
+      />
+    </>
   );
 }
 
@@ -263,6 +349,8 @@ function RoleCard({
   onSave: (patch: Partial<RoleRow>) => void;
   onDelete: () => void;
 }) {
+  const uid = useId();
+  const colorInputId = `${uid}-color`;
   const debouncerRef = useRef<{
     patch: Partial<RoleRow>;
     timer: ReturnType<typeof setTimeout>;
@@ -305,17 +393,7 @@ function RoleCard({
     debounce({ squad_permissions: next });
   };
 
-  const setFlag = (
-    key:
-      | 'panel_access'
-      | 'can_view_ips'
-      | 'can_assign_roles'
-      | 'can_edit_roles'
-      | 'can_manage_ban_sources'
-      | 'can_manage_clans'
-      | 'can_manage_economy',
-    value: boolean,
-  ) => {
+  const setFlag = (key: FlagKey, value: boolean) => {
     if (!canEdit) return;
     const patch: Partial<RoleRow> = { [key]: value } as Partial<RoleRow>;
     if (key === 'panel_access' && !value) {
@@ -351,234 +429,181 @@ function RoleCard({
   const isOwner = role.is_system_role && role.name === 'Owner';
 
   return (
-    <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <RoleColorDot color={role.color as RoleColor | string} />
-          <h2 className="text-lg font-semibold">{role.name}</h2>
-          {isOwner ? (
-            <span className="rounded bg-red-950 px-2 py-0.5 text-[10px] uppercase text-red-300">
-              system
-            </span>
-          ) : null}
-          {saving ? <span className="text-xs text-neutral-500">сохраняем…</span> : null}
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href={`/settings/groups/${role.id}/members`}
-            className="text-xs text-sky-400 hover:text-sky-300"
-          >
-            Открыть список членов ({role.assigned_users_count}) →
-          </Link>
-          {canDelete ? (
-            <button
-              type="button"
-              onClick={onDelete}
-              title="Удалить роль"
-              className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-300 hover:bg-red-950"
-            >
-              ⌫
-            </button>
-          ) : null}
-        </div>
-      </div>
+    <Card as="section" padding="none">
+      <CardHeader
+        title={
+          <span className="inline-flex items-center gap-2">
+            <RoleColorDot color={role.color as RoleColor | string} />
+            {role.name}
+          </span>
+        }
+        actions={
+          <>
+            {saving ? <span className="text-xs text-ink-3">Сохраняем…</span> : null}
+            {isOwner ? <Badge>Системная</Badge> : null}
+            <ButtonLink href={`/settings/groups/${role.id}/members`} size="sm">
+              Участники ({role.assigned_users_count})
+            </ButtonLink>
+            {canDelete ? (
+              <IconButton
+                icon={<TrashIcon />}
+                label="Удалить роль"
+                tone="destructive"
+                onClick={onDelete}
+              />
+            ) : null}
+          </>
+        }
+      />
 
-      {isOwner ? (
-        <div className="mt-3 rounded border border-amber-900 bg-amber-950/40 p-2 text-xs text-amber-200">
-          Системная роль. Имя, цвет и permissions нельзя редактировать через UI — Owner всегда имеет
-          все 3 флага доступа и все 21 Squad permission.
-        </div>
-      ) : null}
-
-      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-        <label className="block text-xs">
-          <span className="mb-1 block text-neutral-400">📝 Название</span>
-          <input
-            type="text"
-            value={role.name}
-            disabled={!canEdit}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+      <CardBody className="space-y-6">
+        {isOwner ? (
+          <InlineBanner
+            tone="warn"
+            title="Системная роль"
+            description="Имя, цвет и права нельзя редактировать через интерфейс — Owner всегда имеет все 3 флага доступа и все 21 Squad permission."
           />
-        </label>
-        <label className="block text-xs">
-          <span className="mb-1 block text-neutral-400">🎨 Цвет</span>
-          <div className="flex items-center gap-2">
+        ) : null}
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <FieldRow label="Название">
+            <TextInput
+              value={role.name}
+              disabled={!canEdit}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </FieldRow>
+          {/* Образец цвета — нативный `<input type="color">`: примитива под него
+              в дизайн-системе нет, а `TextInput` растянул бы его во всю строку. */}
+          <div className="flex flex-col gap-1">
+            <label htmlFor={colorInputId} className="text-xs font-medium text-ink-2">
+              Цвет
+            </label>
             <input
+              id={colorInputId}
               type="color"
               value={HEX_RE.test(role.color) ? role.color : '#737373'}
               disabled={!canEdit}
               onChange={(e) => setColor(e.target.value.toUpperCase())}
-              className="h-8 w-10 cursor-pointer rounded border border-neutral-800 bg-neutral-900 disabled:cursor-not-allowed"
+              className="h-8 w-12 cursor-pointer rounded-ctl border border-line bg-raised disabled:cursor-not-allowed disabled:opacity-40"
             />
-            <input
-              type="text"
+          </div>
+          <FieldRow label="HEX">
+            <TextInput
               value={role.color}
               disabled={!canEdit}
               onChange={(e) => setColor(e.target.value)}
-              className="w-28 rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 font-mono text-sm uppercase disabled:cursor-not-allowed disabled:opacity-60"
+              className="font-mono uppercase"
             />
-          </div>
-        </label>
-      </div>
-
-      <div className="mt-4 grid grid-cols-1 gap-2 text-sm md:grid-cols-2 lg:grid-cols-4">
-        <FlagSwitch
-          label="🖥️ Доступ к панели"
-          enabled={role.panel_access}
-          disabled={!canEdit}
-          onChange={(v) => setFlag('panel_access', v)}
-        />
-        <FlagSwitch
-          label="🌐 Видит историю IP"
-          enabled={role.can_view_ips}
-          disabled={!canEdit || !role.panel_access}
-          onChange={(v) => setFlag('can_view_ips', v)}
-        />
-        <FlagSwitch
-          label="👥 Может выдавать роли"
-          enabled={role.can_assign_roles}
-          disabled={!canEdit || !role.panel_access}
-          onChange={(v) => setFlag('can_assign_roles', v)}
-        />
-        <FlagSwitch
-          label="⚙️ Может редактировать роли"
-          enabled={role.can_edit_roles}
-          disabled={!canEdit || !role.panel_access}
-          onChange={(v) => setFlag('can_edit_roles', v)}
-        />
-        <FlagSwitch
-          label="🛡️ Может управлять источниками банов"
-          enabled={role.can_manage_ban_sources}
-          disabled={!canEdit || !role.panel_access}
-          onChange={(v) => setFlag('can_manage_ban_sources', v)}
-        />
-        <FlagSwitch
-          label="🏳️ Может управлять кланами"
-          enabled={role.can_manage_clans}
-          disabled={!canEdit || !role.panel_access}
-          onChange={(v) => setFlag('can_manage_clans', v)}
-        />
-        <FlagSwitch
-          label="💰 Может управлять экономикой"
-          enabled={role.can_manage_economy}
-          disabled={!canEdit || !role.panel_access}
-          onChange={(v) => setFlag('can_manage_economy', v)}
-        />
-      </div>
-
-      <div className="mt-5">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-xs uppercase tracking-widest text-neutral-500">
-            ≡ Squad permissions
-          </div>
-          <input
-            type="search"
-            value={permFilter}
-            onChange={(e) => setPermFilter(e.target.value)}
-            placeholder="Фильтр прав…"
-            aria-label="Фильтр прав"
-            className="w-40 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 placeholder:text-neutral-500"
-          />
+          </FieldRow>
         </div>
-        {permGrid.filtered.length === 0 ? (
-          <p className="mt-2 text-xs text-neutral-500">
-            Ничего не найдено по фильтру «{permFilter}».
-          </p>
-        ) : null}
-        <div className="mt-2 grid grid-cols-1 gap-1 md:grid-cols-3">
-          {permGrid.columns.map((col, idx) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: layout columns are stable
-            <ul key={idx} className="space-y-1">
-              {col.map((perm) => {
-                const permKey = perm.key as SquadPermissionKey;
-                const active = role.squad_permissions.includes(permKey);
-                return (
-                  <li key={perm.key}>
-                    <label
-                      className={`flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 hover:bg-neutral-900/40 ${
-                        canEdit ? '' : 'cursor-not-allowed opacity-70'
-                      }`}
-                      title={perm.description}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={active}
-                        disabled={!canEdit}
-                        onChange={() => togglePerm(permKey)}
-                        className="h-4 w-4 rounded border-neutral-700 bg-neutral-900 text-sky-500"
-                      />
-                      <span className="font-mono text-xs">{perm.label}</span>
-                      {perm.dangerous ? (
-                        <span title="Dangerous permission" className="text-amber-400">
-                          ⚠️
-                        </span>
-                      ) : null}
-                    </label>
-                  </li>
-                );
-              })}
-            </ul>
+
+        <GroupedList title="Доступ к панели" headingLevel={3}>
+          {ACCESS_FLAGS.map((flag) => (
+            <GroupedRow
+              key={flag.key}
+              label={flag.label}
+              description={flag.description}
+              control={
+                <Switch
+                  label={flag.label}
+                  checked={role[flag.key]}
+                  disabled={!canEdit || (flag.key !== 'panel_access' && !role.panel_access)}
+                  onChange={(value) => setFlag(flag.key, value)}
+                />
+              }
+            />
           ))}
-        </div>
-      </div>
+        </GroupedList>
 
-      <details className="mt-4 text-xs text-neutral-500">
-        <summary className="cursor-pointer hover:text-neutral-300">
-          Как это выглядит в Admins.cfg
-        </summary>
-        <pre
-          data-testid="admins-cfg-preview"
-          className="mt-2 overflow-auto rounded border border-neutral-900 bg-black p-2 font-mono text-[11px] text-neutral-300"
-        >
-          {
-            buildManagedSegmentBody({
-              roles: [{ name: role.name, squadPermissions: role.squad_permissions }],
-              admins: [],
-            }).body
-          }
-        </pre>
-        <p className="mt-1 text-[11px] text-neutral-500">
-          Рендер из того же генератора, что и config-sync (SYNC-2) — побайтно совпадает с файлом.
-          {role.squad_permissions.length === 0
-            ? ' У роли нет Squad permissions, поэтому строка Group= не пишется.'
-            : ''}
-        </p>
-      </details>
-    </section>
-  );
-}
+        <section className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-[13px] font-semibold text-ink">Squad permissions</h3>
+            {/* Фильтр работает по массиву из 21 элемента, поэтому это обычное
+                поле, а не `SearchField`: отложенная отправка нужна запросу в
+                базу, а здесь она была бы задержкой ради задержки. */}
+            <div className="w-48">
+              <TextInput
+                type="search"
+                size="sm"
+                value={permFilter}
+                onChange={(e) => setPermFilter(e.target.value)}
+                placeholder="Фильтр прав…"
+                aria-label="Фильтр прав"
+              />
+            </div>
+          </div>
+          {permGrid.filtered.length === 0 ? (
+            <EmptyState
+              variant="filtered"
+              title={`Ничего не найдено по фильтру «${permFilter}»`}
+              description="Проверьте написание или очистите фильтр."
+              action={
+                <Button size="sm" onClick={() => setPermFilter('')}>
+                  Сбросить фильтр
+                </Button>
+              }
+            />
+          ) : (
+            <div className="grid grid-cols-1 gap-1 md:grid-cols-3">
+              {permGrid.columns.map((col, idx) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: layout columns are stable
+                <ul key={idx} className="space-y-1">
+                  {col.map((perm) => {
+                    const permKey = perm.key as SquadPermissionKey;
+                    return (
+                      <li key={perm.key}>
+                        <Checkbox
+                          checked={role.squad_permissions.includes(permKey)}
+                          disabled={!canEdit}
+                          onChange={() => togglePerm(permKey)}
+                          label={
+                            <span
+                              className="inline-flex items-center gap-1"
+                              title={perm.description}
+                            >
+                              <span className="font-mono">{perm.label}</span>
+                              {perm.dangerous ? (
+                                <span className="text-warn" title="Опасное право">
+                                  <span aria-hidden="true">⚠</span>
+                                  <span className="sr-only">опасное право</span>
+                                </span>
+                              ) : null}
+                            </span>
+                          }
+                        />
+                      </li>
+                    );
+                  })}
+                </ul>
+              ))}
+            </div>
+          )}
+        </section>
 
-function FlagSwitch({
-  label,
-  enabled,
-  disabled,
-  onChange,
-}: {
-  label: string;
-  enabled: boolean;
-  disabled: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <label
-      className={`flex cursor-pointer items-center justify-between rounded border border-neutral-800 px-3 py-2 ${
-        disabled ? 'cursor-not-allowed opacity-60' : 'hover:bg-neutral-900/60'
-      }`}
-    >
-      <span className="text-xs text-neutral-300">{label}</span>
-      <input
-        type="checkbox"
-        aria-label={label}
-        checked={enabled}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-        className="ml-3 h-4 w-9 cursor-pointer appearance-none rounded-full bg-neutral-800 transition-all checked:bg-sky-600 disabled:cursor-not-allowed"
-        style={{
-          backgroundImage:
-            'radial-gradient(circle 7px at 8px center, white 100%, transparent 100%)',
-        }}
-      />
-    </label>
+        <details className="text-xs text-ink-3">
+          <summary className="cursor-pointer transition-colors duration-150 hover:text-ink">
+            Как это выглядит в Admins.cfg
+          </summary>
+          <pre
+            data-testid="admins-cfg-preview"
+            className="mt-2 overflow-auto rounded-ctl border border-line bg-bg p-2 font-mono text-2xs text-ink-2"
+          >
+            {
+              buildManagedSegmentBody({
+                roles: [{ name: role.name, squadPermissions: role.squad_permissions }],
+                admins: [],
+              }).body
+            }
+          </pre>
+          <p className="mt-1 text-2xs text-ink-3">
+            Рендер из того же генератора, что и config-sync (SYNC-2) — побайтно совпадает с файлом.
+            {role.squad_permissions.length === 0
+              ? ' У роли нет Squad permissions, поэтому строка Group= не пишется.'
+              : ''}
+          </p>
+        </details>
+      </CardBody>
+    </Card>
   );
 }

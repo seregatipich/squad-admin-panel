@@ -5,6 +5,42 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ExternalBansSection } from './ExternalBansSection';
 
+/**
+ * jsdom 29 знает элемент `<dialog>`, но не реализует `showModal()`/`close()`,
+ * а окно «Забанить локально» построено на примитиве `Modal`. Полифилл повторяет
+ * ровно то, на что опирается примитив: атрибут `open`, фокус внутрь окна и
+ * цепочку Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
 const TWO_SOURCES_RESPONSE = {
   sources: [
     {
@@ -68,7 +104,7 @@ describe('ExternalBansSection', () => {
     );
 
     render(<ExternalBansSection playerId="player-1" />);
-    expect(screen.getByText('Загрузка…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Загрузка внешних банлистов');
 
     await screen.findByText(/Найден в 2 внешних банлистах/);
   });
@@ -123,14 +159,15 @@ describe('ExternalBansSection', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(<ExternalBansSection playerId="player-1" canBan />);
-    fireEvent.click(await screen.findByRole('button', { name: /Найден в 2 внешних банлистах/ }));
+    await screen.findByText(/Найден в 2 внешних банлистах/);
+    fireEvent.click(screen.getByRole('button', { name: 'Показать' }));
     const localBanButton = screen.getAllByRole('button', { name: 'Забанить локально' })[0];
     if (!localBanButton) throw new Error('local-ban button missing');
     fireEvent.click(localBanButton);
 
     expect(await screen.findByRole('dialog', { name: 'Забанить локально' })).toBeInTheDocument();
     expect(await screen.findByRole('option', { name: 'Alpha Server' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Причина')).toHaveValue('RuBans: aimbot');
+    expect(screen.getByLabelText(/Причина/)).toHaveValue('RuBans: aimbot');
     expect(screen.getByLabelText(/Срок/)).toHaveValue('0');
 
     fireEvent.click(screen.getByRole('button', { name: 'Забанить' }));
@@ -152,7 +189,8 @@ describe('ExternalBansSection', () => {
     );
 
     render(<ExternalBansSection playerId="player-1" />);
-    fireEvent.click(await screen.findByRole('button', { name: /Найден в 2 внешних банлистах/ }));
+    await screen.findByText(/Найден в 2 внешних банлистах/);
+    fireEvent.click(screen.getByRole('button', { name: 'Показать' }));
     expect(screen.queryByRole('button', { name: 'Забанить локально' })).not.toBeInTheDocument();
   });
 });

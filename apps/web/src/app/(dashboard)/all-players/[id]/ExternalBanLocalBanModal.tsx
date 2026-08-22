@@ -1,6 +1,15 @@
 'use client';
 
 import { useEffect, useId, useState } from 'react';
+import {
+  Button,
+  FieldRow,
+  InlineBanner,
+  Modal,
+  Select,
+  Textarea,
+  TextInput,
+} from '@/components/ui';
 
 interface ServerSummary {
   id: string;
@@ -28,6 +37,11 @@ interface ExternalBanLocalBanModalProps {
  * CBAN-4 confirmation form for turning an active external-ban match into a
  * local Squad ban. It preloads the external source/reason, requires an
  * explicit server choice, and submits through the audited AdminBan API.
+ *
+ * Поля живут в настоящей `<form>` внутри окна, а подтверждающая кнопка стоит в
+ * подвале и связана с ней атрибутом `form`: подвал диалога по HIG находится
+ * вне прокручиваемого содержимого, но проверка `pattern` у срока бана должна
+ * остаться браузерной, а не переехать в самодельную валидацию.
  */
 export function ExternalBanLocalBanModal({
   playerId,
@@ -35,7 +49,10 @@ export function ExternalBanLocalBanModal({
   onClose,
   onBanned,
 }: ExternalBanLocalBanModalProps) {
-  const titleId = useId();
+  const formId = useId();
+  const serverFieldId = useId();
+  const reasonFieldId = useId();
+  const lengthFieldId = useId();
   const [servers, setServers] = useState<ServerSummary[]>([]);
   const [serverId, setServerId] = useState('');
   const [reason, setReason] = useState('');
@@ -111,33 +128,38 @@ export function ExternalBanLocalBanModal({
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+    <Modal
+      open
+      onClose={onClose}
+      title="Забанить локально"
+      description={`Источник: ${target.sourceName}. Команда AdminBan будет отправлена на выбранный сервер.`}
+      closeLabel="Закрыть"
+      dismissible={!submitting}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={submitting}>
+            Отмена
+          </Button>
+          <Button
+            type="submit"
+            form={formId}
+            variant="destructive"
+            loading={submitting}
+            disabled={loadingServers || !serverId || !reason.trim()}
+          >
+            Забанить
+          </Button>
+        </>
+      }
     >
-      <form
-        onSubmit={submit}
-        className="w-full max-w-lg space-y-4 rounded border border-neutral-700 bg-neutral-950 p-5 shadow-xl"
-      >
-        <div>
-          <h3 id={titleId} className="text-lg font-semibold text-neutral-100">
-            Забанить локально
-          </h3>
-          <p className="mt-1 text-xs text-neutral-400">
-            Источник: {target.sourceName}. Команда AdminBan будет отправлена на выбранный сервер.
-          </p>
-        </div>
-
-        <label className="block space-y-1 text-sm text-neutral-300">
-          <span>Сервер</span>
-          <select
+      <form id={formId} onSubmit={submit} className="space-y-4">
+        <FieldRow label="Сервер" htmlFor={serverFieldId} required>
+          <Select
+            id={serverFieldId}
             value={serverId}
             onChange={(event) => setServerId(event.target.value)}
             disabled={loadingServers || servers.length === 0 || submitting}
             required
-            className="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2"
           >
             {servers.length === 0 ? <option value="">Серверы недоступны</option> : null}
             {servers.map((server) => (
@@ -145,58 +167,35 @@ export function ExternalBanLocalBanModal({
                 {server.display_name}
               </option>
             ))}
-          </select>
-        </label>
+          </Select>
+        </FieldRow>
 
-        <label className="block space-y-1 text-sm text-neutral-300">
-          <span>Причина</span>
-          <textarea
+        <FieldRow label="Причина" htmlFor={reasonFieldId} required>
+          <Textarea
+            id={reasonFieldId}
             value={reason}
             onChange={(event) => setReason(event.target.value)}
             required
             maxLength={300}
             disabled={submitting}
             rows={3}
-            className="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2"
           />
-        </label>
+        </FieldRow>
 
-        <label className="block space-y-1 text-sm text-neutral-300">
-          <span>Срок (`0` — навсегда, например `7d`)</span>
-          <input
+        <FieldRow label="Срок" htmlFor={lengthFieldId} hint="0 — навсегда, например 7d" required>
+          <TextInput
+            id={lengthFieldId}
             value={banLength}
             onChange={(event) => setBanLength(event.target.value)}
             required
             pattern="\d+[smhdwMy]?"
             disabled={submitting}
-            className="w-full rounded border border-neutral-700 bg-neutral-900 px-3 py-2 font-mono"
+            className="font-mono"
           />
-        </label>
+        </FieldRow>
 
-        {error ? (
-          <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-            Ошибка: {error}
-          </div>
-        ) : null}
-
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={submitting}
-            className="rounded border border-neutral-700 px-3 py-2 text-sm text-neutral-300"
-          >
-            Отмена
-          </button>
-          <button
-            type="submit"
-            disabled={loadingServers || !serverId || !reason.trim() || submitting}
-            className="rounded border border-red-800 bg-red-950 px-3 py-2 text-sm text-red-200 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {submitting ? 'Бан…' : 'Забанить'}
-          </button>
-        </div>
+        {error ? <InlineBanner tone="crit" title="Ошибка" description={error} /> : null}
       </form>
-    </div>
+    </Modal>
   );
 }

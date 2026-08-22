@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -12,9 +12,45 @@ vi.mock('next/link', () => ({
   ),
 }));
 
+/**
+ * jsdom знает элемент `<dialog>`, но не реализует `showModal()`/`close()`, а
+ * удаление участника подтверждается примитивом `AlertDialog`. Полифилл
+ * повторяет ровно то, на что опирается примитив: атрибут `open`, фокус внутрь
+ * окна и цепочку Escape → отменяемое `cancel` → `close`.
+ */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const escapeHandlers = new WeakMap<HTMLDialogElement, (event: KeyboardEvent) => void>();
+
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const notPrevented = this.dispatchEvent(new Event('cancel', { cancelable: true }));
+      if (notPrevented) this.close();
+    };
+    escapeHandlers.set(this, onKeyDown);
+    this.addEventListener('keydown', onKeyDown);
+    this.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+  };
+
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement, value?: string) {
+    if (value !== undefined) this.returnValue = value;
+    this.removeAttribute('open');
+    const onKeyDown = escapeHandlers.get(this);
+    if (onKeyDown) {
+      this.removeEventListener('keydown', onKeyDown);
+      escapeHandlers.delete(this);
+    }
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
 import RosterPanel, {
   deriveCapabilities,
-  formatLastSeen,
+  formatMemberDate,
   formatOnlineDuration,
   memberRoleLabel,
   priorityErrorMessage,
@@ -48,10 +84,10 @@ describe('RosterPanel helpers', () => {
     expect(formatOnlineDuration(-5)).toBe('—');
   });
 
-  it('formats last seen and handles null', () => {
-    expect(formatLastSeen(null)).toBe('—');
-    expect(formatLastSeen('not-a-date')).toBe('—');
-    expect(formatLastSeen('2026-07-01T12:00:00.000Z')).not.toBe('—');
+  it('formats member dates and handles null', () => {
+    expect(formatMemberDate(null)).toBe('—');
+    expect(formatMemberDate('not-a-date')).toBe('—');
+    expect(formatMemberDate('2026-07-01T12:00:00.000Z')).not.toBe('—');
   });
 
   it('labels roles in Russian', () => {
@@ -169,7 +205,7 @@ describe('RosterRow', () => {
       </table>,
     );
     expect(html).toContain('Передать лидерство');
-    expect(html).toContain('Удалить');
+    expect(html).toContain('Удалить Командир из клана');
     expect(html).toContain('<select');
   });
 
@@ -190,7 +226,7 @@ describe('RosterRow', () => {
       </table>,
     );
     expect(html).not.toContain('Передать лидерство');
-    expect(html).not.toContain('Удалить');
+    expect(html).not.toContain('из клана');
     expect(html).toContain('Глава');
   });
 
@@ -210,7 +246,7 @@ describe('RosterRow', () => {
         </tbody>
       </table>,
     );
-    expect(html).toContain('Удалить');
+    expect(html).toContain('Удалить Командир из клана');
     expect(html).not.toContain('Передать лидерство');
     expect(html).not.toContain('<select');
   });
@@ -231,7 +267,7 @@ describe('RosterRow', () => {
         </tbody>
       </table>,
     );
-    expect(html).not.toContain('Удалить');
+    expect(html).not.toContain('из клана');
   });
 
   it('renders an enabled priority checkbox for a manager', () => {
@@ -304,7 +340,7 @@ describe('RosterPanel', () => {
   it('renders the empty roster state without crashing', () => {
     const html = renderToStaticMarkup(<RosterPanel clanId="clan-1" />);
     expect(html).toContain('Ростер');
-    expect(html).toContain('В клане пока нет участников.');
+    expect(html).toContain('Загружаем ростер');
   });
 });
 
@@ -406,5 +442,89 @@ describe('RosterPanel (rendered)', () => {
     expect(await screen.findByText('Срок приоритета клана истёк')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Приоритет в очереди' })).not.toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Приоритет в очереди' })).not.toBeDisabled();
+  });
+});
+
+describe('RosterPanel — подтверждение удаления', () => {
+  const ordinary = member({
+    player_id: 'p-member',
+    canonical_name: 'Боец',
+    member_role: 'member',
+  });
+
+  function mockFetch() {
+    const deleted: string[] = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/v1/me') {
+        return Promise.resolve(
+          new Response(JSON.stringify({ player_id: 'p-boss', can_manage_clans: true }), {
+            status: 200,
+          }),
+        );
+      }
+      if (url.startsWith('/api/v1/clans/clan-1/members') && init?.method === 'DELETE') {
+        deleted.push(url);
+        return Promise.resolve(new Response('{}', { status: 200 }));
+      }
+      if (url.startsWith('/api/v1/clans/clan-1/members')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              clan_id: 'clan-1',
+              items: deleted.length > 0 ? [] : [ordinary],
+              total: deleted.length > 0 ? 0 : 1,
+              page: 1,
+              limit: 25,
+              priority_count: 0,
+              max_priority_slots: 5,
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url} ${init?.method ?? 'GET'}`));
+    });
+    return { fetchMock, deleted };
+  }
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('спрашивает подтверждение диалогом, а не confirm(), и удаляет после согласия', async () => {
+    const { fetchMock, deleted } = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    render(<RosterPanel clanId="clan-1" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Удалить Боец из клана' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Удалить участника?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Удалить' }));
+
+    await waitFor(() => {
+      expect(deleted).toEqual(['/api/v1/clans/clan-1/members/p-member']);
+    });
+  });
+
+  it('оставляет участника в клане, если подтверждение отменили', async () => {
+    const { fetchMock, deleted } = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    render(<RosterPanel clanId="clan-1" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Удалить Боец из клана' }));
+
+    // Отказаться можно и крестиком, и кнопкой подвала — у обоих доступное имя
+    // «Отмена», поэтому запрос делается внутри самого диалога и берёт первый.
+    const dialog = await screen.findByRole('dialog', { name: 'Удалить участника?' });
+    await user.click(within(dialog).getAllByRole('button', { name: 'Отмена' })[0]);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Удалить участника?' })).not.toBeInTheDocument();
+    });
+    expect(deleted).toEqual([]);
   });
 });

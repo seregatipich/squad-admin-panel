@@ -156,7 +156,7 @@ describe('BalancerBrowser imbalance state', () => {
     expect(within(row as HTMLElement).getByText('Новое')).toBeInTheDocument();
   });
 
-  it('colours the diff rows purely from the payload state enum', async () => {
+  it('derives every diff row state from the payload enum alone', async () => {
     mockApi({ items: [IMBALANCE_ITEM] });
 
     render(<BalancerBrowser canEdit />);
@@ -164,13 +164,11 @@ describe('BalancerBrowser imbalance state', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Разобрать' }));
 
     await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument());
-    const rowOf = (label: string) => screen.getByText(label).closest('tr');
-    expect(rowOf('Alpha')?.className).toContain('red');
-    expect(rowOf('Bravo')?.className).toContain('emerald');
-    expect(rowOf('Charlie')?.className).toContain('neutral');
-    expect(screen.getByText('Предлагается перевод')).toBeInTheDocument();
-    expect(screen.getByText('На нужной стороне')).toBeInTheDocument();
-    expect(screen.getByText('Без изменений')).toBeInTheDocument();
+    const rowOf = (label: string) => screen.getByText(label).closest('tr') as HTMLElement;
+    // Состояние строки названо словами, а не одним лишь цветом.
+    expect(within(rowOf('Alpha')).getByText('Предлагается перевод')).toBeInTheDocument();
+    expect(within(rowOf('Bravo')).getByText('На нужной стороне')).toBeInTheDocument();
+    expect(within(rowOf('Charlie')).getByText('Без изменений')).toBeInTheDocument();
   });
 });
 
@@ -181,7 +179,7 @@ describe('BalancerBrowser error state', () => {
     render(<BalancerBrowser canEdit />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Ошибка загрузки: HTTP 500/)).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('HTTP 500');
     });
     expect(screen.queryByText(/Снимков от экспортёра ещё не поступало/)).not.toBeInTheDocument();
   });
@@ -193,8 +191,8 @@ describe('BalancerBrowser proposal mode toggle', () => {
 
     render(<BalancerBrowser canEdit />);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'По игрокам' })).toBeDisabled());
-    expect(screen.getByRole('button', { name: 'По отрядам' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'По игрокам' })).toBeDisabled());
+    expect(screen.getByRole('tab', { name: 'По отрядам' })).toBeEnabled();
   });
 
   it('requests mode=player once the rules allow the player-level mode', async () => {
@@ -204,8 +202,8 @@ describe('BalancerBrowser proposal mode toggle', () => {
     });
 
     render(<BalancerBrowser canEdit />);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'По игрокам' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'По игрокам' }));
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'По игрокам' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('tab', { name: 'По игрокам' }));
 
     await waitFor(() => {
       expect(spy.mock.calls.some(([url]) => String(url).includes('mode=player'))).toBe(true);

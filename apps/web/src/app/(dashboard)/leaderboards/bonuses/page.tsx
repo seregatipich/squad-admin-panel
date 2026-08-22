@@ -1,8 +1,25 @@
 'use client';
 
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { formatCount, formatDuration, medalFor, shouldNavigateRow } from '../helpers';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Button,
+  Card,
+  EmptyState,
+  InlineBanner,
+  PageContainer,
+  PageHeader,
+  SegmentedControl,
+  Skeleton,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
+import { formatCount, formatDuration, medalFor } from '../helpers';
 import {
   BONUS_PERIODS,
   type BonusLeaderboardBody,
@@ -16,7 +33,18 @@ import {
 
 export default function BonusLeaderboardPage() {
   return (
-    <Suspense fallback={<div className="text-neutral-500">Загрузка…</div>}>
+    <Suspense
+      fallback={
+        // Заголовок страницы приходит вместе с содержимым: второго `<h1>` на
+        // время загрузки быть не должно.
+        <PageContainer width="wide">
+          <Skeleton variant="text" width="14rem" label="Загрузка лидерборда бонусов" />
+          <Card padding="sm">
+            <Skeleton variant="row" count={8} />
+          </Card>
+        </PageContainer>
+      }
+    >
       <BonusLeaderboardBrowser />
     </Suspense>
   );
@@ -31,6 +59,11 @@ function BonusLeaderboardBrowser() {
   const [data, setData] = useState<BonusLeaderboardBody | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  /**
+   * Номер последнего запроса: «Повторить» ходит тем же путём, что и обычная
+   * загрузка, а ответ на отменённый запрос в состояние не попадает.
+   */
+  const requestRef = useRef(0);
 
   const selectPeriod = useCallback(
     (next: BonusPeriod) => {
@@ -40,8 +73,10 @@ function BonusLeaderboardBrowser() {
     [pathname, router],
   );
 
-  useEffect(() => {
-    let cancelled = false;
+  const load = useCallback(() => {
+    requestRef.current += 1;
+    const requestId = requestRef.current;
+    const current = () => requestRef.current === requestId;
     setLoading(true);
     setError(null);
     fetch(`/api/v1/leaderboards/bonuses?${buildApiQuery(period)}`, {
@@ -53,80 +88,67 @@ function BonusLeaderboardBrowser() {
         return (await res.json()) as BonusLeaderboardBody;
       })
       .then((body) => {
-        if (!cancelled) setData(body);
+        if (current()) setData(body);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (current()) setError((err as Error).message);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (current()) setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
   }, [period]);
 
-  const openPlayer = useCallback(
-    (playerId: string, event: React.MouseEvent) => {
-      const target = event.target as HTMLElement;
-      if (target.closest('a')) return;
-      const selection = typeof window !== 'undefined' ? window.getSelection()?.toString() : '';
-      const allowed = shouldNavigateRow({
-        ctrlKey: event.ctrlKey,
-        metaKey: event.metaKey,
-        altKey: event.altKey,
-        shiftKey: event.shiftKey,
-        hasSelection: Boolean(selection),
-      });
-      if (!allowed) return;
-      router.push(`/all-players/${playerId}`);
-    },
-    [router],
-  );
+  useEffect(() => {
+    load();
+    return () => {
+      requestRef.current += 1;
+    };
+  }, [load]);
 
   const rows = data?.rows ?? [];
   const available = data?.available ?? true;
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Лидерборд бонусов</h1>
-        <div className="flex items-center gap-1">
-          {BONUS_PERIODS.map((entry) => (
-            <button
-              key={entry.value}
-              type="button"
-              onClick={() => selectPeriod(entry.value)}
-              className={`rounded px-2 py-1 text-xs ${
-                period === entry.value
-                  ? 'bg-neutral-800 text-neutral-100'
-                  : 'text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              {entry.label}
-            </button>
-          ))}
-        </div>
-      </div>
+    <PageContainer width="wide">
+      <PageHeader
+        title="Лидерборд бонусов"
+        backHref="/leaderboards"
+        backLabel="К лидербордам"
+        meta={available ? <span>всего: {formatCount(data?.total_rows ?? 0)}</span> : undefined}
+        actions={
+          <SegmentedControl
+            ariaLabel="Период начисления"
+            items={BONUS_PERIODS.map((entry) => ({ value: entry.value, label: entry.label }))}
+            value={period}
+            onChange={(value) => selectPeriod(value as BonusPeriod)}
+          />
+        }
+      />
 
       {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          Ошибка загрузки: {error}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить лидерборд бонусов"
+          description={error}
+          action={
+            <Button size="sm" onClick={load}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
-      {!available && !loading ? (
-        <div className="rounded border border-dashed border-neutral-800 py-12 text-center text-sm text-neutral-400">
-          Экономика отключена — лидерборд бонусов недоступен.
-        </div>
-      ) : (
-        <BonusTable period={period} rows={rows} loading={loading} onOpenPlayer={openPlayer} />
-      )}
-
-      {available ? (
-        <div className="text-xs text-neutral-500">Всего: {formatCount(data?.total_rows ?? 0)}</div>
-      ) : null}
-    </div>
+      <Card padding="none">
+        {!available && !loading ? (
+          <EmptyState
+            title="Экономика отключена — лидерборд бонусов недоступен."
+            description="Включите экономику в настройках панели, чтобы бонусы начислялись и попадали в рейтинг."
+          />
+        ) : (
+          <BonusTable period={period} rows={rows} loading={loading} />
+        )}
+      </Card>
+    </PageContainer>
   );
 }
 
@@ -134,65 +156,69 @@ function BonusTable({
   period,
   rows,
   loading,
-  onOpenPlayer,
 }: {
   period: BonusPeriod;
   rows: BonusLeaderboardBody['rows'];
   loading: boolean;
-  onOpenPlayer: (playerId: string, event: React.MouseEvent) => void;
 }) {
   if (loading && rows.length === 0) {
-    return <div className="py-10 text-center text-sm text-neutral-500">Загрузка…</div>;
+    return (
+      <div className="p-3">
+        <SkeletonTable rows={8} cols={4} label="Загрузка лидерборда бонусов" />
+      </div>
+    );
   }
   if (!loading && rows.length === 0) {
     return (
-      <div className="rounded border border-dashed border-neutral-800 py-12 text-center text-sm text-neutral-400">
-        Пока никто не заработал бонусов.
-      </div>
+      <EmptyState
+        title="Пока никто не заработал бонусов."
+        description="Бонусы начисляются за время на сервере — рейтинг заполнится сам."
+      />
     );
   }
 
   return (
-    <div className="overflow-x-auto rounded border border-neutral-800">
-      <table className="w-full min-w-[560px] text-sm">
-        <thead className="bg-neutral-950 text-xs uppercase tracking-wider text-neutral-500">
-          <tr>
-            <th className="p-2 text-right">#</th>
-            <th className="p-2 text-left">Игрок</th>
-            <th className="p-2 text-right">{valueColumnLabel(period)}</th>
-            <th className="p-2 text-right">Онлайн</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const medal = medalFor(row.rank);
-            return (
-              <tr
-                key={row.player_id}
-                onClick={(event) => onOpenPlayer(row.player_id, event)}
-                className="cursor-pointer border-t border-neutral-900 hover:bg-neutral-900/40"
-              >
-                <td className="p-2 text-right font-mono text-xs text-neutral-400">
-                  {medal ? <span className="text-base">{medal}</span> : row.rank}
-                </td>
-                <td className="p-2 text-left">
-                  <a
-                    href={playerHref(row)}
-                    className="font-medium text-sky-400 hover:text-sky-300"
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    {row.current_name}
-                  </a>
-                </td>
-                <td className="p-2 text-right font-mono text-xs">{formatCount(row.value)}</td>
-                <td className="p-2 text-right font-mono text-xs">
-                  {formatDuration(row.online_seconds)}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <Table ariaLabel="Лидерборд бонусов" className="min-w-[560px]">
+      <TableHead>
+        <tr>
+          <Th align="right">#</Th>
+          <Th>Игрок</Th>
+          <Th align="right">{valueColumnLabel(period)}</Th>
+          <Th align="right">Онлайн</Th>
+        </tr>
+      </TableHead>
+      <TableBody>
+        {rows.map((row) => {
+          const medal = medalFor(row.rank);
+          return (
+            <TableRow key={row.player_id} interactive>
+              <Td numeric className="text-xs text-ink-3">
+                {medal ? (
+                  <span className="text-base" title={`Место ${row.rank}`}>
+                    {medal}
+                  </span>
+                ) : (
+                  row.rank
+                )}
+              </Td>
+              <Td>
+                <a
+                  href={playerHref(row)}
+                  className="font-medium text-accent no-underline hover:brightness-110"
+                >
+                  {row.current_name}
+                </a>
+              </Td>
+              <Td numeric className="text-xs">
+                {formatCount(row.value)}
+              </Td>
+              <Td numeric className="text-xs">
+                {formatDuration(row.online_seconds)}
+              </Td>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }

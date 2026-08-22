@@ -45,7 +45,7 @@ describe('EventsBrowser — BANNAME-3 rule filter chip', () => {
   it('shows no rule chip without a ?rule param', async () => {
     vi.stubGlobal('fetch', mockFetch());
     render(<EventsBrowser />);
-    await screen.findByText(/журнал событий/i);
+    await screen.findByRole('link', { name: 'Экспорт CSV' });
     expect(screen.queryByText(/правило:/i)).not.toBeInTheDocument();
   });
 
@@ -65,10 +65,28 @@ describe('EventsBrowser — BANNAME-3 rule filter chip', () => {
     const fetchMock = mockFetch();
     vi.stubGlobal('fetch', fetchMock);
     render(<EventsBrowser />);
-    await screen.findByText(/журнал событий/i);
+    await screen.findByRole('link', { name: 'Экспорт CSV' });
     const calledUrls = fetchMock.mock.calls.map(([input]) =>
       typeof input === 'string' ? input : String(input),
     );
     expect(calledUrls.some((url) => url.includes('ruleId=rule-abc'))).toBe(true);
+  });
+});
+
+describe('EventsBrowser — заголовки', () => {
+  it('не рендерит собственный <h1>: на верхнем уровне его даёт страница', async () => {
+    vi.stubGlobal('fetch', mockFetch());
+    render(<EventsBrowser />);
+    await screen.findByRole('link', { name: 'Экспорт CSV' });
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+  });
+
+  it('во вложенном режиме сервера даёт только заголовок раздела', async () => {
+    vi.stubGlobal('fetch', mockFetch());
+    render(<EventsBrowser lockedServerId="srv-1" />);
+    expect(
+      await screen.findByRole('heading', { level: 2, name: 'Журнал событий' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
   });
 });

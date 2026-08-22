@@ -1,7 +1,27 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  SearchField,
+  Select,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  TextInput,
+  Th,
+  Toolbar,
+} from '@/components/ui';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
@@ -38,6 +58,11 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const appliedRef = useRef<ChatFilters>(EMPTY_CHAT_FILTERS);
+  const serverFilterId = useId();
+  const scopeFilterId = useId();
+  const sourceFilterId = useId();
+  const fromFilterId = useId();
+  const toFilterId = useId();
 
   useEffect(() => {
     appliedRef.current = applied;
@@ -113,15 +138,14 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
     }
   }
 
-  function applyFilters() {
-    setApplied(filters);
-    void load(filters);
+  function apply(next: ChatFilters) {
+    setFilters(next);
+    setApplied(next);
+    void load(next);
   }
 
   function resetFilters() {
-    setFilters(EMPTY_CHAT_FILTERS);
-    setApplied(EMPTY_CHAT_FILTERS);
-    void load(EMPTY_CHAT_FILTERS);
+    apply(EMPTY_CHAT_FILTERS);
   }
 
   const onLiveMessage = useCallback(
@@ -140,185 +164,211 @@ export function ChatHistorySection({ playerId }: { playerId: string }) {
     setFilters((prev) => ({ ...prev, [key]: value }));
   }
 
+  const filtersApplied =
+    applied.serverId !== '' ||
+    applied.scope !== '' ||
+    applied.source !== '' ||
+    applied.from !== '' ||
+    applied.to !== '' ||
+    applied.text !== '';
+
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-          Чат
-          <span
-            className="ml-2 rounded-full bg-neutral-800 px-2 py-0.5 text-[11px] text-neutral-200 tabular-nums"
-            title="Сообщений за 30 дней"
-          >
+    <Card as="section" padding="none">
+      <CardHeader
+        title="Чат"
+        count={
+          <Badge size="sm" title="Сообщений за 30 дней">
             {monthlyCount ?? '—'} / 30д
-          </span>
-        </h2>
-      </div>
+          </Badge>
+        }
+      />
 
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        <label className="flex flex-col gap-1 text-xs text-neutral-500">
-          Сервер
-          <select
-            value={filters.serverId}
-            onChange={(e) => setField('serverId', e.target.value)}
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm text-neutral-100"
-          >
-            <option value="">Все серверы</option>
-            {servers.map((server) => (
-              <option key={server.id} value={server.id}>
-                {server.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
+      <CardBody className="space-y-4">
+        <Toolbar
+          search={
+            <SearchField
+              value={applied.text}
+              onCommit={(text) => apply({ ...filters, text })}
+              label="Поиск по сообщениям"
+              placeholder="Поиск по тексту сообщения…"
+              clearLabel="Очистить поиск"
+            />
+          }
+          filters={
+            <>
+              <label
+                htmlFor={serverFilterId}
+                className="flex items-center gap-1.5 text-xs text-ink-3"
+              >
+                Сервер
+                <Select
+                  id={serverFilterId}
+                  size="sm"
+                  value={filters.serverId}
+                  onChange={(e) => setField('serverId', e.target.value)}
+                >
+                  <option value="">Все серверы</option>
+                  {servers.map((server) => (
+                    <option key={server.id} value={server.id}>
+                      {server.display_name}
+                    </option>
+                  ))}
+                </Select>
+              </label>
 
-        <label className="flex flex-col gap-1 text-xs text-neutral-500">
-          Канал
-          <select
-            value={filters.scope}
-            onChange={(e) => setField('scope', e.target.value)}
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm text-neutral-100"
-          >
-            <option value="">Все каналы</option>
-            {CHAT_SCOPE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
+              <label
+                htmlFor={scopeFilterId}
+                className="flex items-center gap-1.5 text-xs text-ink-3"
+              >
+                Канал
+                <Select
+                  id={scopeFilterId}
+                  size="sm"
+                  value={filters.scope}
+                  onChange={(e) => setField('scope', e.target.value)}
+                >
+                  <option value="">Все каналы</option>
+                  {CHAT_SCOPE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </label>
 
-        <label className="flex flex-col gap-1 text-xs text-neutral-500">
-          Источник
-          <select
-            value={filters.source}
-            onChange={(e) => setField('source', e.target.value)}
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm text-neutral-100"
-          >
-            <option value="">Любой</option>
-            {CHAT_SOURCE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
+              <label
+                htmlFor={sourceFilterId}
+                className="flex items-center gap-1.5 text-xs text-ink-3"
+              >
+                Источник
+                <Select
+                  id={sourceFilterId}
+                  size="sm"
+                  value={filters.source}
+                  onChange={(e) => setField('source', e.target.value)}
+                >
+                  <option value="">Любой</option>
+                  {CHAT_SOURCE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </label>
 
-        <label className="flex flex-col gap-1 text-xs text-neutral-500">
-          С даты
-          <input
-            type="date"
-            value={filters.from}
-            onChange={(e) => setField('from', e.target.value)}
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm text-neutral-100"
+              <label
+                htmlFor={fromFilterId}
+                className="flex items-center gap-1.5 text-xs text-ink-3"
+              >
+                С даты
+                <TextInput
+                  id={fromFilterId}
+                  type="date"
+                  size="sm"
+                  value={filters.from}
+                  onChange={(e) => setField('from', e.target.value)}
+                />
+              </label>
+
+              <label htmlFor={toFilterId} className="flex items-center gap-1.5 text-xs text-ink-3">
+                По дату
+                <TextInput
+                  id={toFilterId}
+                  type="date"
+                  size="sm"
+                  value={filters.to}
+                  onChange={(e) => setField('to', e.target.value)}
+                />
+              </label>
+            </>
+          }
+          onReset={resetFilters}
+          resetLabel="Сбросить"
+          actions={
+            <Button size="sm" variant="primary" onClick={() => apply(filters)}>
+              Применить
+            </Button>
+          }
+        />
+
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить историю чата"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => void load(applied)}>
+                Повторить
+              </Button>
+            }
           />
-        </label>
+        ) : null}
 
-        <label className="flex flex-col gap-1 text-xs text-neutral-500">
-          По дату
-          <input
-            type="date"
-            value={filters.to}
-            onChange={(e) => setField('to', e.target.value)}
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm text-neutral-100"
+        {loading ? (
+          <SkeletonTable rows={6} cols={5} label="Загрузка истории чата" />
+        ) : messages.length === 0 ? (
+          <EmptyState
+            variant={filtersApplied ? 'filtered' : 'initial'}
+            title={filtersApplied ? 'Нет сообщений по фильтру' : 'Сообщений нет'}
+            description={
+              filtersApplied
+                ? 'Ни одно сообщение не подходит под выбранные фильтры.'
+                : 'Панель ещё не записала ни одного сообщения этого игрока.'
+            }
+            action={
+              filtersApplied ? (
+                <Button size="sm" onClick={resetFilters}>
+                  Сбросить фильтр
+                </Button>
+              ) : undefined
+            }
           />
-        </label>
-
-        <label className="flex flex-col gap-1 text-xs text-neutral-500">
-          Текст
-          <input
-            type="search"
-            value={filters.text}
-            onChange={(e) => setField('text', e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') applyFilters();
-            }}
-            placeholder="поиск по сообщению"
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm text-neutral-100"
-          />
-        </label>
-      </div>
-
-      <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={applyFilters}
-          className="rounded bg-sky-600 px-4 py-1.5 text-sm text-white hover:bg-sky-500"
-        >
-          Применить
-        </button>
-        <button
-          type="button"
-          onClick={resetFilters}
-          className="rounded border border-neutral-800 px-4 py-1.5 text-sm hover:border-neutral-600"
-        >
-          Сбросить
-        </button>
-      </div>
-
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          Ошибка: {error}
-        </div>
-      ) : null}
-
-      {loading ? (
-        <div className="text-sm text-neutral-500">Загрузка…</div>
-      ) : messages.length === 0 ? (
-        <div className="rounded border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
-          Нет сообщений
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead className="text-xs uppercase tracking-widest text-neutral-500">
+        ) : (
+          <Table ariaLabel="История чата игрока">
+            <TableHead sticky={false}>
               <tr>
-                <th className="p-1 text-left">Время</th>
-                <th className="p-1 text-left">Сервер</th>
-                <th className="p-1 text-left">Канал</th>
-                <th className="p-1 text-left">Источник</th>
-                <th className="p-1 text-left">Сообщение</th>
+                <Th>Время</Th>
+                <Th>Сервер</Th>
+                <Th>Канал</Th>
+                <Th>Источник</Th>
+                <Th>Сообщение</Th>
               </tr>
-            </thead>
-            <tbody>
+            </TableHead>
+            <TableBody>
               {messages.map((message) => (
-                <tr key={message.id} className="border-t border-neutral-900 align-top">
-                  <td className="whitespace-nowrap p-1 font-mono text-neutral-400">
+                <TableRow key={message.id}>
+                  <Td className="whitespace-nowrap font-mono text-xs text-ink-3">
                     {formatChatTs(message.sentAt)}
-                  </td>
-                  <td className="p-1 text-neutral-300">{serverName(message.serverId)}</td>
-                  <td className="p-1">
-                    <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[11px] text-neutral-200">
-                      {scopeLabel(message.scope)}
-                    </span>
-                  </td>
-                  <td className="p-1 text-neutral-500">{sourceLabel(message.source)}</td>
-                  <td className="p-1 text-neutral-100">
+                  </Td>
+                  <Td className="text-ink-2">{serverName(message.serverId)}</Td>
+                  <Td>
+                    <Badge size="sm">{scopeLabel(message.scope)}</Badge>
+                  </Td>
+                  <Td className="text-ink-3">{sourceLabel(message.source)}</Td>
+                  <Td>
                     <span className="whitespace-pre-wrap break-words">{message.message}</span>
                     {message.isFlagged ? (
-                      <span className="ml-2 rounded bg-red-950 px-1.5 py-0.5 text-[10px] uppercase text-red-300">
-                        флаг
+                      <span className="ml-2 inline-block align-middle">
+                        <Badge tone="crit" size="sm">
+                          флаг
+                        </Badge>
                       </span>
                     ) : null}
-                  </td>
-                </tr>
+                  </Td>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+            </TableBody>
+          </Table>
+        )}
 
-      {nextCursor ? (
-        <div className="flex justify-center">
-          <button
-            type="button"
-            onClick={() => void loadMore()}
-            disabled={busy}
-            className="rounded border border-neutral-800 px-3 py-1 text-xs hover:border-neutral-600 disabled:opacity-40"
-          >
-            Показать ещё
-          </button>
-        </div>
-      ) : null}
-    </section>
+        {nextCursor ? (
+          <div className="flex justify-center">
+            <Button size="sm" loading={busy} onClick={() => void loadMore()}>
+              Показать ещё
+            </Button>
+          </div>
+        ) : null}
+      </CardBody>
+    </Card>
   );
 }

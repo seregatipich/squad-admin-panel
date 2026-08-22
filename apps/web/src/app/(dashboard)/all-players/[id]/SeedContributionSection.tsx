@@ -1,7 +1,25 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardGrid,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  Skeleton,
+  StatTile,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
 import {
   buildSeedContributionUrl,
   formatSeedDuration,
@@ -17,7 +35,7 @@ export function SeedContributionSection({ playerId }: { playerId: string }) {
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setHidden(false);
@@ -48,85 +66,76 @@ export function SeedContributionSection({ playerId }: { playerId: string }) {
     };
   }, [playerId]);
 
+  useEffect(() => load(), [load]);
+
   if (hidden) return null;
 
   const servers = data ? sortServersBySeedSeconds(data.by_server) : [];
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">Сид-вклад</h2>
+    <Card padding="none" as="section">
+      <CardHeader title="Сид-вклад" />
+      <CardBody className="space-y-4">
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить сид-вклад"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : null}
 
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          Ошибка загрузки сид-вклада: {error}
-        </div>
-      ) : null}
+        {loading && !data ? (
+          <Skeleton variant="card" count={1} label="Загрузка сид-вклада" />
+        ) : data ? (
+          <>
+            <CardGrid cols={2}>
+              <StatTile
+                label={`Сид за ${data.window.days} дней`}
+                value={formatSeedDuration(data.total_seed_seconds)}
+                hint={`${data.window.from} — ${data.window.to}`}
+              />
+              <StatTile
+                label="Бонусы за сид"
+                value={data.bonus.earned_points}
+                hint={`Коэффициент k_seed: ${data.bonus.k_seed}`}
+              />
+            </CardGrid>
 
-      {loading && !data ? (
-        <div className="py-6 text-center text-sm text-neutral-500">Загрузка…</div>
-      ) : data ? (
-        <>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="rounded border border-neutral-800 bg-neutral-900/40 p-3">
-              <div className="text-xs uppercase tracking-widest text-neutral-500">
-                Сид ({data.window.days} дней)
-              </div>
-              <div className="mt-1 font-mono text-2xl text-sky-300">
-                Сид: {formatSeedDuration(data.total_seed_seconds)}
-              </div>
-              <div className="text-[11px] text-neutral-500">
-                {data.window.from} — {data.window.to}
-              </div>
-            </div>
-
-            <div className="rounded border border-neutral-800 bg-neutral-900/40 p-3">
-              <div className="text-xs uppercase tracking-widest text-neutral-500">
-                Бонусы за сид
-              </div>
-              <div className="mt-1 font-mono text-2xl text-emerald-300">
-                Начислено бонусов: {data.bonus.earned_points}
-              </div>
-              <div className="text-[11px] text-neutral-500">
-                коэффициент k_seed: <span className="text-neutral-400">{data.bonus.k_seed}</span>
-              </div>
-            </div>
-          </div>
-
-          {servers.length === 0 ? (
-            <div className="rounded border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
-              Нет данных о сид-вкладе по серверам.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[420px] text-sm">
-                <thead className="text-xs uppercase tracking-widest text-neutral-500">
-                  <tr>
-                    <th className="p-1 text-left">Сервер</th>
-                    <th className="p-1 text-right">Сид</th>
-                  </tr>
-                </thead>
-                <tbody>
+            {servers.length === 0 ? (
+              <EmptyState
+                title="Сид-вклада по серверам нет"
+                description="Нет данных о сид-вкладе по серверам."
+              />
+            ) : (
+              <Table ariaLabel="Сид-вклад по серверам">
+                <TableHead>
+                  <TableRow>
+                    <Th>Сервер</Th>
+                    <Th align="right">Сид</Th>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
                   {servers.map((server) => (
-                    <tr key={server.server_id} className="border-t border-neutral-900">
-                      <td className="p-1">
-                        <span
-                          title={server.server_name ?? undefined}
-                          className="inline-block rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200"
-                        >
+                    <TableRow key={server.server_id}>
+                      <Td>
+                        <Badge size="sm" title={server.server_name ?? undefined}>
                           {serverLabel(server)}
-                        </span>
-                      </td>
-                      <td className="p-1 text-right font-mono text-sky-300">
-                        {formatSeedDuration(server.seed_seconds)}
-                      </td>
-                    </tr>
+                        </Badge>
+                      </Td>
+                      <Td numeric>{formatSeedDuration(server.seed_seconds)}</Td>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      ) : null}
-    </section>
+                </TableBody>
+              </Table>
+            )}
+          </>
+        ) : null}
+      </CardBody>
+    </Card>
   );
 }

@@ -93,10 +93,11 @@ describe('EvidenceSection', () => {
     stubFetch(listOnly(EVIDENCE_RESPONSE));
 
     render(<EvidenceSection playerId="player-1" />);
-    expect(screen.getByText('Загрузка…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Загрузка доказательств');
 
     await screen.findByText('Аимбот на записи');
-    expect(screen.getByText('Доказательства (1)')).toBeInTheDocument();
+    const heading = screen.getByRole('heading', { name: 'Доказательства' });
+    expect(heading.parentElement).toHaveTextContent('1');
   });
 
   it('hides entirely on 403', async () => {

@@ -1,7 +1,23 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Button,
+  ButtonLink,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  Skeleton,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
 import { fmtDuration } from './presence';
 
 interface CoplayPartner {
@@ -21,8 +37,9 @@ export function PlaysWithSection({ playerId }: { playerId: string }) {
   const [hidden, setHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let cancelled = false;
+    setError(null);
     fetch(`/api/v1/players/${playerId}/coplay`, {
       credentials: 'include',
       cache: 'no-store',
@@ -46,58 +63,73 @@ export function PlaysWithSection({ playerId }: { playerId: string }) {
     };
   }, [playerId]);
 
+  useEffect(() => load(), [load]);
+
   if (hidden) return null;
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Часто играет с</h2>
-        <Link
-          href={`/all-players/${playerId}/compare`}
-          className="text-xs text-sky-400 hover:text-sky-300"
-        >
-          Сравнить онлайн →
-        </Link>
-      </div>
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          Ошибка: {error}
-        </div>
-      ) : partners === null ? (
-        <div className="text-sm text-neutral-500">Загрузка…</div>
-      ) : partners.length === 0 ? (
-        <div className="text-sm text-neutral-500">
-          Совместных игровых сессий выше порога не найдено.
-        </div>
-      ) : (
-        <ul className="space-y-1.5">
-          {partners.map((partner) => (
-            <li
-              key={partner.player_id}
-              className="flex flex-wrap items-center gap-2 rounded border border-neutral-800 bg-neutral-900/40 px-2 py-1.5 text-sm"
-            >
-              <Link
-                href={`/all-players/${partner.player_id}`}
-                className="font-medium text-sky-400 hover:text-sky-300"
-              >
-                {partner.player_name ?? '—'}
-              </Link>
-              <span className="text-xs text-neutral-500">
-                {fmtDuration(partner.overlap_seconds)} вместе
-              </span>
-              <span className="text-xs text-neutral-500">
-                {partner.shared_session_count} сессий
-              </span>
-              <Link
-                href={`/all-players/${playerId}/compare?other=${encodeURIComponent(partner.player_id)}`}
-                className="ml-auto text-xs text-sky-400 hover:text-sky-300"
-              >
-                Сравнить онлайн
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+    <Card padding="none" as="section">
+      <CardHeader
+        title="Часто играет с"
+        actions={
+          <ButtonLink href={`/all-players/${playerId}/compare`} variant="plain" size="sm">
+            Сравнить онлайн
+          </ButtonLink>
+        }
+      />
+      <CardBody padding={partners && partners.length > 0 ? 'none' : 'md'}>
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить напарников"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : partners === null ? (
+          <Skeleton variant="row" count={3} label="Загрузка напарников" />
+        ) : partners.length === 0 ? (
+          <EmptyState
+            title="Постоянных напарников нет"
+            description="Совместных игровых сессий выше порога не найдено."
+          />
+        ) : (
+          <Table ariaLabel="Часто играет с">
+            <TableHead>
+              <TableRow>
+                <Th>Игрок</Th>
+                <Th align="right">Вместе</Th>
+                <Th align="right">Сессий</Th>
+                <Th align="right">Сравнение</Th>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {partners.map((partner) => (
+                <TableRow key={partner.player_id}>
+                  <Td>
+                    <Link href={`/all-players/${partner.player_id}`} className="text-accent">
+                      {partner.player_name ?? '—'}
+                    </Link>
+                  </Td>
+                  <Td numeric>{fmtDuration(partner.overlap_seconds)}</Td>
+                  <Td numeric>{partner.shared_session_count}</Td>
+                  <Td align="right">
+                    <Link
+                      href={`/all-players/${playerId}/compare?other=${encodeURIComponent(partner.player_id)}`}
+                      className="text-accent"
+                    >
+                      Сравнить
+                    </Link>
+                  </Td>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardBody>
+    </Card>
   );
 }

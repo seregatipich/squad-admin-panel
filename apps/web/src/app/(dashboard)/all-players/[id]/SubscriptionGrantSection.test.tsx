@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { SubscriptionGrantSection } from './SubscriptionGrantSection';
@@ -64,8 +64,13 @@ describe('SubscriptionGrantSection', () => {
       stubApi([], [SUBSCRIPTION]);
       render(<SubscriptionGrantSection playerId="player-1" />);
 
-      await screen.findByText('VIP-подписка');
-      expect(screen.getByText(/Бронза — Активна, 100 бонусов \/ 30 дн\./)).toBeInTheDocument();
+      await screen.findByRole('heading', { name: 'VIP-подписка' });
+      const row = within(screen.getByRole('table')).getAllByRole('row')[1];
+      if (!row) throw new Error('subscription row missing');
+      expect(within(row).getByText('Бронза')).toBeInTheDocument();
+      expect(within(row).getByText('Активна')).toBeInTheDocument();
+      expect(within(row).getByText('100 бон.')).toBeInTheDocument();
+      expect(within(row).getByText('30 дн.')).toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,
   );
@@ -76,7 +81,7 @@ describe('SubscriptionGrantSection', () => {
       stubApi();
       render(<SubscriptionGrantSection playerId="player-1" />);
 
-      await screen.findByText('Подписок нет.');
+      await screen.findByText('Подписок нет');
     },
     TEST_TIMEOUT_MS,
   );
@@ -192,7 +197,7 @@ describe('SubscriptionGrantSection', () => {
       stubApi([{ match: '/bonus-shop/tiers', status: 200, body: { tiers: [] } }]);
       render(<SubscriptionGrantSection playerId="player-1" />);
 
-      await screen.findByText('Подписок нет.');
+      await screen.findByText('Подписок нет');
       expect(screen.queryByRole('button', { name: 'Выдать подписку' })).not.toBeInTheDocument();
     },
     TEST_TIMEOUT_MS,

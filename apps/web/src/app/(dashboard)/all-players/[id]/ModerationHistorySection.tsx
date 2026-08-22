@@ -1,6 +1,17 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  Skeleton,
+} from '@/components/ui';
 import {
   authorLabel,
   canDetachEvidence,
@@ -10,13 +21,28 @@ import {
   type ModerationEvidence,
   type ModerationHistoryAction,
   mediaStreamUrl,
-  moderationActionBadgeClass,
   moderationActionLabel,
 } from './moderation-history';
 
 interface ModerationHistoryResponse {
   actions: ModerationHistoryAction[];
 }
+
+/**
+ * Тяжесть действия модерации. Подпись из {@link moderationActionLabel} всё
+ * равно называет его словом, тон лишь помогает найти взглядом бан среди
+ * предупреждений (§5).
+ */
+const ACTION_TONE: Record<string, BadgeTone> = {
+  warn: 'warn',
+  kick: 'warn',
+  ban: 'crit',
+  unban: 'good',
+  name_kick: 'warn',
+  external_ban_kick: 'warn',
+  'external_ban.local_ban': 'crit',
+  clan_tag_protection: 'accent',
+};
 
 function EvidenceBody({ item }: { item: ModerationEvidence }) {
   if (item.kind === 'external_link') {
@@ -26,7 +52,7 @@ function EvidenceBody({ item }: { item: ModerationEvidence }) {
         href={item.external_url}
         target="_blank"
         rel="noreferrer"
-        className="mt-2 block break-all text-sky-400 no-underline hover:text-sky-300"
+        className="mt-2 block break-all text-accent"
       >
         {item.external_url}
       </a>
@@ -37,13 +63,13 @@ function EvidenceBody({ item }: { item: ModerationEvidence }) {
       <img
         src={mediaStreamUrl(item.id)}
         alt={evidenceLabel(item)}
-        className="mt-2 max-h-64 w-full rounded object-contain"
+        className="mt-2 max-h-64 w-full rounded-ctl object-contain"
       />
     );
   }
   return (
     // biome-ignore lint/a11y/useMediaCaption: evidence clips have no authored captions
-    <video controls src={mediaStreamUrl(item.id)} className="mt-2 max-h-64 w-full rounded" />
+    <video controls src={mediaStreamUrl(item.id)} className="mt-2 max-h-64 w-full rounded-ctl" />
   );
 }
 
@@ -74,7 +100,7 @@ export function ModerationHistorySection({
   const [detachError, setDetachError] = useState<string | null>(null);
   const [detaching, setDetaching] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     setHidden(false);
@@ -104,6 +130,8 @@ export function ModerationHistorySection({
       cancelled = true;
     };
   }, [playerId]);
+
+  useEffect(() => load(), [load]);
 
   async function detach(actionId: string, mediaId: string) {
     setDetaching(`${actionId}:${mediaId}`);
@@ -137,83 +165,81 @@ export function ModerationHistorySection({
   if (hidden) return null;
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">
-        История модерации{actions && actions.length > 0 ? ` (${actions.length})` : ''}
-      </h2>
+    <Card padding="none" as="section">
+      <CardHeader
+        title="История модерации"
+        count={actions && actions.length > 0 ? actions.length : undefined}
+      />
+      <CardBody className="space-y-3">
+        {detachError ? <InlineBanner tone="crit" title={detachError} /> : null}
 
-      {detachError ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          {detachError}
-        </div>
-      ) : null}
-
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          Ошибка: {error}
-        </div>
-      ) : loading ? (
-        <div className="text-sm text-neutral-500">Загрузка…</div>
-      ) : !actions || actions.length === 0 ? (
-        <div className="text-sm text-neutral-500">Действий модерации нет.</div>
-      ) : (
-        <ul className="space-y-2">
-          {actions.map((action) => (
-            <li
-              key={action.id}
-              className="rounded border border-neutral-900 bg-neutral-900/40 p-2 text-sm"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="flex flex-wrap items-center gap-2">
-                  <span
-                    className={`rounded px-2 py-0.5 text-xs ${moderationActionBadgeClass(action.action_type)}`}
-                  >
-                    {moderationActionLabel(action.action_type)}
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить историю модерации"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : loading ? (
+          <Skeleton variant="block" count={2} label="Загрузка истории модерации" />
+        ) : !actions || actions.length === 0 ? (
+          <EmptyState
+            title="Действий модерации нет"
+            description="К этому игроку панель ещё не применяла ни предупреждений, ни банов."
+          />
+        ) : (
+          <ul className="space-y-2">
+            {actions.map((action) => (
+              <li key={action.id} className="rounded-ctl border border-line p-2 text-[13px]">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="flex flex-wrap items-center gap-2">
+                    <Badge size="sm" tone={ACTION_TONE[action.action_type] ?? 'neutral'}>
+                      {moderationActionLabel(action.action_type)}
+                    </Badge>
+                    {action.reverted_at ? <Badge size="sm">отменено</Badge> : null}
                   </span>
-                  {action.reverted_at ? (
-                    <span className="rounded bg-neutral-800 px-2 py-0.5 text-[10px] uppercase text-neutral-400">
-                      отменено
-                    </span>
-                  ) : null}
-                </span>
-                <span className="text-xs text-neutral-500">
-                  {formatModerationDate(action.created_at)}
-                </span>
-              </div>
+                  <span className="text-xs text-ink-3">
+                    {formatModerationDate(action.created_at)}
+                  </span>
+                </div>
 
-              {action.reason ? <p className="mt-1 text-neutral-300">{action.reason}</p> : null}
+                {action.reason ? <p className="mt-1 text-ink-2">{action.reason}</p> : null}
 
-              <div className="mt-1 text-xs text-neutral-500">
-                {authorLabel(action.author)}
-                {action.server ? ` · ${action.server.name ?? action.server.id}` : ''}
-              </div>
+                <div className="mt-1 text-xs text-ink-3">
+                  {authorLabel(action.author)}
+                  {action.server ? ` · ${action.server.name ?? action.server.id}` : ''}
+                </div>
 
-              {action.evidence.length > 0 ? (
-                <ul className="mt-2 space-y-2">
-                  {action.evidence.map((item) => (
-                    <li key={item.id} className="rounded border border-neutral-800 p-2">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-neutral-300">{evidenceLabel(item)}</span>
-                        {canDetachEvidence(item.linked_by_player_id, viewerPlayerId) ? (
-                          <button
-                            type="button"
-                            onClick={() => void detach(action.id, item.id)}
-                            disabled={detaching === `${action.id}:${item.id}`}
-                            className="rounded border border-red-900 px-2 py-0.5 text-xs text-red-400 hover:border-red-700 disabled:opacity-40"
-                          >
-                            Открепить
-                          </button>
-                        ) : null}
-                      </div>
-                      <EvidenceBody item={item} />
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+                {action.evidence.length > 0 ? (
+                  <ul className="mt-2 space-y-2">
+                    {action.evidence.map((item) => (
+                      <li key={item.id} className="rounded-ctl border border-line p-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-ink-2">{evidenceLabel(item)}</span>
+                          {canDetachEvidence(item.linked_by_player_id, viewerPlayerId) ? (
+                            <Button
+                              size="sm"
+                              onClick={() => void detach(action.id, item.id)}
+                              loading={detaching === `${action.id}:${item.id}`}
+                            >
+                              Открепить
+                            </Button>
+                          ) : null}
+                        </div>
+                        <EvidenceBody item={item} />
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
   );
 }

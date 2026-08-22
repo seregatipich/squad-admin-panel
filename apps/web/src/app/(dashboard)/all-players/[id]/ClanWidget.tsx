@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { ButtonLink } from '@/components/ui';
 
 export interface PlayerClan {
   id: string;
@@ -17,14 +17,9 @@ const CLAN_ROLE_LABELS: Record<string, string> = {
 export function ClanWidget({ clan }: { clan: PlayerClan | null }) {
   if (!clan) return null;
   return (
-    <Link
-      href={`/clans/${clan.id}`}
-      className="flex items-center gap-1.5 rounded bg-neutral-800 px-2 py-1 text-xs text-sky-400 hover:bg-neutral-700"
-    >
+    <ButtonLink href={`/clans/${clan.id}`} variant="secondary" size="sm">
       <span>{clan.name}</span>
-      <span className="text-neutral-400">
-        {CLAN_ROLE_LABELS[clan.member_role] ?? clan.member_role}
-      </span>
-    </Link>
+      <span className="text-ink-3">{CLAN_ROLE_LABELS[clan.member_role] ?? clan.member_role}</span>
+    </ButtonLink>
   );
 }

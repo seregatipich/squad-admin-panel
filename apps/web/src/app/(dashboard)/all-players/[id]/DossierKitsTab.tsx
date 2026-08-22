@@ -1,5 +1,6 @@
 'use client';
 
+import { EmptyState, Table, TableBody, TableHead, TableRow, Td, Th } from '@/components/ui';
 import { type DossierKit, formatKitTime, sortKits } from './dossier';
 
 /** Same field set as `formatMatchDate` in `recent-matches.ts`; `—` for a never-played kit. */
@@ -22,36 +23,33 @@ function formatKitDate(iso: string | null): string {
 export function DossierKitsTab({ kits }: { kits: readonly DossierKit[] }) {
   if (kits.length === 0) {
     return (
-      <div className="rounded border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
-        Нет данных по китам.
-      </div>
+      <EmptyState
+        title="Нет данных по китам."
+        description="Панель не получила ни одной записи о выбранных китах этого игрока."
+      />
     );
   }
 
   return (
-    <div className="overflow-x-auto rounded border border-neutral-800">
-      <table className="w-full min-w-[420px] text-sm">
-        <thead className="text-xs uppercase tracking-widest text-neutral-500">
-          <tr>
-            <th className="p-1.5 text-left">Кит</th>
-            <th className="p-1.5 text-right">Время</th>
-            <th className="p-1.5 text-right">Последний раз</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sortKits(kits).map((row) => (
-            <tr key={row.kit} className="border-t border-neutral-900">
-              <td className="p-1.5 font-mono text-neutral-200">{row.kit}</td>
-              <td className="p-1.5 text-right font-mono text-neutral-300 tabular-nums">
-                {formatKitTime(row.seconds)}
-              </td>
-              <td className="whitespace-nowrap p-1.5 text-right font-mono text-neutral-400">
-                {formatKitDate(row.last_played_at)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Table ariaLabel="Киты игрока">
+      <TableHead sticky={false}>
+        <tr>
+          <Th>Кит</Th>
+          <Th align="right">Время</Th>
+          <Th align="right">Последний раз</Th>
+        </tr>
+      </TableHead>
+      <TableBody>
+        {sortKits(kits).map((row) => (
+          <TableRow key={row.kit}>
+            <Td className="font-mono">{row.kit}</Td>
+            <Td numeric>{formatKitTime(row.seconds)}</Td>
+            <Td numeric className="whitespace-nowrap">
+              {formatKitDate(row.last_played_at)}
+            </Td>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }

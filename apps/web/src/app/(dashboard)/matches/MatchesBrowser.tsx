@@ -1,8 +1,34 @@
 'use client';
 
+import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  FieldRow,
+  InlineBanner,
+  Modal,
+  PageContainer,
+  PageHeader,
+  Select,
+  SkeletonTable,
+  SortableTh,
+  type SortDirection,
+  StatusBadge,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  TextInput,
+  Th,
+} from '@/components/ui';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   appendMatchPage,
@@ -24,7 +50,7 @@ import {
   mergeMatchPage,
   nextSort,
   PAGE_LIMIT,
-  PILL_CLASSES,
+  type PillTone,
   parseFilters,
   readMatchListScroll,
   type ServerOption,
@@ -41,6 +67,31 @@ import {
 interface ServersResponse {
   items: Array<{ id: string; display_name: string | null; slug: string | null }>;
 }
+
+/**
+ * Исход команды подкрашивает бейдж с тикетами. Цвет здесь только ускоряет
+ * просмотр: кто победил, сказано словами в колонке «Победитель», поэтому строка
+ * без подсветки ничего не теряет (дизайн-система, §5).
+ */
+const TEAM_TONE: Record<PillTone, BadgeTone> = {
+  winner: 'good',
+  loser: 'crit',
+  neutral: 'neutral',
+};
+
+/** Как читается направление сортировки колонок списка матчей. */
+const SORT_DIRECTION_TEXT: Record<SortDirection, string> = {
+  asc: 'по возрастанию',
+  desc: 'по убыванию',
+};
+
+/*
+ * Ссылка на выгрузку остаётся обычным `<a>`, а не `ButtonLink`: `next/link`
+ * перехватывает клик и уводит в клиентскую навигацию, из-за чего файл не
+ * скачивается. Классы повторяют вторичную кнопку размера `md` (§6).
+ */
+const DOWNLOAD_LINK_CLASS =
+  'inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-3 text-xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
 
 export function MatchesBrowser() {
   const router = useRouter();
@@ -62,6 +113,12 @@ export function MatchesBrowser() {
   const [fetchedServers, setFetchedServers] = useState<ServerOption[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [now, setNow] = useState<Date>(() => new Date());
+  /**
+   * Номер последнего запроса первой страницы. Ответ на отменённый запрос —
+   * фильтры сменились, кнопку «Повторить» нажали второй раз, страницу закрыли —
+   * не имеет права попасть в состояние поверх актуального.
+   */
+  const listRequestRef = useRef(0);
   const scrollRestoreRef = useRef<MatchListScrollSnapshot | null>(null);
   const scrollRestoreFrameRef = useRef<number | null>(null);
   const scrollRestoreLoadAttemptsRef = useRef(0);
@@ -91,8 +148,10 @@ export function MatchesBrowser() {
     [filters, pathname, router],
   );
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadFirstPage = useCallback(() => {
+    listRequestRef.current += 1;
+    const requestId = listRequestRef.current;
+    const current = () => listRequestRef.current === requestId;
     setLoading(true);
     setError(null);
     fetch(`/api/v1/matches?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
@@ -104,21 +163,25 @@ export function MatchesBrowser() {
         return (await res.json()) as MatchListResponse;
       })
       .then((data) => {
-        if (cancelled) return;
+        if (!current()) return;
         setItems(data.items);
         setNextCursor(data.next_cursor);
         setLastUpdate(new Date());
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (current()) setError((err as Error).message);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (current()) setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
   }, [filters]);
+
+  useEffect(() => {
+    loadFirstPage();
+    return () => {
+      listRequestRef.current += 1;
+    };
+  }, [loadFirstPage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -259,107 +322,107 @@ export function MatchesBrowser() {
     );
   }, [fetchedServers, items]);
 
-  const openRow = useCallback(
+  /**
+   * Строка списка — настоящая ссылка, поэтому переход делает браузер. Снимок
+   * прокрутки успевает сохраниться в обработчике клика: он выполняется до того,
+   * как `next/link` начинает навигацию.
+   */
+  const rememberScroll = useCallback(
     (id: string) => {
       saveMatchListScroll(window.sessionStorage, currentListHref, window.scrollY, id);
-      router.push(buildMatchDetailHref(id, currentListHref));
     },
-    [currentListHref, router],
+    [currentListHref],
   );
 
   const exportUrl = useMemo(() => buildExportUrl(filters), [filters]);
 
+  const filtersApplied =
+    filters.layer.trim() !== '' ||
+    filters.servers.length > 0 ||
+    filters.hideSeeding ||
+    filters.preset !== 'all';
+
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">Матчи</h1>
-          <span className="text-xs text-neutral-500">
-            {total === null ? 'Всего: …' : `Всего: ${total}`}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <LiveIndicator lastUpdate={lastUpdate} />
-          <a
-            href={exportUrl}
-            className="rounded border border-neutral-800 px-3 py-1.5 text-sm text-neutral-200 no-underline hover:border-neutral-600"
-          >
-            Экспорт CSV
-          </a>
-          <button
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            className="rounded border border-neutral-800 px-3 py-1.5 text-sm text-neutral-200 hover:border-neutral-600 lg:hidden"
-          >
-            Фильтры
-          </button>
-        </div>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="Матчи"
+        status={<LiveIndicator lastUpdate={lastUpdate} />}
+        meta={<span>всего: {total === null ? '…' : total}</span>}
+        actions={
+          <>
+            <a href={exportUrl} className={DOWNLOAD_LINK_CLASS}>
+              Экспорт CSV
+            </a>
+            <Button className="lg:hidden" onClick={() => setDrawerOpen(true)}>
+              Фильтры
+            </Button>
+          </>
+        }
+      />
 
       {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          Ошибка загрузки: {error}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить список матчей"
+          description={error}
+          action={
+            <Button size="sm" onClick={loadFirstPage}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
       <div className="flex gap-6">
         <aside className="hidden w-64 shrink-0 lg:block">
-          <FilterPanel filters={filters} servers={serverOptions} onChange={navigate} />
+          <Card>
+            <FilterPanel filters={filters} servers={serverOptions} onChange={navigate} />
+          </Card>
         </aside>
 
         <div className="min-w-0 flex-1 space-y-3">
-          <MatchTable
-            items={items}
-            loading={loading}
-            filters={filters}
-            now={now}
-            onSort={(column) => navigate(nextSort(filters, column))}
-            onOpen={openRow}
-          />
+          <Card padding="none">
+            <MatchTable
+              items={items}
+              loading={loading}
+              filters={filters}
+              filtersApplied={filtersApplied}
+              now={now}
+              onSort={(column) => navigate(nextSort(filters, column))}
+              onOpen={rememberScroll}
+              listHref={currentListHref}
+            />
+          </Card>
 
           <div ref={sentinelRef} />
 
           {nextCursor ? (
             <div className="flex justify-center">
-              <button
-                type="button"
-                onClick={() => void loadMore()}
-                disabled={loadingMore}
-                className="rounded border border-neutral-800 px-4 py-1.5 text-sm text-neutral-300 hover:border-neutral-600 disabled:opacity-40"
-              >
-                {loadingMore ? 'Загрузка…' : 'Показать ещё'}
-              </button>
+              <Button onClick={() => void loadMore()} loading={loadingMore}>
+                Показать ещё
+              </Button>
             </div>
           ) : !loading && items.length > 0 ? (
-            <div className="py-2 text-center text-xs text-neutral-500">Больше матчей нет</div>
+            <p className="py-2 text-center text-xs text-ink-3">Больше матчей нет</p>
           ) : null}
         </div>
       </div>
 
-      {drawerOpen ? (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <button
-            type="button"
-            aria-label="Закрыть фильтры"
-            onClick={() => setDrawerOpen(false)}
-            className="absolute inset-0 bg-black/60"
-          />
-          <div className="absolute inset-y-0 left-0 w-80 max-w-[85%] overflow-y-auto border-r border-neutral-800 bg-neutral-950 p-4">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-neutral-200">Фильтры</h2>
-              <button
-                type="button"
-                onClick={() => setDrawerOpen(false)}
-                className="rounded border border-neutral-800 px-2 py-0.5 text-sm text-neutral-300 hover:border-neutral-600"
-              >
-                Готово
-              </button>
-            </div>
-            <FilterPanel filters={filters} servers={serverOptions} onChange={navigate} />
-          </div>
-        </div>
-      ) : null}
-    </div>
+      <Modal
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        title="Фильтры"
+        closeLabel="Закрыть фильтры"
+        size="sm"
+        footer={
+          <Button variant="primary" onClick={() => setDrawerOpen(false)}>
+            Готово
+          </Button>
+        }
+      >
+        <FilterPanel filters={filters} servers={serverOptions} onChange={navigate} />
+      </Modal>
+    </PageContainer>
   );
 }
 
@@ -386,136 +449,84 @@ function FilterPanel({
   }
 
   return (
-    <div className="space-y-5 text-sm">
-      <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Layer</span>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            onChange({ layer: layerDraft.trim() });
-          }}
-        >
-          <input
+    <div className="space-y-4">
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          onChange({ layer: layerDraft.trim() });
+        }}
+      >
+        <FieldRow label="Layer">
+          <TextInput
             type="search"
             value={layerDraft}
             onChange={(event) => setLayerDraft(event.target.value)}
             onBlur={() => onChange({ layer: layerDraft.trim() })}
             placeholder="Напр. Yehorivka"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm focus:border-neutral-600 focus:outline-none"
           />
-        </form>
-      </div>
+        </FieldRow>
+      </form>
 
-      <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Период</span>
-        <div className="flex flex-wrap gap-1">
+      <FieldRow label="Период">
+        <Select
+          value={filters.preset}
+          onChange={(event) => onChange({ preset: event.target.value as MatchFilters['preset'] })}
+        >
           {DATE_PRESETS.map((preset) => (
-            <button
-              key={preset.value}
-              type="button"
-              onClick={() => onChange({ preset: preset.value })}
-              className={`rounded px-2 py-0.5 text-xs ${
-                filters.preset === preset.value
-                  ? 'bg-neutral-800 text-neutral-100'
-                  : 'text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
+            <option key={preset.value} value={preset.value}>
               {preset.label}
-            </button>
+            </option>
           ))}
-        </div>
-        {filters.preset === 'custom' ? (
-          <div className="flex flex-col gap-2 pt-1">
-            <label className="flex items-center justify-between gap-2 text-xs text-neutral-500">
-              С
-              <input
-                type="date"
-                value={filters.from}
-                onChange={(event) => onChange({ from: event.target.value })}
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 focus:border-neutral-600 focus:outline-none"
-              />
-            </label>
-            <label className="flex items-center justify-between gap-2 text-xs text-neutral-500">
-              По
-              <input
-                type="date"
-                value={filters.to}
-                onChange={(event) => onChange({ to: event.target.value })}
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 focus:border-neutral-600 focus:outline-none"
-              />
-            </label>
-          </div>
-        ) : null}
-      </div>
+        </Select>
+      </FieldRow>
 
-      <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Серверы</span>
+      {filters.preset === 'custom' ? (
+        <div className="flex flex-col gap-2">
+          <FieldRow label="С">
+            <TextInput
+              type="date"
+              value={filters.from}
+              onChange={(event) => onChange({ from: event.target.value })}
+            />
+          </FieldRow>
+          <FieldRow label="По">
+            <TextInput
+              type="date"
+              value={filters.to}
+              onChange={(event) => onChange({ to: event.target.value })}
+            />
+          </FieldRow>
+        </div>
+      ) : null}
+
+      <div className="space-y-2">
+        <p className="text-xs font-medium text-ink-2">Серверы</p>
         {servers.length === 0 ? (
-          <p className="text-xs text-neutral-500">Нет доступных серверов</p>
+          <p className="text-xs text-ink-3">Нет доступных серверов</p>
         ) : (
-          <div className="max-h-48 space-y-1 overflow-y-auto rounded border border-neutral-900 p-1">
-            {servers.map((server) => {
-              const active = filters.servers.includes(server.id);
-              return (
-                <label
-                  key={server.id}
-                  className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs text-neutral-300 hover:bg-neutral-900"
-                >
-                  <input
-                    type="checkbox"
-                    checked={active}
-                    onChange={() => toggleServer(server.id)}
-                    className="accent-sky-500"
-                  />
-                  <span className="truncate">
-                    {server.display_name ?? server.slug ?? server.id.slice(0, 8)}
-                  </span>
-                </label>
-              );
-            })}
+          <div className="max-h-48 space-y-1 overflow-y-auto rounded-ctl border border-line p-2">
+            {servers.map((server) => (
+              <Checkbox
+                key={server.id}
+                label={server.display_name ?? server.slug ?? server.id.slice(0, 8)}
+                checked={filters.servers.includes(server.id)}
+                onChange={() => toggleServer(server.id)}
+              />
+            ))}
           </div>
         )}
       </div>
 
-      <label className="flex items-center gap-2 text-xs text-neutral-300">
-        <input
-          type="checkbox"
-          checked={filters.hideSeeding}
-          onChange={(event) => onChange({ hideSeeding: event.target.checked })}
-          className="accent-sky-500"
-        />
-        Скрывать seeding
-      </label>
+      <Checkbox
+        label="Скрывать seeding"
+        checked={filters.hideSeeding}
+        onChange={(event) => onChange({ hideSeeding: event.target.checked })}
+      />
     </div>
   );
 }
 
-function SortHeader({
-  column,
-  label,
-  filters,
-  onSort,
-}: {
-  column: SortField;
-  label: string;
-  filters: MatchFilters;
-  onSort: (column: SortField) => void;
-}) {
-  const active = filters.sort === column;
-  const arrow = active ? (filters.order === 'desc' ? '↓' : '↑') : '';
-  return (
-    <button
-      type="button"
-      onClick={() => onSort(column)}
-      className={`inline-flex items-center gap-1 ${active ? 'text-neutral-200' : 'hover:text-neutral-300'}`}
-    >
-      {label}
-      <span className="w-2 text-[10px]">{arrow}</span>
-    </button>
-  );
-}
-
-function TicketPill({
+function TicketBadge({
   team,
   faction,
   tickets,
@@ -526,14 +537,13 @@ function TicketPill({
   tickets: number | null;
   winner: MatchListItem['winner'];
 }) {
-  const tone = teamPillTone(team, winner);
   return (
-    <span
-      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs ${PILL_CLASSES[tone]}`}
-    >
-      <span className="truncate">{faction ?? `Команда ${team}`}</span>
-      <span className="font-mono">{tickets ?? '—'}</span>
-    </span>
+    <Badge tone={TEAM_TONE[teamPillTone(team, winner)]}>
+      <span className="inline-flex items-center gap-1">
+        <span className="truncate">{faction ?? `Команда ${team}`}</span>
+        <span className="tabular-nums">{tickets ?? '—'}</span>
+      </span>
+    </Badge>
   );
 }
 
@@ -541,130 +551,132 @@ function MatchTable({
   items,
   loading,
   filters,
+  filtersApplied,
   now,
   onSort,
   onOpen,
+  listHref,
 }: {
   items: MatchListItem[];
   loading: boolean;
   filters: MatchFilters;
+  filtersApplied: boolean;
   now: Date;
   onSort: (column: SortField) => void;
   onOpen: (id: string) => void;
+  listHref: string;
 }) {
   const columnLabel = (column: SortField) =>
     SORT_COLUMNS.find((entry) => entry.value === column)?.label ?? column;
 
   if (loading && items.length === 0) {
-    return <div className="py-10 text-center text-sm text-neutral-500">Загрузка…</div>;
+    return (
+      <div className="p-3">
+        <SkeletonTable rows={8} cols={8} label="Загрузка списка матчей" />
+      </div>
+    );
   }
   if (!loading && items.length === 0) {
     return (
-      <div className="rounded border border-dashed border-neutral-800 py-12 text-center text-sm text-neutral-400">
-        Матчи не найдены. Измените фильтры.
-      </div>
+      <EmptyState
+        variant={filtersApplied ? 'filtered' : 'initial'}
+        title={filtersApplied ? 'Нет совпадений.' : 'Матчей ещё не было'}
+        description={
+          filtersApplied
+            ? 'Ни один матч не подходит под включённые фильтры.'
+            : 'Панель ещё не записала ни одного матча. Запустите сервер и сыграйте раунд.'
+        }
+      />
     );
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[820px] text-sm">
-        <thead className="text-left text-xs uppercase text-neutral-500">
-          <tr className="border-b border-neutral-900">
-            <th className="py-2 pr-3">Сервер</th>
-            <th className="py-2 pr-3">
-              <SortHeader
-                column="layer"
-                label={columnLabel('layer')}
-                filters={filters}
-                onSort={onSort}
-              />
-            </th>
-            <th className="py-2 pr-3">
-              <SortHeader
-                column="started_at"
-                label={columnLabel('started_at')}
-                filters={filters}
-                onSort={onSort}
-              />
-            </th>
-            <th className="py-2 pr-3">Конец</th>
-            <th className="py-2 pr-3">Команда 1</th>
-            <th className="py-2 pr-3">Команда 2</th>
-            <th className="py-2 pr-3">
-              <SortHeader
-                column="duration_seconds"
-                label={columnLabel('duration_seconds')}
-                filters={filters}
-                onSort={onSort}
-              />
-            </th>
-            <th className="py-2 pr-3">Победитель</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((match) => {
-            const open = isOpenMatch(match);
-            const duration = open
-              ? liveDurationSeconds(match.started_at, now)
-              : match.duration_seconds;
-            return (
-              <tr
-                key={match.id}
-                onClick={() => onOpen(match.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') onOpen(match.id);
-                }}
-                tabIndex={0}
-                className="cursor-pointer border-b border-neutral-900 align-middle hover:bg-neutral-900/40 focus:bg-neutral-900/40 focus:outline-none"
-              >
-                <td className="py-2 pr-3">
-                  <span
-                    title={match.server_name ?? undefined}
-                    className="inline-block rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200"
-                  >
-                    {shortServerName(match)}
-                  </span>
-                </td>
-                <td className="py-2 pr-3 text-neutral-200">{match.layer ?? '—'}</td>
-                <td className="py-2 pr-3 text-xs text-neutral-400">
-                  {formatDateTime(match.started_at)}
-                </td>
-                <td className="py-2 pr-3 text-xs text-neutral-400">
-                  {open ? (
-                    <span className="inline-flex items-center gap-1 rounded border border-emerald-800 bg-emerald-950/60 px-1.5 py-0.5 text-[11px] text-emerald-300">
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-                      Идёт
-                    </span>
-                  ) : (
-                    formatDateTime(match.ended_at)
-                  )}
-                </td>
-                <td className="py-2 pr-3">
-                  <TicketPill
-                    team={1}
-                    faction={match.team1_faction}
-                    tickets={match.team1_tickets}
-                    winner={match.winner}
-                  />
-                </td>
-                <td className="py-2 pr-3">
-                  <TicketPill
-                    team={2}
-                    faction={match.team2_faction}
-                    tickets={match.team2_tickets}
-                    winner={match.winner}
-                  />
-                </td>
-                <td className="py-2 pr-3 font-mono text-xs text-neutral-300">
-                  {formatDuration(duration)}
-                </td>
-                <td className="py-2 pr-3 text-xs text-neutral-300">{winnerLabel(match)}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <Table ariaLabel="Матчи" className="min-w-[820px]">
+      <TableHead>
+        <tr>
+          <Th>Сервер</Th>
+          <SortableTh
+            sortKey="layer"
+            activeKey={filters.sort}
+            direction={filters.order}
+            onSort={(key) => onSort(key as SortField)}
+            label={columnLabel('layer')}
+            directionText={SORT_DIRECTION_TEXT}
+          />
+          <SortableTh
+            sortKey="started_at"
+            activeKey={filters.sort}
+            direction={filters.order}
+            onSort={(key) => onSort(key as SortField)}
+            label={columnLabel('started_at')}
+            directionText={SORT_DIRECTION_TEXT}
+          />
+          <Th>Конец</Th>
+          <Th>Команда 1</Th>
+          <Th>Команда 2</Th>
+          <SortableTh
+            sortKey="duration_seconds"
+            activeKey={filters.sort}
+            direction={filters.order}
+            onSort={(key) => onSort(key as SortField)}
+            label={columnLabel('duration_seconds')}
+            directionText={SORT_DIRECTION_TEXT}
+            align="right"
+          />
+          <Th>Победитель</Th>
+        </tr>
+      </TableHead>
+      <TableBody>
+        {items.map((match) => {
+          const open = isOpenMatch(match);
+          const duration = open
+            ? liveDurationSeconds(match.started_at, now)
+            : match.duration_seconds;
+          return (
+            <TableRow key={match.id} interactive>
+              <Td>
+                <Link
+                  href={buildMatchDetailHref(match.id, listHref)}
+                  onClick={() => onOpen(match.id)}
+                  title={match.server_name ?? undefined}
+                  className="font-medium text-accent no-underline hover:brightness-110"
+                >
+                  {shortServerName(match)}
+                </Link>
+              </Td>
+              <Td>{match.layer ?? '—'}</Td>
+              <Td className="text-xs text-ink-3">{formatDateTime(match.started_at)}</Td>
+              <Td className="text-xs text-ink-3">
+                {open ? (
+                  <StatusBadge state="good" label="Идёт" pulse />
+                ) : (
+                  formatDateTime(match.ended_at)
+                )}
+              </Td>
+              <Td>
+                <TicketBadge
+                  team={1}
+                  faction={match.team1_faction}
+                  tickets={match.team1_tickets}
+                  winner={match.winner}
+                />
+              </Td>
+              <Td>
+                <TicketBadge
+                  team={2}
+                  faction={match.team2_faction}
+                  tickets={match.team2_tickets}
+                  winner={match.winner}
+                />
+              </Td>
+              <Td numeric className="text-xs">
+                {formatDuration(duration)}
+              </Td>
+              <Td className="text-xs">{winnerLabel(match)}</Td>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }

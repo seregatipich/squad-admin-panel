@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('react', async () => {
   const actual = await vi.importActual<typeof import('react')>('react');
-  return { ...actual, use: vi.fn((p: Promise<unknown>) => ({ id: 'test-uuid' })) };
+  return { ...actual, use: vi.fn(() => ({ id: 'test-uuid' })) };
 });
 
 import SettingsPage from './page';

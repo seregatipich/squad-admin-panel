@@ -27,8 +27,10 @@ describe('TagProtectionCard', () => {
       mockFetch(() => Promise.resolve(new Response('{}', { status: 200 }))),
     );
     render(<TagProtectionCard clanId="clan-1" initialProtected={false} />);
-    expect(screen.getByText('Защита тега')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Защита выключена' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Защита тега' })).toBeInTheDocument();
+    // Состояние названо словом, а не только положением тумблера.
+    expect(screen.getByText('Защита выключена')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Защита тега' })).not.toBeChecked();
   });
 
   it('toggles on click and PATCHes /api/v1/clans/:id/settings with is_tag_protected', async () => {
@@ -40,7 +42,7 @@ describe('TagProtectionCard', () => {
     );
     const user = userEvent.setup();
     render(<TagProtectionCard clanId="clan-1" initialProtected={false} />);
-    await user.click(screen.getByRole('button', { name: 'Защита выключена' }));
+    await user.click(screen.getByRole('switch', { name: 'Защита тега' }));
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(
@@ -51,7 +53,8 @@ describe('TagProtectionCard', () => {
         }),
       );
     });
-    expect(await screen.findByRole('button', { name: 'Защита включена' })).toBeInTheDocument();
+    expect(await screen.findByText('Защита включена')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Защита тега' })).toBeChecked();
   });
 
   it('hides the interactive toggle and falls back to a status badge on 403', async () => {
@@ -61,10 +64,10 @@ describe('TagProtectionCard', () => {
     );
     const user = userEvent.setup();
     render(<TagProtectionCard clanId="clan-1" initialProtected={false} />);
-    await user.click(screen.getByRole('button', { name: 'Защита выключена' }));
+    await user.click(screen.getByRole('switch', { name: 'Защита тега' }));
 
     await waitFor(() => {
-      expect(screen.queryByRole('button')).not.toBeInTheDocument();
+      expect(screen.queryByRole('switch')).not.toBeInTheDocument();
     });
     expect(screen.getByText('Защита выключена')).toBeInTheDocument();
   });

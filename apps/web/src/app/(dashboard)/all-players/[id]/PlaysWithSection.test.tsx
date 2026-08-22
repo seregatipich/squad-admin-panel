@@ -33,12 +33,12 @@ describe('PlaysWithSection', () => {
     );
     render(<PlaysWithSection playerId="player-1" />);
     expect(await screen.findByText('Частый напарник')).toBeInTheDocument();
-    expect(screen.getByText('10 сессий')).toBeInTheDocument();
-    expect(screen.getAllByText('Сравнить онлайн').length).toBeGreaterThan(0);
-    const compareLink = screen
-      .getAllByRole('link')
-      .find((link) => link.textContent === 'Сравнить онлайн');
-    expect(compareLink).toHaveAttribute('href', '/all-players/player-1/compare?other=partner-1');
+    expect(screen.getByRole('columnheader', { name: 'Сессий' })).toBeInTheDocument();
+    expect(screen.getByText('10')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Сравнить' })).toHaveAttribute(
+      'href',
+      '/all-players/player-1/compare?other=partner-1',
+    );
   });
 
   it('hides on a panel-access denial', async () => {
@@ -85,7 +85,7 @@ describe('PlaysWithSection', () => {
     );
     render(<PlaysWithSection playerId="player-1" />);
     expect(await screen.findByText('—')).toBeInTheDocument();
-    expect(screen.getByText('30с вместе')).toBeInTheDocument();
+    expect(screen.getByText('30с')).toBeInTheDocument();
   });
 
   it('shows a request error', async () => {
@@ -96,6 +96,8 @@ describe('PlaysWithSection', () => {
       ),
     );
     render(<PlaysWithSection playerId="player-1" />);
-    expect(await screen.findByText('Ошибка: HTTP 503')).toBeInTheDocument();
+    expect(await screen.findByText('Не удалось загрузить напарников')).toBeInTheDocument();
+    expect(screen.getByText('HTTP 503')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
   });
 });

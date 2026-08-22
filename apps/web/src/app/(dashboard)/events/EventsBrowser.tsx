@@ -1,8 +1,30 @@
 'use client';
 
-import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  IconButton,
+  InlineBanner,
+  Modal,
+  SearchField,
+  Select,
+  Skeleton,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+  Toolbar,
+  type ToolbarProps,
+} from '@/components/ui';
 import {
   appendEventPage,
   buildCountApiQuery,
@@ -17,7 +39,6 @@ import {
   formatDateTime,
   kindLabel,
   kindOptionsFromEvents,
-  kindTone,
   PAGE_LIMIT,
   parseFilters,
   type ServerOption,
@@ -29,6 +50,47 @@ interface ServersResponse {
   items: Array<{ id: string; display_name: string | null; slug: string | null }>;
 }
 
+/*
+ * Ссылка на выгрузку остаётся обычным `<a>`, а не `ButtonLink`: `next/link`
+ * перехватывает клик и уводит в клиентскую навигацию, из-за чего файл не
+ * скачивается. Классы повторяют вторичную кнопку размера `md` (§6).
+ */
+const DOWNLOAD_LINK_CLASS =
+  'inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-3 text-xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
+
+/**
+ * Тон пилюли типа события.
+ *
+ * Повторяет разбиение `kindTone` из `helpers.ts`, но выдаёт тон дизайн-системы,
+ * а не строку классов: помощник — общий модуль со своим владельцем, и цвета
+ * оформления в нём остаются те, что были. Смысл всё равно несёт подпись
+ * `kindLabel`, а не цвет (§5).
+ */
+function kindBadgeTone(kind: string): BadgeTone {
+  if (kind.startsWith('server.crashed') || kind.endsWith('.failed')) return 'crit';
+  if (kind.startsWith('player.connected') || kind.startsWith('match.started')) return 'good';
+  if (
+    kind.startsWith('player.disconnected') ||
+    kind.startsWith('match.ended') ||
+    kind.startsWith('banname.matched')
+  ) {
+    return 'warn';
+  }
+  return 'neutral';
+}
+
+/**
+ * Журнал событий: список конвертов с фильтрами и постраничной подгрузкой.
+ *
+ * Собственного `<h1>` здесь нет ни в одном режиме. Тот же компонент
+ * встраивается в `/servers/[id]/events`, где заголовок первого уровня — имя
+ * сервера из layout раздела; второй `<h1>` лишил бы экранный диктор
+ * единственной опоры. На верхнем уровне заголовок ставит `/events/page.tsx`,
+ * а во вложенном режиме здесь появляется только заголовок раздела.
+ *
+ * @param lockedServerId Показывать события одного сервера; выключает выбор
+ *   серверов в фильтрах и включает заголовок раздела.
+ */
 export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -44,6 +106,7 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
   const [fetchedServers, setFetchedServers] = useState<ServerOption[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selected, setSelected] = useState<EventListItem | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
 
   const navigate = useCallback(
     (partial: Partial<EventFilters>) => {
@@ -80,7 +143,7 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
     return () => {
       cancelled = true;
     };
-  }, [filters, lockedServerId]);
+  }, [filters, lockedServerId, reloadToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -165,131 +228,140 @@ export function EventsBrowser({ lockedServerId }: { lockedServerId?: string }) {
 
   const exportHref = `/api/v1/events/export?${buildExportApiQuery(filters, { lockedServerId })}`;
 
+  const filtersApplied =
+    filters.kinds.length > 0 ||
+    filters.servers.length > 0 ||
+    filters.playerQuery !== '' ||
+    filters.ruleId !== '' ||
+    filters.preset !== 'all';
+
+  const resetFilters = useCallback(() => {
+    navigate({
+      kinds: [],
+      servers: [],
+      playerQuery: '',
+      ruleId: '',
+      preset: 'all',
+      from: '',
+      to: '',
+    });
+  }, [navigate]);
+
+  const resetProps: ToolbarProps = filtersApplied
+    ? { onReset: resetFilters, resetLabel: 'Сбросить фильтр' }
+    : {};
+
+  const filterPanel = (
+    <FilterPanel
+      filters={filters}
+      servers={serverOptions}
+      kinds={kindOptions}
+      lockedServerId={lockedServerId}
+      onChange={navigate}
+    />
+  );
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          {lockedServerId ? (
-            <Link
-              href={`/servers/${lockedServerId}`}
-              className="font-mono text-xs text-sky-400 hover:text-sky-300"
-            >
-              ← сервер
-            </Link>
-          ) : null}
-          <h1 className="text-2xl font-semibold">Журнал событий</h1>
-          <span className="text-xs text-neutral-500">
-            {total === null ? 'Всего: …' : `Всего: ${total}`}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <a
-            href={exportHref}
-            className="rounded border border-neutral-800 px-3 py-1.5 text-sm text-neutral-200 no-underline hover:border-neutral-600"
-          >
-            Экспорт CSV
-          </a>
-          <button
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            className="rounded border border-neutral-800 px-3 py-1.5 text-sm text-neutral-200 hover:border-neutral-600 lg:hidden"
-          >
-            Фильтры
-          </button>
-        </div>
-      </div>
-
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          Ошибка загрузки: {error}
-        </div>
+      {lockedServerId ? (
+        <h2 className="text-[17px] font-semibold text-ink">Журнал событий</h2>
       ) : null}
 
+      {error ? (
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить события"
+          description={error}
+          action={
+            <Button size="sm" onClick={() => setReloadToken((token) => token + 1)}>
+              Повторить
+            </Button>
+          }
+        />
+      ) : null}
+
+      <Toolbar
+        search={
+          <SearchField
+            value={filters.playerQuery}
+            onCommit={(next) => navigate({ playerQuery: next.trim() })}
+            label="Поиск по игроку"
+            placeholder="Ник игрока"
+            clearLabel="Очистить поиск"
+          />
+        }
+        filters={
+          <Button className="lg:hidden" onClick={() => setDrawerOpen(true)}>
+            Фильтры
+          </Button>
+        }
+        {...resetProps}
+        summary={total === null ? 'Всего: …' : `Всего: ${total}`}
+        actions={
+          <a href={exportHref} className={DOWNLOAD_LINK_CLASS}>
+            Экспорт CSV
+          </a>
+        }
+      />
+
       {filters.ruleId ? (
-        <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-2 rounded border border-sky-800 bg-sky-950/40 px-2 py-1 text-xs text-sky-200">
-            Правило: {filters.ruleId.slice(0, 8)}…
-            <button
-              type="button"
-              onClick={() => navigate({ ruleId: '' })}
-              aria-label="Убрать фильтр по правилу"
-              className="text-sky-400 hover:text-sky-100"
-            >
-              ×
-            </button>
-          </span>
+        <div className="flex items-center gap-1">
+          <Badge tone="accent">Правило: {filters.ruleId.slice(0, 8)}…</Badge>
+          <IconButton
+            icon={<span aria-hidden="true">✕</span>}
+            label="Убрать фильтр по правилу"
+            onClick={() => navigate({ ruleId: '' })}
+          />
         </div>
       ) : null}
 
       <div className="flex gap-6">
-        <aside className="hidden w-64 shrink-0 lg:block">
-          <FilterPanel
-            filters={filters}
-            servers={serverOptions}
-            kinds={kindOptions}
-            lockedServerId={lockedServerId}
-            onChange={navigate}
-          />
-        </aside>
+        <aside className="hidden w-64 shrink-0 lg:block">{filterPanel}</aside>
 
-        <div className="min-w-0 flex-1 space-y-3">
-          <EventList
-            items={items}
-            loading={loading}
-            showServer={!lockedServerId}
-            onSelect={setSelected}
-          />
+        <div className="min-w-0 flex-1">
+          <Card padding="none">
+            <EventList
+              items={items}
+              loading={loading}
+              filtersApplied={filtersApplied}
+              showServer={!lockedServerId}
+              onSelect={setSelected}
+              onResetFilters={resetFilters}
+            />
 
-          <div ref={sentinelRef} />
+            <div ref={sentinelRef} />
 
-          {nextCursor ? (
-            <div className="flex justify-center">
-              <button
-                type="button"
-                onClick={() => void loadMore()}
-                disabled={loadingMore}
-                className="rounded border border-neutral-800 px-4 py-1.5 text-sm text-neutral-300 hover:border-neutral-600 disabled:opacity-40"
-              >
-                {loadingMore ? 'Загрузка…' : 'Показать ещё'}
-              </button>
-            </div>
-          ) : !loading && items.length > 0 ? (
-            <div className="py-2 text-center text-xs text-neutral-500">Больше событий нет</div>
-          ) : null}
+            {nextCursor ? (
+              <div className="flex justify-center border-t border-line p-3">
+                <Button onClick={() => void loadMore()} loading={loadingMore}>
+                  Показать ещё
+                </Button>
+              </div>
+            ) : !loading && items.length > 0 ? (
+              <p className="border-t border-line p-3 text-center text-xs text-ink-3">
+                Больше событий нет
+              </p>
+            ) : null}
+          </Card>
         </div>
       </div>
 
-      {drawerOpen ? (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <button
-            type="button"
-            aria-label="Закрыть фильтры"
-            onClick={() => setDrawerOpen(false)}
-            className="absolute inset-0 bg-black/60"
-          />
-          <div className="absolute inset-y-0 left-0 w-80 max-w-[85%] overflow-y-auto border-r border-neutral-800 bg-neutral-950 p-4">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-neutral-200">Фильтры</h2>
-              <button
-                type="button"
-                onClick={() => setDrawerOpen(false)}
-                className="rounded border border-neutral-800 px-2 py-0.5 text-sm text-neutral-300 hover:border-neutral-600"
-              >
-                Готово
-              </button>
-            </div>
-            <FilterPanel
-              filters={filters}
-              servers={serverOptions}
-              kinds={kindOptions}
-              lockedServerId={lockedServerId}
-              onChange={navigate}
-            />
-          </div>
-        </div>
-      ) : null}
+      <Modal
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        title="Фильтры"
+        closeLabel="Закрыть фильтры"
+        size="sm"
+        footer={
+          <Button variant="primary" onClick={() => setDrawerOpen(false)}>
+            Готово
+          </Button>
+        }
+      >
+        {filterPanel}
+      </Modal>
 
-      {selected ? <EnvelopeModal event={selected} onClose={() => setSelected(null)} /> : null}
+      <EnvelopeModal event={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }
@@ -307,11 +379,6 @@ function FilterPanel({
   lockedServerId: string | undefined;
   onChange: (partial: Partial<EventFilters>) => void;
 }) {
-  const [playerDraft, setPlayerDraft] = useState(filters.playerQuery);
-  useEffect(() => {
-    setPlayerDraft(filters.playerQuery);
-  }, [filters.playerQuery]);
-
   function toggleKind(value: string) {
     const active = filters.kinds.includes(value);
     const nextKinds = active
@@ -329,90 +396,60 @@ function FilterPanel({
   }
 
   return (
-    <div className="space-y-5 text-sm">
+    <Card className="space-y-4">
       <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Игрок</span>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            onChange({ playerQuery: playerDraft.trim() });
-          }}
-        >
-          <input
-            type="search"
-            value={playerDraft}
-            onChange={(event) => setPlayerDraft(event.target.value)}
-            onBlur={() => onChange({ playerQuery: playerDraft.trim() })}
-            placeholder="Ник игрока"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm focus:border-neutral-600 focus:outline-none"
-          />
-        </form>
-      </div>
-
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <span className="text-xs uppercase tracking-widest text-neutral-500">Тип события</span>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-medium text-ink-2">Тип события</span>
           {filters.kinds.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => onChange({ kinds: [] })}
-              className="text-[11px] text-neutral-500 hover:text-neutral-300"
-            >
+            <Button variant="plain" size="sm" onClick={() => onChange({ kinds: [] })}>
               Сбросить
-            </button>
+            </Button>
           ) : null}
         </div>
-        <div className="max-h-56 space-y-1 overflow-y-auto rounded border border-neutral-900 p-1">
-          {kinds.map((option) => {
-            const active = filters.kinds.includes(option.value);
-            return (
-              <label
-                key={option.value}
-                className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs text-neutral-300 hover:bg-neutral-900"
-              >
-                <input
-                  type="checkbox"
-                  checked={active}
-                  onChange={() => toggleKind(option.value)}
-                  className="accent-sky-500"
-                />
-                <span className="truncate">{option.label}</span>
-              </label>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Период</span>
-        <div className="flex flex-wrap gap-1">
-          {DATE_PRESETS.map((preset) => (
-            <FilterPill
-              key={preset.value}
-              label={preset.label}
-              active={filters.preset === preset.value}
-              onClick={() => onChange({ preset: preset.value })}
+        <div className="max-h-56 space-y-1 overflow-y-auto rounded-ctl border border-line p-1">
+          {kinds.map((option) => (
+            <Checkbox
+              key={option.value}
+              label={<span className="truncate">{option.label}</span>}
+              checked={filters.kinds.includes(option.value)}
+              onChange={() => toggleKind(option.value)}
+              className="px-1.5"
             />
           ))}
         </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <span className="block text-xs font-medium text-ink-2">Период</span>
+        <Select
+          aria-label="Период"
+          value={filters.preset}
+          onChange={(event) => onChange({ preset: event.target.value as EventFilters['preset'] })}
+        >
+          {DATE_PRESETS.map((preset) => (
+            <option key={preset.value} value={preset.value}>
+              {preset.label}
+            </option>
+          ))}
+        </Select>
         {filters.preset === 'custom' ? (
           <div className="flex flex-col gap-2 pt-1">
-            <label className="flex items-center justify-between gap-2 text-xs text-neutral-500">
+            <label className="flex items-center justify-between gap-2 text-xs text-ink-3">
               С
               <input
                 type="date"
                 value={filters.from}
                 onChange={(event) => onChange({ from: event.target.value })}
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 focus:border-neutral-600 focus:outline-none"
+                className="h-8 rounded-ctl border border-line bg-raised px-2 text-xs text-ink"
               />
             </label>
-            <label className="flex items-center justify-between gap-2 text-xs text-neutral-500">
+            <label className="flex items-center justify-between gap-2 text-xs text-ink-3">
               По
               <input
                 type="date"
                 value={filters.to}
                 onChange={(event) => onChange({ to: event.target.value })}
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 focus:border-neutral-600 focus:outline-none"
+                className="h-8 rounded-ctl border border-line bg-raised px-2 text-xs text-ink"
               />
             </label>
           </div>
@@ -420,144 +457,139 @@ function FilterPanel({
       </div>
 
       <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Сортировка</span>
-        <div className="flex flex-wrap gap-1">
-          <FilterPill
-            label="Сначала новые"
-            active={filters.order === 'desc'}
-            onClick={() => onChange({ order: 'desc' })}
-          />
-          <FilterPill
-            label="Сначала старые"
-            active={filters.order === 'asc'}
-            onClick={() => onChange({ order: 'asc' })}
-          />
-        </div>
+        <span className="block text-xs font-medium text-ink-2">Порядок</span>
+        <Select
+          aria-label="Порядок событий"
+          value={filters.order}
+          onChange={(event) => onChange({ order: event.target.value as EventFilters['order'] })}
+        >
+          <option value="desc">Сначала новые</option>
+          <option value="asc">Сначала старые</option>
+        </Select>
       </div>
 
       {lockedServerId ? null : (
         <div className="space-y-1.5">
-          <span className="text-xs uppercase tracking-widest text-neutral-500">Серверы</span>
+          <span className="block text-xs font-medium text-ink-2">Серверы</span>
           {servers.length === 0 ? (
-            <p className="text-xs text-neutral-500">Нет доступных серверов</p>
+            <p className="text-xs text-ink-3">Нет доступных серверов</p>
           ) : (
-            <div className="max-h-48 space-y-1 overflow-y-auto rounded border border-neutral-900 p-1">
-              {servers.map((server) => {
-                const active = filters.servers.includes(server.id);
-                return (
-                  <label
-                    key={server.id}
-                    className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs text-neutral-300 hover:bg-neutral-900"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={active}
-                      onChange={() => toggleServer(server.id)}
-                      className="accent-sky-500"
-                    />
+            <div className="max-h-48 space-y-1 overflow-y-auto rounded-ctl border border-line p-1">
+              {servers.map((server) => (
+                <Checkbox
+                  key={server.id}
+                  label={
                     <span className="truncate">
                       {server.display_name ?? server.slug ?? server.id.slice(0, 8)}
                     </span>
-                  </label>
-                );
-              })}
+                  }
+                  checked={filters.servers.includes(server.id)}
+                  onChange={() => toggleServer(server.id)}
+                  className="px-1.5"
+                />
+              ))}
             </div>
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-function FilterPill({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded px-2 py-0.5 text-xs ${
-        active ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-400 hover:text-neutral-200'
-      }`}
-    >
-      {label}
-    </button>
+    </Card>
   );
 }
 
 function EventList({
   items,
   loading,
+  filtersApplied,
   showServer,
   onSelect,
+  onResetFilters,
 }: {
   items: EventListItem[];
   loading: boolean;
+  filtersApplied: boolean;
   showServer: boolean;
   onSelect: (event: EventListItem) => void;
+  onResetFilters: () => void;
 }) {
   if (loading && items.length === 0) {
-    return <div className="py-10 text-center text-sm text-neutral-500">Загрузка…</div>;
-  }
-  if (!loading && items.length === 0) {
     return (
-      <div className="rounded border border-dashed border-neutral-800 py-12 text-center text-sm text-neutral-400">
-        События не найдены. Измените фильтры.
+      <div className="p-3">
+        <SkeletonTable rows={8} cols={showServer ? 5 : 4} label="Загружаем журнал событий" />
       </div>
     );
   }
+  if (!loading && items.length === 0) {
+    return (
+      <EmptyState
+        variant={filtersApplied ? 'filtered' : 'initial'}
+        title={filtersApplied ? 'Ничего не нашлось' : 'Событий пока нет'}
+        description={
+          filtersApplied
+            ? 'Ни одно событие не подходит под выбранные фильтры.'
+            : 'Как только серверы начнут присылать события, они появятся здесь.'
+        }
+        action={filtersApplied ? <Button onClick={onResetFilters}>Сбросить фильтр</Button> : null}
+      />
+    );
+  }
   return (
-    <ul className="divide-y divide-neutral-900 rounded border border-neutral-800 bg-neutral-950/40">
-      {items.map((event) => (
-        <li key={event.event_id}>
-          <button
-            type="button"
-            onClick={() => onSelect(event)}
-            className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2.5 text-left hover:bg-neutral-900/50"
-          >
-            <span className="w-44 shrink-0 font-mono text-xs text-neutral-500">
-              {formatDateTime(event.occurred_at)}
-            </span>
-            <span
-              className={`inline-flex shrink-0 items-center rounded border px-1.5 py-0.5 text-xs ${kindTone(event.kind)}`}
-            >
-              {kindLabel(event.kind)}
-            </span>
-            {showServer ? (
-              <span className="inline-block rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-300">
-                {shortServerName(event)}
-              </span>
-            ) : null}
-            {event.actor_nickname ? (
-              <span className="truncate text-xs text-neutral-300">{event.actor_nickname}</span>
-            ) : null}
-            <span className="ml-auto font-mono text-[10px] text-neutral-500">
+    <Table dense ariaLabel="События">
+      <TableHead>
+        <TableRow>
+          <Th>Время</Th>
+          <Th>Тип</Th>
+          {showServer ? <Th>Сервер</Th> : null}
+          <Th>Кто</Th>
+          <Th align="right">Идентификатор</Th>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {items.map((event) => (
+          <TableRow key={event.event_id} interactive>
+            <Td className="whitespace-nowrap">
+              {/* Конверт открывается в модальном окне, поэтому здесь настоящая
+                  кнопка, а не ссылка и не обработчик на строке. */}
+              <Button
+                variant="plain"
+                size="sm"
+                onClick={() => onSelect(event)}
+                title={`Показать конверт события ${event.event_id.slice(0, 8)}`}
+              >
+                {formatDateTime(event.occurred_at)}
+              </Button>
+            </Td>
+            <Td>
+              <Badge size="sm" tone={kindBadgeTone(event.kind)}>
+                {kindLabel(event.kind)}
+              </Badge>
+            </Td>
+            {showServer ? <Td className="text-ink-2">{shortServerName(event)}</Td> : null}
+            <Td truncate className="text-ink-2">
+              {event.actor_nickname ?? '—'}
+            </Td>
+            <Td numeric className="font-mono text-2xs text-ink-3">
               {event.event_id.slice(0, 8)}
-            </span>
-          </button>
-        </li>
-      ))}
-    </ul>
+            </Td>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }
 
-function EnvelopeModal({ event, onClose }: { event: EventListItem; onClose: () => void }) {
+function EnvelopeModal({ event, onClose }: { event: EventListItem | null; onClose: () => void }) {
   const [envelope, setEnvelope] = useState<EventEnvelope | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const eventId = event?.event_id ?? null;
 
   useEffect(() => {
+    if (eventId === null) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
     setEnvelope(null);
-    fetch(`/api/v1/events/${event.event_id}`, { credentials: 'include', cache: 'no-store' })
+    fetch(`/api/v1/events/${eventId}`, { credentials: 'include', cache: 'no-store' })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return (await res.json()) as EventEnvelope;
@@ -574,57 +606,26 @@ function EnvelopeModal({ event, onClose }: { event: EventListItem; onClose: () =
     return () => {
       cancelled = true;
     };
-  }, [event.event_id]);
-
-  useEffect(() => {
-    function onKey(keyEvent: KeyboardEvent) {
-      if (keyEvent.key === 'Escape') onClose();
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [eventId]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <button
-        type="button"
-        aria-label="Закрыть"
-        onClick={onClose}
-        className="absolute inset-0 bg-black/70"
-      />
-      <div className="relative z-10 flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-neutral-800 bg-neutral-950">
-        <div className="flex items-start justify-between gap-3 border-b border-neutral-900 p-3">
-          <div className="min-w-0 space-y-1">
-            <div className="flex items-center gap-2">
-              <span
-                className={`inline-flex items-center rounded border px-1.5 py-0.5 text-xs ${kindTone(event.kind)}`}
-              >
-                {kindLabel(event.kind)}
-              </span>
-              <span className="text-xs text-neutral-500">{formatDateTime(event.occurred_at)}</span>
-            </div>
-            <div className="truncate font-mono text-[11px] text-neutral-500">{event.event_id}</div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="shrink-0 rounded border border-neutral-800 px-2 py-0.5 text-sm text-neutral-300 hover:border-neutral-600"
-          >
-            Закрыть
-          </button>
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto p-3">
-          {loading ? (
-            <div className="text-sm text-neutral-500">Загрузка…</div>
-          ) : error ? (
-            <div className="text-sm text-red-300">Ошибка: {error}</div>
-          ) : envelope ? (
-            <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-neutral-900 p-3 font-mono text-[11px] leading-relaxed text-neutral-300">
-              {JSON.stringify(envelope, null, 2)}
-            </pre>
-          ) : null}
-        </div>
-      </div>
-    </div>
+    <Modal
+      open={event !== null}
+      onClose={onClose}
+      title={event ? kindLabel(event.kind) : 'Событие'}
+      description={event ? `${formatDateTime(event.occurred_at)} · ${event.event_id}` : undefined}
+      size="lg"
+      closeLabel="Закрыть"
+    >
+      {loading ? (
+        <Skeleton variant="text" count={6} label="Загружаем конверт события" />
+      ) : error ? (
+        <InlineBanner tone="crit" title="Не удалось загрузить конверт" description={error} />
+      ) : envelope ? (
+        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-ctl bg-raised p-3 font-mono text-2xs leading-relaxed text-ink-2">
+          {JSON.stringify(envelope, null, 2)}
+        </pre>
+      ) : null}
+    </Modal>
   );
 }

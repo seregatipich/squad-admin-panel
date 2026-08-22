@@ -4,6 +4,27 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import {
+  Badge,
+  type BadgeTone,
+  Button,
+  Card,
+  Checkbox,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  EmptyState,
+  FieldRow,
+  InlineBanner,
+  Modal,
+  PageContainer,
+  PageHeader,
+  SearchField,
+  SegmentedControl,
+  Select,
+  Skeleton,
+  StatusDot,
+  TextInput,
+} from '@/components/ui';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
   appendVotePage,
@@ -18,7 +39,7 @@ import {
   PAGE_LIMIT,
   parseFilters,
   RESULT_OPTIONS,
-  RESULT_TONE_CLASSES,
+  type ResultTone,
   resultLabel,
   resultTone,
   type ServerOption,
@@ -37,6 +58,22 @@ interface ServersResponse {
   items: Array<{ id: string; display_name: string | null; slug: string | null }>;
 }
 
+/**
+ * Исход голосования красит бейдж. Цвет здесь только ускоряет просмотр: сам
+ * бейдж называет исход словом, поэтому ничего не теряется (дизайн-система, §5).
+ */
+const RESULT_BADGE_TONE: Record<ResultTone, BadgeTone> = {
+  passed: 'good',
+  failed: 'crit',
+  cancelled: 'warn',
+  pending: 'neutral',
+};
+
+const ORDER_ITEMS = [
+  { value: 'desc', label: 'Сначала новые' },
+  { value: 'asc', label: 'Сначала старые' },
+];
+
 export function VotesBrowser() {
   const router = useRouter();
   const pathname = usePathname();
@@ -52,6 +89,11 @@ export function VotesBrowser() {
   const [total, setTotal] = useState<number | null>(null);
   const [fetchedServers, setFetchedServers] = useState<ServerOption[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  /**
+   * Номер последнего запроса первой страницы: «Повторить» ходит тем же путём,
+   * что и обычная загрузка, а ответ на отменённый запрос не попадает в список.
+   */
+  const listRequestRef = useRef(0);
 
   const navigate = useCallback(
     (partial: Partial<VoteFilters>) => {
@@ -62,8 +104,10 @@ export function VotesBrowser() {
     [filters, pathname, router],
   );
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadFirstPage = useCallback(() => {
+    listRequestRef.current += 1;
+    const requestId = listRequestRef.current;
+    const current = () => listRequestRef.current === requestId;
     setLoading(true);
     setError(null);
     fetch(`/api/v1/votes?${buildListApiQuery(filters, { limit: PAGE_LIMIT })}`, {
@@ -75,21 +119,25 @@ export function VotesBrowser() {
         return (await res.json()) as VoteListResponse;
       })
       .then((data) => {
-        if (cancelled) return;
+        if (!current()) return;
         setItems(data.items);
         setNextCursor(data.next_cursor);
         setLastUpdate(new Date());
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError((err as Error).message);
+        if (current()) setError((err as Error).message);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (current()) setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
   }, [filters]);
+
+  useEffect(() => {
+    loadFirstPage();
+    return () => {
+      listRequestRef.current += 1;
+    };
+  }, [loadFirstPage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -185,84 +233,78 @@ export function VotesBrowser() {
     );
   }, [fetchedServers, items]);
 
+  const filtersApplied =
+    filters.initiatorQuery.trim() !== '' ||
+    filters.voteType !== '' ||
+    filters.result !== '' ||
+    filters.servers.length > 0 ||
+    filters.preset !== 'all';
+
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">Голосования</h1>
-          <span className="text-xs text-neutral-500">
-            {total === null ? 'Всего: …' : `Всего: ${total}`}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <LiveIndicator lastUpdate={lastUpdate} />
-          <button
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            className="rounded border border-neutral-800 px-3 py-1.5 text-sm text-neutral-200 hover:border-neutral-600 lg:hidden"
-          >
+    <PageContainer>
+      <PageHeader
+        title="Голосования"
+        status={<LiveIndicator lastUpdate={lastUpdate} />}
+        meta={<span>всего: {total === null ? '…' : total}</span>}
+        actions={
+          <Button className="lg:hidden" onClick={() => setDrawerOpen(true)}>
             Фильтры
-          </button>
-        </div>
-      </div>
+          </Button>
+        }
+      />
 
       {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          Ошибка загрузки: {error}
-        </div>
+        <InlineBanner
+          tone="crit"
+          title="Не удалось загрузить голосования"
+          description={error}
+          action={
+            <Button size="sm" onClick={loadFirstPage}>
+              Повторить
+            </Button>
+          }
+        />
       ) : null}
 
       <div className="flex gap-6">
         <aside className="hidden w-64 shrink-0 lg:block">
-          <FilterPanel filters={filters} servers={serverOptions} onChange={navigate} />
+          <Card>
+            <FilterPanel filters={filters} servers={serverOptions} onChange={navigate} />
+          </Card>
         </aside>
 
         <div className="min-w-0 flex-1 space-y-3">
-          <VoteCards items={items} loading={loading} />
+          <VoteCards items={items} loading={loading} filtersApplied={filtersApplied} />
 
           <div ref={sentinelRef} />
 
           {nextCursor ? (
             <div className="flex justify-center">
-              <button
-                type="button"
-                onClick={() => void loadMore()}
-                disabled={loadingMore}
-                className="rounded border border-neutral-800 px-4 py-1.5 text-sm text-neutral-300 hover:border-neutral-600 disabled:opacity-40"
-              >
-                {loadingMore ? 'Загрузка…' : 'Показать ещё'}
-              </button>
+              <Button onClick={() => void loadMore()} loading={loadingMore}>
+                Показать ещё
+              </Button>
             </div>
           ) : !loading && items.length > 0 ? (
-            <div className="py-2 text-center text-xs text-neutral-500">Больше голосований нет</div>
+            <p className="py-2 text-center text-xs text-ink-3">Больше голосований нет</p>
           ) : null}
         </div>
       </div>
 
-      {drawerOpen ? (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <button
-            type="button"
-            aria-label="Закрыть фильтры"
-            onClick={() => setDrawerOpen(false)}
-            className="absolute inset-0 bg-black/60"
-          />
-          <div className="absolute inset-y-0 left-0 w-80 max-w-[85%] overflow-y-auto border-r border-neutral-800 bg-neutral-950 p-4">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-neutral-200">Фильтры</h2>
-              <button
-                type="button"
-                onClick={() => setDrawerOpen(false)}
-                className="rounded border border-neutral-800 px-2 py-0.5 text-sm text-neutral-300 hover:border-neutral-600"
-              >
-                Готово
-              </button>
-            </div>
-            <FilterPanel filters={filters} servers={serverOptions} onChange={navigate} />
-          </div>
-        </div>
-      ) : null}
-    </div>
+      <Modal
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        title="Фильтры"
+        closeLabel="Закрыть фильтры"
+        size="sm"
+        footer={
+          <Button variant="primary" onClick={() => setDrawerOpen(false)}>
+            Готово
+          </Button>
+        }
+      >
+        <FilterPanel filters={filters} servers={serverOptions} onChange={navigate} />
+      </Modal>
+    </PageContainer>
   );
 }
 
@@ -275,11 +317,6 @@ function FilterPanel({
   servers: ServerOption[];
   onChange: (partial: Partial<VoteFilters>) => void;
 }) {
-  const [initiatorDraft, setInitiatorDraft] = useState(filters.initiatorQuery);
-  useEffect(() => {
-    setInitiatorDraft(filters.initiatorQuery);
-  }, [filters.initiatorQuery]);
-
   function toggleServer(id: string) {
     const active = filters.servers.includes(id);
     const nextServers = active
@@ -289,141 +326,104 @@ function FilterPanel({
   }
 
   return (
-    <div className="space-y-5 text-sm">
-      <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Инициатор</span>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            onChange({ initiatorQuery: initiatorDraft.trim() });
-          }}
+    <div className="space-y-4">
+      <FieldRow label="Инициатор">
+        <SearchField
+          value={filters.initiatorQuery}
+          onCommit={(value) => onChange({ initiatorQuery: value.trim() })}
+          label="Поиск по инициатору"
+          placeholder="Ник инициатора"
+          clearLabel="Очистить поиск по инициатору"
+        />
+      </FieldRow>
+
+      <FieldRow label="Тип">
+        <Select
+          value={filters.voteType}
+          onChange={(event) =>
+            onChange({ voteType: event.target.value as VoteFilters['voteType'] })
+          }
         >
-          <input
-            type="search"
-            value={initiatorDraft}
-            onChange={(event) => setInitiatorDraft(event.target.value)}
-            onBlur={() => onChange({ initiatorQuery: initiatorDraft.trim() })}
-            placeholder="Ник инициатора"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-2 py-1.5 text-sm focus:border-neutral-600 focus:outline-none"
-          />
-        </form>
-      </div>
-
-      <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Тип</span>
-        <div className="flex flex-wrap gap-1">
-          <FilterPill
-            label="Все"
-            active={filters.voteType === ''}
-            onClick={() => onChange({ voteType: '' })}
-          />
+          <option value="">Все</option>
           {VOTE_TYPE_OPTIONS.map((option) => (
-            <FilterPill
-              key={option.value}
-              label={option.label}
-              active={filters.voteType === option.value}
-              onClick={() => onChange({ voteType: option.value })}
-            />
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
           ))}
-        </div>
-      </div>
+        </Select>
+      </FieldRow>
 
-      <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Исход</span>
-        <div className="flex flex-wrap gap-1">
-          <FilterPill
-            label="Любой"
-            active={filters.result === ''}
-            onClick={() => onChange({ result: '' })}
-          />
+      <FieldRow label="Исход">
+        <Select
+          value={filters.result}
+          onChange={(event) => onChange({ result: event.target.value as VoteFilters['result'] })}
+        >
+          <option value="">Любой</option>
           {RESULT_OPTIONS.map((option) => (
-            <FilterPill
-              key={option.value}
-              label={option.label}
-              active={filters.result === option.value}
-              onClick={() => onChange({ result: option.value })}
-            />
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
           ))}
-        </div>
-      </div>
+        </Select>
+      </FieldRow>
 
-      <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Период</span>
-        <div className="flex flex-wrap gap-1">
+      <FieldRow label="Период">
+        <Select
+          value={filters.preset}
+          onChange={(event) => onChange({ preset: event.target.value as VoteFilters['preset'] })}
+        >
           {DATE_PRESETS.map((preset) => (
-            <FilterPill
-              key={preset.value}
-              label={preset.label}
-              active={filters.preset === preset.value}
-              onClick={() => onChange({ preset: preset.value })}
-            />
+            <option key={preset.value} value={preset.value}>
+              {preset.label}
+            </option>
           ))}
+        </Select>
+      </FieldRow>
+
+      {filters.preset === 'custom' ? (
+        <div className="flex flex-col gap-2">
+          <FieldRow label="С">
+            <TextInput
+              type="date"
+              value={filters.from}
+              onChange={(event) => onChange({ from: event.target.value })}
+            />
+          </FieldRow>
+          <FieldRow label="По">
+            <TextInput
+              type="date"
+              value={filters.to}
+              onChange={(event) => onChange({ to: event.target.value })}
+            />
+          </FieldRow>
         </div>
-        {filters.preset === 'custom' ? (
-          <div className="flex flex-col gap-2 pt-1">
-            <label className="flex items-center justify-between gap-2 text-xs text-neutral-500">
-              С
-              <input
-                type="date"
-                value={filters.from}
-                onChange={(event) => onChange({ from: event.target.value })}
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 focus:border-neutral-600 focus:outline-none"
-              />
-            </label>
-            <label className="flex items-center justify-between gap-2 text-xs text-neutral-500">
-              По
-              <input
-                type="date"
-                value={filters.to}
-                onChange={(event) => onChange({ to: event.target.value })}
-                className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 focus:border-neutral-600 focus:outline-none"
-              />
-            </label>
-          </div>
-        ) : null}
+      ) : null}
+
+      <div className="space-y-1">
+        <p className="text-xs font-medium text-ink-2">Сортировка</p>
+        <SegmentedControl
+          ariaLabel="Сортировка голосований"
+          items={ORDER_ITEMS}
+          value={filters.order}
+          onChange={(value) => onChange({ order: value as VoteFilters['order'] })}
+          size="sm"
+        />
       </div>
 
-      <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Сортировка</span>
-        <div className="flex flex-wrap gap-1">
-          <FilterPill
-            label="Сначала новые"
-            active={filters.order === 'desc'}
-            onClick={() => onChange({ order: 'desc' })}
-          />
-          <FilterPill
-            label="Сначала старые"
-            active={filters.order === 'asc'}
-            onClick={() => onChange({ order: 'asc' })}
-          />
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <span className="text-xs uppercase tracking-widest text-neutral-500">Серверы</span>
+      <div className="space-y-2">
+        <p className="text-xs font-medium text-ink-2">Серверы</p>
         {servers.length === 0 ? (
-          <p className="text-xs text-neutral-500">Нет доступных серверов</p>
+          <p className="text-xs text-ink-3">Нет доступных серверов</p>
         ) : (
-          <div className="max-h-48 space-y-1 overflow-y-auto rounded border border-neutral-900 p-1">
-            {servers.map((server) => {
-              const active = filters.servers.includes(server.id);
-              return (
-                <label
-                  key={server.id}
-                  className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs text-neutral-300 hover:bg-neutral-900"
-                >
-                  <input
-                    type="checkbox"
-                    checked={active}
-                    onChange={() => toggleServer(server.id)}
-                    className="accent-sky-500"
-                  />
-                  <span className="truncate">
-                    {server.display_name ?? server.slug ?? server.id.slice(0, 8)}
-                  </span>
-                </label>
-              );
-            })}
+          <div className="max-h-48 space-y-1 overflow-y-auto rounded-ctl border border-line p-2">
+            {servers.map((server) => (
+              <Checkbox
+                key={server.id}
+                label={server.display_name ?? server.slug ?? server.id.slice(0, 8)}
+                checked={filters.servers.includes(server.id)}
+                onChange={() => toggleServer(server.id)}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -431,37 +431,35 @@ function FilterPanel({
   );
 }
 
-function FilterPill({
-  label,
-  active,
-  onClick,
+function VoteCards({
+  items,
+  loading,
+  filtersApplied,
 }: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
+  items: VoteListItem[];
+  loading: boolean;
+  filtersApplied: boolean;
 }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded px-2 py-0.5 text-xs ${
-        active ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-400 hover:text-neutral-200'
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-function VoteCards({ items, loading }: { items: VoteListItem[]; loading: boolean }) {
   if (loading && items.length === 0) {
-    return <div className="py-10 text-center text-sm text-neutral-500">Загрузка…</div>;
+    return (
+      <Card padding="sm">
+        <Skeleton variant="block" count={5} label="Загрузка голосований" />
+      </Card>
+    );
   }
   if (!loading && items.length === 0) {
     return (
-      <div className="rounded border border-dashed border-neutral-800 py-12 text-center text-sm text-neutral-400">
-        Голосования не найдены. Измените фильтры.
-      </div>
+      <Card padding="none">
+        <EmptyState
+          variant={filtersApplied ? 'filtered' : 'initial'}
+          title={filtersApplied ? 'Нет совпадений.' : 'Голосований ещё не было'}
+          description={
+            filtersApplied
+              ? 'Ни одно голосование не подходит под включённые фильтры.'
+              : 'Панель ещё не записала ни одного голосования на серверах.'
+          }
+        />
+      </Card>
     );
   }
   return (
@@ -482,62 +480,61 @@ function VoteCard({ vote }: { vote: VoteListItem }) {
   const tone = resultTone(vote.result);
   const chain = mapChain(vote);
 
+  const loadBallots = useCallback(() => {
+    setBallotsLoading(true);
+    setBallotsError(null);
+    fetch(`/api/v1/votes/${vote.id}`, { credentials: 'include', cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return (await res.json()) as VoteDetail;
+      })
+      .then((data) => setBallots(data.ballots))
+      .catch((err: unknown) => setBallotsError((err as Error).message))
+      .finally(() => setBallotsLoading(false));
+  }, [vote.id]);
+
   const toggle = useCallback(() => {
     const next = !expanded;
     setExpanded(next);
-    if (next && ballots === null && !ballotsLoading) {
-      setBallotsLoading(true);
-      setBallotsError(null);
-      fetch(`/api/v1/votes/${vote.id}`, { credentials: 'include', cache: 'no-store' })
-        .then(async (res) => {
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return (await res.json()) as VoteDetail;
-        })
-        .then((data) => setBallots(data.ballots))
-        .catch((err: unknown) => setBallotsError((err as Error).message))
-        .finally(() => setBallotsLoading(false));
-    }
-  }, [expanded, ballots, ballotsLoading, vote.id]);
+    if (next && ballots === null && !ballotsLoading) loadBallots();
+  }, [expanded, ballots, ballotsLoading, loadBallots]);
 
   return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-950/40">
+    <Card padding="none">
       <div className="flex flex-wrap items-start justify-between gap-3 p-3">
         <div className="min-w-0 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            <span
-              title={vote.server_name ?? undefined}
-              className="inline-block rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200"
-            >
+            <Badge tone="neutral" title={vote.server_name ?? undefined}>
               {shortServerName(vote)}
-            </span>
-            <span className="rounded border border-neutral-800 bg-neutral-900 px-1.5 py-0.5 text-xs text-neutral-300">
-              {voteTypeLabel(vote.vote_type)}
-            </span>
-            <span className="text-xs text-neutral-500">{formatDateTime(vote.started_at)}</span>
+            </Badge>
+            <Badge tone="neutral">{voteTypeLabel(vote.vote_type)}</Badge>
+            <span className="text-xs text-ink-3">{formatDateTime(vote.started_at)}</span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-            <span className="text-neutral-400">
-              Инициатор:{' '}
-              {vote.initiator_player_id ? (
-                <Link
-                  href={`/all-players/${vote.initiator_player_id}`}
-                  className="text-sky-300 hover:text-sky-200"
-                >
-                  {vote.initiator_nickname ?? vote.initiator_player_id.slice(0, 8)}
-                </Link>
-              ) : (
-                <span className="text-neutral-500">—</span>
-              )}
-            </span>
-          </div>
+          <p className="text-[13px] text-ink-2">
+            Инициатор:{' '}
+            {vote.initiator_player_id ? (
+              <Link
+                href={`/all-players/${vote.initiator_player_id}`}
+                className="text-accent no-underline hover:brightness-110"
+              >
+                {vote.initiator_nickname ?? vote.initiator_player_id.slice(0, 8)}
+              </Link>
+            ) : (
+              <span className="text-ink-3">—</span>
+            )}
+          </p>
 
           {chain.length > 0 ? (
-            <div className="flex flex-wrap items-center gap-1.5 font-mono text-xs text-neutral-300">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs text-ink-2">
               {chain.map((entry, index) => (
                 <span key={`${vote.id}-map-${index}`} className="flex items-center gap-1.5">
-                  {index > 0 ? <span className="text-neutral-500">→</span> : null}
-                  <span className="rounded bg-neutral-900 px-1.5 py-0.5">{entry}</span>
+                  {index > 0 ? (
+                    <span aria-hidden="true" className="text-ink-3">
+                      →
+                    </span>
+                  ) : null}
+                  <span className="rounded-ctl bg-raised px-1.5 py-0.5">{entry}</span>
                 </span>
               ))}
             </div>
@@ -545,18 +542,12 @@ function VoteCard({ vote }: { vote: VoteListItem }) {
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-1.5 text-right">
-          <span
-            className={`inline-flex items-center rounded border px-2 py-0.5 text-xs ${RESULT_TONE_CLASSES[tone]}`}
-          >
-            {resultLabel(vote.result)}
-          </span>
-          <span className="font-mono text-sm text-neutral-200">
+          <Badge tone={RESULT_BADGE_TONE[tone]}>{resultLabel(vote.result)}</Badge>
+          <span className="text-[13px] tabular-nums text-ink">
             {vote.votes_collected}
-            <span className="text-neutral-500">/{vote.votes_required}</span>
+            <span className="text-ink-3">/{vote.votes_required}</span>
           </span>
-          <span className="text-[11px] text-neutral-500">
-            {formatDuration(vote.duration_seconds)}
-          </span>
+          <span className="text-2xs text-ink-3">{formatDuration(vote.duration_seconds)}</span>
         </div>
       </div>
 
@@ -564,45 +555,54 @@ function VoteCard({ vote }: { vote: VoteListItem }) {
         type="button"
         onClick={toggle}
         aria-expanded={expanded}
-        className="flex w-full items-center justify-between border-t border-neutral-900 px-3 py-1.5 text-xs text-neutral-400 hover:bg-neutral-900/40 hover:text-neutral-200"
+        className="flex h-8 w-full items-center justify-between border-t border-line px-3 text-xs text-ink-2 transition-colors duration-150 hover:bg-raised/40 hover:text-ink"
       >
         <span>Проголосовавшие ({vote.ballot_count})</span>
-        <span aria-hidden>{expanded ? '▲' : '▼'}</span>
+        {expanded ? (
+          <ChevronUpIcon className="size-3.5" />
+        ) : (
+          <ChevronDownIcon className="size-3.5" />
+        )}
       </button>
 
       {expanded ? (
-        <div className="border-t border-neutral-900 p-3">
+        <div className="border-t border-line p-3">
           {ballotsLoading ? (
-            <div className="text-xs text-neutral-500">Загрузка…</div>
+            <Skeleton variant="text" count={2} label="Загрузка поимённых голосов" />
           ) : ballotsError ? (
-            <div className="text-xs text-red-300">Ошибка: {ballotsError}</div>
+            <InlineBanner
+              tone="crit"
+              title="Не удалось загрузить поимённые голоса"
+              description={ballotsError}
+              action={
+                <Button size="sm" onClick={loadBallots}>
+                  Повторить
+                </Button>
+              }
+            />
           ) : ballots && ballots.length > 0 ? (
             <ul className="flex flex-wrap gap-2">
               {ballots.map((ballot) => (
                 <li key={`${vote.id}-${ballot.player_id}`}>
                   <Link
                     href={`/all-players/${ballot.player_id}`}
-                    className="inline-flex items-center gap-1.5 rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 no-underline hover:border-neutral-600"
+                    className="inline-flex h-7 items-center gap-1.5 rounded-ctl border border-line bg-raised px-2 text-xs text-ink no-underline transition-colors duration-150 hover:bg-line-2"
                   >
-                    <span
-                      aria-hidden
-                      className={`h-1.5 w-1.5 rounded-full ${
-                        ballot.choice === 'yes' ? 'bg-emerald-400' : 'bg-red-400'
-                      }`}
-                    />
                     <span className="truncate">{ballot.nickname}</span>
-                    <span className="text-neutral-500">
-                      {ballot.choice === 'yes' ? 'за' : 'против'}
-                    </span>
+                    <StatusDot
+                      state={ballot.choice === 'yes' ? 'good' : 'crit'}
+                      label={ballot.choice === 'yes' ? 'за' : 'против'}
+                      size="sm"
+                    />
                   </Link>
                 </li>
               ))}
             </ul>
           ) : (
-            <div className="text-xs text-neutral-500">Поимённых голосов нет.</div>
+            <p className="text-xs text-ink-3">Поимённых голосов нет.</p>
           )}
         </div>
       ) : null}
-    </div>
+    </Card>
   );
 }

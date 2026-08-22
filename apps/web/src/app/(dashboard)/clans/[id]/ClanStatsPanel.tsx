@@ -2,6 +2,24 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Button,
+  Card,
+  CardBody,
+  CardGrid,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  SegmentedControl,
+  Skeleton,
+  StatTile,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
 
 interface ClanStatsChartPoint {
   day: string;
@@ -75,6 +93,14 @@ const PEAK_COLOR = '#ff9f0a';
 const PRIMETIME_BAR_COLOR = '#409cff';
 const TOP_MEMBERS_DISPLAY_LIMIT = 5;
 const DAY_MS = 86_400_000;
+
+/*
+ * Ссылка на выгрузку остаётся обычным `<a>`, а не `ButtonLink`: `next/link`
+ * перехватывает клик и уводит в клиентскую навигацию, из-за чего файл не
+ * скачивается. Классы повторяют вторичную кнопку размера `sm` (§6).
+ */
+const DOWNLOAD_LINK_CLASS =
+  'inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-ctl border border-line bg-raised px-2.5 text-2xs font-medium text-ink no-underline transition-colors duration-150 hover:bg-line-2';
 
 function todayUtcDay(): string {
   return new Date().toISOString().slice(0, 10);
@@ -153,241 +179,221 @@ export default function ClanStatsPanel({ clanId }: { clanId: string }) {
     : null;
 
   return (
-    <section className="space-y-4 rounded border border-neutral-800 bg-neutral-950 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-medium">Статистика клана</h2>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
-            {RANGE_PRESETS.map((preset) => (
-              <button
-                key={preset}
-                type="button"
-                onClick={() => setRange(preset)}
-                className={`rounded border px-2 py-0.5 text-xs ${
-                  range === preset
-                    ? 'border-sky-500 bg-sky-950/40 text-sky-300'
-                    : 'border-neutral-800 text-neutral-400 hover:border-neutral-600'
-                }`}
-              >
-                {RANGE_LABELS[preset]}
-              </button>
-            ))}
-          </div>
-          <Link
-            href={exportHref}
-            className="rounded border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-xs text-neutral-300 hover:bg-neutral-800"
-          >
-            Экспорт CSV
-          </Link>
-        </div>
-      </div>
+    <Card padding="none">
+      <CardHeader
+        title="Статистика клана"
+        actions={
+          <>
+            <SegmentedControl
+              size="sm"
+              ariaLabel="Период статистики"
+              value={String(range)}
+              onChange={(next) => setRange(Number(next) as RangePreset)}
+              items={RANGE_PRESETS.map((preset) => ({
+                value: String(preset),
+                label: RANGE_LABELS[preset],
+              }))}
+            />
+            <a href={exportHref} className={DOWNLOAD_LINK_CLASS}>
+              Экспорт CSV
+            </a>
+          </>
+        }
+      />
 
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          Ошибка: {error}
-        </div>
-      ) : loading || !data ? (
-        <div className="text-sm text-neutral-500">Загрузка…</div>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <TotalCard
-              label="Онлайн"
-              value={fmtDuration(data.totals.online_seconds)}
-              accent="text-emerald-300"
-            />
-            <TotalCard
-              label="Буст"
-              value={fmtDuration(data.totals.boost_seconds)}
-              accent="text-amber-300"
-            />
-            <TotalCard
-              label="Основной сервер"
-              value={
-                data.totals.primary_server?.server_name ??
-                data.totals.primary_server?.server_slug ??
-                '—'
-              }
-              accent="text-sky-300"
-              small
-            />
-            <TotalCard
-              label="Игроков в ростере"
-              value={String(data.roster_size)}
-              accent="text-neutral-200"
-            />
-          </div>
+      <CardBody className="space-y-4">
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить статистику"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => void load()}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : loading || !data ? (
+          <>
+            <Skeleton variant="card" label="Загружаем статистику клана" />
+            <Skeleton variant="block" count={2} />
+          </>
+        ) : (
+          <>
+            <CardGrid cols={4}>
+              <StatTile
+                size="sm"
+                label="Онлайн"
+                value={fmtDuration(data.totals.online_seconds)}
+                tone="good"
+              />
+              <StatTile
+                size="sm"
+                label="Буст"
+                value={fmtDuration(data.totals.boost_seconds)}
+                tone="warn"
+              />
+              <StatTile
+                size="sm"
+                label="Основной сервер"
+                value={
+                  data.totals.primary_server?.server_name ??
+                  data.totals.primary_server?.server_slug ??
+                  '—'
+                }
+                tone="accent"
+              />
+              <StatTile size="sm" label="Игроков в ростере" value={String(data.roster_size)} />
+            </CardGrid>
 
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-3 text-neutral-400">
-                <Legend color={ONLINE_COLOR} label="Онлайн" />
-                <Legend color={BOOST_COLOR} label="Буст" />
-              </div>
-              <span className="text-neutral-500">
-                {hoverPoint ? (
-                  <span className="tabular-nums">
-                    {hoverPoint.day} ·{' '}
-                    <span className="text-emerald-300">
-                      {fmtDuration(hoverPoint.online_seconds)}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-3 text-ink-3">
+                  <Legend color={ONLINE_COLOR} label="Онлайн" />
+                  <Legend color={BOOST_COLOR} label="Буст" />
+                </div>
+                <span className="text-ink-3">
+                  {hoverPoint ? (
+                    <span className="tabular-nums">
+                      {hoverPoint.day} ·{' '}
+                      <span className="text-good">{fmtDuration(hoverPoint.online_seconds)}</span>
+                      {hoverPoint.boost_seconds > 0 ? (
+                        <>
+                          {' '}
+                          ·{' '}
+                          <span className="text-warn">
+                            буст {fmtDuration(hoverPoint.boost_seconds)}
+                          </span>
+                        </>
+                      ) : null}
                     </span>
-                    {hoverPoint.boost_seconds > 0 ? (
-                      <>
-                        {' '}
-                        ·{' '}
-                        <span className="text-amber-300">
-                          буст {fmtDuration(hoverPoint.boost_seconds)}
-                        </span>
-                      </>
-                    ) : null}
+                  ) : (
+                    `${data.from} — ${data.to}`
+                  )}
+                </span>
+              </div>
+              <ActivityChart
+                chart={data.chart}
+                maxSeconds={maxDaySeconds}
+                hoverDay={hoverDay}
+                onHover={setHoverDay}
+              />
+            </div>
+
+            <div className="space-y-2 rounded-card border border-line bg-raised/40 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-[13px] font-semibold text-ink">Праймтайм клана</h3>
+                {data.primetime.range ? (
+                  <span className="inline-flex items-center gap-2 rounded-full border border-warn/40 bg-warn/10 px-3 py-1">
+                    <span
+                      aria-hidden="true"
+                      className="inline-block h-2 w-2 rounded-full"
+                      style={{ backgroundColor: PEAK_COLOR }}
+                    />
+                    <span className="font-mono text-xs text-warn">
+                      {data.primetime.range.label}
+                    </span>
                   </span>
                 ) : (
-                  `${data.from} — ${data.to}`
+                  <span className="text-xs text-ink-3">Недостаточно данных.</span>
                 )}
-              </span>
-            </div>
-            <ActivityChart
-              chart={data.chart}
-              maxSeconds={maxDaySeconds}
-              hoverDay={hoverDay}
-              onHover={setHoverDay}
-            />
-          </div>
-
-          <div className="space-y-2 rounded border border-neutral-800 bg-neutral-900/40 p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="text-xs uppercase tracking-widest text-neutral-500">
-                Праймтайм клана
               </div>
-              {data.primetime.range ? (
-                <span className="inline-flex items-center gap-2 rounded-full border border-amber-900 bg-amber-950/40 px-3 py-1">
-                  <span
-                    className="inline-block h-2 w-2 rounded-full"
-                    style={{ backgroundColor: PEAK_COLOR }}
-                  />
-                  <span className="font-mono text-sm text-amber-200">
-                    {data.primetime.range.label}
-                  </span>
+              <div className="flex items-end gap-px" style={{ height: 56 }}>
+                {HOURS.map((hour) => {
+                  const seconds = data.primetime.histogram[hour] ?? 0;
+                  const heightPct = (seconds / maxHourSeconds) * 100;
+                  const peak = isPeakHour(hour, data.primetime.range);
+                  return (
+                    <div
+                      key={hour}
+                      title={`${String(hour).padStart(2, '0')}:00 — ${fmtDuration(seconds)}`}
+                      className="flex flex-1 items-end self-stretch"
+                    >
+                      <span
+                        className="w-full rounded-sm"
+                        style={{
+                          height: `${Math.max(seconds > 0 ? 4 : 0, heightPct)}%`,
+                          backgroundColor: peak ? PEAK_COLOR : PRIMETIME_BAR_COLOR,
+                          opacity: 0.85,
+                        }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flex justify-between text-2xs tabular-nums text-ink-3">
+                {[0, 6, 12, 18, 23].map((hour) => (
+                  <span key={hour}>{String(hour).padStart(2, '0')}</span>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-[13px] font-semibold text-ink">Топ по фрагам</h3>
+                <span className="text-xs text-ink-3">
+                  K/D клана:{' '}
+                  <span className="tabular-nums text-ink-2">{data.combat.kd.toFixed(2)}</span>
                 </span>
-              ) : (
-                <span className="text-xs text-neutral-500">Недостаточно данных.</span>
-              )}
-            </div>
-            <div className="flex items-end gap-px" style={{ height: 56 }}>
-              {HOURS.map((hour) => {
-                const seconds = data.primetime.histogram[hour] ?? 0;
-                const heightPct = (seconds / maxHourSeconds) * 100;
-                const peak = isPeakHour(hour, data.primetime.range);
-                return (
-                  <div
-                    key={hour}
-                    title={`${String(hour).padStart(2, '0')}:00 — ${fmtDuration(seconds)}`}
-                    className="flex flex-1 items-end self-stretch"
-                  >
-                    <span
-                      className="w-full rounded-sm"
-                      style={{
-                        height: `${Math.max(seconds > 0 ? 4 : 0, heightPct)}%`,
-                        backgroundColor: peak ? PEAK_COLOR : PRIMETIME_BAR_COLOR,
-                        opacity: 0.85,
-                      }}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-            <div className="flex justify-between text-[10px] tabular-nums text-neutral-500">
-              {[0, 6, 12, 18, 23].map((hour) => (
-                <span key={hour}>{String(hour).padStart(2, '0')}</span>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs uppercase tracking-widest text-neutral-500">Топ по фрагам</h3>
-              <span className="text-xs text-neutral-500">
-                K/D клана:{' '}
-                <span className="tabular-nums text-neutral-300">{data.combat.kd.toFixed(2)}</span>
-              </span>
-            </div>
-            {data.combat.top.length === 0 ? (
-              <div className="rounded border border-dashed border-neutral-800 p-4 text-center text-sm text-neutral-500">
-                Нет данных о бое за выбранный период.
               </div>
-            ) : (
-              <div className="overflow-x-auto rounded border border-neutral-800">
-                <table className="w-full text-sm">
-                  <thead className="bg-neutral-950 text-xs uppercase tracking-widest text-neutral-500">
-                    <tr>
-                      <th className="p-2 text-left">Участник</th>
-                      <th className="p-2 text-right">Фраги</th>
-                      <th className="p-2 text-right">Смерти</th>
-                      <th className="p-2 text-right">Воскрешения</th>
-                      <th className="p-2 text-right">K/D</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+              {data.combat.top.length === 0 ? (
+                <EmptyState
+                  title="Нет данных о бое"
+                  description="За выбранный период у клана нет боевой статистики."
+                />
+              ) : (
+                <Table ariaLabel="Топ участников клана по фрагам">
+                  <TableHead sticky={false}>
+                    <TableRow>
+                      <Th>Участник</Th>
+                      <Th align="right">Фраги</Th>
+                      <Th align="right">Смерти</Th>
+                      <Th align="right">Воскрешения</Th>
+                      <Th align="right">K/D</Th>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
                     {data.combat.top.slice(0, TOP_MEMBERS_DISPLAY_LIMIT).map((member) => (
-                      <tr key={member.player_id} className="border-t border-neutral-900">
-                        <td className="p-2">
+                      <TableRow key={member.player_id} interactive>
+                        <Td>
                           <Link
                             href={`/all-players/${member.player_id}`}
-                            className="text-sky-400 hover:text-sky-300"
+                            className="text-accent no-underline hover:brightness-110"
                           >
                             {member.canonical_name}
                           </Link>
-                        </td>
-                        <td className="p-2 text-right tabular-nums text-neutral-200">
-                          {member.kills}
-                        </td>
-                        <td className="p-2 text-right tabular-nums text-neutral-400">
+                        </Td>
+                        <Td numeric>{member.kills}</Td>
+                        <Td numeric className="text-ink-2">
                           {member.deaths}
-                        </td>
-                        <td className="p-2 text-right tabular-nums text-neutral-400">
+                        </Td>
+                        <Td numeric className="text-ink-2">
                           {member.revives}
-                        </td>
-                        <td className="p-2 text-right tabular-nums text-neutral-300">
+                        </Td>
+                        <Td numeric className="text-ink-2">
                           {member.kd.toFixed(2)}
-                        </td>
-                      </tr>
+                        </Td>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
-
-function TotalCard({
-  label,
-  value,
-  accent,
-  small,
-}: {
-  label: string;
-  value: string;
-  accent: string;
-  small?: boolean;
-}) {
-  return (
-    <div className="rounded border border-neutral-800 bg-neutral-900/40 p-3">
-      <div className="text-xs uppercase tracking-widest text-neutral-500">{label}</div>
-      <div className={`mt-1 truncate font-mono ${small ? 'text-base' : 'text-2xl'} ${accent}`}>
-        {value}
-      </div>
-    </div>
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </>
+        )}
+      </CardBody>
+    </Card>
   );
 }
 
 function Legend({ color, label }: { color: string; label: string }) {
   return (
     <span className="flex items-center gap-1">
-      <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: color }} />
+      <span
+        aria-hidden="true"
+        className="inline-block h-2.5 w-2.5 rounded-sm"
+        style={{ backgroundColor: color }}
+      />
       {label}
     </span>
   );
@@ -406,9 +412,10 @@ function ActivityChart({
 }) {
   if (chart.length === 0) {
     return (
-      <div className="rounded border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
-        Нет данных о присутствии за период.
-      </div>
+      <EmptyState
+        title="Нет данных о присутствии"
+        description="За выбранный период участники клана не заходили на серверы."
+      />
     );
   }
   const labelStep = Math.max(1, Math.ceil(chart.length / 8));
@@ -427,6 +434,7 @@ function ActivityChart({
             <button
               type="button"
               key={point.day}
+              aria-label={`${point.day}: онлайн ${fmtDuration(point.online_seconds)}`}
               onPointerEnter={() => onHover(point.day)}
               onFocus={() => onHover(point.day)}
               onBlur={() => onHover(null)}
@@ -451,7 +459,7 @@ function ActivityChart({
           );
         })}
       </div>
-      <div className="flex text-[10px] tabular-nums text-neutral-500">
+      <div className="flex text-2xs tabular-nums text-ink-3">
         {chart.map((point, index) => (
           <span key={point.day} className="flex-1 text-center">
             {index % labelStep === 0 ? point.day.slice(5) : ''}

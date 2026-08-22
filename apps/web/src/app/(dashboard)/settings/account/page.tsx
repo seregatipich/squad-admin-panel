@@ -1,6 +1,25 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LiveIndicator } from '@/components/LiveIndicator';
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  GroupedList,
+  GroupedRow,
+  InlineBanner,
+  PageHeader,
+  Skeleton,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { isCurrentSessionRevoked, type SessionRevokedEvent } from './sessionEvents';
 
@@ -22,6 +41,9 @@ interface ActiveSession {
   expires_at: string;
   current: boolean;
 }
+
+/** Какую сессию оператор попросил завершить: одну конкретную или все сразу. */
+type PendingRevoke = { kind: 'one'; id: string } | { kind: 'all' };
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString('ru-RU');
@@ -50,6 +72,7 @@ export default function AccountSettings() {
   const [sessions, setSessions] = useState<ActiveSession[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [revokingAll, setRevokingAll] = useState(false);
+  const [pendingRevoke, setPendingRevoke] = useState<PendingRevoke | null>(null);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const sessionsRef = useRef<ActiveSession[]>([]);
@@ -65,31 +88,31 @@ export default function AccountSettings() {
   }, []);
   useLiveSubscription('session.revoked', onSessionRevoked);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const [meRes, sessRes] = await Promise.all([
-          fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
-          fetch('/api/v1/me/sessions', { credentials: 'include', cache: 'no-store' }),
-        ]);
-        if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
-        if (!sessRes.ok) throw new Error(`HTTP ${sessRes.status}`);
-        if (cancelled) return;
-        setMe((await meRes.json()) as Me);
-        setSessions((await sessRes.json()) as ActiveSession[]);
-        setLastUpdate(new Date());
-      } catch (e) {
-        if (!cancelled) setMsg({ kind: 'err', text: (e as Error).message });
-      }
+  const load = useCallback(async () => {
+    try {
+      const [meRes, sessRes] = await Promise.all([
+        fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/me/sessions', { credentials: 'include', cache: 'no-store' }),
+      ]);
+      if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
+      if (!sessRes.ok) throw new Error(`HTTP ${sessRes.status}`);
+      setMe((await meRes.json()) as Me);
+      setSessions((await sessRes.json()) as ActiveSession[]);
+      setLastUpdate(new Date());
+      // Снимается только сообщение об ошибке: удачный опрос действительно
+      // отменяет её, а подтверждение «Сессия завершена» оператор должен
+      // успеть прочитать, и опрос раз в полминуты не имеет права его стереть.
+      setMsg((prev) => (prev?.kind === 'err' ? null : prev));
+    } catch (e) {
+      setMsg({ kind: 'err', text: (e as Error).message });
     }
-    void load();
-    const t = setInterval(load, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
   }, []);
+
+  useEffect(() => {
+    void load();
+    const t = setInterval(() => void load(), POLL_MS);
+    return () => clearInterval(t);
+  }, [load]);
 
   async function revokeOne(id: string) {
     setBusyId(id);
@@ -106,6 +129,7 @@ export default function AccountSettings() {
       setMsg({ kind: 'err', text: (e as Error).message });
     } finally {
       setBusyId(null);
+      setPendingRevoke(null);
     }
   }
 
@@ -122,6 +146,7 @@ export default function AccountSettings() {
     } catch (e) {
       setMsg({ kind: 'err', text: (e as Error).message });
       setRevokingAll(false);
+      setPendingRevoke(null);
     }
   }
 
@@ -133,110 +158,154 @@ export default function AccountSettings() {
     window.location.href = '/login';
   }
 
-  if (!me) {
-    return <div className="text-neutral-500">Загрузка…</div>;
-  }
+  const revokeBusy = pendingRevoke?.kind === 'all' ? revokingAll : busyId !== null;
 
   return (
-    <div className="space-y-6 max-w-3xl">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Аккаунт</h1>
-        <LiveIndicator lastUpdate={lastUpdate} />
-      </div>
+    <>
+      <PageHeader title="Аккаунт" status={<LiveIndicator lastUpdate={lastUpdate} />} />
 
       {msg ? (
-        <div
-          className={`rounded border p-3 text-sm ${
-            msg.kind === 'ok'
-              ? 'border-emerald-900 bg-emerald-950/50 text-emerald-200'
-              : 'border-red-900 bg-red-950 text-red-200'
-          }`}
-        >
-          {msg.text}
-        </div>
+        <InlineBanner
+          tone={msg.kind === 'ok' ? 'good' : 'crit'}
+          title={msg.kind === 'ok' ? msg.text : 'Не удалось выполнить запрос'}
+          description={msg.kind === 'ok' ? undefined : msg.text}
+          action={
+            msg.kind === 'err' ? (
+              <Button size="sm" onClick={() => void load()}>
+                Повторить
+              </Button>
+            ) : undefined
+          }
+          onDismiss={() => setMsg(null)}
+          dismissLabel="Скрыть сообщение"
+        />
       ) : null}
 
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Профиль</h2>
-        <dl className="grid grid-cols-[140px_1fr] gap-y-1 text-sm">
-          <dt className="text-neutral-500">Player ID</dt>
-          <dd className="font-mono text-xs">{me.player_id}</dd>
-          <dt className="text-neutral-500">SteamID64</dt>
-          <dd className="font-mono">{me.steam_id64 ?? '—'}</dd>
-          <dt className="text-neutral-500">Имя</dt>
-          <dd>{me.canonical_name}</dd>
-          <dt className="text-neutral-500">Permissions</dt>
-          <dd className="font-mono text-xs">{me.permissions.length} ключей</dd>
-        </dl>
-      </section>
+      {me === null ? (
+        <Skeleton variant="card" count={2} label="Загрузка профиля" />
+      ) : (
+        <GroupedList title="Профиль">
+          <GroupedRow
+            label="Идентификатор игрока"
+            control={<span className="font-mono text-xs text-ink-2">{me.player_id}</span>}
+          />
+          <GroupedRow
+            label="SteamID64"
+            control={<span className="font-mono text-xs text-ink-2">{me.steam_id64 ?? '—'}</span>}
+          />
+          <GroupedRow label="Имя" control={<span className="text-xs">{me.canonical_name}</span>} />
+          <GroupedRow
+            label="Права"
+            description="Набор ключей, которые даёт выданная вам роль."
+            control={
+              <span className="text-xs tabular-nums text-ink-2">
+                {me.permissions.length} ключей
+              </span>
+            }
+          />
+        </GroupedList>
+      )}
 
-      <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Активные сессии</h2>
-          <button
-            type="button"
-            disabled={revokingAll || sessions.length <= 1}
-            onClick={revokeAll}
-            className="rounded border border-red-900 px-3 py-1 text-xs text-red-400 hover:border-red-700 hover:text-red-300 disabled:opacity-40"
-          >
-            {revokingAll ? 'Завершаются…' : 'Завершить все'}
-          </button>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase text-neutral-500">
+      <Card padding="none">
+        <CardHeader
+          title="Активные сессии"
+          count={sessions.length > 0 ? sessions.length : undefined}
+          description="Устройства, с которых сейчас открыта панель."
+          actions={
+            /* «Завершить все» разлогинивает устройства, но ничего не разрушает
+               безвозвратно — войти можно снова, поэтому кнопка вторичная (§5). */
+            <Button
+              disabled={revokingAll || sessions.length <= 1}
+              onClick={() => setPendingRevoke({ kind: 'all' })}
+            >
+              Завершить все
+            </Button>
+          }
+        />
+        {me === null ? (
+          <div className="p-3">
+            <SkeletonTable rows={3} cols={5} label="Загрузка списка сессий" />
+          </div>
+        ) : (
+          <Table ariaLabel="Активные сессии">
+            <TableHead>
               <tr>
-                <th className="py-2 pr-2">IP</th>
-                <th className="py-2 pr-2">Устройство</th>
-                <th className="py-2 pr-2">Последнее действие</th>
-                <th className="py-2 pr-2">Истекает</th>
-                <th className="py-2 pr-2"></th>
+                <Th>IP</Th>
+                <Th>Устройство</Th>
+                <Th>Последнее действие</Th>
+                <Th>Истекает</Th>
+                <Th align="right" width="9rem">
+                  Действие
+                </Th>
               </tr>
-            </thead>
-            <tbody>
+            </TableHead>
+            <TableBody>
               {sessions.map((s) => (
-                <tr key={s.id} className="border-t border-neutral-900">
-                  <td className="py-2 pr-2 font-mono">{s.ip ?? '—'}</td>
-                  <td className="py-2 pr-2 text-neutral-400">{shortenUa(s.user_agent)}</td>
-                  <td className="py-2 pr-2 text-neutral-400">{formatDate(s.last_activity_at)}</td>
-                  <td className="py-2 pr-2 text-neutral-400">
+                <TableRow key={s.id} interactive>
+                  <Td className="font-mono text-xs">{s.ip ?? '—'}</Td>
+                  <Td className="text-xs text-ink-3">{shortenUa(s.user_agent)}</Td>
+                  <Td className="text-xs text-ink-3">{formatDate(s.last_activity_at)}</Td>
+                  <Td className="text-xs text-ink-3">
                     {formatDate(s.expires_at)}{' '}
-                    <span className="text-neutral-500 text-xs">
-                      ({formatRelative(s.expires_at)})
-                    </span>
-                  </td>
-                  <td className="py-2 pr-2 text-right">
+                    <span className="text-ink-4">({formatRelative(s.expires_at)})</span>
+                  </Td>
+                  <Td align="right">
                     {s.current ? (
-                      <span className="rounded bg-emerald-950/50 px-2 py-0.5 text-xs text-emerald-300">
+                      <Badge tone="good" size="sm">
                         текущая
-                      </span>
+                      </Badge>
                     ) : (
-                      <button
-                        type="button"
-                        disabled={busyId === s.id}
-                        onClick={() => revokeOne(s.id)}
-                        className="rounded border border-red-900 px-3 py-0.5 text-xs text-red-400 hover:border-red-700 disabled:opacity-40"
+                      <Button
+                        size="sm"
+                        loading={busyId === s.id}
+                        onClick={() => setPendingRevoke({ kind: 'one', id: s.id })}
                       >
-                        {busyId === s.id ? '…' : 'Завершить'}
-                      </button>
+                        Завершить
+                      </Button>
                     )}
-                  </td>
-                </tr>
+                  </Td>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+            </TableBody>
+          </Table>
+        )}
+      </Card>
 
-      <section>
-        <button
-          type="button"
-          onClick={logout}
-          className="rounded border border-red-900 px-4 py-2 text-sm text-red-400 hover:text-red-300 hover:border-red-700"
-        >
-          Выйти из панели
-        </button>
-      </section>
-    </div>
+      <GroupedList
+        title="Выход"
+        footnote="Выход закрывает только эту сессию. Остальные устройства останутся в панели."
+      >
+        <GroupedRow
+          label="Выйти из панели"
+          control={<Button onClick={() => void logout()}>Выйти</Button>}
+        />
+      </GroupedList>
+
+      {/* Завершение сессии обратимо — оператор входит заново тем же Steam-логином, —
+          поэтому подтверждение обычное, а не критическое (дизайн-система, §5).
+          Раньше и одна сессия, и все сразу завершались вообще без вопроса. */}
+      <AlertDialog
+        open={pendingRevoke !== null}
+        onClose={() => {
+          if (revokeBusy) return;
+          setPendingRevoke(null);
+        }}
+        title={pendingRevoke?.kind === 'all' ? 'Завершить все сессии' : 'Завершить сессию'}
+        body={
+          pendingRevoke?.kind === 'all'
+            ? 'Все устройства, включая это, выйдут из панели. Вам придётся войти заново.'
+            : 'Устройство выйдет из панели. Войти с него можно будет заново.'
+        }
+        confirmLabel={pendingRevoke?.kind === 'all' ? 'Завершить все' : 'Завершить сессию'}
+        cancelLabel="Отмена"
+        tone="default"
+        busy={revokeBusy}
+        onConfirm={() => {
+          if (!pendingRevoke) return;
+          if (pendingRevoke.kind === 'all') void revokeAll();
+          else void revokeOne(pendingRevoke.id);
+        }}
+      />
+    </>
   );
 }

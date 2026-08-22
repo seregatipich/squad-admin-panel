@@ -1,7 +1,29 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  FieldRow,
+  InlineBanner,
+  Modal,
+  Select,
+  SkeletonTable,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Textarea,
+  TextInput,
+  Th,
+  Toolbar,
+} from '@/components/ui';
 import {
   BONUS_TYPE_OPTIONS,
   type BonusFilters,
@@ -48,6 +70,9 @@ export function BonusSection({ playerId }: { playerId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const typeFilterId = useId();
+  const fromFilterId = useId();
+  const toFilterId = useId();
 
   const loadBalance = useCallback(async () => {
     const res = await fetch(`/api/v1/players/${playerId}/bonus-balance`, {
@@ -144,166 +169,174 @@ export function BonusSection({ playerId }: { playerId: string }) {
     setFilters((prev) => ({ ...prev, [key]: value }));
   }
 
+  const filtersApplied = applied.type !== '' || applied.from !== '' || applied.to !== '';
+
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xs uppercase tracking-widest text-neutral-400">Бонусы</h2>
-          <span className="rounded-full bg-amber-950/60 px-3 py-0.5 font-mono text-sm text-amber-200 tabular-nums">
+    <Card as="section" padding="none">
+      <CardHeader
+        title="Бонусы"
+        count={
+          <Badge tone="warn" size="sm">
             {balance ?? '—'}
-          </span>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {canManage && canAssign ? (
-            <button
-              type="button"
-              onClick={() => setPurchaseOpen(true)}
-              className="rounded bg-amber-600 px-3 py-1.5 text-sm text-white hover:bg-amber-500"
-            >
-              Купить привилегию
-            </button>
-          ) : null}
-          {canManage ? (
-            <button
-              type="button"
-              onClick={() => setModalOpen(true)}
-              className="rounded bg-sky-600 px-3 py-1.5 text-sm text-white hover:bg-sky-500"
-            >
-              Корректировать баланс
-            </button>
-          ) : null}
-        </div>
-      </div>
+          </Badge>
+        }
+        actions={
+          <>
+            {canManage && canAssign ? (
+              <Button size="sm" onClick={() => setPurchaseOpen(true)}>
+                Купить привилегию
+              </Button>
+            ) : null}
+            {canManage ? (
+              <Button size="sm" variant="primary" onClick={() => setModalOpen(true)}>
+                Корректировать баланс
+              </Button>
+            ) : null}
+          </>
+        }
+      />
 
-      <div className="border-t border-neutral-900 pt-3">
-        <h3 className="mb-2 text-xs uppercase tracking-widest text-neutral-500">История бонусов</h3>
+      <CardBody className="space-y-4">
+        <h3 className="text-[13px] font-semibold text-ink">История бонусов</h3>
 
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <label className="flex flex-col gap-1 text-xs text-neutral-500">
-            Тип
-            <select
-              value={filters.type}
-              onChange={(e) => setField('type', e.target.value)}
-              className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm text-neutral-100"
-            >
-              <option value="">Любой</option>
-              {BONUS_TYPE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+        <Toolbar
+          filters={
+            <>
+              <label
+                htmlFor={typeFilterId}
+                className="flex items-center gap-1.5 text-xs text-ink-3"
+              >
+                Тип
+                <Select
+                  id={typeFilterId}
+                  size="sm"
+                  value={filters.type}
+                  onChange={(e) => setField('type', e.target.value)}
+                >
+                  <option value="">Любой</option>
+                  {BONUS_TYPE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </label>
 
-          <label className="flex flex-col gap-1 text-xs text-neutral-500">
-            С даты
-            <input
-              type="date"
-              value={filters.from}
-              onChange={(e) => setField('from', e.target.value)}
-              className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm text-neutral-100"
-            />
-          </label>
+              <label
+                htmlFor={fromFilterId}
+                className="flex items-center gap-1.5 text-xs text-ink-3"
+              >
+                С даты
+                <TextInput
+                  id={fromFilterId}
+                  type="date"
+                  size="sm"
+                  value={filters.from}
+                  onChange={(e) => setField('from', e.target.value)}
+                />
+              </label>
 
-          <label className="flex flex-col gap-1 text-xs text-neutral-500">
-            По дату
-            <input
-              type="date"
-              value={filters.to}
-              onChange={(e) => setField('to', e.target.value)}
-              className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm text-neutral-100"
-            />
-          </label>
-        </div>
+              <label htmlFor={toFilterId} className="flex items-center gap-1.5 text-xs text-ink-3">
+                По дату
+                <TextInput
+                  id={toFilterId}
+                  type="date"
+                  size="sm"
+                  value={filters.to}
+                  onChange={(e) => setField('to', e.target.value)}
+                />
+              </label>
+            </>
+          }
+          onReset={resetFilters}
+          resetLabel="Сбросить"
+          actions={
+            <Button size="sm" variant="primary" onClick={applyFilters}>
+              Применить
+            </Button>
+          }
+        />
 
-        <div className="mt-2 flex gap-2">
-          <button
-            type="button"
-            onClick={applyFilters}
-            className="rounded bg-sky-600 px-4 py-1.5 text-sm text-white hover:bg-sky-500"
-          >
-            Применить
-          </button>
-          <button
-            type="button"
-            onClick={resetFilters}
-            className="rounded border border-neutral-800 px-4 py-1.5 text-sm hover:border-neutral-600"
-          >
-            Сбросить
-          </button>
-        </div>
-      </div>
+        {error ? (
+          <InlineBanner
+            tone="crit"
+            title="Не удалось загрузить историю бонусов"
+            description={error}
+            action={
+              <Button size="sm" onClick={() => void load(applied)}>
+                Повторить
+              </Button>
+            }
+          />
+        ) : null}
 
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-          Ошибка: {error}
-        </div>
-      ) : null}
-
-      {loading ? (
-        <div className="text-sm text-neutral-500">Загрузка…</div>
-      ) : transactions.length === 0 ? (
-        <div className="rounded border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
-          Нет операций
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[560px] text-sm">
-            <thead className="text-xs uppercase tracking-widest text-neutral-500">
+        {loading ? (
+          <SkeletonTable rows={5} cols={5} label="Загрузка истории бонусов" />
+        ) : transactions.length === 0 ? (
+          <EmptyState
+            variant={filtersApplied ? 'filtered' : 'initial'}
+            title={filtersApplied ? 'Нет операций по фильтру' : 'Операций нет'}
+            description={
+              filtersApplied
+                ? 'Ни одна операция не подходит под выбранные тип и даты.'
+                : 'Бонусы этому игроку ещё ни разу не начисляли и не списывали.'
+            }
+            action={
+              filtersApplied ? (
+                <Button size="sm" onClick={resetFilters}>
+                  Сбросить фильтр
+                </Button>
+              ) : undefined
+            }
+          />
+        ) : (
+          <Table ariaLabel="История бонусов">
+            <TableHead sticky={false}>
               <tr>
-                <th className="p-1 text-left">Дата</th>
-                <th className="p-1 text-left">Тип</th>
-                <th className="p-1 text-right">Сумма</th>
-                <th className="p-1 text-left">Источник</th>
-                <th className="p-1 text-left">Комментарий</th>
+                <Th>Дата</Th>
+                <Th>Тип</Th>
+                <Th align="right">Сумма</Th>
+                <Th>Источник</Th>
+                <Th>Комментарий</Th>
               </tr>
-            </thead>
-            <tbody>
+            </TableHead>
+            <TableBody>
               {transactions.map((tx) => (
-                <tr key={tx.id} className="border-t border-neutral-900 align-top">
-                  <td className="whitespace-nowrap p-1 font-mono text-neutral-400">
+                <TableRow key={tx.id}>
+                  <Td className="whitespace-nowrap font-mono text-xs text-ink-3">
                     {formatBonusTs(tx.created_at)}
-                  </td>
-                  <td className="p-1">
-                    <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[11px] text-neutral-200">
-                      {typeLabel(tx.type)}
-                    </span>
-                  </td>
-                  <td
-                    className={`p-1 text-right font-mono tabular-nums ${
-                      tx.amount > 0 ? 'text-emerald-300' : 'text-red-300'
-                    }`}
-                  >
+                  </Td>
+                  <Td>
+                    <Badge size="sm">{typeLabel(tx.type)}</Badge>
+                  </Td>
+                  {/* Знак «+»/«−» несёт тот же смысл, что и цвет, — состояние не
+                      закодировано одним только цветом (§5). */}
+                  <Td numeric className={tx.amount > 0 ? 'text-good' : 'text-crit'}>
                     {formatAmount(tx.amount)}
-                  </td>
-                  <td className="p-1 text-neutral-400">{sourceLabel(tx)}</td>
-                  <td className="p-1 text-neutral-100">
+                  </Td>
+                  <Td className="text-ink-2">{sourceLabel(tx)}</Td>
+                  <Td>
                     <span className="whitespace-pre-wrap break-words">{tx.comment ?? '—'}</span>
                     {!isCredit(tx.type) && tx.actor_player_id ? (
-                      <span className="ml-2 rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] uppercase text-neutral-400">
-                        админ
+                      <span className="ml-2 inline-block align-middle">
+                        <Badge size="sm">админ</Badge>
                       </span>
                     ) : null}
-                  </td>
-                </tr>
+                  </Td>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+            </TableBody>
+          </Table>
+        )}
 
-      {nextCursor != null ? (
-        <div className="flex justify-center">
-          <button
-            type="button"
-            onClick={() => void loadMore()}
-            disabled={busy}
-            className="rounded border border-neutral-800 px-3 py-1 text-xs hover:border-neutral-600 disabled:opacity-40"
-          >
-            Показать ещё
-          </button>
-        </div>
-      ) : null}
+        {nextCursor != null ? (
+          <div className="flex justify-center">
+            <Button size="sm" loading={busy} onClick={() => void loadMore()}>
+              Показать ещё
+            </Button>
+          </div>
+        ) : null}
+      </CardBody>
 
       {modalOpen ? (
         <AdjustModal
@@ -321,7 +354,7 @@ export function BonusSection({ playerId }: { playerId: string }) {
           onPurchased={onPurchased}
         />
       ) : null}
-    </section>
+    </Card>
   );
 }
 
@@ -341,6 +374,7 @@ function PurchaseModal({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const tierSelectId = useId();
 
   useEffect(() => {
     fetch('/api/v1/bonus-shop/tiers', { credentials: 'include', cache: 'no-store' })
@@ -381,97 +415,79 @@ function PurchaseModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Купить привилегию"
+    <Modal
+      open
+      onClose={onClose}
+      title="Купить привилегию"
+      description="Покупка списывает бонусы, выдаёт роль привилегии на её срок и попадает в журнал аудита. Повторная покупка той же привилегии продлевает срок."
+      size="sm"
+      closeLabel="Закрыть"
+      dismissible={!busy}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Отмена
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => void submit()}
+            loading={busy}
+            disabled={!selected || !affordable}
+          >
+            Купить
+          </Button>
+        </>
+      }
     >
-      <div className="w-full max-w-md space-y-4 rounded border border-neutral-800 bg-neutral-950 p-5">
-        <h3 className="text-sm font-semibold text-neutral-100">Купить привилегию</h3>
-        <p className="text-xs text-neutral-500">
-          Покупка списывает бонусы, выдаёт роль привилегии на её срок и попадает в журнал аудита.
-          Повторная покупка той же привилегии продлевает срок.
-        </p>
-
+      <div className="space-y-3">
         {loading ? (
-          <div className="text-sm text-neutral-500">Загрузка…</div>
+          <SkeletonTable rows={1} cols={1} label="Загрузка привилегий" />
         ) : tiers.length === 0 ? (
-          <div className="rounded border border-dashed border-neutral-800 p-4 text-center text-sm text-neutral-500">
-            Нет доступных привилегий
-          </div>
+          <EmptyState
+            title="Нет доступных привилегий"
+            description="В магазине бонусов не настроено ни одной привилегии."
+          />
         ) : (
-          <label className="flex flex-col gap-1 text-xs text-neutral-500">
-            Привилегия
-            <select
-              value={tierId}
-              onChange={(e) => setTierId(e.target.value)}
-              className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm text-neutral-100"
-            >
+          <FieldRow label="Привилегия" htmlFor={tierSelectId}>
+            <Select id={tierSelectId} value={tierId} onChange={(e) => setTierId(e.target.value)}>
               <option value="">— выберите —</option>
               {tiers.map((tier) => (
                 <option key={tier.id} value={tier.id}>
                   {tier.name} — {tier.price_bonuses} бонусов / {tier.default_days} дн.
                 </option>
               ))}
-            </select>
-          </label>
+            </Select>
+          </FieldRow>
         )}
 
         {selected ? (
-          <div className="space-y-1 rounded border border-neutral-800 p-3 text-xs text-neutral-400">
-            <div className="flex justify-between">
-              <span>Цена</span>
-              <span className="font-mono text-neutral-100 tabular-nums">
-                {selected.price_bonuses}
-              </span>
+          <dl className="divide-y divide-line rounded-ctl border border-line text-xs">
+            <div className="flex justify-between px-3 py-2">
+              <dt className="text-ink-3">Цена</dt>
+              <dd className="tabular-nums">{selected.price_bonuses}</dd>
             </div>
-            <div className="flex justify-between">
-              <span>Баланс</span>
-              <span className="font-mono text-neutral-100 tabular-nums">{balance ?? '—'}</span>
+            <div className="flex justify-between px-3 py-2">
+              <dt className="text-ink-3">Баланс</dt>
+              <dd className="tabular-nums">{balance ?? '—'}</dd>
             </div>
-            <div className="flex justify-between">
-              <span>Останется</span>
-              <span
-                className={`font-mono tabular-nums ${affordable ? 'text-emerald-300' : 'text-red-300'}`}
-              >
+            <div className="flex justify-between px-3 py-2">
+              <dt className="text-ink-3">Останется</dt>
+              <dd className={`tabular-nums ${affordable ? 'text-good' : 'text-crit'}`}>
                 {balance != null && selected.price_bonuses != null
                   ? balance - selected.price_bonuses
                   : '—'}
-              </span>
+              </dd>
             </div>
-            {!affordable ? (
-              <div className="text-red-300">Недостаточно бонусов для покупки.</div>
-            ) : null}
-          </div>
+          </dl>
         ) : null}
 
-        {error ? (
-          <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-            {error}
-          </div>
+        {selected && !affordable ? (
+          <InlineBanner tone="warn" title="Недостаточно бонусов для покупки." />
         ) : null}
 
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="rounded border border-neutral-800 px-4 py-2 text-sm hover:border-neutral-600 disabled:opacity-40"
-          >
-            Отмена
-          </button>
-          <button
-            type="button"
-            onClick={() => void submit()}
-            disabled={busy || !selected || !affordable}
-            className="rounded bg-amber-600 px-4 py-2 text-sm text-white hover:bg-amber-500 disabled:opacity-40"
-          >
-            Купить
-          </button>
-        </div>
+        {error ? <InlineBanner tone="crit" title={error} /> : null}
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -488,6 +504,8 @@ function AdjustModal({
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const amountId = useId();
+  const commentId = useId();
 
   async function submit() {
     const parsed = validateAdjust(amount, comment);
@@ -522,68 +540,50 @@ function AdjustModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Корректировать баланс"
+    <Modal
+      open
+      onClose={onClose}
+      title="Корректировать баланс"
+      description="Положительная сумма начисляет бонусы, отрицательная — списывает. Комментарий обязателен и попадёт в журнал аудита."
+      size="sm"
+      closeLabel="Закрыть"
+      dismissible={!busy}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Отмена
+          </Button>
+          <Button variant="primary" onClick={() => void submit()} loading={busy}>
+            Применить
+          </Button>
+        </>
+      }
     >
-      <div className="w-full max-w-md space-y-4 rounded border border-neutral-800 bg-neutral-950 p-5">
-        <h3 className="text-sm font-semibold text-neutral-100">Корректировать баланс</h3>
-        <p className="text-xs text-neutral-500">
-          Положительная сумма начисляет бонусы, отрицательная — списывает. Комментарий обязателен и
-          попадёт в журнал аудита.
-        </p>
-
-        <label className="flex flex-col gap-1 text-xs text-neutral-500">
-          Сумма (±)
-          <input
+      <div className="space-y-3">
+        <FieldRow label="Сумма (±)" htmlFor={amountId}>
+          <TextInput
+            id={amountId}
             type="number"
             step={1}
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             placeholder="например, -50"
-            className="rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100"
           />
-        </label>
+        </FieldRow>
 
-        <label className="flex flex-col gap-1 text-xs text-neutral-500">
-          Комментарий
-          <textarea
+        <FieldRow label="Комментарий" htmlFor={commentId}>
+          <Textarea
+            id={commentId}
             value={comment}
             onChange={(e) => setComment(e.target.value)}
             rows={3}
             maxLength={512}
             placeholder="причина корректировки"
-            className="rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100"
           />
-        </label>
+        </FieldRow>
 
-        {error ? (
-          <div className="rounded border border-red-900 bg-red-950 p-2 text-xs text-red-200">
-            {error}
-          </div>
-        ) : null}
-
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="rounded border border-neutral-800 px-4 py-2 text-sm hover:border-neutral-600 disabled:opacity-40"
-          >
-            Отмена
-          </button>
-          <button
-            type="button"
-            onClick={() => void submit()}
-            disabled={busy}
-            className="rounded bg-sky-600 px-4 py-2 text-sm text-white hover:bg-sky-500 disabled:opacity-40"
-          >
-            Применить
-          </button>
-        </div>
+        {error ? <InlineBanner tone="crit" title={error} /> : null}
       </div>
-    </div>
+    </Modal>
   );
 }
