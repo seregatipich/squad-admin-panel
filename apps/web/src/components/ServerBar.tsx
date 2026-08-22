@@ -68,7 +68,13 @@ export function ServerBar() {
   if (!inContext || servers.length === 0) return null;
 
   return (
-    <nav aria-label={t('nav.serverSwitcher')} className="border-b border-line bg-bg">
+    <nav
+      aria-label={t('nav.serverSwitcher')}
+      // Прилипает под верхней панелью: «какой сервер и сколько на нём людей» —
+      // вопрос, который оператор задаёт на каждом экране, а не один раз при
+      // загрузке страницы, поэтому ответ не должен уезжать вверх при прокрутке.
+      className="sticky top-[var(--chrome-h)] z-30 border-b border-line bg-bg/85 backdrop-blur-xl"
+    >
       <ul className="flex flex-wrap items-stretch gap-1.5 px-3 py-2">
         {servers.map((server) => {
           const isActive = pathname.startsWith(`/servers/${server.id}`);
