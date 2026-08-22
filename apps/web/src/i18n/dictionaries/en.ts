@@ -9,7 +9,6 @@ export const en: Record<TranslationKey, string> = {
   'app.title': 'Squad Admin Panel',
   'app.description': 'Open-source self-hosted admin panel for Squad dedicated servers',
 
-  'nav.brand': 'Squad Admin Panel',
   'nav.group.servers': 'Servers',
   'nav.group.audit': 'Audit',
   'nav.group.settings': 'Settings',

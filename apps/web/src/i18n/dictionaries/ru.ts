@@ -10,7 +10,6 @@ export const ru = {
   'app.title': 'Squad Admin Panel',
   'app.description': 'Опенсорсная self-hosted админ-панель для выделенных серверов Squad',
 
-  'nav.brand': 'Squad Admin Panel',
   'nav.group.servers': 'Серверы',
   'nav.group.audit': 'Аудит',
   'nav.group.settings': 'Настройки',
