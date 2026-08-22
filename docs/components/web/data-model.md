@@ -27,7 +27,7 @@ interface Me {
 
 Source: `apps/web/src/lib/dal.ts`.
 
-The `permissions` array drives every conditional render in the sidebar and page-level gating (e.g., showing the Roles link only when `role:view` is in the array). It reflects the user's role at the time of the last `/me` call; the API re-reads the role on every request so changes take effect on the next poll cycle.
+The `permissions` array drives every conditional render in the top bar and page-level gating (e.g., showing the Roles link only when `role:view` is in the array). It reflects the user's role at the time of the last `/me` call; the API re-reads the role on every request so changes take effect on the next poll cycle.
 
 ---
 

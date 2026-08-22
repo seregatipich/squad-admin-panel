@@ -861,7 +861,7 @@ There are **71 `page.tsx` routes** and exactly **three `layout.tsx` files**.
 
 | Group | Layout | Pages | Character |
 |---|---|---|---|
-| `(dashboard)` | `src/app/(dashboard)/layout.tsx` | 63 | The authenticated panel. Calls `requireSession()`, renders the sidebar, command palette and four global listener components. |
+| `(dashboard)` | `src/app/(dashboard)/layout.tsx` | 63 | The authenticated panel. Calls `requireSession()`, renders the top bar, contextual server switcher, command palette and four global listener components. |
 | `(public)` | `src/app/(public)/layout.tsx` | 4 | Anonymous pages — `/stats`, `/public/clans`, `/public/clans/[id]`, `/public/whitelist`. Its header comment (lines 1-6) documents that it deliberately omits `requireSession()` and the setup probe. |
 | *(ungrouped)* | root `src/app/layout.tsx` only | 4 | `/` (cookie check → redirect), `/login`, `/setup`, `/no-access` — pre-auth pages that must render without the shell. |
 
@@ -878,14 +878,14 @@ try {
   const status = await apiFetch<SetupStatus>('/api/v1/setup/status');
   if (!status.setup_completed) redirect('/setup');
 } catch { /* if the endpoint fails, let the user through */ }
-return (<div className="flex min-h-screen flex-col">
+return (<div className="min-h-screen">
     <ConnectionBanner /><ForcedLogout /><SeedNotificationToast /><RoleExpiryToast />
-    <div className="flex flex-1">
-      <SidebarNav permissions={me.permissions} displayName={me.canonical_name}
-                  economyEnabled={me.economy_enabled ?? false} />
-      <CommandPalette permissions={me.permissions} economyEnabled={me.economy_enabled ?? false} />
-      <main className="flex-1 space-y-6 p-8">{children}</main>
-    </div></div>);
+    <TopNav permissions={me.permissions} displayName={me.canonical_name}
+            groups={NAV_GROUPS} economyEnabled={me.economy_enabled ?? false} />
+    <ServerBar />
+    <CommandPalette permissions={me.permissions} economyEnabled={me.economy_enabled ?? false} />
+    <main className="mx-auto w-full max-w-[1600px] space-y-6 px-5 py-5">{children}</main>
+  </div>);
 ```
 
 That `setup/status` call is the one server-side request that does **not** forward the session cookie (compare `logs/page.tsx:18-20`), and its failure is swallowed by design.
@@ -938,7 +938,7 @@ A second, unused backoff implementation exists: `lib/ws-backoff.ts`'s tested `ne
 
 React binding is `lib/use-live-bus.ts`: `useLiveSubscription(type, handler)` narrows the union with `Extract<LiveEvent, {type: T}>`, and `useLiveBusState()` / `useBridgeState()` use `useSyncExternalStore` with correct server snapshots. **36 files** subscribe.
 
-**Live events do not invalidate caches — because there are none.** They mutate component state directly. `IssuesBrowser.tsx:133-134` re-filters its local array through `issueMatchesFilters`; `ReportsBrowser.tsx:173` merges the reduced `ReportLiveView` frame *on top of* the already-loaded list row, a subtlety documented at `live-bus.ts:181-186` because the WS shape omits `reporter_trusted` and `target_report_count_90d`. `SidebarNav`'s pending-reports badge refreshes on `report.created`/`report.updated` instead of polling; `ForcedLogout` listens for `session.revoked` and hard-navigates to `/login`.
+**Live events do not invalidate caches — because there are none.** They mutate component state directly. `IssuesBrowser.tsx:133-134` re-filters its local array through `issueMatchesFilters`; `ReportsBrowser.tsx:173` merges the reduced `ReportLiveView` frame *on top of* the already-loaded list row, a subtlety documented at `live-bus.ts:181-186` because the WS shape omits `reporter_trusted` and `target_report_count_90d`. `TopNav`'s pending-reports badge refreshes on `report.created`/`report.updated` instead of polling, and `ServerBar` re-reads the servers list on `server.status`/`server.deleted`/`rcon.status`; `ForcedLogout` listens for `session.revoked` and hard-navigates to `/login`.
 
 The union is hand-written in the web app and shares nothing with the API. The API's `apps/api/src/plugins/live-bus.ts` defines **23** event types; the web `LiveEvent` union defines **24** — and they have drifted in both directions:
 
@@ -986,7 +986,7 @@ export async function requireSession(): Promise<Me> {
 
 UI gating **mirrors** server RBAC and never replaces it: the API's global `onRequest` hook in `apps/api/src/plugins/auth.ts` is the only enforcement point. Three distribution mechanisms coexist, none abstracted:
 
-1. **Prop drilling from the layout** — `permissions` and `economyEnabled` into `SidebarNav` and `CommandPalette`, which filter `NAV_GROUPS` declaratively: `(!item.permission || permissions.includes(item.permission)) && (!item.requiresEconomy || economyEnabled)` (`SidebarNav.tsx:65`, duplicated verbatim in `commandPalette.ts:39`).
+1. **Prop drilling from the layout** — `permissions` and `economyEnabled` into `TopNav` and `CommandPalette`, which filter `NAV_GROUPS` declaratively: `(!item.permission || permissions.includes(item.permission)) && (!item.requiresEconomy || economyEnabled)` (`TopNav.tsx:16-18`, duplicated verbatim in `commandPalette.ts:39`).
 2. **Server-side hard gates** — only three pages redirect: `logs` on `host:view`, `suspects` on `player:view`, `vips` on `user:view`, all to `/dashboard`. Two more gate on `squad_permissions` (`servers/[id]/rotation/page.tsx:71`, `map-vote/page.tsx:118`, both `changemap`).
 3. **Client `can*` booleans** — the dominant idiom, re-derived per page (`const canEdit = me?.permissions.includes('role:edit') ?? false`) and drilled into children as `canEdit`/`canManage`/`canChat`.
 
@@ -994,7 +994,7 @@ There is **no `<PermissionGate>` component, no permissions context, and no `hasP
 
 ### 5.5 Component architecture
 
-There is **no `ui/` primitives directory, no `features/` directory, and no design-system dependency**. `find apps/web/src/components -type d` returns only the folder itself — 35 non-test components in one flat bin, no barrel `index.ts`, every import a deep path. Of 277 `.tsx` files under `src`, ~227 are colocated inside `app/`. Cross-cutting logic is shared through `lib/*.ts` pure functions rather than component composition: `lib/nav.ts` feeds both sidebar and palette; `lib/marks.ts` feeds `PlayerMarks` and `PlayerMarkBadge`. Each `lib` module has a paired `*.test.ts` — testing discipline is inverted relative to the god components, whose helpers are untestable in place.
+There is **no `ui/` primitives directory, no `features/` directory, and no design-system dependency**. `find apps/web/src/components -type d` returns only the folder itself — 35 non-test components in one flat bin, no barrel `index.ts`, every import a deep path. Of 277 `.tsx` files under `src`, ~227 are colocated inside `app/`. Cross-cutting logic is shared through `lib/*.ts` pure functions rather than component composition: `lib/nav.ts` feeds both the top bar and the palette; `lib/marks.ts` feeds `PlayerMarks` and `PlayerMarkBadge`. Each `lib` module has a paired `*.test.ts` — testing discipline is inverted relative to the god components, whose helpers are untestable in place.
 
 | Component | Consumers | Responsibility |
 |---|---|---|
@@ -1002,7 +1002,7 @@ There is **no `ui/` primitives directory, no `features/` directory, and no desig
 | `components/RoleColorDot.tsx` | 14 | Role swatch over `@squad/shared-config/role-colors`; the only server component in `components/` |
 | `components/LogConsole.tsx` | 6 | Streaming tail/follow console shared across server pages |
 | `components/BannedNameRuleModal.tsx` | 6 | Largest shared component (12.4 KB): modal + form + regex tester |
-| `components/SidebarNav.tsx` | 2 | Permission/flag-filtered nav over `NAV_GROUPS`, live pending-reports badge |
+| `components/TopNav.tsx` | 2 | Permission/flag-filtered top bar over `NAV_GROUPS`, live pending-reports badge, user menu |
 | `components/CommandPalette.tsx` | 2 | Ctrl-K palette; flattened `NAV_GROUPS` + debounced player/server search |
 | `components/ForceStopDialog.tsx` | 2 | The canonical confirm dialog every other modal copies |
 | `components/MetricHistoryChart.tsx` / `MetricHistoryModal.tsx` | 1 / 2 | Recharts `AreaChart`, code-split behind `dynamic()` |
@@ -1049,7 +1049,7 @@ Dictionaries are flat dot-namespaced strings — **73 keys** each, across `app.*
 
 Selection is a plain `locale` cookie (deliberately not `__Host-`prefixed so it survives plain-HTTP dev), written client-side by `LocaleSwitch.tsx:14-16` and followed by the app's single `router.refresh()`. There is **no locale route segment, no `Accept-Language` negotiation, and no middleware involvement**; the root layout resolves once server-side and pushes the value into `LocaleProvider`, which falls back to `DEFAULT_LOCALE` outside the provider instead of throwing.
 
-The honest scope: only **9 non-test files** import a translator, while **148 of 166 non-test `.tsx` files contain hard-coded Cyrillic literals**. i18n covers the shell — nav, auth pages, connection banner, API error codes — and nothing else. `lib/nav.ts` encodes the transitional state in its type: every item carries a legacy Russian `label` *and* an optional `labelKey`, with `nav.test.ts:19-33` asserting `ru[labelKey] === label`. Because `CommandPalette` searches and displays the raw `label`, the palette is unlocalized while the sidebar is not. `/setup` bypasses the i18n layer entirely and is 100% hardcoded Russian, unlike `/login` and `/no-access`. `RoleEditor.tsx:67` throws `'Не удалось загрузить список permissions'` — a Russian string with an English word embedded, a fair summary of the migration's state.
+The honest scope: only **9 non-test files** import a translator, while **148 of 166 non-test `.tsx` files contain hard-coded Cyrillic literals**. i18n covers the shell — nav, auth pages, connection banner, API error codes — and nothing else. `lib/nav.ts` encodes the transitional state in its type: every item carries a legacy Russian `label` *and* an optional `labelKey`, with `nav.test.ts:19-33` asserting `ru[labelKey] === label`. Because `CommandPalette` searches and displays the raw `label`, the palette is unlocalized while the top bar is not. `/setup` bypasses the i18n layer entirely and is 100% hardcoded Russian, unlike `/login` and `/no-access`. `RoleEditor.tsx:67` throws `'Не удалось загрузить список permissions'` — a Russian string with an English word embedded, a fair summary of the migration's state.
 
 ### 5.7 Styling and theming
 
@@ -2482,7 +2482,7 @@ Identity resolution is a select-then-insert against `players` keyed on `steam_id
 | Redis | `session:<tokenId>` `EX 600` | read-through cache of the row (`apps/api/src/lib/sessions.ts:177-189`) |
 | Redis | `session-touch:<id>` `EX 60 NX` | sliding-expiry throttle lock (`sessions.ts:163-174`) |
 
-The raw token is never persisted. On the panel side, `(dashboard)/layout.tsx:16` calls `requireSession()` — `getSession()` wrapped in React `cache()`, forwarding the cookie to `/api/v1/me` and `redirect('/login')` on any throw (`apps/web/src/lib/dal.ts:20-37`). `SidebarNav` filters items by the returned permission list (`apps/web/src/components/SidebarNav.tsx:64-66`).
+The raw token is never persisted. On the panel side, `(dashboard)/layout.tsx:16` calls `requireSession()` — `getSession()` wrapped in React `cache()`, forwarding the cookie to `/api/v1/me` and `redirect('/login')` on any throw (`apps/web/src/lib/dal.ts:20-37`). `TopNav` filters items by the returned permission list (`apps/web/src/components/TopNav.tsx:15-25`).
 
 The actual gate is a **single global `onRequest` hook** in `apps/api/src/plugins/auth.ts` — there is no `preHandler` hook anywhere in `apps/api/src`. It resolves the session, loads the player, attaches `req.user.permissions` from `loadUserPermissions` (`apps/api/src/lib/rbac.ts:91-208`), touches the session, then enforces the route's declared config:
 

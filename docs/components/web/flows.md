@@ -33,7 +33,7 @@ If the first-owner claim already happened and the user's role has no `panel_acce
 2. `DashboardLayout` server component calls `requireSession()`.
 3. `requireSession` reads `__Host-sid`, calls `GET /api/v1/me`; if the session is still valid the Me object is returned and the layout renders.
 4. If the cookie is expired or invalid, `getSession()` returns null → `requireSession()` calls `redirect('/login')`.
-5. `GET /api/v1/me` is a `selfService` route, so a `self_service` session also gets past step 3. The layout therefore checks `me.permissions.length === 0` and redirects such a session to `/me` before rendering the admin shell — otherwise a direct `(dashboard)` URL would render the sidebar around widgets that every panel-gated route answers 401 for.
+5. `GET /api/v1/me` is a `selfService` route, so a `self_service` session also gets past step 3. The layout therefore checks `me.permissions.length === 0` and redirects such a session to `/me` before rendering the admin shell — otherwise a direct `(dashboard)` URL would render the panel shell around widgets that every panel-gated route answers 401 for.
 
 ---
 
@@ -102,7 +102,7 @@ If the first-owner claim already happened and the user's role has no `panel_acce
 
 ### Archive list (`/servers/archive`)
 
-1. Operator opens `/servers/archive` (sidebar entry gated by `server:view`).
+1. Operator opens `/servers/archive` (top-bar «Серверы» entry, gated by `server:view`).
 2. `GET /api/v1/servers/archive` populates the table.
 3. Row click → `/servers/archive/[id]`.
 
