@@ -39,6 +39,34 @@ Next.js 15 (App Router) + React 19 + Tailwind CSS 4. UI is in Russian. Server co
 | `/settings/account` | `src/app/(dashboard)/settings/account/page.tsx` | Session management — list active sessions, revoke individual or all. |
 | `/users` | `src/app/(dashboard)/users/page.tsx` | Table of all players with a non-NULL role (nick, SteamID64, role with color dot, last_seen). "Назначить роль игроку" button (gated by `user:manage_roles`) opens a modal with debounced `GET /api/v1/players?q=` typeahead + role dropdown. The shared expiry control always renders `ДД/ММ/ГГГГ`, opens the native calendar from its whole visible surface, and stores the selected UTC day inclusively; the optional comment is identified as an admin-visible grant reason. Owner is excluded from assignment. |
 
+## Design system
+
+The panel is styled against Apple's Human Interface Guidelines, dark appearance.
+[`design-system.md`](design-system.md) is the contract: type scale, 8-point
+spacing, the four allowed content widths, the three surface levels, colour as
+state, minimum hit targets, required screen states, and the rules for tables and
+grouped lists. Tokens themselves live in `apps/web/src/styles/globals.css`.
+
+`apps/web/src/components/ui/` holds the primitives that implement those rules.
+New UI is composed from them rather than from hand-written utility strings:
+
+| Primitive | What it is |
+|---|---|
+| `PageContainer`, `PageHeader` | The page frame — the only place a page's width, vertical rhythm and `<h1>` are decided. |
+| `Card`, `CardHeader`, `CardBody`, `CardFooter`, `CardGrid` | Grouped surface at one elevation. |
+| `Button`, `ButtonLink`, `IconButton` | Every action. Variants carry intent (`destructive` means irreversible), sizes carry the 32/28px control scale. |
+| `Table`, `TableHead`, `TableBody`, `TableRow`, `Th`, `SortableTh`, `Td` | Thin wrappers over native table elements: sticky head, `aria-sort`, right-aligned numerics. |
+| `Toolbar`, `SearchField`, `Pagination` | The fixed layout above every list — search, filters, counter, reset. |
+| `EmptyState`, `Skeleton`, `SkeletonTable`, `InlineBanner` | The four screen states: loading, empty, error, filtered-empty. |
+| `Modal`, `AlertDialog` | Built on native `<dialog>`, so focus trapping, the top layer and Escape come from the browser. |
+| `Field` (`TextInput`, `Textarea`, `Select`, `Checkbox`, `Switch`, `FieldRow`), `GroupedList`, `GroupedRow` | Forms and inset-grouped settings lists. |
+| `SegmentedControl`, `SegmentedNav`, `Menu` | Switching state and switching route, keyboard-navigable. |
+| `Badge`, `StatusBadge`, `StatusDot`, `StatTile`, `DateTime` | Labels, state, metrics and a single time format. |
+
+Primitives never read the translation dictionary — every human-readable string,
+`aria-label` included, arrives as a prop. That keeps them free of locale
+plumbing and keeps the dictionary a single-owner file.
+
 ## Components
 
 `apps/web/src/components/`:
@@ -111,5 +139,6 @@ In compose, Caddy serves the prebuilt `next start` output.
 
 ## See also
 
+- [Design system](design-system.md)
 - [Configuration](configuration.md)
 - [Testing](testing.md)
