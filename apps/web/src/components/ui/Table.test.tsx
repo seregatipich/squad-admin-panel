@@ -89,6 +89,40 @@ describe('TableHead', () => {
     expect(screen.getByRole('columnheader').closest('thead')).toHaveClass('sticky');
   });
 
+  it('scrolls with the page by default and offsets the header by the chrome height', () => {
+    render(
+      <Table ariaLabel="Серверы">
+        <TableHead>
+          <TableRow>
+            <Th>Имя</Th>
+          </TableRow>
+        </TableHead>
+      </Table>,
+    );
+
+    const wrapper = screen.getByRole('table').parentElement as HTMLElement;
+    expect(wrapper.className).not.toContain('overflow');
+    expect(wrapper.style.getPropertyValue('--table-head-top')).toBe('var(--chrome-h)');
+  });
+
+  it('takes its own scroller when a height is given, and pins the header to it', () => {
+    render(
+      <Table ariaLabel="Серверы" maxHeight="60vh">
+        <TableHead>
+          <TableRow>
+            <Th>Имя</Th>
+          </TableRow>
+        </TableHead>
+      </Table>,
+    );
+
+    const wrapper = screen.getByRole('table').parentElement as HTMLElement;
+    expect(wrapper).toHaveClass('overflow-auto');
+    expect(wrapper.style.maxHeight).toBe('60vh');
+    // Внутри собственного скроллера шапка прилипает к его краю, а не к окну.
+    expect(wrapper.style.getPropertyValue('--table-head-top')).toBe('0px');
+  });
+
   it('releases the header when sticky is turned off', () => {
     render(
       <Table ariaLabel="Игроки">

@@ -1,20 +1,20 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 
-/** Horizontal alignment of a header or body cell. */
+/** Горизонтальное выравнивание ячейки — заголовка или тела. */
 export type TableAlign = 'left' | 'right' | 'center';
 
-/** Muted row tint that mirrors a state already stated in one of the cells. */
+/** Приглушённый тон строки, дублирующий состояние, названное в одной из ячеек. */
 export type TableRowTone = 'default' | 'warn' | 'crit';
 
-/** Sort direction of the column a table is currently ordered by. */
+/** Направление сортировки колонки, по которой упорядочена таблица. */
 export type SortDirection = 'asc' | 'desc';
 
 /**
- * Explicit class per variant instead of an interpolated `text-${align}`:
- * Tailwind 4 scans the sources as text and never sees a class assembled at
- * runtime, so an interpolated name is silently missing from the stylesheet.
+ * Явный класс на каждый вариант вместо интерполяции `text-${align}`: Tailwind 4
+ * сканирует исходники как текст и никогда не видит имя класса, которое
+ * собирается во время выполнения, — такого класса просто не окажется в стилях.
  */
 const ALIGN: Record<TableAlign, string> = {
   left: 'text-left',
@@ -34,7 +34,7 @@ const ROW_TONE: Record<TableRowTone, string> = {
   crit: 'bg-crit/10',
 };
 
-/** Column-header typography from the design system, minus the padding. */
+/** Типографика заголовка колонки из дизайн-системы, без отступов. */
 const TH_TYPE = 'text-2xs font-semibold uppercase tracking-[0.06em] text-ink-3 whitespace-nowrap';
 
 function classes(...parts: Array<string | false | null | undefined>): string {
@@ -42,47 +42,71 @@ function classes(...parts: Array<string | false | null | undefined>): string {
 }
 
 /**
- * The table shell: a horizontally scrollable viewport around a full-width
- * `<table>` at the panel's 13px body size.
+ * Оболочка таблицы: горизонтально прокручиваемая область вокруг `<table>` во всю
+ * ширину, набранной базовым кеглем 13px.
  *
- * These are deliberately thin wrappers over the native elements rather than a
- * declarative `<DataTable columns={…} />`. The panel has dozens of tables, each
- * with its own cell rendering, row links and bulk-selection quirks; a
- * declarative component would have to grow a prop for every one of them, and
- * every page would have to migrate on the same day. Wrappers let a page adopt
- * the design system one table at a time and keep whatever markup it already has
- * inside the cells.
+ * Это сознательно тонкие обёртки над нативными элементами, а не декларативный
+ * `<DataTable columns={…} />`. В панели десятки таблиц, и у каждой своя отрисовка
+ * ячеек, свои строки-ссылки и своя массовая выборка; декларативному компоненту
+ * пришлось бы отрастить проп под каждую из них, а всем страницам — переехать в
+ * один день. Обёртки позволяют переводить страницы на дизайн-систему по одной и
+ * сохранять внутри ячеек ту разметку, которая там уже есть.
  *
- * **A row that navigates puts a real `<a>` in its first cell — never an
- * `onClick` on the `<tr>`.** A click handler on a row looks identical on a
- * left-click and is broken everywhere else: middle-click cannot open a
- * background tab, Cmd/Ctrl-click cannot open a new one, the context menu has no
- * "copy link address", the target is unreachable by keyboard, and a screen
- * reader announces a plain row with no hint that it leads anywhere. A link
- * gives all of that back for free, and the browser — not the panel — decides
- * what each modifier does.
+ * **Строка, которая никуда ведёт, кладёт настоящий `<a>` в первую ячейку — и
+ * никогда не вешает `onClick` на `<tr>`.** Обработчик клика на строке выглядит
+ * так же только при обычном левом клике, а во всём остальном сломан: средней
+ * кнопкой не открыть фоновую вкладку, по Cmd/Ctrl+клику не открыть новую, в
+ * контекстном меню нет «копировать адрес ссылки», с клавиатуры цель недостижима,
+ * а скринридер объявляет обычную строку, ничем не намекая, что она куда-то
+ * ведёт. Ссылка возвращает всё это даром, и что делает каждый модификатор,
+ * решает браузер, а не панель.
  *
- * `dense` shrinks the vertical rhythm through descendant variants rather than a
- * context, so it also reaches cells rendered by callers deep inside the rows.
+ * `dense` сжимает вертикальный ритм через варианты по потомкам, а не через
+ * контекст, — так он достаёт и до ячеек, отрисованных вызывающим кодом глубоко
+ * внутри строк.
  */
 export function Table({
   dense = false,
   layout = 'auto',
+  maxHeight,
   ariaLabel,
   className,
   children,
 }: {
-  /** Trades row height for rows on screen — log and audit views. */
+  /** Меняет высоту строки на число строк в экране — журналы и аудит. */
   dense?: boolean;
-  /** `fixed` makes columns obey their `width` instead of their content. */
+  /** `fixed` заставляет колонки слушаться `width`, а не содержимого. */
   layout?: 'auto' | 'fixed';
-  /** Accessible name of the table; required whenever no visible caption names it. */
+  /**
+   * Собственная область прокрутки таблицы, например `'60vh'`.
+   *
+   * Без неё таблица прокручивается вместе со страницей, и шапка прилипает к
+   * окну под верхней панелью. С ней таблица получает свой скроллер, и шапка
+   * прилипает к его верхнему краю. Промежуточного варианта не существует:
+   * блок с `overflow-x: auto` вычисляет `overflow-y` тоже в `auto` и
+   * становится областью прокрутки, внутри которой `sticky` уже никогда не
+   * сработает от прокрутки страницы.
+   */
+  maxHeight?: string;
+  /** Доступное имя таблицы; обязательно, если её не называет видимая подпись. */
   ariaLabel?: string;
   className?: string;
   children?: ReactNode;
 }) {
+  const scrolls = maxHeight !== undefined;
   return (
-    <div className="overflow-x-auto">
+    <div
+      // Смещение прилипшей шапки публикуется переменной, а не пропсом: сама
+      // шапка не должна знать, кто её прокручивает, а вызывающий код — помнить
+      // про это при каждом использовании.
+      style={
+        {
+          maxHeight,
+          '--table-head-top': scrolls ? '0px' : 'var(--chrome-h)',
+        } as CSSProperties
+      }
+      className={scrolls ? 'overflow-auto' : undefined}
+    >
       <table
         aria-label={ariaLabel}
         className={classes(
@@ -99,18 +123,18 @@ export function Table({
 }
 
 /**
- * The header row group. Pinned by default, because a table long enough to
- * scroll is a table whose column names are needed at the bottom too.
+ * Группа строк шапки. По умолчанию прилипает: таблица, которая доросла до
+ * прокрутки, — это таблица, названия колонок которой нужны и внизу тоже.
  *
- * The offset is `top-0`, not the `--chrome-h` used by page-level sticky layers:
- * {@link Table} wraps the table in `overflow-x-auto`, and a box with
- * `overflow-x: auto` computes `overflow-y` to `auto` as well, which makes that
- * wrapper — not the viewport — the scrollport the header sticks inside. Offset
- * by the top bar's height here and the header would float 46px below the edge
- * of its own container.
+ * Смещение берётся из `--table-head-top`, которую задаёт {@link Table}: у
+ * таблицы, прокручиваемой вместе со страницей, это высота верхней панели, а у
+ * таблицы с собственным скроллером — ноль. Считать это на месте применения
+ * нельзя: `sticky` отсчитывается от ближайшей области прокрутки, и ошибка в
+ * выборе даёт либо шапку под навигацией, либо шапку, зависшую на 46px ниже
+ * края собственного контейнера.
  *
- * The material (`bg-surface/90 backdrop-blur-xl`) is not decoration: without an
- * opaque-enough background the body rows scroll *through* the pinned header.
+ * Материал (`bg-surface/90 backdrop-blur-xl`) — не украшение: без достаточно
+ * плотного фона строки тела прокручиваются *сквозь* закреплённую шапку.
  */
 export function TableHead({
   sticky = true,
@@ -123,26 +147,28 @@ export function TableHead({
 }) {
   return (
     <thead
-      className={classes(sticky && 'sticky top-0 z-20 bg-surface/90 backdrop-blur-xl', className)}
+      className={classes(
+        sticky && 'sticky top-[var(--table-head-top,0px)] z-20 bg-surface/90 backdrop-blur-xl',
+        className,
+      )}
     >
       {children}
     </thead>
   );
 }
 
-/** The body row group; rows are separated by hairlines, never by shadow. */
+/** Группа строк тела: строки разделяются волосяной линией, а не тенью. */
 export function TableBody({ className, children }: { className?: string; children?: ReactNode }) {
   return <tbody className={classes('divide-y divide-line', className)}>{children}</tbody>;
 }
 
 /**
- * A table row, 36px tall.
+ * Строка таблицы высотой 36px.
  *
- * `selected` and `tone` tint the row, and per the design system's "never colour
- * alone" rule the caller must also say the same thing in words: the selected
- * row carries its checkbox, the `warn`/`crit` row carries a status cell. The
- * tint speeds up scanning for people who see it and costs nothing to those who
- * do not.
+ * `selected` и `tone` подкрашивают строку, и по правилу дизайн-системы «никогда
+ * только цветом» вызывающий код обязан сказать то же самое словами: выделенная
+ * строка несёт свой флажок, строка `warn`/`crit` — ячейку состояния. Подсветка
+ * ускоряет просмотр тем, кто её видит, и ничего не стоит тем, кто нет.
  */
 export function TableRow({
   interactive = false,
@@ -151,7 +177,7 @@ export function TableRow({
   className,
   children,
 }: {
-  /** Marks the row as pointing somewhere — pair it with a link in the first cell. */
+  /** Помечает строку как ведущую куда-то — в паре со ссылкой в первой ячейке. */
   interactive?: boolean;
   selected?: boolean;
   tone?: TableRowTone;
@@ -174,9 +200,9 @@ export function TableRow({
 }
 
 /**
- * A column header. Names are written in ordinary sentence case in the source
- * and rendered uppercase by CSS, so a screen reader still reads a word rather
- * than spelling out capitals.
+ * Заголовок колонки. Названия пишутся в исходнике обычным регистром, а в
+ * верхний их переводит CSS, — так скринридер по-прежнему читает слово, а не
+ * произносит его по буквам.
  */
 export function Th({
   align = 'left',
@@ -186,7 +212,7 @@ export function Th({
   children,
 }: {
   align?: TableAlign;
-  /** Any CSS length; only takes effect with `Table layout="fixed"`. */
+  /** Любая длина CSS; действует только вместе с `Table layout="fixed"`. */
   width?: string;
   scope?: 'col' | 'row' | 'colgroup' | 'rowgroup';
   className?: string;
@@ -204,23 +230,27 @@ export function Th({
 }
 
 /**
- * A column header that orders the table.
+ * Заголовок колонки, который упорядочивает таблицу.
  *
- * The cell delegates its padding to an inner `<button>` (`p-0!` so the `dense`
- * overrides cannot put it back) — the button then fills the whole cell, which
- * makes the entire header clickable and, more importantly, makes the global
- * focus ring outline the header a keyboard user is actually on.
+ * Ячейка отдаёт свои отступы внутренней `<button>` (через `p-0!`, чтобы их не
+ * вернули обратно переопределения `dense`) — кнопка занимает ячейку целиком, и
+ * поэтому нажимается весь заголовок, а главное: глобальное кольцо фокуса
+ * обводит именно тот заголовок, на котором сейчас стоит клавиатурный фокус.
  *
- * Direction is announced three ways: `aria-sort` on the cell for assistive
- * technology that understands it, an arrow for sighted users, and
- * `directionText` read out as part of the button's name for everything else.
- * That text is required rather than defaulted because these primitives never
- * touch the translation dictionary — every human-readable string arrives from
- * the page.
+ * Направление объявляется тремя способами: `aria-sort` на ячейке — для
+ * вспомогательных технологий, которые его понимают; стрелка — для зрячих; и
+ * `directionText`, который читается как часть имени кнопки, — для всего
+ * остального. Этот текст обязателен, а не имеет значения по умолчанию, потому
+ * что примитивы не обращаются к словарю переводов: любая человекочитаемая
+ * строка приходит со страницы.
  *
- * Only the active column shows an arrow. Inactive columns show a dimmed double
- * chevron: the affordance "this can be sorted" has to be visible, but it must
- * not compete with the one column that actually orders the data.
+ * Стрелку показывает только активная колонка. У остальных — приглушённый двойной
+ * шеврон: возможность «эту колонку можно сортировать» должна быть видна, но не
+ * должна спорить с той единственной колонкой, которая действительно задаёт
+ * порядок данных.
+ *
+ * `scope` здесь не настраивается: сортируемый заголовок строки бессмыслен —
+ * сортируют колонку.
  */
 export function SortableTh({
   sortKey,
@@ -233,14 +263,14 @@ export function SortableTh({
   width,
   className,
 }: {
-  /** Identifier handed back to {@link onSort}; matches `activeKey` when active. */
+  /** Идентификатор, который вернётся в {@link onSort}; совпадает с `activeKey` у активной колонки. */
   sortKey: string;
-  /** Key the table is currently ordered by, or `null` when it is unordered. */
+  /** Ключ, по которому таблица упорядочена сейчас, или `null`, если порядка нет. */
   activeKey: string | null;
   direction: SortDirection;
   onSort: (key: string) => void;
   label: ReactNode;
-  /** Translated wording for each direction, e.g. `{ asc: 'по возрастанию', … }`. */
+  /** Перевод для каждого направления, например `{ asc: 'по возрастанию', … }`. */
   directionText: Record<SortDirection, string>;
   align?: TableAlign;
   width?: string;
@@ -280,16 +310,15 @@ export function SortableTh({
 }
 
 /**
- * A body cell.
+ * Ячейка тела таблицы.
  *
- * `numeric` is not an alias for `align="right"`: it also turns on
- * `tabular-nums`, and the two belong together — a column of right-aligned
- * proportional digits still fails to line up on the decimal, which is the whole
- * reason the numbers are right-aligned in the first place. It therefore wins
- * over `align`.
+ * `numeric` — не синоним `align="right"`: он ещё и включает `tabular-nums`, и
+ * эти две вещи неразделимы. Колонка выключенных вправо пропорциональных цифр всё
+ * равно не выстроится по разряду, а ведь ради этого числа вправо и выключают.
+ * Поэтому `numeric` побеждает `align`.
  *
- * `truncate` needs a column of known width to clip against: use it with
- * `Table layout="fixed"` and a `width` on the matching {@link Th}.
+ * `truncate` нужна колонка известной ширины, обо что обрезать: применяйте его
+ * вместе с `Table layout="fixed"` и `width` у соответствующего {@link Th}.
  */
 export function Td({
   align = 'left',
@@ -319,19 +348,20 @@ export function Td({
 }
 
 /**
- * The table's description, visually hidden by default.
+ * Описание таблицы, по умолчанию скрытое визуально.
  *
- * A visible caption has no place in this design language — a table sits inside
- * a `Card` whose header already names it — but a `<caption>` is still the one
- * element a screen reader reads before the first row, so it is the right place
- * for the sentence that explains what the rows are and how they are ordered.
+ * Видимой подписи в этом оформлении места нет — таблица лежит внутри `Card`,
+ * шапка которой её уже называет, — но `<caption>` остаётся единственным
+ * элементом, который скринридер читает раньше первой строки. Значит, это верное
+ * место для фразы о том, что за строки перед пользователем и как они
+ * упорядочены.
  */
 export function TableCaption({
   visible = false,
   className,
   children,
 }: {
-  /** Renders the caption on screen instead of only for assistive technology. */
+  /** Показывает подпись на экране, а не только для вспомогательных технологий. */
   visible?: boolean;
   className?: string;
   children?: ReactNode;
