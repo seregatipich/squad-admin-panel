@@ -127,10 +127,16 @@ export function LogConsole({
           />
         </div>
       ) : null}
+      {/* `role="log"` — прямое назначение этой области: поток строк, который
+          дописывается снизу. Программа чтения с экрана объявляет только
+          прибывшее, не перечитывая всё заново, а автотесты получают опору,
+          не зависящую от служебных классов. */}
       <div
         ref={scrollerRef}
         onScroll={onScroll}
         style={{ height }}
+        role="log"
+        aria-label={title}
         className="overflow-y-auto rounded-card border border-line bg-surface p-3 font-mono text-xs leading-relaxed"
       >
         {lines.length === 0 ? (

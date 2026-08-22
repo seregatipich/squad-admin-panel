@@ -41,8 +41,9 @@ test.describe('server detail live-refresh indicator', () => {
       }
       expect(sawReset, 'indicator never reset — polling appears broken').toBe(true);
 
-      const dot = page.locator('span.bg-green-500, span.bg-green-700').first();
-      await expect(dot).toBeVisible();
+      // Подключение RCON подписано словом рядом с точкой — на него и опираемся,
+      // а не на класс заливки.
+      await expect(page.getByText('подключён').first()).toBeVisible();
     } finally {
       await teardownOwner(seed.uid);
     }

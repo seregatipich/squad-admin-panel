@@ -76,7 +76,13 @@ test.describe('live refresh — no F5 needed', () => {
       await attachOwnerCookie(page);
       await page.goto('/dashboard');
 
-      const kpi = page.locator('text=Серверы').locator('..').locator('div').nth(1);
+      // Плитка показателя рендерит ярлык и значение соседними абзацами.
+      // Прежний путь по DOM («text=Серверы» → родитель → второй div) ловил
+      // сначала кнопку раздела «Серверы» в верхней панели, а она стоит в
+      // документе раньше карточки.
+      const kpi = page
+        .locator('p', { hasText: /^Серверы$/ })
+        .locator('xpath=following-sibling::p[1]');
       await expect(kpi).toBeVisible({ timeout: 10_000 });
       const before = Number((await kpi.textContent())?.trim() ?? '0');
 
@@ -114,11 +120,13 @@ test.describe('live refresh — no F5 needed', () => {
       const row = page.locator('tr', { has: page.locator(`a[href="/servers/${createdId}"]`) });
       await expect(row).toBeVisible({ timeout: 10_000 });
 
+      // Состояние читается подписью, а не цветом точки: цвет — деталь
+      // оформления, подпись — то, что видит и слышит оператор.
       runSql(`UPDATE servers SET status='running' WHERE id='${createdId}'`);
-      await expect(row.locator('span.bg-emerald-500').first()).toBeVisible({ timeout: 8_000 });
+      await expect(row.getByText('работает')).toBeVisible({ timeout: 8_000 });
 
       runSql(`UPDATE servers SET status='stopped' WHERE id='${createdId}'`);
-      await expect(row.locator('span.bg-neutral-600').first()).toBeVisible({ timeout: 8_000 });
+      await expect(row.getByText('остановлен')).toBeVisible({ timeout: 8_000 });
     } finally {
       deleteSyntheticServer(createdId);
     }
