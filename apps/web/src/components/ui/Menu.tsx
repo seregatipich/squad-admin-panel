@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { useEffect, useId, useRef, useState } from 'react';
+import { ChevronDownIcon } from './icons';
 
 export type MenuLinkItem = {
   kind: 'link';
@@ -36,6 +37,14 @@ export type MenuTrigger = {
   badge?: ReactNode;
   /** Обязателен, когда `label` — значок: иначе у кнопки нет доступного имени. */
   ariaLabel?: string;
+  /**
+   * Меню владеет текущей страницей.
+   *
+   * Это не то же самое, что `open`: раздел остаётся текущим и после того, как
+   * меню закрылось, и именно по этому признаку оператор понимает, где он
+   * находится.
+   */
+  active?: boolean;
 };
 
 /** Разложенное дерево: у каждого выбираемого пункта — его место в порядке обхода. */
@@ -372,15 +381,15 @@ export function Menu({
         aria-label={trigger.ariaLabel}
         onClick={() => (open ? close(false) : openFrom('first'))}
         onKeyDown={onTriggerKeyDown}
-        className={`flex h-7 items-center gap-1.5 whitespace-nowrap rounded-ctl px-2.5 text-xs transition-colors ${
-          open ? 'bg-raised text-ink' : 'text-ink-2 hover:bg-raised/60 hover:text-ink'
+        className={`flex h-8 items-center gap-1 whitespace-nowrap rounded-ctl px-2.5 text-xs transition-colors duration-150 ${
+          open || trigger.active
+            ? 'bg-raised text-ink'
+            : 'text-ink-2 hover:bg-raised/60 hover:text-ink'
         }`}
       >
         {trigger.label}
         {trigger.badge !== undefined && trigger.badge !== null && <span>{trigger.badge}</span>}
-        <span aria-hidden className="text-[8px] text-ink-3">
-          ▾
-        </span>
+        <ChevronDownIcon className="size-3.5 text-ink-3" />
       </button>
 
       {open && (
