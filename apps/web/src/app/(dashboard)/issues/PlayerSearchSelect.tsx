@@ -157,7 +157,7 @@ export function PlayerSearchSelect({
         autoComplete="off"
       />
       {listVisible ? (
-        <div className="absolute z-10 mt-1 max-h-52 w-full overflow-auto rounded-card border border-line bg-surface/95 p-1 backdrop-blur-xl">
+        <div className="absolute z-10 mt-1 max-h-52 w-full overflow-auto rounded-card border border-line-2 bg-surface p-1">
           {loading ? (
             <div className="px-1.5 py-1">
               <Skeleton variant="text" count={2} label="Поиск игроков" />

@@ -16,6 +16,19 @@ vi.mock('@/lib/use-live-bus', () => ({
 }));
 
 // The bar fetches a pending-reports count on mount; each test decides the total.
+// jsdom не реализует ResizeObserver, а раскладка панели опирается на него.
+// Вёрстки в jsdom тоже нет — все ширины равны нулю, поэтому в тестах панель
+// всегда считает, что помещается целиком. Само решение о переполнении
+// проверяется отдельно, на чистой функции: `lib/nav-overflow.test.ts`.
+vi.stubGlobal(
+  'ResizeObserver',
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+);
+
 const fetchMock = vi.fn(() =>
   Promise.resolve(new Response(JSON.stringify({ total: 0 }), { status: 200 })),
 );
@@ -236,5 +249,22 @@ describe('TopNav', () => {
       'href',
       '/all-players',
     );
+  });
+
+  it('keeps the overflow trigger out of the way while every entry fits', () => {
+    renderNav();
+    // Кнопка остаётся в разметке — измерение опирается на её ширину, — но при
+    // полной панели она не должна попадаться ни глазу, ни скринридеру.
+    const more = screen.queryByRole('button', { name: /^Ещё/ });
+    if (more) expect(more.closest('li')).toHaveClass('invisible');
+  });
+
+  it('never puts the bar into a horizontal scroller', () => {
+    const { container } = renderNav();
+    const row = container.querySelector('nav ul');
+    // Уехавший за край пункт недостижим, а единственным намёком на него была
+    // полоска прокрутки — этого в панели больше нет.
+    expect(row?.className).not.toContain('overflow-x-auto');
+    expect(row?.className).not.toContain('overflow-auto');
   });
 });

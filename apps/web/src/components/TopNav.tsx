@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { LocaleSwitch } from '@/components/LocaleSwitch';
 import { logout } from '@/components/LogoutButton';
 import { SearchIcon } from '@/components/ui/icons';
@@ -11,6 +11,7 @@ import { useTranslator } from '@/i18n/LocaleProvider';
 import type { Translator } from '@/i18n/translate';
 import { openCommandPalette } from '@/lib/commandPalette';
 import { activeNavGroupLabel, isNavHrefActive, type NavGroup, type NavItem } from '@/lib/nav';
+import { fitNavEntries } from '@/lib/nav-overflow';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 
 /** Filters an item's own gates, and — for a menu column — its children's too. */
@@ -110,6 +111,107 @@ function toMenuItems(items: NavItem[], ctx: ItemContext): MenuItem[] {
 }
 
 /**
+ * Сколько пунктов панели помещается в её ширину.
+ *
+ * Ширины пунктов кэшируются при первом полном рендере и переиспользуются: как
+ * только часть пунктов уезжает в «Ещё», измерить их в полосе уже нельзя.
+ * Меняются они только вместе с языком, а смена языка перерисовывает панель
+ * целиком, так что кэш живёт ровно столько, сколько подписи.
+ *
+ * @param count Сколько всего пунктов в панели.
+ * @returns Ссылки на полосу и кнопку «Ещё» плюс число помещающихся пунктов.
+ */
+function useNavOverflow(count: number, measureKey: string) {
+  const rowRef = useRef<HTMLUListElement>(null);
+  const moreRef = useRef<HTMLLIElement>(null);
+  const widthsRef = useRef<number[]>([]);
+  const [visibleCount, setVisibleCount] = useState(count);
+  // Замер идёт в два кадра. В фазе `measure` в полосе стоят все пункты — только
+  // так видно их настоящую ширину: то, что уехало в «Ещё», измерить негде.
+  // Фаза возвращается каждый раз, когда содержимое пунктов меняется, иначе
+  // кэш устаревает — счётчик жалоб прилетает с задержкой и делает «Инструменты»
+  // на два десятка пикселей шире уже после того, как ширины сняты.
+  const [phase, setPhase] = useState<'measure' | 'settled'>('measure');
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: measureKey — и есть описание содержимого, от которого зависят ширины
+  useLayoutEffect(() => {
+    widthsRef.current = [];
+    setVisibleCount(count);
+    setPhase('measure');
+  }, [measureKey, count]);
+
+  // Слой вёрстки, а не эффект после отрисовки: иначе на узком окне панель
+  // успевает мигнуть развёрнутой.
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+
+    const fitFromCache = () => {
+      if (widthsRef.current.length !== count) return;
+      const more = moreRef.current;
+      const moreWidth = more && more.offsetWidth > 0 ? more.offsetWidth + GAP_PX : MORE_FALLBACK_PX;
+      setVisibleCount(fitNavEntries(widthsRef.current, row.clientWidth, moreWidth));
+    };
+
+    if (phase === 'measure') {
+      const items = [...row.children].filter((el) => el !== moreRef.current);
+      if (items.length !== count) return;
+      widthsRef.current = items.map((el) => (el as HTMLElement).offsetWidth + GAP_PX);
+      fitFromCache();
+      setPhase('settled');
+      return;
+    }
+
+    fitFromCache();
+    // Ширина окна меняет только доступное место, но не сами пункты, поэтому
+    // здесь достаточно пересчёта по кэшу.
+    const observer = new ResizeObserver(fitFromCache);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [count, phase]);
+
+  return { rowRef, moreRef, visibleCount };
+}
+
+/** Ключ состояния открытого меню для кнопки «Ещё». */
+const OVERFLOW_KEY = '\u0000overflow';
+
+/** Зазор между пунктами (`gap-0.5`), который измерение обязано учесть. */
+const GAP_PX = 2;
+
+/** Ширина кнопки «Ещё» до того, как она впервые отрисована. */
+const MORE_FALLBACK_PX = 64;
+
+/** Один пункт полосы: прямая ссылка или меню раздела. */
+type BarEntry =
+  | { kind: 'link'; key: string; item: NavItem }
+  | { kind: 'menu'; key: string; label: string; groupLabel: string; items: NavItem[] };
+
+/** Разворачивает колонки мега-меню в плоский список страниц. */
+function flattenEntryPages(items: NavItem[]): NavItem[] {
+  return items.flatMap((item) => item.children ?? [item]);
+}
+
+/**
+ * Пункты, не поместившиеся в полосу, — как содержимое меню «Ещё».
+ *
+ * Каждый уехавший раздел становится секцией со своим именем, поэтому в меню
+ * видно, откуда пункт, а колонки мега-меню разворачиваются в один список:
+ * внутри и без того вложенного меню вторая вложенность только мешает.
+ */
+function toOverflowItems(entries: BarEntry[], ctx: ItemContext): MenuItem[] {
+  return entries.map((entry) =>
+    entry.kind === 'link'
+      ? toMenuLink(entry.item, ctx)
+      : {
+          kind: 'group' as const,
+          label: entry.label,
+          items: flattenEntryPages(entry.items).map((item) => toMenuLink(item, ctx)),
+        },
+  );
+}
+
+/**
  * The panel's global navigation: a sticky top bar with dropdown menus.
  *
  * There is no left sidebar. A sidebar spends a fixed column of every screen on
@@ -151,67 +253,124 @@ export function TopNav({
     setOpen(null);
   }
 
+  // Полоса строится из данных, а не отрисовывается на месте: чтобы решить, что
+  // не помещается, нужен список пунктов до того, как хоть один из них отрисован.
+  const entries: BarEntry[] = groups.flatMap<BarEntry>((group, groupIndex) => {
+    const visible = group.items
+      .map((item) => visibleFor(item, permissions, economyEnabled))
+      .filter((item): item is NavItem => item !== null);
+    if (visible.length === 0) return [];
+
+    // У безымянной группы своего меню нет — её пункты стоят в полосе прямыми
+    // ссылками (сегодня такая одна, «Дашборд»).
+    if (!group.label) {
+      return visible.map((item) => ({ kind: 'link' as const, key: item.href ?? '', item }));
+    }
+    return [
+      {
+        kind: 'menu' as const,
+        key: group.label ?? `group-${groupIndex}`,
+        label: group.labelKey ? t(group.labelKey) : group.label,
+        groupLabel: group.label,
+        items: visible,
+      },
+    ];
+  });
+
+  // Ключ описывает всё, от чего зависят ширины пунктов: их набор, язык
+  // подписей и наличие счётчика, который приезжает отдельным запросом.
+  const measureKey = `${entries.map((e) => e.key).join('|')}|${t('nav.more')}|${pendingReports > 0}`;
+  const { rowRef, moreRef, visibleCount } = useNavOverflow(entries.length, measureKey);
+  const inBar = entries.slice(0, visibleCount);
+  const overflowed = entries.slice(visibleCount);
+  const overflowHasBadge =
+    pendingReports > 0 &&
+    overflowed.some(
+      (entry) =>
+        entry.kind === 'menu' &&
+        groupShowsPendingReports({ label: entry.groupLabel, items: entry.items }),
+    );
+  const overflowHasActive = overflowed.some(
+    (entry) =>
+      (entry.kind === 'menu' && activeGroup === entry.groupLabel) ||
+      (entry.kind === 'link' && isNavHrefActive(pathname, entry.item.href)),
+  );
+
   return (
     <nav
       aria-label={t('nav.mainNav')}
       className="sticky top-0 z-40 border-b border-line bg-surface/80 backdrop-blur-xl"
     >
       <div className="flex h-[46px] items-center gap-1 px-3">
-        <ul className="flex min-w-0 items-center gap-0.5 overflow-x-auto">
-          {groups.map((group, groupIndex) => {
-            const visible = group.items
-              .map((item) => visibleFor(item, permissions, economyEnabled))
-              .filter((item): item is NavItem => item !== null);
-            if (visible.length === 0) return null;
-
-            // An unlabeled group has no menu of its own — its items sit
-            // directly in the bar (the dashboard is the only one today).
-            if (!group.label) {
-              return visible.map((item) => (
-                <li key={item.href}>
-                  <Link
-                    href={item.href ?? '#'}
-                    aria-current={isNavHrefActive(pathname, item.href) ? 'page' : undefined}
-                    className={`flex h-8 items-center whitespace-nowrap rounded-ctl px-2.5 text-xs no-underline transition-colors duration-150 ${
-                      isNavHrefActive(pathname, item.href)
-                        ? 'bg-raised text-ink'
-                        : 'text-ink-2 hover:bg-raised/60 hover:text-ink'
-                    }`}
-                  >
-                    {item.labelKey ? t(item.labelKey) : item.label}
-                  </Link>
-                </li>
-              ));
-            }
-
-            const isOpen = open === group.label;
-            const columnCount = visible.filter((item) => item.children).length;
-            const badgeOnTrigger =
-              !isOpen &&
-              pendingReports > 0 &&
-              groupShowsPendingReports({ ...group, items: visible });
-
-            return (
-              <li key={group.label ?? `group-${groupIndex}`}>
+        {/* Прокрутки здесь нет намеренно: пункт, уехавший за край, недостижим,
+            и единственным намёком на него служила полоска прокрутки. Всё, что
+            не поместилось, уходит в меню «Ещё» ниже. */}
+        <ul ref={rowRef} className="flex min-w-0 flex-1 items-center gap-0.5">
+          {inBar.map((entry) =>
+            entry.kind === 'link' ? (
+              <li key={entry.key}>
+                <Link
+                  href={entry.item.href ?? '#'}
+                  aria-current={isNavHrefActive(pathname, entry.item.href) ? 'page' : undefined}
+                  className={`flex h-8 items-center whitespace-nowrap rounded-ctl px-2.5 text-xs no-underline transition-colors duration-150 ${
+                    isNavHrefActive(pathname, entry.item.href)
+                      ? 'bg-raised text-ink'
+                      : 'text-ink-2 hover:bg-raised/60 hover:text-ink'
+                  }`}
+                >
+                  {entry.item.labelKey ? t(entry.item.labelKey) : entry.item.label}
+                </Link>
+              </li>
+            ) : (
+              <li key={entry.key}>
                 <Menu
                   trigger={{
-                    label: group.labelKey ? t(group.labelKey) : group.label,
-                    active: activeGroup === group.label,
-                    badge: badgeOnTrigger ? (
-                      <PendingBadge
-                        count={pendingReports}
-                        label={t('nav.pendingReports', { count: pendingReports })}
-                      />
-                    ) : undefined,
+                    label: entry.label,
+                    active: activeGroup === entry.groupLabel,
+                    badge:
+                      open !== entry.groupLabel &&
+                      pendingReports > 0 &&
+                      groupShowsPendingReports({ label: entry.groupLabel, items: entry.items }) ? (
+                        <PendingBadge
+                          count={pendingReports}
+                          label={t('nav.pendingReports', { count: pendingReports })}
+                        />
+                      ) : undefined,
                   }}
-                  items={toMenuItems(visible, ctx)}
-                  open={isOpen}
-                  onOpenChange={(next) => setOpen(next ? (group.label ?? null) : null)}
-                  columns={columnCount > 1 ? 2 : 1}
+                  items={toMenuItems(entry.items, ctx)}
+                  open={open === entry.groupLabel}
+                  onOpenChange={(next) => setOpen(next ? entry.groupLabel : null)}
+                  columns={entry.items.filter((item) => item.children).length > 1 ? 2 : 1}
                 />
               </li>
-            );
-          })}
+            ),
+          )}
+
+          {/* Кнопка остаётся в разметке и когда пуста: измерение опирается на
+              её ширину, а исчезающая кнопка меняла бы ширину полосы и гоняла
+              раскладку туда-обратно на граничных размерах окна. */}
+          <li
+            ref={moreRef}
+            className={overflowed.length === 0 ? 'invisible w-0 overflow-hidden' : ''}
+          >
+            <Menu
+              align="end"
+              trigger={{
+                label: t('nav.more'),
+                active: overflowHasActive,
+                badge: overflowHasBadge ? (
+                  <PendingBadge
+                    count={pendingReports}
+                    label={t('nav.pendingReports', { count: pendingReports })}
+                  />
+                ) : undefined,
+              }}
+              items={toOverflowItems(overflowed, ctx)}
+              open={open === OVERFLOW_KEY}
+              onOpenChange={(next) => setOpen(next ? OVERFLOW_KEY : null)}
+              columns={overflowed.length > 2 ? 2 : 1}
+            />
+          </li>
         </ul>
 
         <div className="ml-auto flex shrink-0 items-center gap-2">

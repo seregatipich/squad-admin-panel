@@ -192,7 +192,7 @@ export function CommandPalette({
         if (e.key === 'Escape') close();
       }}
     >
-      <div className="w-full max-w-lg overflow-hidden rounded-card border border-line-2 bg-surface/95 backdrop-blur-xl">
+      <div className="w-full max-w-lg overflow-hidden rounded-card border border-line-2 bg-surface">
         <input
           ref={inputRef}
           type="text"

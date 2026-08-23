@@ -398,7 +398,7 @@ export function Menu({
           role="menu"
           aria-labelledby={triggerId}
           onKeyDown={onPanelKeyDown}
-          className={`absolute z-50 mt-1 min-w-56 rounded-card border border-line bg-surface/95 p-1 backdrop-blur-xl ${ALIGN_CLASS[align]} ${COLUMNS_CLASS[columns]}`}
+          className={`absolute z-50 mt-1 max-h-[calc(100vh-var(--chrome-h)-1.5rem)] min-w-56 overflow-y-auto overscroll-contain rounded-card border border-line-2 bg-surface p-1 ${ALIGN_CLASS[align]} ${COLUMNS_CLASS[columns]}`}
         >
           {entries.map(renderEntry)}
         </div>

@@ -113,6 +113,7 @@ export const en: Record<TranslationKey, string> = {
   'nav.hint.discord': 'webhooks and roles',
   'nav.hint.geoip': 'geolocation database',
   'nav.hint.mediaPublishing': 'screenshots and clips',
+  'nav.more': 'More',
   'nav.mainNav': 'Main navigation',
   'nav.search': 'Search the panel',
   'nav.userMenu': 'User menu',
