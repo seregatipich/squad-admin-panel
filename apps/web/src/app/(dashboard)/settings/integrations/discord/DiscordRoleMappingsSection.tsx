@@ -1,5 +1,26 @@
 'use client';
 import { useCallback, useEffect, useId, useState } from 'react';
+import {
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  FieldRow,
+  IconButton,
+  InlineBanner,
+  Select,
+  SkeletonTable,
+  Switch,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  TextInput,
+  Th,
+  TrashIcon,
+} from '@/components/ui';
 
 /**
  * Panel role → Discord role mapping management (DISCORD-5, #152) on
@@ -188,136 +209,113 @@ export default function DiscordRoleMappingsSection() {
   }
 
   return (
-    <section className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-xs uppercase tracking-widest text-neutral-400">Синхронизация ролей</h2>
-        <button
-          type="button"
-          onClick={() => void reconcile()}
-          disabled={busy}
-          className="rounded border border-sky-900 px-3 py-0.5 text-xs text-sky-300 hover:border-sky-700 disabled:opacity-40"
-        >
-          Синхронизировать сейчас
-        </button>
-      </div>
+    <Card padding="none" as="section">
+      <CardHeader
+        title="Синхронизация ролей"
+        description="Роль панели выдаёт указанную роль Discord каждому игроку, привязавшему Discord-аккаунт; панель — источник истины, расхождения чинит ежечасная сверка. Источник — роль панели; роли по лидербордам (топ по киллам, тиры по времени) появятся позже, после STATS-3."
+        actions={
+          <Button variant="secondary" size="sm" onClick={() => void reconcile()} disabled={busy}>
+            Синхронизировать сейчас
+          </Button>
+        }
+      />
 
-      <p className="text-xs text-neutral-500">
-        Роль панели выдаёт указанную роль Discord каждому игроку, привязавшему Discord-аккаунт;
-        панель — источник истины, расхождения чинит ежечасная сверка. Источник — роль панели; роли
-        по лидербордам (топ по киллам, тиры по времени) появятся позже, после STATS-3.
-      </p>
+      {(statusText || error || notice) && (
+        <CardBody padding="sm" className="space-y-2">
+          {statusText && <InlineBanner tone="crit" title={statusText} />}
+          {error && <InlineBanner tone="crit" title={error} />}
+          {notice && <InlineBanner tone="good" title={notice} />}
+        </CardBody>
+      )}
 
-      {statusText ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {statusText}
-        </div>
-      ) : null}
-      {error ? (
-        <div className="rounded border border-red-900 bg-red-950 p-3 text-sm text-red-200">
-          {error}
-        </div>
-      ) : null}
-      {notice ? (
-        <div className="rounded border border-emerald-900 bg-emerald-950/50 p-3 text-sm text-emerald-200">
-          {notice}
-        </div>
-      ) : null}
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="text-left text-xs uppercase text-neutral-500">
-            <tr>
-              <th className="py-2 pr-2">Роль панели</th>
-              <th className="py-2 pr-2">ID роли Discord</th>
-              <th className="py-2 pr-2">Состояние</th>
-              <th className="py-2 pr-2" />
-            </tr>
-          </thead>
-          <tbody>
+      {!loaded ? (
+        <CardBody padding="sm">
+          <SkeletonTable rows={3} cols={4} label="Загрузка маппингов" />
+        </CardBody>
+      ) : items.length === 0 ? (
+        <EmptyState
+          title="Маппингов пока нет"
+          description="Добавьте первый маппинг ниже — роль панели начнёт выдавать роль Discord при следующей сверке."
+        />
+      ) : (
+        <Table ariaLabel="Маппинги ролей панели на роли Discord">
+          <TableHead>
+            <TableRow>
+              <Th>Роль панели</Th>
+              <Th>ID роли Discord</Th>
+              <Th>Состояние</Th>
+              <Th align="right">Действия</Th>
+            </TableRow>
+          </TableHead>
+          <TableBody>
             {items.map((row) => (
-              <tr key={row.id} className="border-t border-neutral-900 align-top">
-                <td className="py-2 pr-2">{row.role_name}</td>
-                <td className="py-2 pr-2 font-mono text-xs text-neutral-400">
-                  {row.discord_role_id}
-                </td>
-                <td className="py-2 pr-2">
-                  <button
-                    type="button"
-                    onClick={() => void toggle(row)}
-                    disabled={busy}
-                    className={`rounded px-2 py-0.5 text-xs disabled:opacity-40 ${
-                      row.enabled
-                        ? 'bg-emerald-950/50 text-emerald-300'
-                        : 'bg-neutral-800 text-neutral-400'
-                    }`}
-                  >
-                    {row.enabled ? 'Включено' : 'Выключено'}
-                  </button>
-                </td>
-                <td className="py-2 pr-2">
-                  <button
-                    type="button"
+              <TableRow key={row.id}>
+                <Td>{row.role_name}</Td>
+                <Td className="font-mono text-ink-2">{row.discord_role_id}</Td>
+                <Td>
+                  <span className="flex items-center gap-2">
+                    <Switch
+                      checked={row.enabled}
+                      disabled={busy}
+                      onChange={() => void toggle(row)}
+                      label={`Выдавать роль Discord для «${row.role_name ?? row.role_id}»`}
+                    />
+                    <span className="text-xs text-ink-3">
+                      {row.enabled ? 'Включено' : 'Выключено'}
+                    </span>
+                  </span>
+                </Td>
+                <Td align="right">
+                  <IconButton
+                    tone="destructive"
+                    size="sm"
                     onClick={() => void remove(row)}
                     disabled={busy}
-                    className="rounded border border-red-900 px-3 py-0.5 text-xs text-red-400 hover:border-red-700 disabled:opacity-40"
-                  >
-                    Удалить
-                  </button>
-                </td>
-              </tr>
+                    icon={<TrashIcon />}
+                    label={`Удалить маппинг «${row.role_name ?? row.role_id}»`}
+                  />
+                </Td>
+              </TableRow>
             ))}
-            {loaded && items.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="py-3 text-center text-xs text-neutral-500">
-                  Маппингов пока нет
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+      )}
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <label htmlFor={roleSelectId} className="mb-1 block text-xs text-neutral-500">
-            Роль панели
-          </label>
-          <select
-            id={roleSelectId}
-            value={formRoleId}
-            onChange={(e) => setFormRoleId(e.target.value)}
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm focus:border-neutral-600 focus:outline-none"
-          >
-            <option value="">— выберите роль —</option>
-            {assignableRoles.map((role) => (
-              <option key={role.id} value={role.id}>
-                {role.name}
-              </option>
-            ))}
-          </select>
+      <CardBody className="space-y-4 border-t border-line">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FieldRow label="Роль панели" htmlFor={roleSelectId}>
+            <Select
+              id={roleSelectId}
+              value={formRoleId}
+              onChange={(e) => setFormRoleId(e.target.value)}
+            >
+              <option value="">— выберите роль —</option>
+              {assignableRoles.map((role) => (
+                <option key={role.id} value={role.id}>
+                  {role.name}
+                </option>
+              ))}
+            </Select>
+          </FieldRow>
+          <FieldRow label="ID роли Discord" htmlFor={discordRoleInputId}>
+            <TextInput
+              id={discordRoleInputId}
+              value={formDiscordRoleId}
+              onChange={(e) => setFormDiscordRoleId(e.target.value)}
+              placeholder="700000000000000001"
+              className="font-mono"
+            />
+          </FieldRow>
         </div>
-        <div>
-          <label htmlFor={discordRoleInputId} className="mb-1 block text-xs text-neutral-500">
-            ID роли Discord
-          </label>
-          <input
-            id={discordRoleInputId}
-            value={formDiscordRoleId}
-            onChange={(e) => setFormDiscordRoleId(e.target.value)}
-            placeholder="700000000000000001"
-            className="w-full rounded border border-neutral-800 bg-neutral-900 px-3 py-2 font-mono text-xs focus:border-neutral-600 focus:outline-none"
-          />
-        </div>
-      </div>
 
-      <button
-        type="button"
-        onClick={() => void create()}
-        disabled={busy || formRoleId === '' || formDiscordRoleId.trim() === ''}
-        className="rounded border border-emerald-900 px-4 py-1.5 text-sm text-emerald-300 hover:border-emerald-700 disabled:opacity-40"
-      >
-        Добавить
-      </button>
-    </section>
+        <Button
+          variant="primary"
+          onClick={() => void create()}
+          disabled={busy || formRoleId === '' || formDiscordRoleId.trim() === ''}
+        >
+          Добавить
+        </Button>
+      </CardBody>
+    </Card>
   );
 }

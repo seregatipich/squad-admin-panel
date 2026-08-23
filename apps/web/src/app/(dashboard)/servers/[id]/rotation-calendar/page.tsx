@@ -334,7 +334,7 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
                 {dayHistory.map((match) => (
                   <div
                     key={`history-${match.id}`}
-                    className="rounded-ctl border border-warn/40 bg-warn/10 px-1.5 py-1 text-2xs text-amber-300"
+                    className="rounded-ctl border border-warn/40 bg-warn/10 px-1.5 py-1 text-2xs text-warn-ink"
                   >
                     <span className={`block ${CHIP_LABEL}`}>Сыграно</span>
                     {formatTime(new Date(match.started_at))} · {match.layer ?? match.map ?? 'карта'}
@@ -343,7 +343,7 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
                 {dayScheduled.map((entry) => (
                   <div
                     key={entry.id}
-                    className="rounded-ctl border border-accent/40 bg-accent-dim px-1.5 py-1 text-2xs text-sky-300"
+                    className="rounded-ctl border border-accent/40 bg-accent-dim px-1.5 py-1 text-2xs text-accent-ink"
                   >
                     <span className={`block ${CHIP_LABEL}`}>
                       {entry.enabled ? 'Запланировано' : 'Выключено'}
@@ -370,7 +370,7 @@ export default function RotationCalendarPage({ params }: { params: Promise<{ id:
                     {(warnings[entry.id] ?? []).map((warning) => (
                       <p
                         key={`${entry.id}-${warning.type}`}
-                        className="mt-1 text-2xs text-amber-300"
+                        className="mt-1 text-2xs text-warn-ink"
                       >
                         ⚠ {warning.message}
                       </p>

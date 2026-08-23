@@ -190,7 +190,13 @@ describe('DiscordRoleMappingsSection', () => {
     );
     render(<DiscordRoleMappingsSection />);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Включено' }));
+    // The enable control is a real switch, so it reports its own on/off state
+    // to a screen reader instead of relying on the word next to it.
+    const toggle = await screen.findByRole('switch', {
+      name: 'Выдавать роль Discord для «VIP»',
+    });
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await userEvent.click(toggle);
     await waitFor(() => expect(patched).toEqual([{ enabled: false }]));
   });
 
@@ -207,7 +213,10 @@ describe('DiscordRoleMappingsSection', () => {
     );
     render(<DiscordRoleMappingsSection />);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Удалить' }));
+    // Each row's delete button names the mapping it deletes — with several
+    // rows on screen, five buttons all called "Удалить" tell a screen-reader
+    // user nothing about which one they are on.
+    await userEvent.click(await screen.findByRole('button', { name: 'Удалить маппинг «VIP»' }));
     await waitFor(() => expect(deleted).toBe(1));
   });
 

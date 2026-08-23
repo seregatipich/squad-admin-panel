@@ -237,7 +237,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                         title={`${formatTrendDay(entry.day)} — ${entry.count}`}
                       >
                         <div
-                          className="w-full rounded-t bg-sky-500/80 hover:bg-sky-400"
+                          className="w-full rounded-t bg-accent/80 hover:bg-accent"
                           style={{ height: `${Math.max(entry.count > 0 ? 4 : 1, heightPct)}%` }}
                         />
                       </div>
@@ -271,7 +271,7 @@ export function VoteAnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                     title={`${formatVoteHour(entry.hour)} — ${entry.count}`}
                   >
                     <div
-                      className="w-full rounded-t bg-violet-500/80 hover:bg-violet-400"
+                      className="w-full rounded-t bg-accent/80 hover:bg-accent"
                       style={{ height: `${Math.max(entry.count > 0 ? 4 : 1, heightPct)}%` }}
                     />
                   </div>
