@@ -114,6 +114,7 @@ export const ru = {
   'nav.hint.discord': 'вебхуки и роли',
   'nav.hint.geoip': 'база геолокации',
   'nav.hint.mediaPublishing': 'скриншоты и клипы',
+  'nav.more': 'Ещё',
   'nav.mainNav': 'Основная навигация',
   'nav.search': 'Поиск по панели',
   'nav.userMenu': 'Меню пользователя',
