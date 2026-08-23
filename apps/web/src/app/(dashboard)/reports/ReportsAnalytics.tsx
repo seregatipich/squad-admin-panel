@@ -234,10 +234,14 @@ export function ReportsAnalytics() {
             </ResponsiveContainer>
           </div>
 
-          {data.by_server.length > 0 ? (
+          {/* Диаграмма всегда рисовала `by_handler`, а называлась «по серверам»
+              и пряталась по `by_server`. Считать её по серверам нельзя: в
+              `by_server` нет `avg_resolution_seconds` — время решения есть
+              только у модератора. Название и условие приведены к данным. */}
+          {data.by_handler.length > 0 ? (
             <div>
               <h3 className="mb-2 text-[13px] font-semibold text-ink">
-                Среднее время решения по серверам (SLA)
+                Среднее время решения по модераторам (SLA)
               </h3>
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart

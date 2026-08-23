@@ -123,13 +123,17 @@ export default function DiscordStatusChannelsSection() {
             return (
               <li key={row.server_id} className="flex flex-wrap items-center gap-2 p-3">
                 <span className="min-w-[140px] text-ink">{row.display_name}</span>
-                <TextInput
-                  aria-label={`ID статус-канала для ${row.display_name}`}
-                  value={drafts[row.server_id] ?? ''}
-                  onChange={(e) => setDrafts((d) => ({ ...d, [row.server_id]: e.target.value }))}
-                  placeholder="ID канала"
-                  className="w-48 font-mono"
-                />
+                {/* Ширину задаёт обёртка: сам `TextInput` тянется на 100%
+                    родителя, и `w-48` на нём не выиграет у `w-full`. */}
+                <div className="w-56">
+                  <TextInput
+                    aria-label={`ID статус-канала для ${row.display_name}`}
+                    value={drafts[row.server_id] ?? ''}
+                    onChange={(e) => setDrafts((d) => ({ ...d, [row.server_id]: e.target.value }))}
+                    placeholder="ID канала"
+                    className="font-mono"
+                  />
+                </div>
                 <Button
                   variant="secondary"
                   aria-label={`Сохранить статус-канал ${row.display_name}`}

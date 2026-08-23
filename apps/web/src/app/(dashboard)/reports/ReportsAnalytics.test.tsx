@@ -104,6 +104,49 @@ describe('ReportsAnalytics', () => {
     expect(screen.getByText('MinorOffender')).toBeInTheDocument();
   });
 
+  it('names the SLA chart after moderators, because only they carry a resolution time', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.startsWith('/api/v1/servers')) {
+          return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+        }
+        return Promise.resolve(new Response(JSON.stringify(FIXTURE), { status: 200 }));
+      }),
+    );
+
+    render(<ReportsAnalytics />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Среднее время решения по модераторам (SLA)')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/по серверам/)).not.toBeInTheDocument();
+  });
+
+  it('still draws the SLA chart when no server has reports but a moderator has resolved some', async () => {
+    // The chart used to be gated on `by_server`, which carries no
+    // `avg_resolution_seconds` at all — so this payload hid a chart that had
+    // every number it needed.
+    const handlersOnly: ReportAnalytics = { ...FIXTURE, by_server: [] };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.startsWith('/api/v1/servers')) {
+          return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+        }
+        return Promise.resolve(new Response(JSON.stringify(handlersOnly), { status: 200 }));
+      }),
+    );
+
+    render(<ReportsAnalytics />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Среднее время решения по модераторам (SLA)')).toBeInTheDocument(),
+    );
+  });
+
   it('renders nothing when the analytics endpoint responds 403', async () => {
     vi.stubGlobal('fetch', mockFetch(403, { error: 'forbidden' }));
 
