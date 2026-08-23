@@ -316,7 +316,7 @@ export default function SeedCalendarPage({ params }: { params: Promise<{ id: str
                 {dayWindows.map((w, wi) => (
                   <div
                     key={`window-${w.started_at}-${wi}`}
-                    className="rounded-ctl border border-warn/40 bg-warn/10 px-1.5 py-1 text-2xs text-amber-300"
+                    className="rounded-ctl border border-warn/40 bg-warn/10 px-1.5 py-1 text-2xs text-warn-ink"
                     title={`Сидинг ${formatTime(new Date(w.started_at))}–${
                       w.ended_at ? formatTime(new Date(w.ended_at)) : '…'
                     }${w.layer ? ` · ${w.layer}` : ''}`}
@@ -332,7 +332,7 @@ export default function SeedCalendarPage({ params }: { params: Promise<{ id: str
                   return (
                     <div
                       key={`occ-${o.entryId}-${o.startsAt.toISOString()}-${oi}`}
-                      className="rounded-ctl border border-accent/40 bg-accent-dim px-1.5 py-1 text-2xs text-sky-300"
+                      className="rounded-ctl border border-accent/40 bg-accent-dim px-1.5 py-1 text-2xs text-accent-ink"
                     >
                       <span className={CHIP_LABEL}>
                         {entry && !entry.enabled ? 'Выключено' : 'Запланировано'}

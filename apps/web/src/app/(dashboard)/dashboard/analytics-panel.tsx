@@ -42,6 +42,13 @@ const OUTCOME_FILL: Record<string, string> = {
   unknown: 'bg-neutral-600',
 };
 
+/* Две соседние диаграммы рядом: разный оттенок нужен только чтобы взгляд не
+   путал их столбики между собой — оценки в цвете нет (§5). */
+const RANKED_FILL = {
+  maps: 'bg-accent/80',
+  layers: 'bg-purple-500/80',
+} as const;
+
 const AXIS_HOURS = [0, 6, 12, 18];
 
 /*
@@ -238,7 +245,7 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
                     title={`${formatHour(entry.hour)} — ${entry.peak_players}`}
                   >
                     <div
-                      className="w-full rounded-t bg-sky-500/80 hover:bg-sky-400"
+                      className="w-full rounded-t bg-accent/80 hover:bg-accent"
                       style={{ height: `${Math.max(entry.peak_players > 0 ? 4 : 1, heightPct)}%` }}
                     />
                   </div>
@@ -296,13 +303,13 @@ export function AnalyticsPanel({ servers }: { servers: ServerOption[] }) {
               title="Популярные карты"
               rows={data.popular_maps.map((m) => ({ label: m.map, value: m.matches }))}
               max={maxMap}
-              fill="bg-sky-500/80"
+              fill={RANKED_FILL.maps}
             />
             <RankedBars
               title="Популярные слои"
               rows={data.popular_layers.map((l) => ({ label: l.layer, value: l.matches }))}
               max={maxLayer}
-              fill="bg-violet-500/80"
+              fill={RANKED_FILL.layers}
             />
           </div>
         </CardBody>

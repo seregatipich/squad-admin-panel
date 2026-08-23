@@ -133,6 +133,12 @@ export function DiskBreakdownModal({
   const total = data?.total_panel_bytes ?? 0;
   const sortedSaved = data ? [...data.saved_per_server].sort((a, b) => b.bytes - a.bytes) : [];
 
+  /*
+   * Категориальные заливки долей диска: оттенок отличает соседние строки друг
+   * от друга и ничего не сообщает о состоянии (§5) — «депо» не хуже и не лучше
+   * «конфигов». Три ступени одного тона держат родственные категории вместе,
+   * а образ и прочее выпадают из ряда, потому что к серверам не относятся.
+   */
   const toneClass = (tone: Row['tone']): string => {
     switch (tone) {
       case 'depot':
@@ -142,9 +148,9 @@ export function DiskBreakdownModal({
       case 'configs':
         return 'bg-purple-300';
       case 'image':
-        return 'bg-sky-500';
+        return 'bg-accent';
       default:
-        return 'bg-neutral-500';
+        return 'bg-ink-3';
     }
   };
 

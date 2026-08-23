@@ -12,7 +12,22 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Card, CardHeader, EmptyState, InlineBanner, Select } from '@/components/ui';
+import {
+  Badge,
+  Card,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  Select,
+  StatTile,
+  Table,
+  TableBody,
+  TableHead,
+  TableRow,
+  Td,
+  Th,
+} from '@/components/ui';
+import { CHART_AXIS, CHART_GRID, CHART_SERIES, CHART_TOOLTIP_STYLE } from '@/lib/chart-tokens';
 import {
   buildReportsAnalyticsQuery,
   formatAccuracy,
@@ -24,12 +39,9 @@ import {
 } from './analytics-data';
 import {
   isRecidivist,
-  REPORTER_SPAM_BADGE_CLASS,
   REPORTER_SPAM_LABEL,
-  REPORTER_TRUSTED_BADGE_CLASS,
   REPORTER_TRUSTED_LABEL,
   recidivistBadgeLabel,
-  TARGET_RECIDIVIST_BADGE_CLASS,
 } from './helpers';
 
 interface ServerOption {
@@ -196,27 +208,25 @@ export function ReportsAnalytics() {
           </div>
 
           <div>
-            <h3 className="mb-2 text-[11px] uppercase tracking-widest text-neutral-500">
-              Динамика жалоб
-            </h3>
+            <h3 className="mb-2 text-[13px] font-semibold text-ink">Динамика жалоб</h3>
             <ResponsiveContainer width="100%" height={220}>
               <LineChart data={data.trend}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#38383a" />
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
                 <XAxis
                   dataKey="day"
                   tickFormatter={formatTrendDay}
-                  stroke="#a1a1a8"
+                  stroke={CHART_AXIS}
                   minTickGap={24}
                 />
-                <YAxis allowDecimals={false} stroke="#a1a1a8" />
+                <YAxis allowDecimals={false} stroke={CHART_AXIS} />
                 <Tooltip
-                  contentStyle={{ background: '#2c2c2e', border: '1px solid #333' }}
+                  contentStyle={CHART_TOOLTIP_STYLE}
                   labelFormatter={(day) => formatTrendDay(String(day))}
                 />
                 <Line
                   type="monotone"
                   dataKey="count"
-                  stroke="#409cff"
+                  stroke={CHART_SERIES.ram}
                   strokeWidth={2}
                   dot={false}
                 />
@@ -224,10 +234,14 @@ export function ReportsAnalytics() {
             </ResponsiveContainer>
           </div>
 
-          {data.by_server.length > 0 ? (
+          {/* Диаграмма всегда рисовала `by_handler`, а называлась «по серверам»
+              и пряталась по `by_server`. Считать её по серверам нельзя: в
+              `by_server` нет `avg_resolution_seconds` — время решения есть
+              только у модератора. Название и условие приведены к данным. */}
+          {data.by_handler.length > 0 ? (
             <div>
-              <h3 className="mb-2 text-[11px] uppercase tracking-widest text-neutral-500">
-                Среднее время решения по серверам (SLA)
+              <h3 className="mb-2 text-[13px] font-semibold text-ink">
+                Среднее время решения по модераторам (SLA)
               </h3>
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart
@@ -236,14 +250,14 @@ export function ReportsAnalytics() {
                     seconds: row.avg_resolution_seconds ?? 0,
                   }))}
                 >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#38383a" />
-                  <XAxis dataKey="name" stroke="#a1a1a8" />
-                  <YAxis stroke="#a1a1a8" tickFormatter={(v: number) => formatDurationRu(v)} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
+                  <XAxis dataKey="name" stroke={CHART_AXIS} />
+                  <YAxis stroke={CHART_AXIS} tickFormatter={(v: number) => formatDurationRu(v)} />
                   <Tooltip
-                    contentStyle={{ background: '#2c2c2e', border: '1px solid #333' }}
+                    contentStyle={CHART_TOOLTIP_STYLE}
                     formatter={(v) => formatDurationRu(typeof v === 'number' ? v : null)}
                   />
-                  <Bar dataKey="seconds" fill="#30d158" />
+                  <Bar dataKey="seconds" fill={CHART_SERIES.cpu} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -251,101 +265,80 @@ export function ReportsAnalytics() {
 
           <div className="grid gap-6 lg:grid-cols-2">
             <div>
-              <h3 className="mb-2 text-[11px] uppercase tracking-widest text-neutral-500">
-                Топ целей
-              </h3>
+              <h3 className="mb-2 text-[13px] font-semibold text-ink">Топ целей</h3>
               {data.top_targets.length === 0 ? (
-                <p className="text-xs text-neutral-500">Нет данных.</p>
+                <p className="text-xs text-ink-3">Нет данных.</p>
               ) : (
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-left text-neutral-500">
-                      <th className="pb-1 font-normal">Игрок</th>
-                      <th className="pb-1 font-normal">30 дн</th>
-                      <th className="pb-1 font-normal">90 дн</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <Table dense ariaLabel="Игроки, на которых чаще всего жалуются">
+                  <TableHead>
+                    <TableRow>
+                      <Th>Игрок</Th>
+                      <Th>30 дн</Th>
+                      <Th>90 дн</Th>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
                     {data.top_targets.map((row) => (
-                      <tr key={row.player_id} className="border-t border-neutral-900">
-                        <td className="py-1 text-neutral-200">{row.name ?? row.player_id}</td>
-                        <td className="py-1 text-neutral-400">{row.count_30d}</td>
-                        <td className="py-1">
-                          <span
-                            className={
-                              isRecidivist(row.count_90d)
-                                ? `rounded px-1.5 py-0.5 ${TARGET_RECIDIVIST_BADGE_CLASS}`
-                                : 'text-neutral-400'
-                            }
-                          >
-                            {isRecidivist(row.count_90d)
-                              ? recidivistBadgeLabel(row.count_90d)
-                              : row.count_90d}
-                          </span>
-                        </td>
-                      </tr>
+                      <TableRow key={row.player_id}>
+                        <Td>{row.name ?? row.player_id}</Td>
+                        <Td className="text-ink-2">{row.count_30d}</Td>
+                        <Td>
+                          {isRecidivist(row.count_90d) ? (
+                            <Badge tone="warn" size="sm">
+                              {recidivistBadgeLabel(row.count_90d)}
+                            </Badge>
+                          ) : (
+                            <span className="text-ink-2">{row.count_90d}</span>
+                          )}
+                        </Td>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               )}
             </div>
 
             <div>
-              <h3 className="mb-2 text-[11px] uppercase tracking-widest text-neutral-500">
-                Топ репортёров
-              </h3>
+              <h3 className="mb-2 text-[13px] font-semibold text-ink">Топ репортёров</h3>
               {data.top_reporters.length === 0 ? (
-                <p className="text-xs text-neutral-500">Нет данных.</p>
+                <p className="text-xs text-ink-3">Нет данных.</p>
               ) : (
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-left text-neutral-500">
-                      <th className="pb-1 font-normal">Игрок</th>
-                      <th className="pb-1 font-normal">Точность</th>
-                      <th className="pb-1 font-normal">Статус</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <Table dense ariaLabel="Игроки, чаще всего подающие жалобы">
+                  <TableHead>
+                    <TableRow>
+                      <Th>Игрок</Th>
+                      <Th>Точность</Th>
+                      <Th>Статус</Th>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
                     {data.top_reporters.map((row) => (
-                      <tr key={row.player_id} className="border-t border-neutral-900">
-                        <td className="py-1 text-neutral-200">{row.name ?? row.player_id}</td>
-                        <td className="py-1 text-neutral-400">{formatAccuracy(row.accuracy)}</td>
-                        <td className="py-1">
+                      <TableRow key={row.player_id}>
+                        <Td>{row.name ?? row.player_id}</Td>
+                        <Td className="text-ink-2">{formatAccuracy(row.accuracy)}</Td>
+                        <Td>
                           <div className="flex gap-1">
                             {row.trusted ? (
-                              <span
-                                className={`rounded px-1.5 py-0.5 ${REPORTER_TRUSTED_BADGE_CLASS}`}
-                              >
+                              <Badge tone="good" size="sm">
                                 {REPORTER_TRUSTED_LABEL}
-                              </span>
+                              </Badge>
                             ) : null}
                             {row.spam_flagged ? (
-                              <span
-                                className={`rounded px-1.5 py-0.5 ${REPORTER_SPAM_BADGE_CLASS}`}
-                              >
+                              <Badge tone="crit" size="sm">
                                 {REPORTER_SPAM_LABEL}
-                              </span>
+                              </Badge>
                             ) : null}
                           </div>
-                        </td>
-                      </tr>
+                        </Td>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               )}
             </div>
           </div>
         </div>
       )}
     </Card>
-  );
-}
-
-function StatTile({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded border border-neutral-800 bg-neutral-900 p-3">
-      <div className="text-[11px] uppercase tracking-widest text-neutral-500">{label}</div>
-      <div className="mt-1 text-lg font-semibold text-neutral-100">{value}</div>
-    </div>
   );
 }

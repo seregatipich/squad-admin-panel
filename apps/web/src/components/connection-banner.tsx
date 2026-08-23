@@ -81,7 +81,7 @@ export function ConnectionBanner() {
     <div
       role="alert"
       data-testid="connection-banner"
-      className="pointer-events-auto flex items-center gap-2 rounded-card border border-crit/40 bg-surface px-3 py-2 text-xs text-ink shadow-xl shadow-black/40 backdrop-blur-xl"
+      className="pointer-events-auto flex items-center gap-2 rounded-card border border-crit/40 bg-surface px-3 py-2 text-xs text-ink backdrop-blur-xl"
     >
       <span>{t('connection.unavailable')}</span>
       <button

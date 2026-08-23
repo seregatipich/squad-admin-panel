@@ -1,6 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import {
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  EmptyState,
+  InlineBanner,
+  Skeleton,
+  TextInput,
+} from '@/components/ui';
 
 /**
  * DISCORD-6 (#153): pick the Discord voice/text channel the worker renames to
@@ -85,56 +95,61 @@ export default function DiscordStatusChannelsSection() {
   if (hidden) return null;
 
   return (
-    <section className="rounded border border-neutral-800 bg-neutral-950 p-4 space-y-2">
-      <h2 className="text-xs uppercase tracking-widest text-neutral-400">Статус-каналы</h2>
-      <p className="text-xs text-neutral-500">
-        Воркер переименовывает указанный канал в живой статус сервера. Пустое поле — статус-канал
-        отключён.
-      </p>
+    <Card padding="none" as="section">
+      <CardHeader
+        title="Статус-каналы"
+        description="Воркер переименовывает указанный канал в живой статус сервера. Пустое поле — статус-канал отключён."
+      />
+
       {error && (
-        <div
-          role="alert"
-          className="rounded border border-red-900 bg-red-950 px-2 py-1 text-sm text-red-200"
-        >
-          {error}
-        </div>
+        <CardBody padding="sm">
+          <InlineBanner tone="crit" title={error} />
+        </CardBody>
       )}
+
       {rows === null ? (
-        <p className="text-sm text-neutral-500">Загрузка…</p>
+        <CardBody padding="sm">
+          <Skeleton variant="row" count={2} label="Загрузка статус-каналов" />
+        </CardBody>
       ) : rows.length === 0 ? (
-        <p className="text-sm text-neutral-500">Серверов пока нет.</p>
+        <EmptyState
+          title="Серверов пока нет."
+          description="Статус-канал назначается серверу — добавьте сервер, и он появится здесь."
+        />
       ) : (
-        <ul className="space-y-2">
+        <ul className="divide-y divide-line">
           {rows.map((row) => {
             const preview = statusChannelPreview(drafts[row.server_id]?.trim() || null);
             return (
-              <li key={row.server_id} className="flex flex-wrap items-center gap-2">
-                <span className="min-w-[140px] text-sm text-neutral-200">{row.display_name}</span>
-                <input
-                  aria-label={`ID статус-канала для ${row.display_name}`}
-                  value={drafts[row.server_id] ?? ''}
-                  onChange={(e) => setDrafts((d) => ({ ...d, [row.server_id]: e.target.value }))}
-                  placeholder="ID канала"
-                  className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm text-neutral-200"
-                />
-                <button
-                  type="button"
+              <li key={row.server_id} className="flex flex-wrap items-center gap-2 p-3">
+                <span className="min-w-[140px] text-ink">{row.display_name}</span>
+                {/* Ширину задаёт обёртка: сам `TextInput` тянется на 100%
+                    родителя, и `w-48` на нём не выиграет у `w-full`. */}
+                <div className="w-56">
+                  <TextInput
+                    aria-label={`ID статус-канала для ${row.display_name}`}
+                    value={drafts[row.server_id] ?? ''}
+                    onChange={(e) => setDrafts((d) => ({ ...d, [row.server_id]: e.target.value }))}
+                    placeholder="ID канала"
+                    className="font-mono"
+                  />
+                </div>
+                <Button
+                  variant="secondary"
                   aria-label={`Сохранить статус-канал ${row.display_name}`}
                   disabled={busy === row.server_id}
+                  loading={busy === row.server_id}
                   onClick={() => void save(row)}
-                  className="rounded border border-neutral-700 px-2 py-1 text-sm text-neutral-200 disabled:opacity-50"
                 >
                   Сохранить
-                </button>
-                {preview && <span className="text-xs text-neutral-500">→ {preview}</span>}
-                {saved === row.server_id && (
-                  <span className="text-xs text-emerald-400">Сохранено</span>
-                )}
+                </Button>
+                {preview && <span className="text-xs text-ink-3">→ {preview}</span>}
+                {saved === row.server_id && <span className="text-xs text-good">Сохранено</span>}
               </li>
             );
           })}
         </ul>
       )}
-    </section>
+    </Card>
   );
 }

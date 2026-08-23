@@ -159,14 +159,7 @@ export function isRecidivist(count: number): boolean {
 }
 
 export const REPORTER_TRUSTED_LABEL = 'Доверенный';
-export const REPORTER_TRUSTED_BADGE_CLASS =
-  'bg-emerald-950/50 text-emerald-300 border border-emerald-900';
-
 export const REPORTER_SPAM_LABEL = 'Спам';
-export const REPORTER_SPAM_BADGE_CLASS = 'bg-red-950/50 text-red-300 border border-red-900';
-
-export const TARGET_RECIDIVIST_BADGE_CLASS =
-  'bg-amber-950/50 text-amber-300 border border-amber-900';
 
 /** Badge label for the target-recidivism count, e.g. "3 жалобы за 90 дн". */
 export function recidivistBadgeLabel(count: number): string {
