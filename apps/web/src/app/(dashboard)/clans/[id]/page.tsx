@@ -316,7 +316,7 @@ export default function ClanDetailPage({ params }: { params: Promise<{ id: strin
   );
 
   return (
-    <PageContainer>
+    <PageContainer width="wide">
       <PageHeader
         title={clan?.name ?? 'Клан'}
         backHref="/clans"

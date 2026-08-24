@@ -25,8 +25,9 @@ function stubServerFetch(displayName = 'Squad EU #1') {
 }
 
 async function renderLayout() {
+  let result!: ReturnType<typeof render>;
   await act(async () => {
-    render(
+    result = render(
       <Suspense fallback={null}>
         <ServerSectionLayout params={Promise.resolve({ id: SERVER_ID })}>
           <p>содержимое подраздела</p>
@@ -34,6 +35,7 @@ async function renderLayout() {
       </Suspense>,
     );
   });
+  return result;
 }
 
 afterEach(() => {
@@ -43,6 +45,20 @@ afterEach(() => {
 });
 
 describe('ServerSectionLayout', () => {
+  it('holds the section width itself, so the header and the page share one left edge', async () => {
+    // Пока ширину выбирала подстраница, заголовок и вкладки оставались во всю
+    // ширину окна, а содержимое сжималось — раздел разъезжался по левому краю.
+    stubServerFetch();
+    const { container } = await renderLayout();
+
+    const shell = container.firstElementChild;
+    expect(shell).toHaveClass('max-w-6xl');
+    expect(shell).toHaveClass('mx-auto');
+    expect(shell).toContainElement(screen.getByRole('heading', { level: 1 }));
+    expect(shell).toContainElement(screen.getByText('содержимое подраздела'));
+    expect(shell).toContainElement(screen.getByRole('navigation', { name: 'Разделы сервера' }));
+  });
+
   it('renders the server name as the section heading', async () => {
     stubServerFetch();
     await renderLayout();
