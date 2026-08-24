@@ -780,7 +780,11 @@ function HostBlock({
 
       <CardBody className="space-y-1 border-b border-line">
         <p className="truncate text-[13px] font-semibold text-ink">
-          {info?.hostname ?? <span className="font-normal text-ink-3">Нет данных</span>}
+          {info?.hostname ?? (
+            <span className="font-normal text-ink-3">
+              {bridgeDown ? 'Хост не опознан' : 'Нет данных'}
+            </span>
+          )}
         </p>
         <p className="truncate text-xs text-ink-3">
           {info ? (
@@ -788,6 +792,8 @@ function HostBlock({
               {info.os_name} {info.os_version} · {info.arch} · аптайм{' '}
               {formatUptime(info.uptime_seconds)}
             </>
+          ) : bridgeDown ? (
+            'Имя, ОС и аптайм читает агент — он не отвечает.'
           ) : (
             'Загружаем сведения о хосте…'
           )}

@@ -376,6 +376,8 @@ describe('DashboardPage', () => {
 
     expect(screen.getByText('Метрики хоста недоступны')).toBeInTheDocument();
     expect(screen.queryByText('Загружаем метрики хоста')).not.toBeInTheDocument();
+    expect(screen.getByText('Имя, ОС и аптайм читает агент — он не отвечает.')).toBeInTheDocument();
+    expect(screen.queryByText('Загружаем сведения о хосте…')).not.toBeInTheDocument();
   });
 
   it('keeps the loading skeletons while the bridge is up but metrics have not arrived', async () => {
@@ -384,6 +386,7 @@ describe('DashboardPage', () => {
 
     expect(screen.getByText('Загружаем метрики хоста')).toBeInTheDocument();
     expect(screen.queryByText('Метрики хоста недоступны')).not.toBeInTheDocument();
+    expect(screen.getByText('Загружаем сведения о хосте…')).toBeInTheDocument();
   });
 
   it('shows the initial empty state when the audit feed itself is empty', async () => {
