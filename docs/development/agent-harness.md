@@ -84,47 +84,59 @@ Emergency escape hatch: edit or disable the ruleset in GitHub → Settings → R
 
 ## CI and deployment runners
 
-The two GitHub Actions workflows intentionally use different execution boundaries:
+Both workflows run on the organization's own runners, and both select them **by
+group**, never by label:
 
-- [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs verification on
-  fresh GitHub-hosted `ubuntu-24.04` VMs. Every job is disposable and starts without
-  repository Docker layers, containers, volumes, or host paths left by an earlier
-  run. The private-repository Linux shape is 2 vCPU / 8 GB RAM / 14 GB SSD.
-- [`.github/workflows/deploy-tk104.yml`](../../.github/workflows/deploy-tk104.yml)
-  remains on the organization-level `self-hosted` runner and reaches production over
-  SSH. Production credentials therefore never enter a general verification runner.
+```yaml
+runs-on:
+  group: selfhost-group-1
+```
 
-CI keeps explicit timeouts and two-way parallelism limits because a private-repository
-hosted Linux VM has two CPUs. It no longer has `prepare-runner`/`cleanup-runner` jobs:
-those jobs existed to maintain a persistent 20 GB VM and are both unnecessary and
-misleading on a fresh 14 GB VM. The Go bridge runs directly on the disposable VM via
-SHA-pinned `actions/setup-go`; tests that exercise absolute paths cannot touch a real
-panel host because the entire machine is discarded after the job.
+Label-based selection is switched off for this project so that a GitHub-hosted
+machine can never be picked up by accident. Two consequences follow, and both are
+silent failures rather than errors:
 
-Full CI intentionally accepts only trusted `push` events for `dev`/`master` and
-explicit dispatches. Draft branches use the local pre-push gate, and
-`cancel-in-progress: true` discards a superseded SHA so a merge wave does not consume
-the organization's monthly allowance multiple times. GitHub Free for organizations
-currently includes 2,000 hosted minutes per month. Exhaustion must be handled by
-batching accepted changes or restoring a dedicated verification runner, never by
-weakening checks or running verification on production.
+- `runs-on: self-hosted` matches nothing. A job declared that way sits in `queued`
+  forever with no diagnostic — this is exactly how `deploy-tk104.yml` was left after
+  label selection was turned off.
+- `runs-on: ubuntu-24.04` quietly succeeds on a GitHub-hosted VM, which defeats the
+  point of owning runners and spends the organization's hosted minutes.
 
 [`scripts/test-ci-runner-strategy.sh`](../../scripts/test-ci-runner-strategy.sh)
-enforces the split: every required CI job must use `ubuntu-24.04`, persistent disk
-maintenance is forbidden there, and the deployment workflow must remain self-hosted.
-[`scripts/test-workflow-security.sh`](../../scripts/test-workflow-security.sh) retains
-the repository-wide rule that no workflow may combine a pull-request trigger with a
-self-hosted job (#217, #286).
+fails CI on either mistake, for `ci.yml` and `deploy-tk104.yml` alike.
+
+**Verification and deployment now share one machine.** That is the trade this project
+accepts in exchange for owning its runners, and it is only defensible because the
+repository is private and the branch model is direct-merge: no code from an outside
+fork ever reaches a workflow. The invariant that keeps it true is that CI accepts only
+trusted `push` events for `dev`/`master` and explicit dispatches — never
+`pull_request`. [`scripts/test-workflow-security.sh`](../../scripts/test-workflow-security.sh)
+enforces it repository-wide and understands both ways of naming a self-hosted runner,
+the `self-hosted` label and a runner group (#217, #286). `deploy-tk104.yml` writes the
+production SSH deploy key to that machine's disk (#248), so this rule is the boundary
+protecting it.
+
+`cancel-in-progress: true` discards a superseded SHA — on a group with a single
+machine a merge wave would otherwise queue behind itself. Timeouts stay explicit and
+generous: the runner keeps its Turbo cache between runs, but a lockfile change still
+puts the full coverage suite back at roughly 17 minutes.
+
+The runner is persistent, so disk state accumulates across runs — Docker layers,
+volumes and workspaces are no longer discarded for you. Watch it: the previous
+persistent setup needed `prepare-runner`/`cleanup-runner` maintenance jobs for exactly
+this reason, and they were removed when CI moved to disposable VMs (#286).
 
 ## Runner recovery runbook
 
-If a **deployment** run stays `queued` and never starts, run [`scripts/check-runner-health.sh`](../../scripts/check-runner-health.sh) before waiting further — it queries repository runners and, best-effort, the organization-level endpoint, prints each runner's `status`/`busy`, and exits non-zero unless at least one reports `online`. Hosted CI does not depend on this result. The test suite [`scripts/test-check-runner-health.sh`](../../scripts/test-check-runner-health.sh) stubs `gh` and covers online, offline, disabled/zero-runner, and organization-endpoint-denied cases.
+If **any** run — CI or deployment — stays `queued` and never starts, run [`scripts/check-runner-health.sh`](../../scripts/check-runner-health.sh) before waiting further — it queries repository runners and, best-effort, the organization-level endpoint, prints each runner's `status`/`busy`, and exits non-zero unless at least one reports `online`. Every workflow now depends on this result, CI included. The test suite [`scripts/test-check-runner-health.sh`](../../scripts/test-check-runner-health.sh) stubs `gh` and covers online, offline, disabled/zero-runner, and organization-endpoint-denied cases.
 
 Per [`docs/operations/deployment.md`](../operations/deployment.md#cicd-runner-split), this org has disabled repository-level self-hosted runners, so the repository-level query normally reports zero. The runner used by deployment is organization-level and its status is visible only through the organization endpoint (which needs organization administration access).
 
 **Historical incident (issue #215, 2026-07-15 to 2026-07-18):** GitHub reported the two *repository-level* runners `tk104-runner-1` (id 21) and `tk104-runner-2` (id 22) as `offline`. Host-level diagnosis on `tk104` found their registration artifacts (`.runner`, `.credentials`, `.credentials_rsaparams`) missing — both `actions.runner.breaking-squad-squad-admin-panel.tk104-runner-{1,2}.service` units were loaded but `inactive/dead`, failing since 2026-07-09 with `Not configured. Run config.(sh/cmd) to configure the runner.` Per `docs/operations/deployment.md`, `tk104-runner-1`/`-2` are an earlier, now-deprecated repository-level setup that this org's policy no longer routes jobs to — CI runs on the separate org-level runner instead, so their outage did not block `dev`/`master` CI. Restarting the existing systemd units cannot restore them; re-registering them as **org-level** runners (not repository-level, which is disabled) would need an org-admin `admin:org` credential to mint a registration token, then `config.sh --unattended --replace` in each existing runner directory and a service restart — host and org-admin access a repository-scoped session does not have.
 
-**Migration incident (2026-08-12 to 2026-08-13, issue #286):** the organization runner stopped taking the authoritative `dev` CI run, while repository-scoped credentials could neither observe nor restore it. Verification moved back to ephemeral GitHub-hosted VMs; the same runner remains an independently observable dependency of production deployment only.
+**Migration incident (2026-08-12 to 2026-08-13, issue #286):** the organization runner stopped taking the authoritative `dev` CI run, while repository-scoped credentials could neither observe nor restore it. Verification moved back to ephemeral GitHub-hosted VMs at the time.
+
+**Return to owned runners (2026-08-24):** the project moved every job back onto its own runners, this time addressed by the `selfhost-group-1` group instead of the `self-hosted` label, with label-based selection disabled so GitHub-hosted machines cannot be drawn in. If CI queues indefinitely again, the first check is the same one #286 needed and it now covers CI too — see the runbook above.
 
 ## Completion verification
 

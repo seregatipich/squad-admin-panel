@@ -37,7 +37,8 @@ jobs:
   # checkout to the host and run scripts/deploy-tk104.sh there via SSH.
   deploy:
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'full')
-    runs-on: self-hosted
+    runs-on:
+      group: selfhost-group-1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -83,7 +84,8 @@ jobs:
   # fast frontend preview loop; promote dev -> master as usual once ready.
   deploy-web-preview:
     if: (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'web')
-    runs-on: self-hosted
+    runs-on:
+      group: selfhost-group-1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -1,16 +1,19 @@
 name: ci
-# Runs on ephemeral GitHub-hosted Ubuntu VMs. The production deployment workflow
-# deliberately stays on the dedicated self-hosted runner; this file contains
-# verification only. The local pre-push checklist remains the fast first gate,
-# while this workflow is authoritative (see AGENTS.md → "CI gate").
+# Runs on the organization's own runners, selected by group rather than by label:
+# label-based selection is switched off for this project so that GitHub-hosted
+# runners can never be picked up by accident. Verification therefore shares the
+# machine with `deploy-tk104.yml`; that is acceptable here only because the
+# repository is private and the branch model is direct-merge, so no code from an
+# outside fork ever reaches this workflow. The local pre-push checklist remains
+# the fast first gate, while this workflow is authoritative (AGENTS.md → "CI gate").
 on:
   push:
     branches: [master, dev]
   workflow_dispatch:
 
 concurrency:
-  # Only the newest SHA of a ref matters. Cancelling superseded work prevents a
-  # merge wave from wasting the organization's monthly hosted-runner allowance.
+  # Only the newest SHA of a ref matters. Cancelling superseded work keeps a merge
+  # wave from queueing behind itself on a runner group with one machine in it.
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
@@ -21,7 +24,8 @@ jobs:
   # this job gives the dev tip SHA the branch-guard result required by the
   # protect-master ruleset for the fast-forward promotion push.
   branch-guard:
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: selfhost-group-1
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,10 +65,11 @@ jobs:
         run: bash scripts/test-ci-runner-strategy.sh
 
   node:
-    runs-on: ubuntu-24.04
-    # A cold hosted run has no Turbo cache; the full coverage suite alone can
-    # take about 17 minutes on 2 vCPU and the complete job exceeded 30 minutes
-    # during the #286 bootstrap proof. Keep a bounded but realistic margin.
+    runs-on:
+      group: selfhost-group-1
+    # The margin stays wide even though the group's runner keeps its Turbo cache
+    # between runs: a cache miss after a lockfile change puts the full coverage
+    # suite back at roughly 17 minutes, and the whole job once exceeded 30.
     timeout-minutes: 45
     services:
       # Dynamic host ports (Docker assigns a free one) so the job never collides
@@ -163,7 +168,8 @@ jobs:
           ./gitleaks detect --config .gitleaks.toml --no-banner --redact --exit-code 1
 
   go:
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: selfhost-group-1
     timeout-minutes: 15
     env:
       GOFLAGS: -buildvcs=false
@@ -189,7 +195,8 @@ jobs:
           ls -la bin/
 
   docker:
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: selfhost-group-1
     needs: [node, go]
     timeout-minutes: 30
     steps:

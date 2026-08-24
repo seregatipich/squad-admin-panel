@@ -30,7 +30,7 @@ These rules are mandatory for every contributor and every coding agent (Claude C
    git merge --no-ff feature/<slug>
    git push origin dev
    ```
-5. **Before pushing, the local pre-push checklist must pass** — `scripts/pre-push-checklist.sh` runs automatically via the lefthook pre-push hook as a fast local pre-check (see "CI gate"). The push to `dev` then triggers the `ci` workflow on an ephemeral GitHub-hosted runner; watch the run and fix forward until every check is green. Work is not done while `dev` CI is red.
+5. **Before pushing, the local pre-push checklist must pass** — `scripts/pre-push-checklist.sh` runs automatically via the lefthook pre-push hook as a fast local pre-check (see "CI gate"). The push to `dev` then triggers the `ci` workflow on the project's own runner group; watch the run and fix forward until every check is green. Work is not done while `dev` CI is red.
 6. Delete the merged work branch.
 
 ## Local test setup (read before running any DB-backed test)
@@ -58,7 +58,9 @@ gh run view <run-id> --json jobs --jq '.jobs[] | "\(.conclusion)\t\(.name)"'
 gh run view <run-id> --log-failed   # logs of the failing step
 ```
 
-The `ci` workflow runs on fresh `ubuntu-24.04` GitHub-hosted VMs. Verification never shares filesystem or Docker state with production deployment; the self-hosted runner is reserved for `deploy-tk104.yml`. Full hosted CI intentionally runs only for trusted `dev`/`master` pushes and explicit dispatches, while superseded runs are cancelled to preserve the organization's monthly allowance. See "CI and deployment runners" in `docs/development/agent-harness.md`.
+**Every job — verification and deployment alike — runs on the organization's own runners, selected by group (`runs-on: group: selfhost-group-1`).** Label-based selection is switched off for this project, so `runs-on: self-hosted` matches nothing and a job declared that way waits in the queue forever; a job pinned to `ubuntu-*` would silently pull in a GitHub-hosted machine, which this project does not want. [`scripts/test-ci-runner-strategy.sh`](scripts/test-ci-runner-strategy.sh) fails CI on either mistake.
+
+Because verification now shares the machine with the production deployment, CI stays limited to trusted `dev`/`master` pushes and explicit dispatches — never `pull_request` — and superseded runs are cancelled so a merge wave does not queue behind itself on a group with one machine in it. [`scripts/test-workflow-security.sh`](scripts/test-workflow-security.sh) fails CI if any workflow ever reaches a self-hosted job from a pull-request trigger, by label or by group. See "CI and deployment runners" in `docs/development/agent-harness.md`.
 
 **Adding a package? Add it to `test:cov`.** CI's only JS test step is `pnpm test:cov`, which carries an explicit `--filter` list. A package missing from that list never runs in CI — it can be merged with a red suite while `dev` stays green (#229: 16 of 28 suites were invisible this way, and two workers sat broken behind a green dashboard). [`scripts/test-cov-complete.sh`](scripts/test-cov-complete.sh) now fails CI when a workspace package whose `test` script runs vitest is not in the list; run it locally any time with `bash scripts/test-cov-complete.sh`. The Go bridge is deliberately excluded — it has its own `go` job.
 

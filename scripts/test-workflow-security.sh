@@ -10,7 +10,8 @@
 #
 # This check keeps that invariant honest: it fails if any workflow file's
 # top-level `on:` block declares pull_request or pull_request_target while
-# the same file also has a job with `runs-on: self-hosted`.
+# the same file also has a job on a self-hosted runner — declared either by the
+# `self-hosted` label or by a runner group.
 #
 # Exit 0 = no workflow reaches a self-hosted job via pull_request(_target);
 # exit 1 = at least one does, or the scan found no workflow files at all.
@@ -40,8 +41,15 @@ while IFS= read -r workflow; do
     has_pr_trigger=yes
   fi
 
+  # Свой раннер объявляют двумя способами, и оба дают доступ к постоянной
+  # машине: меткой (`runs-on: self-hosted`) и группой (`runs-on:` + `group:`).
+  # Проверять только метку нельзя — этот проект выбирает раннеры группой, и
+  # такая проверка молча проходила бы на любом workflow.
   has_self_hosted=no
   if grep -Eq '^[[:space:]]*runs-on:[[:space:]]*self-hosted[[:space:]]*$' "$workflow"; then
+    has_self_hosted=yes
+  fi
+  if grep -Eq '^[[:space:]]*group:[[:space:]]*[A-Za-z0-9_.-]+[[:space:]]*$' "$workflow"; then
     has_self_hosted=yes
   fi
 
