@@ -29,24 +29,36 @@ match the host's `panel` group and the data tree created by `install-host-bridge
 (`curl --fail`). Таймаут API, сетевой сбой и HTTP 4xx/5xx завершают deploy
 ненулевым кодом до сообщения `Deploy complete`.
 
-## CI/CD runner split
+## CI/CD runners
 
-Verification and deployment deliberately use different trust and lifecycle boundaries:
+Every job — verification and deployment alike — runs on the organization's own
+runners, addressed **by group**:
 
-- **`ci` uses ephemeral GitHub-hosted `ubuntu-24.04` VMs.** Every job starts on a
-  clean machine, so test Docker/filesystem state cannot persist into another run or
-  reach the deployment runner. The workflow runs only for trusted `dev`/`master`
-  pushes and explicit dispatches; superseded runs are cancelled to preserve the
-  GitHub Free organization allowance. The `node` job's PostgreSQL/Redis service
-  containers publish to Docker-assigned ports; `Resolve service ports` exports those
-  values through both normal and `TEST_*` variables. The `go` job installs the pinned
-  Go toolchain directly on its disposable VM. The `docker` job builds every production
-  image and executes the backup/restore round trip.
-- **`deploy-tk104` stays on the organization-level self-hosted runner.** Repository-
-  level self-hosted runners are disabled by organization policy, and the production
-  host itself is not a runner. A separate organization runner reaches production over
-  SSH. Keeping this workflow self-hosted avoids moving production credentials into the
-  general verification fleet; all referenced actions remain SHA-pinned.
+```yaml
+runs-on:
+  group: selfhost-group-1
+```
+
+Label-based selection is switched off for this project, so `runs-on: self-hosted`
+matches nothing and such a job queues forever, while `runs-on: ubuntu-*` would quietly
+pull in a GitHub-hosted machine. `scripts/test-ci-runner-strategy.sh` fails CI on
+either mistake.
+
+- **`ci` runs on that group.** The workflow runs only for trusted `dev`/`master`
+  pushes and explicit dispatches — never `pull_request`, which is the boundary that
+  keeps outside code away from a machine holding production credentials. Superseded
+  runs are cancelled so a merge wave does not queue behind itself. The `node` job's
+  PostgreSQL/Redis service containers publish to Docker-assigned ports; `Resolve
+  service ports` exports those values through both normal and `TEST_*` variables. The
+  `go` job installs the pinned Go toolchain through SHA-pinned `actions/setup-go`. The
+  `docker` job builds every production image and executes the backup/restore round
+  trip. The runner is persistent, so Docker layers, volumes and workspaces accumulate
+  between runs and need watching.
+- **`deploy-tk104` runs on the same group.** Repository-level self-hosted runners are
+  disabled by organization policy, and the production host itself is not a runner; the
+  organization runner reaches production over SSH. All referenced actions remain
+  SHA-pinned — that requirement carries more weight now that verification shares the
+  machine on which this workflow writes the production deploy key (#248).
 - **`deploy-tk104` deploys over SSH.** The `deploy` job (triggered
   by a push to `master`) writes the `TK104_SSH_KEY` secret to a deploy key, `rsync`s
   the checkout to `seregatipich@tk104.duckdns.org:~/apps/squad-admin-panel/`
