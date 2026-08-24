@@ -184,6 +184,15 @@ jobs:
       run:
         working-directory: apps/bridge
     steps:
+      # Раннер постоянный, и его рабочая папка переживает прогоны. Эта задача —
+      # единственная, что идёт в контейнере от root, поэтому всё, что она в этой
+      # папке оставит, соседние задачи (они работают от пользователя `runner`)
+      # потом не смогут удалить: `actions/checkout` падает с EACCES. Шаг чистит
+      # такой мусор, оставшийся от прошлых прогонов, и работает до checkout —
+      # у самого checkout прав на это уже не будет.
+      - name: очистить артефакты предыдущих прогонов от root
+        working-directory: /
+        run: rm -rf "$GITHUB_WORKSPACE/apps/bridge/bin" || true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -210,16 +219,20 @@ jobs:
           "$(go env GOPATH)/bin/govulncheck" ./...
       - name: build static binary
         run: |
-          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/panel-host-bridge ./cmd/panel-host-bridge
-          ls -la bin/
+          # Собираем в файловую систему контейнера, а не в рабочую папку раннера:
+          # она общая и переживает прогон, а этот контейнер работает от root —
+          # оставленный здесь файл соседние задачи удалить уже не смогут.
+          out=/tmp/panel-host-bridge
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$out" ./cmd/panel-host-bridge
+          ls -la "$out"
           # Раньше здесь стоял `file`, которого нет в образе `golang`, и шаг падал
           # с кодом 127. Заодно он ничего и не проверял — только печатал. `ldd`
           # на статическом бинарнике выходит с ошибкой и сообщает, что тот не
           # динамический; успех `ldd` означает, что бинарник тянет библиотеки за
           # собой и на хост его класть нельзя.
-          if ldd bin/panel-host-bridge >/dev/null 2>&1; then
+          if ldd "$out" >/dev/null 2>&1; then
             echo "::error::panel-host-bridge слинкован динамически — на хосте без нужных библиотек он не запустится"
-            ldd bin/panel-host-bridge
+            ldd "$out"
             exit 1
           fi
           echo "panel-host-bridge статический"
