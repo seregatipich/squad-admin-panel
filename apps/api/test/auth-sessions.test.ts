@@ -1,6 +1,6 @@
 import cookie from '@fastify/cookie';
 import * as schema from '@squad/db/schema';
-import { players, roles, sessions as sessionsTable } from '@squad/db/schema';
+import { playerNameHistory, players, roles, sessions as sessionsTable } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import Fastify from 'fastify';
@@ -469,5 +469,109 @@ describe('GET /api/v1/me/sessions — pagination implicit', () => {
     expect(res.statusCode).toBe(200);
     const list = res.json() as unknown[];
     expect(list.length).toBe(2);
+  });
+});
+
+describe('GET /api/v1/me/names', () => {
+  let schemaInfo: Awaited<ReturnType<typeof createIsolatedSchema>>;
+  let h: Awaited<ReturnType<typeof buildApp>>;
+  beforeEach(async () => {
+    schemaInfo = await createIsolatedSchema();
+    await runMigrations(schemaInfo.url);
+    h = await buildApp({ dbUrl: schemaInfo.url });
+  });
+  afterEach(async () => {
+    await h.cleanup();
+    await schemaInfo.drop();
+  });
+
+  it('returns 401 when not authenticated', async () => {
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/me/names' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns both names and the history newest first', async () => {
+    const { token, playerId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000404n);
+    await h.db.update(players).set({ personaName: 'SteamNick' }).where(eq(players.id, playerId));
+    await h.db.insert(playerNameHistory).values([
+      {
+        playerId,
+        name: 'OldestNick',
+        nameNormalized: 'oldestnick',
+        firstSeenAt: new Date('2026-01-01T00:00:00.000Z'),
+        lastSeenAt: new Date('2026-02-01T00:00:00.000Z'),
+      },
+      {
+        playerId,
+        name: 'MiddleNick',
+        nameNormalized: 'middlenick',
+        firstSeenAt: new Date('2026-02-01T00:00:00.000Z'),
+        lastSeenAt: new Date('2026-06-01T00:00:00.000Z'),
+      },
+      {
+        playerId,
+        name: 'TestPlayer',
+        nameNormalized: 'testplayer',
+        firstSeenAt: new Date('2026-06-01T00:00:00.000Z'),
+        lastSeenAt: new Date('2026-08-01T00:00:00.000Z'),
+      },
+    ]);
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/me/names',
+      cookies: { [SESSION_COOKIE]: token },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      canonical_name: string;
+      persona_name: string | null;
+      history: Array<{ name: string; first_seen_at: string; last_seen_at: string }>;
+    };
+    expect(body.canonical_name).toBe('TestPlayer');
+    expect(body.persona_name).toBe('SteamNick');
+    expect(body.history.map((entry) => entry.name)).toEqual([
+      'TestPlayer',
+      'MiddleNick',
+      'OldestNick',
+    ]);
+    expect(body.history[0]?.last_seen_at).toBe('2026-08-01T00:00:00.000Z');
+  });
+
+  it('returns an empty history for a player who never changed a name', async () => {
+    const { token } = await seedAuthedPlayer(h.db, h.redis, 76561198000000405n);
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/me/names',
+      cookies: { [SESSION_COOKIE]: token },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { persona_name: string | null; history: unknown[] };
+    expect(body.persona_name).toBeNull();
+    expect(body.history).toEqual([]);
+  });
+
+  it("never leaks another player's names", async () => {
+    const { token, playerId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000406n);
+    const [{ id: otherPlayerId }] = await h.db
+      .insert(players)
+      .values({
+        steamId64: 76561198000000407n,
+        canonicalName: 'Stranger',
+        canonicalNameNormalized: 'stranger',
+      })
+      .returning({ id: players.id });
+    await h.db.insert(playerNameHistory).values([
+      { playerId, name: 'MyOldNick', nameNormalized: 'myoldnick' },
+      { playerId: otherPlayerId, name: 'StrangerNick', nameNormalized: 'strangernick' },
+    ]);
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/me/names',
+      cookies: { [SESSION_COOKIE]: token },
+    });
+    const body = res.json() as { history: Array<{ name: string }> };
+    expect(body.history.map((entry) => entry.name)).toEqual(['MyOldNick']);
   });
 });

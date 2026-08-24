@@ -47,6 +47,7 @@ const FORBIDDEN_ROUTES: Array<{ method: 'GET'; url: string }> = [
   { method: 'GET', url: '/api/v1/bonus-shop/tiers' },
   { method: 'GET', url: '/api/v1/me/tokens' },
   { method: 'GET', url: '/api/v1/me/sessions' },
+  { method: 'GET', url: '/api/v1/me/names' },
 ];
 
 beforeAll(async () => {

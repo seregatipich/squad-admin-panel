@@ -1,10 +1,22 @@
-import { economySettings, sessions as sessionsTable } from '@squad/db/schema';
+import {
+  economySettings,
+  playerNameHistory,
+  players,
+  sessions as sessionsTable,
+} from '@squad/db/schema';
 import { and, desc, eq, gt } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { revokeAllForPlayer, revokeSession, tokenIdFromToken } from '../lib/sessions.js';
 import { SESSION_COOKIE } from '../plugins/auth.js';
+
+/**
+ * Сколько прошлых ников отдавать. Историю листает человек глазами, а у
+ * заметного игрока она набирает сотни строк — без потолка запрос когда-нибудь
+ * выльет их все в шапку страницы.
+ */
+const NAME_HISTORY_LIMIT = 50;
 
 const authRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -60,6 +72,46 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       can_manage_economy: req.user.permissions.canManageEconomy,
       can_handle_reports: req.user.permissions.canHandleReports,
       economy_enabled: economyRow?.enabled ?? false,
+    };
+  });
+
+  /**
+   * Ники игрока: текущий игровой, ник из Steam и история смен.
+   *
+   * Отдельный маршрут, а не поля в `/api/v1/me`: тот дёргает шапка на каждой
+   * странице панели ради прав доступа, и подшивать к нему список на полсотни
+   * строк ради одного экрана «Аккаунт» — платить историей за каждый переход.
+   *
+   * Без `selfService`: маршрут panel-only, как и соседний `/me/sessions`.
+   */
+  fast.get('/api/v1/me/names', { config: { audit: false } }, async (req, reply) => {
+    if (!req.user) {
+      reply.code(401);
+      return { error: 'unauthenticated' };
+    }
+    const [player] = await app.db
+      .select({ canonicalName: players.canonicalName, personaName: players.personaName })
+      .from(players)
+      .where(eq(players.id, req.user.playerId))
+      .limit(1);
+    const history = await app.db
+      .select({
+        name: playerNameHistory.name,
+        firstSeenAt: playerNameHistory.firstSeenAt,
+        lastSeenAt: playerNameHistory.lastSeenAt,
+      })
+      .from(playerNameHistory)
+      .where(eq(playerNameHistory.playerId, req.user.playerId))
+      .orderBy(desc(playerNameHistory.lastSeenAt))
+      .limit(NAME_HISTORY_LIMIT);
+    return {
+      canonical_name: player?.canonicalName ?? req.user.canonicalName,
+      persona_name: player?.personaName ?? null,
+      history: history.map((entry) => ({
+        name: entry.name,
+        first_seen_at: entry.firstSeenAt.toISOString(),
+        last_seen_at: entry.lastSeenAt.toISOString(),
+      })),
     };
   });
 
