@@ -126,20 +126,20 @@ volumes and workspaces are no longer discarded for you. Watch it: the previous
 persistent setup needed `prepare-runner`/`cleanup-runner` maintenance jobs for exactly
 this reason, and they were removed when CI moved to disposable VMs (#286).
 
-**A containerised job owns everything it checks out.** The `go` job runs in a
-container and therefore as `root`, while every other job runs as the `runner` user on
-the same persistent workspace. It is not only build output: `actions/checkout` itself
-writes the whole tree as root, so the next job cannot delete a single file nor even
-create `.git/index.lock`, and dies with `EACCES: permission denied, unlink …`. That is
-how `branch-guard` and `node` broke as soon as the container landed.
+**Never run a whole job in a container on this runner.** The workspace is shared and
+persistent; a containerised job runs as `root`, so `actions/checkout` inside it writes
+the entire tree as root and the next job — running as the `runner` user — can neither
+delete a file nor create `.git/index.lock`, dying with `EACCES: permission denied,
+unlink …`. Deleting the workspace from inside the container does not help either: the
+container's working directory *is* that path, and every later step fails with
+`chdir to cwd … no such file or directory`. Both failure modes were observed here.
 
-The job therefore deletes `$GITHUB_WORKSPACE` before its own checkout and again
-afterwards under `if: always()`, so a mid-job failure cannot poison the rest of the
-run. The runner recreates the directory for the next job with the right owner. This is
-safe because the group holds a single machine and runs jobs one at a time — **adding a
-second runner to the group makes jobs overlap and invalidates it**; at that point move
-the race test to a `docker run` with a read-only mount instead of running the whole job
-in a container.
+The working arrangement is the reverse: the `go` job runs natively, and only the one
+step that needs a C toolchain goes into `docker run` with the source mounted
+**read-only** and the Go caches redirected inside the container, so nothing root-owned
+can appear in the workspace. `branch-guard` opens the run with a `chown` performed by a
+throwaway container — the runner user cannot repair root-owned files itself, and
+without that step a single bad run leaves the machine broken until someone logs in.
 
 **The machine carries no C toolchain.** `go test -race` needs cgo and therefore a C
 compiler; the GitHub-hosted image had one, this runner does not. The `go` job runs

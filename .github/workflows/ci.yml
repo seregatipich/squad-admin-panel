@@ -28,6 +28,16 @@ jobs:
       group: selfhost-group-1
     timeout-minutes: 10
     steps:
+      # Страховка на постоянном раннере: если какая-то задача оставила в общей
+      # рабочей папке файлы от root, `actions/checkout` дальше падает с
+      # `EACCES … unlink` и `Unable to create index.lock`, и раннер остаётся
+      # сломанным до ручной уборки на машине. Сам раннер чужие файлы не осилит,
+      # поэтому владельца возвращает контейнер от root. Обычно шаг ничего не
+      # находит и стоит копейки.
+      - name: вернуть владельца рабочей папки
+        run: |
+          docker run --rm -v "$RUNNER_WORKSPACE":/w alpine:3.22 \
+            chown -R "$(id -u):$(id -g)" /w || true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -170,13 +180,6 @@ jobs:
   go:
     runs-on:
       group: selfhost-group-1
-    # Контейнер, а не голая машина: детектору гонок нужен cgo, а значит и
-    # компилятор C, которого на раннере группы нет. Ставить его на саму машину
-    # означало бы менять постоянный хост, который делит работу с продакшн-
-    # деплоем; образ `golang` приносит компилятор с собой и заодно возвращает
-    # задаче изоляцию файловой системы — тесты бриджа трогают абсолютные пути.
-    container:
-      image: golang:1.25.13-bookworm
     timeout-minutes: 15
     env:
       GOFLAGS: -buildvcs=false
@@ -184,69 +187,47 @@ jobs:
       run:
         working-directory: apps/bridge
     steps:
-      # Раннер постоянный, его рабочая папка переживает прогоны, и эта задача —
-      # единственная, что идёт в контейнере от root. Значит `actions/checkout`
-      # здесь создаёт весь чекаут от root, а соседние задачи работают от
-      # пользователя `runner` и потом не могут ни удалить эти файлы, ни писать в
-      # `.git`: они падают с `EACCES … unlink` и `Unable to create index.lock`.
-      # Папка сносится до своего checkout — на случай, если её оставил
-      # предыдущий прогон, — и обязательно после задачи, чем бы та ни кончилась.
-      - name: убрать чекаут предыдущего прогона
-        working-directory: /
-        run: rm -rf "$GITHUB_WORKSPACE" || true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.25.13'
           cache-dependency-path: apps/bridge/go.sum
       - run: go vet ./...
-      # Детектору гонок нужен cgo, а значит и системный компилятор C. На
-      # GitHub-образе он стоял и `CGO_ENABLED` был равен 1 по умолчанию; на
-      # собственном раннере это не гарантировано, и `go test -race` падал с
-      # «-race requires cgo». Включаем явно и сразу проверяем компилятор, иначе
-      # ошибка приходит из глубины сборки и читается плохо.
+      # Только этот шаг уходит в контейнер, и только потому, что детектору гонок
+      # нужен cgo, а компилятора C на машине нет. Вся задача в контейнере не
+      # годится: `actions/checkout` внутри него пишет чекаут от root, и соседние
+      # задачи после этого не могут ни удалить файлы, ни создать index.lock.
+      # Монтирование только на чтение гарантирует, что контейнер не оставит в
+      # общей папке ничего; кеши уводятся внутрь контейнера.
       - name: go test -race
-        env:
-          CGO_ENABLED: '1'
         run: |
-          command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || {
-            echo "::error::В образе задачи нет компилятора C, без него не работает go test -race"
-            exit 1
-          }
-          go test -race -count=1 ./...
+          docker run --rm \
+            -v "$PWD":/src:ro -w /src \
+            -e CGO_ENABLED=1 \
+            -e GOFLAGS=-buildvcs=false \
+            -e GOCACHE=/tmp/gocache \
+            -e GOMODCACHE=/tmp/gomodcache \
+            golang:1.25.13-bookworm \
+            go test -race -count=1 ./...
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
       - name: build static binary
         run: |
-          # Собираем в файловую систему контейнера, а не в рабочую папку раннера:
-          # она общая и переживает прогон, а этот контейнер работает от root —
-          # оставленный здесь файл соседние задачи удалить уже не смогут.
-          out=/tmp/panel-host-bridge
-          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$out" ./cmd/panel-host-bridge
-          ls -la "$out"
-          # Раньше здесь стоял `file`, которого нет в образе `golang`, и шаг падал
-          # с кодом 127. Заодно он ничего и не проверял — только печатал. `ldd`
-          # на статическом бинарнике выходит с ошибкой и сообщает, что тот не
-          # динамический; успех `ldd` означает, что бинарник тянет библиотеки за
-          # собой и на хост его класть нельзя.
-          if ldd "$out" >/dev/null 2>&1; then
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/panel-host-bridge ./cmd/panel-host-bridge
+          ls -la bin/
+          # Раньше здесь стоял `file`, которого нет в образе `golang`. Заодно он
+          # ничего и не проверял — только печатал. `ldd` на статическом бинарнике
+          # выходит с ошибкой и сообщает, что тот не динамический; успех `ldd`
+          # означает, что бинарник тянет библиотеки за собой и на хост его класть
+          # нельзя.
+          if ldd bin/panel-host-bridge >/dev/null 2>&1; then
             echo "::error::panel-host-bridge слинкован динамически — на хосте без нужных библиотек он не запустится"
-            ldd "$out"
+            ldd bin/panel-host-bridge
             exit 1
           fi
           echo "panel-host-bridge статический"
-
-      # Обязательно `always()`: если задача упадёт посередине, чекаут от root
-      # останется и сломает все последующие задачи прогона, а не только эту.
-      # Единственная машина в группе выполняет задачи по очереди, поэтому снести
-      # папку здесь безопасно; при добавлении второго раннера в группу задачи
-      # смогут пойти параллельно, и это место придётся пересмотреть.
-      - name: убрать за собой чекаут от root
-        if: always()
-        working-directory: /
-        run: rm -rf "$GITHUB_WORKSPACE" || true
 
   docker:
     runs-on:
