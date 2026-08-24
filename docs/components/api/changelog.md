@@ -1,5 +1,16 @@
 # `api` — changelog
 
+## 2026-08-24 — Session list stops showing dead sessions; own names exposed
+
+### Fixed
+
+- `GET /api/v1/me/sessions` (`routes/auth.ts`) selected every `sessions` row of the caller with no `expires_at` filter, so the panel's «Активные сессии» card — which promises «устройства, с которых сейчас открыта панель» — listed sessions that had expired days earlier, each with a live «Завершить» button next to it. The query now filters on `expires_at > now()`.
+- The same query had no `ORDER BY`, leaving row order to the planner; the caller's own session routinely landed in the middle of the list, which is the one row an operator must find to avoid revoking the session they are looking through. Results are now ordered by `last_activity_at` descending with the current session hoisted to the front.
+
+### Added
+
+- `GET /api/v1/me/names` returns the caller's in-game name, their Steam persona name and their `player_name_history` (newest `last_seen_at` first, capped at 50 rows). The table has been filled for a long time but was never exposed to a client. Kept off `/api/v1/me` on purpose: the top nav fetches that route on every page load and has no use for a history list. Panel-only — the route declares no `selfService`, and `test/security/self-service-session.test.ts` asserts a self-service session cannot reach it.
+
 ## 2026-08-04 — Per-server "update game" now streams real progress
 
 ### Fixed
