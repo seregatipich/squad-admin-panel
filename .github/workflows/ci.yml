@@ -211,8 +211,18 @@ jobs:
       - name: build static binary
         run: |
           CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/panel-host-bridge ./cmd/panel-host-bridge
-          file bin/panel-host-bridge
           ls -la bin/
+          # Раньше здесь стоял `file`, которого нет в образе `golang`, и шаг падал
+          # с кодом 127. Заодно он ничего и не проверял — только печатал. `ldd`
+          # на статическом бинарнике выходит с ошибкой и сообщает, что тот не
+          # динамический; успех `ldd` означает, что бинарник тянет библиотеки за
+          # собой и на хост его класть нельзя.
+          if ldd bin/panel-host-bridge >/dev/null 2>&1; then
+            echo "::error::panel-host-bridge слинкован динамически — на хосте без нужных библиотек он не запустится"
+            ldd bin/panel-host-bridge
+            exit 1
+          fi
+          echo "panel-host-bridge статический"
 
   docker:
     runs-on:
