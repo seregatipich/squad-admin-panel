@@ -58,6 +58,23 @@ const ME = {
   permissions: ['role:view', 'user:view'],
 };
 
+const NAMES = {
+  canonical_name: 'Alpha',
+  persona_name: 'AlphaOnSteam',
+  history: [
+    {
+      name: 'Alpha',
+      first_seen_at: '2026-06-01T00:00:00.000Z',
+      last_seen_at: '2026-08-01T00:00:00.000Z',
+    },
+    {
+      name: 'AlphaOld',
+      first_seen_at: '2026-01-01T00:00:00.000Z',
+      last_seen_at: '2026-06-01T00:00:00.000Z',
+    },
+  ],
+};
+
 const SESSIONS = [
   {
     id: 'sess-current',
@@ -100,6 +117,9 @@ function installFetch(options: FetchOptions = {}) {
         new Response(status === 200 ? JSON.stringify(SESSIONS) : 'no', { status }),
       );
     }
+    if (url === '/api/v1/me/names') {
+      return Promise.resolve(new Response(JSON.stringify(NAMES), { status: 200 }));
+    }
     return Promise.resolve(new Response('{}', { status: 200 }));
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -126,12 +146,30 @@ afterEach(() => {
 });
 
 describe('AccountPage', () => {
-  it('shows the profile with the permission count in Russian', async () => {
+  it('shows the profile with the permission count declined in Russian', async () => {
     await renderPage();
-    expect(await screen.findByText('player-1')).toBeInTheDocument();
+    expect(await screen.findByText('76561198000000001')).toBeInTheDocument();
     expect(screen.getByText('Права')).toBeInTheDocument();
-    expect(screen.getByText('2 ключей')).toBeInTheDocument();
+    expect(screen.getByText('2 ключа')).toBeInTheDocument();
     expect(screen.queryByText('Permissions')).not.toBeInTheDocument();
+  });
+
+  it('names the account in the header instead of in a profile row', async () => {
+    await renderPage();
+    expect(await screen.findByText('Alpha')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'ещё 1 ник' })).toBeInTheDocument();
+    // Строки «Идентификатор игрока» и «Имя» убраны: внутренний UUID оператору
+    // ничего не даёт, а имя переехало в шапку.
+    expect(screen.queryByText('Идентификатор игрока')).not.toBeInTheDocument();
+    expect(screen.queryByText('Имя')).not.toBeInTheDocument();
+    expect(screen.queryByText('player-1')).not.toBeInTheDocument();
+  });
+
+  it('does not repeat the logout that already lives in the top navigation', async () => {
+    await renderPage();
+    await screen.findByText('10.0.0.1');
+    expect(screen.queryByRole('button', { name: 'Выйти' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Выйти из панели')).not.toBeInTheDocument();
   });
 
   it('marks the current session and offers to end only the others', async () => {
@@ -204,6 +242,7 @@ describe('AccountPage', () => {
       if (url === '/api/v1/me') return Promise.resolve(new Response(JSON.stringify(ME)));
       if (url === '/api/v1/me/sessions')
         return Promise.resolve(new Response(JSON.stringify(SESSIONS)));
+      if (url === '/api/v1/me/names') return Promise.resolve(new Response(JSON.stringify(NAMES)));
       return Promise.resolve(new Response('{}'));
     });
     await act(async () => {
@@ -214,16 +253,16 @@ describe('AccountPage', () => {
     expect(screen.getByText('10.0.0.1')).toBeInTheDocument();
   });
 
-  it('polls the profile and the session list on the interval', async () => {
+  it('polls the profile, the names and the session list on the interval', async () => {
     vi.useFakeTimers();
     try {
       const fetchMock = installFetch();
       render(<AccountPage />);
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
       act(() => {
         vi.advanceTimersByTime(30_000);
       });
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
     } finally {
       vi.useRealTimers();
     }

@@ -1,6 +1,5 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LiveIndicator } from '@/components/LiveIndicator';
 import {
   AlertDialog,
   Badge,
@@ -21,15 +20,20 @@ import {
   Th,
 } from '@/components/ui';
 import { useLiveSubscription } from '@/lib/use-live-bus';
+import { AccountIdentity } from './AccountIdentity';
+import {
+  type AccountNames,
+  describeDevice,
+  formatDate,
+  formatPermissionCount,
+  formatRelative,
+} from './helpers';
 import { isCurrentSessionRevoked, type SessionRevokedEvent } from './sessionEvents';
 
 const POLL_MS = 30_000;
 
 interface Me {
-  player_id: string;
   steam_id64: string | null;
-  canonical_name: string;
-  avatar_url: string | null;
   permissions: string[];
 }
 
@@ -45,36 +49,14 @@ interface ActiveSession {
 /** Какую сессию оператор попросил завершить: одну конкретную или все сразу. */
 type PendingRevoke = { kind: 'one'; id: string } | { kind: 'all' };
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString('ru-RU');
-}
-
-function formatRelative(iso: string): string {
-  const diffMs = new Date(iso).getTime() - Date.now();
-  if (diffMs <= 0) return 'истекла';
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 60) return `через ${diffMin} мин`;
-  const diffH = Math.floor(diffMin / 60);
-  const remMin = diffMin % 60;
-  if (diffH < 24) return remMin > 0 ? `через ${diffH} ч ${remMin} мин` : `через ${diffH} ч`;
-  const diffD = Math.floor(diffH / 24);
-  return `через ${diffD} дн`;
-}
-
-function shortenUa(ua: string | null): string {
-  if (!ua) return '—';
-  const m = ua.match(/^([^/]+\/[^\s]+).*\((.*?)\)/);
-  return m ? `${m[1]} (${m[2]})` : ua.slice(0, 80);
-}
-
 export default function AccountSettings() {
   const [me, setMe] = useState<Me | null>(null);
+  const [names, setNames] = useState<AccountNames | null>(null);
   const [sessions, setSessions] = useState<ActiveSession[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [revokingAll, setRevokingAll] = useState(false);
   const [pendingRevoke, setPendingRevoke] = useState<PendingRevoke | null>(null);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const sessionsRef = useRef<ActiveSession[]>([]);
   sessionsRef.current = sessions;
 
@@ -90,15 +72,17 @@ export default function AccountSettings() {
 
   const load = useCallback(async () => {
     try {
-      const [meRes, sessRes] = await Promise.all([
+      const [meRes, sessRes, namesRes] = await Promise.all([
         fetch('/api/v1/me', { credentials: 'include', cache: 'no-store' }),
         fetch('/api/v1/me/sessions', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/v1/me/names', { credentials: 'include', cache: 'no-store' }),
       ]);
       if (!meRes.ok) throw new Error(`HTTP ${meRes.status}`);
       if (!sessRes.ok) throw new Error(`HTTP ${sessRes.status}`);
+      if (!namesRes.ok) throw new Error(`HTTP ${namesRes.status}`);
       setMe((await meRes.json()) as Me);
       setSessions((await sessRes.json()) as ActiveSession[]);
-      setLastUpdate(new Date());
+      setNames((await namesRes.json()) as AccountNames);
       // Снимается только сообщение об ошибке: удачный опрос действительно
       // отменяет её, а подтверждение «Сессия завершена» оператор должен
       // успеть прочитать, и опрос раз в полминуты не имеет права его стереть.
@@ -150,19 +134,14 @@ export default function AccountSettings() {
     }
   }
 
-  async function logout() {
-    await fetch('/api/v1/auth/logout', {
-      method: 'POST',
-      credentials: 'include',
-    });
-    window.location.href = '/login';
-  }
-
   const revokeBusy = pendingRevoke?.kind === 'all' ? revokingAll : busyId !== null;
 
   return (
     <>
-      <PageHeader title="Аккаунт" status={<LiveIndicator lastUpdate={lastUpdate} />} />
+      {/* Ник стоит в `actions`, у правого края строки заголовка: слева на этой
+          странице всего одно слово, и оператор, у которого открыто несколько
+          панелей, по нему не поймёт, под каким аккаунтом смотрит. */}
+      <PageHeader title="Аккаунт" actions={<AccountIdentity names={names} />} />
 
       {msg ? (
         <InlineBanner
@@ -186,20 +165,15 @@ export default function AccountSettings() {
       ) : (
         <GroupedList title="Профиль">
           <GroupedRow
-            label="Идентификатор игрока"
-            control={<span className="font-mono text-xs text-ink-2">{me.player_id}</span>}
-          />
-          <GroupedRow
             label="SteamID64"
             control={<span className="font-mono text-xs text-ink-2">{me.steam_id64 ?? '—'}</span>}
           />
-          <GroupedRow label="Имя" control={<span className="text-xs">{me.canonical_name}</span>} />
           <GroupedRow
             label="Права"
             description="Набор ключей, которые даёт выданная вам роль."
             control={
               <span className="text-xs tabular-nums text-ink-2">
-                {me.permissions.length} ключей
+                {formatPermissionCount(me.permissions.length)}
               </span>
             }
           />
@@ -243,7 +217,7 @@ export default function AccountSettings() {
               {sessions.map((s) => (
                 <TableRow key={s.id} interactive>
                   <Td className="font-mono text-xs">{s.ip ?? '—'}</Td>
-                  <Td className="text-xs text-ink-3">{shortenUa(s.user_agent)}</Td>
+                  <Td className="text-xs text-ink-3">{describeDevice(s.user_agent)}</Td>
                   <Td className="text-xs text-ink-3">{formatDate(s.last_activity_at)}</Td>
                   <Td className="text-xs text-ink-3">
                     {formatDate(s.expires_at)}{' '}
@@ -270,16 +244,6 @@ export default function AccountSettings() {
           </Table>
         )}
       </Card>
-
-      <GroupedList
-        title="Выход"
-        footnote="Выход закрывает только эту сессию. Остальные устройства останутся в панели."
-      >
-        <GroupedRow
-          label="Выйти из панели"
-          control={<Button onClick={() => void logout()}>Выйти</Button>}
-        />
-      </GroupedList>
 
       {/* Завершение сессии обратимо — оператор входит заново тем же Steam-логином, —
           поэтому подтверждение обычное, а не критическое (дизайн-система, §5).

@@ -299,14 +299,19 @@ test.describe('live refresh — no F5 needed', () => {
     await attachOwnerCookie(page);
     await page.goto('/settings/account');
 
-    const profileSection = page.locator('section', { hasText: 'Профиль' }).first();
-    await expect(profileSection).toBeVisible({ timeout: 10_000 });
+    // Ник переехал из блока «Профиль» в шапку страницы; проверяется именно она,
+    // а не вся страница — имя игрока стоит ещё и в меню пользователя вверху, и
+    // совпадение там прошло бы мимо того, что этот тест проверяет.
+    const pageHeader = page
+      .locator('header')
+      .filter({ has: page.getByRole('heading', { level: 1, name: 'Аккаунт' }) });
+    await expect(pageHeader).toBeVisible({ timeout: 10_000 });
 
     const origName = runSql(`SELECT canonical_name FROM players WHERE steam_id64=${ownerUid}`);
     const newName = `LR Renamed ${Date.now()}`;
     try {
       runSql(`UPDATE players SET canonical_name='${newName}' WHERE steam_id64=${ownerUid}`);
-      await expect(profileSection.locator(`text=${newName}`).first()).toBeVisible({
+      await expect(pageHeader.locator(`text=${newName}`).first()).toBeVisible({
         timeout: 35_000,
       });
     } finally {
@@ -318,28 +323,18 @@ test.describe('live refresh — no F5 needed', () => {
     await attachOwnerCookie(page);
     const realId = pickServerId();
 
-    const pages: Array<{ url: string; pollMs: number }> = [
-      { url: '/dashboard', pollMs: 4000 },
-      { url: '/servers', pollMs: 4000 },
-      { url: '/audit', pollMs: 6000 },
-      { url: '/players', pollMs: 8000 },
-    ];
+    // `/settings/account` в списке не значится: индикатор живости с неё убран —
+    // страница не про наблюдение за меняющимися данными, а её опрос раз в
+    // полминуты проверяет тест (h) выше. С её уходом в списке остались только
+    // страницы с частым опросом, и отдельная ветка ожидания для редкого больше
+    // ни на что не приходится.
+    const pages = ['/dashboard', '/servers', '/audit', '/players'];
     if (realId) {
-      pages.push(
-        { url: `/servers/${realId}`, pollMs: 3000 },
-        { url: `/servers/${realId}/events`, pollMs: 4000 },
-        { url: `/servers/${realId}/configs`, pollMs: 8000 },
-      );
+      pages.push(`/servers/${realId}`, `/servers/${realId}/events`, `/servers/${realId}/configs`);
     }
-    pages.push({ url: '/settings/account', pollMs: 30_000 });
 
-    for (const { url, pollMs } of pages) {
+    for (const url of pages) {
       await page.goto(url);
-      if (pollMs >= 30_000) {
-        const indicator = page.locator('text=/обновлено \\d+с назад/').first();
-        await expect(indicator).toBeVisible({ timeout: 10_000 });
-        continue;
-      }
       await expectIndicatorTicks(page, 12_000);
     }
   });
