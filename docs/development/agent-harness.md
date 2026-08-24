@@ -126,6 +126,14 @@ volumes and workspaces are no longer discarded for you. Watch it: the previous
 persistent setup needed `prepare-runner`/`cleanup-runner` maintenance jobs for exactly
 this reason, and they were removed when CI moved to disposable VMs (#286).
 
+**A containerised job must not write into the runner's workspace.** The `go` job runs
+in a container and therefore as `root`, while every other job runs as the `runner`
+user on the same persistent workspace. Anything the container leaves behind is
+root-owned, and the next job's `actions/checkout` dies on it with
+`EACCES: permission denied, unlink …` — which is how `branch-guard` and `node` broke
+the first time the container landed. The job builds into the container's own `/tmp`
+and clears stale root-owned output before its checkout; keep it that way.
+
 **The machine carries no C toolchain.** `go test -race` needs cgo and therefore a C
 compiler; the GitHub-hosted image had one, this runner does not. The `go` job runs
 inside `golang:1.25.13-bookworm` rather than on the bare machine, so the compiler
