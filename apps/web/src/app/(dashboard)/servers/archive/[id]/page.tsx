@@ -6,6 +6,7 @@ import {
   ButtonLink,
   Card,
   CardHeader,
+  DateTime,
   EmptyState,
   GroupedList,
   GroupedRow,
@@ -21,6 +22,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 
 interface ArchiveServer {
   id: string;
@@ -70,6 +72,7 @@ interface BackupContent {
 }
 
 export default function ArchiveDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const locale = useIntlLocale();
   const { id } = use(params);
   const [data, setData] = useState<ArchiveDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -142,7 +145,7 @@ export default function ArchiveDetailPage({ params }: { params: Promise<{ id: st
             <>
               <span className="font-mono">{server.id}</span>
               <span>
-                Удалён {new Date(server.deleted_at).toLocaleString()}
+                Удалён <DateTime value={server.deleted_at} locale={locale} />
                 {server.deleted_by_steam_id64 ? ` · ${server.deleted_by_steam_id64}` : ''}
               </span>
             </>
@@ -230,7 +233,7 @@ export default function ArchiveDetailPage({ params }: { params: Promise<{ id: st
                       <Td className="font-mono text-2xs text-ink-3">{b.sha256_hex.slice(0, 12)}</Td>
                       <Td className="text-xs text-ink-2">{b.message ?? '—'}</Td>
                       <Td className="text-xs text-ink-3">
-                        {new Date(b.created_at).toLocaleString()}
+                        <DateTime value={b.created_at} locale={locale} />
                       </Td>
                     </TableRow>
                   ))}

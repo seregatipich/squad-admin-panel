@@ -69,6 +69,21 @@ Primitives never read the translation dictionary — every human-readable string
 `aria-label` included, arrives as a prop. That keeps them free of locale
 plumbing and keeps the dictionary a single-owner file.
 
+### Dates and times
+
+Every timestamp goes through `DateTime`, `formatAbsolute` or `formatClock`, and
+each of them **requires** an explicit BCP-47 locale — call sites read it from
+`useIntlLocale()` (`src/i18n/LocaleProvider.tsx`), which maps the UI locale to
+the tag `Intl` wants (`ru` → `ru-RU`, `en` → `en-GB`).
+
+A bare `toLocaleString()` / `toLocaleDateString()` / `toLocaleTimeString()`
+formats in the *viewer's browser* locale, which has nothing to do with the
+language the panel is showing: the players table printed
+`8/23/2026, 11:35:00 AM` while the report queue two clicks away printed
+`22.08.2026, 03:33`, and both changed with the machine and its ICU version.
+`src/i18n/date-locale.regression.test.ts` scans the sources and fails the build
+if a locale-less call comes back.
+
 ## Components
 
 `apps/web/src/components/`:

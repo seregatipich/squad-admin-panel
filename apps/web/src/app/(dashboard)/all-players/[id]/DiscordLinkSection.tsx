@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { Button, Card, CardBody, CardHeader, InlineBanner, Skeleton } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 import {
   buildDiscordLinkUrl,
   buildForceUnlinkUrl,
@@ -29,6 +30,7 @@ interface Viewer {
  * answers 403.
  */
 export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Viewer | null }) {
+  const locale = useIntlLocale();
   const [data, setData] = useState<DiscordLinkResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [hidden, setHidden] = useState(false);
@@ -128,7 +130,9 @@ export function DiscordLinkSection({ playerId, me }: { playerId: string; me: Vie
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="space-y-1">
               <div className="text-[13px] text-ink">{data.discord_username}</div>
-              <div className="text-xs text-ink-3">Привязан {formatLinkedAt(data.linked_at)}</div>
+              <div className="text-xs text-ink-3">
+                Привязан {formatLinkedAt(data.linked_at, locale)}
+              </div>
             </div>
             {isSelf ? (
               <Button size="sm" disabled={busy} onClick={() => void unlink(SELF_UNLINK_URL)}>

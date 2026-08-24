@@ -19,6 +19,7 @@ import {
   CardHeader,
   DateTime,
   EmptyState,
+  formatClock,
   InlineBanner,
   PageContainer,
   PageHeader,
@@ -43,6 +44,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 import { formatBytes, formatBytesPerSec, formatPercent, formatUptime, ratio } from '@/lib/format';
 import { computeHostHealth, type HealthLevel, thresholdTone } from '@/lib/host-health';
 import { AnalyticsPanel } from './analytics-panel';
@@ -1080,6 +1082,7 @@ function RecentActivity({
 }
 
 function ActivityRow({ ev }: { ev: AuditRow }) {
+  const locale = useIntlLocale();
   const severity = severityFromStatus(ev.status_code);
   const time = new Date(ev.created_at);
   const targetLabel = ev.target_type
@@ -1090,7 +1093,7 @@ function ActivityRow({ ev }: { ev: AuditRow }) {
   return (
     <TableRow>
       <Td className="whitespace-nowrap text-xs tabular-nums text-ink-3">
-        {time.toLocaleTimeString()}
+        {formatClock(time, locale) ?? '—'}
       </Td>
       <Td className="text-xs text-ink-2">{ACTOR_KIND_LABEL[ev.actor_kind] ?? ev.actor_kind}</Td>
       <Td className="text-xs text-ink">{ev.action_type}</Td>

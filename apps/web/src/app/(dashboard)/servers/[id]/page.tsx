@@ -19,6 +19,7 @@ import {
   CardGrid,
   CardHeader,
   ChevronDownIcon,
+  formatAbsolute,
   GroupedList,
   GroupedRow,
   IconButton,
@@ -32,6 +33,7 @@ import {
   StatusDot,
   type StatusState,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { nextBackoffMs } from '@/lib/ws-backoff';
 import type { SeedingSummary } from '../seeding-format';
@@ -153,6 +155,7 @@ function rconView(status: RconStatus): { state: StatusState; label: string } {
  * разделов.
  */
 export default function ServerDetail({ params }: { params: Promise<{ id: string }> }) {
+  const locale = useIntlLocale();
   const { id } = use(params);
   const router = useRouter();
   const [data, setData] = useState<ServerResponse | null>(null);
@@ -491,7 +494,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
             <CrashBadge crashLoop={data.crash_loop ?? false} crashCount={data.crash_count ?? 0} />
             <SeedingBadge serverId={server.id} initial={data.seeding ?? null} />
             {uptimeMs != null && startedAt ? (
-              <span className="text-xs text-ink-3" title={new Date(startedAt).toLocaleString()}>
+              <span className="text-xs text-ink-3" title={formatAbsolute(startedAt, locale) ?? ''}>
                 В работе {formatUptime(uptimeMs)}
               </span>
             ) : null}

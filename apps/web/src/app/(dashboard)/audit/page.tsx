@@ -6,6 +6,7 @@ import {
   type BadgeTone,
   Button,
   Card,
+  DateTime,
   EmptyState,
   InlineBanner,
   PageContainer,
@@ -20,6 +21,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 
 interface AuditEntry {
   id: string;
@@ -46,6 +48,7 @@ interface VerifyChainResult {
 const POLL_MS = 6000;
 
 export default function AuditPage() {
+  const locale = useIntlLocale();
   const [items, setItems] = useState<AuditEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -222,7 +225,7 @@ export default function AuditPage() {
                   <Fragment key={r.id}>
                     <TableRow interactive>
                       <Td className="whitespace-nowrap text-xs text-ink-3">
-                        {new Date(r.created_at).toLocaleString()}
+                        <DateTime value={r.created_at} locale={locale} />
                       </Td>
                       <Td className="font-mono text-xs">
                         {r.actor_kind === 'user'

@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { formatAbsolute } from '@/components/ui';
 
 vi.mock('next/navigation', () => ({
   redirect: vi.fn(),
@@ -158,11 +159,18 @@ describe('PlayersPage', () => {
     );
   });
 
-  it('renders the first_seen_at value in every body row', async () => {
+  /*
+   * Ожидание строится через `formatAbsolute`, а не через `toLocaleString()`:
+   * второй вариант печатал бы то же, что и страница до починки, и тест прошёл
+   * бы на американском «1/2/2024, 3:04:05 AM» в русской панели.
+   */
+  it('renders the first_seen_at value in every body row, in the panel format', async () => {
     await renderPage();
-    expect(screen.getByText(new Date(FIRST_SEEN_A).toLocaleString())).toBeInTheDocument();
-    expect(screen.getByText(new Date(FIRST_SEEN_B).toLocaleString())).toBeInTheDocument();
-    expect(screen.getByText(new Date(FIRST_SEEN_C).toLocaleString())).toBeInTheDocument();
+    for (const iso of [FIRST_SEEN_A, FIRST_SEEN_B, FIRST_SEEN_C]) {
+      const expected = formatAbsolute(iso, 'ru-RU') as string;
+      expect(expected).toMatch(/^\d{2}\.\d{2}\.\d{4}, \d{2}:\d{2}:\d{2}$/);
+      expect(screen.getByText(expected)).toBeInTheDocument();
+    }
   });
 
   it('clicking the Ник header refetches with sort=nickname&dir=asc', async () => {

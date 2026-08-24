@@ -19,6 +19,7 @@ import {
   CardFooter,
   CardHeader,
   CopyIcon,
+  DateTime,
   EmptyState,
   FieldRow,
   GroupedList,
@@ -37,6 +38,7 @@ import {
   Textarea,
   Th,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 import {
   buildRoleAssignPayload,
   DEFAULT_VIP_EXPIRY_WINDOWS_DAYS,
@@ -134,6 +136,7 @@ interface Me {
 const BACK_TO_LIST = { backHref: '/all-players', backLabel: 'К списку игроков' } as const;
 
 export default function PlayerDetail({ params }: { params: Promise<{ id: string }> }) {
+  const locale = useIntlLocale();
   const { id: playerId } = use(params);
   const [data, setData] = useState<PlayerResponse | null>(null);
   const [me, setMe] = useState<Me | null>(null);
@@ -299,9 +302,12 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
         />
         <GroupedRow
           label="Впервые замечен"
-          control={new Date(player.first_seen_at).toLocaleString()}
+          control={<DateTime value={player.first_seen_at} locale={locale} />}
         />
-        <GroupedRow label="Был(а)" control={new Date(player.last_seen_at).toLocaleString()} />
+        <GroupedRow
+          label="Был(а)"
+          control={<DateTime value={player.last_seen_at} locale={locale} />}
+        />
         <GroupedRow
           label="Наиграно"
           control={
@@ -371,10 +377,10 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
                   <Td className="font-medium">{n.name}</Td>
                   <Td numeric>{n.observation_count}</Td>
                   <Td className="text-xs text-ink-3">
-                    {new Date(n.first_seen_at).toLocaleString()}
+                    <DateTime value={n.first_seen_at} locale={locale} />
                   </Td>
                   <Td className="text-xs text-ink-3">
-                    {new Date(n.last_seen_at).toLocaleString()}
+                    <DateTime value={n.last_seen_at} locale={locale} />
                   </Td>
                   {canBan ? (
                     <Td>
@@ -775,6 +781,7 @@ function LocationSection({
   ipsVisible: boolean;
   geoConfigured: boolean;
 }) {
+  const locale = useIntlLocale();
   if (!ipsVisible) {
     return (
       <Card as="section" padding="none">
@@ -832,7 +839,7 @@ function LocationSection({
                 </span>
               )}
               <span className="font-mono text-ink-2">{current.ip}</span>
-              <span className="text-ink-3">{new Date(current.last_seen_at).toLocaleString()}</span>
+              <DateTime value={current.last_seen_at} locale={locale} className="text-ink-3" />
               <span className="font-mono tabular-nums text-ink-3">
                 ×{current.observation_count}
               </span>
@@ -871,7 +878,7 @@ function LocationSection({
                     <Td className="font-mono">{ip.ip}</Td>
                     <Td numeric>{ip.observation_count}</Td>
                     <Td className="text-xs text-ink-3">
-                      {new Date(ip.last_seen_at).toLocaleString()}
+                      <DateTime value={ip.last_seen_at} locale={locale} />
                     </Td>
                   </TableRow>
                 ))}

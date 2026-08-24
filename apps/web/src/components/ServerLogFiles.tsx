@@ -17,6 +17,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 
 interface LogFile {
   name: string;
@@ -55,6 +56,7 @@ export function ServerLogFiles({
   serverId: string;
   canDownload: boolean;
 }) {
+  const locale = useIntlLocale();
   const [files, setFiles] = useState<LogFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -145,7 +147,7 @@ export function ServerLogFiles({
                   {formatSize(f.size)}
                 </Td>
                 <Td className="whitespace-nowrap text-ink-2">
-                  <DateTime value={f.mtime} locale="ru-RU" />
+                  <DateTime value={f.mtime} locale={locale} />
                 </Td>
                 <Td align="right">
                   <a

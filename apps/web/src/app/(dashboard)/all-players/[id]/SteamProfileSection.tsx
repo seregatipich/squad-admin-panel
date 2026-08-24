@@ -1,7 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import { Button, Card, CardBody, CardHeader, GroupedRow, InlineBanner } from '@/components/ui';
+import {
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  DateTime,
+  GroupedRow,
+  InlineBanner,
+} from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 
 /**
  * Steam Web API snapshot as `GET /api/v1/players/:playerId` returns it
@@ -59,6 +68,7 @@ export function SteamProfileSection({
   steamId64: string | null;
   snapshot: SteamSnapshot;
 }) {
+  const locale = useIntlLocale();
   const [current, setCurrent] = useState<SteamSnapshot>(snapshot);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -154,9 +164,11 @@ export function SteamProfileSection({
           label="Проверено"
           control={
             <span data-testid="steam-checked-at">
-              {current.steam_checked_at
-                ? new Date(current.steam_checked_at).toLocaleString()
-                : 'не проверялся'}
+              {current.steam_checked_at ? (
+                <DateTime value={current.steam_checked_at} locale={locale} />
+              ) : (
+                'не проверялся'
+              )}
             </span>
           }
         />

@@ -49,10 +49,16 @@ export function parseDiscordLink(json: unknown): DiscordLinkResponse | null {
   };
 }
 
-/** Renders the link timestamp as a locale date, or an em dash when absent/unparsable. */
-export function formatLinkedAt(linkedAt: string | null): string {
+/**
+ * Renders the link timestamp as a date, or an em dash when absent/unparsable.
+ *
+ * @param linkedAt ISO timestamp of the Discord link, or `null`.
+ * @param locale BCP-47 tag to format in; required, because the browser's own
+ *   locale has nothing to do with the language the panel is displayed in.
+ */
+export function formatLinkedAt(linkedAt: string | null, locale: string): string {
   if (!linkedAt) return '—';
   const date = new Date(linkedAt);
   if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleDateString();
+  return date.toLocaleDateString(locale);
 }

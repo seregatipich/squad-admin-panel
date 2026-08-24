@@ -7,11 +7,13 @@ import {
   Card,
   CardBody,
   CardHeader,
+  DateTime,
   EmptyState,
   InlineBanner,
   Skeleton,
   TextInput,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 import type { LiveEvent } from '@/lib/live-bus';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { MediaPublishControl } from './MediaPublishControl';
@@ -69,6 +71,7 @@ function evidenceLabel(media: EvidenceMedia): string {
  * refreshes the list in place.
  */
 export function EvidenceSection({ playerId }: { playerId: string }) {
+  const locale = useIntlLocale();
   const [items, setItems] = useState<EvidenceItem[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [hidden, setHidden] = useState(false);
@@ -173,7 +176,7 @@ export function EvidenceSection({ playerId }: { playerId: string }) {
                 />
                 <p>
                   Ссылка показывается один раз, работает один раз и истекает{' '}
-                  {new Date(mintedLink.expires_at).toLocaleString()}.
+                  <DateTime value={mintedLink.expires_at} locale={locale} />.
                 </p>
               </div>
             }
@@ -204,9 +207,11 @@ export function EvidenceSection({ playerId }: { playerId: string }) {
               <li key={link.id} className="rounded-ctl border border-line p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-[13px] text-ink">{evidenceLabel(media)}</span>
-                  <span className="text-xs text-ink-3">
-                    {new Date(link.created_at).toLocaleString()}
-                  </span>
+                  <DateTime
+                    value={link.created_at}
+                    locale={locale}
+                    className="text-xs text-ink-3"
+                  />
                 </div>
                 {media.upload_token_id ? (
                   <span className="mt-1 inline-block">

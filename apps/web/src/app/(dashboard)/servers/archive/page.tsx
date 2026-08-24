@@ -6,6 +6,7 @@ import {
   ButtonLink,
   Card,
   EmptyState,
+  formatAbsolute,
   InlineBanner,
   PageContainer,
   PageHeader,
@@ -17,6 +18,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 
 interface ArchiveRow {
   id: string;
@@ -37,6 +39,7 @@ interface Me {
 }
 
 export default function ArchivePage() {
+  const locale = useIntlLocale();
   const [data, setData] = useState<ArchiveResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
@@ -157,7 +160,7 @@ export default function ArchivePage() {
                       </Td>
                       <Td className="font-mono text-xs">{row.slug}</Td>
                       <Td>
-                        <span title={new Date(row.deleted_at).toLocaleString()}>
+                        <span title={formatAbsolute(row.deleted_at, locale) ?? ''}>
                           {formatRelative(row.deleted_at)}
                         </span>
                       </Td>

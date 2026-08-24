@@ -2,7 +2,13 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DateTime, formatAbsolute, formatRelative, type RelativeLabels } from './DateTime';
+import {
+  DateTime,
+  formatAbsolute,
+  formatClock,
+  formatRelative,
+  type RelativeLabels,
+} from './DateTime';
 
 afterEach(cleanup);
 
@@ -52,6 +58,23 @@ describe('formatAbsolute', () => {
     expect(formatAbsolute('не дата', 'ru')).toBeNull();
     expect(formatAbsolute(Number.NaN, 'ru')).toBeNull();
     expect(formatAbsolute(new Date('нет'), 'ru')).toBeNull();
+  });
+});
+
+describe('formatClock', () => {
+  it('prints only the time of day, in the same 24-hour clock as the full format', () => {
+    expect(formatClock(MOMENT, 'ru')).toBe('15:23:45');
+    expect(formatClock(MOMENT, 'en-US')).toBe('15:23:45');
+  });
+
+  it('prints midnight as 00, never 24 or 12 AM', () => {
+    expect(formatClock(new Date(2026, 0, 5, 0, 5, 9), 'ru')).toBe('00:05:09');
+    expect(formatClock(new Date(2026, 0, 5, 0, 5, 9), 'en-US')).toBe('00:05:09');
+  });
+
+  it('returns null for an unparsable value', () => {
+    expect(formatClock('не дата', 'ru')).toBeNull();
+    expect(formatClock(Number.NaN, 'ru')).toBeNull();
   });
 });
 

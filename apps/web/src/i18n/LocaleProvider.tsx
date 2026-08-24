@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useMemo } from 'react';
-import { DEFAULT_LOCALE, type Locale } from './config';
+import { DEFAULT_LOCALE, INTL_LOCALE, type Locale } from './config';
 import { createTranslatorForLocale, type Translator } from './translate';
 
 interface LocaleContextValue {
@@ -48,4 +48,17 @@ export function useLocale(): Locale {
 /** The bound {@link Translator} for the active locale. */
 export function useTranslator(): Translator {
   return useLocaleContext().t;
+}
+
+/**
+ * The active locale as a BCP-47 tag for `Intl` — what {@link DateTime},
+ * {@link formatAbsolute} and `toLocaleString` want.
+ *
+ * Exists so no call site has to reach for a literal: a bare `toLocaleString()`
+ * renders in the *browser's* locale, so the same timestamp comes out
+ * `8/23/2026, 11:35:00 AM` on one machine and `23.08.2026, 11:35:00` on the
+ * next, and the panel's own language does not enter into it at all.
+ */
+export function useIntlLocale(): string {
+  return INTL_LOCALE[useLocaleContext().locale];
 }
