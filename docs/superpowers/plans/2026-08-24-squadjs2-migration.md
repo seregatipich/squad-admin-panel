@@ -113,7 +113,7 @@ docker run --rm --read-only --network host --user 1001:1001 \
 
 - [ ] **Step 1:** Переиспользовать существующий лог `docker/rnsquadjs/plugins/panelBridge/test/fixtures/` (`SquadGame.log`, при отсутствии — снять с канарейки как в Task 1 прежнего плана).
 - [ ] **Step 2:** Прогнать пин SquadJS2 по логу (запуск из Task 2, `logReaderMode: "tail"` на статичном файле; при необходимости — вспомогательный скрипт с подпиской на все 17 + `UPDATED_PLAYER_INFORMATION` событий, дампящий JSON-массив `{event, data}`), сохранить как `squadjs2-events.json`.
-- [ ] **Step 3:** Сгенерировать эталонные envelope из текущего RNSquadJS-маппера для тех же событий → `expected-envelopes.json` (нормализовав `event_id`/`ts`).
+- [ ] **Step 3:** Эталонные envelope получить **из RNSquadJS-контура на том же логе** (прогон существующего `eventMap.ts` по `SquadGame.log.parsed.json` либо повторный прогон RNSquadJS-пайплайна) → `expected-envelopes.json`. Кормить SquadJS2-сырьё в RNSquadJS-маппер нельзя — формы raw-событий разные. Суть шага — **ручное выравнивание** двух последовательностей по паре (тип, таймштамп) в парную фикстуру `{squadjs2Raw, expectedEnvelope}`; расхождения в составе событий (лишние/отсутствующие) фиксируются в пин-документе как факт о движке.
 - [ ] **Step 4: Commit** `test(squadjs2): golden-фикстура событий и эталонные envelope`.
 
 ---
@@ -214,7 +214,7 @@ docker run --rm --read-only --network host --user 1001:1001 \
 - [ ] **Step 1 (red):** Тесты:
   - `GET` (perm `server:view`): `{server_id, engine, mode, cutover, status}`; `engine` по `SQUADJS2_ENGINE_SET`; статус — dual-read (`sidecar:status:*`, фолбэк `rnsquadjs:status:*`); режим — cutover ⇒ `production`, иначе живой `:shadow`-ключ ⇒ `shadow`, иначе `legacy`.
   - `POST {engine, mode}` (perm `server:stop`, аудит `server.sidecar.switch`): смена движка правит engine-set, гасит контейнер старого движка, зовёт `directory_delete` старого каталога (устранение утечки plaintext-пароля), рендерит конфиг, запускает новый; `mode: 'production'` секвенируется как текущий cutover-POST (`SADD` → 202 → `CUTOVER_TICK_MS` → повторный `SISMEMBER` → запуск; `SREM` при провале); `mode: 'shadow'` для сервера в production — сначала запуск shadow-замены, `SREM` в `finally`. Существующий `GET/POST /servers/:id/rnsquadjs` продолжает работать (регресс-тест не меняется).
-- [ ] **Step 2 (green):** Реализация; регистрация в `registerRoutes()` (parity-тест регистрации уронит сборку, если забыть). Транзишен-lock не добавляется (наследуемый пробел, issue — Task 20).
+- [ ] **Step 2 (green):** Реализация; регистрация в `registerRoutes()` (parity-тест регистрации уронит сборку, если забыть). **Инвариант одного писателя:** после любого `POST /sidecar` у сервера остаётся ровно один сайдкар-контейнер — обработчик всегда гасит контейнеры *обоих* движков перед запуском целевого (для same-engine это прежний `containerRm`-relaunch), чтобы на `:shadow`-стриме никогда не оказалось двух писателей. Тест на это обязателен. Транзишен-lock не добавляется (наследуемый пробел, issue — Task 20).
 - [ ] **Step 3:** Изолированная БД: `eval "$(bash scripts/new-test-db.sh sidecar)"`; мутации в тестах скоупить по `steamId64` (гайд AGENTS.md) + прогнать `test-isolation.regression.test.ts`. **Commit** `feat(api): engine-neutral маршрут сайдкара с переключением движка`.
 
 ### Task 15: Жизненный цикл — install/start/stop/restart/delete
@@ -258,7 +258,7 @@ docker run --rm --read-only --network host --user 1001:1001 \
 **Files:** `docs/operations/squadjs2-rollout.md` (создать).
 
 - [ ] **Step 1:** Написать runbook по §6 спеки — матрица состояний, команды на каждый переход (`POST /sidecar`), какой контейнер/стрим проверять, критерии гейтов, строка отката для каждой фазы:
-  - Фаза 3 (канарейка, shadow): `POST /sidecar {engine:'squadjs2', mode:'shadow'}` — для rnsquadjs-shadow-сервера это **замена** shadow-писателя (один писатель на `:shadow`-стрим), для rnsquadjs-production — squadjs2-shadow работает рядом; соак 24 ч; `node scripts/rnsquadjs-shadow-diff.mjs <uuid>` — parity ≥ 99 %, ноль missing types, посчётный гейт `name_changed` зелёный.
+  - Фаза 3 (канарейка, shadow): `POST /sidecar {engine:'squadjs2', mode:'shadow'}` — для rnsquadjs-shadow-сервера это **замена** shadow-писателя: старый rnsquadjs-shadow-сайдкар обязан быть остановлен тем же POST-ом до запуска squadjs2 (инвариант одного писателя из Task 14 — проверить `docker ps` после перехода: ровно один `squadjs2-{id}`); для rnsquadjs-production — squadjs2-shadow работает рядом (разные стримы); соак 24 ч; `node scripts/rnsquadjs-shadow-diff.mjs <uuid>` — parity ≥ 99 %, ноль missing types, посчётный гейт `name_changed` зелёный.
   - Фаза 4 (канарейка, production): `POST /sidecar {engine:'squadjs2', mode:'production'}`; проверки: heartbeat `worker:heartbeat:sidecar:{id}` стабилен, `XLEN events:server:{id}` растёт, banned-name-on-rename срабатывает (ручной тест переименования), `worker-discord`/`worker-automation` без деградации; соак 24 ч. Откат: `POST /sidecar {engine:'rnsquadjs', mode:'production'}`.
   - Фаза 5 (флот): батчи по 5, каждый — shadow-соак → cutover → 24 ч зелёные.
 - [ ] **Step 2:** Прогнать канарейку по runbook, вписать фактические результаты (id прогонов, выводы diff-скрипта) в runbook-журнал.
