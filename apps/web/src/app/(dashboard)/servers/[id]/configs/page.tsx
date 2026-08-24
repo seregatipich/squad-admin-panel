@@ -14,6 +14,7 @@ import {
   Button,
   Card,
   CardHeader,
+  DateTime,
   EmptyState,
   InlineBanner,
   PageContainer,
@@ -27,6 +28,7 @@ import {
   TextInput,
   Th,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 import { managedSegmentLineRange } from './managed-segment';
 
 const POLL_MS = 8000;
@@ -1104,6 +1106,7 @@ function HistoryView(props: {
   onRestore: (vid: string) => void;
   restoring: string | null;
 }) {
+  const locale = useIntlLocale();
   if (props.diffFrom) {
     return (
       <div>
@@ -1165,9 +1168,7 @@ function HistoryView(props: {
         {props.versions.map((v) => (
           <TableRow key={v.id}>
             <Td className="whitespace-nowrap tabular-nums">
-              <time dateTime={v.created_at} suppressHydrationWarning>
-                {new Date(v.created_at).toLocaleString()}
-              </time>
+              <DateTime value={v.created_at} locale={locale} />
             </Td>
             <Td>{v.author_email ?? <span className="text-ink-3">—</span>}</Td>
             <Td>{v.message ?? <span className="text-ink-3">без сообщения</span>}</Td>
@@ -1195,6 +1196,7 @@ function HistoryView(props: {
 }
 
 function BlameView({ blame }: { blame: BlameResponse | null }) {
+  const locale = useIntlLocale();
   if (!blame) {
     return (
       <div className="p-4">
@@ -1236,7 +1238,7 @@ function BlameView({ blame }: { blame: BlameResponse | null }) {
               </Td>
               <Td className="whitespace-nowrap tabular-nums text-ink-3">
                 <time dateTime={l.created_at} suppressHydrationWarning>
-                  {new Date(l.created_at).toLocaleDateString()}
+                  {new Date(l.created_at).toLocaleDateString(locale)}
                 </time>
               </Td>
               <Td numeric className="text-ink-3">

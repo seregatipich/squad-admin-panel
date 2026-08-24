@@ -8,6 +8,7 @@ import {
   ButtonLink,
   Card,
   EmptyState,
+  formatClock,
   InlineBanner,
   PageContainer,
   PageHeader,
@@ -25,6 +26,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import { formatSeedProgress, type SeedingSummary } from './seeding-format';
 
@@ -87,6 +89,7 @@ const ACTION_LABEL = {
 } as const;
 
 export default function ServersPage() {
+  const locale = useIntlLocale();
   const [data, setData] = useState<ServersResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
@@ -414,7 +417,7 @@ export default function ServersPage() {
                     )}
                   </Td>
                   <Td className="text-xs text-ink-3">
-                    {row.last_poll_at ? new Date(row.last_poll_at).toLocaleTimeString() : '—'}
+                    {row.last_poll_at ? (formatClock(row.last_poll_at, locale) ?? '—') : '—'}
                   </Td>
                   <Td>
                     <ActionButtons

@@ -9,6 +9,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  formatAbsolute,
   InlineBanner,
   Menu,
   type MenuItem,
@@ -21,6 +22,7 @@ import {
   Td,
   Th,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 import type { LiveEvent } from '@/lib/live-bus';
 import {
   type MarkTone,
@@ -46,12 +48,13 @@ const MARK_STATE_LABEL: Record<MarkTone, string> = {
   neutral: 'низкая тяжесть',
 };
 
-function formatWhen(iso: string | null): string {
+function formatWhen(iso: string | null, locale: string): string {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString();
+  return formatAbsolute(iso, locale) ?? '—';
 }
 
 export function PlayerMarks({ playerId }: { playerId: string }) {
+  const locale = useIntlLocale();
   const [types, setTypes] = useState<MarkTypeOption[]>([]);
   const [marks, setMarks] = useState<PlayerMark[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -219,7 +222,8 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
                         </span>
                       </div>
                       <div className="text-2xs text-ink-3">
-                        поставил {mark.created_by_name ?? '—'} · {formatWhen(mark.created_at)}
+                        поставил {mark.created_by_name ?? '—'} ·{' '}
+                        {formatWhen(mark.created_at, locale)}
                       </div>
                       {mark.comment ? (
                         <div className="mt-0.5 text-xs text-ink-2">{mark.comment}</div>
@@ -270,7 +274,7 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
                       </Td>
                       <Td className="align-top text-ink-2">
                         {mark.created_by_name ?? '—'}
-                        <div className="text-ink-3">{formatWhen(mark.created_at)}</div>
+                        <div className="text-ink-3">{formatWhen(mark.created_at, locale)}</div>
                       </Td>
                       <Td className="align-top text-ink-2">
                         {mark.active ? (
@@ -280,7 +284,7 @@ export function PlayerMarks({ playerId }: { playerId: string }) {
                         ) : (
                           <>
                             {mark.cleared_by_name ?? '—'}
-                            <div className="text-ink-3">{formatWhen(mark.cleared_at)}</div>
+                            <div className="text-ink-3">{formatWhen(mark.cleared_at, locale)}</div>
                           </>
                         )}
                       </Td>

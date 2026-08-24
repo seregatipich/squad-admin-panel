@@ -7,6 +7,7 @@ import {
   Button,
   Card,
   Checkbox,
+  DateTime,
   EmptyState,
   InlineBanner,
   PageContainer,
@@ -25,6 +26,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 import { highestSeverityTone, type MarkTone, type MarkTypeMini } from '@/lib/marks';
 import { useLiveSubscription } from '@/lib/use-live-bus';
 import {
@@ -89,6 +91,7 @@ const ONLINE_SORT_DIRECTION: Record<Exclude<OnlineSort, 'none'>, SortDirection> 
 };
 
 export default function PlayersPage() {
+  const locale = useIntlLocale();
   const [data, setData] = useState<PlayersResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
@@ -389,13 +392,13 @@ export default function PlayersPage() {
                       {fmtDuration(p.total_time_played_seconds)}
                     </Td>
                     <Td className="text-xs text-ink-3">
-                      {new Date(p.first_seen_at).toLocaleString()}
+                      <DateTime value={p.first_seen_at} locale={locale} />
                     </Td>
                     <Td className="text-xs text-ink-3">
                       {online ? (
                         <span className="text-good">сейчас на сервере</span>
                       ) : (
-                        new Date(p.last_seen_at).toLocaleString()
+                        <DateTime value={p.last_seen_at} locale={locale} />
                       )}
                     </Td>
                   </TableRow>

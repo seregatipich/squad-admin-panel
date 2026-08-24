@@ -27,7 +27,7 @@ export { Button, ButtonLink, IconButton } from './Button';
 export type { CardPadding } from './Card';
 export { Card, CardBody, CardFooter, CardGrid, CardHeader } from './Card';
 export type { DateTimeMode, DateTimeProps, RelativeLabels } from './DateTime';
-export { DateTime, formatAbsolute, formatRelative } from './DateTime';
+export { DateTime, formatAbsolute, formatClock, formatRelative } from './DateTime';
 export type { EmptyStateVariant } from './EmptyState';
 export { EmptyState } from './EmptyState';
 export type {

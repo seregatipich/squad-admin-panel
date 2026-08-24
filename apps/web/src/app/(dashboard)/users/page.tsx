@@ -9,6 +9,7 @@ import {
   Badge,
   Button,
   Card,
+  DateTime,
   EmptyState,
   FieldRow,
   InlineBanner,
@@ -28,6 +29,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 import { buildRoleAssignPayload, formatRoleExpiryLabel } from '@/lib/role-expiry';
 
 interface UserRow {
@@ -63,6 +65,7 @@ interface PendingUnassign {
 }
 
 export default function UsersPage() {
+  const locale = useIntlLocale();
   const [users, setUsers] = useState<UserRow[] | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [roleOptions, setRoleOptions] = useState<RoleOption[] | null>(null);
@@ -257,7 +260,7 @@ export default function UsersPage() {
                     ) : null}
                   </Td>
                   <Td className="text-xs text-ink-3">
-                    {new Date(u.last_seen_at).toLocaleString()}
+                    <DateTime value={u.last_seen_at} locale={locale} />
                   </Td>
                   {canManage ? (
                     <Td align="right">

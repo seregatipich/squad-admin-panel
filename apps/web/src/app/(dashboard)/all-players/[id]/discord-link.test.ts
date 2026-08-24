@@ -86,17 +86,20 @@ describe('parseDiscordLink', () => {
 });
 
 describe('formatLinkedAt', () => {
-  it('renders an ISO timestamp as a local date string', () => {
-    expect(formatLinkedAt('2026-07-20T10:30:00.000Z')).toBe(
-      new Date('2026-07-20T10:30:00.000Z').toLocaleDateString(),
-    );
+  /* Полдень по локальному времени: дата не переползает на соседний день ни в
+     одном часовом поясе, в котором может запуститься тест. */
+  const NOON_20_JULY_2026 = new Date(2026, 6, 20, 12, 0, 0).toISOString();
+
+  it('renders the timestamp in the panel locale, not the browser one', () => {
+    expect(formatLinkedAt(NOON_20_JULY_2026, 'ru-RU')).toBe('20.07.2026');
+    expect(formatLinkedAt(NOON_20_JULY_2026, 'en-GB')).toBe('20/07/2026');
   });
 
   it('renders an em dash for a missing timestamp', () => {
-    expect(formatLinkedAt(null)).toBe('—');
+    expect(formatLinkedAt(null, 'ru-RU')).toBe('—');
   });
 
   it('renders an em dash for an unparsable timestamp', () => {
-    expect(formatLinkedAt('not-a-date')).toBe('—');
+    expect(formatLinkedAt('not-a-date', 'ru-RU')).toBe('—');
   });
 });

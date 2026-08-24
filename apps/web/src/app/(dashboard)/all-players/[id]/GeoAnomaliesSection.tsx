@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Badge, Button, InlineBanner, Skeleton, StatusBadge } from '@/components/ui';
+import { Badge, Button, DateTime, InlineBanner, Skeleton, StatusBadge } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 import { CHART_FRAME, CHART_GRID, CHART_SURFACE } from '@/lib/chart-tokens';
 
 interface CountrySwitch {
@@ -139,6 +140,7 @@ function WorldMap({ points }: { points: GeoPoint[] }) {
 }
 
 export function GeoAnomaliesSection({ playerId }: { playerId: string }) {
+  const locale = useIntlLocale();
   const [data, setData] = useState<GeoAnomalies | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -259,9 +261,11 @@ export function GeoAnomaliesSection({ playerId }: { playerId: string }) {
                       Алерт
                     </Badge>
                   ) : null}
-                  <span className="ml-auto text-xs text-ink-3">
-                    {new Date(entry.to_observed_at).toLocaleString()}
-                  </span>
+                  <DateTime
+                    value={entry.to_observed_at}
+                    locale={locale}
+                    className="ml-auto text-xs text-ink-3"
+                  />
                 </li>
               ))}
           </ul>

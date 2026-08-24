@@ -30,6 +30,19 @@ const ABSOLUTE_OPTIONS: Intl.DateTimeFormatOptions = {
   hourCycle: 'h23',
 };
 
+/*
+ * Только время суток — для колонок, где дата не несёт информации: журнал
+ * действий за сегодня, время последнего опроса сервера. Часовой цикл тот же,
+ * что и в полном формате, чтобы «00:05» в одной колонке не превращалось в
+ * «12:05 AM» в соседней.
+ */
+const CLOCK_OPTIONS: Intl.DateTimeFormatOptions = {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+};
+
 /* Порог «только что» совпадает с порогом свежести живых данных в
    `LiveIndicator` (10 с): в панели «сейчас» означает одно и то же везде. */
 const JUST_NOW_MS = 10_000;
@@ -72,6 +85,18 @@ function relativeFor(date: Date, now: number, labels: RelativeLabels): string {
 export function formatAbsolute(value: string | number | Date, locale: string): string | null {
   const date = toDate(value);
   return date === null ? null : absoluteFor(date, locale);
+}
+
+/**
+ * Время суток в едином формате панели — ЧЧ:ММ:СС.
+ *
+ * @param value момент времени: ISO-строка, миллисекунды эпохи или `Date`.
+ * @param locale локаль форматирования; обязательна — функция её не угадывает.
+ * @returns отформатированную строку либо `null`, если дата невалидна.
+ */
+export function formatClock(value: string | number | Date, locale: string): string | null {
+  const date = toDate(value);
+  return date === null ? null : new Intl.DateTimeFormat(locale, CLOCK_OPTIONS).format(date);
 }
 
 /**

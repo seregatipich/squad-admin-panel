@@ -35,3 +35,18 @@ export function isLocale(value: string | null | undefined): value is Locale {
 export function resolveLocale(value: string | null | undefined): Locale {
   return isLocale(value) ? value : DEFAULT_LOCALE;
 }
+
+/**
+ * BCP-47 tags used for `Intl` formatting of dates, times and numbers.
+ *
+ * Kept apart from {@link LOCALES} because a UI-dictionary key and a formatting
+ * locale are different things: `en` alone resolves to US conventions
+ * (`8/23/2026, 11:35:00 AM`), which mixes a 12-hour clock and a month-first
+ * order into a panel whose every other timestamp is day-first and 24-hour.
+ * `en-GB` keeps English month names where they appear while matching the
+ * Russian field order, so the two locales stay comparable at a glance.
+ */
+export const INTL_LOCALE: Record<Locale, string> = {
+  en: 'en-GB',
+  ru: 'ru-RU',
+};

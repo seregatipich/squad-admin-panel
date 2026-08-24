@@ -352,6 +352,43 @@ describe('DashboardPage', () => {
     expect(screen.getByText('server.restart')).toBeInTheDocument();
   });
 
+  /*
+   * Карточка серверов раньше стояла на `h-full` и вытягивалась под соседнюю
+   * карточку хоста: три строки таблицы и триста пикселей пустоты под ними.
+   */
+  it('does not stretch the servers card to the height of its neighbour', async () => {
+    stubFetch({});
+    await renderDashboard();
+
+    const card = screen.getByRole('heading', { name: /^Серверы/ }).closest('section');
+    expect(card).not.toBeNull();
+    expect(card?.classList.contains('h-full')).toBe(false);
+  });
+
+  /*
+   * Регрессия: карточка хоста крутила четыре скелетона «загружаем метрики»
+   * бесконечно, когда агент лежал, — данные не придут никогда, а панель
+   * обещала их вот-вот показать.
+   */
+  it('tells a downed bridge apart from metrics that are still loading', async () => {
+    stubFetch({ '/api/v1/host/bridge-status': { body: { connected: false } } });
+    await renderDashboard();
+
+    expect(screen.getByText('Метрики хоста недоступны')).toBeInTheDocument();
+    expect(screen.queryByText('Загружаем метрики хоста')).not.toBeInTheDocument();
+    expect(screen.getByText('Имя, ОС и аптайм читает агент — он не отвечает.')).toBeInTheDocument();
+    expect(screen.queryByText('Загружаем сведения о хосте…')).not.toBeInTheDocument();
+  });
+
+  it('keeps the loading skeletons while the bridge is up but metrics have not arrived', async () => {
+    stubFetch({});
+    await renderDashboard();
+
+    expect(screen.getByText('Загружаем метрики хоста')).toBeInTheDocument();
+    expect(screen.queryByText('Метрики хоста недоступны')).not.toBeInTheDocument();
+    expect(screen.getByText('Загружаем сведения о хосте…')).toBeInTheDocument();
+  });
+
   it('shows the initial empty state when the audit feed itself is empty', async () => {
     stubFetch({ '/api/v1/audit': { body: { items: [] } } });
     await renderDashboard();

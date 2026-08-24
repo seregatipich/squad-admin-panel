@@ -19,6 +19,7 @@ import {
   CardHeader,
   DateTime,
   EmptyState,
+  formatClock,
   InlineBanner,
   PageContainer,
   PageHeader,
@@ -43,6 +44,7 @@ import {
   Th,
   Toolbar,
 } from '@/components/ui';
+import { useIntlLocale } from '@/i18n/LocaleProvider';
 import { formatBytes, formatBytesPerSec, formatPercent, formatUptime, ratio } from '@/lib/format';
 import { computeHostHealth, type HealthLevel, thresholdTone } from '@/lib/host-health';
 import { AnalyticsPanel } from './analytics-panel';
@@ -518,7 +520,7 @@ function ServersTable({
   };
 
   return (
-    <Card as="section" padding="none" className="h-full">
+    <Card as="section" padding="none">
       <CardHeader
         title="Серверы"
         count={servers.length === 0 ? undefined : servers.length}
@@ -717,6 +719,7 @@ function ServerTableRow({ server, onAction }: { server: ServerRow; onAction: () 
 
 /** Относительное время, которое пересчитывается раз в пять секунд. */
 function RelativeTime({ ts }: { ts: string }) {
+  const locale = useIntlLocale();
   const [now, setNow] = useState<number>(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 5000);
@@ -725,7 +728,7 @@ function RelativeTime({ ts }: { ts: string }) {
   return (
     <DateTime
       value={ts}
-      locale="ru-RU"
+      locale={locale}
       mode="relative"
       now={now}
       relativeLabels={RELATIVE_LABELS}
@@ -751,9 +754,16 @@ function HostBlock({
   diskBreakdown: DiskBreakdown | null;
   onDiskClick: () => void;
 }) {
-  const isLoading = info === null || metrics === null;
   const [openMetric, setOpenMetric] = useState<MetricKey | null>(null);
   const bridgeConnected = bridge?.connected === true;
+  /*
+   * `bridge === null` — статус ещё не пришёл, `connected: false` — пришёл и
+   * говорит, что метрик не будет. Без этого различия карточка вечно крутила
+   * четыре скелетона: агент лежит, данные не придут никогда, а панель делает
+   * вид, что вот-вот загрузит.
+   */
+  const bridgeDown = bridge !== null && !bridgeConnected;
+  const noMetrics = info === null || metrics === null;
 
   return (
     <Card as="section" padding="none" className="flex h-full flex-col">
@@ -770,7 +780,11 @@ function HostBlock({
 
       <CardBody className="space-y-1 border-b border-line">
         <p className="truncate text-[13px] font-semibold text-ink">
-          {info?.hostname ?? <span className="font-normal text-ink-3">Нет данных</span>}
+          {info?.hostname ?? (
+            <span className="font-normal text-ink-3">
+              {bridgeDown ? 'Хост не опознан' : 'Нет данных'}
+            </span>
+          )}
         </p>
         <p className="truncate text-xs text-ink-3">
           {info ? (
@@ -778,6 +792,8 @@ function HostBlock({
               {info.os_name} {info.os_version} · {info.arch} · аптайм{' '}
               {formatUptime(info.uptime_seconds)}
             </>
+          ) : bridgeDown ? (
+            'Имя, ОС и аптайм читает агент — он не отвечает.'
           ) : (
             'Загружаем сведения о хосте…'
           )}
@@ -806,12 +822,20 @@ function HostBlock({
         </div>
       </CardBody>
 
-      <CardBody className="grid gap-4 sm:grid-cols-2">
-        {isLoading ? (
-          <>
-            <Skeleton variant="card" count={2} label="Загружаем метрики хоста" />
-            <Skeleton variant="card" count={2} />
-          </>
+      <CardBody className={noMetrics && bridgeDown ? undefined : 'grid gap-4 sm:grid-cols-2'}>
+        {noMetrics ? (
+          bridgeDown ? (
+            <InlineBanner
+              tone="warn"
+              title="Метрики хоста недоступны"
+              description="Агент panel-host-bridge не отвечает, поэтому CPU, память, диск и сеть панели неоткуда взять. Запустите агент на хосте — плитки заполнятся сами."
+            />
+          ) : (
+            <>
+              <Skeleton variant="card" count={2} label="Загружаем метрики хоста" />
+              <Skeleton variant="card" count={2} />
+            </>
+          )
         ) : (
           <>
             <CpuTile info={info} metrics={metrics} onOpen={() => setOpenMetric('cpu')} />
@@ -1080,6 +1104,7 @@ function RecentActivity({
 }
 
 function ActivityRow({ ev }: { ev: AuditRow }) {
+  const locale = useIntlLocale();
   const severity = severityFromStatus(ev.status_code);
   const time = new Date(ev.created_at);
   const targetLabel = ev.target_type
@@ -1090,7 +1115,7 @@ function ActivityRow({ ev }: { ev: AuditRow }) {
   return (
     <TableRow>
       <Td className="whitespace-nowrap text-xs tabular-nums text-ink-3">
-        {time.toLocaleTimeString()}
+        {formatClock(time, locale) ?? '—'}
       </Td>
       <Td className="text-xs text-ink-2">{ACTOR_KIND_LABEL[ev.actor_kind] ?? ev.actor_kind}</Td>
       <Td className="text-xs text-ink">{ev.action_type}</Td>
