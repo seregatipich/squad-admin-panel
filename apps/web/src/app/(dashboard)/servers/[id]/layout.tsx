@@ -2,7 +2,7 @@
 
 import { usePathname } from 'next/navigation';
 import { use, useEffect, useState } from 'react';
-import { PageHeader, SegmentedNav, type SegmentedNavItem } from '@/components/ui';
+import { PageContainer, PageHeader, SegmentedNav, type SegmentedNavItem } from '@/components/ui';
 
 /**
  * Подразделы сервера слева направо: сначала то, на что оператор смотрит во
@@ -90,8 +90,11 @@ export default function ServerSectionLayout({
     label: section.label,
   }));
 
+  // Ширину держит раздел, а не страница: заголовок и вкладки живут здесь, и
+  // если бы ширину выбирала подстраница, шапка раздела и его содержимое
+  // расходились бы по левому краю (§3).
   return (
-    <div className="space-y-6">
+    <PageContainer width="wide">
       <div className="space-y-2">
         <PageHeader
           title={name ?? FALLBACK_TITLE}
@@ -102,6 +105,6 @@ export default function ServerSectionLayout({
         <SegmentedNav items={items} pathname={pathname} ariaLabel="Разделы сервера" />
       </div>
       {children}
-    </div>
+    </PageContainer>
   );
 }

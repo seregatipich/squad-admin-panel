@@ -171,7 +171,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
   if (err) {
     return (
-      <PageContainer>
+      <PageContainer width="wide">
         <PageHeader {...BACK_TO_LIST} title="Карточка игрока" />
         <InlineBanner
           tone="crit"
@@ -189,7 +189,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
 
   if (!data) {
     return (
-      <PageContainer>
+      <PageContainer width="wide">
         <PageHeader {...BACK_TO_LIST} title="Карточка игрока" />
         <Skeleton variant="card" count={3} label="Загрузка карточки игрока" />
       </PageContainer>
@@ -215,7 +215,7 @@ export default function PlayerDetail({ params }: { params: Promise<{ id: string 
   }
 
   return (
-    <PageContainer>
+    <PageContainer width="wide">
       <PageHeader
         {...BACK_TO_LIST}
         title={
