@@ -126,6 +126,15 @@ volumes and workspaces are no longer discarded for you. Watch it: the previous
 persistent setup needed `prepare-runner`/`cleanup-runner` maintenance jobs for exactly
 this reason, and they were removed when CI moved to disposable VMs (#286).
 
+**The machine carries no C toolchain.** `go test -race` needs cgo and therefore a C
+compiler; the GitHub-hosted image had one, this runner does not. The `go` job runs
+inside `golang:1.25.13-bookworm` rather than on the bare machine, so the compiler
+comes with the image and nothing has to be installed on a host that also holds the
+production deploy key. The same container restores filesystem isolation for the bridge
+tests, which exercise absolute paths. Installing `build-essential` on the runner would
+work too, and would let the job run natively again — that is a host decision, not a
+repository one.
+
 ## Runner recovery runbook
 
 If **any** run — CI or deployment — stays `queued` and never starts, run [`scripts/check-runner-health.sh`](../../scripts/check-runner-health.sh) before waiting further — it queries repository runners and, best-effort, the organization-level endpoint, prints each runner's `status`/`busy`, and exits non-zero unless at least one reports `online`. Every workflow now depends on this result, CI included. The test suite [`scripts/test-check-runner-health.sh`](../../scripts/test-check-runner-health.sh) stubs `gh` and covers online, offline, disabled/zero-runner, and organization-endpoint-denied cases.
