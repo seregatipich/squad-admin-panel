@@ -22,7 +22,8 @@ Routes are registered in [`apps/api/src/server.ts`](../../../apps/api/src/server
 | GET | `/api/v1/auth/steam/callback` | Validates nonce cookie↔query match, single-use Redis nonce, `return_to` host-binding to `PANEL_PUBLIC_URL`, Steam `check_authentication`, and `openid.response_nonce` replay guard (`steam-response-nonce:{nonce}`, TTL 3600 s, NX). On success: upserts `players` row, runs `claimFirstOwner`, checks permissions; sets the `__Host-sid` cookie and redirects to `/` for a role with `panel_access`, or to `/me` with a `self_service`-scoped session otherwise. | none |
 | POST | `/api/v1/auth/logout` | Revoke current session, clear `__Host-sid` cookie. | session |
 | GET | `/api/v1/me` | Current player, permissions array, clearance. Returns `{ steam_id64, canonical_name, avatar_url, permissions, clearance }`. | session |
-| GET | `/api/v1/me/sessions` | List own active sessions; `current: true` on the request's session. | session |
+| GET | `/api/v1/me/names` | Own names: `{ canonical_name, persona_name, history: [{ name, first_seen_at, last_seen_at }] }`. History comes from `player_name_history`, newest `last_seen_at` first, capped at 50 rows. Deliberately **not** folded into `/api/v1/me`, which the panel's top nav fetches on every page. Panel-only (no `selfService`). | session |
+| GET | `/api/v1/me/sessions` | List own **unexpired** sessions (`expires_at > now()`); `current: true` on the request's session, which is always returned first, the rest ordered by `last_activity_at` descending. | session |
 | DELETE | `/api/v1/me/sessions/:id` | Revoke own session by id. 404 for foreign session. | session |
 | DELETE | `/api/v1/me/sessions` | Revoke all own sessions. | session |
 | GET | `/api/v1/me/tokens` | List own API tokens (id, name, scopes, created_at, last_used_at, revoked_at). Never returns plaintext or hash. | session |
