@@ -520,7 +520,7 @@ function ServersTable({
   };
 
   return (
-    <Card as="section" padding="none" className="h-full">
+    <Card as="section" padding="none">
       <CardHeader
         title="Серверы"
         count={servers.length === 0 ? undefined : servers.length}
@@ -719,6 +719,7 @@ function ServerTableRow({ server, onAction }: { server: ServerRow; onAction: () 
 
 /** Относительное время, которое пересчитывается раз в пять секунд. */
 function RelativeTime({ ts }: { ts: string }) {
+  const locale = useIntlLocale();
   const [now, setNow] = useState<number>(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 5000);
@@ -727,7 +728,7 @@ function RelativeTime({ ts }: { ts: string }) {
   return (
     <DateTime
       value={ts}
-      locale="ru-RU"
+      locale={locale}
       mode="relative"
       now={now}
       relativeLabels={RELATIVE_LABELS}
@@ -753,9 +754,16 @@ function HostBlock({
   diskBreakdown: DiskBreakdown | null;
   onDiskClick: () => void;
 }) {
-  const isLoading = info === null || metrics === null;
   const [openMetric, setOpenMetric] = useState<MetricKey | null>(null);
   const bridgeConnected = bridge?.connected === true;
+  /*
+   * `bridge === null` — статус ещё не пришёл, `connected: false` — пришёл и
+   * говорит, что метрик не будет. Без этого различия карточка вечно крутила
+   * четыре скелетона: агент лежит, данные не придут никогда, а панель делает
+   * вид, что вот-вот загрузит.
+   */
+  const bridgeDown = bridge !== null && !bridgeConnected;
+  const noMetrics = info === null || metrics === null;
 
   return (
     <Card as="section" padding="none" className="flex h-full flex-col">
@@ -808,12 +816,20 @@ function HostBlock({
         </div>
       </CardBody>
 
-      <CardBody className="grid gap-4 sm:grid-cols-2">
-        {isLoading ? (
-          <>
-            <Skeleton variant="card" count={2} label="Загружаем метрики хоста" />
-            <Skeleton variant="card" count={2} />
-          </>
+      <CardBody className={noMetrics && bridgeDown ? undefined : 'grid gap-4 sm:grid-cols-2'}>
+        {noMetrics ? (
+          bridgeDown ? (
+            <InlineBanner
+              tone="warn"
+              title="Метрики хоста недоступны"
+              description="Агент panel-host-bridge не отвечает, поэтому CPU, память, диск и сеть панели неоткуда взять. Запустите агент на хосте — плитки заполнятся сами."
+            />
+          ) : (
+            <>
+              <Skeleton variant="card" count={2} label="Загружаем метрики хоста" />
+              <Skeleton variant="card" count={2} />
+            </>
+          )
         ) : (
           <>
             <CpuTile info={info} metrics={metrics} onOpen={() => setOpenMetric('cpu')} />
