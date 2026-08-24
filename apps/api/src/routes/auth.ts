@@ -1,5 +1,5 @@
 import { economySettings, sessions as sessionsTable } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq, gt } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -68,18 +68,30 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       reply.code(401);
       return { error: 'unauthenticated' };
     }
+    // Панель называет этот список «активными сессиями» и обещает «устройства,
+    // с которых сейчас открыта панель», поэтому протухшие строки сюда не
+    // попадают: они уже никого не пускают, а кнопка «Завершить» напротив них
+    // предлагает завершить то, что завершилось само.
     const rows = await app.db
       .select()
       .from(sessionsTable)
-      .where(eq(sessionsTable.playerId, req.user.playerId));
-    return rows.map((s) => ({
-      id: s.id,
-      ip: s.ip,
-      user_agent: s.userAgent,
-      last_activity_at: s.lastActivityAt.toISOString(),
-      expires_at: s.expiresAt.toISOString(),
-      current: s.id === req.session?.id,
-    }));
+      .where(
+        and(eq(sessionsTable.playerId, req.user.playerId), gt(sessionsTable.expiresAt, new Date())),
+      )
+      .orderBy(desc(sessionsTable.lastActivityAt));
+    // Своё устройство — первым: оператор ищет в списке именно его, чтобы не
+    // завершить сессию, из которой смотрит. Сортировка стабильна, поэтому
+    // порядок по последней активности внутри остальных сохраняется.
+    return rows
+      .map((s) => ({
+        id: s.id,
+        ip: s.ip,
+        user_agent: s.userAgent,
+        last_activity_at: s.lastActivityAt.toISOString(),
+        expires_at: s.expiresAt.toISOString(),
+        current: s.id === req.session?.id,
+      }))
+      .sort((a, b) => Number(b.current) - Number(a.current));
   });
 
   fast.delete(

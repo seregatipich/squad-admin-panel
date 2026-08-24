@@ -204,6 +204,71 @@ describe('GET /api/v1/me/sessions', () => {
     expect(list.length).toBe(2);
     expect(list.filter((s) => s.current).length).toBe(1);
   });
+
+  it('omits sessions that have already expired', async () => {
+    // Регрессия: карточка называется «Активные сессии» и обещает «устройства, с
+    // которых сейчас открыта панель», а эндпоинт отдавал все строки игрока —
+    // включая протухшие, с живой кнопкой «Завершить» напротив каждой.
+    const { token, playerId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000402n);
+    const live = await createSession(h.db, h.redis, {
+      playerId,
+      ip: '10.0.0.7',
+      userAgent: 'live-ua',
+      ttlMs: 21600 * 1000,
+    });
+    const expired = await createSession(h.db, h.redis, {
+      playerId,
+      ip: '10.0.0.8',
+      userAgent: 'expired-ua',
+      ttlMs: -60 * 1000,
+    });
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/me/sessions',
+      cookies: { [SESSION_COOKIE]: token },
+    });
+    expect(res.statusCode).toBe(200);
+    const ids = (res.json() as Array<{ id: string }>).map((s) => s.id);
+    expect(ids).toContain(live.session.id);
+    expect(ids).not.toContain(expired.session.id);
+  });
+
+  it('puts the current session first and orders the rest by last activity', async () => {
+    const { token, playerId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000403n);
+    const stale = await createSession(h.db, h.redis, {
+      playerId,
+      ip: '10.0.0.9',
+      userAgent: 'stale-ua',
+      ttlMs: 21600 * 1000,
+    });
+    const recent = await createSession(h.db, h.redis, {
+      playerId,
+      ip: '10.0.0.10',
+      userAgent: 'recent-ua',
+      ttlMs: 21600 * 1000,
+    });
+    // Момент последней активности проставляется явно: строки создаются в одну
+    // миллисекунду, и порядок вставки ничего про активность не говорит.
+    await h.db
+      .update(sessionsTable)
+      .set({ lastActivityAt: new Date(Date.now() - 3 * 3_600_000) })
+      .where(eq(sessionsTable.id, stale.session.id));
+    await h.db
+      .update(sessionsTable)
+      .set({ lastActivityAt: new Date(Date.now() - 1 * 3_600_000) })
+      .where(eq(sessionsTable.id, recent.session.id));
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: '/api/v1/me/sessions',
+      cookies: { [SESSION_COOKIE]: token },
+    });
+    expect(res.statusCode).toBe(200);
+    const list = res.json() as Array<{ id: string; current: boolean }>;
+    expect(list[0]?.current).toBe(true);
+    expect(list.slice(1).map((s) => s.id)).toEqual([recent.session.id, stale.session.id]);
+  });
 });
 
 describe('DELETE /api/v1/me/sessions/:id', () => {
