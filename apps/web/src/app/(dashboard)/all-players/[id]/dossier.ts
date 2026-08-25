@@ -1,5 +1,3 @@
-import type { Locale } from '@/i18n/config';
-
 /**
  * DOSSIER-6 (#193): types, formatters and sorters behind the player card's
  * «Досье» block.
@@ -228,19 +226,15 @@ export function sortKits(rows: readonly DossierKit[]): DossierKit[] {
   return [...rows].sort((a, b) => b.seconds - a.seconds);
 }
 
-/** unlocalized -> the raw asset id. ru -> name_ru, falling back to name_en, then the asset id. en -> mirrored. */
-export function vehicleDisplayName(
-  row: {
-    vehicle_asset_id: string;
-    name_en: string | null;
-    name_ru: string | null;
-    unlocalized: boolean;
-  },
-  locale: Locale,
-): string {
+/** unlocalized -> the raw asset id; otherwise name_ru, falling back to name_en, then the asset id. */
+export function vehicleDisplayName(row: {
+  vehicle_asset_id: string;
+  name_en: string | null;
+  name_ru: string | null;
+  unlocalized: boolean;
+}): string {
   if (row.unlocalized) return row.vehicle_asset_id;
-  if (locale === 'ru') return row.name_ru ?? row.name_en ?? row.vehicle_asset_id;
-  return row.name_en ?? row.name_ru ?? row.vehicle_asset_id;
+  return row.name_ru ?? row.name_en ?? row.vehicle_asset_id;
 }
 
 /** unlocalized -> VEHICLE_UNCATALOGUED_HINT. Localised -> the raw asset id. */

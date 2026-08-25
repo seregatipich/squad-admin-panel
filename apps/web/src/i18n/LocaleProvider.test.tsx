@@ -2,6 +2,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { Locale } from './config';
 import { LocaleProvider, useIntlLocale, useLocale, useTranslator } from './LocaleProvider';
 
 function Probe() {
@@ -21,38 +22,32 @@ function Probe() {
 afterEach(cleanup);
 
 describe('LocaleProvider', () => {
-  it('exposes the provided locale and a bound translator', () => {
+  it('exposes the ru locale, a day-first Intl tag and a bound Russian translator', () => {
     render(
-      <LocaleProvider locale="en">
+      <LocaleProvider>
         <Probe />
       </LocaleProvider>,
     );
-    expect(screen.getByTestId('locale')).toHaveTextContent('en');
-    expect(screen.getByTestId('text')).toHaveTextContent('Sign in with Steam');
-  });
-
-  /* Регрессия: панель печатала даты в локали браузера, из-за чего в русском
-     интерфейсе соседствовали «8/23/2026, 11:35:00 AM» и «22.08.2026, 03:33». */
-  it('gives Intl a day-first tag for both locales, never the US default', () => {
-    render(
-      <LocaleProvider locale="ru">
-        <Probe />
-      </LocaleProvider>,
-    );
+    expect(screen.getByTestId('locale')).toHaveTextContent('ru');
     expect(screen.getByTestId('intl-locale')).toHaveTextContent('ru-RU');
     expect(screen.getByTestId('date')).toHaveTextContent('22.08.2026');
-    cleanup();
+    expect(screen.getByTestId('text')).toHaveTextContent('Войти через Steam');
+  });
 
+  it('ignores a locale prop and still resolves to ru', () => {
     render(
-      <LocaleProvider locale="en">
+      // Cast: `Locale` now has a single value ('ru'). This proves the prop is
+      // ignored, not that 'en' is still a real locale.
+      <LocaleProvider locale={'en' as Locale}>
         <Probe />
       </LocaleProvider>,
     );
-    expect(screen.getByTestId('intl-locale')).toHaveTextContent('en-GB');
-    expect(screen.getByTestId('date')).toHaveTextContent('22/08/2026');
+    expect(screen.getByTestId('locale')).toHaveTextContent('ru');
+    expect(screen.getByTestId('intl-locale')).toHaveTextContent('ru-RU');
+    expect(screen.getByTestId('text')).toHaveTextContent('Войти через Steam');
   });
 
-  it('falls back to the default (ru) locale outside a provider', () => {
+  it('falls back to the ru locale outside a provider', () => {
     render(<Probe />);
     expect(screen.getByTestId('locale')).toHaveTextContent('ru');
     expect(screen.getByTestId('intl-locale')).toHaveTextContent('ru-RU');

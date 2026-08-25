@@ -225,32 +225,27 @@ describe('sortKits', () => {
 });
 
 describe('vehicleDisplayName', () => {
-  it('picks name_ru for ru and name_en for en', () => {
+  it('picks name_ru, falling back to name_en, then the asset id', () => {
     const row = {
       vehicle_asset_id: 'BP_MRAP_C',
       name_en: 'MRAP',
       name_ru: 'МРАП',
       unlocalized: false,
     };
-    expect(vehicleDisplayName(row, 'ru')).toBe('МРАП');
-    expect(vehicleDisplayName(row, 'en')).toBe('MRAP');
-    expect(vehicleDisplayName({ ...row, name_ru: null }, 'ru')).toBe('MRAP');
-    expect(vehicleDisplayName({ ...row, name_en: null }, 'en')).toBe('МРАП');
-    expect(vehicleDisplayName({ ...row, name_en: null, name_ru: null }, 'ru')).toBe('BP_MRAP_C');
-    expect(vehicleDisplayName({ ...row, name_en: null, name_ru: null }, 'en')).toBe('BP_MRAP_C');
+    expect(vehicleDisplayName(row)).toBe('МРАП');
+    expect(vehicleDisplayName({ ...row, name_ru: null })).toBe('MRAP');
+    expect(vehicleDisplayName({ ...row, name_en: null })).toBe('МРАП');
+    expect(vehicleDisplayName({ ...row, name_en: null, name_ru: null })).toBe('BP_MRAP_C');
   });
 
   it('returns the raw asset id when unlocalized', () => {
     expect(
-      vehicleDisplayName(
-        {
-          vehicle_asset_id: 'BP_Unknown_X',
-          name_en: 'Ignored',
-          name_ru: 'Игнор',
-          unlocalized: true,
-        },
-        'ru',
-      ),
+      vehicleDisplayName({
+        vehicle_asset_id: 'BP_Unknown_X',
+        name_en: 'Ignored',
+        name_ru: 'Игнор',
+        unlocalized: true,
+      }),
     ).toBe('BP_Unknown_X');
   });
 });

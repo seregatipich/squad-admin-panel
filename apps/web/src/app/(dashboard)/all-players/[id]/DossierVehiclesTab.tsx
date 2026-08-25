@@ -1,7 +1,6 @@
 'use client';
 
 import { EmptyState, Table, TableBody, TableHead, TableRow, Td, Th } from '@/components/ui';
-import { useLocale } from '@/i18n/LocaleProvider';
 
 import {
   DAMAGE_UNAVAILABLE_HINT,
@@ -17,7 +16,7 @@ import {
  * DOSSIER-6 (#193) «Техника» tab: «На технике» from `vehicles` and
  * «Уничтожено» from `vehicle_kills`.
  *
- * A catalogued row shows the name for the active locale and carries the raw
+ * A catalogued row shows the vehicle's Russian display name and carries the raw
  * asset id in its `title`; an uncatalogued row shows the raw asset id and is
  * titled {@link VEHICLE_UNCATALOGUED_HINT}. Both aggregates are lifetime-only,
  * so the header states {@link LIFETIME_ONLY_NOTE}.
@@ -32,8 +31,6 @@ export function DossierVehiclesTab({
   vehicles: readonly DossierVehicle[];
   vehicleKills: readonly DossierVehicleKill[];
 }) {
-  const locale = useLocale();
-
   if (vehicles.length === 0 && vehicleKills.length === 0) {
     return (
       <EmptyState
@@ -62,7 +59,7 @@ export function DossierVehiclesTab({
               {vehicles.map((row) => (
                 <TableRow key={row.vehicle_asset_id}>
                   <Td>
-                    <span title={vehicleTitle(row)}>{vehicleDisplayName(row, locale)}</span>
+                    <span title={vehicleTitle(row)}>{vehicleDisplayName(row)}</span>
                   </Td>
                   <Td numeric>{row.kills}</Td>
                   <Td numeric>
@@ -100,10 +97,10 @@ export function DossierVehiclesTab({
                         unlocalized: row.unlocalized,
                       })}
                     >
-                      {vehicleDisplayName(
-                        { ...row, vehicle_asset_id: row.victim_vehicle_asset_id },
-                        locale,
-                      )}
+                      {vehicleDisplayName({
+                        ...row,
+                        vehicle_asset_id: row.victim_vehicle_asset_id,
+                      })}
                     </span>
                   </Td>
                   <Td className="font-mono">{row.weapon}</Td>

@@ -2,11 +2,6 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LocaleProvider } from '@/i18n/LocaleProvider';
-
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
-}));
 
 import LoginPage from './page';
 
@@ -26,48 +21,25 @@ afterEach(() => {
 
 describe('LoginPage', () => {
   it('renders the sign-in call to action in Russian', async () => {
-    render(
-      <LocaleProvider locale="ru">
-        <LoginPage />
-      </LocaleProvider>,
-    );
+    render(<LoginPage />);
     expect(screen.getByRole('heading', { name: 'Squad Admin Panel' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Войти через Steam' })).toBeInTheDocument();
     expect(screen.queryByText(/единственный способ входа/i)).not.toBeInTheDocument();
   });
 
-  it('renders the sign-in call to action in English', () => {
-    render(
-      <LocaleProvider locale="en">
-        <LoginPage />
-      </LocaleProvider>,
-    );
-    expect(screen.getByRole('link', { name: 'Sign in with Steam' })).toBeInTheDocument();
-    expect(screen.queryByText(/the only way to sign in/i)).not.toBeInTheDocument();
-    expect(screen.queryByText('Войти через Steam')).not.toBeInTheDocument();
-  });
-
   it('localizes the auth_failed error banner', async () => {
     window.history.replaceState({}, '', '/login?error=auth_failed');
-    render(
-      <LocaleProvider locale="en">
-        <LoginPage />
-      </LocaleProvider>,
-    );
+    render(<LoginPage />);
     await waitFor(() =>
       expect(
-        screen.getByText('Could not verify your Steam sign-in. Please try again.'),
+        screen.getByText('Не удалось проверить вход через Steam. Попробуйте ещё раз.'),
       ).toBeInTheDocument(),
     );
   });
 
   it('interpolates the Steam ID into the not_authorized error', async () => {
     window.history.replaceState({}, '', '/login?error=not_authorized&steam_id64=76561198000000001');
-    render(
-      <LocaleProvider locale="ru">
-        <LoginPage />
-      </LocaleProvider>,
-    );
+    render(<LoginPage />);
     await waitFor(() =>
       expect(
         screen.getByText(
@@ -75,5 +47,13 @@ describe('LoginPage', () => {
         ),
       ).toBeInTheDocument(),
     );
+  });
+
+  it('does not render a language selector', () => {
+    render(<LoginPage />);
+    // LocaleSwitch (removed) rendered a <fieldset> — an implicit role="group" —
+    // as its outer element, and nothing else on this page uses that role, so
+    // its absence is a reliable guard against the selector coming back.
+    expect(screen.queryByRole('group')).not.toBeInTheDocument();
   });
 });

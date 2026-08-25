@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { LocaleSwitch } from '@/components/LocaleSwitch';
 import { logout } from '@/components/LogoutButton';
 import { SearchIcon } from '@/components/ui/icons';
 import { Menu, type MenuItem } from '@/components/ui/Menu';
@@ -385,11 +384,6 @@ export function TopNav({
               ⌘K
             </kbd>
           </button>
-
-          {/* The language toggle is a control, not a command, so it lives in the
-              bar rather than inside the user menu, whose children have to be
-              menu items for the menu to stay a menu. */}
-          <LocaleSwitch />
 
           <UserMenu displayName={displayName} t={t} />
         </div>

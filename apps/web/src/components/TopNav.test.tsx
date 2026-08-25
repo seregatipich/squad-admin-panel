@@ -202,9 +202,6 @@ describe('TopNav', () => {
       '/settings/tokens',
     );
     expect(screen.getByRole('menuitem', { name: 'Выйти' })).toBeInTheDocument();
-    // Переключатель языка — элемент управления, а не команда меню, поэтому он
-    // живёт в самой полосе и доступен без открытия меню.
-    expect(screen.getByRole('group', { name: 'Язык' })).toBeInTheDocument();
   });
 
   it('walks an open menu with the keyboard and returns focus on Escape', () => {
@@ -237,18 +234,9 @@ describe('TopNav', () => {
     expect(screen.getByRole('menu')).toBeInTheDocument();
   });
 
-  it('renders the English labels under the English locale', () => {
-    render(
-      <LocaleProvider locale="en">
-        <TopNav permissions={ALL_PERMISSIONS} displayName="Alice" groups={NAV_GROUPS} />
-      </LocaleProvider>,
-    );
-    expect(screen.getByRole('link', { name: 'Dashboard' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Players/ }));
-    expect(screen.getByRole('menuitem', { name: /All players/ })).toHaveAttribute(
-      'href',
-      '/all-players',
-    );
+  it('no longer renders a locale switcher in the bar', () => {
+    renderNav();
+    expect(screen.queryByRole('group', { name: 'Язык' })).not.toBeInTheDocument();
   });
 
   it('keeps the overflow trigger out of the way while every entry fits', () => {

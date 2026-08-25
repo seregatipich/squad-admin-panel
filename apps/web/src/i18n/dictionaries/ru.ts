@@ -133,10 +133,6 @@ export const ru = {
   'connection.retry': 'Повторить',
   'connection.dismiss': 'Скрыть',
 
-  'localeSwitch.label': 'Язык',
-  'localeSwitch.en': 'English',
-  'localeSwitch.ru': 'Русский',
-
   'errors.invalid_period': 'Некорректный период.',
   'errors.rate_limited': 'Слишком много запросов. Попробуйте позже.',
   'errors.internal_error': 'Внутренняя ошибка сервера.',

@@ -61,16 +61,4 @@ describe('ConnectionBanner', () => {
     expect(screen.getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Скрыть' })).toBeInTheDocument();
   });
-
-  it('shows the unavailable toast in English', async () => {
-    render(
-      <LocaleProvider locale="en">
-        <ConnectionBanner />
-      </LocaleProvider>,
-    );
-    await driveToUnreachable();
-    expect(screen.getByText('The panel is temporarily unavailable.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
-  });
 });

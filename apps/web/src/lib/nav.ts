@@ -22,7 +22,7 @@ export type NavLabelKey = Extract<TranslationKey, `nav.${string}`>;
  *
  * `label` is the Russian source label (also the CommandPalette search/display
  * text). `labelKey`, when set, is the i18n key the localized bar renders
- * through the active-locale translator; it defaults to matching `label` in the
+ * through the translator; it defaults to matching `label` in the
  * Russian dictionary (guarded by a test in `nav.test.ts`).
  */
 export interface NavItem {
