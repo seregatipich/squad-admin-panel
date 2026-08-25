@@ -82,7 +82,7 @@ docker login ghcr.io -u <user> --password-stdin
 docker manifest inspect ghcr.io/breaking-squad/squadjs:master | head -5
 ```
 
-- [ ] **Step 2: Выбрать и зафиксировать digest.** Взять digest последнего verified-запуска `Build Docker image` в `breaking-squad/squadjs2` (artifact «происхождение digest»). Записать в `ai_docs/squadjs2-pin-2026-08-24.md`: digest, commit SHA, дата, ссылки на run; раздел «Чек-лист совместимости при бампе» (события и поля log-parser'а, сигнатуры RCON, формат конфига, версия Node, plugins-автообнаружение).
+- [ ] **Step 2: Зафиксировать digest.** Стартовый пин определён в §9 спеки: `sha256:7cfc1535f54fdda21ad73d147a054e7d7b77aa516ead139149bc4857c8a72639` (commit `d6c0e698`, run 32641097402 от 2026-08-23, джоба `docker` — success). Если к моменту исполнения есть более свежий verified-выпуск (`gh run list --repo breaking-squad/squadjs2 --workflow build-docker-image.yml` — последний run с успешной джобой `docker`; digest — в блоке `Digest` её лога) — взять его. Записать в `ai_docs/squadjs2-pin-2026-08-24.md`: digest, commit SHA, дата, ссылка на run; раздел «Чек-лист совместимости при бампе» (события и поля log-parser'а, сигнатуры RCON, формат конфига, версия Node, plugins-автообнаружение).
 - [ ] **Step 3: Compose-сервис.** В оба compose-файла добавить сервис `squadjs2-image` под `profiles: ['images']` (context `.`, dockerfile `docker/squadjs2.Dockerfile`, tag `squad-panel/squadjs2:latest`, `command: ['/bin/true']`) — по образцу `rnsquadjs-image`.
 - [ ] **Step 4: CI-сборка.** В `ci.yml` добавить шаг `docker build -f docker/squadjs2.Dockerfile -t squad-panel/squadjs2:ci .` с предварительным `docker/login-action` (SHA-пин! — `scripts/test-workflow-pins.sh` уронит CI за тег) на `GITHUB_TOKEN`/`GHCR_PULL_TOKEN`. Шаг добавить, но пометить `if: false` до готовности Dockerfile в Task 10, затем включить там же.
 - [ ] **Step 5: Commit** `chore(squadjs2): пин образа, GHCR-доступ, каркас сборки`.
@@ -257,7 +257,7 @@ docker run --rm --read-only --network host --user 1001:1001 \
 
 **Files:** `docs/operations/squadjs2-rollout.md` (создать).
 
-- [ ] **Step 1:** Написать runbook по §6 спеки — матрица состояний, команды на каждый переход (`POST /sidecar`), какой контейнер/стрим проверять, критерии гейтов, строка отката для каждой фазы:
+- [ ] **Step 1:** Написать runbook по §6 спеки — матрица состояний, команды на каждый переход (`POST /sidecar`), какой контейнер/стрим проверять, критерии гейтов, строка отката для каждой фазы. Выбор канарейки — правило из §9 спеки: `servers.is_canary = true` → иначе сервер в rnsquadjs-shadow → иначе наименьший онлайн за 7 дней; соак 24 ч, батч 5 — зафиксировано там же:
   - Фаза 3 (канарейка, shadow): `POST /sidecar {engine:'squadjs2', mode:'shadow'}` — для rnsquadjs-shadow-сервера это **замена** shadow-писателя: старый rnsquadjs-shadow-сайдкар обязан быть остановлен тем же POST-ом до запуска squadjs2 (инвариант одного писателя из Task 14 — проверить `docker ps` после перехода: ровно один `squadjs2-{id}`); для rnsquadjs-production — squadjs2-shadow работает рядом (разные стримы); соак 24 ч; `node scripts/rnsquadjs-shadow-diff.mjs <uuid>` — parity ≥ 99 %, ноль missing types, посчётный гейт `name_changed` зелёный.
   - Фаза 4 (канарейка, production): `POST /sidecar {engine:'squadjs2', mode:'production'}`; проверки: heartbeat `worker:heartbeat:sidecar:{id}` стабилен, `XLEN events:server:{id}` растёт, banned-name-on-rename срабатывает (ручной тест переименования), `worker-discord`/`worker-automation` без деградации; соак 24 ч. Откат: `POST /sidecar {engine:'rnsquadjs', mode:'production'}`.
   - Фаза 5 (флот): батчи по 5, каждый — shadow-соак → cutover → 24 ч зелёные.
@@ -274,7 +274,7 @@ docker run --rm --read-only --network host --user 1001:1001 \
 
 **Files:** раздел «Удаляются» выше + доки.
 
-- [ ] **Step 1:** Снять фолбэк-чтение `rnsquadjs:status:*` в `/sidecar`-GET; удалить маршруты-алиасы `/servers/:id/rnsquadjs` (или, при живых внешних потребителях, — редирект-заглушку 410 с указанием замены; решает оператор).
+- [ ] **Step 1:** Снять фолбэк-чтение `rnsquadjs:status:*` в `/sidecar`-GET; судьба алиасов `/servers/:id/rnsquadjs` — по правилу §9 спеки: нет обращений в аудите/логах API за 14 дней — удалить, есть — 410-заглушка с указанием замены на один релизный цикл.
 - [ ] **Step 2:** Удалить файлы и цепочки из раздела «Удаляются»; `pnpm-workspace.yaml`, `test:cov`-фильтр, compose-файлы, `ci.yml` — синхронно. `bash scripts/test-cov-complete.sh` зелёный.
 - [ ] **Step 3:** Веб: удалить мёртвую карточку «RNSquadJS» из `DossierSkillTab` + `RNSQUADJS_UNAVAILABLE` (+ тесты).
 - [ ] **Step 4:** Доки: ADR-дополнение в `decisions.md` (движок сайдкара — SquadJS2; ключи `sidecar:*`; RNSquadJS удалён); `map.md`, `api.md`, `data-model.md`, `testing.md`; пометить `ai_docs/rnsquadjs-migration-pin-2026-04-24.md` как superseded (ссылка на новый пин-документ).
