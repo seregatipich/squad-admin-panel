@@ -1,5 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { DossierSection } from '@/components/DossierSection';
+import { RecentMatchesSection } from '@/components/RecentMatchesSection';
 import {
   AlertDialog,
   Badge,
@@ -33,6 +35,7 @@ import { isCurrentSessionRevoked, type SessionRevokedEvent } from './sessionEven
 const POLL_MS = 30_000;
 
 interface Me {
+  player_id: string;
   steam_id64: string | null;
   permissions: string[];
 }
@@ -178,6 +181,16 @@ export default function AccountSettings() {
             }
           />
         </GroupedList>
+      )}
+
+      {/* Своя игровая статистика — те же блоки, что и на карточке игрока: маршрут
+          досье пропускает владельца сессии без `combat:view`, а «Последние
+          матчи» и так открыты любому, у кого есть доступ в панель. */}
+      {me === null ? null : (
+        <>
+          <DossierSection playerId={me.player_id} title="Игровая статистика" />
+          <RecentMatchesSection playerId={me.player_id} />
+        </>
       )}
 
       <Card padding="none">
