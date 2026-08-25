@@ -30,6 +30,7 @@ const FULL: DossierResponse = {
     teamkills: 4,
     revives: 37,
     damage_dealt: null,
+    online_seconds: 1_414_980,
     matches: 90,
     wins: 50,
     losses: 30,
@@ -105,6 +106,7 @@ const EMPTY: DossierResponse = {
     teamkills: 0,
     revives: 0,
     damage_dealt: null,
+    online_seconds: 0,
     matches: 0,
     wins: 0,
     losses: 0,
@@ -286,6 +288,7 @@ describe('DossierSection', () => {
         'Поднятия',
         'Тимкиллы',
         'Урон',
+        'Онлайн',
       ]) {
         expect(screen.getByText(label)).toBeInTheDocument();
       }
@@ -293,6 +296,7 @@ describe('DossierSection', () => {
       expect(screen.getByText('63%')).toBeInTheDocument();
       expect(screen.getByText('90')).toBeInTheDocument();
       expect(screen.getByText('1200')).toBeInTheDocument();
+      expect(screen.getByText('393ч 3м')).toBeInTheDocument();
 
       // Причина прочерка написана словами под значением, а не спрятана в подсказке.
       const damageTile = screen.getByText('Урон').closest('div');

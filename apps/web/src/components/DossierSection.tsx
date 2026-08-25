@@ -36,18 +36,28 @@ const TABS: readonly { key: DossierTab; label: string }[] = [
 ];
 
 /**
- * DOSSIER-6 (#193) «Досье» block on the player card.
+ * DOSSIER-6 (#193) «Досье» block, shared by the player card and the operator's
+ * own «Аккаунт» page.
  *
  * Issues exactly one `GET /api/v1/players/:playerId/dossier` per (server,
  * period) selection and renders all four tabs from that single payload —
- * switching tabs never refetches. The route is gated on `combat:view`, which
- * `GET /api/v1/me` does not report, so the block self-hides on 401/403 rather
- * than gating on a permission flag. The server selector drives the request and
- * appears only on the tabs whose aggregates carry a server dimension.
+ * switching tabs never refetches. Somebody else's dossier is gated on
+ * `combat:view`, which `GET /api/v1/me` does not report, so the block
+ * self-hides on 401/403 rather than gating on a permission flag; on one's own
+ * numbers the route lets the session through regardless, and that branch never
+ * fires. The server selector drives the request and appears only on the tabs
+ * whose aggregates carry a server dimension.
  *
- * @param playerId UUID of the player whose card is open.
+ * @param playerId UUID of the player whose numbers to show.
+ * @param title Заголовок карточки; на своей странице это не «досье».
  */
-export function DossierSection({ playerId }: { playerId: string }) {
+export function DossierSection({
+  playerId,
+  title = 'Досье',
+}: {
+  playerId: string;
+  title?: string;
+}) {
   const [data, setData] = useState<DossierResponse | null>(null);
   const [servers, setServers] = useState<ServerOption[]>([]);
   const [serverId, setServerId] = useState<string>('all');
@@ -120,7 +130,7 @@ export function DossierSection({ playerId }: { playerId: string }) {
   return (
     <Card as="section" padding="none">
       <CardHeader
-        title="Досье"
+        title={title}
         actions={
           lifetimeOnly ? (
             <span className="text-xs text-ink-3">{LIFETIME_ONLY_NOTE}</span>

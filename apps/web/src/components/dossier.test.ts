@@ -10,7 +10,7 @@ import {
   type DossierWeapon,
   fillTrendMonths,
   formatDamage,
-  formatKitTime,
+  formatPlayTime,
   formatWinrate,
   hasAnyDamage,
   LIFETIME_ONLY_NOTE,
@@ -83,15 +83,15 @@ describe('hasAnyDamage', () => {
   });
 });
 
-describe('formatKitTime', () => {
+describe('formatPlayTime', () => {
   it('always renders Nч Nм and guards invalid input', () => {
-    expect(formatKitTime(3661)).toBe('1ч 1м');
-    expect(formatKitTime(125)).toBe('0ч 2м');
-    expect(formatKitTime(0)).toBe('0ч 0м');
-    expect(formatKitTime(7200)).toBe('2ч 0м');
-    expect(formatKitTime(-5)).toBe('—');
-    expect(formatKitTime(Number.POSITIVE_INFINITY)).toBe('—');
-    expect(formatKitTime(Number.NaN)).toBe('—');
+    expect(formatPlayTime(3661)).toBe('1ч 1м');
+    expect(formatPlayTime(125)).toBe('0ч 2м');
+    expect(formatPlayTime(0)).toBe('0ч 0м');
+    expect(formatPlayTime(7200)).toBe('2ч 0м');
+    expect(formatPlayTime(-5)).toBe('—');
+    expect(formatPlayTime(Number.POSITIVE_INFINITY)).toBe('—');
+    expect(formatPlayTime(Number.NaN)).toBe('—');
   });
 });
 
