@@ -73,8 +73,8 @@ plumbing and keeps the dictionary a single-owner file.
 
 Every timestamp goes through `DateTime`, `formatAbsolute` or `formatClock`, and
 each of them **requires** an explicit BCP-47 locale — call sites read it from
-`useIntlLocale()` (`src/i18n/LocaleProvider.tsx`), which maps the UI locale to
-the tag `Intl` wants (`ru` → `ru-RU`, `en` → `en-GB`).
+`useIntlLocale()` (`src/i18n/LocaleProvider.tsx`), which maps the (single) UI
+locale to the tag `Intl` wants (`ru` → `ru-RU`).
 
 A bare `toLocaleString()` / `toLocaleDateString()` / `toLocaleTimeString()`
 formats in the *viewer's browser* locale, which has nothing to do with the
@@ -102,7 +102,7 @@ if a locale-less call comes back.
 | `RoleColorDot.tsx` | Coloured dot used wherever a role's colour needs to be shown inline (e.g. role lists). Accepts `color: RoleColor` from `@squad/shared-config/role-colors` and an optional `size` (`'sm'`/`'md'`). Purely presentational — no click handlers. |
 | `RoleExpiryDateField.tsx` | Shared role-expiry calendar trigger for `/users` and the player card. Displays a locale-independent `ДД/ММ/ГГГГ`, opens the native date picker from the full button, supports an explicit reset to a permanent role, and explains the inclusive UTC-day boundary. |
 | `RoleEditor.tsx` | Shared editor used by `/roles/new` and `/roles/[id]`. Loads permission registry from `GET /api/v1/permissions` on mount. Features: name field, 16-color swatch picker, description textarea, permission search bar, permissions grouped by 16 categories in 3-column responsive grid with ⚠️ for `dangerous` and "(в разработке)" for `unimplemented`. Owner read-only mode: amber banner + all inputs disabled. |
-| `TopNav.tsx` | Client-side global navigation: a sticky 46 px top bar over `NAV_GROUPS`. Each group is one bar entry — «Дашборд» is a direct link, the rest open dropdowns, and a group whose items carry `children` (Инструменты, Настройки) opens a mega-menu anchored to the bar rather than to its trigger. Menus open on click and close on Escape, an outside click, or navigation. Filters items by `permission` / `requiresEconomy`, drops an entry whose items are all gated out, marks the owning entry active via `activeNavGroupLabel()`, and carries the live pending-reports badge — on the «Жалобы» item, or on the closed «Инструменты» trigger. Also hosts the search field (opens the command palette), the user menu, `LogoutButton` and `LocaleSwitch`. Mounted from `(dashboard)/layout.tsx` with `permissions` + `displayName` + `groups` props derived server-side from `requireSession()`. |
+| `TopNav.tsx` | Client-side global navigation: a sticky 46 px top bar over `NAV_GROUPS`. Each group is one bar entry — «Дашборд» is a direct link, the rest open dropdowns, and a group whose items carry `children` (Инструменты, Настройки) opens a mega-menu anchored to the bar rather than to its trigger. Menus open on click and close on Escape, an outside click, or navigation. Filters items by `permission` / `requiresEconomy`, drops an entry whose items are all gated out, marks the owning entry active via `activeNavGroupLabel()`, and carries the live pending-reports badge — on the «Жалобы» item, or on the closed «Инструменты» trigger. Also hosts the search field (opens the command palette), the user menu and `LogoutButton`. Mounted from `(dashboard)/layout.tsx` with `permissions` + `displayName` + `groups` props derived server-side from `requireSession()`. |
 | `ServerBar.tsx` | Contextual server switcher rendered under `TopNav` on `/dashboard`, `/servers`, `/statistics`, `/matches` and `/chat` only. One chip per server from `GET /api/v1/servers` — status dot, display name, and the RCON poller's last player count (omitted entirely when the server has never been polled, so it never reads as "0 online"). Refreshes on `server.status` / `server.deleted` / `rcon.status` live-bus events. Renders nothing when the panel has no servers or the request fails. |
 
 ## Lib utilities

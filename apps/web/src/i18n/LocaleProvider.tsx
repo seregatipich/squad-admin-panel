@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useMemo } from 'react';
+import { createContext, useContext } from 'react';
 import { DEFAULT_LOCALE, INTL_LOCALE, type Locale } from './config';
 import { createTranslatorForLocale, type Translator } from './translate';
 
@@ -11,23 +11,19 @@ interface LocaleContextValue {
 
 const LocaleContext = createContext<LocaleContextValue | null>(null);
 
+const RU_VALUE: LocaleContextValue = {
+  locale: DEFAULT_LOCALE,
+  t: createTranslatorForLocale(DEFAULT_LOCALE),
+};
+
 /**
- * Provides the active {@link Locale} and a bound {@link Translator} to client
- * components. Fed by the root layout, which resolves the locale on the server
- * from the `locale` cookie so the first render already matches `<html lang>`.
+ * Provides the (Russian-only) {@link Locale} and its bound {@link Translator}
+ * to client components. The panel no longer offers a language switch, so the
+ * `locale` prop is accepted for source compatibility with existing call sites
+ * but is otherwise ignored — every render resolves to {@link DEFAULT_LOCALE}.
  */
-export function LocaleProvider({
-  locale,
-  children,
-}: {
-  locale: Locale;
-  children: React.ReactNode;
-}) {
-  const value = useMemo<LocaleContextValue>(
-    () => ({ locale, t: createTranslatorForLocale(locale) }),
-    [locale],
-  );
-  return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;
+export function LocaleProvider({ children }: { locale?: Locale; children: React.ReactNode }) {
+  return <LocaleContext.Provider value={RU_VALUE}>{children}</LocaleContext.Provider>;
 }
 
 function useLocaleContext(): LocaleContextValue {
@@ -35,12 +31,12 @@ function useLocaleContext(): LocaleContextValue {
   if (ctx === null) {
     // Fall back to the default locale rather than throwing: a stray component
     // rendered outside the provider still shows readable (default-locale) text.
-    return { locale: DEFAULT_LOCALE, t: createTranslatorForLocale(DEFAULT_LOCALE) };
+    return RU_VALUE;
   }
   return ctx;
 }
 
-/** The active UI locale. */
+/** The active UI locale (always {@link DEFAULT_LOCALE}). */
 export function useLocale(): Locale {
   return useLocaleContext().locale;
 }

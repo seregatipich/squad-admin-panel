@@ -6,22 +6,19 @@ import '@fontsource-variable/jetbrains-mono';
 import '../styles/globals.css';
 import type { Metadata } from 'next';
 import { LocaleProvider } from '@/i18n/LocaleProvider';
-import { getLocale, getTranslator } from '@/i18n/server';
 
-export async function generateMetadata(): Promise<Metadata> {
-  const t = await getTranslator();
+export function generateMetadata(): Metadata {
   return {
-    title: t('app.title'),
-    description: t('app.description'),
+    title: 'Squad Admin Panel',
+    description: 'Опенсорсная self-hosted админ-панель для выделенных серверов Squad',
   };
 }
 
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const locale = await getLocale();
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang={locale}>
+    <html lang="ru">
       <body>
-        <LocaleProvider locale={locale}>{children}</LocaleProvider>
+        <LocaleProvider>{children}</LocaleProvider>
       </body>
     </html>
   );

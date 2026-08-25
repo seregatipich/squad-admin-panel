@@ -1,5 +1,4 @@
 import type { Locale } from './config';
-import { en } from './dictionaries/en';
 import { ru, type TranslationKey } from './dictionaries/ru';
 
 export type { TranslationKey } from './dictionaries/ru';
@@ -16,7 +15,7 @@ export type TranslationParams = Record<string, string | number>;
  */
 export type Translator = (key: TranslationKey, params?: TranslationParams) => string;
 
-const DICTIONARIES: Record<Locale, Dictionary> = { en, ru };
+const DICTIONARIES: Record<Locale, Dictionary> = { ru };
 
 /** Returns the dictionary for `locale`. */
 export function getDictionary(locale: Locale): Dictionary {

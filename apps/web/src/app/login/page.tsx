@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { LocaleSwitch } from '@/components/LocaleSwitch';
 import { Card, InlineBanner, PageContainer, PageHeader } from '@/components/ui';
 import { useTranslator } from '@/i18n/LocaleProvider';
 
@@ -34,10 +33,6 @@ export default function LoginPage() {
   return (
     <main className="min-h-screen bg-bg px-6 py-16 text-ink">
       <PageContainer width="form">
-        <div className="flex justify-end">
-          <LocaleSwitch />
-        </div>
-
         <PageHeader title={t('login.heading')} />
 
         {/* Не удалось проверить вход — состояние обратимое: можно повторить.
