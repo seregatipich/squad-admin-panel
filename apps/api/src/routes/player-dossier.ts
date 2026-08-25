@@ -38,11 +38,20 @@ function toIso(value: Date | string | null): string | null {
   return (value instanceof Date ? value : new Date(value)).toISOString();
 }
 
-function combatGuard(req: FastifyRequest, reply: FastifyReply): { error: string } | null {
+function combatGuard(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  subjectPlayerId: string,
+): { error: string } | null {
   if (!req.user) {
     reply.code(401);
     return { error: 'unauthenticated' };
   }
+  // Своё досье игрок открывает без `combat:view`: право закрывает чужие
+  // боевые цифры, а не собственные, и на этом стоит блок статистики на
+  // странице «Аккаунт». Сессию всё равно нужно иметь панельную — маршрут
+  // не помечен `selfService`, и self-service-сессия сюда не доходит.
+  if (req.user.playerId === subjectPlayerId) return null;
   if (!req.user.permissions.combatView) {
     reply.code(403);
     return { error: 'forbidden' };
@@ -58,7 +67,9 @@ function combatGuard(req: FastifyRequest, reply: FastifyReply): { error: string 
  *   `winrate = wins/(wins+losses)` → `null` as in the player-matches /
  *   combat-summary routes; `damage_dealt` is a permanent `null`).
  * - `kd_trend` reads the materialised `player_stat_periods` month rows
- *   (`matches_played > 0`; `serverId=all` → the `server_id IS NULL` rollup).
+ *   (`matches_played > 0`; `serverId=all` → the `server_id IS NULL` rollup),
+ *   and `skill.online_seconds` sums `online_seconds` over the same month rows
+ *   without that filter — seeding-only months still count as time played.
  * - `weapons` (top `weaponsLimit` by kills) + `weapons_total` (full distinct
  *   weapon count) from `player_weapon_stats`.
  * - `vehicles` / `vehicle_kills` from `player_vehicle_stats` /
@@ -68,8 +79,9 @@ function combatGuard(req: FastifyRequest, reply: FastifyReply): { error: string 
  *
  * `serverId=<uuid>` filters only `kits` and `skill`/`kd_trend` — the
  * weapon/vehicle aggregate tables carry no server dimension and stay
- * lifetime, reported as `period: "all"`. Requires the `combat:view` role
- * flag; responses cache in Redis for 60 s (`x-cache: hit|miss`).
+ * lifetime, reported as `period: "all"`. Requires the `combat:view` role flag
+ * for every player except the caller's own; responses cache in Redis for 60 s
+ * (`x-cache: hit|miss`).
  */
 const playerDossierRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
@@ -81,10 +93,10 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
       config: { audit: false },
     },
     async (req, reply) => {
-      const denied = combatGuard(req, reply);
+      const { playerId } = req.params;
+      const denied = combatGuard(req, reply, playerId);
       if (denied) return denied;
 
-      const { playerId } = req.params;
       const { from, to, serverId, weaponsLimit } = req.query;
 
       const known = await app.db
@@ -108,9 +120,16 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
 
       const skillConditions: (SQL | undefined)[] = [eq(matchPlayers.playerId, playerId)];
       if (serverId !== 'all') skillConditions.push(eq(matches.serverId, serverId));
-      if (from) skillConditions.push(sql`${matches.startedAt} >= ${from}`);
+      // Границы окна уходят в запрос строками, а не объектами Date: postgres.js
+      // отказывается сериализовать Date, пришедший через шаблон `sql`, и весь
+      // маршрут падал с 500 на любом `?from=`/`?to=` — то есть на каждом
+      // выборе периода, кроме «Всё время».
+      if (from)
+        skillConditions.push(sql`${matches.startedAt} >= ${from.toISOString()}::timestamptz`);
       if (to) {
-        skillConditions.push(sql`${matches.startedAt} < (${to})::timestamptz + INTERVAL '1 day'`);
+        skillConditions.push(
+          sql`${matches.startedAt} < ${to.toISOString()}::timestamptz + INTERVAL '1 day'`,
+        );
       }
 
       const winExpr = sql`${matches.winner} = 'team' || ${matchPlayers.team}`;
@@ -130,20 +149,31 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
         .innerJoin(matches, eq(matches.id, matchPlayers.matchId))
         .where(and(...skillConditions));
 
-      const trendConditions: (SQL | undefined)[] = [
+      const monthConditions: (SQL | undefined)[] = [
         eq(playerStatPeriods.playerId, playerId),
         eq(playerStatPeriods.periodType, 'month'),
         serverId === 'all'
           ? isNull(playerStatPeriods.serverId)
           : eq(playerStatPeriods.serverId, serverId),
-        gt(playerStatPeriods.matchesPlayed, 0),
       ];
+      // `period_start` — это date, и сравнивать его нужно с датой, а не с
+      // моментом времени: приведение к timestamptz увело бы полуночный `from`
+      // в предыдущий месяц на любом отрицательном смещении сервера.
       if (from) {
-        trendConditions.push(
-          sql`${playerStatPeriods.periodStart} >= date_trunc('month', (${from})::timestamptz)::date`,
+        monthConditions.push(
+          sql`${playerStatPeriods.periodStart} >= date_trunc('month', ${from.toISOString()}::date)::date`,
         );
       }
-      if (to) trendConditions.push(sql`${playerStatPeriods.periodStart} <= (${to})::date`);
+      if (to)
+        monthConditions.push(sql`${playerStatPeriods.periodStart} <= ${to.toISOString()}::date`);
+
+      // График строится только по месяцам с матчами — пустой месяц ломает
+      // линию K/D. Времени на сервере это условие не касается: месяц, целиком
+      // проведённый на сидинге, в «Онлайн» попасть обязан.
+      const trendConditions: (SQL | undefined)[] = [
+        ...monthConditions,
+        gt(playerStatPeriods.matchesPlayed, 0),
+      ];
 
       const trendRows = await app.db
         .select({
@@ -154,6 +184,11 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
         .from(playerStatPeriods)
         .where(and(...trendConditions))
         .orderBy(asc(playerStatPeriods.periodStart));
+
+      const [onlineRow] = await app.db
+        .select({ seconds: sql<string>`COALESCE(SUM(${playerStatPeriods.onlineSeconds}), 0)` })
+        .from(playerStatPeriods)
+        .where(and(...monthConditions));
 
       const weaponFilter = eq(playerWeaponStats.playerId, playerId);
       const weaponRows = await app.db
@@ -240,6 +275,7 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
           teamkills,
           revives,
           damage_dealt: null,
+          online_seconds: Number(onlineRow?.seconds ?? 0),
           matches: skillRow?.matches ?? 0,
           wins,
           losses,

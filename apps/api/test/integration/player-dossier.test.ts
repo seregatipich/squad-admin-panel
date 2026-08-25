@@ -51,6 +51,7 @@ interface DossierBody {
     teamkills: number;
     revives: number;
     damage_dealt: null;
+    online_seconds: number;
     matches: number;
     wins: number;
     losses: number;
@@ -188,6 +189,7 @@ beforeAll(async () => {
       deaths: 3,
       kdRatio: 1.67,
       matchesPlayed: 2,
+      onlineSeconds: 7200,
     },
     {
       playerId,
@@ -198,6 +200,20 @@ beforeAll(async () => {
       deaths: 2,
       kdRatio: 2,
       matchesPlayed: 1,
+      onlineSeconds: 3600,
+    },
+    // Месяц без единого матча: в график K/D он не попадает, но время на
+    // сервере игрок в нём провёл, и «Онлайн» обязан его учесть.
+    {
+      playerId,
+      serverId: null,
+      periodType: 'month',
+      periodStart: '2026-06-01',
+      kills: 0,
+      deaths: 0,
+      kdRatio: 0,
+      matchesPlayed: 0,
+      onlineSeconds: 1800,
     },
   ]);
 
@@ -271,6 +287,7 @@ describeIfDb('GET /api/v1/players/:playerId/dossier', () => {
       teamkills: 1,
       revives: 2,
       damage_dealt: null,
+      online_seconds: 9000,
       matches: 2,
       wins: 1,
       losses: 1,
@@ -327,6 +344,7 @@ describeIfDb('GET /api/v1/players/:playerId/dossier', () => {
       teamkills: 0,
       revives: 0,
       damage_dealt: null,
+      online_seconds: 0,
       matches: 0,
       wins: 0,
       losses: 0,
@@ -392,6 +410,35 @@ describeIfDb('GET /api/v1/players/:playerId/dossier', () => {
     expect(res.json()).toEqual({ error: 'forbidden' });
   });
 
+  it('свои цифры видны без combatView, чужие — нет', async () => {
+    const roleId = uuidv7();
+    await h.db.insert(roles).values({
+      id: roleId,
+      name: `DossierSelfGated-${roleId}`,
+      color: 'neutral',
+      isSystemRole: false,
+      panelAccess: true,
+      combatView: false,
+    });
+    const [selfGated] = await h.db
+      .insert(players)
+      .values({
+        steamId64: testSteamId(192005),
+        canonicalName: 'DossierSelfGated',
+        canonicalNameNormalized: 'dossierselfgated',
+        roleId,
+      })
+      .returning({ id: players.id });
+    const selfCookie = await loginAs(h.db, selfGated.id);
+
+    const own = await fetchDossier(selfGated.id, '', selfCookie);
+    expect(own.statusCode).toBe(200);
+
+    const foreign = await fetchDossier(playerId, '', selfCookie);
+    expect(foreign.statusCode).toBe(403);
+    expect(foreign.json()).toEqual({ error: 'forbidden' });
+  });
+
   it('Owner → 200', async () => {
     const res = await fetchDossier(playerId, `?serverId=${SERVER_B}`);
     expect(res.statusCode).toBe(200);
@@ -407,6 +454,7 @@ describeIfDb('GET /api/v1/players/:playerId/dossier', () => {
     expect(body.skill.matches).toBe(1);
     expect(body.skill.wins).toBe(1);
     expect(body.skill.losses).toBe(0);
+    expect(body.skill.online_seconds).toBe(3600);
     expect(body.kd_trend).toEqual([{ month: '2026-07-01', kills: 4, deaths: 2 }]);
 
     expect(body.kits).toEqual([
@@ -420,6 +468,27 @@ describeIfDb('GET /api/v1/players/:playerId/dossier', () => {
     expect(body.vehicles).toHaveLength(2);
     expect(body.period).toBe('all');
     expect(body.server_id).toBe(SERVER_A);
+  });
+
+  it('окно периода сужает «Онлайн» так же, как график', async () => {
+    const res = await fetchDossier(playerId, '?from=2026-07-01');
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as DossierBody;
+
+    // Месяц 2026-06 с его 1800 с остаётся за окном.
+    expect(body.skill.online_seconds).toBe(7200);
+    expect(body.kd_trend).toEqual([{ month: '2026-07-01', kills: 5, deaths: 3 }]);
+  });
+
+  it('верхняя граница окна тоже не роняет запрос', async () => {
+    const res = await fetchDossier(playerId, '?from=2026-06-01&to=2026-06-30');
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as DossierBody;
+
+    // Июнь у этого игрока — месяц без матчей: время есть, боя нет.
+    expect(body.skill.online_seconds).toBe(1800);
+    expect(body.skill.matches).toBe(0);
+    expect(body.kd_trend).toEqual([]);
   });
 
   it('unlocalized vehicles get unlocalized: true and null names', async () => {
