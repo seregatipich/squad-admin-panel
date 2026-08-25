@@ -6,7 +6,9 @@ import { use, useCallback, useEffect, useId, useState } from 'react';
 
 import { BannedNameRuleModal } from '@/components/BannedNameRuleModal';
 import { DirectMessageButton } from '@/components/DirectMessageModal';
+import { DossierSection } from '@/components/DossierSection';
 import { PlayerMarks } from '@/components/PlayerMarks';
+import { RecentMatchesSection } from '@/components/RecentMatchesSection';
 import { RoleColorDot } from '@/components/RoleColorDot';
 import { RoleExpiryDateField } from '@/components/RoleExpiryDateField';
 import {
@@ -51,7 +53,6 @@ import { BonusSection } from './BonusSection';
 import { ChatHistorySection } from './ChatHistorySection';
 import { ClanWidget, type PlayerClan } from './ClanWidget';
 import { DiscordLinkSection } from './DiscordLinkSection';
-import { DossierSection } from './DossierSection';
 import { EvidenceSection } from './EvidenceSection';
 import { ExternalBansSection } from './ExternalBansSection';
 import { GeoAnomaliesSection } from './GeoAnomaliesSection';
@@ -62,7 +63,6 @@ import { NotesSection } from './NotesSection';
 import { PlayerTeamkillsSection } from './PlayerTeamkillsSection';
 import { PlaysWithSection } from './PlaysWithSection';
 import { PresenceSection } from './PresenceSection';
-import { RecentMatchesSection } from './RecentMatchesSection';
 import { ReportPlayerSection } from './ReportPlayerSection';
 import { ReportsSection } from './ReportsSection';
 import { SeedContributionSection } from './SeedContributionSection';

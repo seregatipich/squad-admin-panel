@@ -1,7 +1,7 @@
 'use client';
 
 import { EmptyState, Table, TableBody, TableHead, TableRow, Td, Th } from '@/components/ui';
-import { type DossierKit, formatKitTime, sortKits } from './dossier';
+import { type DossierKit, formatPlayTime, sortKits } from './dossier';
 
 /** Same field set as `formatMatchDate` in `recent-matches.ts`; `—` for a never-played kit. */
 function formatKitDate(iso: string | null): string {
@@ -25,7 +25,7 @@ export function DossierKitsTab({ kits }: { kits: readonly DossierKit[] }) {
     return (
       <EmptyState
         title="Нет данных по китам."
-        description="Панель не получила ни одной записи о выбранных китах этого игрока."
+        description="Панель не получила ни одной записи о выбранных китах."
       />
     );
   }
@@ -43,7 +43,7 @@ export function DossierKitsTab({ kits }: { kits: readonly DossierKit[] }) {
         {sortKits(kits).map((row) => (
           <TableRow key={row.kit}>
             <Td className="font-mono">{row.kit}</Td>
-            <Td numeric>{formatKitTime(row.seconds)}</Td>
+            <Td numeric>{formatPlayTime(row.seconds)}</Td>
             <Td numeric className="whitespace-nowrap">
               {formatKitDate(row.last_played_at)}
             </Td>

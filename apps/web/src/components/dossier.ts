@@ -1,6 +1,6 @@
 /**
- * DOSSIER-6 (#193): types, formatters and sorters behind the player card's
- * «Досье» block.
+ * DOSSIER-6 (#193): types, formatters and sorters behind the «Досье» block —
+ * the player card's and the operator's own on «Аккаунт».
  *
  * Every conditional the four tabs need lives here rather than in the `.tsx`
  * files, so the feature's behaviour is unit-covered and the components stay
@@ -36,6 +36,8 @@ export interface DossierSkill {
   revives: number;
   /** Permanently null in the API (player-dossier.ts:242); renders as «—». */
   damage_dealt: null;
+  /** Время на сервере за то же окно: сумма месячных `online_seconds`. */
+  online_seconds: number;
   matches: number;
   wins: number;
   losses: number;
@@ -145,7 +147,7 @@ export function hasAnyDamage(rows: readonly { damage: number | null }[]): boolea
 }
 
 /** Always `Nч Nм`; `—` for a negative or non-finite input. */
-export function formatKitTime(seconds: number): string {
+export function formatPlayTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '—';
   const total = Math.floor(seconds);
   return `${Math.floor(total / 3600)}ч ${Math.floor((total % 3600) / 60)}м`;

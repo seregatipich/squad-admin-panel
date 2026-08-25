@@ -58,7 +58,7 @@ export function DossierWeaponsTab({
     return (
       <EmptyState
         title="Нет данных по оружию."
-        description="Панель не получила ни одного события убийства с оружием этого игрока."
+        description="Панель не получила ни одного события убийства из оружия."
       />
     );
   }

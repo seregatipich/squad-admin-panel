@@ -160,6 +160,19 @@ describeIfDb('self-service session scope (VIPSUB-5)', () => {
     expect(res.statusCode).toBe(401);
   });
 
+  // Досье теперь читается и без `combat:view`, если игрок смотрит своё, —
+  // на этом стоит блок статистики на странице «Аккаунт». Послабление живёт
+  // внутри маршрута и не должно превращать его в self-service.
+  it('denies a self-service session its own dossier', async () => {
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/players/${vipPlayerId}/dossier`,
+      headers: { cookie: selfServiceCookie },
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: 'unauthenticated' });
+  });
+
   it('still identifies the player on GET /api/v1/me', async () => {
     const res = await h.app.inject({
       method: 'GET',

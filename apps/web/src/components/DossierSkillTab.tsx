@@ -17,6 +17,7 @@ import {
   type DossierSkill,
   type DossierTrendPoint,
   formatDamage,
+  formatPlayTime,
   formatWinrate,
   RNSQUADJS_UNAVAILABLE,
 } from './dossier';
@@ -34,12 +35,13 @@ function periodValue(months: number | null): string {
 }
 
 /**
- * DOSSIER-6 (#193) «Скилл» tab: the eleven combat KPIs, the period selector
+ * DOSSIER-6 (#193) «Скилл» tab: the twelve combat KPIs, the period selector
  * driving the block's single request, the donut + month-trend chart, and the
  * RNSquadJS sub-section.
  *
  * @param skill Aggregates for the selected window; `damage_dealt` is
- *   permanently null upstream and renders as «—».
+ *   permanently null upstream and renders as «—», `online_seconds` is the time
+ *   on the servers over the same window.
  * @param trend Month rows already zero-filled by `fillTrendMonths`.
  * @param monthsBack Active window; null is «Всё время».
  * @param onMonthsBackChange Re-runs the block's fetch with the new window.
@@ -71,8 +73,8 @@ export function DossierSkillTab({
 
       {skill.matches === 0 ? (
         <EmptyState
-          title="У этого игрока пока нет боевой статистики."
-          description="Панель ещё не получила ни одного завершённого матча с его участием."
+          title="Боевой статистики пока нет."
+          description="Панель ещё не получила ни одного завершённого матча."
         />
       ) : null}
 
@@ -95,6 +97,7 @@ export function DossierSkillTab({
           value={formatDamage(skill.damage_dealt)}
           hint={DAMAGE_UNAVAILABLE_HINT}
         />
+        <StatTile size="sm" label="Онлайн" value={formatPlayTime(skill.online_seconds)} />
       </div>
 
       <Chart kills={skill.kills} deaths={skill.deaths} trend={trend} />

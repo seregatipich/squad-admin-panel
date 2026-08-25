@@ -11,6 +11,20 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/components/LiveIndicator', () => ({ LiveIndicator: () => null }));
 vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));
+// Оба блока статистики ходят в свои маршруты и покрыты собственными тестами;
+// здесь проверяется только то, что страница отдаёт им нужного игрока.
+// Идентификатор проверяется атрибутом, а не текстом: страница обязана нигде
+// не печатать uuid игрока, и на этом стоит соседний тест.
+vi.mock('@/components/DossierSection', () => ({
+  DossierSection: ({ playerId, title }: { playerId: string; title?: string }) => (
+    <div data-testid="dossier" data-player-id={playerId} data-title={title ?? 'Досье'} />
+  ),
+}));
+vi.mock('@/components/RecentMatchesSection', () => ({
+  RecentMatchesSection: ({ playerId }: { playerId: string }) => (
+    <div data-testid="recent-matches" data-player-id={playerId} />
+  ),
+}));
 
 import AccountPage from './page';
 
@@ -251,6 +265,22 @@ describe('AccountPage', () => {
 
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
     expect(screen.getByText('10.0.0.1')).toBeInTheDocument();
+  });
+
+  it('показывает свою игровую статистику и последние матчи', async () => {
+    await renderPage();
+
+    const dossier = await screen.findByTestId('dossier');
+    expect(dossier).toHaveAttribute('data-player-id', 'player-1');
+    expect(dossier).toHaveAttribute('data-title', 'Игровая статистика');
+    expect(screen.getByTestId('recent-matches')).toHaveAttribute('data-player-id', 'player-1');
+  });
+
+  it('не рисует статистику, пока профиль не загружен', async () => {
+    await renderPage({ meStatus: 503 });
+
+    expect(screen.queryByTestId('dossier')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('recent-matches')).not.toBeInTheDocument();
   });
 
   it('polls the profile, the names and the session list on the interval', async () => {
