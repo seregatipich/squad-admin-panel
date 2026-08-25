@@ -520,9 +520,7 @@ describe('DossierSection', () => {
       stubFetch({ dossier: EMPTY });
       const { container } = render(<DossierSection playerId={PLAYER_ID} />);
 
-      expect(
-        await screen.findByText('У этого игрока пока нет боевой статистики.'),
-      ).toBeInTheDocument();
+      expect(await screen.findByText('Боевой статистики пока нет.')).toBeInTheDocument();
 
       clickTab('weapons');
       expect(await screen.findByText('Нет данных по оружию.')).toBeInTheDocument();

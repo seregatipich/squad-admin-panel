@@ -35,7 +35,7 @@ export function DossierVehiclesTab({
     return (
       <EmptyState
         title="Нет данных по технике."
-        description="Панель не получила ни одного события с техникой этого игрока."
+        description="Панель не получила ни одного события с техникой."
       />
     );
   }

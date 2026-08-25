@@ -25,7 +25,7 @@ export function DossierKitsTab({ kits }: { kits: readonly DossierKit[] }) {
     return (
       <EmptyState
         title="Нет данных по китам."
-        description="Панель не получила ни одной записи о выбранных китах этого игрока."
+        description="Панель не получила ни одной записи о выбранных китах."
       />
     );
   }
