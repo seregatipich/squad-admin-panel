@@ -16,8 +16,21 @@ vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));
 // Идентификатор проверяется атрибутом, а не текстом: страница обязана нигде
 // не печатать uuid игрока, и на этом стоит соседний тест.
 vi.mock('@/components/DossierSection', () => ({
-  DossierSection: ({ playerId, title }: { playerId: string; title?: string }) => (
-    <div data-testid="dossier" data-player-id={playerId} data-title={title ?? 'Досье'} />
+  DossierSection: ({
+    playerId,
+    title,
+    serverFilter = true,
+  }: {
+    playerId: string;
+    title?: string;
+    serverFilter?: boolean;
+  }) => (
+    <div
+      data-testid="dossier"
+      data-player-id={playerId}
+      data-title={title ?? 'Досье'}
+      data-server-filter={String(serverFilter)}
+    />
   ),
 }));
 vi.mock('@/components/RecentMatchesSection', () => ({
@@ -273,7 +286,29 @@ describe('AccountPage', () => {
     const dossier = await screen.findByTestId('dossier');
     expect(dossier).toHaveAttribute('data-player-id', 'player-1');
     expect(dossier).toHaveAttribute('data-title', 'Игровая статистика');
+    // Своя статистика считается по всем серверам сразу — выбирать нечего.
+    expect(dossier).toHaveAttribute('data-server-filter', 'false');
     expect(screen.getByTestId('recent-matches')).toHaveAttribute('data-player-id', 'player-1');
+  });
+
+  it('ставит статистику выше профиля и не зажимает страницу в узкую колонку', async () => {
+    installFetch();
+    let container!: HTMLElement;
+    await act(async () => {
+      container = render(<AccountPage />).container;
+    });
+
+    const shell = container.firstElementChild;
+    expect(shell).toHaveClass('max-w-[1600px]');
+    expect(shell?.className).not.toContain('max-w-3xl');
+    expect(shell?.className).not.toContain('mx-auto');
+
+    const dossier = await screen.findByTestId('dossier');
+    const profile = screen.getByText('Профиль');
+    // SteamID64 и число ключей — справка, а не то, ради чего сюда заходят.
+    expect(dossier.compareDocumentPosition(profile) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 
   it('не рисует статистику, пока профиль не загружен', async () => {
