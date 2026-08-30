@@ -469,6 +469,29 @@ describe('DossierSection', () => {
   );
 
   it(
+    'serverFilter={false} убирает выбор сервера и запрос за списком серверов',
+    async () => {
+      const fetchMock = stubFetch({});
+      render(<DossierSection playerId={PLAYER_ID} serverFilter={false} />);
+
+      await screen.findByText('K/D');
+      expect(screen.queryByLabelText('Сервер')).not.toBeInTheDocument();
+      expect(screen.queryByText(LIFETIME_ONLY_NOTE)).not.toBeInTheDocument();
+
+      clickTab('weapons');
+      await screen.findByText('Показано 3 из 137');
+      expect(screen.queryByLabelText('Сервер')).not.toBeInTheDocument();
+
+      const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(urls.some((url) => url.startsWith('/api/v1/servers'))).toBe(false);
+      expect(urls.every((url) => !url.includes('/dossier') || url.includes('serverId=all'))).toBe(
+        true,
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'vehicles and weapons tabs show the lifetime note instead of the server selector',
     async () => {
       stubFetch({});

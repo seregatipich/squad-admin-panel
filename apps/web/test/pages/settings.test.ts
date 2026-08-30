@@ -22,7 +22,7 @@ vi.mock('../../src/lib/api', () => ({ apiFetch: vi.fn().mockResolvedValue({}) })
 
 describe('settings pages', () => {
   it('settings/account/page exports default', async () => {
-    const mod = await import('../../src/app/(dashboard)/settings/account/page');
+    const mod = await import('../../src/app/(dashboard)/(account)/settings/account/page');
     expect(mod.default).toBeDefined();
   });
 

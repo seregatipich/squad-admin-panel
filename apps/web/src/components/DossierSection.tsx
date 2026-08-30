@@ -46,17 +46,22 @@ const TABS: readonly { key: DossierTab; label: string }[] = [
  * self-hides on 401/403 rather than gating on a permission flag; on one's own
  * numbers the route lets the session through regardless, and that branch never
  * fires. The server selector drives the request and appears only on the tabs
- * whose aggregates carry a server dimension.
+ * whose aggregates carry a server dimension — and only where the consumer asks
+ * for it at all (`serverFilter`).
  *
  * @param playerId UUID of the player whose numbers to show.
  * @param title Заголовок карточки; на своей странице это не «досье».
+ * @param serverFilter Показывать ли выбор сервера. Своя игровая статистика
+ *   считается по всем серверам сразу, и выбор там — лишний орган управления.
  */
 export function DossierSection({
   playerId,
   title = 'Досье',
+  serverFilter = true,
 }: {
   playerId: string;
   title?: string;
+  serverFilter?: boolean;
 }) {
   const [data, setData] = useState<DossierResponse | null>(null);
   const [servers, setServers] = useState<ServerOption[]>([]);
@@ -109,6 +114,7 @@ export function DossierSection({
   useEffect(() => load(), [load]);
 
   useEffect(() => {
+    if (!serverFilter) return;
     let cancelled = false;
     fetch('/api/v1/servers', { credentials: 'include', cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : null))
@@ -121,7 +127,7 @@ export function DossierSection({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [serverFilter]);
 
   if (hidden) return null;
 
@@ -132,7 +138,7 @@ export function DossierSection({
       <CardHeader
         title={title}
         actions={
-          lifetimeOnly ? (
+          !serverFilter ? null : lifetimeOnly ? (
             <span className="text-xs text-ink-3">{LIFETIME_ONLY_NOTE}</span>
           ) : servers.length > 0 ? (
             <span className="flex items-center gap-2">

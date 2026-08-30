@@ -10,7 +10,7 @@ import {
   playerWeaponStats,
   vehicleCatalog,
 } from '@squad/db/schema';
-import { and, asc, desc, eq, gt, isNull, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, type SQL, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -63,13 +63,17 @@ function combatGuard(
  * DOSSIER-5 (#192): one consolidated read-only dossier payload per player.
  *
  * Assembles every dossier section in a single response:
- * - `skill` aggregates live over `match_players ⋈ matches` (outcome rule and
- *   `winrate = wins/(wins+losses)` → `null` as in the player-matches /
- *   combat-summary routes; `damage_dealt` is a permanent `null`).
- * - `kd_trend` reads the materialised `player_stat_periods` month rows
- *   (`matches_played > 0`; `serverId=all` → the `server_id IS NULL` rollup),
- *   and `skill.online_seconds` sums `online_seconds` over the same month rows
- *   without that filter — seeding-only months still count as time played.
+ * - `skill` aggregates live over `match_players ⋈ matches`, **excluding seed
+ *   matches** (`matches.is_seed`) — a warm-up round on an empty server is not
+ *   game statistics (outcome rule and `winrate = wins/(wins+losses)` → `null`
+ *   as in the player-matches / combat-summary routes; `damage_dealt` is a
+ *   permanent `null`).
+ * - `kd_trend` groups the very same matches by month, so the chart can never
+ *   disagree with the summary above it.
+ * - `skill.online_seconds` is the one figure still read from the materialised
+ *   `player_stat_periods` month rows (`serverId=all` → the `server_id IS NULL`
+ *   rollup): it is time on the servers, not a combat aggregate, so a month
+ *   spent seeding counts in full.
  * - `weapons` (top `weaponsLimit` by kills) + `weapons_total` (full distinct
  *   weapon count) from `player_weapon_stats`.
  * - `vehicles` / `vehicle_kills` from `player_vehicle_stats` /
@@ -118,7 +122,12 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
         return reply.send(JSON.parse(cached));
       }
 
-      const skillConditions: (SQL | undefined)[] = [eq(matchPlayers.playerId, playerId)];
+      // Сидовые матчи не считаются игровой статистикой: это разогрев на пустом
+      // сервере, где K/D и винрейт значат не то же самое, что в бою.
+      const skillConditions: (SQL | undefined)[] = [
+        eq(matchPlayers.playerId, playerId),
+        eq(matches.isSeed, false),
+      ];
       if (serverId !== 'all') skillConditions.push(eq(matches.serverId, serverId));
       // Границы окна уходят в запрос строками, а не объектами Date: postgres.js
       // отказывается сериализовать Date, пришедший через шаблон `sql`, и весь
@@ -167,23 +176,22 @@ const playerDossierRoutes: FastifyPluginAsync = async (app) => {
       if (to)
         monthConditions.push(sql`${playerStatPeriods.periodStart} <= ${to.toISOString()}::date`);
 
-      // График строится только по месяцам с матчами — пустой месяц ломает
-      // линию K/D. Времени на сервере это условие не касается: месяц, целиком
-      // проведённый на сидинге, в «Онлайн» попасть обязан.
-      const trendConditions: (SQL | undefined)[] = [
-        ...monthConditions,
-        gt(playerStatPeriods.matchesPlayed, 0),
-      ];
-
+      // Тренд считается по тем же матчам, что и сводка, а не по
+      // материализованным строкам `player_stat_periods`: те не отделяют
+      // сидовые матчи, и график расходился бы с цифрами над ним. Месяцы без
+      // матчей сюда не попадают сами — группировка их не создаёт.
+      const trendMonth = sql`to_char(date_trunc('month', ${matches.startedAt}), 'YYYY-MM-DD')`;
       const trendRows = await app.db
         .select({
-          month: playerStatPeriods.periodStart,
-          kills: playerStatPeriods.kills,
-          deaths: playerStatPeriods.deaths,
+          month: sql<string>`${trendMonth}`,
+          kills: sql<number>`COALESCE(SUM(${matchPlayers.kills}), 0)::int`,
+          deaths: sql<number>`COALESCE(SUM(${matchPlayers.deaths}), 0)::int`,
         })
-        .from(playerStatPeriods)
-        .where(and(...trendConditions))
-        .orderBy(asc(playerStatPeriods.periodStart));
+        .from(matchPlayers)
+        .innerJoin(matches, eq(matches.id, matchPlayers.matchId))
+        .where(and(...skillConditions))
+        .groupBy(trendMonth)
+        .orderBy(asc(trendMonth));
 
       const [onlineRow] = await app.db
         .select({ seconds: sql<string>`COALESCE(SUM(${playerStatPeriods.onlineSeconds}), 0)` })

@@ -71,6 +71,7 @@ vi.mock('../src/lib/live-bus', () => ({
   })),
 }));
 
+import settingsAccountPage from '../src/app/(dashboard)/(account)/settings/account/page';
 import playerDetailPage from '../src/app/(dashboard)/all-players/[id]/page';
 import playersPage from '../src/app/(dashboard)/all-players/page';
 import auditPage from '../src/app/(dashboard)/audit/page';
@@ -87,7 +88,6 @@ import serversArchiveRestorePage from '../src/app/(dashboard)/servers/archive/[i
 import serversArchivePage from '../src/app/(dashboard)/servers/archive/page';
 import serversNewPage from '../src/app/(dashboard)/servers/new/page';
 import serversPage from '../src/app/(dashboard)/servers/page';
-import settingsAccountPage from '../src/app/(dashboard)/settings/account/page';
 import settingsGroupMembersPage from '../src/app/(dashboard)/settings/groups/[id]/members/page';
 import settingsGroupsPage from '../src/app/(dashboard)/settings/groups/page';
 import mediaPublishingPage from '../src/app/(dashboard)/settings/integrations/media/page';

@@ -177,8 +177,31 @@ beforeAll(async () => {
     },
   ]);
 
+  // Сидовый матч на том же сервере и в том же месяце. Числа нарочно крупные:
+  // если фильтр `is_seed` где-нибудь потеряется, это увидит любая проверка.
+  const [seedMatch] = await h.db
+    .insert(matches)
+    .values({
+      serverId: SERVER_A,
+      startedAt: new Date('2026-07-03T12:00:00Z'),
+      winner: 'team1',
+      isSeed: true,
+    })
+    .returning({ id: matches.id });
+  await h.db.insert(matchPlayers).values({
+    matchId: seedMatch.id,
+    playerId,
+    joinedAt: new Date('2026-07-03T12:00:00Z'),
+    playSeconds: 600,
+    team: 1,
+    kills: 99,
+    deaths: 1,
+    teamkills: 9,
+    revives: 9,
+  });
+
   // Materialised month rows: the all-servers rollup (server_id NULL) plus the
-  // per-server-A row; kd_trend selects by server scope.
+  // per-server-A row. Их читает только «Онлайн» — тренд считается по матчам.
   await h.db.insert(playerStatPeriods).values([
     {
       playerId,
@@ -489,6 +512,18 @@ describeIfDb('GET /api/v1/players/:playerId/dossier', () => {
     expect(body.skill.online_seconds).toBe(1800);
     expect(body.skill.matches).toBe(0);
     expect(body.kd_trend).toEqual([]);
+  });
+
+  it('сидовые матчи не попадают ни в сводку, ни в график', async () => {
+    const res = await fetchDossier();
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as DossierBody;
+
+    // 99 убийств сидового матча остались снаружи — иначе было бы 104.
+    expect(body.skill.kills).toBe(5);
+    expect(body.skill.matches).toBe(2);
+    expect(body.skill.teamkills).toBe(1);
+    expect(body.kd_trend).toEqual([{ month: '2026-07-01', kills: 5, deaths: 3 }]);
   });
 
   it('unlocalized vehicles get unlocalized: true and null names', async () => {

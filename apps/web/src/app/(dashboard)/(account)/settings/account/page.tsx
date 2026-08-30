@@ -11,6 +11,7 @@ import {
   GroupedList,
   GroupedRow,
   InlineBanner,
+  PageContainer,
   PageHeader,
   Skeleton,
   SkeletonTable,
@@ -141,122 +142,135 @@ export default function AccountSettings() {
 
   return (
     <>
-      {/* Ник стоит в `actions`, у правого края строки заголовка: слева на этой
+      {/* Ширина `full`, а не `reading` раздела «Настройки»: страница давно
+          переросла профиль и вход — на ней таблицы оружия, техники и матчей,
+          которым колонка в 768px тесна. Ради этого маршрут и вынесен в группу
+          `(account)`: адрес прежний, а вот каркас настроек его больше не
+          оборачивает. */}
+      <PageContainer width="full">
+        {/* Ник стоит в `actions`, у правого края строки заголовка: слева на этой
           странице всего одно слово, и оператор, у которого открыто несколько
           панелей, по нему не поймёт, под каким аккаунтом смотрит. */}
-      <PageHeader title="Аккаунт" actions={<AccountIdentity names={names} />} />
+        <PageHeader title="Аккаунт" actions={<AccountIdentity names={names} />} />
 
-      {msg ? (
-        <InlineBanner
-          tone={msg.kind === 'ok' ? 'good' : 'crit'}
-          title={msg.kind === 'ok' ? msg.text : 'Не удалось выполнить запрос'}
-          description={msg.kind === 'ok' ? undefined : msg.text}
-          action={
-            msg.kind === 'err' ? (
-              <Button size="sm" onClick={() => void load()}>
-                Повторить
-              </Button>
-            ) : undefined
-          }
-          onDismiss={() => setMsg(null)}
-          dismissLabel="Скрыть сообщение"
-        />
-      ) : null}
-
-      {me === null ? (
-        <Skeleton variant="card" count={2} label="Загрузка профиля" />
-      ) : (
-        <GroupedList title="Профиль">
-          <GroupedRow
-            label="SteamID64"
-            control={<span className="font-mono text-xs text-ink-2">{me.steam_id64 ?? '—'}</span>}
+        {msg ? (
+          <InlineBanner
+            tone={msg.kind === 'ok' ? 'good' : 'crit'}
+            title={msg.kind === 'ok' ? msg.text : 'Не удалось выполнить запрос'}
+            description={msg.kind === 'ok' ? undefined : msg.text}
+            action={
+              msg.kind === 'err' ? (
+                <Button size="sm" onClick={() => void load()}>
+                  Повторить
+                </Button>
+              ) : undefined
+            }
+            onDismiss={() => setMsg(null)}
+            dismissLabel="Скрыть сообщение"
           />
-          <GroupedRow
-            label="Права"
-            description="Набор ключей, которые даёт выданная вам роль."
-            control={
-              <span className="text-xs tabular-nums text-ink-2">
-                {formatPermissionCount(me.permissions.length)}
-              </span>
+        ) : null}
+
+        {/* Статистика стоит выше профиля намеренно: SteamID64 и число ключей
+          оператор смотрит раз в жизни, а свои цифры — постоянно. Блоки те же,
+          что и на карточке игрока: маршрут досье пропускает владельца сессии
+          без `combat:view`, а «Последние матчи» и так открыты любому, у кого
+          есть доступ в панель. */}
+        {me === null ? null : (
+          <>
+            <DossierSection
+              playerId={me.player_id}
+              title="Игровая статистика"
+              serverFilter={false}
+            />
+            <RecentMatchesSection playerId={me.player_id} />
+          </>
+        )}
+
+        {me === null ? (
+          <Skeleton variant="card" count={2} label="Загрузка профиля" />
+        ) : (
+          <GroupedList title="Профиль">
+            <GroupedRow
+              label="SteamID64"
+              control={<span className="font-mono text-xs text-ink-2">{me.steam_id64 ?? '—'}</span>}
+            />
+            <GroupedRow
+              label="Права"
+              description="Набор ключей, которые даёт выданная вам роль."
+              control={
+                <span className="text-xs tabular-nums text-ink-2">
+                  {formatPermissionCount(me.permissions.length)}
+                </span>
+              }
+            />
+          </GroupedList>
+        )}
+
+        <Card padding="none">
+          <CardHeader
+            title="Активные сессии"
+            count={sessions.length > 0 ? sessions.length : undefined}
+            description="Устройства, с которых сейчас открыта панель."
+            actions={
+              /* «Завершить все» разлогинивает устройства, но ничего не разрушает
+               безвозвратно — войти можно снова, поэтому кнопка вторичная (§5). */
+              <Button
+                disabled={revokingAll || sessions.length <= 1}
+                onClick={() => setPendingRevoke({ kind: 'all' })}
+              >
+                Завершить все
+              </Button>
             }
           />
-        </GroupedList>
-      )}
-
-      {/* Своя игровая статистика — те же блоки, что и на карточке игрока: маршрут
-          досье пропускает владельца сессии без `combat:view`, а «Последние
-          матчи» и так открыты любому, у кого есть доступ в панель. */}
-      {me === null ? null : (
-        <>
-          <DossierSection playerId={me.player_id} title="Игровая статистика" />
-          <RecentMatchesSection playerId={me.player_id} />
-        </>
-      )}
-
-      <Card padding="none">
-        <CardHeader
-          title="Активные сессии"
-          count={sessions.length > 0 ? sessions.length : undefined}
-          description="Устройства, с которых сейчас открыта панель."
-          actions={
-            /* «Завершить все» разлогинивает устройства, но ничего не разрушает
-               безвозвратно — войти можно снова, поэтому кнопка вторичная (§5). */
-            <Button
-              disabled={revokingAll || sessions.length <= 1}
-              onClick={() => setPendingRevoke({ kind: 'all' })}
-            >
-              Завершить все
-            </Button>
-          }
-        />
-        {me === null ? (
-          <div className="p-3">
-            <SkeletonTable rows={3} cols={5} label="Загрузка списка сессий" />
-          </div>
-        ) : (
-          <Table ariaLabel="Активные сессии">
-            <TableHead>
-              <tr>
-                <Th>IP</Th>
-                <Th>Устройство</Th>
-                <Th>Последнее действие</Th>
-                <Th>Истекает</Th>
-                <Th align="right" width="9rem">
-                  Действие
-                </Th>
-              </tr>
-            </TableHead>
-            <TableBody>
-              {sessions.map((s) => (
-                <TableRow key={s.id} interactive>
-                  <Td className="font-mono text-xs">{s.ip ?? '—'}</Td>
-                  <Td className="text-xs text-ink-3">{describeDevice(s.user_agent)}</Td>
-                  <Td className="text-xs text-ink-3">{formatDate(s.last_activity_at)}</Td>
-                  <Td className="text-xs text-ink-3">
-                    {formatDate(s.expires_at)}{' '}
-                    <span className="text-ink-4">({formatRelative(s.expires_at)})</span>
-                  </Td>
-                  <Td align="right">
-                    {s.current ? (
-                      <Badge tone="good" size="sm">
-                        текущая
-                      </Badge>
-                    ) : (
-                      <Button
-                        size="sm"
-                        loading={busyId === s.id}
-                        onClick={() => setPendingRevoke({ kind: 'one', id: s.id })}
-                      >
-                        Завершить
-                      </Button>
-                    )}
-                  </Td>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </Card>
+          {me === null ? (
+            <div className="p-3">
+              <SkeletonTable rows={3} cols={5} label="Загрузка списка сессий" />
+            </div>
+          ) : (
+            <Table ariaLabel="Активные сессии">
+              <TableHead>
+                <tr>
+                  <Th>IP</Th>
+                  <Th>Устройство</Th>
+                  <Th>Последнее действие</Th>
+                  <Th>Истекает</Th>
+                  <Th align="right" width="9rem">
+                    Действие
+                  </Th>
+                </tr>
+              </TableHead>
+              <TableBody>
+                {sessions.map((s) => (
+                  <TableRow key={s.id} interactive>
+                    <Td className="font-mono text-xs">{s.ip ?? '—'}</Td>
+                    <Td className="text-xs text-ink-3">{describeDevice(s.user_agent)}</Td>
+                    <Td className="text-xs text-ink-3">{formatDate(s.last_activity_at)}</Td>
+                    <Td className="text-xs text-ink-3">
+                      {formatDate(s.expires_at)}{' '}
+                      <span className="text-ink-4">({formatRelative(s.expires_at)})</span>
+                    </Td>
+                    <Td align="right">
+                      {s.current ? (
+                        <Badge tone="good" size="sm">
+                          текущая
+                        </Badge>
+                      ) : (
+                        <Button
+                          size="sm"
+                          loading={busyId === s.id}
+                          onClick={() => setPendingRevoke({ kind: 'one', id: s.id })}
+                        >
+                          Завершить
+                        </Button>
+                      )}
+                    </Td>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </Card>
+      </PageContainer>
 
       {/* Завершение сессии обратимо — оператор входит заново тем же Steam-логином, —
           поэтому подтверждение обычное, а не критическое (дизайн-система, §5).
