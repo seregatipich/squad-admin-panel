@@ -70,6 +70,10 @@ services:
       SESSION_SECRET: ${SESSION_SECRET}
       APP_DOMAIN: tk104.duckdns.org
       PANEL_PUBLIC_URL: https://tk104.duckdns.org
+      BSS_SITE_URL: ${BSS_SITE_URL:-}
+      BSS_SSO_CLIENT_ID: ${BSS_SSO_CLIENT_ID:-}
+      BSS_SSO_CLIENT_SECRET: ${BSS_SSO_CLIENT_SECRET:-}
+      BSS_SSO_CLIENT_SECRET_NEXT: ${BSS_SSO_CLIENT_SECRET_NEXT:-}
       COOKIE_SECURE: 'true'
       STEAM_API_KEY: ${STEAM_API_KEY:-}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-21600}
@@ -476,6 +480,7 @@ services:
       NODE_ENV: production
       NEXT_PUBLIC_APP_DOMAIN: tk104.duckdns.org
       API_URL: http://api:3000
+      BSS_SITE_URL: ${BSS_SITE_URL:-https://bss.games}
     depends_on:
       api:
         condition: service_healthy

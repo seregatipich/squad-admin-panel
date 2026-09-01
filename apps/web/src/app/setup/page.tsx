@@ -18,12 +18,12 @@ interface SetupStatus {
 }
 
 /**
- * Ссылка входа — обычный `<a>`, а не `ButtonLink`: `/api/v1/auth/steam/login`
- * начинает OpenID-обмен и обязан получить полную навигацию документа, тогда как
+ * Ссылка входа — обычный `<a>`, а не `ButtonLink`: `/api/v1/auth/bss/login`
+ * начинает SSO-обмен и обязан получить полную навигацию документа, тогда как
  * `next/link` перехватил бы клик маршрутизатором и предзагрузил бы адрес.
  */
-const STEAM_LINK_CLASS =
-  'inline-flex h-8 w-full items-center justify-center rounded-ctl bg-accent px-3 text-xs font-medium text-bg no-underline transition-colors duration-150 hover:brightness-110';
+const SSO_LINK_CLASS =
+  'inline-flex h-11 w-full items-center justify-center rounded-ctl bg-accent px-3 text-xs font-medium text-bg no-underline transition-colors duration-150 hover:brightness-110';
 
 export default function SetupPage() {
   const [status, setStatus] = useState<SetupStatus | null>(null);
@@ -112,12 +112,12 @@ export default function SetupPage() {
         <PageContainer width="form">
           <PageHeader
             title="Настройка панели"
-            subtitle="Для начала работы войдите через Steam. Первый вошедший автоматически станет Owner."
+            subtitle="Для начала работы войдите через BSS. Первая подтверждённая учётная запись автоматически станет Owner."
           />
           {statusBanner}
           <Card>
-            <a href="/api/v1/auth/steam/login" className={STEAM_LINK_CLASS}>
-              Войти через Steam
+            <a href="/api/v1/auth/bss/login" className={SSO_LINK_CLASS}>
+              Войти через BSS
             </a>
           </Card>
         </PageContainer>

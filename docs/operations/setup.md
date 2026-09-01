@@ -14,9 +14,10 @@ git clone git@github.com:breaking-squad/squad-admin-panel.git
 cd squad-admin-panel
 
 cp .env.example .env
-# Fill in: APP_DOMAIN, PANEL_PUBLIC_URL, POSTGRES_PASSWORD, APP_ENCRYPTION_KEY, SESSION_SECRET.
+# Fill in: APP_DOMAIN, PANEL_PUBLIC_URL, BSS_*, POSTGRES_PASSWORD,
+# APP_ENCRYPTION_KEY and SESSION_SECRET.
 # PANEL_PUBLIC_URL must be the full public URL (e.g. https://squad-panel.example.com).
-# It is required for Steam OpenID return_to host-binding.
+# It determines the exact BSS callback URL.
 # Generate secrets:
 #   openssl rand -base64 32
 # Save APP_ENCRYPTION_KEY OFFLINE — losing it makes encrypted secrets unrecoverable.
@@ -39,7 +40,7 @@ docker compose up -d --build
 
 After `docker compose up -d`, the API, web, DB, Redis, workers, and bridge should be healthy before the first login. The 5 system roles (`Owner`, `Senior Admin`, `Admin`, `Viewer`, `Moderator`) are seeded by DB migrations.
 
-**First login becomes Owner.** Open `https://${APP_DOMAIN}/login` and click **"Войти через Steam"**. The first Steam OpenID callback that completes on a fresh panel automatically assigns the Owner role to that Steam account (`claimFirstOwner` in `apps/api/src/lib/first-owner.ts`). All subsequent logins skip the claim.
+**Первый вход назначает Owner.** Откройте `https://${APP_DOMAIN}/login`: панель перенаправит пользователя на единый вход `bss.games`. Первая подтверждённая учётная запись на новой панели автоматически получает Owner (`claimFirstOwner` в `apps/api/src/lib/first-owner.ts`). Все последующие входы пропускают назначение.
 
 After the Owner session is created, the dashboard layout checks `GET /api/v1/setup/status`. If `setup_completed=false`, the browser is redirected to `/setup`. Enter the organization/community name and submit; `POST /api/v1/setup/complete` stores it and marks setup complete. A completed panel redirects `/setup` back to `/`.
 
@@ -49,7 +50,7 @@ The trick is one-shot. To re-arm it:
 
 1. Drop the database: `docker compose exec postgres psql -U admin -c 'DROP DATABASE admin; CREATE DATABASE admin;'` (**DESTRUCTIVE — all data lost**).
 2. Apply migrations: `pnpm db:migrate`.
-3. Log in via Steam — the first login becomes Owner again.
+3. Войдите через `bss.games` — первый вход снова назначит Owner.
 
 ## Transferring Owner to a different Steam account
 
