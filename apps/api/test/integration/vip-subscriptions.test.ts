@@ -55,7 +55,7 @@ function nextSteamOffset(): number {
 }
 
 /**
- * Mints a session the way `auth-steam.ts` does for a player whose role has no
+ * Mints a session the way the BSS callback does for a player whose role has no
  * `panel_access`: scope `self_service`. Anything that is reachable with this
  * cookie is reachable by a plain VIP with no panel rights at all.
  */

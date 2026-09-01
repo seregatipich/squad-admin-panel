@@ -6,7 +6,6 @@ import { invalidatePermissionCache } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import authPlugin from '../../src/plugins/auth.js';
 import metricsPlugin from '../../src/plugins/metrics.js';
-import steamRoutes from '../../src/routes/auth-steam.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
 import {
   buildIntegrationApp,
@@ -26,12 +25,10 @@ let ownerCookie: string;
 let noRoleCookie: string;
 
 /**
- * `auth-steam.ts`'s and `plugins/metrics.ts`'s routes are not registered by
- * the shared `buildIntegrationApp()` harness (`apps/api/test/integration/harness.ts`
- * is deliberately left untouched by #246), so this builds a small dedicated
+ * `plugins/metrics.ts`'s route is not registered by the shared
+ * `buildIntegrationApp()` harness, so this builds a small dedicated
  * Fastify instance — sharing `h`'s real `db`/`redis` — wired with the real
- * `authPlugin` plus those two route files, matching the mocked-config pattern
- * already used by `test/auth-steam.test.ts`. Two synthetic routes (bare
+ * `authPlugin` plus metrics. Two synthetic routes (bare
  * `config: {}` and `config: { public: true }`) exercise the fail-closed floor
  * and its opt-out directly, independent of any production route's own
  * decision.
@@ -50,7 +47,6 @@ async function buildBareApp(harness: IntegrationHarness) {
   } as any);
   await app.register(cookie, { secret: 'fail-open-default-test-secret'.repeat(2) });
   await app.register(authPlugin);
-  await app.register(steamRoutes);
   await app.register(metricsPlugin);
   app.get('/test/bare-route', { config: {} }, async () => ({ ok: true }));
   app.get('/test/public-route', { config: { public: true } }, async () => ({ ok: true }));
@@ -171,11 +167,6 @@ describeIfDb('fail-closed auth default (#246)', () => {
     it('GET /ready stays reachable without a session', async () => {
       const res = await h.app.inject({ method: 'GET', url: '/ready' });
       expect(res.statusCode).toBe(200);
-    });
-
-    it('GET /api/v1/auth/steam/login stays reachable without a session', async () => {
-      const res = await bareApp.inject({ method: 'GET', url: '/api/v1/auth/steam/login' });
-      expect(res.statusCode).toBe(302);
     });
 
     it('GET /metrics stays reachable without a session', async () => {

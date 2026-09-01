@@ -126,11 +126,9 @@ export const ru = {
   'nav.lastPoll': 'Последний опрос: {when}',
 
   'login.heading': 'Squad Admin Panel',
-  'login.error.authFailed': 'Не удалось проверить вход через Steam. Попробуйте ещё раз.',
   'login.error.ssoFailed': 'Не удалось войти через bss.games. Повторите вход.',
   'login.error.notAuthorized':
     'Steam ID {steamId} не имеет доступа к панели. Обратитесь к администратору.',
-  'login.steamButton': 'Войти через Steam',
   'login.retry': 'Повторить вход',
   'login.redirecting': 'Переходим на bss.games…',
 

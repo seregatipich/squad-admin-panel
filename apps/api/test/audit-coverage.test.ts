@@ -30,7 +30,6 @@ import auditRoutes from '../src/routes/audit.js';
 import authRoutes from '../src/routes/auth.js';
 import bssAuthRoutes from '../src/routes/auth-bss.js';
 import discordAuthRoutes from '../src/routes/auth-discord.js';
-import steamRoutes from '../src/routes/auth-steam.js';
 import balancerRoutes from '../src/routes/balancer.js';
 import hostRoutes from '../src/routes/host.js';
 import hostActionsRoutes from '../src/routes/host-actions.js';
@@ -116,7 +115,6 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   await app.register(integrationsDiscordRoleMappingsRoutes);
   await app.register(auditRoutes);
   await app.register(bssAuthRoutes);
-  await app.register(steamRoutes);
   await app.register(discordAuthRoutes);
   await app.register(vipSubscriptionRoutes);
   await app.register(seasonsRoutes);
@@ -156,7 +154,6 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
   it('mutating routes that claim audit: false are limited to auth callbacks and self-audited service endpoints', async () => {
     const routes = await collectRoutes();
     const allowlist = new Set([
-      '/api/v1/auth/steam/callback',
       '/api/v1/integrations/vip/lifecycle',
       '/api/v1/integrations/balancer/proposals',
     ]);

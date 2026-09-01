@@ -20,7 +20,7 @@ Fastify 5 + Zod type-provider. REST under `/api/v1/*`, WebSocket for install str
 ## Code location
 
 - Entrypoint: [`apps/api/src/index.ts`](../../../apps/api/src/index.ts) → [`server.ts`](../../../apps/api/src/server.ts) registers routes and plugins.
-- Routes: [`apps/api/src/routes/`](../../../apps/api/src/routes/) — `audit.ts`, `auth-steam.ts`, `depot.ts`, `host.ts`, `host-actions.ts`, `players.ts`, `permissions.ts`, `roles.ts`, `server-configs.ts`, `server-install.ts`, `server-logs.ts`, `servers.ts`, `users.ts`.
+- Routes: [`apps/api/src/routes/`](../../../apps/api/src/routes/) — `audit.ts`, `auth-bss.ts`, `depot.ts`, `host.ts`, `host-actions.ts`, `players.ts`, `permissions.ts`, `roles.ts`, `server-configs.ts`, `server-install.ts`, `server-logs.ts`, `servers.ts`, `users.ts`.
 - Plugins: [`apps/api/src/plugins/`](../../../apps/api/src/plugins/) — `audit.ts`, `auth.ts`, `bridge-heartbeat.ts`, `bridge.ts`, `database.ts`, `db-health.ts`, `error-diag.ts`, `health.ts`, `heartbeat-watch.ts`, `install-progress.ts`, `live-bus.ts`, `metrics.ts`, `orphan-sweep.ts`, `redis.ts`, `request-context.ts`, `status-reconciler.ts`, `types.ts`. `@fastify/rate-limit`, `@fastify/swagger`, and `@fastify/swagger-ui` are third-party plugins registered inline in [`server.ts`](../../../apps/api/src/server.ts) lines 176-191, not local files under this directory.
 - Libs: [`apps/api/src/lib/`](../../../apps/api/src/lib/) — `blame.ts` (Myers diff for config blame), `crypto.ts`, `seed-configs.ts`.
 

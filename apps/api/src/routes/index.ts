@@ -7,7 +7,6 @@ import auditRoutes from './audit.js';
 import authRoutes from './auth.js';
 import bssAuthRoutes from './auth-bss.js';
 import discordAuthRoutes from './auth-discord.js';
-import steamRoutes from './auth-steam.js';
 import automationRulesRoutes from './automation-rules.js';
 import balancerRoutes from './balancer.js';
 import banSourcesRoutes from './ban-sources.js';
@@ -226,7 +225,6 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await app.register(publicMediaRoutes);
   await app.register(publicBanlistRoutes);
   await app.register(bssAuthRoutes);
-  await app.register(steamRoutes);
   await app.register(discordAuthRoutes);
   await app.register(setupRoutes);
   await app.register(integrationsBalancerRoutes);

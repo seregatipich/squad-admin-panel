@@ -1,14 +1,13 @@
 /**
- * Steam-only login smoke against the live panel stack.
+ * Unified SSO session smoke against the live panel stack.
  *
- * Cannot exercise the OpenID 2.0 verifier itself without a real Steam
- * account; instead this test verifies that AFTER a manual Steam login
- * (cookie supplied via PANEL_TEST_COOKIE env), the panel reports the
- * caller correctly and legacy setup surfaces stay closed.
+ * The cookie is obtained through bss.games and supplied via
+ * PANEL_TEST_COOKIE. This suite verifies the resulting panel session and
+ * that removed direct-login surfaces stay closed.
  *
  * Setup:
  *   1. docker compose up -d
- *   2. Open https://<host>/login, sign in via Steam (becomes Owner).
+ *   2. Open https://<host>/login and complete the BSS login.
  *   3. Copy __Host-sid value from devtools and export PANEL_TEST_COOKIE.
  *
  * Run: pnpm --filter @squad/api test:e2e
@@ -18,7 +17,7 @@ import { newClient, shouldSkip } from './lib/client.js';
 
 const skip = shouldSkip();
 
-describe.skipIf(skip.skip)('steam-login e2e', () => {
+describe.skipIf(skip.skip)('unified-login e2e', () => {
   const api = newClient();
 
   it('GET /api/v1/me returns the Owner with non-empty permissions', async () => {
@@ -57,11 +56,9 @@ describe.skipIf(skip.skip)('steam-login e2e', () => {
     expect(res.status).toBe(404);
   });
 
-  it('GET /api/v1/auth/steam/login redirects to steamcommunity.com', async () => {
+  it('removed direct Steam login stays gone', async () => {
     const res = await api.fetch('/api/v1/auth/steam/login', { redirect: 'manual' });
-    expect([302, 303, 307]).toContain(res.status);
-    const location = res.headers.get('location') ?? '';
-    expect(location).toContain('steamcommunity.com/openid/login');
+    expect(res.status).toBe(404);
   });
 
   it('legacy /api/v1/auth/login is gone (404)', async () => {

@@ -111,11 +111,6 @@ vi.mock('../src/lib/sessions.js', () => ({
   tokenIdFromToken: vi.fn(),
 }));
 
-vi.mock('../src/lib/steam-openid.js', () => ({
-  buildLoginRedirectUrl: vi.fn(),
-  verifyWithSteam: vi.fn(),
-}));
-
 vi.mock('../src/lib/steam-profile.js', () => ({
   fetchSteamProfile: vi.fn(),
 }));
@@ -183,8 +178,8 @@ vi.mock('../src/lib/logger.js', () => ({
 import adminsCfgRoutes from '../src/routes/admins-cfg.js';
 import auditRoutes from '../src/routes/audit.js';
 import authRoutes from '../src/routes/auth.js';
+import authBssRoutes from '../src/routes/auth-bss.js';
 import authDiscordRoutes from '../src/routes/auth-discord.js';
-import authSteamRoutes from '../src/routes/auth-steam.js';
 import depotRoutes from '../src/routes/depot.js';
 import hostRoutes from '../src/routes/host.js';
 import hostActionsRoutes from '../src/routes/host-actions.js';
@@ -217,8 +212,8 @@ describe('routes import graph', () => {
     expect(typeof authDiscordRoutes).toBe('function');
   });
 
-  it('auth-steam exports a Fastify plugin', () => {
-    expect(typeof authSteamRoutes).toBe('function');
+  it('auth-bss exports a Fastify plugin', () => {
+    expect(typeof authBssRoutes).toBe('function');
   });
 
   it('auth exports a Fastify plugin', () => {

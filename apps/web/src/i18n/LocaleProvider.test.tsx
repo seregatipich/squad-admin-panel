@@ -14,7 +14,7 @@ function Probe() {
       <span data-testid="locale">{locale}</span>
       <span data-testid="intl-locale">{intlLocale}</span>
       <span data-testid="date">{new Date(2026, 7, 22).toLocaleDateString(intlLocale)}</span>
-      <span data-testid="text">{t('login.steamButton')}</span>
+      <span data-testid="text">{t('login.redirecting')}</span>
     </div>
   );
 }
@@ -31,7 +31,7 @@ describe('LocaleProvider', () => {
     expect(screen.getByTestId('locale')).toHaveTextContent('ru');
     expect(screen.getByTestId('intl-locale')).toHaveTextContent('ru-RU');
     expect(screen.getByTestId('date')).toHaveTextContent('22.08.2026');
-    expect(screen.getByTestId('text')).toHaveTextContent('Войти через Steam');
+    expect(screen.getByTestId('text')).toHaveTextContent('Переходим на bss.games…');
   });
 
   it('ignores a locale prop and still resolves to ru', () => {
@@ -44,13 +44,13 @@ describe('LocaleProvider', () => {
     );
     expect(screen.getByTestId('locale')).toHaveTextContent('ru');
     expect(screen.getByTestId('intl-locale')).toHaveTextContent('ru-RU');
-    expect(screen.getByTestId('text')).toHaveTextContent('Войти через Steam');
+    expect(screen.getByTestId('text')).toHaveTextContent('Переходим на bss.games…');
   });
 
   it('falls back to the ru locale outside a provider', () => {
     render(<Probe />);
     expect(screen.getByTestId('locale')).toHaveTextContent('ru');
     expect(screen.getByTestId('intl-locale')).toHaveTextContent('ru-RU');
-    expect(screen.getByTestId('text')).toHaveTextContent('Войти через Steam');
+    expect(screen.getByTestId('text')).toHaveTextContent('Переходим на bss.games…');
   });
 });

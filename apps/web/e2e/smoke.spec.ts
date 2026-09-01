@@ -18,9 +18,12 @@ test.describe('panel smoke flows (unauthenticated)', () => {
     expect(resp.status()).toBe(401);
   });
 
-  test('login page loads and offers Steam sign-in', async ({ page }) => {
-    const resp = await page.goto('/login');
+  test('login page loads and offers BSS retry after a recoverable error', async ({ page }) => {
+    const resp = await page.goto('/login?error=sso_failed');
     expect(resp?.ok()).toBe(true);
-    await expect(page.getByRole('link', { name: 'Войти через Steam' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Повторить вход' })).toHaveAttribute(
+      'href',
+      '/api/v1/auth/bss/login',
+    );
   });
 });
