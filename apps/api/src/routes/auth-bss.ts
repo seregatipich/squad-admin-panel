@@ -62,8 +62,8 @@ function safeCallbackLog(
       'BSS authentication callback',
     );
   } catch {
-    // A logging sink must never turn a completed authentication response into
-    // an exception whose automatic error text contains the callback query.
+    // Сбой при записи журнала не должен превратить готовый ответ в исключение,
+    // автоматический текст которого раскроет параметры callback-запроса.
   }
 }
 

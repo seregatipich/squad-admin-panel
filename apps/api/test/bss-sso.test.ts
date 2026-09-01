@@ -150,4 +150,28 @@ describe('BSS SSO protocol', () => {
       steam_id64: '76561198000000001',
     });
   });
+
+  it.each([
+    ['server error', async () => new Response(null, { status: 502 })],
+    ['network error', async () => Promise.reject(new Error('site unavailable'))],
+  ])('retries a retryable %s once and no more', async (_case, failure) => {
+    const fetchImpl = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementationOnce(failure)
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+    const client = new BssSsoClient({ ...CONFIG, fetchImpl });
+
+    await expect(client.revokeAllSiteSessions('76561198000000001')).resolves.toBe(true);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not immediately retry a rate-limited site', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 429 }));
+    const client = new BssSsoClient({ ...CONFIG, fetchImpl });
+
+    await expect(client.revokeAllSiteSessions('76561198000000001')).resolves.toBe(false);
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
 });

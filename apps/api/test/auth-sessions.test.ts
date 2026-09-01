@@ -7,7 +7,7 @@ import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import Redis from 'ioredis';
 import postgres from 'postgres';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSession } from '../src/lib/sessions.js';
 import authPlugin, { SESSION_COOKIE } from '../src/plugins/auth.js';
 import liveBusPlugin, { type LiveEvent } from '../src/plugins/live-bus.js';
@@ -29,6 +29,9 @@ async function buildApp(opts: { dbUrl: string }) {
   app.decorate('bridge', makeFakeBridge());
   const testConfig = {
     PANEL_PUBLIC_URL: 'https://panel.test',
+    BSS_SITE_URL: 'https://bss.games',
+    BSS_SSO_CLIENT_ID: 'squad-admin-panel',
+    BSS_SSO_CLIENT_SECRET: 's'.repeat(32),
     STEAM_API_KEY: '',
     SESSION_TTL_SECONDS: 21600,
     SESSION_TOUCH_THROTTLE_SECONDS: 60,
@@ -59,6 +62,7 @@ async function seedAuthedPlayer(
   db: any,
   redis: Redis,
   steamId64: bigint,
+  scope: 'panel' | 'self_service' = 'panel',
 ): Promise<{ token: string; sessionId: string; playerId: string }> {
   const ownerRoleRows = await db
     .select({ id: roles.id })
@@ -81,6 +85,7 @@ async function seedAuthedPlayer(
     ip: null,
     userAgent: 'test-ua',
     ttlMs: 21600 * 1000,
+    scope,
   });
   return { token: result.token, sessionId: result.session.id, playerId: insertedId };
 }
@@ -132,6 +137,7 @@ describe('POST /api/v1/auth/logout', () => {
     h = await buildApp({ dbUrl: schemaInfo.url });
   });
   afterEach(async () => {
+    vi.restoreAllMocks();
     await h.cleanup();
     await schemaInfo.drop();
   });
@@ -155,6 +161,69 @@ describe('POST /api/v1/auth/logout', () => {
       .where(eq(sessionsTable.id, sessionId));
     expect(remaining.length).toBe(0);
     expect(revokedIds.has(sessionId)).toBe(true);
+  });
+
+  it.each(['panel', 'self_service'] as const)(
+    'revokes site and every local %s session on global logout',
+    async (scope) => {
+      const steamId64 = scope === 'panel' ? 76561198000000302n : 76561198000000303n;
+      const { token, playerId } = await seedAuthedPlayer(h.db, h.redis, steamId64, scope);
+      await createSession(h.db, h.redis, {
+        playerId,
+        ip: '192.0.2.40',
+        userAgent: 'second-device',
+        ttlMs: 21600 * 1000,
+        scope,
+      });
+      const fetchMock = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValue(Response.json({ ok: true }));
+
+      const response = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/logout-all',
+        cookies: { [SESSION_COOKIE]: token },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        ok: true,
+        remote_ok: true,
+        site_url: 'https://bss.games',
+      });
+      expect(
+        await h.db.select().from(sessionsTable).where(eq(sessionsTable.playerId, playerId)),
+      ).toEqual([]);
+      expect(String(response.headers['set-cookie'])).toContain('__Host-sid=;');
+      const [url, init] = fetchMock.mock.calls[0] ?? [];
+      expect(url).toBe('https://bss.games/api/v1/auth/sso/logout-all');
+      expect(JSON.parse(String(init?.body))).toEqual({
+        client_id: 'squad-admin-panel',
+        client_secret: 's'.repeat(32),
+        steam_id64: String(steamId64),
+      });
+    },
+  );
+
+  it('always revokes local sessions when the site stays unavailable', async () => {
+    const { token, playerId } = await seedAuthedPlayer(h.db, h.redis, 76561198000000304n);
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(null, { status: 502 }));
+
+    const response = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/logout-all',
+      cookies: { [SESSION_COOKIE]: token },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ok: true, remote_ok: false });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      await h.db.select().from(sessionsTable).where(eq(sessionsTable.playerId, playerId)),
+    ).toEqual([]);
+    expect(String(response.headers['set-cookie'])).toContain('__Host-sid=;');
   });
 });
 

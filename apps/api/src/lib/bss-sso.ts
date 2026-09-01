@@ -3,6 +3,8 @@ import { z } from 'zod';
 
 const MAX_RESPONSE_BYTES = 16_384;
 const DEFAULT_TIMEOUT_MS = 2_000;
+const LOGOUT_RETRY_DELAY_MIN_MS = 100;
+const LOGOUT_RETRY_DELAY_JITTER_MS = 150;
 const STATE_RE = /^[A-Za-z0-9._~-]{32,512}$/u;
 const VERIFIER_RE = /^[A-Za-z0-9._~-]{43,128}$/u;
 const STEAM_ID64_RE = /^\d{17}$/u;
@@ -40,7 +42,7 @@ const identitySchema = z
 const okSchema = z.object({ ok: z.literal(true) }).strict();
 
 export class BssSsoError extends Error {
-  constructor() {
+  constructor(readonly retryable = false) {
     super('bss_sso_failed');
     this.name = 'BssSsoError';
   }
@@ -152,21 +154,32 @@ export class BssSsoClient {
 
   async revokeAllSiteSessions(steamId64: string): Promise<boolean> {
     if (!STEAM_ID64_RE.test(steamId64)) return false;
-    try {
-      const payload = await this.post('/api/v1/auth/sso/logout-all', {
-        client_id: this.clientId,
-        client_secret: this.clientSecret,
-        steam_id64: steamId64,
-      });
-      return okSchema.safeParse(payload).success;
-    } catch {
-      return false;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const payload = await this.post('/api/v1/auth/sso/logout-all', {
+          client_id: this.clientId,
+          client_secret: this.clientSecret,
+          steam_id64: steamId64,
+        });
+        return okSchema.safeParse(payload).success;
+      } catch (error) {
+        if (attempt === 0 && error instanceof BssSsoError && error.retryable) {
+          const delayMs =
+            LOGOUT_RETRY_DELAY_MIN_MS +
+            Math.floor(Math.random() * (LOGOUT_RETRY_DELAY_JITTER_MS + 1));
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+        return false;
+      }
     }
+    return false;
   }
 
   private async post(path: string, payload: Record<string, string>): Promise<unknown> {
+    let response: Response;
     try {
-      const response = await this.fetchImpl(`${this.siteUrl}${path}`, {
+      response = await this.fetchImpl(`${this.siteUrl}${path}`, {
         method: 'POST',
         redirect: 'error',
         signal: AbortSignal.timeout(this.timeoutMs),
@@ -176,10 +189,14 @@ export class BssSsoClient {
         },
         body: JSON.stringify(payload),
       });
-      if (response.status !== 200) {
-        await response.body?.cancel().catch(() => undefined);
-        throw new BssSsoError();
-      }
+    } catch {
+      throw new BssSsoError(true);
+    }
+    if (response.status !== 200) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new BssSsoError(response.status >= 500);
+    }
+    try {
       return await readBoundedJson(response);
     } catch {
       throw new BssSsoError();

@@ -8,6 +8,7 @@ import { and, desc, eq, gt } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { BssSsoClient } from '../lib/bss-sso.js';
 import { revokeAllForPlayer, revokeSession, tokenIdFromToken } from '../lib/sessions.js';
 import { SESSION_COOKIE } from '../plugins/auth.js';
 
@@ -42,6 +43,46 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       }
       reply.clearCookie(SESSION_COOKIE, { path: '/' });
       return { ok: true };
+    },
+  );
+
+  fast.post(
+    '/api/v1/auth/logout-all',
+    {
+      config: {
+        audit: { action: 'user.logout_all', resource: 'session' },
+        selfService: true,
+        rateLimit: { max: 5, timeWindow: '1 minute' },
+      },
+    },
+    async (req, reply) => {
+      if (!req.user) {
+        reply.code(401);
+        return { error: 'unauthenticated' };
+      }
+
+      const siteUrl = app.config.BSS_SITE_URL ?? '/login';
+      let remoteOk = false;
+      try {
+        if (
+          req.user.steamId64 &&
+          app.config.BSS_SITE_URL &&
+          app.config.BSS_SSO_CLIENT_ID &&
+          app.config.BSS_SSO_CLIENT_SECRET
+        ) {
+          remoteOk = await new BssSsoClient({
+            siteUrl: app.config.BSS_SITE_URL,
+            panelPublicUrl: app.config.PANEL_PUBLIC_URL,
+            clientId: app.config.BSS_SSO_CLIENT_ID,
+            clientSecret: app.config.BSS_SSO_CLIENT_SECRET,
+          }).revokeAllSiteSessions(String(req.user.steamId64));
+        }
+      } finally {
+        await revokeAllForPlayer(app.db, app.redis, req.user.playerId, app.liveBus);
+        reply.clearCookie(SESSION_COOKIE, { path: '/' });
+      }
+
+      return { ok: true, remote_ok: remoteOk, site_url: siteUrl };
     },
   );
 
