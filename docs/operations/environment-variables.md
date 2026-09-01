@@ -5,7 +5,11 @@
 | Name | Required | Default | Environment | Description | Sensitive |
 |---|---:|---|---|---|---|
 | `APP_DOMAIN` | yes | `admin.localhost` | all | FQDN under which Caddy serves the panel. | no |
-| `PANEL_PUBLIC_URL` | yes | — | all | Full public URL of the panel (e.g. `https://panel.example`). Used as `openid.return_to` / `openid.realm` base for Steam OpenID. | no |
+| `PANEL_PUBLIC_URL` | yes | — | api | Точный публичный origin панели. Из него строится единственный callback BSS: `/api/v1/auth/bss/callback`; временно также обслуживает старый Steam OpenID. | no |
+| `BSS_SITE_URL` | yes | `https://bss.games` только в web | api / web | Точный origin сайта. В API задаётся вместе со всем SSO-контрактом; web использует его только для безопасной ссылки назад. | no |
+| `BSS_SSO_CLIENT_ID` | yes | — | api | Должен дословно совпадать с `PANEL_SSO_CLIENT_ID` сайта; штатное значение `squad-admin-panel`. | no |
+| `BSS_SSO_CLIENT_SECRET` | yes | — | api | Текущий общий секрет обмена и взаимного отзыва сессий; не менее 32 символов без пробелов. | yes |
+| `BSS_SSO_CLIENT_SECRET_NEXT` | no | — | api | Второй принимаемый секрет только на окно безопасной ротации; должен отличаться от текущего. | yes |
 | `TLS_ISSUER` | yes | `internal` | all | `internal` (Caddy self-signed for dev) or `acme` (Let's Encrypt). | no |
 | `ACME_EMAIL` | only if `TLS_ISSUER=acme` | `admin@example.com` | all | Contact email used by Let's Encrypt. | no |
 | `DUCKDNS_TOKEN` | only for tk104 | — | caddy (tk104) | DuckDNS API token for DNS-01 TLS (`compose.tk104.yml` / `docker/Caddyfile.tk104`) when port 80 is not forwarded. | yes |
@@ -41,6 +45,7 @@
 ```bash
 openssl rand -base64 32     # POSTGRES_PASSWORD, SESSION_SECRET
 openssl rand -base64 32     # APP_ENCRYPTION_KEY (then save offline)
+openssl rand -hex 32        # BSS_SSO_CLIENT_SECRET
 ```
 
 `APP_ENCRYPTION_KEY` rotation:

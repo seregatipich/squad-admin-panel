@@ -29,6 +29,73 @@ match the host's `panel` group and the data tree created by `install-host-bridge
 (`curl --fail`). Таймаут API, сетевой сбой и HTTP 4xx/5xx завершают deploy
 ненулевым кодом до сообщения `Deploy complete`.
 
+## Единый вход через bss.games
+
+Панель не подтверждает Steam-личность самостоятельно: штатная страница входа
+переходит на `https://bss.games`, а панель независимо определяет текущие права
+по своему RBAC после возврата пользователя. Прямые Steam-маршруты панели на
+первом выпуске остаются только как технический откат и не показываются в UI.
+
+В `.env.tk104` обязательны:
+
+```dotenv
+BSS_SITE_URL=https://bss.games
+BSS_SSO_CLIENT_ID=squad-admin-panel
+BSS_SSO_CLIENT_SECRET=<общий секрет из закрытого хранилища>
+BSS_SSO_CLIENT_SECRET_NEXT=
+```
+
+На сайте им дословно соответствуют:
+
+```dotenv
+PANEL_SSO_PUBLIC_URL=https://tk104.duckdns.org
+PANEL_SSO_CLIENT_ID=squad-admin-panel
+PANEL_SSO_CLIENT_SECRET=<тот же общий секрет>
+PANEL_SSO_CLIENT_SECRET_NEXT=
+```
+
+Разрешён ровно один callback:
+`https://tk104.duckdns.org/api/v1/auth/bss/callback`. Секреты получает только
+API-контейнер; web получает один несекретный `BSS_SITE_URL`. Неполный набор,
+HTTP-origin в production, путь/query во внешнем URL, короткий секрет или
+совпадающие current/next останавливают API до начала обслуживания запросов.
+
+### Первый выпуск и отзыв старых сессий
+
+Сначала выпустите совместимый сайт и панель с одинаковым контрактом, проверьте
+`/health`, затем один раз отзовите сессии, созданные старым прямым входом.
+Команда должна выполняться при остановленном API: она берёт короткую
+эксклюзивную блокировку таблицы, удаляет только найденные точные
+`session:<id>`/`session-touch:<id>` ключи без `SCAN`, затем удаляет строки
+PostgreSQL и печатает только итоговое число.
+
+```bash
+docker compose --env-file .env.tk104 -f compose.tk104.yml stop api
+docker compose --env-file .env.tk104 -f compose.tk104.yml run --rm --no-deps api \
+  node --enable-source-maps dist/tools/revoke-sessions-for-sso-cutover.js \
+  --confirm-all-sessions
+docker compose --env-file .env.tk104 -f compose.tk104.yml up -d api
+curl -fsk https://tk104.duckdns.org/health
+```
+
+При ошибке команды сначала верните API через `up -d api`, проверьте PostgreSQL
+и Redis и повторите команду: до успешного удаления из Redis строки базы не
+исчезают. Успешный отзыв необратим — откат image не восстановит завершённые
+сессии, пользователи войдут заново. Остальные данные не меняются.
+
+### Ротация общего секрета без перерыва
+
+1. Добавьте новый секрет как `*_SECRET_NEXT` одновременно на сайте и панели.
+2. На панели сделайте новый секрет current, а старый временно next. Сайт ещё
+   отправляет старый, но принимает новый.
+3. На сайте сделайте новый секрет current, а старый временно next.
+4. Проверьте вход и полный выход в обоих направлениях, затем очистите next в
+   обоих приложениях.
+
+Не повторяйте автоматически callback или обмен кода. Только идемпотентный
+полный отзыв делает один повтор с небольшой случайной задержкой при сетевом
+сбое/5xx; `429` не повторяется немедленно.
+
 ## CI/CD runners
 
 Every job — verification and deployment alike — runs on the organization's own
@@ -154,7 +221,8 @@ git clone git@github.com:breaking-squad/squad-admin-panel.git
 cd squad-admin-panel
 
 cp .env.example .env
-# Fill APP_DOMAIN, PANEL_PUBLIC_URL, POSTGRES_PASSWORD, APP_ENCRYPTION_KEY, SESSION_SECRET
+# Fill APP_DOMAIN, PANEL_PUBLIC_URL, BSS_*, POSTGRES_PASSWORD,
+# APP_ENCRYPTION_KEY and SESSION_SECRET
 # Generate secrets: openssl rand -base64 32
 # Save APP_ENCRYPTION_KEY offline — losing it makes RCON passwords unrecoverable.
 
@@ -168,7 +236,7 @@ docker compose config --quiet
 docker compose up -d --build
 ```
 
-`migrator` runs before `api` starts. When `api` becomes healthy, Caddy begins routing. Open `https://${APP_DOMAIN}/login` and sign in via Steam — the first login becomes Owner. The first Owner session is then redirected through `/setup` to save the organization name.
+`migrator` runs before `api` starts. When `api` becomes healthy, Caddy begins routing. Open `https://${APP_DOMAIN}/login`: вход продолжится через bss.games, а первая подтверждённая учётная запись станет Owner. Затем она перейдёт через `/setup` для начальной настройки.
 
 ## Staging deployment gate
 
@@ -189,7 +257,7 @@ Expected results:
 - `/health` returns `{"status":"ok", ...}`.
 - `/ready` returns HTTP 200 with `status:"ok"` and `checks.postgres`, `checks.redis`, `checks.bridge` equal to `ok`.
 - `/api/docs` returns an HTTP 200/30x response from the API docs UI.
-- A fresh panel can complete the Steam first-Owner login and organization-name setup.
+- Новая панель завершает первый Owner-вход через bss.games и начальную настройку.
 - The dashboard loads and the bridge/worker health widgets do not report a persistent outage.
 
 Dokploy can be used to build or restart the compose stack after the host has been prepared, but it is not a complete deployment boundary for this project. The host bridge, `panel` group, systemd socket/service, data tree, and `squad-depot` bind volume must be installed and verified outside Dokploy first.
@@ -242,6 +310,10 @@ sudo systemctl restart panel-host-bridge.service
 2. `pnpm install`
 3. Rebuild and restart affected services.
 4. Database migrations are forward-only. If the new schema has destructive changes, refer to [`migrations.md`](./migrations.md) for the manual rollback procedure.
+
+Для отката единого входа верните предыдущий image панели и прежний UI, не
+меняя общий секрет сайта. Уже отозванные одноразовой командой сессии не
+восстанавливаются; это единственная необратимая часть перехода.
 
 ## Verifying a deployment
 

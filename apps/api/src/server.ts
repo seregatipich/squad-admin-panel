@@ -15,7 +15,7 @@ import {
 import type { AppConfig } from './config.js';
 import { loadEncryptionKey } from './lib/crypto.js';
 import diagPlugin from './lib/diag.js';
-import { buildLogger } from './lib/logger.js';
+import { buildLogger, shouldDisableSensitiveAuthRequestLogging } from './lib/logger.js';
 import { MEDIA_MAX_UPLOAD_BYTES } from './lib/media-storage.js';
 import { createRconClient } from './lib/rcon.js';
 import auditPlugin from './plugins/audit.js';
@@ -44,7 +44,7 @@ export async function buildServer(config: AppConfig) {
   const app = Fastify({
     loggerInstance: logger,
     trustProxy: true,
-    disableRequestLogging: false,
+    disableRequestLogging: shouldDisableSensitiveAuthRequestLogging,
     genReqId: (req) =>
       (req.headers['x-request-id'] as string | undefined) ??
       `req-${Math.random().toString(36).slice(2)}`,

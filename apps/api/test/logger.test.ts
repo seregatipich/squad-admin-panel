@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { als, buildLogger } from '../src/lib/logger.js';
+import { als, buildLogger, shouldDisableSensitiveAuthRequestLogging } from '../src/lib/logger.js';
 
 describe('buildLogger', () => {
   it('returns a pino logger and a LateSink', () => {
@@ -44,6 +44,37 @@ describe('buildLogger', () => {
     const hasWarn = chunks.some((c) => c.includes('should-appear'));
     expect(hasDebug).toBe(false);
     expect(hasWarn).toBe(true);
+  });
+
+  it('redacts the BSS client secret when a request body is logged explicitly', () => {
+    const chunks: string[] = [];
+    const { logger, lateSink } = buildLogger('info');
+    lateSink.setInner(
+      new Writable({
+        write(chunk, _enc, cb) {
+          chunks.push(chunk.toString());
+          cb();
+        },
+      }),
+    );
+    logger.info({ req: { body: { client_secret: 'sentinel-bss-secret' } } }, 'request');
+
+    expect(chunks.join('')).not.toContain('sentinel-bss-secret');
+    expect(chunks.join('')).toContain('[redacted]');
+  });
+});
+
+describe('sensitive auth request logging', () => {
+  it('disables automatic logs only for the BSS callback path', () => {
+    expect(
+      shouldDisableSensitiveAuthRequestLogging({
+        url: '/api/v1/auth/bss/callback?code=secret&state=secret',
+      }),
+    ).toBe(true);
+    expect(
+      shouldDisableSensitiveAuthRequestLogging({ url: '/api/v1/auth/bss/callback-extra' }),
+    ).toBe(false);
+    expect(shouldDisableSensitiveAuthRequestLogging({ url: '/api/v1/auth/bss/login' })).toBe(false);
   });
 });
 
