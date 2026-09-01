@@ -57,7 +57,35 @@ describe('configure-bss-sso-env.sh', () => {
     assert.match(cutover, /revoke-sessions-for-sso-cutover\.js/);
     assert.match(cutover, /--confirm-all-sessions/);
     assert.match(cutover, /name: External health check\n\s+if: always\(\)/);
-    assert.ok((workflow.match(/name: Remove SSH deploy key/g) ?? []).length === 3);
+    assert.ok((workflow.match(/name: Remove SSH deploy key/g) ?? []).length === 4);
+  });
+
+  it('provisions the site read token only for the exact dev SHA without restarting services', () => {
+    const workflow = readFileSync(
+      path.join(REPOSITORY_ROOT, '.github/workflows/deploy-tk104.yml'),
+      'utf8',
+    );
+    const start = workflow.indexOf('provision-site-read-token:');
+    const end = workflow.indexOf('revoke-sessions-for-sso-cutover:');
+    const provision = workflow.slice(start, end);
+    const ci = readFileSync(path.join(REPOSITORY_ROOT, '.github/workflows/ci.yml'), 'utf8');
+
+    assert.ok(start >= 0 && end > start);
+    assert.match(provision, /name: Verify exact dev revision/);
+    assert.match(provision, /EXPECTED_SHA: \$\{\{ inputs\.expected_sha \}\}/);
+    assert.match(provision, /GITHUB_REF.*refs\/heads\/dev/);
+    assert.match(provision, /EXPECTED_SHA.*GITHUB_SHA/);
+    assert.match(provision, /secrets\.PANEL_READ_API_TOKEN/);
+    assert.match(provision, /base64 -w 0/);
+    assert.match(provision, /SITE_PANEL_READ_TOKEN_B64/);
+    assert.doesNotMatch(provision, /base64 --decode/);
+    assert.match(provision, /scripts\/provision-site-read-token\.mjs/);
+    assert.match(provision, /node --input-type=module/);
+    assert.doesNotMatch(provision, /restart|\bstop\b|\bup -d\b|deploy-tk104\.sh/i);
+    assert.match(
+      ci,
+      /docker run --rm --entrypoint node squad-admin-panel\/api:ci --input-type=module -e "await import\('postgres'\)"/,
+    );
   });
 
   it('atomically changes only the four SSO settings and never prints the secret', () => {

@@ -19,12 +19,12 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: 'full stack, web preview, or one-time SSO session cutover'
+        description: 'deployment or one-time SSO operation'
         type: choice
         default: full
-        options: [full, web, sso-cutover]
+        options: [full, web, site-read-token, sso-cutover]
       expected_sha:
-        description: 'exact master SHA required for sso-cutover'
+        description: 'exact ref SHA required for one-time SSO operations'
         type: string
         required: false
 
@@ -143,6 +143,54 @@ jobs:
           done
           echo "external health check did not reach 200" >&2
           exit 1
+
+      - name: Remove SSH deploy key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy
+
+  provision-site-read-token:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.target == 'site-read-token'
+    runs-on:
+      group: selfhost-group-1
+    steps:
+      - name: Verify exact dev revision
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          if [[ "${GITHUB_REF}" != "refs/heads/dev" || "${EXPECTED_SHA}" != "${GITHUB_SHA}" ]]; then
+            echo "site-read-token requires the exact requested dev SHA." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Configure SSH deploy key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.TK104_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H tk104.duckdns.org >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Provision limited site read token
+        env:
+          PANEL_READ_API_TOKEN: ${{ secrets.PANEL_READ_API_TOKEN }}
+        run: |
+          if [[ -z "${PANEL_READ_API_TOKEN}" ]]; then
+            echo "Required panel read token is missing." >&2
+            exit 1
+          fi
+          encoded_token="$(printf '%s' "${PANEL_READ_API_TOKEN}" | base64 -w 0)"
+          {
+            printf '%s\n' "${encoded_token}"
+            sed -n '1,$p' scripts/provision-site-read-token.mjs
+          } | ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+            seregatipich@tk104.duckdns.org \
+            'set -euo pipefail; IFS= read -r SITE_PANEL_READ_TOKEN_B64; export SITE_PANEL_READ_TOKEN_B64 BSS_PROVISION_SITE_READ_TOKEN_RUN=1; cd "$HOME/apps/squad-admin-panel"; docker compose --env-file .env.tk104 -f compose.tk104.yml exec -T -e SITE_PANEL_READ_TOKEN_B64 -e BSS_PROVISION_SITE_READ_TOKEN_RUN api node --input-type=module'
+          unset encoded_token
 
       - name: Remove SSH deploy key
         if: always()

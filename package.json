@@ -31,7 +31,7 @@
     "verify:audit-chain": "tsx scripts/verify-audit-chain.ts",
     "solve:issues": "tsx scripts/solve-issues-parallel.ts",
     "solve:issues:test": "tsx --test scripts/solve-issues-parallel.test.ts",
-    "test:scripts": "pnpm --filter panel-bridge build && tsx --test --test-concurrency=1 scripts/configure-bss-sso-env.test.ts scripts/operations-scripts.test.ts scripts/rnsquadjs-shadow-diff.test.ts scripts/verify-audit-chain.test.ts",
+    "test:scripts": "pnpm --filter panel-bridge build && tsx --test --test-concurrency=1 scripts/configure-bss-sso-env.test.ts scripts/operations-scripts.test.ts scripts/provision-site-read-token.test.ts scripts/rnsquadjs-shadow-diff.test.ts scripts/verify-audit-chain.test.ts",
     "prepare": "lefthook install || true"
   },
   "devDependencies": {

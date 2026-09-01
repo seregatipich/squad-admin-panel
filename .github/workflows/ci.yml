@@ -239,6 +239,8 @@ jobs:
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: build api image
         run: docker build -f docker/api.Dockerfile -t squad-admin-panel/api:ci .
+      - name: verify api runtime database client
+        run: docker run --rm --entrypoint node squad-admin-panel/api:ci --input-type=module -e "await import('postgres')"
       - name: build worker-log-ingest image
         run: docker build -f docker/worker.Dockerfile --build-arg WORKER=log-ingest -t squad-admin-panel/worker-log-ingest:ci .
       - name: build worker-rcon image
