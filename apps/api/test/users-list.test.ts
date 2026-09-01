@@ -153,7 +153,7 @@ describeIfDb('GET /api/v1/users — HTTP integration', () => {
     const cookie = await loginAsOwner(h);
     const ownerPlayerId = h.seed.ownerPlayerId;
     if (!ownerPlayerId) throw new Error('owner player missing');
-    const expiresAt = '2026-08-02T18:30:00.000Z';
+    const expiresAt = '2100-08-02T18:30:00.000Z';
     const comment = 'Срочная VIP-роль по заявке штаба';
     await h.db.execute(drizzleSql`
       UPDATE players
