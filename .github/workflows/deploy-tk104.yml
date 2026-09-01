@@ -57,6 +57,19 @@ jobs:
             -e "ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20" \
             ./ seregatipich@tk104.duckdns.org:~/apps/squad-admin-panel/
 
+      - name: Configure BSS SSO settings
+        env:
+          BSS_SSO_SHARED_SECRET: ${{ secrets.BSS_SSO_SHARED_SECRET }}
+        run: |
+          if [[ -z "${BSS_SSO_SHARED_SECRET}" ]]; then
+            echo "Required BSS SSO secret is missing." >&2
+            exit 1
+          fi
+          printf '%s' "${BSS_SSO_SHARED_SECRET}" | \
+            ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+              seregatipich@tk104.duckdns.org \
+              'cd ~/apps/squad-admin-panel && bash scripts/configure-bss-sso-env.sh'
+
       - name: Build and restart the stack on tk104
         run: |
           ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \

@@ -149,7 +149,7 @@ Note the asymmetry: the privileged path is one-directional and narrow, while the
 | `packages/shared-types` | Zod schemas + `eventEnvelope`; the only package both `apps/web` and `apps/api` import |
 | `packages/bridge-client`, `packages/diag` | TS RPC client for the bridge; structural-injection diagnostics sink (the cleanest dependency boundary in the repo, `packages/diag/src/index.ts:1`) |
 | `docker/` | `api|web|worker|squad-server|restic|depot-init|rnsquadjs` Dockerfiles + two Caddyfiles. `worker.Dockerfile` is parameterised by `ARG WORKER` |
-| `scripts/` (22) | `bootstrap.sh` (7-stage installer), `new-test-db.sh`, `pre-push-checklist.sh`, `verify-done.sh`, `git-guard.sh`, `install-host-bridge.sh`, `deploy-tk104.sh` |
+| `scripts/` | `bootstrap.sh` (7-stage installer), `new-test-db.sh`, `pre-push-checklist.sh`, `verify-done.sh`, `git-guard.sh`, `install-host-bridge.sh`, `configure-bss-sso-env.sh`, `deploy-tk104.sh` |
 | `docs/` (238 `.md`) | `architecture/` (incl. `decisions.md` with **9** dated records), `components/`, `development/`, `operations/`. Substantially stale in places — see the documentation chapter |
 | `ai_docs/` | Agent working corpus; `ai_docs/adr/` holds **2** further ADRs (11 total) |
 
