@@ -52,6 +52,7 @@ afterEach(async () => {
 describe('provision-site-read-token', () => {
   it('rejects malformed input before touching the database', async () => {
     assert.throws(() => parseSiteReadToken('not-a-token'), /формат/i);
+    assert.throws(() => parseSiteReadToken(`${FIRST_TOKEN}\nprocess.exit(0)`), /формат/i);
 
     let transactionOpened = false;
     const sql = {
@@ -130,7 +131,7 @@ describe('provision-site-read-token', () => {
           ...process.env,
           BSS_PROVISION_SITE_READ_TOKEN_RUN: '1',
           DATABASE_URL: database.url,
-          SITE_PANEL_READ_TOKEN: FIRST_TOKEN,
+          SITE_PANEL_READ_TOKEN_B64: Buffer.from(FIRST_TOKEN).toString('base64'),
         },
         input: readFileSync(SCRIPT),
         encoding: 'utf8',
@@ -144,6 +145,24 @@ describe('provision-site-read-token', () => {
     } finally {
       await sql.end();
     }
+  });
+
+  it('does not normalize a trailing newline during stdin transport', () => {
+    const result = spawnSync(process.execPath, ['--input-type=module'], {
+      cwd: path.join(REPOSITORY_ROOT, 'apps/api'),
+      env: {
+        ...process.env,
+        BSS_PROVISION_SITE_READ_TOKEN_RUN: '1',
+        DATABASE_URL: 'postgres://unused:unused@127.0.0.1:1/unused',
+        SITE_PANEL_READ_TOKEN_B64: Buffer.from(`${FIRST_TOKEN}\n`).toString('base64'),
+      },
+      input: readFileSync(SCRIPT),
+      encoding: 'utf8',
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Неверный формат ключа чтения сайта/);
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(FIRST_TOKEN));
   });
 
   it('is idempotent and rotates only its own previous token', async () => {

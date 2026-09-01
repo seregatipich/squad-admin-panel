@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
+import path from 'node:path';
 
 const TOKEN_NAME = 'bss.games: проверка доступа';
 const TOKEN_SCOPES = ['user:view', 'role:view'];
@@ -131,13 +133,21 @@ export async function provisionSiteReadToken(sql, plaintext) {
 }
 
 async function runCli() {
-  const plaintext = process.env.SITE_PANEL_READ_TOKEN ?? '';
+  const encodedToken = process.env.SITE_PANEL_READ_TOKEN_B64 ?? '';
+  const decodedToken = Buffer.from(encodedToken, 'base64');
+  if (!encodedToken || decodedToken.toString('base64') !== encodedToken) {
+    throw new Error('Неверный формат ключа чтения сайта.');
+  }
+  const plaintext = decodedToken.toString('utf8');
   parseSiteReadToken(plaintext);
 
   const databaseUrl = process.env.DATABASE_URL?.trim();
   if (!databaseUrl) throw new Error('DATABASE_URL не задан.');
 
-  const { default: postgres } = await import('postgres');
+  const requireFromDatabasePackage = createRequire(
+    path.resolve(process.cwd(), '../../packages/db/package.json'),
+  );
+  const postgres = requireFromDatabasePackage('postgres');
   const sql = postgres(databaseUrl, { max: 1, onnotice: () => undefined });
   try {
     const result = await provisionSiteReadToken(sql, plaintext);

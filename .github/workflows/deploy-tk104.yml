@@ -151,12 +151,19 @@ jobs:
   provision-site-read-token:
     if: >-
       github.event_name == 'workflow_dispatch' &&
-      github.event.inputs.target == 'site-read-token' &&
-      github.ref == 'refs/heads/dev' &&
-      github.event.inputs.expected_sha == github.sha
+      github.event.inputs.target == 'site-read-token'
     runs-on:
       group: selfhost-group-1
     steps:
+      - name: Verify exact dev revision
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          if [[ "${GITHUB_REF}" != "refs/heads/dev" || "${EXPECTED_SHA}" != "${GITHUB_SHA}" ]]; then
+            echo "site-read-token requires the exact requested dev SHA." >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -176,12 +183,14 @@ jobs:
             echo "Required panel read token is missing." >&2
             exit 1
           fi
+          encoded_token="$(printf '%s' "${PANEL_READ_API_TOKEN}" | base64 -w 0)"
           {
-            printf '%s\n' "${PANEL_READ_API_TOKEN}"
+            printf '%s\n' "${encoded_token}"
             sed -n '1,$p' scripts/provision-site-read-token.mjs
           } | ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
             seregatipich@tk104.duckdns.org \
-            'set -euo pipefail; IFS= read -r SITE_PANEL_READ_TOKEN; export SITE_PANEL_READ_TOKEN BSS_PROVISION_SITE_READ_TOKEN_RUN=1; cd "$HOME/apps/squad-admin-panel"; docker compose --env-file .env.tk104 -f compose.tk104.yml exec -T -e SITE_PANEL_READ_TOKEN -e BSS_PROVISION_SITE_READ_TOKEN_RUN api node --input-type=module'
+            'set -euo pipefail; IFS= read -r SITE_PANEL_READ_TOKEN_B64; export SITE_PANEL_READ_TOKEN_B64 BSS_PROVISION_SITE_READ_TOKEN_RUN=1; cd "$HOME/apps/squad-admin-panel"; docker compose --env-file .env.tk104 -f compose.tk104.yml exec -T -e SITE_PANEL_READ_TOKEN_B64 -e BSS_PROVISION_SITE_READ_TOKEN_RUN api node --input-type=module'
+          unset encoded_token
 
       - name: Remove SSH deploy key
         if: always()
