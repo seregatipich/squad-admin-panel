@@ -184,6 +184,7 @@ jobs:
           REMOTE
 
       - name: External health check
+        if: always()
         run: |
           for _ in $(seq 1 20); do
             code=$(curl -s -o /dev/null -w '%{http_code}' https://tk104.duckdns.org/health --max-time 10 || echo 000)

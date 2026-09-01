@@ -56,6 +56,7 @@ describe('configure-bss-sso-env.sh', () => {
     assert.match(cutover, /stop api/);
     assert.match(cutover, /revoke-sessions-for-sso-cutover\.js/);
     assert.match(cutover, /--confirm-all-sessions/);
+    assert.match(cutover, /name: External health check\n\s+if: always\(\)/);
     assert.ok((workflow.match(/name: Remove SSH deploy key/g) ?? []).length === 3);
   });
 
