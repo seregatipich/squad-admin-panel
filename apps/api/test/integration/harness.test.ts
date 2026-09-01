@@ -21,10 +21,16 @@ describe('integration harness', () => {
     expect([200, 401]).toContain(meRes.statusCode);
   }, 30_000);
 
-  it('GET /api/v1/auth/steam/login resolves through the shared registerRoutes() (regression, #207)', async () => {
+  it('keeps BSS as the only browser login route after the SSO cutover', async () => {
     current = await buildIntegrationApp();
-    const res = await current.app.inject({ method: 'GET', url: '/api/v1/auth/steam/login' });
-    expect(res.statusCode).toBe(302);
+    const bss = await current.app.inject({ method: 'GET', url: '/api/v1/auth/bss/login' });
+    const directSteam = await current.app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/steam/login',
+    });
+
+    expect(bss.statusCode).toBe(302);
+    expect(directSteam.statusCode).toBe(404);
   }, 30_000);
 
   it('cleanup drops the database', async () => {

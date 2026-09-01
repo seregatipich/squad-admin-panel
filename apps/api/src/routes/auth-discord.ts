@@ -78,8 +78,8 @@ const discordAuthRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
   /**
-   * Step 1 of the link flow. Mirrors `auth-steam.ts`: a single-use random
-   * value lands in both Redis (bound to the caller's player id, TTL 300 s) and
+   * Step 1 of the link flow. A single-use random value lands in both Redis
+   * (bound to the caller's player id, TTL 300 s) and
    * an httpOnly `__Host-` cookie, so the callback can prove the round-trip
    * started in this browser, for this session.
    */

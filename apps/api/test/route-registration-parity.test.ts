@@ -8,9 +8,8 @@ import { describe, expect, it } from 'vitest';
  * `test/integration/harness.ts` call its exported `registerRoutes()`). Before
  * this file existed, `server.ts` and `harness.ts` each hand-maintained their
  * own ~115-entry import/registration list and silently drifted —
- * `auth-steam.ts` was registered in `server.ts` but missing from
- * `harness.ts`, so `GET /api/v1/auth/steam/login` 404'd in every integration
- * test. This test turns any future drift between `src/routes/` and
+ * an authentication route was once registered in `server.ts` but missing
+ * from `harness.ts`. This test turns any future drift between `src/routes/` and
  * `routes/index.ts` into a hard failure instead of a silent gap.
  */
 

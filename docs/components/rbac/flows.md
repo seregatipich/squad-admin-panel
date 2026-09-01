@@ -2,10 +2,12 @@
 
 ## First-login Owner trick
 
-Runs inside `GET /api/v1/auth/steam/callback` after a successful Steam OpenID validation, within a single Postgres transaction protected by an advisory lock.
+Выполняется внутри `GET /api/v1/auth/bss/callback` после серверного обмена
+одноразового кода и проверки SteamID64, в одной транзакции PostgreSQL под
+advisory lock.
 
 ```
-Steam callback handler
+BSS callback handler
       │
       ├── UPSERT players (steam_id64, canonical_name, ...)
       │
