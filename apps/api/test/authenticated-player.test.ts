@@ -40,9 +40,10 @@ async function buildApp(dbUrl: string) {
     // biome-ignore lint/suspicious/noExplicitAny: partial config for isolated helper test
   } as any);
   await app.register(cookie, { secret: 'a'.repeat(48) });
-  app.get('/establish', async (req, reply) =>
-    establishAuthenticatedPlayerSession(app, req, reply, identity),
-  );
+  app.get('/establish', async (req, reply) => {
+    await establishAuthenticatedPlayerSession(app, req, reply, identity);
+    return reply;
+  });
   await app.ready();
   return {
     app,

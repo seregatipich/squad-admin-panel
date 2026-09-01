@@ -28,6 +28,7 @@ import requestContextPlugin from '../src/plugins/request-context.js';
 import adminsCfgRoutes from '../src/routes/admins-cfg.js';
 import auditRoutes from '../src/routes/audit.js';
 import authRoutes from '../src/routes/auth.js';
+import bssAuthRoutes from '../src/routes/auth-bss.js';
 import discordAuthRoutes from '../src/routes/auth-discord.js';
 import steamRoutes from '../src/routes/auth-steam.js';
 import balancerRoutes from '../src/routes/balancer.js';
@@ -114,6 +115,7 @@ async function collectRoutes(): Promise<RouteRecord[]> {
   await app.register(integrationsBalancerRoutes);
   await app.register(integrationsDiscordRoleMappingsRoutes);
   await app.register(auditRoutes);
+  await app.register(bssAuthRoutes);
   await app.register(steamRoutes);
   await app.register(discordAuthRoutes);
   await app.register(vipSubscriptionRoutes);

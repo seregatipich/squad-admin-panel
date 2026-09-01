@@ -2,6 +2,11 @@ import { players } from '@squad/db/schema';
 import { normalizePlayerName } from '@squad/shared-config';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { SESSION_COOKIE } from '../plugins/auth.js';
+
+export type AuthenticatedPlayerSessionResult =
+  | { ok: true; scope: 'panel' | 'self_service' }
+  | { ok: false; error: 'identity_rejected' | 'identity_persist_failed' | 'owner_role_missing' };
+
 import type { BssIdentity } from './bss-sso.js';
 import { claimFirstOwner } from './first-owner.js';
 import { loadUserPermissions } from './rbac.js';
@@ -12,11 +17,12 @@ export async function establishAuthenticatedPlayerSession(
   req: FastifyRequest,
   reply: FastifyReply,
   identity: BssIdentity,
-): Promise<FastifyReply> {
+): Promise<AuthenticatedPlayerSessionResult> {
   const canonicalName = identity.canonicalName.trim();
   const canonicalNameNormalized = normalizePlayerName(canonicalName);
   if (!canonicalName || !canonicalNameNormalized) {
-    return reply.code(400).send({ error: 'identity_rejected' });
+    reply.code(400).send({ error: 'identity_rejected' });
+    return { ok: false, error: 'identity_rejected' };
   }
 
   const update = {
@@ -36,13 +42,17 @@ export async function establishAuthenticatedPlayerSession(
     .onConflictDoUpdate({ target: players.steamId64, set: update })
     .returning({ id: players.id });
   const playerId = playerRows[0]?.id;
-  if (!playerId) return reply.code(500).send({ error: 'identity_persist_failed' });
+  if (!playerId) {
+    reply.code(500).send({ error: 'identity_persist_failed' });
+    return { ok: false, error: 'identity_persist_failed' };
+  }
 
   // biome-ignore lint/suspicious/noExplicitAny: SentinelBridge structural subtype
   const claim = await claimFirstOwner(app.db, app.bridge as any, playerId, identity.steamId64);
   if (claim === 'no_owner_role') {
     req.log.error('Owner role missing — system roles not seeded?');
-    return reply.code(500).send({ error: 'owner_role_missing' });
+    reply.code(500).send({ error: 'owner_role_missing' });
+    return { ok: false, error: 'owner_role_missing' };
   }
 
   const permissions = await loadUserPermissions(app.db, playerId);
@@ -61,5 +71,6 @@ export async function establishAuthenticatedPlayerSession(
     sameSite: 'lax',
     maxAge: app.config.SESSION_TTL_SECONDS,
   });
-  return reply.redirect(scope === 'panel' ? '/' : '/me', 302);
+  reply.redirect(scope === 'panel' ? '/' : '/me', 302);
+  return { ok: true, scope };
 }

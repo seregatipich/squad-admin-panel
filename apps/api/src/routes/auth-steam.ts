@@ -103,7 +103,8 @@ const steamRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const identity: BssIdentity = { steamId64, canonicalName, avatarUrl };
-      return establishAuthenticatedPlayerSession(app, req, reply, identity);
+      await establishAuthenticatedPlayerSession(app, req, reply, identity);
+      return reply;
     },
   );
 };
