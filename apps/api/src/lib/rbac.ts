@@ -141,7 +141,9 @@ export async function loadUserPermissions(
         ARRAY[]::text[]
       ) AS squad_permissions
     FROM players p
-    LEFT JOIN roles r ON r.id = p.role_id
+    LEFT JOIN roles r
+      ON r.id = p.role_id
+     AND (p.role_expires_at IS NULL OR p.role_expires_at > now())
     WHERE p.id = ${playerId}
     LIMIT 1
   `);

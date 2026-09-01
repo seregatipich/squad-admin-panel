@@ -140,4 +140,93 @@ describe('loadConfig', () => {
 
     expect(loadConfig().BALANCER_WEBHOOK_SECRET).toBe(secret);
   });
+
+  it('accepts a complete BSS SSO client and an overlapping rotation secret', async () => {
+    Object.assign(process.env, VALID_ENV, {
+      NODE_ENV: 'production',
+      BSS_SITE_URL: 'https://bss.games',
+      BSS_SSO_CLIENT_ID: 'squad-admin-panel',
+      BSS_SSO_CLIENT_SECRET: 'c'.repeat(32),
+      BSS_SSO_CLIENT_SECRET_NEXT: 'd'.repeat(32),
+    });
+    const loadConfig = await freshLoadConfig();
+
+    const config = loadConfig();
+
+    expect(config.BSS_SITE_URL).toBe('https://bss.games');
+    expect(config.BSS_SSO_CLIENT_ID).toBe('squad-admin-panel');
+    expect(config.BSS_SSO_CLIENT_SECRET_NEXT).toBe('d'.repeat(32));
+  });
+
+  it.each([
+    { BSS_SITE_URL: 'https://bss.games' },
+    { BSS_SSO_CLIENT_ID: 'squad-admin-panel' },
+    { BSS_SSO_CLIENT_SECRET: 'c'.repeat(32) },
+    { BSS_SSO_CLIENT_SECRET_NEXT: 'd'.repeat(32) },
+  ])('rejects an incomplete BSS SSO configuration: %o', async (partial) => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+    Object.assign(process.env, VALID_ENV, { NODE_ENV: 'production' }, partial);
+    const loadConfig = await freshLoadConfig();
+
+    expect(() => loadConfig()).toThrow('process.exit called');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it.each(['http://bss.games', 'https://bss.games/path', 'https://user:pass@bss.games'])(
+    'rejects an unsafe production BSS site origin: %s',
+    async (siteUrl) => {
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+        throw new Error('process.exit called');
+      });
+      Object.assign(process.env, VALID_ENV, {
+        NODE_ENV: 'production',
+        BSS_SITE_URL: siteUrl,
+        BSS_SSO_CLIENT_ID: 'squad-admin-panel',
+        BSS_SSO_CLIENT_SECRET: 'c'.repeat(32),
+      });
+      const loadConfig = await freshLoadConfig();
+
+      expect(() => loadConfig()).toThrow('process.exit called');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    },
+  );
+
+  it.each([
+    { PANEL_PUBLIC_URL: 'http://panel.example' },
+    { BSS_SSO_CLIENT_ID: ' squad-admin-panel' },
+  ])('rejects an unsafe production BSS callback setting: %o', async (unsafe) => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+    Object.assign(process.env, VALID_ENV, {
+      NODE_ENV: 'production',
+      BSS_SITE_URL: 'https://bss.games',
+      BSS_SSO_CLIENT_ID: 'squad-admin-panel',
+      BSS_SSO_CLIENT_SECRET: 'c'.repeat(32),
+      ...unsafe,
+    });
+    const loadConfig = await freshLoadConfig();
+
+    expect(() => loadConfig()).toThrow('process.exit called');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('rejects identical current and next BSS SSO secrets', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+    Object.assign(process.env, VALID_ENV, {
+      NODE_ENV: 'production',
+      BSS_SITE_URL: 'https://bss.games',
+      BSS_SSO_CLIENT_ID: 'squad-admin-panel',
+      BSS_SSO_CLIENT_SECRET: 'c'.repeat(32),
+      BSS_SSO_CLIENT_SECRET_NEXT: 'c'.repeat(32),
+    });
+    const loadConfig = await freshLoadConfig();
+
+    expect(() => loadConfig()).toThrow('process.exit called');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
 });
