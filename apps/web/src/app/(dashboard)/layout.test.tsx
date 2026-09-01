@@ -1,3 +1,4 @@
+import { Children, isValidElement, type ReactElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
@@ -21,9 +22,9 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/components/connection-banner', () => ({
   ConnectionBanner: () => null,
 }));
-vi.mock('@/components/TopNav', () => ({
-  TopNav: () => null,
-}));
+const { topNavMock } = vi.hoisted(() => ({ topNavMock: vi.fn(() => null) }));
+vi.mock('@/components/TopNav', () => ({ TopNav: topNavMock }));
+vi.mock('@/lib/bss-site', () => ({ getBssSiteUrl: () => 'https://bss.games' }));
 vi.mock('@/components/ServerBar', () => ({
   ServerBar: () => null,
 }));
@@ -77,8 +78,12 @@ describe('DashboardLayout', () => {
 
   it('renders the shell for a session that holds panel permissions', async () => {
     requireSessionMock.mockResolvedValue(session(['servers.view']));
-    await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
+    const shell = await DashboardLayout({ children: null });
     expect(redirectMock).not.toHaveBeenCalled();
+    const topNav = Children.toArray(shell.props.children).find(
+      (child) => isValidElement(child) && child.type === topNavMock,
+    );
+    expect((topNav as ReactElement<{ siteUrl: string }>).props.siteUrl).toBe('https://bss.games');
   });
 
   // #225: `redirect()` aborts by throwing, so calling it inside the

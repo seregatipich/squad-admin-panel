@@ -215,10 +215,18 @@ describe('POST /api/v1/auth/logout', () => {
       method: 'POST',
       url: '/api/v1/auth/logout-all',
       cookies: { [SESSION_COOKIE]: token },
+      payload: { site_url: 'https://attacker.example' },
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ ok: true, remote_ok: false });
+    const body = response.json() as { ok: true; remote_ok: false; site_url: string };
+    expect(body).toMatchObject({ ok: true, remote_ok: false });
+    const destination = new URL(body.site_url);
+    expect(destination.origin).toBe('https://bss.games');
+    expect(destination.pathname).toBe('/cabinet');
+    expect(destination.searchParams.get('error')).toBe('true');
+    expect(destination.searchParams.get('message')).toContain('Сайт мог остаться открытым');
+    expect(body.site_url).not.toContain('attacker.example');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(
       await h.db.select().from(sessionsTable).where(eq(sessionsTable.playerId, playerId)),

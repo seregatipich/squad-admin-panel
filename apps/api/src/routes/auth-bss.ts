@@ -132,13 +132,15 @@ const bssAuthRoutes: FastifyPluginAsync = async (app) => {
         }
 
         const identity = await new BssSsoClient(config).exchangeCode({ code, codeVerifier });
-        const result = await establishAuthenticatedPlayerSession(app, request, reply, identity);
+        const result = await establishAuthenticatedPlayerSession(app, request, reply, identity, {
+          sendErrorResponse: false,
+        });
         safeCallbackLog(
           request,
           result.ok ? 'accepted' : 'rejected',
           result.ok ? null : 'session_rejected',
         );
-        return reply;
+        return result.ok ? reply : reply.redirect('/login?error=sso_failed', 302);
       } catch {
         safeCallbackLog(request, 'rejected', 'exchange_failed');
         if (reply.sent) return reply;

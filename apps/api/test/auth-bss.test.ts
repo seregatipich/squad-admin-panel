@@ -407,4 +407,20 @@ describe('BSS authentication routes', () => {
     expect(h.logs.join('')).not.toContain(started.state);
     expect(h.logs.join('')).not.toContain(sentinelFailure);
   });
+
+  it('returns a recoverable login page when the accepted identity cannot create a session', async () => {
+    const started = await beginLogin('192.0.2.34');
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      Response.json({
+        steam_id64: String(testSteamId(299_499)),
+        canonical_name: '   ',
+        avatar_url: null,
+      }),
+    );
+
+    const response = await completeLogin({ ...started, ip: '192.0.2.35' });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/login?error=sso_failed');
+  });
 });

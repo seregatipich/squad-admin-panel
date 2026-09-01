@@ -8,6 +8,7 @@ import { ServerBar } from '@/components/ServerBar';
 import { TopNav } from '@/components/TopNav';
 import { ToastRegion } from '@/components/ui/ToastRegion';
 import { apiFetch } from '@/lib/api';
+import { getBssSiteUrl } from '@/lib/bss-site';
 import { requireSession } from '@/lib/dal';
 import { NAV_GROUPS } from '@/lib/nav';
 
@@ -62,6 +63,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <TopNav
         permissions={me.permissions}
         displayName={me.canonical_name}
+        siteUrl={getBssSiteUrl()}
         groups={NAV_GROUPS}
         economyEnabled={me.economy_enabled ?? false}
       />

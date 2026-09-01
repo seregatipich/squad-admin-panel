@@ -19,6 +19,18 @@ import { SESSION_COOKIE } from '../plugins/auth.js';
  */
 const NAME_HISTORY_LIMIT = 50;
 
+function globalLogoutDestination(siteUrl: string | undefined, remoteOk: boolean): string {
+  if (!siteUrl) return '/login';
+  if (remoteOk) return siteUrl;
+  const destination = new URL('/cabinet', siteUrl);
+  destination.search = new URLSearchParams({
+    message:
+      'В панели выполнен выход со всех устройств. Сайт мог остаться открытым — завершите сессии на нём повторно.',
+    error: 'true',
+  }).toString();
+  return destination.toString();
+}
+
 const authRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
 
@@ -61,7 +73,6 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'unauthenticated' };
       }
 
-      const siteUrl = app.config.BSS_SITE_URL ?? '/login';
       let remoteOk = false;
       try {
         if (
@@ -82,7 +93,11 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         reply.clearCookie(SESSION_COOKIE, { path: '/' });
       }
 
-      return { ok: true, remote_ok: remoteOk, site_url: siteUrl };
+      return {
+        ok: true,
+        remote_ok: remoteOk,
+        site_url: globalLogoutDestination(app.config.BSS_SITE_URL, remoteOk),
+      };
     },
   );
 

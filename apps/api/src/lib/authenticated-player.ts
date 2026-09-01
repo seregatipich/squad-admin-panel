@@ -17,11 +17,13 @@ export async function establishAuthenticatedPlayerSession(
   req: FastifyRequest,
   reply: FastifyReply,
   identity: BssIdentity,
+  options: { sendErrorResponse?: boolean } = {},
 ): Promise<AuthenticatedPlayerSessionResult> {
+  const sendErrorResponse = options.sendErrorResponse ?? true;
   const canonicalName = identity.canonicalName.trim();
   const canonicalNameNormalized = normalizePlayerName(canonicalName);
   if (!canonicalName || !canonicalNameNormalized) {
-    reply.code(400).send({ error: 'identity_rejected' });
+    if (sendErrorResponse) reply.code(400).send({ error: 'identity_rejected' });
     return { ok: false, error: 'identity_rejected' };
   }
 
@@ -43,7 +45,7 @@ export async function establishAuthenticatedPlayerSession(
     .returning({ id: players.id });
   const playerId = playerRows[0]?.id;
   if (!playerId) {
-    reply.code(500).send({ error: 'identity_persist_failed' });
+    if (sendErrorResponse) reply.code(500).send({ error: 'identity_persist_failed' });
     return { ok: false, error: 'identity_persist_failed' };
   }
 
@@ -51,7 +53,7 @@ export async function establishAuthenticatedPlayerSession(
   const claim = await claimFirstOwner(app.db, app.bridge as any, playerId, identity.steamId64);
   if (claim === 'no_owner_role') {
     req.log.error('Owner role missing — system roles not seeded?');
-    reply.code(500).send({ error: 'owner_role_missing' });
+    if (sendErrorResponse) reply.code(500).send({ error: 'owner_role_missing' });
     return { ok: false, error: 'owner_role_missing' };
   }
 
