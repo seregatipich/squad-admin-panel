@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildIntegrationApp, type IntegrationHarness } from './harness.js';
+import { buildIntegrationApp, type IntegrationHarness, loginAsOwner } from './harness.js';
 
 let current: IntegrationHarness | null = null;
 
@@ -22,11 +22,15 @@ describe('integration harness', () => {
   }, 30_000);
 
   it('keeps BSS as the only browser login route after the SSO cutover', async () => {
-    current = await buildIntegrationApp();
+    current = await buildIntegrationApp({
+      seedOwner: { steamId64: 76561198000000001n },
+    });
+    const cookie = await loginAsOwner(current);
     const bss = await current.app.inject({ method: 'GET', url: '/api/v1/auth/bss/login' });
     const directSteam = await current.app.inject({
       method: 'GET',
       url: '/api/v1/auth/steam/login',
+      headers: { cookie },
     });
 
     expect(bss.statusCode).toBe(302);
