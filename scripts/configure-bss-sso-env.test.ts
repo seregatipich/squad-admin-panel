@@ -57,7 +57,25 @@ describe('configure-bss-sso-env.sh', () => {
     assert.match(cutover, /revoke-sessions-for-sso-cutover\.js/);
     assert.match(cutover, /--confirm-all-sessions/);
     assert.match(cutover, /name: External health check\n\s+if: always\(\)/);
-    assert.ok((workflow.match(/name: Remove SSH deploy key/g) ?? []).length === 3);
+    assert.ok((workflow.match(/name: Remove SSH deploy key/g) ?? []).length === 4);
+  });
+
+  it('provisions the site read token only for the exact dev SHA without restarting services', () => {
+    const workflow = readFileSync(
+      path.join(REPOSITORY_ROOT, '.github/workflows/deploy-tk104.yml'),
+      'utf8',
+    );
+    const start = workflow.indexOf('provision-site-read-token:');
+    const end = workflow.indexOf('revoke-sessions-for-sso-cutover:');
+    const provision = workflow.slice(start, end);
+
+    assert.ok(start >= 0 && end > start);
+    assert.match(provision, /github\.ref == 'refs\/heads\/dev'/);
+    assert.match(provision, /github\.event\.inputs\.expected_sha == github\.sha/);
+    assert.match(provision, /secrets\.PANEL_READ_API_TOKEN/);
+    assert.match(provision, /scripts\/provision-site-read-token\.mjs/);
+    assert.match(provision, /node --input-type=module/);
+    assert.doesNotMatch(provision, /restart|\bstop\b|\bup -d\b|deploy-tk104\.sh/i);
   });
 
   it('atomically changes only the four SSO settings and never prints the secret', () => {
