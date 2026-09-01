@@ -44,6 +44,21 @@ describe('configure-bss-sso-env.sh', () => {
     assert.match(workflow.slice(configure, build), /bash scripts\/configure-bss-sso-env\.sh/);
   });
 
+  it('keeps the one-time session cutover exact and restarts the API on failure', () => {
+    const workflow = readFileSync(
+      path.join(REPOSITORY_ROOT, '.github/workflows/deploy-tk104.yml'),
+      'utf8',
+    );
+    const cutover = workflow.slice(workflow.indexOf('revoke-sessions-for-sso-cutover:'));
+
+    assert.match(cutover, /github\.event\.inputs\.expected_sha == github\.sha/);
+    assert.match(cutover, /trap restart_api EXIT/);
+    assert.match(cutover, /stop api/);
+    assert.match(cutover, /revoke-sessions-for-sso-cutover\.js/);
+    assert.match(cutover, /--confirm-all-sessions/);
+    assert.ok((workflow.match(/name: Remove SSH deploy key/g) ?? []).length === 3);
+  });
+
   it('atomically changes only the four SSO settings and never prints the secret', () => {
     const root = temporaryRoot();
     const envFile = path.join(root, '.env.tk104');
