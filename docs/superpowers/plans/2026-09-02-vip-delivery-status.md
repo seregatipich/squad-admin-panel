@@ -168,7 +168,7 @@ Preflight возвращает текущий `servers_total`, но lifecycle п
 20 раз в одном тесте, чтобы уникальные ограничения и row lock были
 нагружены, а не замоканы.
 
-- [ ] **Шаг 8: Commit**
+- [x] **Шаг 8: Commit**
 
 ```bash
 git add apps/api packages/db apps/workers/role-expirer apps/workers/seed-reward docs/superpowers
