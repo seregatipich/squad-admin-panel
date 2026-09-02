@@ -164,9 +164,8 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
             );
           }
           // Spec §2.7.1 — sync-task is enqueued in the same transaction
-          // as the DB write. If Redis publish fails, the transaction
-          // rolls back and the role change is not persisted.
-          await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+          // as the DB write; the relay publishes it only after commit.
+          await publishAdminsCfgSyncForAllServers(tx, {
             reason: 'role.create',
             actor_player_id: req.user?.playerId ?? null,
             enqueued_at: new Date().toISOString(),
@@ -257,7 +256,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
               );
             }
           }
-          await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+          await publishAdminsCfgSyncForAllServers(tx, {
             reason: 'role.update',
             actor_player_id: req.user?.playerId ?? null,
             enqueued_at: new Date().toISOString(),
@@ -330,7 +329,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
             })
             .where(eq(players.roleId, req.params.id));
           await tx.delete(roles).where(eq(roles.id, req.params.id));
-          await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+          await publishAdminsCfgSyncForAllServers(tx, {
             reason: 'role.delete',
             actor_player_id: req.user?.playerId ?? null,
             enqueued_at: new Date().toISOString(),

@@ -1148,7 +1148,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
             ...(resetsExpiry ? { priorityExpiryProcessed: false } : {}),
           })
           .where(and(eq(clans.id, clan.id), isNull(clans.deletedAt)));
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'clan.expire.update',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: now.toISOString(),
@@ -1202,7 +1202,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
           .update(clans)
           .set({ deletedAt: disbandedAt, updatedAt: disbandedAt })
           .where(eq(clans.id, clan.id));
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'clan.disband',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: disbandedAt.toISOString(),
@@ -1547,7 +1547,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
             and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)),
           );
         if (hadPriority) {
-          await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+          await publishAdminsCfgSyncForAllServers(tx, {
             reason: 'clan.member.remove',
             actor_player_id: req.user?.playerId ?? null,
             enqueued_at: new Date().toISOString(),
@@ -1665,7 +1665,7 @@ const clansRoutes: FastifyPluginAsync = async (app) => {
             .where(
               and(eq(clanMembers.clanId, clan.id), eq(clanMembers.playerId, req.params.playerId)),
             );
-          await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+          await publishAdminsCfgSyncForAllServers(tx, {
             reason: 'clan.priority.toggle',
             actor_player_id: req.user?.playerId ?? null,
             enqueued_at: new Date().toISOString(),

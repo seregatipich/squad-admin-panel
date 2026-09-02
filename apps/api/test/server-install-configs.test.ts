@@ -16,10 +16,11 @@
  *   C) one cfg file missing from depot → the existing "creating empty"
  *      fallback still fires and does not crash seedConfigs.
  */
-import { configVersions, servers } from '@squad/db/schema';
+import { adminsCfgSyncOutbox, configVersions, servers } from '@squad/db/schema';
 import { DEPOT_VOLUME_NAME } from '@squad/shared-config';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { markServerRunningAndEnqueue } from '../src/routes/server-install.js';
 import {
   buildIntegrationApp,
   type FakeBridge,
@@ -315,6 +316,60 @@ describe('server install depot seeding', () => {
 
       const [row] = await h.db.select().from(servers).where(eq(servers.id, serverId));
       expect(row?.status).toBe('running');
+    });
+  });
+
+  describe('E) running transition and initial Admins.cfg outbox', () => {
+    const depotRoot = '/opt/panel-data/depot';
+
+    beforeEach(async () => {
+      vi.stubEnv('PANEL_DEPOT_HOST_PATH', depotRoot);
+      bridge = makeFakeBridge();
+      seedDepotFiles(bridge, depotRoot);
+      h = await buildIntegrationApp({ seedOwner: { steamId64: OWNER_STEAM_ID }, bridge });
+    });
+
+    it('commits running and exactly one outbox row together', async () => {
+      const cookie = await loginAs(h);
+      const serverId = await createServer(h, cookie);
+
+      await markServerRunningAndEnqueue(h.db, serverId, 'container-atomic', {
+        reason: 'server.install.completed',
+        actor_player_id: null,
+        enqueued_at: new Date().toISOString(),
+      });
+
+      const [server] = await h.db.select().from(servers).where(eq(servers.id, serverId));
+      const tasks = await h.db
+        .select()
+        .from(adminsCfgSyncOutbox)
+        .where(eq(adminsCfgSyncOutbox.serverId, serverId));
+      expect(server).toMatchObject({ status: 'running', containerId: 'container-atomic' });
+      expect(tasks).toHaveLength(1);
+    });
+
+    it('rolls back running when the outbox payload cannot be inserted', async () => {
+      const cookie = await loginAs(h);
+      const serverId = await createServer(h, cookie);
+      await h.db.update(servers).set({ status: 'installing' }).where(eq(servers.id, serverId));
+
+      await expect(
+        markServerRunningAndEnqueue(h.db, serverId, 'container-must-rollback', {
+          reason: 'server.install.completed',
+          // A bigint cannot be encoded as JSONB. This forces the outbox insert
+          // to fail after the UPDATE has executed inside the real PG transaction.
+          actor_player_id: 1n as never,
+          enqueued_at: new Date().toISOString(),
+        }),
+      ).rejects.toThrow();
+
+      const [server] = await h.db.select().from(servers).where(eq(servers.id, serverId));
+      const tasks = await h.db
+        .select()
+        .from(adminsCfgSyncOutbox)
+        .where(eq(adminsCfgSyncOutbox.serverId, serverId));
+      expect(server).toMatchObject({ status: 'installing', containerId: null });
+      expect(tasks).toHaveLength(0);
     });
   });
 });

@@ -1,3 +1,4 @@
+import type { DatabaseClient } from '@squad/db';
 import type Redis from 'ioredis';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -11,7 +12,7 @@ import {
 // `publishAdminsCfgSyncForAllServers` now writes to the durable Postgres outbox
 // (SYNC-1, #34), so it can no longer be meaningfully unit-tested against a fake
 // db. Its behaviour — one outbox row per active server, transactional
-// atomicity/rollback, immediate best-effort dispatch, and the relay — is
+// atomicity/rollback and the relay — is
 // covered end-to-end against real Postgres + Redis in
 // `test/integration/admins-cfg-outbox.test.ts`.
 
@@ -23,38 +24,18 @@ const testEvent: AdminsCfgSyncEvent = {
 };
 
 describe('publishAdminsCfgSyncForServer', () => {
-  it('calls xadd on the correct stream key', async () => {
+  it('inserts one durable outbox row for the selected server', async () => {
     const serverId = 'bbbbbbbb-0000-0000-0000-000000000001';
-    const xaddArgs: unknown[][] = [];
-    const redis = {
-      xadd: vi.fn((...args: unknown[]) => {
-        xaddArgs.push(args);
-        return Promise.resolve('1-0');
-      }),
-    } as unknown as Redis;
+    const values = vi.fn().mockResolvedValue(undefined);
+    const db = { insert: vi.fn(() => ({ values })) } as unknown as DatabaseClient;
 
-    await publishAdminsCfgSyncForServer(redis, serverId, testEvent);
+    await publishAdminsCfgSyncForServer(db, serverId, testEvent);
 
-    expect(xaddArgs).toHaveLength(1);
-    expect(xaddArgs[0]?.[0]).toBe(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`);
-  });
-
-  it('includes MAXLEN trimming args', async () => {
-    const serverId = 'cccccccc-0000-0000-0000-000000000001';
-    const xaddArgs: unknown[][] = [];
-    const redis = {
-      xadd: vi.fn((...args: unknown[]) => {
-        xaddArgs.push(args);
-        return Promise.resolve('1-0');
-      }),
-    } as unknown as Redis;
-
-    await publishAdminsCfgSyncForServer(redis, serverId, testEvent);
-
-    const args = xaddArgs[0] as string[];
-    expect(args).toContain('MAXLEN');
-    expect(args).toContain('~');
-    expect(args).toContain('500');
+    expect(values).toHaveBeenCalledWith({
+      serverId,
+      payload: testEvent,
+      correlationId: undefined,
+    });
   });
 });
 
@@ -75,6 +56,7 @@ describe('ensureAdminsCfgSyncGroup', () => {
     expect(xgroupArgs[0]?.[0]).toBe('CREATE');
     expect(xgroupArgs[0]?.[1]).toBe(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`);
     expect(xgroupArgs[0]?.[2]).toBe(ADMINS_CFG_SYNC_GROUP);
+    expect(xgroupArgs[0]?.[3]).toBe('0');
     expect(xgroupArgs[0]?.[4]).toBe('MKSTREAM');
   });
 

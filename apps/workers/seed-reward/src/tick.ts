@@ -1,11 +1,10 @@
-import type { DatabaseClient } from '@squad/db';
+import { type DatabaseClient, enqueueAdminsCfgSyncForAllServers } from '@squad/db';
 import {
   auditLog,
   economySettings,
   playerDailyPresence,
   players,
   roles,
-  servers,
   sessions,
 } from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
@@ -35,6 +34,7 @@ export interface SeedRewardReconcileResult {
   rewardRoleId: string | null;
   thresholdSeconds: number;
   changes: SeedRewardChange[];
+  enqueued: number;
 }
 
 export interface SeedRewardSyncEvent {
@@ -47,7 +47,6 @@ export interface SeedRewardSyncEvent {
 export interface SeedRewardTickDeps {
   now?: Date;
   reconcileAssignments(now: Date): Promise<SeedRewardReconcileResult>;
-  publishAdminsCfgSync(event: SeedRewardSyncEvent): Promise<{ enqueued: number }>;
   invalidatePermissionCache(playerId: string): void;
   revokeAllForPlayer(playerId: string): Promise<void>;
   diag: Pick<Diag, 'emit'>;
@@ -85,15 +84,6 @@ export async function runSeedRewardTick(deps: SeedRewardTickDeps): Promise<SeedR
       await deps.revokeAllForPlayer(change.playerId);
     }
 
-    const syncResult =
-      reconciliation.changes.length === 0
-        ? { enqueued: 0 }
-        : await deps.publishAdminsCfgSync({
-            reason: 'seed.reward.reconcile',
-            actor_player_id: null,
-            enqueued_at: now.toISOString(),
-            request_id: `seed-reward:${now.toISOString()}`,
-          });
     const granted = reconciliation.changes.filter((change) => change.kind === 'granted').length;
     const revoked = reconciliation.changes.length - granted;
 
@@ -106,7 +96,7 @@ export async function runSeedRewardTick(deps: SeedRewardTickDeps): Promise<SeedR
         skipped: false,
         granted,
         revoked,
-        enqueued: syncResult.enqueued,
+        enqueued: reconciliation.enqueued,
         fromDay: reconciliation.fromDay,
         toDay: reconciliation.toDay,
         rewardRoleId: reconciliation.rewardRoleId,
@@ -114,7 +104,7 @@ export async function runSeedRewardTick(deps: SeedRewardTickDeps): Promise<SeedR
       },
     });
 
-    return { skipped: false, granted, revoked, enqueued: syncResult.enqueued };
+    return { skipped: false, granted, revoked, enqueued: reconciliation.enqueued };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await deps.diag.emit({
@@ -130,11 +120,10 @@ export async function runSeedRewardTick(deps: SeedRewardTickDeps): Promise<SeedR
 
 export function createSeedRewardDeps(
   db: DatabaseClient,
-  redis: Pick<Redis, 'del' | 'pipeline' | 'publish'>,
+  redis: Pick<Redis, 'del' | 'publish'>,
 ): Omit<SeedRewardTickDeps, 'now' | 'diag'> {
   return {
     reconcileAssignments: (now) => reconcileSeedRewardAssignments(db, now),
-    publishAdminsCfgSync: (event) => publishAdminsCfgSyncForAllServers(db, redis, event),
     invalidatePermissionCache: () => undefined,
     revokeAllForPlayer: (playerId) => revokeAllSessionsForPlayer(db, redis, playerId),
   };
@@ -170,7 +159,14 @@ export async function reconcileSeedRewardAssignments(
     const rewardRoleId = settings?.rewardRoleId ?? null;
     const thresholdSeconds = (settings?.thresholdHours ?? 0) * SECONDS_PER_HOUR;
     if (!rewardRoleId) {
-      return { configured: false, ...window, rewardRoleId, thresholdSeconds, changes: [] };
+      return {
+        configured: false,
+        ...window,
+        rewardRoleId,
+        thresholdSeconds,
+        changes: [],
+        enqueued: 0,
+      };
     }
 
     const [rewardRole] = await tx
@@ -271,7 +267,16 @@ export async function reconcileSeedRewardAssignments(
       });
     }
 
-    return { configured: true, ...window, rewardRoleId, thresholdSeconds, changes };
+    const { enqueued } =
+      changes.length === 0
+        ? { enqueued: 0 }
+        : await enqueueAdminsCfgSyncForAllServers(tx, {
+            reason: 'seed.reward.reconcile',
+            actor_player_id: null,
+            enqueued_at: now.toISOString(),
+            request_id: `seed-reward:${now.toISOString()}`,
+          } satisfies SeedRewardSyncEvent);
+    return { configured: true, ...window, rewardRoleId, thresholdSeconds, changes, enqueued };
   });
 }
 
@@ -306,20 +311,4 @@ export async function revokeAllSessionsForPlayer(
       }),
     );
   }
-}
-
-export async function publishAdminsCfgSyncForAllServers(
-  db: Pick<DatabaseClient, 'select'>,
-  redis: Pick<Redis, 'pipeline'>,
-  event: SeedRewardSyncEvent,
-): Promise<{ enqueued: number }> {
-  const rows = await db.select({ id: servers.id }).from(servers).where(isNull(servers.deletedAt));
-  if (rows.length === 0) return { enqueued: 0 };
-  const payload = JSON.stringify(event);
-  const pipeline = redis.pipeline();
-  for (const row of rows) {
-    pipeline.xadd(`events:admins-cfg-sync:${row.id}`, 'MAXLEN', '~', '500', '*', 'event', payload);
-  }
-  await pipeline.exec();
-  return { enqueued: rows.length };
 }

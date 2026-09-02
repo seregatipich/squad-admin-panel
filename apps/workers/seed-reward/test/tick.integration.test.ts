@@ -1,5 +1,6 @@
 import { randomInt } from 'node:crypto';
 import {
+  adminsCfgSyncOutbox,
   auditLog,
   createDatabaseClient,
   economySettings,
@@ -9,7 +10,7 @@ import {
   servers,
   sessions,
 } from '@squad/db';
-import { and, asc, desc, eq, gt, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -17,7 +18,8 @@ import { createSeedRewardDeps, runSeedRewardTick } from '../src/tick.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
-const NOW = new Date('2026-07-14T04:00:00.000Z');
+const NOW = new Date(Date.parse('2026-07-14T00:00:00.000Z') + randomInt(0, 24 * 60 * 60 * 1000));
+const OUTBOX_REQUEST_ID = `seed-reward:${NOW.toISOString()}`;
 const PLAYER_ID = uuidv7();
 // Per run, not a constant: `steam_id64` is unique, so a run whose `afterAll` never
 // completed (crash, watch-mode interrupt) would otherwise leave a row that makes
@@ -32,29 +34,18 @@ const SESSION_ID = `seed-reward-${PLAYER_ID}`;
 const db = DATABASE_URL ? createDatabaseClient(DATABASE_URL) : null;
 
 function makeRedis(): {
-  redis: Pick<Redis, 'del' | 'pipeline' | 'publish'>;
+  redis: Pick<Redis, 'del' | 'publish'>;
   del: ReturnType<typeof vi.fn>;
-  xadd: ReturnType<typeof vi.fn>;
   publish: ReturnType<typeof vi.fn>;
 } {
   const del = vi.fn(async () => 1);
-  const xadd = vi.fn();
   const publish = vi.fn(async () => 1);
-  const pipeline = {
-    xadd: (...args: unknown[]) => {
-      xadd(...args);
-      return pipeline;
-    },
-    exec: vi.fn(async () => []),
-  };
   return {
     redis: {
       del,
-      pipeline: vi.fn(() => pipeline),
       publish,
-    } as unknown as Pick<Redis, 'del' | 'pipeline' | 'publish'>,
+    } as unknown as Pick<Redis, 'del' | 'publish'>,
     del,
-    xadd,
     publish,
   };
 }
@@ -71,6 +62,9 @@ function revokedFor(
 
 beforeAll(async () => {
   if (!db) return;
+  await db
+    .delete(adminsCfgSyncOutbox)
+    .where(sql`${adminsCfgSyncOutbox.payload}->>'request_id' = ${OUTBOX_REQUEST_ID}`);
   await db.insert(roles).values({
     id: REWARD_ROLE_ID,
     name: `SeedRewardIntegration_${REWARD_ROLE_ID}`,
@@ -120,6 +114,9 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!db) return;
   await db
+    .delete(adminsCfgSyncOutbox)
+    .where(sql`${adminsCfgSyncOutbox.payload}->>'request_id' = ${OUTBOX_REQUEST_ID}`);
+  await db
     .update(economySettings)
     .set({ seedRewardThresholdHoursPerMonth: 0, seedRewardRoleId: null })
     .where(eq(economySettings.id, 1));
@@ -134,22 +131,13 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-/**
- * `publishAdminsCfgSyncForAllServers` enqueues one outbox row per *active server
- * in the database*, not per server this test created, so a literal 1 tied the
- * expectation to global DB state. Re-counting the servers afterwards fixed the
- * ordering dependency but not a concurrency one: the affected-package sweep runs
- * every package against one shared DATABASE_URL, and suites that create and drop
- * servers (log-ingest's, for instance) move the count between the tick and the
- * re-count — observed as `expected "spy" to be called 5 times, but got 6 times`.
- *
- * Read the fan-out off the tick itself instead. The streams it published are the
- * servers it saw, so `enqueued` is checked against the side effect it reports on
- * with no second look at the table, and this test's own server is still asserted
- * exactly.
- */
-function syncedStreams(xadd: ReturnType<typeof vi.fn>): string[] {
-  return xadd.mock.calls.map(([stream]) => stream as string);
+async function outboxSnapshot(): Promise<Map<string, string>> {
+  if (!db) throw new Error('database not configured');
+  const rows = await db
+    .select({ id: adminsCfgSyncOutbox.id, serverId: adminsCfgSyncOutbox.serverId })
+    .from(adminsCfgSyncOutbox)
+    .where(sql`${adminsCfgSyncOutbox.payload}->>'request_id' = ${OUTBOX_REQUEST_ID}`);
+  return new Map(rows.map((row) => [row.id, row.serverId]));
 }
 
 /**
@@ -199,6 +187,8 @@ describeIfDb('seed reward worker integration', () => {
     const diag = { emit: vi.fn().mockResolvedValue(undefined) };
 
     const grantWatermark = await auditWatermark();
+    const grantOutboxBefore = await outboxSnapshot();
+    expect(grantOutboxBefore.size).toBe(0);
     const granted = await runSeedRewardTick({
       ...createSeedRewardDeps(db, firstRedis.redis),
       now: NOW,
@@ -206,14 +196,14 @@ describeIfDb('seed reward worker integration', () => {
     });
 
     const grantChanges = await seedRewardAuditSince(grantWatermark);
-    const grantStreams = syncedStreams(firstRedis.xadd);
+    const grantTasks = [...(await outboxSnapshot())].filter(([id]) => !grantOutboxBefore.has(id));
     expect(granted).toEqual({
       skipped: false,
       granted: grantChanges.filter((row) => row.actionType === 'seed.reward_granted').length,
       revoked: grantChanges.filter((row) => row.actionType === 'seed.reward_revoked').length,
-      enqueued: grantStreams.length,
+      enqueued: grantTasks.length,
     });
-    expect(grantStreams).toContain(`events:admins-cfg-sync:${SERVER_ID}`);
+    expect(grantTasks.map(([, serverId]) => serverId)).toContain(SERVER_ID);
     expect(
       grantChanges.filter((row) => row.targetId === PLAYER_ID).map((row) => row.actionType),
     ).toEqual(['seed.reward_granted']);
@@ -240,6 +230,7 @@ describeIfDb('seed reward worker integration', () => {
     const secondRedis = makeRedis();
 
     const revokeWatermark = await auditWatermark();
+    const revokeOutboxBefore = await outboxSnapshot();
     const revoked = await runSeedRewardTick({
       ...createSeedRewardDeps(db, secondRedis.redis),
       now: NOW,
@@ -247,14 +238,14 @@ describeIfDb('seed reward worker integration', () => {
     });
 
     const revokeChanges = await seedRewardAuditSince(revokeWatermark);
-    const revokeStreams = syncedStreams(secondRedis.xadd);
+    const revokeTasks = [...(await outboxSnapshot())].filter(([id]) => !revokeOutboxBefore.has(id));
     expect(revoked).toEqual({
       skipped: false,
       granted: revokeChanges.filter((row) => row.actionType === 'seed.reward_granted').length,
       revoked: revokeChanges.filter((row) => row.actionType === 'seed.reward_revoked').length,
-      enqueued: revokeStreams.length,
+      enqueued: revokeTasks.length,
     });
-    expect(revokeStreams).toContain(`events:admins-cfg-sync:${SERVER_ID}`);
+    expect(revokeTasks.map(([, serverId]) => serverId)).toContain(SERVER_ID);
     expect(
       revokeChanges.filter((row) => row.targetId === PLAYER_ID).map((row) => row.actionType),
     ).toEqual(['seed.reward_revoked']);

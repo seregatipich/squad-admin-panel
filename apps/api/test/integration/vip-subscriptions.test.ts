@@ -913,9 +913,7 @@ describeIfDb('VIPSUB-5 self-service subscriptions', () => {
       expect(await countSuccessfulAudit('me.subscription.create', playerId)).toBe(0);
       expect(await countOutboxReason('vip.lifecycle.assigned')).toBe(outboxBefore + 1);
       expect(await countOutboxReason('player.role.assign')).toBe(loserOutboxBefore);
-      expect(await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`)).toBe(
-        redisBefore + 1,
-      );
+      expect(await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`)).toBe(redisBefore);
       expect(await storedPlayer(playerId)).toMatchObject({
         balance: 500,
         roleId: raceRoleId,
@@ -992,9 +990,7 @@ describeIfDb('VIPSUB-5 self-service subscriptions', () => {
       expect(await countSuccessfulAudit('vip.lifecycle.apply', playerId)).toBe(0);
       expect(await countOutboxReason('player.role.assign')).toBe(outboxBefore + 1);
       expect(await countOutboxReason('vip.lifecycle.assigned')).toBe(loserOutboxBefore);
-      expect(await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`)).toBe(
-        redisBefore + 1,
-      );
+      expect(await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`)).toBe(redisBefore);
       expect(await storedPlayer(playerId)).toMatchObject({
         balance: 400,
         roleId: raceRoleId,
@@ -1103,8 +1099,6 @@ describeIfDb('VIPSUB-5 admin subscription grant', () => {
       outbox.filter((r) => (r.payload as { reason?: string }).reason === 'player.role.assign')
         .length,
     ).toBeGreaterThan(0);
-    expect(await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`)).toBeGreaterThan(
-      before,
-    );
+    expect(await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`)).toBe(before);
   });
 });

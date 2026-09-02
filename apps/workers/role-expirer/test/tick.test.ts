@@ -16,9 +16,8 @@ describe('runRoleExpiryTick', () => {
     const deps = {
       now,
       findExpiredAssignments: vi.fn().mockResolvedValue(expired),
-      clearExpiredAssignments: vi.fn().mockResolvedValue(expired),
+      clearExpiredAssignments: vi.fn().mockResolvedValue({ cleared: expired, enqueued: 2 }),
       writeAuditEntry: vi.fn().mockResolvedValue(undefined),
-      publishAdminsCfgSync: vi.fn().mockResolvedValue({ enqueued: 2 }),
       invalidatePermissionCache: vi.fn(),
       revokeAllForPlayer: vi.fn().mockResolvedValue(undefined),
       diag: { emit: vi.fn().mockResolvedValue(undefined) },
@@ -28,7 +27,11 @@ describe('runRoleExpiryTick', () => {
 
     expect(result).toEqual({ expired: 1, enqueued: 2 });
     expect(deps.findExpiredAssignments).toHaveBeenCalledWith(now);
-    expect(deps.clearExpiredAssignments).toHaveBeenCalledWith(expired, now);
+    expect(deps.clearExpiredAssignments).toHaveBeenCalledWith(
+      expired,
+      now,
+      expect.objectContaining({ reason: 'player.role.expire', actor_player_id: null }),
+    );
     expect(deps.invalidatePermissionCache).toHaveBeenCalledWith(expired[0].playerId);
     expect(deps.revokeAllForPlayer).toHaveBeenCalledWith(expired[0].playerId);
     expect(deps.writeAuditEntry).toHaveBeenCalledWith(
@@ -43,12 +46,6 @@ describe('runRoleExpiryTick', () => {
           role_comment: expired[0].roleComment,
         },
         after: { role_id: null, role_expires_at: null, role_comment: null },
-      }),
-    );
-    expect(deps.publishAdminsCfgSync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: 'player.role.expire',
-        actor_player_id: null,
       }),
     );
     expect(deps.diag.emit).toHaveBeenCalledWith(
@@ -71,19 +68,21 @@ describe('runRoleExpiryTick', () => {
       now,
       findExpiredAssignments: vi.fn().mockResolvedValue(scanned),
       // The conditional UPDATE observes that lifecycle already renewed the row.
-      clearExpiredAssignments: vi.fn().mockResolvedValue([]),
+      clearExpiredAssignments: vi.fn().mockResolvedValue({ cleared: [], enqueued: 0 }),
       writeAuditEntry: vi.fn().mockResolvedValue(undefined),
-      publishAdminsCfgSync: vi.fn().mockResolvedValue({ enqueued: 1 }),
       invalidatePermissionCache: vi.fn(),
       revokeAllForPlayer: vi.fn().mockResolvedValue(undefined),
       diag: { emit: vi.fn().mockResolvedValue(undefined) },
     };
 
     await expect(runRoleExpiryTick(deps)).resolves.toEqual({ expired: 0, enqueued: 0 });
-    expect(deps.clearExpiredAssignments).toHaveBeenCalledWith(scanned, now);
+    expect(deps.clearExpiredAssignments).toHaveBeenCalledWith(
+      scanned,
+      now,
+      expect.objectContaining({ reason: 'player.role.expire' }),
+    );
     expect(deps.writeAuditEntry).not.toHaveBeenCalled();
     expect(deps.invalidatePermissionCache).not.toHaveBeenCalled();
     expect(deps.revokeAllForPlayer).not.toHaveBeenCalled();
-    expect(deps.publishAdminsCfgSync).not.toHaveBeenCalled();
   });
 });

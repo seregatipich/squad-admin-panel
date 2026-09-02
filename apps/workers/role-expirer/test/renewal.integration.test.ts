@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import {
+  adminsCfgSyncOutbox,
   alertEvents,
   auditLog,
   bonusTransactions,
   createDatabaseClient,
   players,
   roles,
+  servers,
   vipSubscriptions,
   vipTiers,
 } from '@squad/db';
@@ -33,12 +35,14 @@ const vipRoleId = randomUUID();
 const tierId = randomUUID();
 const richSubId = randomUUID();
 const poorSubId = randomUUID();
+const renewalServerId = randomUUID();
+const tickNow = new Date(Date.now() + Number.parseInt(randomUUID().slice(0, 8), 16));
+const renewalRequestId = `role-expirer:renewals:${tickNow.toISOString()}`;
 
 function makeRedis() {
   const publish = vi.fn(async () => 1);
-  const pipeline = vi.fn(() => ({ xadd: vi.fn(), exec: vi.fn(async () => []) }));
   return {
-    redis: { publish, pipeline } as unknown as Pick<Redis, 'publish' | 'pipeline'>,
+    redis: { publish } as unknown as Pick<Redis, 'publish'>,
     publish,
   };
 }
@@ -60,6 +64,11 @@ beforeAll(async () => {
     roleId: vipRoleId,
     defaultDays: TIER_DAYS,
     priceBonuses: TIER_PRICE,
+  });
+  await db.insert(servers).values({
+    id: renewalServerId,
+    displayName: 'Renewal outbox server',
+    slug: `renewal-outbox-${renewalServerId}`,
   });
 
   const dueAt = new Date(Date.now() - 60_000);
@@ -110,6 +119,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!db) return;
+  await db
+    .delete(adminsCfgSyncOutbox)
+    .where(sql`${adminsCfgSyncOutbox.payload}->>'request_id' = ${renewalRequestId}`);
   await db.delete(alertEvents).where(sql`payload->>'subscription_id' = ${poorSubId}`);
   await db.delete(vipSubscriptions).where(eq(vipSubscriptions.tierId, tierId));
   await db.delete(bonusTransactions).where(eq(bonusTransactions.playerId, richPlayerId));
@@ -118,6 +130,7 @@ afterAll(async () => {
   // writes are scoped to its own throwaway player ids and are left in place.
   await db.delete(players).where(eq(players.steamId64, RICH_STEAM));
   await db.delete(players).where(eq(players.steamId64, POOR_STEAM));
+  await db.delete(servers).where(eq(servers.id, renewalServerId));
   await db.delete(vipTiers).where(eq(vipTiers.id, tierId));
   await db.delete(roles).where(eq(roles.id, vipRoleId));
   await db.$client.end();
@@ -128,11 +141,26 @@ describeIfDb('runSubscriptionRenewalTick against a real database', () => {
     if (!db) return;
     const { redis, publish } = makeRedis();
     const deps = createSubscriptionRenewalDeps(db, redis);
+    const activeServerIds = (
+      await db.select({ id: servers.id }).from(servers).where(sql`${servers.deletedAt} IS NULL`)
+    ).map((row) => row.id);
 
-    const result = await runSubscriptionRenewalTick({ ...deps, diag });
+    const result = await runSubscriptionRenewalTick({ ...deps, now: tickNow, diag });
 
     expect(result.renewed).toBeGreaterThanOrEqual(1);
     expect(result.expired).toBeGreaterThanOrEqual(1);
+    const syncRows = await db
+      .select({ serverId: adminsCfgSyncOutbox.serverId })
+      .from(adminsCfgSyncOutbox)
+      .where(sql`${adminsCfgSyncOutbox.payload}->>'request_id' = ${renewalRequestId}`);
+    expect(syncRows).toHaveLength(activeServerIds.length * result.renewed);
+    const rowsPerServer = new Map<string, number>();
+    for (const row of syncRows) {
+      rowsPerServer.set(row.serverId, (rowsPerServer.get(row.serverId) ?? 0) + 1);
+    }
+    expect(rowsPerServer).toEqual(
+      new Map(activeServerIds.map((serverId) => [serverId, result.renewed])),
+    );
 
     // Funded: charged, role extended, schedule advanced, still active.
     const [rich] = await db

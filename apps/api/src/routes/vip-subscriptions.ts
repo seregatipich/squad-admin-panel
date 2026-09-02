@@ -336,7 +336,7 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
           referenceId: req.body.tier_id,
         });
         if (applied.status !== 'ok') return applied;
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'player.role.assign',
           actor_player_id: playerId,
           enqueued_at: new Date().toISOString(),
@@ -563,7 +563,7 @@ const vipSubscriptionRoutes: FastifyPluginAsync = async (app) => {
         const subscription = inserted[0];
         if (!subscription) throw new Error('vip_subscriptions insert returned no row');
 
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'player.role.assign',
           actor_player_id: input.actorPlayerId,
           enqueued_at: new Date().toISOString(),

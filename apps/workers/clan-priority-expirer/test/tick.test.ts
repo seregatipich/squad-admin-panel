@@ -5,9 +5,8 @@ describe('runClanPriorityExpiryTick', () => {
   it('is a no-op when there are no expired unprocessed clans', async () => {
     const deps = {
       findExpiredUnprocessedClans: vi.fn().mockResolvedValue([]),
-      markProcessed: vi.fn().mockResolvedValue(undefined),
+      markProcessed: vi.fn().mockResolvedValue({ enqueued: 0 }),
       writeAuditEntry: vi.fn().mockResolvedValue(undefined),
-      publishAdminsCfgSync: vi.fn().mockResolvedValue({ enqueued: 0 }),
       diag: { emit: vi.fn().mockResolvedValue(undefined) },
     };
 
@@ -16,7 +15,6 @@ describe('runClanPriorityExpiryTick', () => {
     expect(result).toEqual({ expiredClans: 0, enqueued: 0 });
     expect(deps.markProcessed).not.toHaveBeenCalled();
     expect(deps.writeAuditEntry).not.toHaveBeenCalled();
-    expect(deps.publishAdminsCfgSync).not.toHaveBeenCalled();
     expect(deps.diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'clan_priority_expirer.run_ok', severity: 'info' }),
     );
@@ -39,9 +37,8 @@ describe('runClanPriorityExpiryTick', () => {
     const deps = {
       now,
       findExpiredUnprocessedClans: vi.fn().mockResolvedValue(expired),
-      markProcessed: vi.fn().mockResolvedValue(undefined),
+      markProcessed: vi.fn().mockResolvedValue({ enqueued: 3 }),
       writeAuditEntry: vi.fn().mockResolvedValue(undefined),
-      publishAdminsCfgSync: vi.fn().mockResolvedValue({ enqueued: 3 }),
       diag: { emit: vi.fn().mockResolvedValue(undefined) },
     };
 
@@ -49,7 +46,10 @@ describe('runClanPriorityExpiryTick', () => {
 
     expect(result).toEqual({ expiredClans: 2, enqueued: 3 });
     expect(deps.findExpiredUnprocessedClans).toHaveBeenCalledWith(now);
-    expect(deps.markProcessed).toHaveBeenCalledWith([expired[0].clanId, expired[1].clanId]);
+    expect(deps.markProcessed).toHaveBeenCalledWith(
+      [expired[0].clanId, expired[1].clanId],
+      expect.objectContaining({ reason: 'clan.priority.expire', actor_player_id: null }),
+    );
     expect(deps.writeAuditEntry).toHaveBeenCalledTimes(2);
     expect(deps.writeAuditEntry).toHaveBeenNthCalledWith(
       1,
@@ -65,10 +65,6 @@ describe('runClanPriorityExpiryTick', () => {
         after: { priority_expiry_processed: true },
       }),
     );
-    expect(deps.publishAdminsCfgSync).toHaveBeenCalledTimes(1);
-    expect(deps.publishAdminsCfgSync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: 'clan.priority.expire', actor_player_id: null }),
-    );
     expect(deps.diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'clan_priority_expirer.run_ok', severity: 'info' }),
     );
@@ -77,9 +73,8 @@ describe('runClanPriorityExpiryTick', () => {
   it('does not re-fire for an already-processed clan (findExpiredUnprocessedClans excludes it)', async () => {
     const deps = {
       findExpiredUnprocessedClans: vi.fn().mockResolvedValue([]),
-      markProcessed: vi.fn().mockResolvedValue(undefined),
+      markProcessed: vi.fn().mockResolvedValue({ enqueued: 0 }),
       writeAuditEntry: vi.fn().mockResolvedValue(undefined),
-      publishAdminsCfgSync: vi.fn().mockResolvedValue({ enqueued: 0 }),
       diag: { emit: vi.fn().mockResolvedValue(undefined) },
     };
 
@@ -98,9 +93,8 @@ describe('runClanPriorityExpiryTick', () => {
           priorityExpiresAt: new Date('2026-07-14T09:00:00.000Z'),
         },
       ]),
-      markProcessed: vi.fn().mockResolvedValue(undefined),
+      markProcessed: vi.fn().mockResolvedValue({ enqueued: 1 }),
       writeAuditEntry: vi.fn().mockResolvedValue(undefined),
-      publishAdminsCfgSync: vi.fn().mockResolvedValue({ enqueued: 1 }),
       diag: { emit: vi.fn().mockResolvedValue(undefined) },
     };
     expect(Object.keys(deps)).not.toContain('clearHasPriority');
@@ -114,9 +108,8 @@ describe('runClanPriorityExpiryTick', () => {
     const boom = new Error('db unreachable');
     const deps = {
       findExpiredUnprocessedClans: vi.fn().mockRejectedValue(boom),
-      markProcessed: vi.fn().mockResolvedValue(undefined),
+      markProcessed: vi.fn().mockResolvedValue({ enqueued: 0 }),
       writeAuditEntry: vi.fn().mockResolvedValue(undefined),
-      publishAdminsCfgSync: vi.fn().mockResolvedValue({ enqueued: 0 }),
       diag: { emit: vi.fn().mockResolvedValue(undefined) },
     };
 

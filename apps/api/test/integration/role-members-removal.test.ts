@@ -1,4 +1,4 @@
-import { players, roles, servers } from '@squad/db/schema';
+import { adminsCfgSyncOutbox, players, roles, servers } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -14,7 +14,6 @@ import {
 
 const OWNER_STEAM = testSteamId(735000);
 const MEMBER_STEAM = testSteamId(735001);
-const SYNC_STREAM = (serverId: string) => `events:admins-cfg-sync:${serverId}`;
 
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
@@ -26,6 +25,15 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
   let unrelatedRoleId: string;
   let serverId: string;
   let ownerCookie: string;
+
+  async function syncTaskCount(): Promise<number> {
+    return (
+      await h.db
+        .select({ id: adminsCfgSyncOutbox.id })
+        .from(adminsCfgSyncOutbox)
+        .where(eq(adminsCfgSyncOutbox.serverId, serverId))
+    ).length;
+  }
 
   beforeEach(async () => {
     h = await buildIntegrationApp({
@@ -89,7 +97,7 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
     const cachedPermissions = await loadUserPermissions(h.db, memberId);
     expect(cachedPermissions.roleId).toBe(actualRoleId);
 
-    const streamLengthBefore = await h.redis.xlen(SYNC_STREAM(serverId));
+    const streamLengthBefore = await syncTaskCount();
     const response = await h.app.inject({
       method: 'DELETE',
       url: `/api/v1/roles/${unrelatedRoleId}/members/${memberId}`,
@@ -113,7 +121,7 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
       roleComment: 'keep this assignment',
     });
     expect(stored[0]?.roleExpiresAt).not.toBeNull();
-    expect(await h.redis.xlen(SYNC_STREAM(serverId))).toBe(streamLengthBefore);
+    expect(await syncTaskCount()).toBe(streamLengthBefore);
     expect(await resolveSession(h.db, h.redis, targetSession.token)).toMatchObject({
       id: targetSession.session.id,
       playerId: memberId,
@@ -122,7 +130,7 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
   });
 
   it('treats a non-member of the sole Owner role as an idempotent no-op', async () => {
-    const streamLengthBefore = await h.redis.xlen(SYNC_STREAM(serverId));
+    const streamLengthBefore = await syncTaskCount();
 
     const response = await h.app.inject({
       method: 'DELETE',
@@ -138,7 +146,7 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
       .where(eq(players.id, memberId))
       .limit(1);
     expect(stored[0]?.roleId).toBe(actualRoleId);
-    expect(await h.redis.xlen(SYNC_STREAM(serverId))).toBe(streamLengthBefore);
+    expect(await syncTaskCount()).toBe(streamLengthBefore);
   });
 
   it('clears assignment metadata and runs side effects once for an actual member', async () => {
@@ -149,7 +157,7 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
       ttlMs: 60_000,
     });
     const cachedPermissions = await loadUserPermissions(h.db, memberId);
-    const streamLengthBefore = await h.redis.xlen(SYNC_STREAM(serverId));
+    const streamLengthBefore = await syncTaskCount();
 
     const response = await h.app.inject({
       method: 'DELETE',
@@ -174,7 +182,7 @@ describeIfDb('DELETE /api/v1/roles/:id/members/:playerId — mutation outcome', 
       roleComment: null,
       roleExpiresAt: null,
     });
-    expect(await h.redis.xlen(SYNC_STREAM(serverId))).toBe(streamLengthBefore + 1);
+    expect(await syncTaskCount()).toBe(streamLengthBefore + 1);
     expect(await resolveSession(h.db, h.redis, targetSession.token)).toBeNull();
     const permissionsAfter = await loadUserPermissions(h.db, memberId);
     expect(permissionsAfter).not.toBe(cachedPermissions);

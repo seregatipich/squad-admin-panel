@@ -1,4 +1,4 @@
-import { players, roles, servers } from '@squad/db/schema';
+import { adminsCfgSyncOutbox, players, roles, servers } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -16,8 +16,6 @@ const PLAYER_A = testSteamId(730001);
 const PLAYER_B = testSteamId(730002);
 const PLAYER_C = testSteamId(730003);
 const UNKNOWN_STEAM = testSteamId(730099); // valid 17-digit id, never inserted
-
-const SYNC_STREAM = (serverId: string) => `events:admins-cfg-sync:${serverId}`;
 
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
@@ -55,6 +53,15 @@ describeIfDb('role-members bulk toolkit', () => {
     });
     const body = res.json() as { items: Array<{ steam_id64: string | null }> };
     return body.items.map((i) => i.steam_id64).filter((s): s is string => s !== null);
+  }
+
+  async function syncTaskCount(): Promise<number> {
+    return (
+      await h.db
+        .select({ id: adminsCfgSyncOutbox.id })
+        .from(adminsCfgSyncOutbox)
+        .where(eq(adminsCfgSyncOutbox.serverId, serverId))
+    ).length;
   }
 
   beforeEach(async () => {
@@ -102,7 +109,7 @@ describeIfDb('role-members bulk toolkit', () => {
     await seedPlayer({ steamId64: PLAYER_B, name: 'Bravo' });
     const cookie = await loginAsOwner(h);
 
-    const before = await h.redis.xlen(SYNC_STREAM(serverId));
+    const before = await syncTaskCount();
     const res = await h.app.inject({
       method: 'POST',
       url: `/api/v1/roles/${viewerRoleId}/members/import`,
@@ -125,14 +132,14 @@ describeIfDb('role-members bulk toolkit', () => {
     expect(bySteam.get(PLAYER_B.toString())?.comment).toBeNull();
 
     // Sync was enqueued exactly once for the active server.
-    expect(await h.redis.xlen(SYNC_STREAM(serverId))).toBe(before + 1);
+    expect(await syncTaskCount()).toBe(before + 1);
   });
 
   it('import is ALL-OR-NOTHING: one unknown SteamID rejects the whole file, assigns nothing', async () => {
     await seedPlayer({ steamId64: PLAYER_A, name: 'Alpha' });
     const cookie = await loginAsOwner(h);
 
-    const before = await h.redis.xlen(SYNC_STREAM(serverId));
+    const before = await syncTaskCount();
     const res = await h.app.inject({
       method: 'POST',
       url: `/api/v1/roles/${viewerRoleId}/members/import`,
@@ -160,7 +167,7 @@ describeIfDb('role-members bulk toolkit', () => {
     expect(a[0]?.roleId).toBeNull();
 
     // No sync enqueued because nothing was written.
-    expect(await h.redis.xlen(SYNC_STREAM(serverId))).toBe(before);
+    expect(await syncTaskCount()).toBe(before);
   });
 
   it('import: a malformed (non-numeric) row rejects the whole file and names the line', async () => {
@@ -254,7 +261,7 @@ describeIfDb('role-members bulk toolkit', () => {
     await seedPlayer({ steamId64: PLAYER_C, name: 'Charlie', roleId: viewerRoleId });
     const cookie = await loginAsOwner(h);
 
-    const before = await h.redis.xlen(SYNC_STREAM(serverId));
+    const before = await syncTaskCount();
     const res = await h.app.inject({
       method: 'POST',
       url: `/api/v1/roles/${viewerRoleId}/members/bulk-delete`,
@@ -266,7 +273,7 @@ describeIfDb('role-members bulk toolkit', () => {
 
     const remaining = await memberSteamIds(viewerRoleId, cookie);
     expect(remaining).toEqual([PLAYER_C.toString()]);
-    expect(await h.redis.xlen(SYNC_STREAM(serverId))).toBe(before + 1);
+    expect(await syncTaskCount()).toBe(before + 1);
   });
 
   it('bulk-delete only affects members of THIS role', async () => {
@@ -296,7 +303,7 @@ describeIfDb('role-members bulk toolkit', () => {
     await seedPlayer({ steamId64: PLAYER_B, name: 'Bravo', roleId: viewerRoleId });
     const cookie = await loginAsOwner(h);
 
-    const before = await h.redis.xlen(SYNC_STREAM(serverId));
+    const before = await syncTaskCount();
     const res = await h.app.inject({
       method: 'POST',
       url: `/api/v1/roles/${viewerRoleId}/members/move`,
@@ -308,7 +315,7 @@ describeIfDb('role-members bulk toolkit', () => {
 
     expect(await memberSteamIds(targetRoleId, cookie)).toEqual([PLAYER_A.toString()]);
     expect(await memberSteamIds(viewerRoleId, cookie)).toEqual([PLAYER_B.toString()]);
-    expect(await h.redis.xlen(SYNC_STREAM(serverId))).toBe(before + 1);
+    expect(await syncTaskCount()).toBe(before + 1);
   });
 
   it('move: rejects a missing target role', async () => {

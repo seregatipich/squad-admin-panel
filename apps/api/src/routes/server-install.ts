@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { DatabaseClient } from '@squad/db';
 import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
 import {
@@ -13,7 +14,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { publishAdminsCfgSyncForServer } from '../lib/admins-cfg-sync.js';
+import { type AdminsCfgSyncEvent, publishAdminsCfgSyncForServer } from '../lib/admins-cfg-sync.js';
 import { writeAuditEntry } from '../lib/audit.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
 import { buildSidecarEnv, writeSidecarConfig } from '../lib/rnsquadjs.js';
@@ -147,6 +148,23 @@ interface InstallEmitContext {
   actorPlayerId: string | undefined;
 }
 
+export async function markServerRunningAndEnqueue(
+  db: Pick<DatabaseClient, 'transaction'>,
+  serverId: string,
+  containerId: string,
+  event: AdminsCfgSyncEvent,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const updated = await tx
+      .update(servers)
+      .set({ status: 'running', containerId, updatedAt: new Date() })
+      .where(and(eq(servers.id, serverId), isNull(servers.deletedAt)))
+      .returning({ id: servers.id });
+    if (updated.length === 0) throw new Error('server_not_found');
+    await publishAdminsCfgSyncForServer(tx, serverId, event);
+  });
+}
+
 async function runInstall(
   app: FastifyInstance,
   serverId: string,
@@ -273,14 +291,11 @@ async function runInstall(
     },
   });
 
-  await app.db
-    .update(servers)
-    .set({
-      status: 'running',
-      containerId: res.container_id,
-      updatedAt: new Date(),
-    })
-    .where(eq(servers.id, serverId));
+  await markServerRunningAndEnqueue(app.db, serverId, res.container_id, {
+    reason: 'server.install.completed',
+    actor_player_id: emitCtx.actorPlayerId ?? null,
+    enqueued_at: new Date().toISOString(),
+  });
   await emitCtx.diag.emit({
     component: 'api',
     kind: 'server.install.verify',
@@ -409,15 +424,6 @@ const serverInstallRoutes: FastifyPluginAsync = async (app) => {
             },
             { diag: installDiag, actorPlayerId },
           );
-          // Spec §2.7.7 — push initial Admins.cfg with the current managed
-          // segment to the freshly installed server. Worker config-sync
-          // picks this up and writes the marker-fenced section into the
-          // baseline Admins.cfg the seedConfigs step just created.
-          await publishAdminsCfgSyncForServer(app.redis, id, {
-            reason: 'server.install.completed',
-            actor_player_id: actor.kind === 'steam' ? actor.playerId : null,
-            enqueued_at: new Date().toISOString(),
-          });
           await writeAuditEntry(app.db, {
             actor,
             actorIp,

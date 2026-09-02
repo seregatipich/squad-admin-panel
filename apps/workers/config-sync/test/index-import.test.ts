@@ -8,6 +8,8 @@ const mockLogger = vi.hoisted(() => ({
   debug: vi.fn(),
   error: vi.fn(),
 }));
+const relayOutboxMock = vi.hoisted(() => vi.fn());
+let releaseStalledRelay: (() => void) | undefined;
 
 let selectedServers: Array<{ id: string }> = [];
 
@@ -21,6 +23,7 @@ vi.mock('@squad/db', () => ({
   createDatabaseClient: vi.fn(() => ({
     select: selectMock,
   })),
+  relayAdminsCfgSyncOutbox: relayOutboxMock,
   servers: { id: 'id', deletedAt: 'deletedAt' },
 }));
 
@@ -83,21 +86,30 @@ vi.mock('../src/syncer.js', () => ({
 let exitSpy: ReturnType<typeof vi.spyOn>;
 
 beforeAll(() => {
+  relayOutboxMock.mockResolvedValueOnce({ relayed: 0 }).mockImplementation(
+    () =>
+      new Promise<{ relayed: number }>((resolve) => {
+        releaseStalledRelay = () => resolve({ relayed: 0 });
+      }),
+  );
   selectedServers = [{ id: SERVER_ID }];
   process.env.DATABASE_URL = 'postgres://localhost/test';
   process.env.REDIS_URL = 'redis://localhost:6379/15';
   process.env.PANEL_BRIDGE_SOCKET = '/tmp/fake.sock';
   process.env.ADMINS_CFG_DRIFT_INTERVAL_MS = '10';
+  process.env.ADMINS_CFG_RELAY_INTERVAL_MS = '10';
   exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
 });
 
 afterAll(async () => {
+  releaseStalledRelay?.();
   process.emit('SIGTERM', 'SIGTERM');
   await new Promise((r) => setTimeout(r, 20));
   exitSpy.mockRestore();
   process.removeAllListeners('SIGTERM');
   process.removeAllListeners('SIGINT');
   delete process.env.ADMINS_CFG_DRIFT_INTERVAL_MS;
+  delete process.env.ADMINS_CFG_RELAY_INTERVAL_MS;
 });
 
 describe('config-sync index.ts', () => {
@@ -126,6 +138,11 @@ describe('config-sync index.ts', () => {
       { serverId: SERVER_ID, expected: 'expected', actual: 'actual' },
       'admins.cfg drift detected — awaiting force-sync',
     );
+  });
+
+  it('keeps relay interval single-flight while Redis delivery is stalled', async () => {
+    await new Promise((r) => setTimeout(r, 80));
+    expect(relayOutboxMock).toHaveBeenCalledTimes(2);
   });
 
   it('refreshes the server list immediately on a NOGROUP xreadgroup error (SYNC-5)', async () => {

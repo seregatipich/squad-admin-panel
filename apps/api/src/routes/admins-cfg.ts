@@ -102,7 +102,7 @@ const adminsCfgRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'server_not_found' };
       }
-      await publishAdminsCfgSyncForServer(app.redis, req.query.server_id, {
+      await publishAdminsCfgSyncForServer(app.db, req.query.server_id, {
         reason: 'force_sync',
         actor_player_id: req.user?.playerId ?? null,
         enqueued_at: new Date().toISOString(),

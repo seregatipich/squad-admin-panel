@@ -13,7 +13,6 @@ import {
   runRoleExpiryTick,
   writeRoleExpiryAuditEntry,
 } from '../../../workers/role-expirer/src/tick.js';
-import { publishAdminsCfgSyncForAllServers } from '../../src/lib/admins-cfg-sync.js';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
 import { createSession } from '../../src/lib/sessions.js';
 import { testSteamId } from '../helpers/snapshot-restore.js';
@@ -585,9 +584,8 @@ describeIfDb('auto-expiry chain (VIPSUB-1 reuse — acceptance criterion)', () =
     await h.db.delete(adminsCfgSyncOutbox);
     const deps: RoleExpiryTickDeps = {
       findExpiredAssignments: (now) => findExpiredAssignments(h.db, now, 500),
-      clearExpiredAssignments: (ids, now) => clearExpiredAssignments(h.db, ids, now),
+      clearExpiredAssignments: (ids, now, event) => clearExpiredAssignments(h.db, ids, now, event),
       writeAuditEntry: (entry) => writeRoleExpiryAuditEntry(h.db, entry),
-      publishAdminsCfgSync: (event) => publishAdminsCfgSyncForAllServers(h.db, h.redis, event),
       invalidatePermissionCache: () => undefined,
       revokeAllForPlayer: (playerId) => revokeAllSessionsForPlayer(h.db, h.redis, playerId),
       diag: { emit: async () => undefined },

@@ -1,4 +1,11 @@
-import { playerIpHistory, players, roleSquadPermissions, roles, servers } from '@squad/db/schema';
+import {
+  adminsCfgSyncOutbox,
+  playerIpHistory,
+  players,
+  roleSquadPermissions,
+  roles,
+  servers,
+} from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches, loadUserPermissions } from '../../src/lib/rbac.js';
@@ -429,23 +436,25 @@ describeIfDb('admins-cfg drift + force-sync endpoints', () => {
     if (!serverId) return; // no server in test DB; skip
     const stream = `events:admins-cfg-sync:${serverId}`;
     await h.redis.del(stream);
+    const before = (
+      await h.db
+        .select({ id: adminsCfgSyncOutbox.id })
+        .from(adminsCfgSyncOutbox)
+        .where(eq(adminsCfgSyncOutbox.serverId, serverId))
+    ).length;
     const res = await h.app.inject({
       method: 'POST',
       url: `/api/v1/admins-cfg/sync?server_id=${serverId}`,
       headers: { cookie: await loginAsSteam(OWNER_STEAM) },
     });
     expect(res.statusCode).toBe(200);
-    const len = await h.redis.xlen(stream);
-    expect(len).toBeGreaterThanOrEqual(1);
-    // Inspect the most recent entry — should carry reason=force_sync.
-    const entries = (await h.redis.xrevrange(stream, '+', '-', 'COUNT', 1)) as Array<
-      [string, string[]]
-    >;
-    const kv = entries[0]?.[1] ?? [];
-    const evIdx = kv.indexOf('event');
-    expect(evIdx).toBeGreaterThanOrEqual(0);
-    const payload = JSON.parse(kv[evIdx + 1] ?? '{}') as { reason: string };
-    expect(payload.reason).toBe('force_sync');
+    expect(await h.redis.xlen(stream)).toBe(0);
+    const tasks = await h.db
+      .select({ payload: adminsCfgSyncOutbox.payload })
+      .from(adminsCfgSyncOutbox)
+      .where(eq(adminsCfgSyncOutbox.serverId, serverId));
+    expect(tasks).toHaveLength(before + 1);
+    expect(tasks).toContainEqual({ payload: expect.objectContaining({ reason: 'force_sync' }) });
   });
 
   it('GET /api/v1/admins-cfg/drift returns 404 for unknown server', async () => {
@@ -458,8 +467,8 @@ describeIfDb('admins-cfg drift + force-sync endpoints', () => {
   });
 });
 
-describeIfDb('admins-cfg sync stream is published on role mutations', () => {
-  it('POST /api/v1/roles enqueues an admins-cfg-sync event for every active server', async () => {
+describeIfDb('admins-cfg outbox is committed on role mutations', () => {
+  it('POST /api/v1/roles enqueues a durable task for every active server without direct XADD', async () => {
     // ensure at least one server exists
     const existing = await h.db.select({ id: servers.id }).from(servers).limit(1);
     let serverId = existing[0]?.id;
@@ -492,8 +501,16 @@ describeIfDb('admins-cfg sync stream is published on role mutations', () => {
     });
     expect(created.statusCode).toBe(201);
 
-    const len = await h.redis.xlen(stream);
-    expect(len).toBeGreaterThanOrEqual(1);
+    expect(await h.redis.xlen(stream)).toBe(0);
+    const tasks = await h.db
+      .select({ payload: adminsCfgSyncOutbox.payload })
+      .from(adminsCfgSyncOutbox)
+      .where(eq(adminsCfgSyncOutbox.serverId, serverId));
+    expect(tasks).toContainEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({ reason: 'role.create' }),
+      }),
+    );
 
     // Cleanup
     const { id } = created.json() as { id: string };

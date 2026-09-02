@@ -1,8 +1,7 @@
-import type { DatabaseClient } from '@squad/db';
-import { auditLog, clanMembers, clans, servers } from '@squad/db/schema';
+import { type DatabaseClient, enqueueAdminsCfgSyncForAllServers } from '@squad/db';
+import { auditLog, clanMembers, clans } from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
 import { and, asc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
-import type Redis from 'ioredis';
 
 export interface ExpiredClan {
   clanId: string;
@@ -32,9 +31,8 @@ export interface AdminsCfgSyncEvent {
 export interface ClanPriorityExpiryTickDeps {
   now?: Date;
   findExpiredUnprocessedClans(now: Date): Promise<ExpiredClan[]>;
-  markProcessed(clanIds: string[]): Promise<void>;
+  markProcessed(clanIds: string[], event: AdminsCfgSyncEvent): Promise<{ enqueued: number }>;
   writeAuditEntry(entry: ClanPriorityExpiryAuditEntry): Promise<void>;
-  publishAdminsCfgSync(event: AdminsCfgSyncEvent): Promise<{ enqueued: number }>;
   diag: Pick<Diag, 'emit'>;
 }
 
@@ -71,7 +69,16 @@ export async function runClanPriorityExpiryTick(
       return { expiredClans: 0, enqueued: 0 };
     }
 
-    await deps.markProcessed(expired.map((clan) => clan.clanId));
+    const event: AdminsCfgSyncEvent = {
+      reason: 'clan.priority.expire',
+      actor_player_id: null,
+      enqueued_at: now.toISOString(),
+      request_id: `clan-priority-expirer:${now.toISOString()}`,
+    };
+    const { enqueued } = await deps.markProcessed(
+      expired.map((clan) => clan.clanId),
+      event,
+    );
 
     for (const clan of expired) {
       await deps.writeAuditEntry({
@@ -90,22 +97,15 @@ export async function runClanPriorityExpiryTick(
       });
     }
 
-    const syncResult = await deps.publishAdminsCfgSync({
-      reason: 'clan.priority.expire',
-      actor_player_id: null,
-      enqueued_at: now.toISOString(),
-      request_id: `clan-priority-expirer:${now.toISOString()}`,
-    });
-
     await deps.diag.emit({
       component: 'worker-clan-priority-expirer',
       kind: 'clan_priority_expirer.run_ok',
       severity: 'info',
       message: `expired ${expired.length} clan priority window(s)`,
-      payload: { expiredClans: expired.length, enqueued: syncResult.enqueued },
+      payload: { expiredClans: expired.length, enqueued },
     });
 
-    return { expiredClans: expired.length, enqueued: syncResult.enqueued };
+    return { expiredClans: expired.length, enqueued };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await deps.diag.emit({
@@ -121,13 +121,11 @@ export async function runClanPriorityExpiryTick(
 
 export function createClanPriorityExpiryDeps(
   db: DatabaseClient,
-  redis: Pick<Redis, 'pipeline'>,
 ): Omit<ClanPriorityExpiryTickDeps, 'now' | 'diag'> {
   return {
     findExpiredUnprocessedClans: (now) => findExpiredUnprocessedClans(db, now),
-    markProcessed: (clanIds) => markProcessed(db, clanIds),
+    markProcessed: (clanIds, event) => markProcessed(db, clanIds, event),
     writeAuditEntry: (entry) => writeClanPriorityExpiryAuditEntry(db, entry),
-    publishAdminsCfgSync: (event) => publishAdminsCfgSyncForAllServers(db, redis, event),
   };
 }
 
@@ -184,9 +182,21 @@ export async function findExpiredUnprocessedClans(
   });
 }
 
-export async function markProcessed(db: DatabaseClient, clanIds: string[]): Promise<void> {
-  if (clanIds.length === 0) return;
-  await db.update(clans).set({ priorityExpiryProcessed: true }).where(inArray(clans.id, clanIds));
+export async function markProcessed(
+  db: DatabaseClient,
+  clanIds: string[],
+  event: AdminsCfgSyncEvent,
+): Promise<{ enqueued: number }> {
+  if (clanIds.length === 0) return { enqueued: 0 };
+  return db.transaction(async (tx) => {
+    const updated = await tx
+      .update(clans)
+      .set({ priorityExpiryProcessed: true })
+      .where(inArray(clans.id, clanIds))
+      .returning({ id: clans.id });
+    if (updated.length === 0) return { enqueued: 0 };
+    return enqueueAdminsCfgSyncForAllServers(tx, event);
+  });
 }
 
 export async function writeClanPriorityExpiryAuditEntry(
@@ -208,20 +218,4 @@ export async function writeClanPriorityExpiryAuditEntry(
     statusCode: entry.statusCode,
     rowHash: Buffer.from([]),
   });
-}
-
-export async function publishAdminsCfgSyncForAllServers(
-  db: Pick<DatabaseClient, 'select'>,
-  redis: Pick<Redis, 'pipeline'>,
-  event: AdminsCfgSyncEvent,
-): Promise<{ enqueued: number }> {
-  const rows = await db.select({ id: servers.id }).from(servers).where(isNull(servers.deletedAt));
-  if (rows.length === 0) return { enqueued: 0 };
-  const payload = JSON.stringify(event);
-  const pipeline = redis.pipeline();
-  for (const row of rows) {
-    pipeline.xadd(`events:admins-cfg-sync:${row.id}`, 'MAXLEN', '~', '500', '*', 'event', payload);
-  }
-  await pipeline.exec();
-  return { enqueued: rows.length };
 }

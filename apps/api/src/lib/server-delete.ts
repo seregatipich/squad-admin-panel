@@ -24,7 +24,7 @@ export interface DeleteResult {
   ufw_rules_removed: number;
   /** True when the per-server Redis sync queue cleanup ran (requires `redis`). */
   sync_queue_removed: boolean;
-  /** Count of still-pending outbox rows stamped relayed (cancelled) on delete. */
+  /** Count of unapplied outbox rows completed as `server_removed` on delete. */
   sync_outbox_cancelled: number;
   errors: Array<{ phase: string; error: string }>;
 }
@@ -196,15 +196,35 @@ export async function softDeleteServer(
     }
   }
 
-  await ctx.db
-    .update(servers)
-    .set({
-      deletedAt: new Date(),
-      deletedByPlayerId: ctx.actorPlayerId,
-      deletionBackupMarkerId: backupMarkerId,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(servers.id, serverId), isNull(servers.deletedAt)));
+  const removedAt = new Date();
+  await ctx.db.transaction(async (tx) => {
+    await tx
+      .update(servers)
+      .set({
+        deletedAt: removedAt,
+        deletedByPlayerId: ctx.actorPlayerId,
+        deletionBackupMarkerId: backupMarkerId,
+        updatedAt: removedAt,
+      })
+      .where(and(eq(servers.id, serverId), isNull(servers.deletedAt)));
+
+    const completed = await tx
+      .update(adminsCfgSyncOutbox)
+      .set({
+        appliedAt: removedAt,
+        reloadOutcome: 'server_removed',
+        lastError: null,
+      })
+      .where(and(eq(adminsCfgSyncOutbox.serverId, serverId), isNull(adminsCfgSyncOutbox.appliedAt)))
+      .returning({ id: adminsCfgSyncOutbox.id });
+    await tx
+      .update(adminsCfgSyncOutbox)
+      .set({ relayedAt: removedAt })
+      .where(
+        and(eq(adminsCfgSyncOutbox.serverId, serverId), isNull(adminsCfgSyncOutbox.relayedAt)),
+      );
+    result.sync_outbox_cancelled = completed.length;
+  });
 
   // Phase 6 — per-server Admins.cfg sync-queue cleanup (SYNC-5). Runs AFTER
   // the soft-delete UPDATE so the outbox relay's `deleted_at IS NULL` guard is
@@ -215,22 +235,7 @@ export async function softDeleteServer(
     result.sync_queue_removed = true;
     const streamKey = `${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`;
 
-    // (a) Stamp every still-pending outbox row relayed so the relay never
-    // republishes them onto the stream we are about to destroy.
-    try {
-      const cancelled = await ctx.db
-        .update(adminsCfgSyncOutbox)
-        .set({ relayedAt: new Date() })
-        .where(
-          and(eq(adminsCfgSyncOutbox.serverId, serverId), isNull(adminsCfgSyncOutbox.relayedAt)),
-        )
-        .returning({ id: adminsCfgSyncOutbox.id });
-      result.sync_outbox_cancelled = cancelled.length;
-    } catch (err) {
-      result.errors.push({ phase: 'sync_queue_cleanup', error: (err as Error).message });
-    }
-
-    // (b) Destroy the consumer group. The idempotent no-op cases are swallowed:
+    // (a) Destroy the consumer group. The idempotent no-op cases are swallowed:
     // a missing stream key (`requires the key to exist` / `no such key`) or a
     // missing group (`NOGROUP`) — both mean "never installed / already cleaned".
     try {
@@ -242,7 +247,7 @@ export async function softDeleteServer(
       }
     }
 
-    // (c) Drop the stream itself. UNLINK reclaims memory off-thread; fall back
+    // (b) Drop the stream itself. UNLINK reclaims memory off-thread; fall back
     // to DEL for clients/builds without UNLINK.
     try {
       await ctx.redis.unlink(streamKey);
@@ -254,7 +259,7 @@ export async function softDeleteServer(
       }
     }
 
-    // (d) Drop the per-server sync-status key so no stale `unreachable` alert
+    // (c) Drop the per-server sync-status key so no stale `unreachable` alert
     // lingers for a server that no longer exists.
     try {
       await ctx.redis.del(`${ADMINS_CFG_STATUS_KEY_PREFIX}${serverId}`);

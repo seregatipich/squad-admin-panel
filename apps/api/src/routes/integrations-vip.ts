@@ -279,7 +279,9 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
       const now = new Date();
       const expiresAt = body.expires_at ? new Date(body.expires_at) : null;
       const assignEvent = isAssignEvent(body.event_type);
-      const shouldAssign = assignEvent || (expiresAt !== null && expiresAt > now);
+      const shouldAssign =
+        assignEvent ||
+        (body.event_type === 'vip.refunded' && expiresAt !== null && expiresAt > now);
 
       const requestHash = createHash('sha256').update(canonicalJson(body)).digest('hex');
       const result = await app.db
@@ -431,20 +433,17 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
               .where(eq(players.id, player.id));
           }
 
-          const syncResult =
-            action === 'ignored'
-              ? { enqueued: 0 }
-              : await publishAdminsCfgSyncForAllServers(
-                  tx,
-                  app.redis,
-                  {
-                    reason: `vip.lifecycle.${action}`,
-                    actor_player_id: null,
-                    enqueued_at: now.toISOString(),
-                    request_id: req.id,
-                  },
-                  serverIds,
-                );
+          const syncResult = await publishAdminsCfgSyncForAllServers(
+            tx,
+            {
+              reason: `vip.lifecycle.${action}`,
+              actor_player_id: null,
+              enqueued_at: now.toISOString(),
+              request_id: req.id,
+            },
+            serverIds,
+            body.event_id,
+          );
 
           await tx.insert(auditLog).values({
             actorKind: 'system',

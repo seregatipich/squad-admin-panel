@@ -1,6 +1,14 @@
 import { randomInt, randomUUID } from 'node:crypto';
-import { createDatabaseClient, players, roles, vipLifecycleEvents } from '@squad/db';
-import { and, eq } from 'drizzle-orm';
+import {
+  adminsCfgSyncOutbox,
+  createDatabaseClient,
+  enqueueAdminsCfgSyncForAllServers,
+  players,
+  roles,
+  servers,
+  vipLifecycleEvents,
+} from '@squad/db';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { clearExpiredAssignments, findExpiredAssignments } from '../src/tick.js';
 
@@ -107,8 +115,13 @@ describeIfDb('findExpiredAssignments against a real database', () => {
         .set({ roleExpiresAt: renewedUntil, roleLifecycleEventId: eventId })
         .where(eq(players.steamId64, steamId64));
 
-      const cleared = await clearExpiredAssignments(db, [stale], NOW);
-      expect(cleared).toEqual([]);
+      const cleared = await clearExpiredAssignments(db, [stale], NOW, {
+        reason: 'player.role.expire',
+        actor_player_id: null,
+        enqueued_at: NOW.toISOString(),
+        request_id: 'stale-expiry-test',
+      });
+      expect(cleared).toEqual({ cleared: [], enqueued: 0 });
       const [stored] = await db
         .select({ roleId: players.roleId, expiresAt: players.roleExpiresAt })
         .from(players)
@@ -116,6 +129,93 @@ describeIfDb('findExpiredAssignments against a real database', () => {
       expect(stored).toEqual({ roleId: NORMAL_ROLE_ID, expiresAt: renewedUntil });
     } finally {
       await db.delete(vipLifecycleEvents).where(eq(vipLifecycleEvents.eventId, eventId));
+      await db.delete(players).where(eq(players.steamId64, steamId64));
+    }
+  });
+
+  it('commits role expiry with one outbox row per active server', async () => {
+    if (!db) throw new Error('database not configured');
+    const playerId = randomUUID();
+    const serverId = randomUUID();
+    const steamId64 = 76561198914600000n + BigInt(randomInt(1, 1_000_000));
+    const requestId = `role-expirer-success-${randomUUID()}`;
+    try {
+      await db
+        .delete(adminsCfgSyncOutbox)
+        .where(sql`${adminsCfgSyncOutbox.payload}->>'request_id' = ${requestId}`);
+      await db.insert(players).values({
+        id: playerId,
+        steamId64,
+        canonicalName: 'Истёкшая роль с outbox',
+        canonicalNameNormalized: 'истёкшая роль с outbox',
+        roleId: NORMAL_ROLE_ID,
+        roleExpiresAt: EXPIRED_AT,
+      });
+      await db.insert(servers).values({
+        id: serverId,
+        displayName: 'Role expiry outbox server',
+        slug: `role-expiry-outbox-${serverId}`,
+      });
+      const [assignment] = await findExpiredAssignments(db, NOW, 1000).then((rows) =>
+        rows.filter((row) => row.playerId === playerId),
+      );
+      if (!assignment) throw new Error('expired assignment was not scanned');
+      const activeIds = (
+        await db.select({ id: servers.id }).from(servers).where(isNull(servers.deletedAt))
+      ).map((row) => row.id);
+
+      const result = await clearExpiredAssignments(db, [assignment], NOW, {
+        reason: 'player.role.expire',
+        actor_player_id: null,
+        enqueued_at: NOW.toISOString(),
+        request_id: requestId,
+      });
+
+      expect(result).toEqual({ cleared: [assignment], enqueued: activeIds.length });
+      const rows = await db
+        .select({ serverId: adminsCfgSyncOutbox.serverId })
+        .from(adminsCfgSyncOutbox)
+        .where(sql`${adminsCfgSyncOutbox.payload}->>'request_id' = ${requestId}`);
+      expect(new Set(rows.map((row) => row.serverId))).toEqual(new Set(activeIds));
+    } finally {
+      await db
+        .delete(adminsCfgSyncOutbox)
+        .where(sql`${adminsCfgSyncOutbox.payload}->>'request_id' = ${requestId}`);
+      await db.delete(players).where(eq(players.steamId64, steamId64));
+      await db.delete(servers).where(eq(servers.id, serverId));
+    }
+  });
+
+  it('rolls a role mutation back when its transactional outbox insert fails', async () => {
+    if (!db) throw new Error('database not configured');
+    const playerId = randomUUID();
+    const steamId64 = 76561198914700000n + BigInt(randomInt(1, 1_000_000));
+    try {
+      await db.insert(players).values({
+        id: playerId,
+        steamId64,
+        canonicalName: 'Откат роли при ошибке outbox',
+        canonicalNameNormalized: 'откат роли при ошибке outbox',
+        roleId: NORMAL_ROLE_ID,
+        roleExpiresAt: EXPIRED_AT,
+      });
+
+      await expect(
+        db.transaction(async (tx) => {
+          await tx
+            .update(players)
+            .set({ roleId: null, roleExpiresAt: null })
+            .where(eq(players.id, playerId));
+          await enqueueAdminsCfgSyncForAllServers(tx, { reason: 'rollback-proof' }, [randomUUID()]);
+        }),
+      ).rejects.toThrow();
+
+      const [stored] = await db
+        .select({ roleId: players.roleId, roleExpiresAt: players.roleExpiresAt })
+        .from(players)
+        .where(eq(players.id, playerId));
+      expect(stored).toEqual({ roleId: NORMAL_ROLE_ID, roleExpiresAt: EXPIRED_AT });
+    } finally {
       await db.delete(players).where(eq(players.steamId64, steamId64));
     }
   });

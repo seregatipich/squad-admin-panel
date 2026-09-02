@@ -115,7 +115,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
           roleLifecycleEventId: null,
         })
         .where(eq(players.id, playerId));
-      await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+      await publishAdminsCfgSyncForAllServers(tx, {
         reason: 'whitelist.member.add',
         actor_player_id: req.user?.playerId ?? null,
         enqueued_at: new Date().toISOString(),
@@ -246,7 +246,7 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
             roleLifecycleEventId: null,
           })
           .where(eq(players.id, player.id));
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'whitelist.member.remove',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),

@@ -1,4 +1,9 @@
-import { applyVipGrant, type DatabaseClient, nextRenewalAfter } from '@squad/db';
+import {
+  applyVipGrant,
+  type DatabaseClient,
+  enqueueAdminsCfgSyncForAllServers,
+  nextRenewalAfter,
+} from '@squad/db';
 import {
   alertEvents,
   auditLog,
@@ -10,7 +15,7 @@ import {
 import type { Diag } from '@squad/diag';
 import { and, asc, eq, lte } from 'drizzle-orm';
 import type Redis from 'ioredis';
-import { type AdminsCfgSyncEvent, publishAdminsCfgSyncForAllServers } from './tick.js';
+import type { AdminsCfgSyncEvent } from './tick.js';
 
 /** Redis pub/sub channel the API's live-bus subscribes to for real-time fan-out. */
 const LIVE_BUS_CHANNEL = 'live-bus';
@@ -47,10 +52,11 @@ export interface ChargeRenewalInput {
   /** The billing date to store once the charge succeeds. */
   nextRenewalAt: Date;
   now: Date;
+  syncEvent: AdminsCfgSyncEvent;
 }
 
 export type ChargeRenewalResult =
-  | { status: 'ok'; balance: number; roleExpiresAt: Date }
+  | { status: 'ok'; balance: number; roleExpiresAt: Date; enqueued: number }
   | { status: 'insufficient_balance'; balance: number }
   | { status: 'role_conflict' }
   | { status: 'role_permanent' }
@@ -95,7 +101,6 @@ export interface SubscriptionRenewalDeps {
   chargeRenewal(input: ChargeRenewalInput): Promise<ChargeRenewalResult>;
   expireSubscription(subscriptionId: string, now: Date): Promise<void>;
   writeAuditEntry(entry: SubscriptionAuditEntry): Promise<void>;
-  publishAdminsCfgSync(event: AdminsCfgSyncEvent): Promise<{ enqueued: number }>;
   notifySubscriptionExpired(payload: SubscriptionExpiredAlertPayload): Promise<void>;
   invalidatePermissionCache(playerId: string): void;
   diag: Pick<Diag, 'emit'>;
@@ -118,8 +123,8 @@ export interface SubscriptionRenewalResult {
  * notified; its role is NOT removed here, because the already-paid period must
  * run out first, which the existing `runRoleExpiryTick` handles on schedule.
  *
- * One failing subscription never aborts the batch, and the Admins.cfg fan-out
- * is emitted once per run rather than once per subscription.
+ * One failing subscription never aborts the batch. Every successful renewal
+ * writes its Admins.cfg outbox rows in the same transaction as the charge.
  */
 export async function runSubscriptionRenewalTick(
   deps: SubscriptionRenewalDeps,
@@ -129,6 +134,13 @@ export async function runSubscriptionRenewalTick(
     const due = await deps.findDueSubscriptions(now);
     let renewed = 0;
     let expired = 0;
+    let enqueued = 0;
+    const syncEvent: AdminsCfgSyncEvent = {
+      reason: 'player.role.assign',
+      actor_player_id: null,
+      enqueued_at: now.toISOString(),
+      request_id: `role-expirer:renewals:${now.toISOString()}`,
+    };
 
     for (const subscription of due) {
       const result = await deps.chargeRenewal({
@@ -139,6 +151,7 @@ export async function runSubscriptionRenewalTick(
         days: subscription.renewsEveryDays,
         nextRenewalAt: nextRenewalAfter(subscription.nextRenewalAt, subscription.renewsEveryDays),
         now,
+        syncEvent,
       });
 
       // Cancelled while the batch was in flight: nothing was billed and the
@@ -147,6 +160,7 @@ export async function runSubscriptionRenewalTick(
 
       if (result.status === 'ok') {
         renewed += 1;
+        enqueued += result.enqueued;
         await deps.writeAuditEntry({
           actor: { kind: 'system', label: 'role-expirer' },
           actorIp: null,
@@ -209,17 +223,6 @@ export async function runSubscriptionRenewalTick(
       });
     }
 
-    let enqueued = 0;
-    if (renewed > 0) {
-      const sync = await deps.publishAdminsCfgSync({
-        reason: 'player.role.assign',
-        actor_player_id: null,
-        enqueued_at: now.toISOString(),
-        request_id: `role-expirer:renewals:${now.toISOString()}`,
-      });
-      enqueued = sync.enqueued;
-    }
-
     await deps.diag.emit({
       component: 'worker-role-expirer',
       kind: 'role_expirer.renewals_ok',
@@ -244,7 +247,7 @@ export async function runSubscriptionRenewalTick(
 
 export function createSubscriptionRenewalDeps(
   db: DatabaseClient,
-  redis: Pick<Redis, 'pipeline' | 'publish'>,
+  redis: Pick<Redis, 'publish'>,
   opts: { batchSize?: number } = {},
 ): Omit<SubscriptionRenewalDeps, 'now' | 'diag'> {
   const batchSize = opts.batchSize ?? 500;
@@ -253,7 +256,6 @@ export function createSubscriptionRenewalDeps(
     chargeRenewal: (input) => chargeRenewal(db, input),
     expireSubscription: (subscriptionId, now) => expireSubscription(db, subscriptionId, now),
     writeAuditEntry: (entry) => writeSubscriptionAuditEntry(db, entry),
-    publishAdminsCfgSync: (event) => publishAdminsCfgSyncForAllServers(db, redis, event),
     notifySubscriptionExpired: (payload) => notifySubscriptionExpired(db, redis, payload),
     invalidatePermissionCache: () => undefined,
   };
@@ -328,11 +330,13 @@ async function chargeRenewalTx(
       // Cancelled between the scan and the charge — undo the whole period.
       throw new SubscriptionVanishedError(input.subscriptionId);
     }
+    const { enqueued } = await enqueueAdminsCfgSyncForAllServers(tx, input.syncEvent);
 
     return {
       status: 'ok' as const,
       balance: applied.balance,
       roleExpiresAt: applied.roleExpiresAt,
+      enqueued,
     };
   });
 }

@@ -454,7 +454,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
             decidedAt: now,
           })
           .where(eq(whitelistApplications.id, existing.id));
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'whitelist.application.approve',
           actor_player_id: reviewerPlayerId,
           enqueued_at: now.toISOString(),

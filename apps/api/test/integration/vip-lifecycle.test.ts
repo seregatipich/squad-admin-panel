@@ -76,12 +76,14 @@ async function mutationCounts(eventId: string) {
   return { events: events.length, audits: audits.length, outbox: outbox.length };
 }
 
-async function syncEvents(): Promise<unknown[]> {
-  const rows = await h.redis.xrange(`events:admins-cfg-sync:${serverId}`, '-', '+');
-  return rows.map(([, fields]) => {
-    const eventIndex = fields.indexOf('event');
-    return JSON.parse(String(fields[eventIndex + 1]));
-  });
+async function syncTasks() {
+  return h.db
+    .select({
+      correlationId: adminsCfgSyncOutbox.correlationId,
+      payload: adminsCfgSyncOutbox.payload,
+    })
+    .from(adminsCfgSyncOutbox)
+    .where(eq(adminsCfgSyncOutbox.serverId, serverId));
 }
 
 async function latestVipAudit() {
@@ -198,7 +200,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(assigned?.roleExpiresAt?.toISOString()).toBe('2030-01-02T03:04:05.000Z');
     expect(assigned?.roleComment).toContain('purchase-001');
     expect(assigned?.roleLifecycleEventId).toBe(event.event_id);
-    expect(await syncEvents()).toHaveLength(1);
+    expect(await syncTasks()).toEqual([expect.objectContaining({ correlationId: event.event_id })]);
     expect(await latestVipAudit()).toMatchObject({
       actorKind: 'system',
       actorSystemLabel: 'vip-user-service',
@@ -210,7 +212,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
 
     expect(duplicate.statusCode).toBe(200);
     expect(duplicate.json()).toMatchObject({ ok: true, duplicate: true });
-    expect(await syncEvents()).toHaveLength(1);
+    expect(await syncTasks()).toHaveLength(1);
   });
 
   it('resolves an exact duplicate before manual ownership and target server checks', async () => {
@@ -563,56 +565,105 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     });
   });
 
-  it.each(['vip.refunded', 'vip.expired'])(
-    'uses future expires_at on %s as desired state and lets the same purchase revoke after expiry',
-    async (eventType) => {
-      const suffix = eventType.slice('vip.'.length);
-      const compensation = {
-        event_id: `vip-${suffix}-compensation`,
-        event_type: eventType,
-        player_id: playerId,
-        role_id: roleId,
-        tier: 'tier_1',
-        purchase_id: `purchase-${suffix}-compensation`,
-        expires_at: '2030-06-02T03:04:05.000Z',
-        revision: 1,
-      };
+  it('uses future expires_at on vip.refunded as desired state and lets the same purchase revoke after expiry', async () => {
+    const eventType = 'vip.refunded';
+    const suffix = 'refunded';
+    const compensation = {
+      event_id: `vip-${suffix}-compensation`,
+      event_type: eventType,
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'tier_1',
+      purchase_id: `purchase-${suffix}-compensation`,
+      expires_at: '2030-06-02T03:04:05.000Z',
+      revision: 1,
+    };
 
-      const restored = await postLifecycle(compensation);
+    const restored = await postLifecycle(compensation);
 
-      expect(restored.statusCode).toBe(202);
-      expect(restored.json()).toMatchObject({ action: 'assigned' });
-      expect(
-        (
-          await h.db
-            .select({ marker: players.roleLifecycleEventId, expiresAt: players.roleExpiresAt })
-            .from(players)
-            .where(eq(players.id, playerId))
-        )[0],
-      ).toEqual({
-        marker: compensation.event_id,
-        expiresAt: new Date(compensation.expires_at),
-      });
+    expect(restored.statusCode).toBe(202);
+    expect(restored.json()).toMatchObject({ action: 'assigned' });
+    expect(
+      (
+        await h.db
+          .select({ marker: players.roleLifecycleEventId, expiresAt: players.roleExpiresAt })
+          .from(players)
+          .where(eq(players.id, playerId))
+      )[0],
+    ).toEqual({
+      marker: compensation.event_id,
+      expiresAt: new Date(compensation.expires_at),
+    });
 
-      const revoked = await postLifecycle({
-        ...compensation,
-        event_id: `vip-${suffix}-expired`,
-        expires_at: '2020-06-02T03:04:05.000Z',
-        revision: 2,
-      });
+    const revoked = await postLifecycle({
+      ...compensation,
+      event_id: `vip-${suffix}-expired`,
+      expires_at: '2020-06-02T03:04:05.000Z',
+      revision: 2,
+    });
 
-      expect(revoked.statusCode).toBe(202);
-      expect(revoked.json()).toMatchObject({ action: 'revoked' });
-      expect(
-        (
-          await h.db
-            .select({ roleId: players.roleId, marker: players.roleLifecycleEventId })
-            .from(players)
-            .where(eq(players.id, playerId))
-        )[0],
-      ).toEqual({ roleId: null, marker: null });
-    },
-  );
+    expect(revoked.statusCode).toBe(202);
+    expect(revoked.json()).toMatchObject({ action: 'revoked' });
+    expect(
+      (
+        await h.db
+          .select({ roleId: players.roleId, marker: players.roleLifecycleEventId })
+          .from(players)
+          .where(eq(players.id, playerId))
+      )[0],
+    ).toEqual({ roleId: null, marker: null });
+  });
+
+  it('never assigns on vip.expired even when panel time sees expires_at in the future', async () => {
+    const purchase = {
+      event_id: 'vip-expired-clock-skew-purchase',
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'tier_1',
+      purchase_id: 'purchase-expired-clock-skew',
+      expires_at: '2030-06-02T03:04:05.000Z',
+      revision: 1,
+    };
+    expect((await postLifecycle(purchase)).json()).toMatchObject({ action: 'assigned' });
+
+    const expired = await postLifecycle({
+      ...purchase,
+      event_id: 'vip-expired-clock-skew-expiry',
+      event_type: 'vip.expired',
+      revision: 2,
+    });
+
+    expect(expired.statusCode).toBe(202);
+    expect(expired.json()).toMatchObject({ action: 'revoked', enqueued: 1 });
+    const [stored] = await h.db
+      .select({ roleId: players.roleId })
+      .from(players)
+      .where(eq(players.id, playerId));
+    expect(stored?.roleId).toBeNull();
+  });
+
+  it('enqueues correlated snapshot rows when natural expiry is already reflected in the player', async () => {
+    const eventId = 'vip-expired-already-cleared';
+    const response = await postLifecycle({
+      event_id: eventId,
+      event_type: 'vip.expired',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'tier_1',
+      purchase_id: 'purchase-already-cleared',
+      expires_at: '2020-06-02T03:04:05.000Z',
+      revision: 1,
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ action: 'ignored', enqueued: 1 });
+    const tasks = await h.db
+      .select({ serverId: adminsCfgSyncOutbox.serverId })
+      .from(adminsCfgSyncOutbox)
+      .where(eq(adminsCfgSyncOutbox.correlationId, eventId));
+    expect(tasks).toEqual([{ serverId }]);
+  });
 
   it('accepts signed preflight by stable external tier label without matching the editable tier name', async () => {
     const payload = {
@@ -1020,7 +1071,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
 
     expect(duplicate.statusCode).toBe(200);
     expect(duplicate.json()).toMatchObject({ ok: true, duplicate: true });
-    expect(await syncEvents()).toHaveLength(2);
+    expect(await syncTasks()).toHaveLength(2);
   });
 
   it('rejects an invalid signature before changing role state', async () => {
@@ -1043,6 +1094,6 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
       .from(players)
       .where(eq(players.id, playerId));
     expect(player?.roleId).toBeNull();
-    expect(await syncEvents()).toHaveLength(0);
+    expect(await syncTasks()).toHaveLength(0);
   });
 });

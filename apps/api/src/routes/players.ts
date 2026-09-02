@@ -410,7 +410,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
             roleLifecycleEventId: null,
           })
           .where(eq(players.id, playerId));
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: newRoleId === null ? 'player.role.unassign' : 'player.role.assign',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
@@ -482,7 +482,7 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
             roleLifecycleEventId: null,
           })
           .where(eq(players.id, playerId));
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'player.role.unassign',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),

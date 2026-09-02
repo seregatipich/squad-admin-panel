@@ -45,11 +45,10 @@ const STREAM_BLOCK_MS = 5_000;
 const RECLAIM_INTERVAL_MS = Number(process.env.ADMINS_CFG_RECLAIM_INTERVAL_MS ?? 30_000);
 const RECLAIM_MIN_IDLE_MS = Number(process.env.ADMINS_CFG_RECLAIM_MIN_IDLE_MS ?? 60_000);
 // Cadence for draining the durable Postgres outbox onto the Redis streams
-// (SYNC-1, #34). The API publishes immediately on enqueue as a fast path; this
-// sweep is the at-least-once fallback that delivers any row whose immediate
-// publish failed (e.g. Redis was briefly unavailable), so no committed mutation
-// is ever stranded without its sync task.
+// (SYNC-1, #34). API and worker producers only write Postgres; this post-commit
+// relay is the sole publisher for Admins.cfg streams.
 const RELAY_INTERVAL_MS = Number(process.env.ADMINS_CFG_RELAY_INTERVAL_MS ?? 1_000);
+const RELAY_XADD_TIMEOUT_MS = Number(process.env.ADMINS_CFG_RELAY_XADD_TIMEOUT_MS ?? 5_000);
 const CONSUMER_NAME = `consumer-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 
 async function ensureGroup(redis: Redis, serverId: string): Promise<void> {
@@ -58,7 +57,7 @@ async function ensureGroup(redis: Redis, serverId: string): Promise<void> {
       'CREATE',
       `${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`,
       ADMINS_CFG_SYNC_GROUP,
-      '$',
+      '0',
       'MKSTREAM',
     );
   } catch (err) {
@@ -69,7 +68,8 @@ async function ensureGroup(redis: Redis, serverId: string): Promise<void> {
 
 async function main() {
   const db = createDatabaseClient(requiredEnv('DATABASE_URL'));
-  const redis = new Redis(requiredEnv('REDIS_URL'), {
+  const redisUrl = requiredEnv('REDIS_URL');
+  const redis = new Redis(redisUrl, {
     maxRetriesPerRequest: null,
     enableReadyCheck: true,
     retryStrategy: (times: number) => Math.min(2000, 200 * 2 ** Math.min(times, 6)),
@@ -83,6 +83,16 @@ async function main() {
   );
   redis.on('error', (err: Error) => log.warn({ err: err.message }, 'redis error (will retry)'));
   redis.on('reconnecting', (delay: number) => log.info({ delay }, 'redis reconnecting'));
+  const relayRedis = new Redis(redisUrl, {
+    enableOfflineQueue: false,
+    enableReadyCheck: true,
+    maxRetriesPerRequest: 1,
+    commandTimeout: RELAY_XADD_TIMEOUT_MS,
+    retryStrategy: (times: number) => Math.min(2000, 200 * 2 ** Math.min(times, 6)),
+  });
+  relayRedis.on('error', (err: Error) =>
+    log.warn({ err: err.message }, 'outbox relay redis error (will retry)'),
+  );
 
   const bridge = new BridgeClient({
     socketPath: process.env.PANEL_BRIDGE_SOCKET ?? '/run/panel-host-bridge/bridge.sock',
@@ -315,16 +325,23 @@ async function main() {
     }
   }
 
-  async function relayOutbox(): Promise<void> {
-    try {
-      const { relayed } = await relayAdminsCfgSyncOutbox(db, redis, {
-        streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX,
-        maxlen: 500,
-      });
-      if (relayed > 0) log.info({ relayed }, 'relayed admins-cfg-sync outbox rows');
-    } catch (err) {
-      log.warn({ err: (err as Error).message }, 'admins-cfg-sync outbox relay failed');
-    }
+  let relayInFlight: Promise<void> | null = null;
+  function relayOutbox(): Promise<void> {
+    if (relayInFlight) return relayInFlight;
+    relayInFlight = (async () => {
+      try {
+        const { relayed } = await relayAdminsCfgSyncOutbox(db, relayRedis, {
+          streamPrefix: ADMINS_CFG_SYNC_STREAM_PREFIX,
+          xaddTimeoutMs: RELAY_XADD_TIMEOUT_MS,
+        });
+        if (relayed > 0) log.info({ relayed }, 'relayed admins-cfg-sync outbox rows');
+      } catch (err) {
+        log.warn({ err: (err as Error).message }, 'admins-cfg-sync outbox relay failed');
+      }
+    })().finally(() => {
+      relayInFlight = null;
+    });
+    return relayInFlight;
   }
 
   async function driftSweep(): Promise<void> {
@@ -384,6 +401,7 @@ async function main() {
       if (reclaimTimer) clearInterval(reclaimTimer);
       if (relayTimer) clearInterval(relayTimer);
       await bridge.close().catch(() => undefined);
+      await relayRedis.quit().catch(() => undefined);
       await redis.quit().catch(() => undefined);
     },
     onError: (err) => log.error({ err: err.message }, 'shutdown failed'),
@@ -405,8 +423,8 @@ async function main() {
   await reclaimPendingMessages().catch((err) =>
     log.warn({ err: (err as Error).message }, 'boot reclaim failed'),
   );
-  // Boot-time relay pass — drain any outbox rows whose immediate publish never
-  // reached Redis (e.g. Redis was down when the mutation committed).
+  // Boot-time post-commit relay pass — publish durable pending rows left by
+  // producers or a previous worker run.
   await relayOutbox();
   stopHeartbeat = startHeartbeat({
     redis,

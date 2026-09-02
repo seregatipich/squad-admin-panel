@@ -364,7 +364,7 @@ const economyRoutes: FastifyPluginAsync = async (app) => {
         });
         if (applied.status !== 'ok') return applied;
 
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'player.role.assign',
           actor_player_id: actorId,
           enqueued_at: new Date().toISOString(),

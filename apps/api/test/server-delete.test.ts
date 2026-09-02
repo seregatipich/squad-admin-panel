@@ -441,14 +441,22 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
     expect(row?.deletedAt).not.toBeNull();
   });
 
-  it('stamps every still-pending outbox row relayed and reports the count', async () => {
+  it('atomically completes every unapplied outbox row as server_removed', async () => {
     const seeded = await seedServer(h, { slug: 'sync-outbox' });
     await seedConfigs(h, seeded.id);
+
+    const previouslyRelayedAt = new Date('2026-08-01T12:00:00.000Z');
 
     await h.db.insert(adminsCfgSyncOutbox).values([
       { serverId: seeded.id, payload: { reason: 'a' } },
       { serverId: seeded.id, payload: { reason: 'b' } },
       { serverId: seeded.id, payload: { reason: 'c' } },
+      {
+        serverId: seeded.id,
+        payload: { reason: 'already-relayed' },
+        relayedAt: previouslyRelayedAt,
+        streamId: '1-0',
+      },
     ]);
 
     const result = await softDeleteServer(
@@ -466,14 +474,31 @@ describe('softDeleteServer — Redis sync-queue cleanup (SYNC-5)', () => {
       seeded.id,
     );
 
-    expect(result.sync_outbox_cancelled).toBe(3);
-    const stillPending = await h.db
-      .select({ id: adminsCfgSyncOutbox.id })
+    expect(result.sync_outbox_cancelled).toBe(4);
+    const completed = await h.db
+      .select({
+        appliedAt: adminsCfgSyncOutbox.appliedAt,
+        relayedAt: adminsCfgSyncOutbox.relayedAt,
+        reloadOutcome: adminsCfgSyncOutbox.reloadOutcome,
+        lastError: adminsCfgSyncOutbox.lastError,
+        streamId: adminsCfgSyncOutbox.streamId,
+      })
       .from(adminsCfgSyncOutbox)
-      .where(
-        and(eq(adminsCfgSyncOutbox.serverId, seeded.id), isNull(adminsCfgSyncOutbox.relayedAt)),
-      );
-    expect(stillPending).toHaveLength(0);
+      .where(eq(adminsCfgSyncOutbox.serverId, seeded.id));
+    expect(completed).toHaveLength(4);
+    expect(completed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          appliedAt: expect.any(Date),
+          reloadOutcome: 'server_removed',
+          lastError: null,
+        }),
+      ]),
+    );
+    expect(completed.every((row) => row.appliedAt !== null)).toBe(true);
+    expect(completed).toContainEqual(
+      expect.objectContaining({ relayedAt: previouslyRelayedAt, streamId: '1-0' }),
+    );
   });
 
   it('a row enqueued after the delete is NOT relayed to a resurrected stream (relay guard)', async () => {

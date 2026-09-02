@@ -288,8 +288,8 @@ describeIfDb('POST /api/v1/players/:playerId/bonus-purchases (ECON-6)', () => {
     expect(stored.roleId).toBe(vipRoleId);
     expectCloseTo(stored.roleExpiresAt, before + TIER_DAYS * DAY_MS);
 
-    // SYNC-3: the grant enqueued a durable outbox row per active server and
-    // the immediate best-effort publish put an entry on the server's stream.
+    // SYNC-3: the grant enqueues a durable outbox row per active server; Redis
+    // remains untouched until the post-commit relay runs.
     const activeServers = await h.db
       .select({ id: servers.id })
       .from(servers)
@@ -302,9 +302,7 @@ describeIfDb('POST /api/v1/players/:playerId/bonus-purchases (ECON-6)', () => {
     );
     expect(assignRows.length).toBe(activeServers.length);
     expect(assignRows.map((r) => r.serverId)).toContain(serverId);
-    expect(
-      await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`),
-    ).toBeGreaterThanOrEqual(1);
+    expect(await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`)).toBe(0);
   });
 
   it('writes the player.bonus.purchase audit row', async () => {

@@ -44,7 +44,7 @@ async function main() {
     statusFn: () => 'running',
     onError: (err) => log.warn({ err: err.message }, 'heartbeat publish failed'),
   });
-  const runtimeDeps = createClanPriorityExpiryDeps(db, redis);
+  const runtimeDeps = createClanPriorityExpiryDeps(db);
 
   async function tick(): Promise<void> {
     const result = await runClanPriorityExpiryTick({ ...runtimeDeps, diag });

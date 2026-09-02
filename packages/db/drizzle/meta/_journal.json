@@ -659,6 +659,13 @@
       "when": 1785853400000,
       "tag": "0108_vip_delivery_status",
       "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1788379900000,
+      "tag": "0109_admins_cfg_outbox_delivery",
+      "breakpoints": true
     }
   ]
 }

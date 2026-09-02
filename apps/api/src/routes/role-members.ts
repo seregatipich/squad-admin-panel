@@ -194,7 +194,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
             roleLifecycleEventId: null,
           })
           .where(eq(players.id, playerId));
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'role.member.add',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
@@ -260,7 +260,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
           .where(and(eq(players.id, playerId), eq(players.roleId, r.id)))
           .returning({ id: players.id });
         if (updated.length === 0) return false;
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'role.member.remove',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
@@ -398,7 +398,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
             })
             .where(eq(players.id, a.playerId));
         }
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'role.member.import',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
@@ -515,7 +515,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
           .where(and(eq(players.roleId, r.id), inArray(players.id, playerIds)))
           .returning({ id: players.id });
         removedIds = updated.map((u) => u.id);
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'role.member.bulk_remove',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
@@ -608,7 +608,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
           .where(and(eq(players.roleId, src.id), inArray(players.id, playerIds)))
           .returning({ id: players.id });
         movedIds = updated.map((u) => u.id);
-        await publishAdminsCfgSyncForAllServers(tx, app.redis, {
+        await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'role.member.move',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),

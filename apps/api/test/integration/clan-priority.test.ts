@@ -1,4 +1,5 @@
 import {
+  adminsCfgSyncOutbox,
   clanMembers,
   clans,
   players,
@@ -6,7 +7,7 @@ import {
   roles,
   servers,
 } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { invalidateAllPermissionCaches } from '../../src/lib/rbac.js';
@@ -136,22 +137,27 @@ async function seedClan(
 }
 
 async function drainSyncStream(): Promise<void> {
+  await h.db.delete(adminsCfgSyncOutbox).where(eq(adminsCfgSyncOutbox.serverId, serverId));
   await h.redis.del(`events:admins-cfg-sync:${serverId}`);
 }
 
 async function latestSyncReason(): Promise<string | null> {
-  const entries = (await h.redis.xrevrange(
-    `events:admins-cfg-sync:${serverId}`,
-    '+',
-    '-',
-    'COUNT',
-    1,
-  )) as Array<[string, string[]]>;
-  const kv = entries[0]?.[1] ?? [];
-  const evIdx = kv.indexOf('event');
-  if (evIdx < 0) return null;
-  const payload = JSON.parse(kv[evIdx + 1] ?? '{}') as { reason?: string };
-  return payload.reason ?? null;
+  const [row] = await h.db
+    .select({ payload: adminsCfgSyncOutbox.payload })
+    .from(adminsCfgSyncOutbox)
+    .where(eq(adminsCfgSyncOutbox.serverId, serverId))
+    .orderBy(desc(adminsCfgSyncOutbox.createdAt))
+    .limit(1);
+  return (row?.payload as { reason?: string } | undefined)?.reason ?? null;
+}
+
+async function syncTaskCount(): Promise<number> {
+  return (
+    await h.db
+      .select({ id: adminsCfgSyncOutbox.id })
+      .from(adminsCfgSyncOutbox)
+      .where(eq(adminsCfgSyncOutbox.serverId, serverId))
+  ).length;
 }
 
 beforeAll(async () => {
@@ -254,7 +260,7 @@ describeIfDb('PUT /api/v1/clans/:id/members/:playerId/priority', () => {
       targetId: clan.clanId,
     });
 
-    const len = await h.redis.xlen(`events:admins-cfg-sync:${serverId}`);
+    const len = await syncTaskCount();
     expect(len).toBeGreaterThanOrEqual(1);
     expect(await latestSyncReason()).toBe('clan.priority.toggle');
   });
@@ -320,7 +326,7 @@ describeIfDb('PUT /api/v1/clans/:id/members/:playerId/priority', () => {
       .from(clanMembers)
       .where(and(eq(clanMembers.clanId, clan.clanId), eq(clanMembers.playerId, clan.leaderId)));
     expect(row?.hasPriority).toBe(false);
-    const len = await h.redis.xlen(`events:admins-cfg-sync:${serverId}`);
+    const len = await syncTaskCount();
     expect(len).toBeGreaterThanOrEqual(1);
   });
 });
@@ -339,7 +345,7 @@ describeIfDb('member/clan removal publishes admins-cfg sync', () => {
       headers: { cookie: managerCookie },
     });
     expect(res.statusCode).toBe(200);
-    const len = await h.redis.xlen(`events:admins-cfg-sync:${serverId}`);
+    const len = await syncTaskCount();
     expect(len).toBeGreaterThanOrEqual(1);
     expect(await latestSyncReason()).toBe('clan.member.remove');
   });
@@ -358,7 +364,7 @@ describeIfDb('member/clan removal publishes admins-cfg sync', () => {
       .from(clanMembers)
       .where(and(eq(clanMembers.clanId, clan.clanId), eq(clanMembers.playerId, clan.leaderId)));
     expect(row?.hasPriority).toBe(false);
-    const len = await h.redis.xlen(`events:admins-cfg-sync:${serverId}`);
+    const len = await syncTaskCount();
     expect(len).toBeGreaterThanOrEqual(1);
     expect(await latestSyncReason()).toBe('clan.disband');
   });
@@ -385,7 +391,7 @@ describeIfDb('PATCH /api/v1/clans/:id/expire', () => {
       .from(clans)
       .where(eq(clans.id, clan.clanId));
     expect(row?.processed).toBe(false);
-    const len = await h.redis.xlen(`events:admins-cfg-sync:${serverId}`);
+    const len = await syncTaskCount();
     expect(len).toBeGreaterThanOrEqual(1);
     expect(await latestSyncReason()).toBe('clan.expire.update');
   });
