@@ -352,31 +352,35 @@ git commit -m "fix(outbox): publish Admins cfg tasks after commit"
 - Modify: `apps/workers/config-sync/src/index.ts`
 - Modify: `apps/workers/config-sync/src/syncer.ts`
 - Modify: `apps/workers/config-sync/src/rcon-reload.ts`
+- Create: `apps/workers/config-sync/src/delivery.ts`
 - Test: `packages/db/test/admins-cfg-outbox.test.ts`
+- Test: `apps/workers/config-sync/test/delivery.test.ts`
+- Test: `apps/workers/config-sync/test/delivery.integration.test.ts`
 - Test: `apps/workers/config-sync/test/syncer.test.ts`
 - Test: `apps/workers/config-sync/test/rcon-reload.test.ts`
 - Test: `apps/workers/config-sync/test/purchase-admins-cfg.test.ts`
+- Test: `apps/api/test/e2e/admins-cfg-reload-live.e2e.test.ts`
 
 **Интерфейсы:**
 - Consumes: `_outbox_id` и `rconCommandResultSchema`.
 - Produces: `markAdminsCfgSyncApplied(id, outcome)` и `markAdminsCfgSyncFailed(id, code)`.
 - Produces: `confirmed | file_ready_for_restart | server_removed | unavailable | rejected | timeout | invalid_result`.
 
-- [ ] **Шаг 1: Написать RED-тесты результата и переходов server state**
+- [x] **Шаг 1: Написать RED-тесты результата и переходов server state**
 
 Проверить running/starting: enqueue недостаточен, `applied_at` остаётся null до
 валидного `ok=true`. Проверить mismatched request/server/command, rejected и
 timeout. Смоделировать `stopped -> running` между записью и финализацией —
 нужен RCON; `running -> stopped` — достаточно файла после финального чтения.
 
-- [ ] **Шаг 2: Написать RED-тесты падений и restart/reclaim**
+- [x] **Шаг 2: Написать RED-тесты падений и restart/reclaim**
 
 Покрыть падение: после файла до RCON result; после result до `applied_at`; после
 `applied_at` до `XACK`. После restart/reclaim сообщение завершается без потери:
 до DB-confirmation повторяется безопасно с тем же request id, после неё только
 XACK. Совпавший file hash при ещё пустом `applied_at` не пропускает RCON.
 
-- [ ] **Шаг 3: Подтвердить RED**
+- [x] **Шаг 3: Подтвердить RED**
 
 Run:
 
@@ -387,7 +391,7 @@ pnpm --filter @squad/worker-config-sync exec vitest run test/rcon-reload.test.ts
 
 Expected: enqueue сейчас считается достаточным, outbox application helpers отсутствуют.
 
-- [ ] **Шаг 4: Добавить условные DB helpers**
+- [x] **Шаг 4: Добавить условные DB helpers**
 
 `markAdminsCfgSyncApplied` обновляет только указанный id с
 `applied_at IS NULL`, атомарно ставит время/outcome и чистит error.
@@ -398,7 +402,7 @@ Expected: enqueue сейчас считается достаточным, outbox
 и relay атомарно ставят `applied_at`, очищают error и не перезаписывают уже
 сохранённые `relayed_at`/`stream_id`.
 
-- [ ] **Шаг 5: Дождаться точного RCON result**
+- [x] **Шаг 5: Дождаться точного RCON result**
 
 Для correlated outbox использовать детерминированный
 `request_id = admins-cfg-sync:<outbox_id>`. После `XADD` ждать до 4 секунд с
@@ -406,7 +410,7 @@ Expected: enqueue сейчас считается достаточным, outbox
 `server_id`, `request_id`, `command=AdminReloadServerConfig`, `ok=true`.
 Сырые `response/error` допускаются только в памяти/логах с редактированием.
 
-- [ ] **Шаг 6: Повторно проверить состояние сервера**
+- [x] **Шаг 6: Повторно проверить состояние сервера**
 
 После успешной записи/сверки файла прочитать свежий `servers.status`. Перед
 финальным DB update прочитать его ещё раз. Финальный `running|starting` требует
@@ -414,23 +418,31 @@ confirmed RCON; финальный неживой статус сохраняе�
 `file_ready_for_restart`. Если сервер стал живым, выполнить RCON-ветку; не
 использовать Redis `rcon:status` как источник lifecycle-решения.
 
-- [ ] **Шаг 7: Изменить порядок ACK**
+- [x] **Шаг 7: Изменить порядок ACK**
 
 На временных ошибках записать безопасный code и оставить message в PEL.
-Успех: сначала `markAdminsCfgSyncApplied`, затем `XACK`. При повторе applied
-outbox сразу XACK. Некоррелированные старые события сохраняют прежнюю
-идемпотентную синхронизацию и ACK, но не участвуют в VIP status.
+Успех: сначала `markAdminsCfgSyncApplied`, затем одна атомарная Redis-операция
+выполняет `XACK` и точный `XDEL`. При повторе applied outbox файл и RCON не
+трогаются, выполняется только та же очистка. Устойчивый lifecycle
+`superseded` также разрешает очистку без применения старого желания.
+Некоррелированные старые события сохраняют прежнюю идемпотентную синхронизацию,
+но после успешного `XACK` также удаляются из stream и не участвуют в VIP status.
 
-- [ ] **Шаг 8: Подтвердить GREEN**
+- [x] **Шаг 8: Подтвердить GREEN**
 
 Повторить команды шага 3. Expected: тесты гонок состояния и всех crash points проходят.
 
-- [ ] **Шаг 9: Commit**
+- [x] **Шаг 9: Commit — `667ddc8a`**
 
 ```bash
 git add packages/db/src/admins-cfg-outbox.ts packages/db/test apps/workers/config-sync
 git commit -m "feat(config-sync): persist confirmed VIP delivery"
 ```
+
+Результат: `@squad/worker-config-sync` — 107/107, отдельная интеграция с
+PostgreSQL и Redis — 7/7 с сохранённым сторонним sentinel-ключом; typecheck
+worker/db, Biome и `git diff --check` прошли. Независимое ревью дополнительно
+закрыло доверие к Redis payload, бесконечный poison retry и общий `FLUSHDB`.
 
 ### Задача 6: Подписанное агрегированное состояние
 
