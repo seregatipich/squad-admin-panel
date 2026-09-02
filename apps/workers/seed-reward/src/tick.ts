@@ -230,6 +230,7 @@ export async function reconcileSeedRewardAssignments(
           roleId: afterRoleId,
           roleExpiresAt: null,
           roleComment: null,
+          roleLifecycleEventId: null,
           updatedAt: now,
         })
         .where(and(eq(players.id, state.playerId), currentRolePredicate))

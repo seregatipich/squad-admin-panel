@@ -41,7 +41,15 @@ export async function claimFirstOwner(
       return 'already_claimed' as const;
     }
 
-    await tx.update(players).set({ roleId: ownerRoleId }).where(eq(players.id, playerId));
+    await tx
+      .update(players)
+      .set({
+        roleId: ownerRoleId,
+        roleExpiresAt: null,
+        roleComment: null,
+        roleLifecycleEventId: null,
+      })
+      .where(eq(players.id, playerId));
     await tx.update(panelMeta).set({ firstOwnerClaimed: true }).where(eq(panelMeta.id, 1));
     return 'claimed' as const;
   });

@@ -576,7 +576,10 @@ describeIfDb('auto-expiry chain (VIPSUB-1 reuse — acceptance criterion)', () =
 
     // 2. Back-date the assignment so the next tick considers it expired.
     const past = new Date(Date.now() - 60 * 60 * 1000);
-    await h.db.update(players).set({ roleExpiresAt: past }).where(eq(players.id, expiryPlayerId));
+    await h.db
+      .update(players)
+      .set({ roleExpiresAt: past })
+      .where(eq(players.steamId64, EXPIRY_STEAM));
 
     // 3. Run the production role-expirer tick against the outbox publisher.
     await h.db.delete(adminsCfgSyncOutbox);

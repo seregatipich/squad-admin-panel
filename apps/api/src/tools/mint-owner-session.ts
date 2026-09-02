@@ -117,12 +117,14 @@ export async function mintOwnerSession(input: MintOwnerSessionInput): Promise<st
           canonical_name_normalized,
           role_id,
           role_expires_at,
-          role_comment
+          role_comment,
+          role_lifecycle_event_id
         ) VALUES (
           ${input.steamId64},
           ${input.canonicalName},
           ${canonicalNameNormalized},
           ${ownerRole.id},
+          NULL,
           NULL,
           NULL
         )
@@ -130,6 +132,7 @@ export async function mintOwnerSession(input: MintOwnerSessionInput): Promise<st
           role_id = EXCLUDED.role_id,
           role_expires_at = NULL,
           role_comment = NULL,
+          role_lifecycle_event_id = NULL,
           updated_at = now()
         RETURNING id
       `;

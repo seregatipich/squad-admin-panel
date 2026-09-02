@@ -10,12 +10,13 @@ describe('runRoleExpiryTick', () => {
         roleId: '019e0000-0000-7000-8000-000000000201',
         roleExpiresAt: new Date('2026-07-06T09:59:00.000Z'),
         roleComment: 'VIP истек',
+        roleLifecycleEventId: 'vip-expired-101',
       },
     ];
     const deps = {
       now,
       findExpiredAssignments: vi.fn().mockResolvedValue(expired),
-      clearExpiredAssignments: vi.fn().mockResolvedValue(undefined),
+      clearExpiredAssignments: vi.fn().mockResolvedValue(expired),
       writeAuditEntry: vi.fn().mockResolvedValue(undefined),
       publishAdminsCfgSync: vi.fn().mockResolvedValue({ enqueued: 2 }),
       invalidatePermissionCache: vi.fn(),
@@ -27,7 +28,7 @@ describe('runRoleExpiryTick', () => {
 
     expect(result).toEqual({ expired: 1, enqueued: 2 });
     expect(deps.findExpiredAssignments).toHaveBeenCalledWith(now);
-    expect(deps.clearExpiredAssignments).toHaveBeenCalledWith([expired[0].playerId], now);
+    expect(deps.clearExpiredAssignments).toHaveBeenCalledWith(expired, now);
     expect(deps.invalidatePermissionCache).toHaveBeenCalledWith(expired[0].playerId);
     expect(deps.revokeAllForPlayer).toHaveBeenCalledWith(expired[0].playerId);
     expect(deps.writeAuditEntry).toHaveBeenCalledWith(
@@ -53,5 +54,36 @@ describe('runRoleExpiryTick', () => {
     expect(deps.diag.emit).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'role_expirer.run_ok', severity: 'info' }),
     );
+  });
+
+  it('does not emit side effects when a lifecycle renewal wins after the expiry scan', async () => {
+    const now = new Date('2026-07-06T10:00:00.000Z');
+    const scanned = [
+      {
+        playerId: '019e0000-0000-7000-8000-000000000102',
+        roleId: '019e0000-0000-7000-8000-000000000202',
+        roleExpiresAt: new Date('2026-07-06T09:59:00.000Z'),
+        roleComment: 'VIP purchase purchase-A',
+        roleLifecycleEventId: 'purchase-A-event',
+      },
+    ];
+    const deps = {
+      now,
+      findExpiredAssignments: vi.fn().mockResolvedValue(scanned),
+      // The conditional UPDATE observes that lifecycle already renewed the row.
+      clearExpiredAssignments: vi.fn().mockResolvedValue([]),
+      writeAuditEntry: vi.fn().mockResolvedValue(undefined),
+      publishAdminsCfgSync: vi.fn().mockResolvedValue({ enqueued: 1 }),
+      invalidatePermissionCache: vi.fn(),
+      revokeAllForPlayer: vi.fn().mockResolvedValue(undefined),
+      diag: { emit: vi.fn().mockResolvedValue(undefined) },
+    };
+
+    await expect(runRoleExpiryTick(deps)).resolves.toEqual({ expired: 0, enqueued: 0 });
+    expect(deps.clearExpiredAssignments).toHaveBeenCalledWith(scanned, now);
+    expect(deps.writeAuditEntry).not.toHaveBeenCalled();
+    expect(deps.invalidatePermissionCache).not.toHaveBeenCalled();
+    expect(deps.revokeAllForPlayer).not.toHaveBeenCalled();
+    expect(deps.publishAdminsCfgSync).not.toHaveBeenCalled();
   });
 });

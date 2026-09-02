@@ -59,6 +59,20 @@ describe('planVipGrant', () => {
     expect(plan).toEqual({ status: 'role_permanent' });
   });
 
+  it('rejects a grant when the matching timed role is owned by external VIP lifecycle', () => {
+    const plan = planVipGrant(
+      state({
+        roleId: VIP_ROLE,
+        roleExpiresAt: new Date(NOW.getTime() + DAY_MS),
+        externalLifecycleOwner: true,
+      }),
+      tier(),
+      NOW,
+    );
+
+    expect(plan).toEqual({ status: 'role_conflict' });
+  });
+
   it('extends from the current expiry when the same role is still active', () => {
     const currentExpiry = new Date(NOW.getTime() + 10 * DAY_MS);
 

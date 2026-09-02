@@ -1,8 +1,8 @@
 import { randomInt, randomUUID } from 'node:crypto';
-import { createDatabaseClient, players, roles } from '@squad/db';
+import { createDatabaseClient, players, roles, vipLifecycleEvents } from '@squad/db';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { findExpiredAssignments } from '../src/tick.js';
+import { clearExpiredAssignments, findExpiredAssignments } from '../src/tick.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDb = DATABASE_URL ? describe : describe.skip;
@@ -68,5 +68,55 @@ describeIfDb('findExpiredAssignments against a real database', () => {
 
     expect(byPlayerId.has(NORMAL_PLAYER_ID)).toBe(true);
     expect(byPlayerId.has(OWNER_PLAYER_ID)).toBe(false);
+  });
+
+  it('does not clear a lifecycle role renewed after the expiry scan', async () => {
+    if (!db) throw new Error('database not configured');
+    const playerId = randomUUID();
+    const steamId64 = 76561198914500000n + BigInt(randomInt(1, 1_000_000));
+    const eventId = `role-expirer-renewal-${randomUUID()}`;
+    const renewedUntil = new Date('2030-07-06T10:00:00.000Z');
+
+    try {
+      await db.insert(players).values({
+        id: playerId,
+        steamId64,
+        canonicalName: 'Продлённый VIP',
+        canonicalNameNormalized: 'продлённый vip',
+        roleId: NORMAL_ROLE_ID,
+        roleExpiresAt: EXPIRED_AT,
+      });
+      const scanned = await findExpiredAssignments(db, NOW, 1000);
+      const stale = scanned.find((assignment) => assignment.playerId === playerId);
+      expect(stale).toBeDefined();
+      if (!stale) throw new Error('expired assignment was not scanned');
+
+      await db.insert(vipLifecycleEvents).values({
+        eventId,
+        eventType: 'vip.extended',
+        playerId,
+        roleId: NORMAL_ROLE_ID,
+        tier: 'tier_1',
+        purchaseId: 'purchase-B',
+        action: 'assigned',
+        payload: { expires_at: renewedUntil.toISOString() },
+        appliedAt: NOW,
+      });
+      await db
+        .update(players)
+        .set({ roleExpiresAt: renewedUntil, roleLifecycleEventId: eventId })
+        .where(eq(players.steamId64, steamId64));
+
+      const cleared = await clearExpiredAssignments(db, [stale], NOW);
+      expect(cleared).toEqual([]);
+      const [stored] = await db
+        .select({ roleId: players.roleId, expiresAt: players.roleExpiresAt })
+        .from(players)
+        .where(eq(players.steamId64, steamId64));
+      expect(stored).toEqual({ roleId: NORMAL_ROLE_ID, expiresAt: renewedUntil });
+    } finally {
+      await db.delete(vipLifecycleEvents).where(eq(vipLifecycleEvents.eventId, eventId));
+      await db.delete(players).where(eq(players.steamId64, steamId64));
+    }
   });
 });

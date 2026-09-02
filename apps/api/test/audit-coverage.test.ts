@@ -154,6 +154,7 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
   it('mutating routes that claim audit: false are limited to auth callbacks and self-audited service endpoints', async () => {
     const routes = await collectRoutes();
     const allowlist = new Set([
+      '/api/v1/integrations/vip/preflight',
       '/api/v1/integrations/vip/lifecycle',
       '/api/v1/integrations/balancer/proposals',
     ]);

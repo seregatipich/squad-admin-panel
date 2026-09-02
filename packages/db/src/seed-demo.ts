@@ -42,9 +42,19 @@ async function main() {
   const ownerRoleId = ownerRole[0].id as string;
 
   const adminRows = await sql`
-    INSERT INTO players (steam_id64, canonical_name, canonical_name_normalized, role_id)
-    VALUES (${ADMIN_STEAM_ID.toString()}, 'Local Test Admin', 'local test admin', ${ownerRoleId})
-    ON CONFLICT (steam_id64) DO UPDATE SET role_id = ${ownerRoleId}
+    INSERT INTO players (
+      steam_id64, canonical_name, canonical_name_normalized,
+      role_id, role_expires_at, role_comment, role_lifecycle_event_id
+    )
+    VALUES (
+      ${ADMIN_STEAM_ID.toString()}, 'Local Test Admin', 'local test admin',
+      ${ownerRoleId}, NULL, NULL, NULL
+    )
+    ON CONFLICT (steam_id64) DO UPDATE SET
+      role_id = ${ownerRoleId},
+      role_expires_at = NULL,
+      role_comment = NULL,
+      role_lifecycle_event_id = NULL
     RETURNING id
   `;
   if (!adminRows[0]) throw new Error('admin player upsert returned no row');

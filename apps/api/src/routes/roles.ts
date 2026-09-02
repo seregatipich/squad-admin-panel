@@ -1,5 +1,5 @@
 import type { DatabaseClient } from '@squad/db';
-import { rolePermissions, roleSquadPermissions, roles, vipTiers } from '@squad/db/schema';
+import { players, rolePermissions, roleSquadPermissions, roles, vipTiers } from '@squad/db/schema';
 import { isRoleColor, isSquadPermissionKey, SQUAD_PERMISSIONS } from '@squad/shared-config';
 import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
@@ -320,6 +320,15 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
       await invalidatePermissionCacheForRole(app.db, req.params.id);
       try {
         await app.db.transaction(async (tx) => {
+          await tx
+            .update(players)
+            .set({
+              roleId: null,
+              roleExpiresAt: null,
+              roleComment: null,
+              roleLifecycleEventId: null,
+            })
+            .where(eq(players.roleId, req.params.id));
           await tx.delete(roles).where(eq(roles.id, req.params.id));
           await publishAdminsCfgSyncForAllServers(tx, app.redis, {
             reason: 'role.delete',

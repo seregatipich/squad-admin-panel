@@ -31,6 +31,8 @@ export interface AdminsCfgSyncEvent {
  * exist without a corresponding sync task — the durability guarantee a
  * Redis-only queue cannot make (a trimmed or lost stream entry would strand the
  * mutation until a manual force-sync).
+ * Lifecycle callers pass the non-empty server-id snapshot they just validated;
+ * other callers keep the ordinary active-server lookup here.
  *
  * As a latency optimisation it then attempts an immediate best-effort `XADD`
  * and stamps `relayed_at` on the rows that publish successfully. This publish
@@ -44,11 +46,11 @@ export async function publishAdminsCfgSyncForAllServers(
   db: AdminsCfgSyncDb,
   redis: Redis,
   event: AdminsCfgSyncEvent,
+  serverIds?: readonly string[],
 ): Promise<{ enqueued: number }> {
-  const activeServers = await db
-    .select({ id: servers.id })
-    .from(servers)
-    .where(isNull(servers.deletedAt));
+  const activeServers = serverIds
+    ? serverIds.map((id) => ({ id }))
+    : await db.select({ id: servers.id }).from(servers).where(isNull(servers.deletedAt));
   if (activeServers.length === 0) return { enqueued: 0 };
 
   const inserted = await db

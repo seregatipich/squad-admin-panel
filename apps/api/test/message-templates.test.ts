@@ -34,7 +34,7 @@ async function demoteToViewer(): Promise<string> {
   await h.db
     .update(players)
     .set({ roleId: viewerRoleId })
-    .where(eq(players.id, h.seed.ownerPlayerId));
+    .where(eq(players.steamId64, OWNER_STEAM_ID));
   invalidatePermissionCache(h.seed.ownerPlayerId);
   return await loginAsOwner(h);
 }

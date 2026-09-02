@@ -1,15 +1,18 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import {
   adminsCfgSyncOutbox,
+  auditLog,
   bonusTransactions,
   economySettings,
   players,
   roles,
   servers,
+  vipLifecycleEvents,
   vipSubscriptions,
   vipTiers,
 } from '@squad/db/schema';
 import { and, eq } from 'drizzle-orm';
+import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ADMINS_CFG_SYNC_STREAM_PREFIX } from '../../src/lib/admins-cfg-sync.js';
@@ -29,6 +32,7 @@ const OWNER_STEAM = testSteamId(985001);
 const DAY_MS = 86_400_000;
 const TIER_PRICE = 100;
 const TIER_DAYS = 30;
+const VIP_LIFECYCLE_SECRET = 'vip-subscriptions-race-secret-with-enough-entropy';
 
 const describeIfDb = process.env.DATABASE_URL ? describe : describe.skip;
 
@@ -39,6 +43,7 @@ let vipRoleId: string;
 let panelRoleId: string;
 let otherRoleId: string;
 let econOnlyRoleId: string;
+let raceRoleId: string;
 let serverId: string;
 
 let tierId: string;
@@ -46,12 +51,40 @@ let secondTierId: string;
 let panelTierId: string;
 let unpricedTierId: string;
 let inactiveTierId: string;
+let raceTierId: string;
 
 let steamCursor = 985010;
 
 function nextSteamOffset(): number {
   steamCursor += 1;
   return steamCursor;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    .join(',')}}`;
+}
+
+async function postLifecycle(payload: Record<string, unknown>) {
+  const timestamp = new Date().toISOString();
+  const signature = `sha256=${createHmac('sha256', VIP_LIFECYCLE_SECRET)
+    .update(`${timestamp}.${canonicalJson(payload)}`)
+    .digest('hex')}`;
+  return h.app.inject({
+    method: 'POST',
+    url: '/api/v1/integrations/vip/lifecycle',
+    headers: {
+      'content-type': 'application/json',
+      'x-vip-timestamp': timestamp,
+      'x-vip-signature': signature,
+    },
+    payload: JSON.stringify(payload),
+  });
 }
 
 /**
@@ -85,6 +118,7 @@ async function loginPanel(playerId: string): Promise<string> {
 async function seedPlayer(
   name: string,
   role: { roleId: string | null; roleExpiresAt?: Date | null } | null = null,
+  eosId?: string,
 ): Promise<string> {
   const [row] = await h.db
     .insert(players)
@@ -92,6 +126,7 @@ async function seedPlayer(
       steamId64: testSteamId(nextSteamOffset()),
       canonicalName: name,
       canonicalNameNormalized: name.toLowerCase(),
+      eosId,
       roleId: role?.roleId ?? null,
       roleExpiresAt: role?.roleExpiresAt ?? null,
     })
@@ -116,6 +151,7 @@ async function storedPlayer(playerId: string) {
       balance: players.bonusBalance,
       roleId: players.roleId,
       roleExpiresAt: players.roleExpiresAt,
+      roleLifecycleEventId: players.roleLifecycleEventId,
     })
     .from(players)
     .where(eq(players.id, playerId))
@@ -218,11 +254,101 @@ async function withRacingDuplicateInsert<T>(
   }
 }
 
+async function withPausedInsert<T>(
+  table: unknown,
+  body: (gate: { waitUntilPaused(): Promise<void>; release(): void }) => Promise<T>,
+): Promise<T> {
+  type TxLike = { insert: (...args: unknown[]) => unknown };
+  const db = h.app.db as unknown as {
+    transaction: <R>(fn: (tx: TxLike) => Promise<R>) => Promise<R>;
+  };
+  const realTransaction = db.transaction.bind(db);
+  let paused = false;
+  let signalPaused!: () => void;
+  let release!: () => void;
+  const pausedPromise = new Promise<void>((resolve) => {
+    signalPaused = resolve;
+  });
+  const releasePromise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  db.transaction = (async (fn: (tx: TxLike) => Promise<unknown>) =>
+    realTransaction(async (tx) => {
+      const realInsert = tx.insert.bind(tx);
+      tx.insert = (...args: unknown[]): unknown => {
+        const query = realInsert(...args);
+        if (paused || args[0] !== table) return query;
+        paused = true;
+        return wrapThenable(query, async () => {
+          signalPaused();
+          await releasePromise;
+        });
+      };
+      return fn(tx);
+    })) as typeof db.transaction;
+
+  try {
+    return await body({ waitUntilPaused: () => pausedPromise, release });
+  } finally {
+    release();
+    db.transaction = realTransaction;
+  }
+}
+
+async function waitForBlockedPlayerLock(): Promise<void> {
+  // The harness pool has max=2 and both application transactions occupy it;
+  // use a third observer connection so observing the wait cannot itself queue.
+  const observer = postgres(h.app.config.DATABASE_URL, { max: 1, prepare: false });
+  const deadline = Date.now() + 5_000;
+  try {
+    while (Date.now() < deadline) {
+      const rows = await observer<{ waiting: number }[]>`
+        SELECT count(*)::int AS waiting
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND pid <> pg_backend_pid()
+          AND wait_event_type = 'Lock'
+          AND query ILIKE '%players%FOR UPDATE%'
+      `;
+      if ((rows[0]?.waiting ?? 0) > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error('losing transaction did not wait for the player row lock');
+  } finally {
+    await observer.end();
+  }
+}
+
+async function countOutboxReason(reason: string): Promise<number> {
+  const rows = await h.db
+    .select({ serverId: adminsCfgSyncOutbox.serverId, payload: adminsCfgSyncOutbox.payload })
+    .from(adminsCfgSyncOutbox);
+  return rows.filter(
+    (row) => row.serverId === serverId && (row.payload as { reason?: string }).reason === reason,
+  ).length;
+}
+
+async function countSuccessfulAudit(action: string, playerId: string): Promise<number> {
+  const rows = await h.db
+    .select({ id: auditLog.id })
+    .from(auditLog)
+    .where(
+      and(
+        eq(auditLog.actionType, action),
+        eq(auditLog.targetId, playerId),
+        eq(auditLog.statusCode, 201),
+      ),
+    );
+  return rows.length;
+}
+
 beforeAll(async () => {
   h = await buildIntegrationApp({
     seedOwner: { steamId64: OWNER_STEAM, canonicalName: 'SubsOwner' },
     bridge: makeFakeBridge(),
   });
+  (h.app.config as Record<string, unknown>).VIP_LIFECYCLE_WEBHOOK_SECRET = VIP_LIFECYCLE_SECRET;
   ownerCookie = await loginAsOwner(h);
 
   await h.db.update(economySettings).set({ economyEnabled: true }).where(eq(economySettings.id, 1));
@@ -242,6 +368,7 @@ beforeAll(async () => {
   panelRoleId = randomUUID();
   otherRoleId = randomUUID();
   econOnlyRoleId = randomUUID();
+  raceRoleId = randomUUID();
   await h.db.insert(roles).values([
     { id: vipRoleId, name: 'SubsVip', panelAccess: false },
     { id: panelRoleId, name: 'SubsPanel', panelAccess: true },
@@ -253,6 +380,7 @@ beforeAll(async () => {
       canManageEconomy: true,
       canAssignRoles: false,
     },
+    { id: raceRoleId, name: 'SubsExternalRaceVip', panelAccess: false },
   ]);
 
   const insertTier = async (values: {
@@ -311,6 +439,13 @@ beforeAll(async () => {
     priceBonuses: 25,
     isActive: false,
     sortOrder: 50,
+  });
+  raceTierId = await insertTier({
+    name: 'Subs External Race',
+    roleId: raceRoleId,
+    defaultDays: TIER_DAYS,
+    priceBonuses: TIER_PRICE,
+    sortOrder: 60,
   });
 }, 90_000);
 
@@ -716,6 +851,157 @@ describeIfDb('VIPSUB-5 self-service subscriptions', () => {
     expect((await storedPlayer(playerId)).balance).toBe(500);
     expect(await storedSubscriptions(playerId)).toHaveLength(1);
   });
+
+  it('forces the external lifecycle winner in 10 real database interleavings', async () => {
+    for (let iteration = 0; iteration < 10; iteration += 1) {
+      const playerId = await seedPlayer(
+        `SubsExternalRace${iteration}`,
+        null,
+        `vip-external-wins-${iteration}-${Date.now()}`,
+      );
+      await credit(playerId, 500);
+      const cookie = await loginSelfService(playerId);
+      const eventId = `vip-external-wins-${iteration}-${Date.now()}`;
+      const outboxBefore = await countOutboxReason('vip.lifecycle.assigned');
+      const loserOutboxBefore = await countOutboxReason('player.role.assign');
+      const redisBefore = await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`);
+
+      const [lifecycle, subscription] = await withPausedInsert(
+        vipLifecycleEvents,
+        async ({ waitUntilPaused, release }) => {
+          const winner = postLifecycle({
+            event_id: eventId,
+            event_type: 'vip.purchased',
+            player_id: playerId,
+            role_id: raceRoleId,
+            tier: 'tier_1',
+            purchase_id: `external-race-${iteration}`,
+            expires_at: '2030-01-02T03:04:05.000Z',
+          });
+          await waitUntilPaused();
+          let loserSettled = false;
+          const loser = h.app
+            .inject({
+              method: 'POST',
+              url: '/api/v1/me/subscriptions',
+              headers: { cookie, 'content-type': 'application/json' },
+              payload: JSON.stringify({ tier_id: raceTierId }),
+            })
+            .then((response) => {
+              loserSettled = true;
+              return response;
+            });
+          await waitForBlockedPlayerLock();
+          expect(loserSettled).toBe(false);
+          release();
+          return Promise.all([winner, loser]);
+        },
+      );
+
+      expect(lifecycle.statusCode).toBe(202);
+      expect(subscription.statusCode).toBe(409);
+      expect(subscription.json()).toMatchObject({ error: 'role_conflict' });
+      expect(await storedSubscriptions(playerId)).toHaveLength(0);
+      expect(
+        await h.db
+          .select({ id: bonusTransactions.id })
+          .from(bonusTransactions)
+          .where(
+            and(eq(bonusTransactions.playerId, playerId), eq(bonusTransactions.type, 'spend')),
+          ),
+      ).toHaveLength(0);
+      expect(await countSuccessfulAudit('me.subscription.create', playerId)).toBe(0);
+      expect(await countOutboxReason('vip.lifecycle.assigned')).toBe(outboxBefore + 1);
+      expect(await countOutboxReason('player.role.assign')).toBe(loserOutboxBefore);
+      expect(await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`)).toBe(
+        redisBefore + 1,
+      );
+      expect(await storedPlayer(playerId)).toMatchObject({
+        balance: 500,
+        roleId: raceRoleId,
+        roleLifecycleEventId: eventId,
+      });
+    }
+  }, 120_000);
+
+  it('forces the internal subscription winner in 10 real database interleavings', async () => {
+    for (let iteration = 0; iteration < 10; iteration += 1) {
+      const playerId = await seedPlayer(
+        `SubsInternalRace${iteration}`,
+        null,
+        `vip-internal-wins-${iteration}-${Date.now()}`,
+      );
+      await credit(playerId, 500);
+      const cookie = await loginSelfService(playerId);
+      const eventId = `vip-internal-loser-${iteration}-${Date.now()}`;
+      const outboxBefore = await countOutboxReason('player.role.assign');
+      const loserOutboxBefore = await countOutboxReason('vip.lifecycle.assigned');
+      const redisBefore = await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`);
+
+      const [subscription, lifecycle] = await withPausedInsert(
+        vipSubscriptions,
+        async ({ waitUntilPaused, release }) => {
+          const winner = h.app.inject({
+            method: 'POST',
+            url: '/api/v1/me/subscriptions',
+            headers: { cookie, 'content-type': 'application/json' },
+            payload: JSON.stringify({ tier_id: raceTierId }),
+          });
+          await waitUntilPaused();
+          let loserSettled = false;
+          const loser = postLifecycle({
+            event_id: eventId,
+            event_type: 'vip.purchased',
+            player_id: playerId,
+            role_id: raceRoleId,
+            tier: 'tier_1',
+            purchase_id: `external-race-${iteration}`,
+            expires_at: '2030-01-02T03:04:05.000Z',
+          }).then((response) => {
+            loserSettled = true;
+            return response;
+          });
+          await waitForBlockedPlayerLock();
+          expect(loserSettled).toBe(false);
+          release();
+          return Promise.all([winner, loser]);
+        },
+      );
+
+      expect(subscription.statusCode).toBe(201);
+      expect(lifecycle.statusCode).toBe(409);
+      expect(lifecycle.json()).toEqual({
+        error: 'vip_subscription_conflict',
+        error_code: 'vip_subscription_conflict',
+      });
+      expect(await storedSubscriptions(playerId)).toHaveLength(1);
+      expect(
+        await h.db
+          .select({ id: bonusTransactions.id })
+          .from(bonusTransactions)
+          .where(
+            and(eq(bonusTransactions.playerId, playerId), eq(bonusTransactions.type, 'spend')),
+          ),
+      ).toHaveLength(1);
+      expect(
+        await h.db
+          .select({ id: vipLifecycleEvents.eventId })
+          .from(vipLifecycleEvents)
+          .where(eq(vipLifecycleEvents.eventId, eventId)),
+      ).toHaveLength(0);
+      expect(await countSuccessfulAudit('vip.lifecycle.apply', playerId)).toBe(0);
+      expect(await countOutboxReason('player.role.assign')).toBe(outboxBefore + 1);
+      expect(await countOutboxReason('vip.lifecycle.assigned')).toBe(loserOutboxBefore);
+      expect(await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`)).toBe(
+        redisBefore + 1,
+      );
+      expect(await storedPlayer(playerId)).toMatchObject({
+        balance: 400,
+        roleId: raceRoleId,
+        roleLifecycleEventId: null,
+      });
+    }
+  }, 120_000);
 });
 
 describeIfDb('VIPSUB-5 admin subscription grant', () => {

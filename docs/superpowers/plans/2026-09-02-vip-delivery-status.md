@@ -15,6 +15,8 @@
 - Не создавать баланс, списание или компенсацию покупки в панели.
 - Не перезаписывать ручную роль или роль, принадлежащую активной `vip_subscriptions`.
 - Не включать SteamID64, EOS, пути, сырые ответы RCON и конфиг в status или публичные доказательства.
+- Постоянные ошибки сохраняют переходный `error` и возвращают канонический
+  `error_code` с тем же безопасным значением.
 - Revision монотонна на игрока; БД закрепляет unique `(player_id, revision)` для ненулевой revision.
 - Redis-публикация outbox выполняется только после commit; `XACK` — только после устойчивой записи результата в PostgreSQL.
 - Старый producer переживает первый выпуск при `VIP_LIFECYCLE_REQUIRE_REVISION=false`; флаг включается только после выпуска сайта.
@@ -84,11 +86,15 @@ git commit -m "fix(api): harden VIP lifecycle signature"
 
 **Файлы:**
 - Modify: `apps/api/src/routes/integrations-vip.ts`
-- Modify: `apps/api/src/routes/vip-subscriptions.ts`
+- Create: `packages/db/drizzle/0108_vip_delivery_status.sql`
+- Modify: `packages/db/src/schema/players.ts`
 - Modify: `packages/db/src/economy/vip-grant.ts`
+- Modify: production writers роли в `apps/api`, `apps/workers` и `packages/db`
+- Modify: `apps/workers/role-expirer/src/tick.ts`
 - Test: `apps/api/test/integration/vip-lifecycle.test.ts`
 - Test: `apps/api/test/integration/vip-subscriptions.test.ts`
-- Modify: `packages/db/test/vip-grant.unit.test.ts`
+- Test: `packages/db/test/vip-grant.unit.test.ts`
+- Create: `packages/db/test/vip-role-lifecycle-writers.test.ts`
 
 **Интерфейсы:**
 - Produces: единый `checkVipLifecycleTarget(tx, input, { lockPlayer })`.
@@ -96,7 +102,7 @@ git commit -m "fix(api): harden VIP lifecycle signature"
 - Produces: preflight `{ ok, servers_total, projection_owner, expires_at }`, где
   владелец/срок возвращаются только из доказанного внешнего назначения.
 
-- [ ] **Шаг 1: Написать RED-тесты проверок и гонки владельцев**
+- [x] **Шаг 1: Написать RED-тесты проверок и гонки владельцев**
 
 Проверить отсутствие EOS, inactive/mismatched tier, system role, `panel_access`,
 другую роль, вручную назначенную ту же VIP-роль и активную
@@ -105,7 +111,7 @@ lifecycle, аудит или outbox. Запустить параллельно �
 ручной подписки одному игроку; после обеих транзакций ровно один источник
 владеет назначением, проигравший получает конфликт и не списывает бонусы.
 
-- [ ] **Шаг 2: Подтвердить RED**
+- [x] **Шаг 2: Подтвердить RED**
 
 Run:
 
@@ -117,39 +123,46 @@ pnpm --filter @squad/db exec vitest run test/vip-grant.unit.test.ts
 
 Expected: текущий маршрут не проверяет EOS/tier/подписку и допускает перезапись.
 
-- [ ] **Шаг 3: Зафиксировать проекцию и блокировку игрока**
+- [x] **Шаг 3: Зафиксировать проекцию и блокировку игрока**
 
 В lifecycle-транзакции первым доменным чтением выбрать игрока через
-`.select({ id, steamId64, eosId, roleId, roleExpiresAt, roleComment })` и
+`.select({ id, steamId64, eosId, roleId, roleExpiresAt, roleComment,
+roleLifecycleEventId })` и
 `.for('update')`. Не использовать `select()` всей строки. Под этой блокировкой
 читать active tier, текущую активную `vip_subscriptions` и последнее действующее
 lifecycle-событие, доказывающее владение внешним назначением.
 
-- [ ] **Шаг 4: Реализовать единые правила цели**
+- [x] **Шаг 4: Реализовать единые правила цели**
 
 Разрешить роль только если tier активен, точно ссылается на `role_id`, роль не
 system и `panelAccess=false`, EOS непустой. Пустая роль допускает первую
-покупку. Совпавшая роль допускает extension/revoke только при совпавшей внешней
-purchase-линии и неизменённом результате последнего lifecycle; иначе вернуть
-`manual_role_conflict`. Любая active `vip_subscriptions` даёт
+покупку. Совпавшая роль допускает новую оплачиваемую `vip.extended`-ревизию с
+новым `purchase_id` внутри владельца `bss-store`; revoke допускается только для
+точного текущего `purchase_id`. Ручная смена полного снимка роли очищает
+указатель владельца, после чего lifecycle возвращает `manual_role_conflict`.
+Любая active `vip_subscriptions` даёт
 `vip_subscription_conflict`.
 
-- [ ] **Шаг 5: Закрыть обратную гонку ручной подписки**
+- [x] **Шаг 5: Закрыть обратную гонку ручной подписки**
 
 Сохранить `SELECT ... FOR UPDATE` в `applyVipGrant`, а создание
 `vip_subscriptions` после получения блокировки обязать проверить отсутствие
 действующего внешнего lifecycle-владения. При конфликте откатить всю
 транзакцию, включая bonus ledger. Ручная смена роли остаётся разрешённой и
-выигрывает; следующий webhook увидит несовпадение владения и ничего не сотрёт.
+выигрывает; каждый production writer записывает полный снимок
+`role_id/role_expires_at/role_comment/role_lifecycle_event_id`, чтобы прежний
+срок не снял новую ручную роль. Следующий webhook увидит отсутствие владения и
+ничего не сотрёт.
 
-- [ ] **Шаг 6: Повторно получить снимок серверов**
+- [x] **Шаг 6: Повторно получить снимок серверов**
 
 Preflight возвращает текущий `servers_total`, но lifecycle после блокировки и
 всех проверок заново выбирает `{ id }` неудалённых серверов. При пустом списке
-вернуть `409 { error: 'no_target_servers' }` и откатить все записи. Передать
+вернуть `409 { error: 'no_target_servers', error_code: 'no_target_servers' }`
+и откатить все записи. Передать
 непустой массив id в outbox helper, чтобы fan-out соответствовал одному снимку.
 
-- [ ] **Шаг 7: Подтвердить GREEN**
+- [x] **Шаг 7: Подтвердить GREEN**
 
 Повторить команды шага 2; отдельно прогнать тест параллельной покупки не менее
 20 раз в одном тесте, чтобы уникальные ограничения и row lock были
@@ -158,14 +171,14 @@ Preflight возвращает текущий `servers_total`, но lifecycle п
 - [ ] **Шаг 8: Commit**
 
 ```bash
-git add apps/api/src/routes/integrations-vip.ts apps/api/src/routes/vip-subscriptions.ts packages/db/src/economy/vip-grant.ts apps/api/test packages/db/test/vip-grant.unit.test.ts
+git add apps/api packages/db apps/workers/role-expirer apps/workers/seed-reward docs/superpowers
 git commit -m "fix(api): serialize VIP role ownership"
 ```
 
 ### Задача 3: Ревизии, хеш тела и состояние `superseded`
 
 **Файлы:**
-- Create: `packages/db/drizzle/0108_vip_delivery_status.sql`
+- Modify: `packages/db/drizzle/0108_vip_delivery_status.sql`
 - Modify: `packages/db/drizzle/meta/_journal.json`
 - Modify: `packages/db/src/schema/vip-lifecycle-events.ts`
 - Modify: `apps/api/src/routes/integrations-vip.ts`
@@ -490,6 +503,12 @@ pnpm exec biome check apps/api/src/routes/integrations-vip.ts apps/api/src/lib/a
 relay crash после XADD, config-sync restart во всех трёх контрольных точках и
 переходы `stopped <-> running`. Проверить один итог роли, один победивший event,
 полный outbox и отсутствие преждевременного `applied`.
+
+До включения producer обезличенно посчитать текущие роли с пустым
+`role_lifecycle_event_id`, которые совпадают с историческими внешними
+`assigned`-событиями. При результате больше нуля остановить включение и провести
+отдельное проверенное восстановление указателей; не угадывать владельца
+автоматическим backfill.
 
 - [ ] **Шаг 3: Запросить независимое ревью diff**
 

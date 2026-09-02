@@ -436,7 +436,12 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
       await app.db.transaction(async (tx) => {
         await tx
           .update(players)
-          .set({ roleId: resolvedRoleId, roleExpiresAt: grantedUntil, roleComment })
+          .set({
+            roleId: resolvedRoleId,
+            roleExpiresAt: grantedUntil,
+            roleComment,
+            roleLifecycleEventId: null,
+          })
           .where(eq(players.id, applicant.id));
         await tx
           .update(whitelistApplications)

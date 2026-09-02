@@ -1,7 +1,7 @@
 import type { DatabaseClient } from '@squad/db';
 import { auditLog, players, roles, servers, sessions } from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
-import { and, asc, eq, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import type Redis from 'ioredis';
 
 /** Redis pub/sub channel the API's live-bus subscribes to for real-time fan-out. */
@@ -12,6 +12,7 @@ export interface ExpiredRoleAssignment {
   roleId: string;
   roleExpiresAt: Date;
   roleComment: string | null;
+  roleLifecycleEventId: string | null;
 }
 
 export interface RoleExpiryAuditEntry {
@@ -41,7 +42,10 @@ export interface AdminsCfgSyncEvent {
 export interface RoleExpiryTickDeps {
   now?: Date;
   findExpiredAssignments(now: Date): Promise<ExpiredRoleAssignment[]>;
-  clearExpiredAssignments(playerIds: string[], now: Date): Promise<void>;
+  clearExpiredAssignments(
+    assignments: ExpiredRoleAssignment[],
+    now: Date,
+  ): Promise<ExpiredRoleAssignment[]>;
   writeAuditEntry(entry: RoleExpiryAuditEntry): Promise<void>;
   publishAdminsCfgSync(event: AdminsCfgSyncEvent): Promise<{ enqueued: number }>;
   invalidatePermissionCache(playerId: string): void;
@@ -69,12 +73,19 @@ export async function runRoleExpiryTick(deps: RoleExpiryTickDeps): Promise<RoleE
       return { expired: 0, enqueued: 0 };
     }
 
-    await deps.clearExpiredAssignments(
-      expired.map((assignment) => assignment.playerId),
-      now,
-    );
+    const cleared = await deps.clearExpiredAssignments(expired, now);
+    if (cleared.length === 0) {
+      await deps.diag.emit({
+        component: 'worker-role-expirer',
+        kind: 'role_expirer.run_ok',
+        severity: 'info',
+        message: 'expired 0 role assignments',
+        payload: { expired: 0, enqueued: 0 },
+      });
+      return { expired: 0, enqueued: 0 };
+    }
 
-    for (const assignment of expired) {
+    for (const assignment of cleared) {
       await deps.writeAuditEntry({
         actor: { kind: 'system', label: 'role-expirer' },
         actorIp: null,
@@ -105,11 +116,11 @@ export async function runRoleExpiryTick(deps: RoleExpiryTickDeps): Promise<RoleE
       component: 'worker-role-expirer',
       kind: 'role_expirer.run_ok',
       severity: 'info',
-      message: `expired ${expired.length} role assignment(s)`,
-      payload: { expired: expired.length, enqueued: syncResult.enqueued },
+      message: `expired ${cleared.length} role assignment(s)`,
+      payload: { expired: cleared.length, enqueued: syncResult.enqueued },
     });
 
-    return { expired: expired.length, enqueued: syncResult.enqueued };
+    return { expired: cleared.length, enqueued: syncResult.enqueued };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await deps.diag.emit({
@@ -131,7 +142,7 @@ export function createRoleExpiryDeps(
   const batchSize = opts.batchSize ?? 500;
   return {
     findExpiredAssignments: (now) => findExpiredAssignments(db, now, batchSize),
-    clearExpiredAssignments: (playerIds, now) => clearExpiredAssignments(db, playerIds, now),
+    clearExpiredAssignments: (assignments, now) => clearExpiredAssignments(db, assignments, now),
     writeAuditEntry: (entry) => writeRoleExpiryAuditEntry(db, entry),
     publishAdminsCfgSync: (event) => publishAdminsCfgSyncForAllServers(db, redis, event),
     invalidatePermissionCache: () => undefined,
@@ -150,6 +161,7 @@ export async function findExpiredAssignments(
       roleId: players.roleId,
       roleExpiresAt: players.roleExpiresAt,
       roleComment: players.roleComment,
+      roleLifecycleEventId: players.roleLifecycleEventId,
     })
     .from(players)
     .innerJoin(roles, eq(players.roleId, roles.id))
@@ -172,6 +184,7 @@ export async function findExpiredAssignments(
         roleId: row.roleId,
         roleExpiresAt: row.roleExpiresAt,
         roleComment: row.roleComment ?? null,
+        roleLifecycleEventId: row.roleLifecycleEventId ?? null,
       },
     ];
   });
@@ -179,14 +192,35 @@ export async function findExpiredAssignments(
 
 export async function clearExpiredAssignments(
   db: DatabaseClient,
-  playerIds: string[],
+  assignments: ExpiredRoleAssignment[],
   now: Date,
-): Promise<void> {
-  if (playerIds.length === 0) return;
-  await db
-    .update(players)
-    .set({ roleId: null, roleExpiresAt: null, roleComment: null, updatedAt: now })
-    .where(inArray(players.id, playerIds));
+): Promise<ExpiredRoleAssignment[]> {
+  if (assignments.length === 0) return [];
+  return db.transaction(async (tx) => {
+    const cleared: ExpiredRoleAssignment[] = [];
+    for (const assignment of assignments) {
+      const [updated] = await tx
+        .update(players)
+        .set({
+          roleId: null,
+          roleExpiresAt: null,
+          roleComment: null,
+          roleLifecycleEventId: null,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(players.id, assignment.playerId),
+            eq(players.roleId, assignment.roleId),
+            eq(players.roleExpiresAt, assignment.roleExpiresAt),
+            sql`${players.roleLifecycleEventId} IS NOT DISTINCT FROM ${assignment.roleLifecycleEventId}`,
+          ),
+        )
+        .returning({ id: players.id });
+      if (updated) cleared.push(assignment);
+    }
+    return cleared;
+  });
 }
 
 export async function writeRoleExpiryAuditEntry(

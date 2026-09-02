@@ -1,7 +1,8 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import type { DatabaseClient } from '../client.js';
 import { type BonusTransactionRow, bonusTransactions } from '../schema/bonus-transactions.js';
 import { players } from '../schema/players.js';
+import { vipLifecycleEvents } from '../schema/vip-lifecycle-events.js';
 
 const DAY_MS = 86_400_000;
 
@@ -28,6 +29,7 @@ export interface VipGrantTargetState {
   balance: number;
   roleId: string | null;
   roleExpiresAt: Date | null;
+  externalLifecycleOwner?: boolean;
 }
 
 export type VipGrantPlan =
@@ -62,6 +64,7 @@ export function planVipGrant(
 ): VipGrantPlan {
   const nextBalance = state.balance - tier.price;
   if (nextBalance < 0) return { status: 'insufficient_balance', balance: state.balance };
+  if (state.externalLifecycleOwner) return { status: 'role_conflict' };
 
   const sameRole = state.roleId === tier.roleId;
   if (state.roleId !== null && !sameRole) return { status: 'role_conflict' };
@@ -79,6 +82,64 @@ export function planVipGrant(
     roleId: tier.roleId,
     roleExpiresAt: new Date(base.getTime() + tier.days * DAY_MS),
   };
+}
+
+export interface VipLifecycleProjection {
+  id: string;
+  roleId: string | null;
+  roleExpiresAt: Date | null;
+  roleComment: string | null;
+  roleLifecycleEventId: string | null;
+}
+
+export interface VipLifecycleOwner {
+  purchaseId: string | null;
+  expiresAt: Date;
+}
+
+export function vipLifecycleRoleComment(tier: string | null, purchaseId: string | null): string {
+  const purchase = purchaseId ? ` purchase ${purchaseId}` : '';
+  return `VIP ${tier ?? 'vip'}${purchase}`;
+}
+
+/** Returns evidence only while the player projection points at its exact external grant. */
+export async function findVipLifecycleOwner(
+  tx: Pick<DatabaseClient, 'select'>,
+  player: VipLifecycleProjection,
+  expectedPurchaseId?: string | null,
+): Promise<VipLifecycleOwner | null> {
+  if (!player.roleId || !player.roleExpiresAt || !player.roleLifecycleEventId) return null;
+  const [event] = await tx
+    .select({
+      purchaseId: vipLifecycleEvents.purchaseId,
+      tier: vipLifecycleEvents.tier,
+      payload: vipLifecycleEvents.payload,
+    })
+    .from(vipLifecycleEvents)
+    .where(
+      and(
+        eq(vipLifecycleEvents.playerId, player.id),
+        eq(vipLifecycleEvents.eventId, player.roleLifecycleEventId),
+        eq(vipLifecycleEvents.roleId, player.roleId),
+        eq(vipLifecycleEvents.action, 'assigned'),
+        isNotNull(vipLifecycleEvents.appliedAt),
+      ),
+    )
+    .limit(1);
+  if (!event || (expectedPurchaseId !== undefined && event.purchaseId !== expectedPurchaseId)) {
+    return null;
+  }
+  const payload = event.payload as { expires_at?: unknown };
+  if (typeof payload.expires_at !== 'string') return null;
+  const expiresAt = new Date(payload.expires_at);
+  if (
+    !Number.isFinite(expiresAt.getTime()) ||
+    expiresAt.getTime() !== player.roleExpiresAt.getTime() ||
+    vipLifecycleRoleComment(event.tier, event.purchaseId) !== player.roleComment
+  ) {
+    return null;
+  }
+  return { purchaseId: event.purchaseId, expiresAt };
 }
 
 /**
@@ -143,9 +204,12 @@ export async function applyVipGrant(
   const now = input.now ?? new Date();
   const locked = await tx
     .select({
+      id: players.id,
       balance: players.bonusBalance,
       roleId: players.roleId,
       roleExpiresAt: players.roleExpiresAt,
+      roleComment: players.roleComment,
+      roleLifecycleEventId: players.roleLifecycleEventId,
     })
     .from(players)
     .where(eq(players.id, input.playerId))
@@ -154,7 +218,12 @@ export async function applyVipGrant(
   const current = locked[0];
   if (!current) return { status: 'player_not_found' };
 
-  const plan = planVipGrant(current, input.tier, now);
+  const externalLifecycleOwner = await findVipLifecycleOwner(tx, current);
+  const plan = planVipGrant(
+    { ...current, externalLifecycleOwner: externalLifecycleOwner !== null },
+    input.tier,
+    now,
+  );
   if (plan.status !== 'ok') return plan;
 
   let transaction: BonusTransactionRow | null = null;
@@ -180,6 +249,8 @@ export async function applyVipGrant(
       bonusBalance: plan.nextBalance,
       roleId: plan.roleId,
       roleExpiresAt: plan.roleExpiresAt,
+      roleComment: null,
+      roleLifecycleEventId: null,
       updatedAt: now,
     })
     .where(eq(players.id, input.playerId));

@@ -108,7 +108,12 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     await app.db.transaction(async (tx) => {
       await tx
         .update(players)
-        .set({ roleId: whitelistRoleId, roleComment: comment })
+        .set({
+          roleId: whitelistRoleId,
+          roleExpiresAt: null,
+          roleComment: comment,
+          roleLifecycleEventId: null,
+        })
         .where(eq(players.id, playerId));
       await publishAdminsCfgSyncForAllServers(tx, app.redis, {
         reason: 'whitelist.member.add',
@@ -234,7 +239,12 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
       await app.db.transaction(async (tx) => {
         await tx
           .update(players)
-          .set({ roleId: null, roleComment: null })
+          .set({
+            roleId: null,
+            roleExpiresAt: null,
+            roleComment: null,
+            roleLifecycleEventId: null,
+          })
           .where(eq(players.id, player.id));
         await publishAdminsCfgSyncForAllServers(tx, app.redis, {
           reason: 'whitelist.member.remove',

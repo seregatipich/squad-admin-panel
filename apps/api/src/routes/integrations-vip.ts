@@ -1,5 +1,14 @@
-import { auditLog, players, roles, vipLifecycleEvents } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { findVipLifecycleOwner, type VipGrantExecutor, vipLifecycleRoleComment } from '@squad/db';
+import {
+  auditLog,
+  players,
+  roles,
+  servers,
+  vipLifecycleEvents,
+  vipSubscriptions,
+  vipTiers,
+} from '@squad/db/schema';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -44,6 +53,12 @@ const vipLifecycleBody = z
     }
   });
 
+const vipPreflightBody = z.object({
+  steam_id64: z.string().regex(/^\d{17}$/),
+  role_id: z.string().uuid(),
+  tier: z.string().trim().min(1).max(64),
+});
+
 type VipLifecycleBody = z.infer<typeof vipLifecycleBody>;
 type VipLifecycleAction = 'assigned' | 'revoked' | 'ignored';
 
@@ -51,24 +66,158 @@ function isAssignEvent(eventType: VipLifecycleBody['event_type']): boolean {
   return eventType === 'vip.purchased' || eventType === 'vip.extended';
 }
 
-function roleComment(body: VipLifecycleBody): string {
-  const tier = body.tier ?? 'vip';
-  const purchase = body.purchase_id ? ` purchase ${body.purchase_id}` : '';
-  return `VIP ${tier}${purchase}`;
-}
-
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-function playerLookupCondition(body: VipLifecycleBody) {
-  if (body.player_id) return eq(players.id, body.player_id);
-  if (body.steam_id64) return eq(players.steamId64, BigInt(body.steam_id64));
-  throw new Error('player_id or steam_id64 is required');
+type VipTargetError =
+  | 'player_not_found'
+  | 'player_eos_missing'
+  | 'role_not_vip'
+  | 'role_conflict'
+  | 'manual_role_conflict'
+  | 'vip_subscription_conflict';
+
+type VipTargetInput = {
+  player_id?: string;
+  steam_id64?: string;
+  role_id: string;
+  purchase_id?: string | null;
+};
+
+type VipTargetResult =
+  | { error: VipTargetError }
+  | {
+      player: {
+        id: string;
+        steamId64: bigint | null;
+        eosId: string | null;
+        roleId: string | null;
+        roleExpiresAt: Date | null;
+        roleComment: string | null;
+        roleLifecycleEventId: string | null;
+      };
+      rolePanelAccess: boolean;
+      projectionOwner: 'bss-store' | null;
+      expiresAt: Date | null;
+    };
+
+export async function checkVipLifecycleTarget(
+  tx: VipGrantExecutor,
+  input: VipTargetInput,
+  options: { lockPlayer: boolean },
+): Promise<VipTargetResult> {
+  const condition = input.player_id
+    ? eq(players.id, input.player_id)
+    : input.steam_id64
+      ? eq(players.steamId64, BigInt(input.steam_id64))
+      : null;
+  if (!condition) return { error: 'player_not_found' };
+
+  const playerQuery = tx
+    .select({
+      id: players.id,
+      steamId64: players.steamId64,
+      eosId: players.eosId,
+      roleId: players.roleId,
+      roleExpiresAt: players.roleExpiresAt,
+      roleComment: players.roleComment,
+      roleLifecycleEventId: players.roleLifecycleEventId,
+    })
+    .from(players)
+    .where(condition)
+    .limit(1);
+  const [player] = options.lockPlayer ? await playerQuery.for('update') : await playerQuery;
+  if (!player) return { error: 'player_not_found' };
+  if (!player.eosId?.trim()) return { error: 'player_eos_missing' };
+
+  const tiers = await tx
+    .select({
+      rolePanelAccess: roles.panelAccess,
+      roleIsSystem: roles.isSystemRole,
+    })
+    .from(vipTiers)
+    .innerJoin(roles, eq(roles.id, vipTiers.roleId))
+    .where(and(eq(vipTiers.roleId, input.role_id), eq(vipTiers.isActive, true)))
+    .limit(2);
+  const tier = tiers[0];
+  if (!tier || tiers.length !== 1 || tier.roleIsSystem || tier.rolePanelAccess) {
+    return { error: 'role_not_vip' };
+  }
+
+  const [subscription] = await tx
+    .select({ id: vipSubscriptions.id })
+    .from(vipSubscriptions)
+    .where(and(eq(vipSubscriptions.playerId, player.id), eq(vipSubscriptions.status, 'active')))
+    .limit(1);
+  if (subscription) return { error: 'vip_subscription_conflict' };
+
+  const projectionOwner = await findVipLifecycleOwner(
+    tx,
+    player,
+    Object.hasOwn(input, 'purchase_id') ? input.purchase_id : undefined,
+  );
+  if (player.roleId && player.roleId !== input.role_id) return { error: 'role_conflict' };
+  if (player.roleId && !projectionOwner) return { error: 'manual_role_conflict' };
+
+  return {
+    player,
+    rolePanelAccess: tier.rolePanelAccess,
+    projectionOwner: projectionOwner ? 'bss-store' : null,
+    expiresAt: projectionOwner?.expiresAt ?? null,
+  };
+}
+
+function targetErrorStatus(error: VipTargetError | 'no_target_servers'): number {
+  if (error === 'player_not_found') return 404;
+  if (error === 'role_not_vip') return 403;
+  return 409;
 }
 
 const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
+
+  fast.post(
+    '/api/v1/integrations/vip/preflight',
+    {
+      schema: { body: vipPreflightBody },
+      config: { audit: false, public: true },
+    },
+    async (req, reply) => {
+      const secret = app.config.VIP_LIFECYCLE_WEBHOOK_SECRET;
+      if (!secret) {
+        reply.code(503);
+        return { error: 'vip_lifecycle_webhook_disabled' };
+      }
+      const timestamp = headerValue(req.headers['x-vip-timestamp']);
+      const signature = headerValue(req.headers['x-vip-signature']);
+      if (!verifyVipLifecycleSignature(secret, timestamp, signature, req.body)) {
+        reply.code(401);
+        return { error: 'invalid_signature' };
+      }
+
+      const result = await app.db.transaction(async (tx) => {
+        const target = await checkVipLifecycleTarget(tx, req.body, { lockPlayer: false });
+        if ('error' in target) return target;
+        const serverIds = await tx
+          .select({ id: servers.id })
+          .from(servers)
+          .where(isNull(servers.deletedAt));
+        if (serverIds.length === 0) return { error: 'no_target_servers' as const };
+        return { target, serversTotal: serverIds.length };
+      });
+      if ('error' in result && result.error) {
+        reply.code(targetErrorStatus(result.error));
+        return { error: result.error, error_code: result.error };
+      }
+      return {
+        ok: true,
+        servers_total: result.serversTotal,
+        projection_owner: result.target.projectionOwner,
+        expires_at: result.target.expiresAt?.toISOString() ?? null,
+      };
+    },
+  );
 
   fast.post(
     '/api/v1/integrations/vip/lifecycle',
@@ -108,31 +257,22 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
 
       const now = new Date();
       const result = await app.db.transaction(async (tx) => {
-        const [player] = await tx
-          .select({ id: players.id, roleId: players.roleId })
-          .from(players)
-          .where(playerLookupCondition(body))
-          .limit(1);
-        if (!player) {
-          return { error: 'player_not_found' as const };
-        }
+        const targetInput: VipTargetInput = {
+          player_id: body.player_id,
+          steam_id64: body.steam_id64,
+          role_id: body.role_id,
+          ...(shouldAssign ? {} : { purchase_id: body.purchase_id ?? null }),
+        };
+        const target = await checkVipLifecycleTarget(tx, targetInput, { lockPlayer: true });
+        if ('error' in target) return target;
+        const player = target.player;
 
-        const [role] = await tx
-          .select({
-            id: roles.id,
-            name: roles.name,
-            isSystemRole: roles.isSystemRole,
-            panelAccess: roles.panelAccess,
-          })
-          .from(roles)
-          .where(eq(roles.id, body.role_id))
-          .limit(1);
-        if (!role) {
-          return { error: 'role_not_found' as const };
-        }
-        if (role.isSystemRole && role.name === 'Owner') {
-          return { error: 'owner_assignment_forbidden' as const };
-        }
+        const serverRows = await tx
+          .select({ id: servers.id })
+          .from(servers)
+          .where(isNull(servers.deletedAt));
+        if (serverRows.length === 0) return { error: 'no_target_servers' as const };
+        const serverIds = serverRows.map((server) => server.id);
 
         const action: VipLifecycleAction = shouldAssign
           ? 'assigned'
@@ -166,7 +306,8 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
             .set({
               roleId: body.role_id,
               roleExpiresAt: expiresAt,
-              roleComment: roleComment(body),
+              roleComment: vipLifecycleRoleComment(body.tier ?? null, body.purchase_id ?? null),
+              roleLifecycleEventId: body.event_id,
               updatedAt: now,
             })
             .where(eq(players.id, player.id));
@@ -177,6 +318,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
               roleId: null,
               roleExpiresAt: null,
               roleComment: null,
+              roleLifecycleEventId: null,
               updatedAt: now,
             })
             .where(eq(players.id, player.id));
@@ -185,12 +327,17 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
         const syncResult =
           action === 'ignored'
             ? { enqueued: 0 }
-            : await publishAdminsCfgSyncForAllServers(tx, app.redis, {
-                reason: `vip.lifecycle.${action}`,
-                actor_player_id: null,
-                enqueued_at: now.toISOString(),
-                request_id: req.id,
-              });
+            : await publishAdminsCfgSyncForAllServers(
+                tx,
+                app.redis,
+                {
+                  reason: `vip.lifecycle.${action}`,
+                  actor_player_id: null,
+                  enqueued_at: now.toISOString(),
+                  request_id: req.id,
+                },
+                serverIds,
+              );
 
         await tx.insert(auditLog).values({
           actorKind: 'system',
@@ -207,7 +354,10 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
               ? {
                   role_id: body.role_id,
                   role_expires_at: expiresAt?.toISOString() ?? null,
-                  role_comment: roleComment(body),
+                  role_comment: vipLifecycleRoleComment(
+                    body.tier ?? null,
+                    body.purchase_id ?? null,
+                  ),
                 }
               : action === 'revoked'
                 ? { role_id: null, role_expires_at: null, role_comment: null }
@@ -228,16 +378,14 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
           duplicate: false as const,
           action,
           enqueued: syncResult.enqueued,
-          rolePanelAccess: role.panelAccess,
+          rolePanelAccess: target.rolePanelAccess,
           playerId: player.id,
         };
       });
 
-      if ('error' in result) {
-        const status =
-          result.error === 'player_not_found' || result.error === 'role_not_found' ? 404 : 403;
-        reply.code(status);
-        return { error: result.error };
+      if ('error' in result && result.error) {
+        reply.code(targetErrorStatus(result.error));
+        return { error: result.error, error_code: result.error };
       }
 
       if (result.duplicate) {

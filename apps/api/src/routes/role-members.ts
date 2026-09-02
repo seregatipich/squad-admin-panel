@@ -187,7 +187,12 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       await app.db.transaction(async (tx) => {
         await tx
           .update(players)
-          .set({ roleId: req.params.id, roleComment: comment })
+          .set({
+            roleId: req.params.id,
+            roleExpiresAt: null,
+            roleComment: comment,
+            roleLifecycleEventId: null,
+          })
           .where(eq(players.id, playerId));
         await publishAdminsCfgSyncForAllServers(tx, app.redis, {
           reason: 'role.member.add',
@@ -246,7 +251,12 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       const removed = await app.db.transaction(async (tx) => {
         const updated = await tx
           .update(players)
-          .set({ roleId: null, roleComment: null, roleExpiresAt: null })
+          .set({
+            roleId: null,
+            roleComment: null,
+            roleExpiresAt: null,
+            roleLifecycleEventId: null,
+          })
           .where(and(eq(players.id, playerId), eq(players.roleId, r.id)))
           .returning({ id: players.id });
         if (updated.length === 0) return false;
@@ -380,7 +390,12 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         for (const a of assignments) {
           await tx
             .update(players)
-            .set({ roleId: req.params.id, roleComment: a.comment })
+            .set({
+              roleId: req.params.id,
+              roleExpiresAt: null,
+              roleComment: a.comment,
+              roleLifecycleEventId: null,
+            })
             .where(eq(players.id, a.playerId));
         }
         await publishAdminsCfgSyncForAllServers(tx, app.redis, {
@@ -491,7 +506,12 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       await app.db.transaction(async (tx) => {
         const updated = await tx
           .update(players)
-          .set({ roleId: null, roleComment: null })
+          .set({
+            roleId: null,
+            roleExpiresAt: null,
+            roleComment: null,
+            roleLifecycleEventId: null,
+          })
           .where(and(eq(players.roleId, r.id), inArray(players.id, playerIds)))
           .returning({ id: players.id });
         removedIds = updated.map((u) => u.id);
@@ -579,7 +599,12 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       await app.db.transaction(async (tx) => {
         const updated = await tx
           .update(players)
-          .set({ roleId: targetRole.id, roleComment: null })
+          .set({
+            roleId: targetRole.id,
+            roleExpiresAt: null,
+            roleComment: null,
+            roleLifecycleEventId: null,
+          })
           .where(and(eq(players.roleId, src.id), inArray(players.id, playerIds)))
           .returning({ id: players.id });
         movedIds = updated.map((u) => u.id);

@@ -652,6 +652,13 @@
       "when": 1785853336000,
       "tag": "0107_last_owner_invariant",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1785853400000,
+      "tag": "0108_vip_delivery_status",
+      "breakpoints": true
     }
   ]
 }
