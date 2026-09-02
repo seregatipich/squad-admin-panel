@@ -12,6 +12,8 @@
 | `CONFIG_DRIFT_INTERVAL_MS` | no | `300000` | Generic config-drift sweep interval (ms) over the 16 non-managed config files (CFG-2, #64). 5 min default. | no |
 | `ADMINS_CFG_RECLAIM_INTERVAL_MS` | no | `30000` | Cadence for the `XAUTOCLAIM` pass that takes over orphaned PEL messages (ms). | no |
 | `ADMINS_CFG_RECLAIM_MIN_IDLE_MS` | no | `60000` | Minimum idle time before a pending message becomes eligible for reclaim (ms). | no |
+| `ADMINS_CFG_RELAY_INTERVAL_MS` | no | `1000` | Post-commit outbox relay cadence (ms). Overlapping ticks are coalesced by a single-flight guard. | no |
+| `ADMINS_CFG_RELAY_XADD_TIMEOUT_MS` | no | `5000` | Upper bound for one relay `XADD` (ms). Timeout rolls the DB transaction back and leaves the row pending. | no |
 
 ## Operational notes
 

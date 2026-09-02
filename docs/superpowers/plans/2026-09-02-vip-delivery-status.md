@@ -269,9 +269,12 @@ git commit -m "feat(db): serialize VIP lifecycle revisions"
 
 **Файлы:**
 - Modify: `packages/db/src/schema/admins-cfg-sync-outbox.ts`
+- Create: `packages/db/drizzle/0109_admins_cfg_outbox_delivery.sql`
 - Modify: `packages/db/src/admins-cfg-outbox.ts`
 - Modify: `apps/api/src/lib/admins-cfg-sync.ts`
-- Modify: callers of `publishAdminsCfgSyncForAllServers` under `apps/api/src/routes/`
+- Modify: all API callers, including force-sync and the atomic server-install finalizer
+- Modify: role-expirer, subscription-renewal, seed-reward and clan-priority-expirer producers
+- Modify: config-sync consumer-group bootstrap
 - Test: `apps/api/test/integration/admins-cfg-outbox.test.ts`
 - Create: `packages/db/test/admins-cfg-outbox.test.ts`
 
@@ -279,14 +282,16 @@ git commit -m "feat(db): serialize VIP lifecycle revisions"
 - Consumes: непустой `serverIds` snapshot для lifecycle, обычный DB-query для остальных callers.
 - Produces: outbox fields `correlationId`, `appliedAt`, `lastError`, `reloadOutcome`; relay envelope `_outbox_id`.
 
-- [ ] **Шаг 1: Написать RED-тесты commit-границы и relay crash**
+- [x] **Шаг 1: Написать RED-тесты commit-границы и relay crash**
 
 Проверить отсутствие `XADD` до commit, видимость строки relay только после
 commit, отсутствие строки/Redis при rollback и один outbox на каждый id
 lifecycle-снимка. Смоделировать падение relay после `XADD`, но до
 `relayed_at`: следующий запуск публикует повтор с тем же `_outbox_id`.
+Покрыть single-server force/install, worker producers, пустой stream id,
+soft-delete до apply и backlog больше прежнего Redis cap.
 
-- [ ] **Шаг 2: Подтвердить RED**
+- [x] **Шаг 2: Подтвердить RED**
 
 Run:
 
@@ -297,31 +302,43 @@ pnpm --filter @squad/db exec vitest run test/admins-cfg-outbox.test.ts
 
 Expected: текущий fast path публикует внутри транзакции, envelope не содержит id.
 
-- [ ] **Шаг 3: Расширить outbox миграцию и schema**
+- [x] **Шаг 3: Расширить outbox миграцию и schema**
 
-В ту же ещё не выпущенную `0108` добавить nullable `correlation_id`,
+Не менять уже применявшуюся `0108`: отдельной forward-only миграцией `0109`
+добавить nullable `correlation_id`,
 `applied_at`, `last_error`, `reload_outcome` и partial index по
 `correlation_id`. `last_error` принимает только нормализованные коды; сырой
-текст worker не сохраняет.
+текст worker не сохраняет. Проверить как чистую цепочку, так и upgrade БД со
+старым hash `0108`.
 
-- [ ] **Шаг 4: Удалить Redis из транзакционного helper**
+- [x] **Шаг 4: Удалить Redis из транзакционного helper**
 
 Удалить `tryImmediateDispatch` и Redis-параметр. Helper только вставляет строки
 outbox; lifecycle передаёт уже полученный `serverIds`, остальные callers могут
 использовать существующий выбор активных серверов. Обновить все callers, чтобы
-ни один не оставил скрытый fast path.
+ни один не оставил скрытый fast path. Финальный переход установки сервера в
+`running` и single-server enqueue выполнять одной PostgreSQL-транзакцией.
 
-- [ ] **Шаг 5: Публиковать correlation после commit**
+- [x] **Шаг 5: Публиковать correlation после commit**
 
 Relay сериализует `{ ...payload, _outbox_id: row.id }`, после успешного `XADD`
 пишет `relayed_at` и `stream_id`. Сохранить at-least-once поведение при crash;
 soft-deleted сервер по-прежнему дренируется без воссоздания stream.
+Не использовать `MAXLEN` до consumer-aware очистки после устойчивого
+подтверждения: backlog больше прежнего cap обязан целиком оставаться читаемым.
+Новая consumer group стартует с `0`, чтобы увидеть уже relayed запись. Удаление
+сервера терминально завершает все unapplied строки как `server_removed`, не
+перезаписывая существующие `relayed_at`/`stream_id`.
+Периодический relay работает single-flight. Для него используется отдельный
+Redis-клиент с конечным ожиданием команды; общий блокирующий consumer-клиент не
+меняет retry-семантику. Таймаут откатывает DB-транзакцию и оставляет строку
+pending; возможная поздняя доставка сохраняет тот же `_outbox_id`.
 
-- [ ] **Шаг 6: Подтвердить GREEN**
+- [x] **Шаг 6: Подтвердить GREEN**
 
 Повторить команды шага 2 и существующие fan-out тесты role/whitelist/clan.
 
-- [ ] **Шаг 7: Commit**
+- [x] **Шаг 7: Commit — `da1f1910`**
 
 ```bash
 git add packages/db apps/api/src/lib/admins-cfg-sync.ts apps/api/src/routes apps/api/test
@@ -343,7 +360,7 @@ git commit -m "fix(outbox): publish Admins cfg tasks after commit"
 **Интерфейсы:**
 - Consumes: `_outbox_id` и `rconCommandResultSchema`.
 - Produces: `markAdminsCfgSyncApplied(id, outcome)` и `markAdminsCfgSyncFailed(id, code)`.
-- Produces: `confirmed | file_ready_for_restart | unavailable | rejected | timeout | invalid_result`.
+- Produces: `confirmed | file_ready_for_restart | server_removed | unavailable | rejected | timeout | invalid_result`.
 
 - [ ] **Шаг 1: Написать RED-тесты результата и переходов server state**
 
@@ -377,6 +394,9 @@ Expected: enqueue сейчас считается достаточным, outbox
 `markAdminsCfgSyncFailed` оставляет `applied_at=NULL` и пишет allowlisted code.
 Повтор уже applied строки возвращает её состояние, чтобы consumer мог безопасно
 сделать XACK без файла или RCON.
+`server_removed` — терминальный успешный исход для удалённой цели: soft-delete
+и relay атомарно ставят `applied_at`, очищают error и не перезаписывают уже
+сохранённые `relayed_at`/`stream_id`.
 
 - [ ] **Шаг 5: Дождаться точного RCON result**
 
@@ -433,6 +453,8 @@ git commit -m "feat(config-sync): persist confirmed VIP delivery"
 отказ как `failed`, а старое событие после большей revision как `superseded`
 даже при позднем завершении его outbox. Убедиться, что запрещённых ключей и
 сырых ошибок нет на любой ветке.
+Строки с `reload_outcome=server_removed` учитывать в `servers_applied`, не в
+ошибках: удалённая цель считается успешно завершённой.
 
 - [ ] **Шаг 2: Подтвердить RED**
 

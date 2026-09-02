@@ -79,10 +79,11 @@ Spawns `dist/index.js` with a real Redis (DB 14) and a real Postgres test DB; ve
 
 Cross-component coverage that the API publishes the right events:
 
-- `apps/api/test/integration/roles-and-access.test.ts > admins-cfg sync stream is published on role mutations` — asserts `XLEN events:admins-cfg-sync:<server_id> ≥ 1` after `POST /api/v1/roles`.
+- API role/whitelist/clan/VIP tests assert a pending outbox row per active server and zero early Redis entries before an explicit post-commit relay.
 - The API permission-matrix tests guard that `/api/v1/admins-cfg/drift` and `/api/v1/admins-cfg/drift/all` require `admin_group:view`, while `/api/v1/admins-cfg/sync` requires `admin_group:edit`.
-- `apps/api/test/server-delete.test.ts > softDeleteServer — Redis sync-queue cleanup (SYNC-5)` — DB + real-Redis coverage that soft-delete destroys the per-server stream, consumer group, and `admins-cfg:status:<id>` key, stamps pending outbox rows relayed (`sync_outbox_cancelled`), stays idempotent when nothing exists, is compatible when no `redis` is supplied, and records a `sync_queue_cleanup` error without aborting on Redis failure.
-- `apps/api/test/integration/admins-cfg-outbox.test.ts > stamps a soft-deleted server's pending rows relayed without publishing (SYNC-5)` — proves the relay drains an orphan row without an `XADD`, so a post-delete enqueue cannot resurrect the stream.
+- `apps/api/test/server-delete.test.ts > softDeleteServer — Redis sync-queue cleanup (SYNC-5)` — DB + real-Redis coverage that soft-delete destroys the per-server stream, consumer group, and `admins-cfg:status:<id>` key, completes every unapplied outbox row as `server_removed` while preserving an existing `relayed_at`/`stream_id`, stays idempotent, and records Redis cleanup failure without undoing the DB result.
+- `apps/api/test/integration/admins-cfg-outbox.test.ts` covers commit/rollback visibility, stable `_outbox_id` after relay crash, bounded/null `XADD`, group creation after relay, a backlog above the old cap without trim, and deleted-server terminal drain without stream resurrection.
+- `apps/workers/config-sync/test/index-import.test.ts` proves relay interval single-flight while delivery is stalled.
 
 ## What is explicitly NOT covered yet
 

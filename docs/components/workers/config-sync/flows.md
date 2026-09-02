@@ -3,12 +3,18 @@
 ## Main flow — event-driven sync
 
 ```
-┌────────────────┐           ┌─────────────────────┐           ┌──────────────────┐
-│ API mutation   │  XADD     │ events:admins-cfg-  │ XREADGROUP│ worker-config-   │
-│ (role/player)  │──────────▶│ sync:<server_id>    │──────────▶│ sync             │
-└────────────────┘           └─────────────────────┘           └────────┬─────────┘
-                                                                        │
-                                                ┌───────────────────────┘
+┌────────────────┐ INSERT in tx ┌──────────────────┐ post-commit XADD ┌─────────────────────┐
+│ API / worker   │──────────────▶│ PostgreSQL       │─────────────────▶│ events:admins-cfg-  │
+│ mutation       │               │ outbox           │ stable id        │ sync:<server_id>    │
+└────────────────┘               └──────────────────┘                  └──────────┬──────────┘
+                                                                                │ XREADGROUP
+                                                                                ▼
+                                                                      ┌──────────────────┐
+                                                                      │ worker-config-   │
+                                                                      │ sync             │
+                                                                      └────────┬─────────┘
+                                                                               │
+                                                ┌──────────────────────────────┘
                                                 ▼
         ┌──────────┐  fileRead    ┌──────────────┐  buildManagedSegment   ┌────────┐
         │ bridge   │◀─────────────│ syncer.ts    │───────────────────────▶│ sha256 │
@@ -29,9 +35,9 @@ After a successful `fileAtomicWrite`, the worker also `XADD`s an `AdminReloadSer
 
 Step-by-step:
 
-1. The API records a mutation (e.g. `PUT /api/v1/roles/:id` updates squad permissions). In the same response cycle it calls `publishAdminsCfgSyncForAllServers(db, redis, event)`.
-2. That helper queries `servers WHERE deleted_at IS NULL` and pipelines an `XADD` into `events:admins-cfg-sync:<server_id>` for every active server.
-3. The worker has a consumer group `config-sync` registered on each of those streams. `XREADGROUP` returns the new entries.
+1. The API or a mutation worker records the domain change and one `admins_cfg_sync_outbox` row per active-server snapshot in the same PostgreSQL transaction. Force-sync inserts one single-server row; server installation commits its final `running` transition and row atomically.
+2. A single-flight relay sees rows only after commit, performs bounded `XADD` calls with stable `_outbox_id`, then records `relayed_at`/`stream_id`. Failure leaves the row pending. The relay does not use `MAXLEN`; cleanup is allowed only after durable apply/`XACK`.
+3. The worker creates new consumer groups at `0`, so a row relayed before group creation is still visible. `XREADGROUP` returns the entries.
 4. `syncServerAdminsCfg(ctx, serverId, opts)` is invoked per entry:
    - Publish `state: 'syncing'` to `admins-cfg:status:<server_id>`.
    - Snapshot DB: `roles` (with `role_squad_permissions`) + `players WHERE role_id IS NOT NULL` mapped to role names.
@@ -53,9 +59,9 @@ A separate `setInterval` ticks every `ADMINS_CFG_DRIFT_INTERVAL_MS` (default 5 m
 - **If they differ (someone edited the segment by hand) → the worker DOES NOT auto-overwrite. It publishes `state: 'drift'` with both hashes and a warn log `admins.cfg drift detected — awaiting force-sync`. The operator decides via the UI banner.** This matches spec §2.7.6: panel surfaces the divergence and asks the operator to "Force sync" or accept the change manually (P0 acceptance is "copy values into the UI").
 - If the bridge errors → status flips to `unreachable` and the server enters per-server backoff (5s → 10s → ... capped at 5 min).
 
-Active mutations (role.create/update/delete, player.role.assign/unassign, role.member.add/remove, force_sync) skip this passive branch and write through immediately — those are panel-initiated changes, not drift.
+Active mutations (role.create/update/delete, player.role.assign/unassign, role.member.add/remove, force_sync) skip this passive branch after their committed outbox row is consumed — those are panel-initiated changes, not drift.
 
-The UI's `<AdminsCfgDriftBanner>` polls `/api/v1/admins-cfg/drift?server_id=...` every 30 s. When state ∈ {`drift`, `unreachable`}, the banner offers a "Force sync" button that POSTs to `/api/v1/admins-cfg/sync?server_id=...`. That endpoint enqueues a `force_sync` event onto the stream; the worker picks it up and overwrites unconditionally (`opts.forceWrite=true`).
+The UI's `<AdminsCfgDriftBanner>` polls `/api/v1/admins-cfg/drift?server_id=...` every 30 s. When state ∈ {`drift`, `unreachable`}, the banner offers a "Force sync" button that POSTs to `/api/v1/admins-cfg/sync?server_id=...`. That endpoint inserts a durable single-server `force_sync` outbox row; after relay the worker picks it up and overwrites unconditionally (`opts.forceWrite=true`).
 
 ## Config drift detection flow (generic)
 
@@ -89,12 +95,12 @@ Spec §2.7.7 mandates that "при временной недоступности
 Together they guarantee:
 - A persistently-unreachable server's messages keep retrying every reclaim cycle until the bridge recovers.
 - A consumer that crashed mid-handle does not orphan messages; the next process picks them up at boot.
-- The PEL never grows unboundedly: every entry is either acked on success or reclaimed and re-attempted.
+- Unapplied backlog is not trimmed and can grow while a server remains unavailable or producers keep writing. Task5 must add consumer-aware cleanup after durable `applied_at` + `XACK` (and safe `XDEL`) together with operator monitoring; reclaim alone does not bound the PEL.
 
 ## Per-server lifecycle
 
 - **Server install** — when a new server's row appears in DB, the next 30-s `refreshServerList` tick adds it to the active set and creates the consumer group with `MKSTREAM`. The API enqueues an initial sync event so the file is populated before Squad first boots.
-- **Server soft-delete** — the API's `softDeleteServer` now tears the per-server sync queue down synchronously (SYNC-5, #38): it `XGROUP DESTROY`s the `config-sync` group, `UNLINK`s the `events:admins-cfg-sync:<id>` stream, `DEL`s the `admins-cfg:status:<id>` key, and stamps any still-pending `admins_cfg_sync_outbox` rows `relayed_at`. The worker reacts two ways: (1) the destroyed stream makes the next multiplexed `XREADGROUP` reject `NOGROUP`, which triggers an immediate `refreshServerList()` (see the retry table) so the id is dropped without waiting for the 30-s tick; (2) even without that, the id falls out of `activeServerIds` on the next refresh. The **outbox relay** ([`relayAdminsCfgSyncOutbox`](../../../../packages/db/src/admins-cfg-outbox.ts)) additionally joins `servers` and, for any pending row whose server is soft-deleted, stamps it `relayed_at` **without** an `XADD` — so a mutation that raced the delete can never resurrect the torn-down stream.
+- **Server soft-delete** — the API's `softDeleteServer` now tears the per-server sync queue down synchronously (SYNC-5, #38): it `XGROUP DESTROY`s the `config-sync` group, `UNLINK`s the `events:admins-cfg-sync:<id>` stream, `DEL`s the `admins-cfg:status:<id>` key, and terminally completes every unapplied outbox row with `applied_at` and `reload_outcome=server_removed`, preserving any existing `relayed_at`/`stream_id`. The worker reacts two ways: (1) the destroyed stream makes the next multiplexed `XREADGROUP` reject `NOGROUP`, which triggers an immediate `refreshServerList()` (see the retry table) so the id is dropped without waiting for the 30-s tick; (2) even without that, the id falls out of `activeServerIds` on the next refresh. The **outbox relay** ([`relayAdminsCfgSyncOutbox`](../../../../packages/db/src/admins-cfg-outbox.ts)) additionally joins `servers` and, for a pending row whose server is already soft-deleted, records the same terminal `server_removed` result and stamps `relayed_at` **without** an `XADD` — so a mutation that raced the delete cannot resurrect the torn-down stream.
 - **Server restore** — re-appears on the active list, the consumer group is (re-)created with `MKSTREAM`, the next reconcile rewrites the managed segment from current DB.
 
 ## Background flow — heartbeat

@@ -599,7 +599,7 @@ export interface DeleteContext {
 export type AdminsCfgSyncDb = Pick<DatabaseClient, 'select' | 'insert' | 'update'>;
 ```
 
-That module implements a genuine **transactional outbox**: it inserts `admins_cfg_sync_outbox` rows inside the caller's transaction, then attempts a best-effort Redis `XADD` pipeline and stamps `relayedAt` only on entries that published. `tryImmediateDispatch` swallows every failure so a Redis outage cannot roll back the domain mutation; the config-sync worker's relay redelivers at-least-once.
+That module implements a genuine **transactional outbox**: API and worker producers only insert `admins_cfg_sync_outbox` rows inside the caller's transaction. A post-commit, single-flight config-sync relay publishes them to Redis with a bounded `XADD` wait and stamps `relayedAt` only after Redis returns a non-empty stream id. Redis failure rolls the relay transaction back, leaving the row pending for an at-least-once retry with the same `_outbox_id`.
 
 **Error modelling has no taxonomy** — no `AppError`, no shared error type, five coexisting styles:
 
@@ -691,7 +691,7 @@ Fifteen modules. The defining structural fact is that **there is exactly one loc
 | `reports.ts` / `report-actions.ts` / `report-analytics.ts` | `GET/POST/PATCH /reports[/:id]`, `POST /reports/:id/actions`, `POST /reports/bulk-resolve`, `GET /analytics/reports` | `panelAccess`; handling needs `can_handle_reports` | RCON via worker **before** ledger write, so a 502 leaves no row; `events` row + XADD `events:server:<id>`; ALT-7 alert; 1..N audit rows sharing `context.bulk_group` |
 | `external-bans.ts` / `ban-sources.ts` | `GET /external-bans`, `POST …/local-ban`, `GET/POST/PUT/DELETE /ban-sources[/:id]`, `POST …/sync` | `panelAccess`, `can_manage_ban_sources`, squad perm `ban` | Encrypts `auth_header`; `INCR EXTERNAL_BAN_CACHE_VERSION_KEY`; XADD `bansync:manual`; 422 `kick_requires_trusted_source` |
 | `whitelist.ts` / `whitelist-applications.ts` / `vip-tiers.ts` / `integrations-vip.ts` | `GET/PUT /whitelist/settings`, `POST /whitelist/members`, `POST /whitelist/import`, review queue, `POST /integrations/vip/lifecycle` | `whitelist:view\|edit`; `can_edit_roles` (**including the tier GET**); VIP webhook uses HMAC `x-vip-signature` | Whitelist "membership" is just `players.role_id = panel_meta.whitelist_role_id`; every grant enqueues **outbox** rows + `invalidatePermissionCache` + `revokeAllForPlayer` |
-| `admins-cfg.ts` | `GET /admins-cfg/drift[/all]`, `POST /admins-cfg/sync` | `admin_group:view` / `edit` | Drift is read purely from Redis `admins-cfg:status:<id>` (TTL 86400 s, expired ⇒ `state:'unknown'`); the force-sync **XADDs directly and bypasses the outbox**, so a Redis blip loses it |
+| `admins-cfg.ts` | `GET /admins-cfg/drift[/all]`, `POST /admins-cfg/sync` | `admin_group:view` / `edit` | Drift is read purely from Redis `admins-cfg:status:<id>` (TTL 86400 s, expired ⇒ `state:'unknown'`); force-sync inserts a durable single-server outbox row and never performs an API-side `XADD` |
 | `banned-names.ts` / `public-banlist.ts` / `settings-banlist-publication.ts` | nick-rule CRUD; `GET /public/banlist?format=squad_cfg\|json` | reads **authenticated only**; writes squad perm `ban`; banlist inline `banlist:read` | ETag/`If-None-Match` 304; 30/min; 404 when the `banlist_publication_settings` singleton is disabled |
 | `issues.ts` | internal tracker CRUD + comments | authenticated; PATCH = author or `can_manage_issues` | `liveBus issue.*`; `ensureSystemIssueLabels` seeded at registration |
 
@@ -701,12 +701,10 @@ The durability layer for anything that changes who is an admin is the **outbox**
 const inserted = await db.insert(adminsCfgSyncOutbox)
   .values(activeServers.map((s) => ({ serverId: s.id, payload: event })))
   .returning({ id: ..., serverId: ... });
-const relayedIds = await tryImmediateDispatch(redis, inserted, event);
-if (relayedIds.length > 0) await db.update(adminsCfgSyncOutbox).set({ relayedAt: new Date() })...
 ```
-`apps/api/src/lib/admins-cfg-sync.ts:63-73`
+`apps/api/src/lib/admins-cfg-sync.ts`
 
-Rows are inserted **inside the caller's transaction**, then opportunistically relayed to `events:admins-cfg-sync:<serverId>`; `relayAdminsCfgSyncOutbox` (`FOR UPDATE SKIP LOCKED`) sweeps the rest. It is called once per request and inserts one row *per active server*, not per affected member.
+Rows are inserted **inside the caller's transaction** and become visible to `relayAdminsCfgSyncOutbox` only after commit. The relay uses `FOR UPDATE SKIP LOCKED`, publishes one row per active-server snapshot to `events:admins-cfg-sync:<serverId>`, and never trims unacknowledged cfg-sync entries with `MAXLEN`.
 
 ### 4.4 Live game ops & analytics
 
@@ -1806,7 +1804,8 @@ The intended fix is documented but unimplemented. `packages/db/sql/` holds ten i
 | `panel:logs` | Redis stream | `MAXLEN ~ 100_000` (`log-stream.ts:84`) | log sink | silent eviction |
 | `host:metrics` | Redis stream | `MAXLEN ~ 5760` (`metrics-pack.ts:13`) | metrics-sampler | silent eviction |
 | `container:metrics:<id>` | Redis stream | `MAXLEN ~ '2880'` — hardcoded literal (`sampler.ts:63`) | metrics-sampler | silent eviction |
-| RCON / cfg-sync streams | Redis | `MAXLEN ~ 500` (e.g. `scheduler/src/deps.ts:60`) | producers | silent eviction |
+| RCON streams | Redis | `MAXLEN ~ 500` (e.g. `scheduler/src/deps.ts:60`) | producers | silent eviction |
+| cfg-sync streams | Redis + PG outbox | no relay-side `MAXLEN`; cleanup must be consumer-aware after `XACK`/`applied_at` | config-sync relay | bounded by a future confirmed-delivery cleanup policy |
 | `crashes:<serverId>` | Redis zset | exact 24 h `ZREMRANGEBYSCORE` (`plugins/status-reconciler.ts:241`) | API plugin | exact, score-based trim |
 | event dedup keys | Redis | `DEDUP_TTL_SECONDS = 86_400` (`shared-types/src/events.ts:292`) | ban-sync, discord | key expiry |
 | Squad game logs | bridge filesystem | `squadLogRetentionDays = 10` (`handlers.go:582`) | bridge sweep, driven hourly by log-ingest | file unlink; optional archive-before-delete per `archive_server_ids` |
@@ -1827,7 +1826,7 @@ Nothing in this system talks to anything else over a single mechanism. There are
 | # | Substrate | Key / channel (defining file) | Producer(s) | Consumer(s) | Durability | Ordering | Dedup | Reclaim / DLQ | Redis down | Postgres down |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 1 | Redis Stream + consumer groups | `events:server:<id>`, `events:global` — `STREAM_NAME`, `packages/shared-types/src/events.ts:285` | `apps/workers/log-ingest/src/publish.ts:11`; `apps/workers/ban-sync/src/events.ts:81`; API `publishModerationEvent` (`routes/report-actions.ts:111-170`) | automation `automation-dispatch:v1` (`apps/workers/automation/src/dispatch.ts:14`); discord `discord-notify:v1` (`apps/workers/discord/src/consume.ts:13`) | `MAXLEN ~ 10000`, trimmed | total per stream; **no cross-server order** | producer `SET NX dedup:log-ingest:v1:<id>` + consumer `DEDUP_KEY(group,eventId)` TTL 86400 (`events.ts:291`) | discord `XAUTOCLAIM` (`consume.ts:151`); **automation has none** | events lost, no buffering | `events` row insert fails; stream entry may still exist |
-| 2 | PG transactional outbox → Redis Stream | `admins_cfg_sync_outbox` → `events:admins-cfg-sync:<id>`, group `config-sync` (`apps/api/src/lib/admins-cfg-sync.ts:6-7`) | in-txn insert; relay `relayAdminsCfgSyncOutbox` (`packages/db/src/admins-cfg-outbox.ts:52`) every 1 s (`config-sync/src/index.ts:48`) | worker-config-sync (`apps/workers/config-sync/src/index.ts:138`) | **durable in PG**; `MAXLEN ~ 500` on the stream | `ORDER BY created_at`, `FOR UPDATE SKIP LOCKED` | none in transport; worker collapses duplicates by `Admins.cfg` hash | `XAUTOCLAIM` (`config-sync/src/index.ts:251`) | rows stay `relayed_at IS NULL`, replayed later — **the only substrate that survives this** | nothing enqueued at all |
+| 2 | PG transactional outbox → Redis Stream | `admins_cfg_sync_outbox` → `events:admins-cfg-sync:<id>`, group `config-sync` (`apps/api/src/lib/admins-cfg-sync.ts:6-7`) | in-txn insert; post-commit single-flight relay `relayAdminsCfgSyncOutbox` | worker-config-sync | **durable in PG before relay**; no relay-side `MAXLEN` | `ORDER BY created_at`, `FOR UPDATE SKIP LOCKED` | stable `_outbox_id`; file generation is idempotent | `XAUTOCLAIM`; soft-delete completes rows as `server_removed` | pending rows keep `relayed_at IS NULL`; bounded retry after recovery | nothing enqueued at all |
 | 3 | Redis pub/sub (live bus) | `live-bus`, `rcon:status:changed` (`apps/api/src/plugins/live-bus.ts:287-288`) | `app.liveBus.publish` + raw `redis.publish` from 7 workers and `packages/db` | API `EventEmitter` → WebSocket clients | **none** — fire-and-forget, zero retention | per-publisher only | `_origin` instance-id echo suppression (`live-bus.ts:301,314`) | none | publish failure logged `warn`, event silently dropped | unaffected (bus carries no writes) |
 | 4 | Redis Stream as request/response RPC | `rcon:commands:<id>` → `rcon:command-result:<reqId>` (`packages/shared-types/src/rcon-commands.ts:3,5`) | `sendRconCommandViaWorker` (`apps/api/src/lib/rcon-worker-command.ts:53`) + 6 workers | worker-rcon, group `worker-rcon:commands:v1` (`apps/workers/rcon/src/commands.ts:122`) | `MAXLEN ~ 500`; result string `EX 120` | FIFO per server | `request_id` (uuidv7) is correlation only; `resultExists()` short-circuits reclaims (`commands.ts:206`) | `XAUTOCLAIM` every 30 s, idle > 60 s (`commands.ts:146`) — **a reclaim re-executes the game command** | `{attempted:false, reason:'worker_unavailable'}`; caller returns `timeout` after 4 s of 100 ms polling | unaffected; audit/DB write happens after |
 | 5 | Redis Stream, single group | `diag:queue` (`packages/shared-config/src/diag.ts:13`) | `createDiag().emit()` from api, workers, bridge (`packages/diag/src/index.ts:24`) | worker-diag-flush, group `diag-flush` → `diagnostic_events` | `MAXLEN ~ 100000` | FIFO | none | ack-after-insert only; **no XAUTOCLAIM** | diagnostics dropped | entries stay pending, then trimmed away |
@@ -1936,7 +1935,7 @@ Redis is the second primary datastore, not a cache. There is no central key regi
 | `rcon:commands:<id>` | stream | `lib/rcon-worker-command.ts:54` + 6 workers | `rcon/src/commands.ts` | `MAXLEN ~ 500` | **yes** (in flight) | Queued kick/ban/broadcast commands dropped |
 | `rcon:command-result:<reqId>` | string | `rcon/src/commands.ts:94` | `lib/rcon-worker-command.ts:71` (deletes on read) | `EX 120` | **yes** (in flight) | Synchronous RCON calls time out with no result |
 | `events:server:<id>` / `events:global` / `events:dlq` | stream | `log-ingest/src/publish.ts:16`; ban-sync; API | `events.ts:294` groups | `MAXLEN ~ 10000` | **yes** (in flight) | Unconsumed domain events lost permanently; `events:dlq` has no reader |
-| `events:admins-cfg-sync:<id>` | stream | outbox relay | worker-config-sync | `MAXLEN ~ 500` | no — PG outbox backs it | Nothing; rows re-relay |
+| `events:admins-cfg-sync:<id>` | stream | post-commit outbox relay | worker-config-sync | no `MAXLEN`; consumer-aware cleanup after durable apply is required | partially — pending rows remain in PG; already-relayed/unapplied rows still require Redis persistence/reclaim | Pending rows relay after recovery; applied state is completed in PG |
 | `dedup:<group>:<eventId>` | string | producers + consumers | same | `EX 86400` | dedup | Duplicate Discord notifications / duplicate ban applications on replay |
 | `panel:logs` | stream | `shared-config/src/log-stream-sink.ts:95` | `routes/logs.ts:61,77`; `lib/log-export.ts:40` | `MAXLEN ~ 100000` | **yes** | Log viewer and export empty |
 | `host:metrics` / `container:metrics:<id>` | stream | metrics-sampler | `routes/host.ts:78`; `routes/server-metrics.ts:39` | `MAXLEN 5760` / `~2880` | **yes** | ~48 h of host metric history gone |
@@ -2675,15 +2674,17 @@ sequenceDiagram
     participant BR as Bridge
     participant SQ as Squad
     A->>P: INSERT admins_cfg_sync_outbox (inside tx)
-    A->>R: best-effort XADD, stamp relayed_at
-    P->>CS: relayAdminsCfgSyncOutbox (FOR UPDATE SKIP LOCKED)
+    A->>P: COMMIT domain mutation + outbox
+    CS->>P: claim committed rows (FOR UPDATE SKIP LOCKED)
+    CS->>R: bounded XADD with stable _outbox_id
+    CS->>P: stamp relayed_at + stream_id
     CS->>BR: file_read Admins.cfg
     CS->>CS: hash //SQUAD-PANEL BEGIN…END segment
     CS->>BR: file_atomic_write (only on mismatch)
     CS->>SQ: RCON AdminReloadServerConfig
 ```
 
-The outbox insert rides inside the mutation transaction (`apps/api/src/lib/admins-cfg-sync.ts:43-68`); the immediate `XADD` is a latency optimisation whose failure is non-fatal because `relayAdminsCfgSyncOutbox` (`packages/db/src/admins-cfg-outbox.ts:52`, `FOR UPDATE SKIP LOCKED`) covers the gap at-least-once. The worker splices only the `//SQUAD-PANEL BEGIN…END` managed segment and writes solely on hash mismatch (`apps/workers/config-sync/src/syncer.ts:173-226`), then forces `AdminReloadServerConfig` (`:278-281`) because Squad does not passively re-read the file. Passive `drift_check` sweeps deliberately **detect but never auto-correct** — drift is surfaced as a UI banner with a Force-sync button rather than silently overwriting manual edits.
+The outbox insert rides inside the mutation transaction (`apps/api/src/lib/admins-cfg-sync.ts`); there is no API-side Redis publish. The config-sync worker's single-flight `relayAdminsCfgSyncOutbox` claims only committed rows with `FOR UPDATE SKIP LOCKED`, uses a bounded relay connection, and retries failures at-least-once with the same `_outbox_id`. The worker splices only the `//SQUAD-PANEL BEGIN…END` managed segment and writes solely on hash mismatch (`apps/workers/config-sync/src/syncer.ts`), then forces `AdminReloadServerConfig` because Squad does not passively re-read the file. Passive `drift_check` sweeps deliberately **detect but never auto-correct** — drift is surfaced as a UI banner with a Force-sync button rather than silently overwriting manual edits.
 
 `Bans.cfg` reaches a server only through the generic config editor (`PUT /api/v1/servers/:id/configs/Bans.cfg`, perm `config:edit`): it is in `ALLOWED_CONFIG_FILES` and `HOT_RELOAD_FILES`, so it is written by `file_atomic_write` and followed by a reload. **No code parses, generates, or reconciles its content.**
 

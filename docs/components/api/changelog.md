@@ -1,5 +1,12 @@
 # `api` — changelog
 
+## 2026-09-02 — Строгая post-commit доставка Admins.cfg
+
+### Changed
+
+- API и mutation-workers больше не выполняют прямой `XADD`: доменное изменение и outbox фиксируются одной PostgreSQL-транзакцией, а single-flight relay публикует только после commit, без `MAXLEN`, с ограниченным ожиданием и устойчивым `_outbox_id`.
+- Удаление сервера теперь завершает все unapplied строки терминальным успешным исходом `server_removed`, сохраняя уже записанные `relayed_at`/`stream_id`. Это заменяет описанный ниже исторический контракт SYNC-5, где строки только помечались relayed, а stream ограничивался `MAXLEN ~ 500`.
+
 ## 2026-09-01 — Единый вход с bss.games (#299)
 
 ### Added
