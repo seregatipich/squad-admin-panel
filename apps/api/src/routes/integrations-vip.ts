@@ -263,6 +263,8 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
     '/api/v1/integrations/vip/status',
     {
       schema: { body: vipStatusBody },
+      // POST несёт подписанное HMAC тело запроса, но не меняет состояние.
+      // Аудит каждого опроса создавал бы только анонимный шум в неизменяемом журнале.
       config: { audit: false, public: true },
     },
     async (req, reply) => {
