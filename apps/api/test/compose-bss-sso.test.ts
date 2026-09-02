@@ -34,4 +34,18 @@ describe.each(COMPOSE_FILES)('%s — BSS SSO environment contract', (file) => {
     expect(web).toContain('BSS_SITE_URL:');
     expect(web).not.toContain('BSS_SSO_CLIENT_ID:');
   });
+
+  it('passes the private VIP lifecycle contract only to API', () => {
+    for (const name of ['VIP_LIFECYCLE_WEBHOOK_SECRET', 'VIP_LIFECYCLE_REQUIRE_REVISION']) {
+      expect(api).toContain(`${name}:`);
+      expect(web).not.toContain(`${name}:`);
+      expect(yaml.match(new RegExp(`^\\s+${name}:`, 'gmu'))).toHaveLength(1);
+    }
+  });
+
+  it('passes the exact release marker only to API health', () => {
+    expect(api).toContain('APP_VERSION:');
+    expect(web).not.toContain('APP_VERSION:');
+    expect(yaml.match(/^\s+APP_VERSION:/gmu)).toHaveLength(1);
+  });
 });
