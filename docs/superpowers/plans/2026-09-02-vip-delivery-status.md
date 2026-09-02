@@ -458,7 +458,7 @@ worker/db, Biome и `git diff --check` прошли. Независимое ре
 - Consumes: lifecycle supersession и outbox applied state.
 - Produces: `POST /api/v1/integrations/vip/status`.
 
-- [ ] **Шаг 1: Написать RED-тесты status**
+- [x] **Шаг 1: Написать RED-тесты status**
 
 Неизвестный event даёт 404. Проверить литеральные переходы
 `accepted -> applying -> applied`, временную ошибку как `applying`, постоянный
@@ -468,13 +468,13 @@ worker/db, Biome и `git diff --check` прошли. Независимое ре
 Строки с `reload_outcome=server_removed` учитывать в `servers_applied`, не в
 ошибках: удалённая цель считается успешно завершённой.
 
-- [ ] **Шаг 2: Подтвердить RED**
+- [x] **Шаг 2: Подтвердить RED**
 
 Run: `pnpm --filter @squad/api exec vitest run test/integration/vip-lifecycle.test.ts`
 
 Expected: status route отсутствует.
 
-- [ ] **Шаг 3: Реализовать status route**
+- [x] **Шаг 3: Реализовать status route**
 
 Тело `{ event_id }` проходит HMAC и timestamp window. Ответ:
 
@@ -496,12 +496,12 @@ Expected: status route отсутствует.
 `count(*) = count(applied_at)` и непустой correlation snapshot. Временные коды
 не переводят событие в failed.
 
-- [ ] **Шаг 4: Обновить русскую документацию**
+- [x] **Шаг 4: Обновить русскую документацию**
 
 Зафиксировать `202 != applied`, HMAC window, оба 409, superseded, ownership
 конфликты, поля outbox, post-commit relay и трёхшаговый rollout флага.
 
-- [ ] **Шаг 5: Подтвердить GREEN и типы**
+- [x] **Шаг 5: Подтвердить GREEN и типы**
 
 Run:
 
@@ -512,6 +512,15 @@ pnpm --filter @squad/worker-config-sync typecheck
 pnpm --filter @squad/db typecheck
 pnpm exec biome check apps/api/src/routes/integrations-vip.ts apps/api/src/lib/vip-lifecycle-signature.ts apps/workers/config-sync packages/db/src
 ```
+
+Результат: интеграционный lifecycle/status на отдельной мигрированной
+PostgreSQL — 51/51; typecheck `@squad/api`, `@squad/worker-config-sync` и
+`@squad/db` прошёл; Biome проверил 134 файла затронутого контура без замечаний.
+RED до реализации: 10 status-сценариев получали общий `401 unauthenticated`,
+поскольку публичный маршрут отсутствовал; прежние 40 lifecycle-сценариев были
+зелёными. Дополнительный RED управляемой гонки воспроизвёл смешанный
+`applied` после commit supersession; единый SQL-снимок перевёл тот же сценарий
+в `superseded`. Commit по прямому поручению не создавался.
 
 - [ ] **Шаг 6: Commit**
 

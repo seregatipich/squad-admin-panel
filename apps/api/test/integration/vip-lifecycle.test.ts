@@ -9,7 +9,8 @@ import {
   vipSubscriptions,
   vipTiers,
 } from '@squad/db/schema';
-import { desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
+import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildIntegrationApp, type IntegrationHarness, makeFakeBridge } from './harness.js';
@@ -59,6 +60,50 @@ async function postLifecycle(payload: Record<string, unknown>, signature?: strin
 
 async function postPreflight(payload: Record<string, unknown>, signature?: string) {
   return postSigned('/api/v1/integrations/vip/preflight', payload, signature);
+}
+
+async function postStatus(eventId: string, signature?: string) {
+  return postSigned('/api/v1/integrations/vip/status', { event_id: eventId }, signature);
+}
+
+function expectSafeStatusBody(body: Record<string, unknown>) {
+  const serialized = JSON.stringify(body);
+  for (const forbidden of [
+    'steam_id64',
+    'discord_id',
+    'eos_id',
+    'payload',
+    'file_path',
+    'rcon_response',
+    '76561198000990001',
+    'vip-lifecycle-eos-',
+    '/srv/squad/',
+    'raw RCON failure',
+  ]) {
+    expect(serialized).not.toContain(forbidden);
+  }
+}
+
+async function waitForBlockedStatusOutboxRead(): Promise<void> {
+  const observer = postgres(h.app.config.DATABASE_URL, { max: 1, prepare: false });
+  const deadline = Date.now() + 5_000;
+  try {
+    while (Date.now() < deadline) {
+      const rows = await observer<{ waiting: number }[]>`
+        SELECT count(*)::int AS waiting
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND pid <> pg_backend_pid()
+          AND wait_event_type = 'Lock'
+          AND query ILIKE '%admins_cfg_sync_outbox%'
+      `;
+      if ((rows[0]?.waiting ?? 0) > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error('status did not wait for the outbox relation lock');
+  } finally {
+    await observer.end();
+  }
 }
 
 async function mutationCounts(eventId: string) {
@@ -165,6 +210,332 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     ]);
     expect(indexes[0]?.indexdef).toContain('UNIQUE');
     expect(indexes[0]?.indexdef).toContain('WHERE (revision IS NOT NULL)');
+  });
+
+  it('returns 404 for an unknown signed lifecycle event', async () => {
+    const response = await postStatus('vip-status-unknown');
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({
+      error: 'event_not_found',
+      error_code: 'event_not_found',
+    });
+  });
+
+  it('requires the same valid HMAC boundary for lifecycle status', async () => {
+    const response = await postStatus('vip-status-auth', 'sha256=bad');
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: 'invalid_signature' });
+  });
+
+  it('reports accepted, applying and applied only after every server is durably applied', async () => {
+    const secondServerId = uuidv7();
+    await h.db.insert(servers).values({
+      id: secondServerId,
+      displayName: 'VIP lifecycle second server',
+      slug: `vip-lifecycle-second-${Date.now()}`,
+      status: 'ready',
+    });
+    const eventId = 'vip-status-progress';
+    expect(
+      (
+        await postLifecycle({
+          event_id: eventId,
+          event_type: 'vip.purchased',
+          player_id: playerId,
+          steam_id64: '76561198000990001',
+          role_id: roleId,
+          tier: 'tier_1',
+          purchase_id: 'purchase-status-progress',
+          expires_at: '2030-01-02T03:04:05.000Z',
+          revision: 1,
+          discord_id: '123456789012345678',
+        })
+      ).statusCode,
+    ).toBe(202);
+
+    const accepted = await postStatus(eventId);
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toEqual({
+      ok: true,
+      event_id: eventId,
+      state: 'accepted',
+      action: 'assigned',
+      servers_total: 2,
+      servers_applied: 0,
+      servers_pending: 2,
+      error_codes: [],
+    });
+    expectSafeStatusBody(accepted.json());
+
+    await h.db
+      .update(adminsCfgSyncOutbox)
+      .set({ relayedAt: new Date() })
+      .where(eq(adminsCfgSyncOutbox.correlationId, eventId));
+    const applying = await postStatus(eventId);
+    expect(applying.json()).toEqual({
+      ok: true,
+      event_id: eventId,
+      state: 'applying',
+      action: 'assigned',
+      servers_total: 2,
+      servers_applied: 0,
+      servers_pending: 2,
+      error_codes: [],
+    });
+    expectSafeStatusBody(applying.json());
+
+    await h.db
+      .update(adminsCfgSyncOutbox)
+      .set({ appliedAt: new Date(), reloadOutcome: 'confirmed' })
+      .where(
+        and(
+          eq(adminsCfgSyncOutbox.correlationId, eventId),
+          eq(adminsCfgSyncOutbox.serverId, serverId),
+        ),
+      );
+    const partiallyApplied = await postStatus(eventId);
+    expect(partiallyApplied.json()).toEqual({
+      ok: true,
+      event_id: eventId,
+      state: 'applying',
+      action: 'assigned',
+      servers_total: 2,
+      servers_applied: 1,
+      servers_pending: 1,
+      error_codes: [],
+    });
+
+    await h.db
+      .update(adminsCfgSyncOutbox)
+      .set({ appliedAt: new Date(), reloadOutcome: 'server_removed' })
+      .where(
+        and(
+          eq(adminsCfgSyncOutbox.correlationId, eventId),
+          eq(adminsCfgSyncOutbox.serverId, secondServerId),
+        ),
+      );
+    const applied = await postStatus(eventId);
+    expect(applied.json()).toEqual({
+      ok: true,
+      event_id: eventId,
+      state: 'applied',
+      action: 'assigned',
+      servers_total: 2,
+      servers_applied: 2,
+      servers_pending: 0,
+      error_codes: [],
+    });
+    expectSafeStatusBody(applied.json());
+  });
+
+  it.each([
+    ['unavailable', 'applying'],
+    ['timeout', 'applying'],
+    ['rejected', 'failed'],
+    ['invalid_result', 'failed'],
+  ] as const)('maps a safe %s delivery code to %s', async (errorCode, state) => {
+    const eventId = `vip-status-${errorCode}`;
+    expect(
+      (
+        await postLifecycle({
+          event_id: eventId,
+          event_type: 'vip.purchased',
+          player_id: playerId,
+          role_id: roleId,
+          tier: 'tier_1',
+          purchase_id: `purchase-status-${errorCode}`,
+          expires_at: '2030-01-02T03:04:05.000Z',
+          revision: 1,
+        })
+      ).statusCode,
+    ).toBe(202);
+    await h.db
+      .update(adminsCfgSyncOutbox)
+      .set({
+        relayedAt: new Date(),
+        lastError: errorCode,
+        reloadOutcome: errorCode,
+      })
+      .where(eq(adminsCfgSyncOutbox.correlationId, eventId));
+
+    const response = await postStatus(eventId);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ok: true,
+      event_id: eventId,
+      state,
+      action: 'assigned',
+      servers_total: 1,
+      servers_applied: 0,
+      servers_pending: 1,
+      error_codes: [errorCode],
+    });
+    expectSafeStatusBody(response.json());
+  });
+
+  it('does not expose an unexpected stored error as a status code', async () => {
+    const eventId = 'vip-status-unsafe-error';
+    expect(
+      (
+        await postLifecycle({
+          event_id: eventId,
+          event_type: 'vip.purchased',
+          player_id: playerId,
+          role_id: roleId,
+          tier: 'tier_1',
+          purchase_id: 'purchase-status-unsafe-error',
+          expires_at: '2030-01-02T03:04:05.000Z',
+          revision: 1,
+        })
+      ).statusCode,
+    ).toBe(202);
+    await h.db
+      .update(adminsCfgSyncOutbox)
+      .set({
+        relayedAt: new Date(),
+        lastError: 'raw RCON failure for 76561198000990001 at /srv/squad/Admins.cfg',
+        reloadOutcome: null,
+      })
+      .where(eq(adminsCfgSyncOutbox.correlationId, eventId));
+
+    const response = await postStatus(eventId);
+
+    expect(response.json()).toEqual({
+      ok: true,
+      event_id: eventId,
+      state: 'applying',
+      action: 'assigned',
+      servers_total: 1,
+      servers_applied: 0,
+      servers_pending: 1,
+      error_codes: [],
+    });
+    expectSafeStatusBody(response.json());
+  });
+
+  it('never reports applied for an event without a non-empty outbox snapshot', async () => {
+    const eventId = 'vip-status-empty-snapshot';
+    await h.db.insert(vipLifecycleEvents).values({
+      eventId,
+      eventType: 'vip.purchased',
+      playerId,
+      roleId,
+      revision: 1,
+      action: 'assigned',
+      payload: {},
+      appliedAt: new Date(),
+    });
+
+    const response = await postStatus(eventId);
+
+    expect(response.json()).toEqual({
+      ok: true,
+      event_id: eventId,
+      state: 'accepted',
+      action: 'assigned',
+      servers_total: 0,
+      servers_applied: 0,
+      servers_pending: 0,
+      error_codes: [],
+    });
+  });
+
+  it('reports superseded before inspecting a late-completed outbox snapshot', async () => {
+    expect((await postLifecycle(revisionEvent('vip-status-old', 4))).statusCode).toBe(202);
+    expect((await postLifecycle(revisionEvent('vip-status-winner', 5))).statusCode).toBe(202);
+    await h.db
+      .update(adminsCfgSyncOutbox)
+      .set({
+        relayedAt: new Date(),
+        appliedAt: new Date(),
+        reloadOutcome: 'confirmed',
+        lastError: 'raw RCON failure for 76561198000990001 at /srv/squad/Admins.cfg',
+      })
+      .where(eq(adminsCfgSyncOutbox.correlationId, 'vip-status-old'));
+
+    const response = await postStatus('vip-status-old');
+
+    expect(response.json()).toEqual({
+      ok: true,
+      event_id: 'vip-status-old',
+      state: 'superseded',
+      action: 'assigned',
+      superseded_by_event_id: 'vip-status-winner',
+      servers_total: 0,
+      servers_applied: 0,
+      servers_pending: 0,
+      error_codes: [],
+    });
+    expectSafeStatusBody(response.json());
+  });
+
+  it('reads supersession and delivery aggregate from one PostgreSQL snapshot', async () => {
+    const oldEventId = 'vip-status-snapshot-old';
+    const winnerEventId = 'vip-status-snapshot-winner';
+    expect((await postLifecycle(revisionEvent(oldEventId, 4))).statusCode).toBe(202);
+    await h.db
+      .update(adminsCfgSyncOutbox)
+      .set({
+        relayedAt: new Date(),
+        appliedAt: new Date(),
+        reloadOutcome: 'confirmed',
+      })
+      .where(eq(adminsCfgSyncOutbox.correlationId, oldEventId));
+    await h.db.insert(vipLifecycleEvents).values({
+      eventId: winnerEventId,
+      eventType: 'vip.extended',
+      playerId,
+      roleId,
+      revision: 5,
+      action: 'assigned',
+      payload: {},
+      appliedAt: new Date(),
+    });
+
+    const blocker = postgres(h.app.config.DATABASE_URL, { max: 1, prepare: false });
+    let signalLocked!: () => void;
+    let releaseLock!: () => void;
+    const locked = new Promise<void>((resolve) => {
+      signalLocked = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const blockerTransaction = blocker.begin(async (tx) => {
+      await tx.unsafe('LOCK TABLE admins_cfg_sync_outbox IN ACCESS EXCLUSIVE MODE');
+      signalLocked();
+      await released;
+    });
+    await locked;
+
+    const statusPromise = postStatus(oldEventId);
+    try {
+      await waitForBlockedStatusOutboxRead();
+      await h.db
+        .update(vipLifecycleEvents)
+        .set({ supersededByEventId: winnerEventId })
+        .where(eq(vipLifecycleEvents.eventId, oldEventId));
+    } finally {
+      releaseLock();
+      await blockerTransaction;
+      await blocker.end();
+    }
+    const response = await statusPromise;
+
+    expect(response.json()).toEqual({
+      ok: true,
+      event_id: oldEventId,
+      state: 'superseded',
+      action: 'assigned',
+      superseded_by_event_id: winnerEventId,
+      servers_total: 0,
+      servers_applied: 0,
+      servers_pending: 0,
+      error_codes: [],
+    });
   });
 
   it('assigns a signed VIP purchase with expiry, publishes Admins.cfg sync, audits once and ignores duplicate delivery', async () => {

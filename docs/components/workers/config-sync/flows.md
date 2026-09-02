@@ -52,6 +52,27 @@ Step-by-step:
 5. После файловой операции worker дважды читает `servers.status`. Стабильно неживой сервер получает `file_ready_for_restart`. Для `running|starting` отправляется `AdminReloadServerConfig` с `request_id=admins-cfg-sync:<outbox_id>` и принимается только точный валидный `ok=true` результат. Переход `stopped -> running` включает RCON-ветку, а `running -> stopped` завершается как готовый файл.
 6. Успешный итог сначала сохраняется в PostgreSQL (`applied_at` и allowlisted `reload_outcome`). Затем Lua-скрипт атомарно выполняет `XACK` и точный `XDEL`. Уже applied replay и устойчивый lifecycle `superseded` пропускают файл/RCON и выполняют только очистку. Ошибка сохраняет безопасный код и оставляет запись в PEL без `XDEL`.
 
+### Подтверждение VIP lifecycle
+
+Каждая строка снимка VIP-события хранит `correlation_id=event_id`, время
+`relayed_at`, Redis `stream_id`, устойчивое `applied_at`, безопасный
+`last_error` и нормализованный `reload_outcome`. API создаёт эти строки в той
+же PostgreSQL-транзакции, что роль и lifecycle; Redis relay запускается только
+после commit. Поэтому ответ lifecycle `202` подтверждает приём, но не доставку.
+
+Подписанный `POST /api/v1/integrations/vip/status` агрегирует только эти поля:
+не начавшийся relay — `accepted`, relay/частичный итог/временные
+`unavailable|timeout` — `applying`, полный непустой снимок с `applied_at` —
+`applied`, постоянные `rejected|invalid_result` — `failed`. Терминальный
+`server_removed` входит в число применённых серверов. Если lifecycle уже
+помечен `superseded`, это состояние имеет приоритет над агрегатом outbox:
+позднее подтверждение старой строки не доказывает применение устаревшего
+желания.
+Lifecycle и агрегат читаются одним SQL-снимком, без READ COMMITTED-разрыва
+между отдельными запросами.
+Ни outbox, ни status не сохраняют и не отдают SteamID64, EOS, путь,
+содержимое файла или сырой ответ RCON.
+
 ## Drift detection flow (every 5 min)
 
 A separate `setInterval` ticks every `ADMINS_CFG_DRIFT_INTERVAL_MS` (default 5 min). For each active server it runs `syncServerAdminsCfg(... { reason: 'drift_check', forceWrite: false })`. The passive `drift_check` reason changes behaviour vs. the event-driven path:

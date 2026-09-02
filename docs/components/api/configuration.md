@@ -11,7 +11,8 @@
 | `PANEL_PUBLIC_URL` | yes | — | all | Full public URL of the panel (e.g. `https://panel.example`). Used as the `openid.return_to` and `openid.realm` base for Steam OpenID callbacks. | no |
 | `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64. AES-256-GCM key for `server_credentials.*_encrypted`. | yes |
 | `SESSION_SECRET` | yes | — | all | Cookie-signing secret. | yes |
-| `VIP_LIFECYCLE_WEBHOOK_SECRET` | no | — | all | HMAC secret for the disabled-by-default VIP lifecycle endpoint. Used only by `vip-user-service`; panel does not own wallet ledger or refunds. | yes |
+| `VIP_LIFECYCLE_WEBHOOK_SECRET` | нет | — | все | Общий HMAC-ключ для выключенных по умолчанию VIP preflight, lifecycle и status. Timestamp каждого запроса обязан попасть в окно ±300 секунд. | да |
+| `VIP_LIFECYCLE_REQUIRE_REVISION` | нет | `false` | все | После совместимого выпуска сайта требует положительную `revision` в lifecycle. До этого старый producer разрешён только пока у игрока нет revision-истории. | нет |
 | `BALANCER_WEBHOOK_SECRET` | no | — | all | HMAC secret for the disabled-by-default team-balancer proposal endpoint. Shared with the SquadJS balancer exporter. Ingestion only — the panel never executes a team change. | yes |
 | `STEAM_API_KEY` | no | — | all | Steam Web API key for persona/avatar enrichment. Without it, persona falls back to `Player <last 4 of steam_id64>`. Get from https://steamcommunity.com/dev/apikey | yes |
 | `SESSION_TTL_SECONDS` | no | `21600` (6 h) | all | Sliding session lifetime in seconds. | no |
@@ -23,6 +24,18 @@
 ## Listening port
 
 Inside the container the API binds `0.0.0.0:3000`. Caddy proxies `/api/*` and the WebSocket upgrade routes to that port over the internal compose network.
+
+## Порядок включения VIP lifecycle
+
+1. Выпустить миграции, API и `worker-config-sync` с
+   `VIP_LIFECYCLE_REQUIRE_REVISION=false`.
+2. Выпустить сайт, который передаёт revision, формирует свежий подписанный
+   timestamp, обрабатывает оба конфликта `event_body_conflict` и
+   `revision_conflict` и опрашивает status после `202`.
+3. После подтверждённого отсутствия запросов без revision включить
+   `VIP_LIFECYCLE_REQUIRE_REVISION=true` и повторить подписанный smoke.
+
+Откат сайта безопасен только пока флаг остаётся `false`.
 
 ## Plugin tunables
 

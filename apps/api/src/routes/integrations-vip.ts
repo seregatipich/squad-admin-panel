@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { findVipLifecycleOwner, type VipGrantExecutor, vipLifecycleRoleComment } from '@squad/db';
 import {
+  adminsCfgSyncOutbox,
   auditLog,
   players,
   roles,
@@ -9,7 +10,7 @@ import {
   vipSubscriptions,
   vipTiers,
 } from '@squad/db/schema';
-import { and, desc, eq, isNotNull, isNull, ne } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -59,6 +60,13 @@ const vipPreflightBody = z.object({
   role_id: z.string().uuid(),
   tier: z.string().trim().min(1).max(64),
 });
+
+const vipStatusBody = z.object({
+  event_id: z.string().trim().min(1).max(160),
+});
+
+const vipDeliveryErrorCodes = ['unavailable', 'timeout', 'rejected', 'invalid_result'] as const;
+const permanentVipDeliveryErrors = new Set<string>(['rejected', 'invalid_result']);
 
 type VipLifecycleBody = z.infer<typeof vipLifecycleBody>;
 type VipLifecycleAction = 'assigned' | 'revoked' | 'ignored' | 'superseded';
@@ -247,6 +255,108 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
         servers_total: result.serversTotal,
         projection_owner: result.target.projectionOwner,
         expires_at: result.target.expiresAt?.toISOString() ?? null,
+      };
+    },
+  );
+
+  fast.post(
+    '/api/v1/integrations/vip/status',
+    {
+      schema: { body: vipStatusBody },
+      config: { audit: false, public: true },
+    },
+    async (req, reply) => {
+      const secret = app.config.VIP_LIFECYCLE_WEBHOOK_SECRET;
+      if (!secret) {
+        reply.code(503);
+        return { error: 'vip_lifecycle_webhook_disabled' };
+      }
+      const timestamp = headerValue(req.headers['x-vip-timestamp']);
+      const signature = headerValue(req.headers['x-vip-signature']);
+      if (!verifyVipLifecycleSignature(secret, timestamp, signature, req.body)) {
+        reply.code(401);
+        return { error: 'invalid_signature' };
+      }
+
+      // Один SQL-снимок не даёт новой revision вклиниться между чтением
+      // supersession и outbox и превратить старое событие в ложный `applied`.
+      const [status] = await app.db
+        .select({
+          action: vipLifecycleEvents.action,
+          supersededByEventId: vipLifecycleEvents.supersededByEventId,
+          serversTotal: sql<number>`count(${adminsCfgSyncOutbox.id})::integer`,
+          serversApplied: sql<number>`count(${adminsCfgSyncOutbox.appliedAt})::integer`,
+          hasProgress: sql<boolean>`coalesce(bool_or(
+            ${adminsCfgSyncOutbox.id} is not null
+            and (
+              ${adminsCfgSyncOutbox.relayedAt} is not null
+              or ${adminsCfgSyncOutbox.appliedAt} is not null
+              or ${adminsCfgSyncOutbox.lastError} is not null
+              or ${adminsCfgSyncOutbox.reloadOutcome} is not null
+            )
+          ), false)`,
+          storedErrorCodes: sql<string[]>`coalesce(
+            array_agg(distinct ${adminsCfgSyncOutbox.lastError}) filter (
+              where ${adminsCfgSyncOutbox.appliedAt} is null
+                and ${adminsCfgSyncOutbox.lastError} is not null
+            ),
+            array[]::text[]
+          )`,
+        })
+        .from(vipLifecycleEvents)
+        .leftJoin(
+          adminsCfgSyncOutbox,
+          eq(adminsCfgSyncOutbox.correlationId, vipLifecycleEvents.eventId),
+        )
+        .where(eq(vipLifecycleEvents.eventId, req.body.event_id))
+        .groupBy(
+          vipLifecycleEvents.eventId,
+          vipLifecycleEvents.action,
+          vipLifecycleEvents.supersededByEventId,
+        )
+        .limit(1);
+      if (!status) {
+        reply.code(404);
+        return { error: 'event_not_found', error_code: 'event_not_found' };
+      }
+
+      if (status.action === 'superseded' || status.supersededByEventId !== null) {
+        return {
+          ok: true,
+          event_id: req.body.event_id,
+          state: 'superseded' as const,
+          action: status.action,
+          ...(status.supersededByEventId
+            ? { superseded_by_event_id: status.supersededByEventId }
+            : {}),
+          servers_total: 0,
+          servers_applied: 0,
+          servers_pending: 0,
+          error_codes: [],
+        };
+      }
+
+      const errorCodes = vipDeliveryErrorCodes.filter((code) =>
+        status.storedErrorCodes.includes(code),
+      );
+      const state =
+        status.serversTotal > 0 && status.serversApplied === status.serversTotal
+          ? ('applied' as const)
+          : errorCodes.some((code) => permanentVipDeliveryErrors.has(code))
+            ? ('failed' as const)
+            : status.hasProgress
+              ? ('applying' as const)
+              : ('accepted' as const);
+
+      return {
+        ok: true,
+        event_id: req.body.event_id,
+        state,
+        action: status.action,
+        servers_total: status.serversTotal,
+        servers_applied: status.serversApplied,
+        servers_pending: status.serversTotal - status.serversApplied,
+        error_codes: errorCodes,
       };
     },
   );

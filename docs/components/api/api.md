@@ -65,14 +65,23 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| POST | `/api/v1/integrations/vip/lifecycle` | Signed service endpoint for `vip-user-service` to assign, extend, expire or refund VIP panel roles. Disabled unless `VIP_LIFECYCLE_WEBHOOK_SECRET` is set. | HMAC only |
+| POST | `/api/v1/integrations/vip/preflight` | Подписанная проверка игрока, VIP-роли, владельца текущего назначения и непустого снимка серверов до покупки. | только HMAC |
+| POST | `/api/v1/integrations/vip/lifecycle` | Подписанное назначение, продление, истечение или возврат VIP-роли от `vip-user-service`. | только HMAC |
+| POST | `/api/v1/integrations/vip/status` | Подписанное агрегированное состояние доставки принятого события по `{ event_id }`. | только HMAC |
 
-Required headers:
+Все три маршрута выключены без `VIP_LIFECYCLE_WEBHOOK_SECRET` и используют
+одни заголовки:
 
-- `x-vip-timestamp`: ISO timestamp used in the signature payload.
-- `x-vip-signature`: `sha256=<hex>` HMAC-SHA256 of `<x-vip-timestamp>.<canonical-json-body>` using `VIP_LIFECYCLE_WEBHOOK_SECRET`.
+- `x-vip-timestamp`: ISO 8601 с часовым поясом в окне ±300 секунд от времени
+  API;
+- `x-vip-signature`: `sha256=<hex>` — HMAC-SHA256 от
+  `<x-vip-timestamp>.<canonical-json-body>` с ключом
+  `VIP_LIFECYCLE_WEBHOOK_SECRET`.
 
-Body:
+Дата вне окна, дата без часового пояса, неверный формат и неверная подпись
+одинаково возвращают `401 { "error": "invalid_signature" }`.
+
+Lifecycle принимает:
 
 ```json
 {
@@ -82,13 +91,65 @@ Body:
   "role_id": "0190abcd-0000-7000-8000-000000000002",
   "tier": "vip2",
   "purchase_id": "purchase-123",
-  "expires_at": "2030-01-02T03:04:05.000Z"
+  "expires_at": "2030-01-02T03:04:05.000Z",
+  "revision": 17
 }
 ```
 
-`event_type` values: `vip.purchased`, `vip.extended`, `vip.expired`, `vip.refunded`. Purchase/extension events require a future `expires_at`; expiry/refund events revoke only when the current player role still matches `role_id`. `event_id` is stored in `vip_lifecycle_events` and makes retries idempotent: duplicate delivery returns `200 { ok: true, duplicate: true }` without another Admins.cfg sync. First application returns `202` with `action` (`assigned`, `revoked`, `ignored`) and `enqueued`.
+`event_type`: `vip.purchased`, `vip.extended`, `vip.expired` или
+`vip.refunded`. Для покупки и продления нужен будущий `expires_at`; снятие
+разрешено только владельцу текущего внешнего назначения. `discord_id` временно
+допускается подписанной схемой, но панель его не использует. Положительная
+`revision` монотонна для игрока; до завершения перехода она необязательна только
+при `VIP_LIFECYCLE_REQUIRE_REVISION=false`.
 
-Ownership boundary: `vip-user-service` owns wallet ledger, purchase idempotency and economic rollback. This panel owns role membership, `role_expires_at` and Admins.cfg sync. Discord role sync is handled outside this API.
+Успешный первый приём возвращает `202` с `action` и `enqueued`. Это означает
+«событие и снимок outbox зафиксированы», а не «роль уже доставлена на серверы».
+Тот же `event_id` с тем же телом возвращает идемпотентный `200`, с другим телом
+— `409 event_body_conflict`. Другой `event_id` с уже занятой revision получает
+`409 revision_conflict`. Большая revision помечает прежнее событие как
+`superseded`; поздняя меньшая revision сразу записывается с таким действием и
+не меняет роль или outbox.
+
+Preflight и lifecycle не перезаписывают ручную роль или активную внутреннюю
+`vip_subscriptions`. Конфликты владельца возвращаются безопасными кодами
+`role_conflict`, `manual_role_conflict` или `vip_subscription_conflict`; пустой
+снимок целей — `no_target_servers`. Панель повторяет эти проверки и получает
+снимок серверов заново внутри lifecycle-транзакции.
+
+Status принимает `{ "event_id": "purchase-123" }`. Неизвестное событие даёт
+`404 event_not_found`; успешный ответ имеет вид:
+
+```json
+{
+  "ok": true,
+  "event_id": "purchase-123",
+  "state": "applying",
+  "action": "assigned",
+  "servers_total": 2,
+  "servers_applied": 1,
+  "servers_pending": 1,
+  "error_codes": ["timeout"]
+}
+```
+
+`state` принимает `accepted`, `applying`, `applied`, `failed` или
+`superseded`. `applied` требует непустой коррелированный снимок и `applied_at`
+у каждой его строки. `unavailable` и `timeout` остаются `applying`, а
+`rejected` и `invalid_result` дают `failed`. Результат `server_removed`
+считается успешно применённой целью. `superseded` имеет приоритет над поздним
+завершением старого outbox и при наличии победителя добавляет
+`superseded_by_event_id`. Событие и агрегат outbox читаются одним снимком
+PostgreSQL, поэтому commit новой revision между отдельными чтениями не может
+дать старому событию ложный терминальный `applied`.
+
+Ответ status содержит только действие, агрегированные счётчики и закрытый
+список кодов. SteamID64, EOS, путь или содержимое файла и сырой ответ RCON не
+возвращаются.
+
+Граница владения: `vip-user-service` отвечает за кошелёк, идемпотентность
+покупки и экономическую компенсацию. Панель отвечает за роль,
+`role_expires_at` и доставку `Admins.cfg`. Discord-роль находится вне этого API.
 
 ### Team balancer proposals
 
