@@ -251,12 +251,19 @@ pnpm --filter @squad/db typecheck
 
 Expected: гонки имеют одного победителя; обе перестановки дают одно состояние.
 
-- [ ] **Шаг 7: Commit**
+- [x] **Шаг 7: Commit**
 
 ```bash
 git add packages/db/drizzle packages/db/src/schema/vip-lifecycle-events.ts apps/api/src/routes/integrations-vip.ts apps/api/test/integration/vip-lifecycle.test.ts
 git commit -m "feat(db): serialize VIP lifecycle revisions"
 ```
+
+Результат: commit `932fc49b`; lifecycle `39/39`, два isolation-теста,
+миграция на чистой PostgreSQL, workspace typecheck `8/8`, Biome и
+`git diff --check` прошли. Два независимых прохода ревью закрыли найденные
+пограничные случаи повтора после истечения и malformed lower revision.
+Локальный pre-commit не нашёл бинарник `gitleaks`, поэтому проверка утечек
+остаётся обязательной частью полного CI точного кандидата.
 
 ### Задача 4: Строго post-commit outbox
 
