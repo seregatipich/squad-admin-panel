@@ -36,14 +36,14 @@
 - Produces: `verifyVipLifecycleSignature(secret, timestamp, signature, payload, nowMs?)` с окном ±300 секунд для действующего ISO 8601 timestamp.
 - Produces: preflight и lifecycle body с optional `revision`, совместимым `discord_id` и флагом `VIP_LIFECYCLE_REQUIRE_REVISION`.
 
-- [ ] **Шаг 1: Написать RED-тесты подписи и схемы**
+- [x] **Шаг 1: Написать RED-тесты подписи и схемы**
 
 Проверить валидную подпись на `now`, обе границы ±300 секунд, отказ на ±301,
 дату без timezone, невалидный ISO и неверную подпись. В интеграционном
 тесте проверить `discord_id`, optional revision при выключенном флаге и
 `400 { error: 'revision_required' }` при включённом.
 
-- [ ] **Шаг 2: Подтвердить RED**
+- [x] **Шаг 2: Подтвердить RED**
 
 Run:
 
@@ -53,7 +53,7 @@ pnpm --filter @squad/api exec vitest run test/vip-lifecycle-signature.test.ts te
 
 Expected: устаревшая/будущая подпись принимается, новых полей и флага нет.
 
-- [ ] **Шаг 3: Ограничить HMAC по времени**
+- [x] **Шаг 3: Ограничить HMAC по времени**
 
 До вычисления HMAC строго разобрать действующий ISO 8601 timestamp с timezone и
 проверить `Math.abs(nowMs - parsedTimestampMs) <= 300_000`. Любой отказ остаётся
@@ -61,7 +61,7 @@ Expected: устаревшая/будущая подпись принимает�
 Параметр `nowMs` нужен только для детерминированного теста и по умолчанию равен
 `Date.now()`.
 
-- [ ] **Шаг 4: Добавить схемы и флаг совместимости**
+- [x] **Шаг 4: Добавить схемы и флаг совместимости**
 
 Preflight принимает `{ steam_id64, role_id, tier }`. Lifecycle добавляет
 `revision: positive int optional` и `discord_id: 17..20 digits optional`.
@@ -69,11 +69,11 @@ Preflight принимает `{ steam_id64, role_id, tier }`. Lifecycle доба
 `false`; при `true` отсутствие revision отклоняется до транзакции. Discord id
 участвует в подписанном теле и request hash, но дальше не используется.
 
-- [ ] **Шаг 5: Подтвердить GREEN**
+- [x] **Шаг 5: Подтвердить GREEN**
 
 Повторить команду шага 2. Expected: все тесты проходят.
 
-- [ ] **Шаг 6: Commit**
+- [x] **Шаг 6: Commit**
 
 ```bash
 git add apps/api/src/lib/vip-lifecycle-signature.ts apps/api/src/routes/integrations-vip.ts apps/api/src/config.ts apps/api/test .env.example
