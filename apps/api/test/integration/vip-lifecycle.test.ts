@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import {
   adminsCfgSyncOutbox,
   auditLog,
@@ -9,9 +9,9 @@ import {
   vipSubscriptions,
   vipTiers,
 } from '@squad/db/schema';
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildIntegrationApp, type IntegrationHarness, makeFakeBridge } from './harness.js';
 
 const SECRET = 'vip-lifecycle-test-secret-with-enough-entropy';
@@ -135,8 +135,35 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
   }, 60_000);
 
   afterEach(async () => {
+    vi.useRealTimers();
     await h.cleanup();
   }, 60_000);
+
+  it('migrates lifecycle revision metadata and the partial player revision uniqueness guard', async () => {
+    const columns = (await h.db.execute(sql`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'vip_lifecycle_events'
+        AND column_name IN ('revision', 'request_hash', 'superseded_by_event_id')
+      ORDER BY column_name
+    `)) as unknown as Array<{ column_name: string }>;
+    const indexes = (await h.db.execute(sql`
+      SELECT indexdef
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'vip_lifecycle_events'
+        AND indexname = 'vip_lifecycle_events_player_revision_key'
+    `)) as unknown as Array<{ indexdef: string }>;
+
+    expect(columns.map((row) => row.column_name)).toEqual([
+      'request_hash',
+      'revision',
+      'superseded_by_event_id',
+    ]);
+    expect(indexes[0]?.indexdef).toContain('UNIQUE');
+    expect(indexes[0]?.indexdef).toContain('WHERE (revision IS NOT NULL)');
+  });
 
   it('assigns a signed VIP purchase with expiry, publishes Admins.cfg sync, audits once and ignores duplicate delivery', async () => {
     const event = {
@@ -185,6 +212,407 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(duplicate.json()).toMatchObject({ ok: true, duplicate: true });
     expect(await syncEvents()).toHaveLength(1);
   });
+
+  it('resolves an exact duplicate before manual ownership and target server checks', async () => {
+    const event = {
+      event_id: 'vip-duplicate-after-target-change',
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'tier_1',
+      purchase_id: 'purchase-duplicate-after-target-change',
+      expires_at: '2030-01-02T03:04:05.000Z',
+      revision: 1,
+    };
+    expect((await postLifecycle(event)).statusCode).toBe(202);
+    expect(
+      (
+        await h.db
+          .select({
+            requestHash: vipLifecycleEvents.requestHash,
+            revision: vipLifecycleEvents.revision,
+          })
+          .from(vipLifecycleEvents)
+          .where(eq(vipLifecycleEvents.eventId, event.event_id))
+      )[0],
+    ).toEqual({
+      requestHash: createHash('sha256').update(canonicalJson(event)).digest('hex'),
+      revision: 1,
+    });
+    const counts = await mutationCounts(event.event_id);
+    await h.db
+      .update(players)
+      .set({ roleLifecycleEventId: null, roleComment: 'manual override' })
+      .where(eq(players.steamId64, 76561198000990001n));
+    await h.db.update(servers).set({ deletedAt: new Date() }).where(eq(servers.id, serverId));
+
+    const duplicate = await postLifecycle(event);
+
+    expect(duplicate.statusCode).toBe(200);
+    expect(duplicate.json()).toEqual({ ok: true, duplicate: true });
+    expect(await mutationCounts(event.event_id)).toEqual(counts);
+  });
+
+  it('resolves an exact duplicate after its saved expiry has passed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2029-01-01T00:00:00.000Z'));
+    const event = {
+      event_id: 'vip-duplicate-after-expiry',
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'tier_1',
+      purchase_id: 'purchase-duplicate-after-expiry',
+      expires_at: '2030-01-01T00:00:00.000Z',
+      revision: 1,
+    };
+    expect((await postLifecycle(event)).statusCode).toBe(202);
+    const counts = await mutationCounts(event.event_id);
+    vi.setSystemTime(new Date('2031-01-01T00:00:00.000Z'));
+
+    const duplicate = await postLifecycle(event);
+
+    expect(duplicate.statusCode).toBe(200);
+    expect(duplicate.json()).toEqual({ ok: true, duplicate: true });
+    expect(await mutationCounts(event.event_id)).toEqual(counts);
+
+    const newExpiredEvent = await postLifecycle({
+      ...event,
+      event_id: 'vip-new-event-after-expiry',
+      revision: 2,
+    });
+    expect(newExpiredEvent.statusCode).toBe(400);
+    expect(newExpiredEvent.json()).toEqual({
+      error: 'role_expiry_must_be_future',
+      error_code: 'role_expiry_must_be_future',
+    });
+    expect(await mutationCounts(event.event_id)).toEqual(counts);
+  });
+
+  it.each([
+    ['tier', { tier: 'changed-tier' }],
+    ['expiry', { expires_at: '2030-02-02T03:04:05.000Z' }],
+  ])('rejects the same event id with changed %s before target checks', async (_field, change) => {
+    const event = {
+      event_id: 'vip-event-body-conflict',
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'tier_1',
+      purchase_id: 'purchase-event-body-conflict',
+      expires_at: '2030-01-02T03:04:05.000Z',
+      revision: 1,
+    };
+    expect((await postLifecycle(event)).statusCode).toBe(202);
+    const counts = await mutationCounts(event.event_id);
+    await h.db
+      .update(players)
+      .set({ roleLifecycleEventId: null, roleComment: 'manual override' })
+      .where(eq(players.steamId64, 76561198000990001n));
+    await h.db.update(servers).set({ deletedAt: new Date() }).where(eq(servers.id, serverId));
+
+    const conflict = await postLifecycle({ ...event, ...change });
+
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toEqual({
+      error: 'event_body_conflict',
+      error_code: 'event_body_conflict',
+    });
+    expect(await mutationCounts(event.event_id)).toEqual(counts);
+  });
+
+  it('returns a safe body conflict when the same event id races across players', async () => {
+    const [otherPlayer] = await h.db
+      .insert(players)
+      .values({
+        steamId64: 76561198000990003n,
+        canonicalName: 'VipLifecycleOtherPlayer',
+        canonicalNameNormalized: 'viplifecycleotherplayer',
+        eosId: `vip-lifecycle-other-eos-${Date.now()}`,
+      })
+      .returning({ id: players.id });
+    const event = {
+      event_id: 'vip-cross-player-event-race',
+      event_type: 'vip.purchased',
+      role_id: roleId,
+      tier: 'tier_1',
+      purchase_id: 'purchase-cross-player-race',
+      expires_at: '2030-01-02T03:04:05.000Z',
+      revision: 1,
+    };
+
+    const responses = await Promise.all([
+      postLifecycle({ ...event, player_id: playerId }),
+      postLifecycle({ ...event, player_id: otherPlayer?.id }),
+    ]);
+
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([202, 409]);
+    expect(responses.find((response) => response.statusCode === 409)?.json()).toEqual({
+      error: 'event_body_conflict',
+      error_code: 'event_body_conflict',
+    });
+  });
+
+  it('rejects a different event that reuses the same player revision', async () => {
+    const first = {
+      event_id: 'vip-revision-owner',
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'tier_1',
+      purchase_id: 'purchase-revision-owner',
+      expires_at: '2030-01-02T03:04:05.000Z',
+      revision: 4,
+    };
+    expect((await postLifecycle(first)).statusCode).toBe(202);
+    const counts = await mutationCounts(first.event_id);
+    await h.db.update(players).set({ eosId: null }).where(eq(players.id, playerId));
+    await h.db.update(servers).set({ deletedAt: new Date() }).where(eq(servers.id, serverId));
+
+    const conflict = await postLifecycle({
+      ...first,
+      event_id: 'vip-revision-intruder',
+      expires_at: '2030-02-02T03:04:05.000Z',
+    });
+
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toEqual({
+      error: 'revision_conflict',
+      error_code: 'revision_conflict',
+    });
+    expect(await mutationCounts(first.event_id)).toEqual(counts);
+  });
+
+  function revisionEvent(eventId: string, revision: number) {
+    return {
+      event_id: eventId,
+      event_type: revision === 4 ? 'vip.purchased' : 'vip.extended',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'tier_1',
+      purchase_id: `purchase-revision-${revision}`,
+      expires_at: `2030-0${revision}-02T03:04:05.000Z`,
+      revision,
+    };
+  }
+
+  it('lets revision 5 supersede an already accepted revision 4', async () => {
+    const fourth = await postLifecycle(revisionEvent('vip-order-4', 4));
+    const fifth = await postLifecycle(revisionEvent('vip-order-5', 5));
+
+    expect(fourth.statusCode).toBe(202);
+    expect(fifth.statusCode).toBe(202);
+    expect(fifth.json()).toMatchObject({ action: 'assigned' });
+    expect(
+      (
+        await h.db
+          .select({ marker: players.roleLifecycleEventId, expiresAt: players.roleExpiresAt })
+          .from(players)
+          .where(eq(players.id, playerId))
+      )[0],
+    ).toEqual({ marker: 'vip-order-5', expiresAt: new Date('2030-05-02T03:04:05.000Z') });
+    expect(
+      (
+        await h.db
+          .select({
+            action: vipLifecycleEvents.action,
+            supersededBy: vipLifecycleEvents.supersededByEventId,
+          })
+          .from(vipLifecycleEvents)
+          .where(eq(vipLifecycleEvents.eventId, 'vip-order-4'))
+      )[0],
+    ).toEqual({ action: 'assigned', supersededBy: 'vip-order-5' });
+  });
+
+  it('records a late revision 4 as superseded without mutating revision 5', async () => {
+    const fifthFirst = await postLifecycle(revisionEvent('vip-reverse-5', 5));
+    const countsAfterWinner = await mutationCounts('vip-reverse-5');
+    await h.db.update(players).set({ eosId: null }).where(eq(players.id, playerId));
+    await h.db.update(servers).set({ deletedAt: new Date() }).where(eq(servers.id, serverId));
+    const fourthLate = await postLifecycle(revisionEvent('vip-reverse-4', 4));
+
+    expect(fifthFirst.statusCode).toBe(202);
+    expect(fourthLate.statusCode).toBe(202);
+    expect(fourthLate.json()).toMatchObject({ action: 'superseded', enqueued: 0 });
+    expect(
+      (
+        await h.db
+          .select({ marker: players.roleLifecycleEventId, expiresAt: players.roleExpiresAt })
+          .from(players)
+          .where(eq(players.id, playerId))
+      )[0],
+    ).toEqual({ marker: 'vip-reverse-5', expiresAt: new Date('2030-05-02T03:04:05.000Z') });
+    expect(await mutationCounts('vip-reverse-5')).toEqual({
+      ...countsAfterWinner,
+      events: countsAfterWinner.events,
+    });
+    expect(
+      (
+        await h.db
+          .select({
+            action: vipLifecycleEvents.action,
+            supersededBy: vipLifecycleEvents.supersededByEventId,
+          })
+          .from(vipLifecycleEvents)
+          .where(eq(vipLifecycleEvents.eventId, 'vip-reverse-4'))
+      )[0],
+    ).toEqual({ action: 'superseded', supersededBy: 'vip-reverse-5' });
+  });
+
+  it.each([
+    ['missing expiry', {}, 'expires_at_required'],
+    ['past expiry', { expires_at: '2020-01-01T00:00:00.000Z' }, 'role_expiry_must_be_future'],
+  ])(
+    'rejects a lower malformed activation with %s before revision handling',
+    async (_case, extra, error) => {
+      expect((await postLifecycle(revisionEvent('vip-malformed-winner-5', 5))).statusCode).toBe(
+        202,
+      );
+      const countsBefore = await mutationCounts('vip-malformed-loser-4');
+
+      const malformed = await postLifecycle({
+        event_id: 'vip-malformed-loser-4',
+        event_type: 'vip.purchased',
+        player_id: playerId,
+        role_id: roleId,
+        tier: 'tier_1',
+        purchase_id: 'purchase-malformed-4',
+        revision: 4,
+        ...extra,
+      });
+
+      expect(malformed.statusCode).toBe(400);
+      expect(malformed.json()).toEqual({
+        error,
+        error_code: error,
+      });
+      expect(await mutationCounts('vip-malformed-loser-4')).toEqual(countsBefore);
+    },
+  );
+
+  it('serializes concurrent revisions and leaves the larger revision as the only projection', async () => {
+    const makeEvent = (revision: number) => ({
+      event_id: `vip-concurrent-${revision}`,
+      event_type: revision === 4 ? 'vip.purchased' : 'vip.extended',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'tier_1',
+      purchase_id: `purchase-concurrent-${revision}`,
+      expires_at: `2030-0${revision}-02T03:04:05.000Z`,
+      revision,
+    });
+
+    const responses = await Promise.all([postLifecycle(makeEvent(4)), postLifecycle(makeEvent(5))]);
+
+    expect(responses.map((response) => response.statusCode)).toEqual([202, 202]);
+    const [projection] = await h.db
+      .select({ marker: players.roleLifecycleEventId, expiresAt: players.roleExpiresAt })
+      .from(players)
+      .where(eq(players.id, playerId));
+    expect(projection).toEqual({
+      marker: 'vip-concurrent-5',
+      expiresAt: new Date('2030-05-02T03:04:05.000Z'),
+    });
+    const events = await h.db
+      .select({
+        eventId: vipLifecycleEvents.eventId,
+        action: vipLifecycleEvents.action,
+        supersededBy: vipLifecycleEvents.supersededByEventId,
+      })
+      .from(vipLifecycleEvents)
+      .where(eq(vipLifecycleEvents.playerId, playerId));
+    expect(events).toHaveLength(2);
+    expect(events.find((event) => event.eventId === 'vip-concurrent-4')).toMatchObject({
+      supersededBy: 'vip-concurrent-5',
+    });
+    expect(events.find((event) => event.eventId === 'vip-concurrent-5')).toEqual({
+      eventId: 'vip-concurrent-5',
+      action: 'assigned',
+      supersededBy: null,
+    });
+    const counts = await mutationCounts('vip-concurrent-5');
+    expect(counts.audits).toBeGreaterThanOrEqual(1);
+    expect(counts.audits).toBeLessThanOrEqual(2);
+    expect(counts.outbox).toBe(counts.audits);
+  });
+
+  it('rejects legacy delivery after revisioned history exists', async () => {
+    const revisioned = {
+      event_id: 'vip-revisioned-history',
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'tier_1',
+      purchase_id: 'purchase-revisioned-history',
+      expires_at: '2030-01-02T03:04:05.000Z',
+      revision: 1,
+    };
+    expect((await postLifecycle(revisioned)).statusCode).toBe(202);
+
+    const { revision: _revision, ...legacyBody } = revisioned;
+    const legacy = await postLifecycle({
+      ...legacyBody,
+      event_id: 'vip-legacy-after-revision',
+      expires_at: '2030-02-02T03:04:05.000Z',
+    });
+
+    expect(legacy.statusCode).toBe(409);
+    expect(legacy.json()).toEqual({
+      error: 'revision_required',
+      error_code: 'revision_required',
+    });
+  });
+
+  it.each(['vip.refunded', 'vip.expired'])(
+    'uses future expires_at on %s as desired state and lets the same purchase revoke after expiry',
+    async (eventType) => {
+      const suffix = eventType.slice('vip.'.length);
+      const compensation = {
+        event_id: `vip-${suffix}-compensation`,
+        event_type: eventType,
+        player_id: playerId,
+        role_id: roleId,
+        tier: 'tier_1',
+        purchase_id: `purchase-${suffix}-compensation`,
+        expires_at: '2030-06-02T03:04:05.000Z',
+        revision: 1,
+      };
+
+      const restored = await postLifecycle(compensation);
+
+      expect(restored.statusCode).toBe(202);
+      expect(restored.json()).toMatchObject({ action: 'assigned' });
+      expect(
+        (
+          await h.db
+            .select({ marker: players.roleLifecycleEventId, expiresAt: players.roleExpiresAt })
+            .from(players)
+            .where(eq(players.id, playerId))
+        )[0],
+      ).toEqual({
+        marker: compensation.event_id,
+        expiresAt: new Date(compensation.expires_at),
+      });
+
+      const revoked = await postLifecycle({
+        ...compensation,
+        event_id: `vip-${suffix}-expired`,
+        expires_at: '2020-06-02T03:04:05.000Z',
+        revision: 2,
+      });
+
+      expect(revoked.statusCode).toBe(202);
+      expect(revoked.json()).toMatchObject({ action: 'revoked' });
+      expect(
+        (
+          await h.db
+            .select({ roleId: players.roleId, marker: players.roleLifecycleEventId })
+            .from(players)
+            .where(eq(players.id, playerId))
+        )[0],
+      ).toEqual({ roleId: null, marker: null });
+    },
+  );
 
   it('accepts signed preflight by stable external tier label without matching the editable tier name', async () => {
     const payload = {
@@ -322,6 +750,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
       tier: 'tier_1',
       purchase_id: 'external-purchase-1',
       expires_at: '2030-01-02T03:04:05.000Z',
+      revision: 4,
     };
     expect((await postLifecycle(purchase)).statusCode).toBe(202);
 
@@ -344,6 +773,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
       event_type: 'vip.extended',
       purchase_id: 'external-purchase-2',
       expires_at: '2030-02-02T03:04:05.000Z',
+      revision: 5,
     });
     expect(extension.statusCode).toBe(202);
     expect(extension.json()).toMatchObject({ action: 'assigned' });
@@ -352,6 +782,8 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
       ...purchase,
       event_id: 'vip-owner-stale-refund',
       event_type: 'vip.refunded',
+      expires_at: '2020-01-02T03:04:05.000Z',
+      revision: 6,
     });
     expect(staleRefund.statusCode).toBe(409);
     expect(staleRefund.json()).toEqual({
@@ -375,6 +807,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
       event_type: 'vip.extended',
       purchase_id: 'external-purchase-3',
       expires_at: '2030-03-02T03:04:05.000Z',
+      revision: 7,
     });
     expect(afterManualOverride.statusCode).toBe(409);
     expect(afterManualOverride.json()).toEqual({

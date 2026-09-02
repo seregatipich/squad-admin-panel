@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { findVipLifecycleOwner, type VipGrantExecutor, vipLifecycleRoleComment } from '@squad/db';
 import {
   auditLog,
@@ -8,14 +9,14 @@ import {
   vipSubscriptions,
   vipTiers,
 } from '@squad/db/schema';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, ne } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishAdminsCfgSyncForAllServers } from '../lib/admins-cfg-sync.js';
 import { invalidatePermissionCache } from '../lib/rbac.js';
 import { revokeAllForPlayer } from '../lib/sessions.js';
-import { verifyVipLifecycleSignature } from '../lib/vip-lifecycle-signature.js';
+import { canonicalJson, verifyVipLifecycleSignature } from '../lib/vip-lifecycle-signature.js';
 
 const vipLifecycleEventTypeSchema = z.enum([
   'vip.purchased',
@@ -60,7 +61,7 @@ const vipPreflightBody = z.object({
 });
 
 type VipLifecycleBody = z.infer<typeof vipLifecycleBody>;
-type VipLifecycleAction = 'assigned' | 'revoked' | 'ignored';
+type VipLifecycleAction = 'assigned' | 'revoked' | 'ignored' | 'superseded';
 
 function isAssignEvent(eventType: VipLifecycleBody['event_type']): boolean {
   return eventType === 'vip.purchased' || eventType === 'vip.extended';
@@ -85,36 +86,38 @@ type VipTargetInput = {
   purchase_id?: string | null;
 };
 
+type VipTargetPlayer = {
+  id: string;
+  steamId64: bigint | null;
+  eosId: string | null;
+  roleId: string | null;
+  roleExpiresAt: Date | null;
+  roleComment: string | null;
+  roleLifecycleEventId: string | null;
+};
+
 type VipTargetResult =
   | { error: VipTargetError }
   | {
-      player: {
-        id: string;
-        steamId64: bigint | null;
-        eosId: string | null;
-        roleId: string | null;
-        roleExpiresAt: Date | null;
-        roleComment: string | null;
-        roleLifecycleEventId: string | null;
-      };
+      player: VipTargetPlayer;
       rolePanelAccess: boolean;
       projectionOwner: 'bss-store' | null;
       expiresAt: Date | null;
     };
 
-export async function checkVipLifecycleTarget(
+async function selectVipLifecyclePlayer(
   tx: VipGrantExecutor,
-  input: VipTargetInput,
-  options: { lockPlayer: boolean },
-): Promise<VipTargetResult> {
+  input: Pick<VipTargetInput, 'player_id' | 'steam_id64'>,
+  lockPlayer: boolean,
+): Promise<VipTargetPlayer | null> {
   const condition = input.player_id
     ? eq(players.id, input.player_id)
     : input.steam_id64
       ? eq(players.steamId64, BigInt(input.steam_id64))
       : null;
-  if (!condition) return { error: 'player_not_found' };
+  if (!condition) return null;
 
-  const playerQuery = tx
+  const query = tx
     .select({
       id: players.id,
       steamId64: players.steamId64,
@@ -127,7 +130,16 @@ export async function checkVipLifecycleTarget(
     .from(players)
     .where(condition)
     .limit(1);
-  const [player] = options.lockPlayer ? await playerQuery.for('update') : await playerQuery;
+  const [player] = lockPlayer ? await query.for('update') : await query;
+  return player ?? null;
+}
+
+export async function checkVipLifecycleTarget(
+  tx: VipGrantExecutor,
+  input: VipTargetInput,
+  options: { lockPlayer: boolean; player?: VipTargetPlayer },
+): Promise<VipTargetResult> {
+  const player = options.player ?? (await selectVipLifecyclePlayer(tx, input, options.lockPlayer));
   if (!player) return { error: 'player_not_found' };
   if (!player.eosId?.trim()) return { error: 'player_eos_missing' };
 
@@ -168,10 +180,30 @@ export async function checkVipLifecycleTarget(
   };
 }
 
-function targetErrorStatus(error: VipTargetError | 'no_target_servers'): number {
+type VipLifecycleError =
+  | VipTargetError
+  | 'event_body_conflict'
+  | 'expires_at_required'
+  | 'no_target_servers'
+  | 'revision_conflict'
+  | 'revision_required'
+  | 'role_expiry_must_be_future';
+
+function targetErrorStatus(error: VipLifecycleError): number {
   if (error === 'player_not_found') return 404;
   if (error === 'role_not_vip') return 403;
+  if (error === 'expires_at_required' || error === 'role_expiry_must_be_future') return 400;
   return 409;
+}
+
+function uniqueViolationConstraint(error: unknown): string | null {
+  let current: unknown = error;
+  for (let depth = 0; current && depth < 6; depth += 1) {
+    const candidate = current as { code?: string; constraint_name?: string; cause?: unknown };
+    if (candidate.code === '23505') return candidate.constraint_name ?? '';
+    current = candidate.cause;
+  }
+  return null;
 }
 
 const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
@@ -244,144 +276,229 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
         reply.code(400);
         return { error: 'revision_required' };
       }
-      const shouldAssign = isAssignEvent(body.event_type);
-      const expiresAt = body.expires_at ? new Date(body.expires_at) : null;
-      if (shouldAssign && !expiresAt) {
-        reply.code(400);
-        return { error: 'expires_at_required' };
-      }
-      if (shouldAssign && expiresAt && expiresAt <= new Date()) {
-        reply.code(400);
-        return { error: 'role_expiry_must_be_future' };
-      }
-
       const now = new Date();
-      const result = await app.db.transaction(async (tx) => {
-        const targetInput: VipTargetInput = {
-          player_id: body.player_id,
-          steam_id64: body.steam_id64,
-          role_id: body.role_id,
-          ...(shouldAssign ? {} : { purchase_id: body.purchase_id ?? null }),
-        };
-        const target = await checkVipLifecycleTarget(tx, targetInput, { lockPlayer: true });
-        if ('error' in target) return target;
-        const player = target.player;
+      const expiresAt = body.expires_at ? new Date(body.expires_at) : null;
+      const assignEvent = isAssignEvent(body.event_type);
+      const shouldAssign = assignEvent || (expiresAt !== null && expiresAt > now);
 
-        const serverRows = await tx
-          .select({ id: servers.id })
-          .from(servers)
-          .where(isNull(servers.deletedAt));
-        if (serverRows.length === 0) return { error: 'no_target_servers' as const };
-        const serverIds = serverRows.map((server) => server.id);
+      const requestHash = createHash('sha256').update(canonicalJson(body)).digest('hex');
+      const result = await app.db
+        .transaction(async (tx) => {
+          const player = await selectVipLifecyclePlayer(tx, body, true);
+          if (!player) return { error: 'player_not_found' as const };
 
-        const action: VipLifecycleAction = shouldAssign
-          ? 'assigned'
-          : player.roleId === body.role_id
-            ? 'revoked'
-            : 'ignored';
+          const [existingEvent] = await tx
+            .select({
+              payload: vipLifecycleEvents.payload,
+              requestHash: vipLifecycleEvents.requestHash,
+            })
+            .from(vipLifecycleEvents)
+            .where(eq(vipLifecycleEvents.eventId, body.event_id))
+            .limit(1);
+          if (existingEvent) {
+            const existingHash =
+              existingEvent.requestHash ??
+              createHash('sha256').update(canonicalJson(existingEvent.payload)).digest('hex');
+            return existingHash === requestHash
+              ? { duplicate: true as const }
+              : { error: 'event_body_conflict' as const };
+          }
 
-        const inserted = await tx
-          .insert(vipLifecycleEvents)
-          .values({
+          if (assignEvent) {
+            if (!expiresAt) return { error: 'expires_at_required' as const };
+            if (expiresAt <= now) return { error: 'role_expiry_must_be_future' as const };
+          }
+
+          const [currentRevision] = await tx
+            .select({
+              eventId: vipLifecycleEvents.eventId,
+              revision: vipLifecycleEvents.revision,
+            })
+            .from(vipLifecycleEvents)
+            .where(
+              and(
+                eq(vipLifecycleEvents.playerId, player.id),
+                isNotNull(vipLifecycleEvents.revision),
+              ),
+            )
+            .orderBy(desc(vipLifecycleEvents.revision))
+            .limit(1);
+          if (currentRevision) {
+            if (body.revision === undefined) return { error: 'revision_required' as const };
+            if (body.revision === currentRevision.revision) {
+              return { error: 'revision_conflict' as const };
+            }
+            if (body.revision < (currentRevision.revision ?? 0)) {
+              await tx.insert(vipLifecycleEvents).values({
+                eventId: body.event_id,
+                eventType: body.event_type,
+                playerId: player.id,
+                roleId: body.role_id,
+                tier: body.tier ?? null,
+                purchaseId: body.purchase_id ?? null,
+                revision: body.revision,
+                requestHash,
+                supersededByEventId: currentRevision.eventId,
+                action: 'superseded',
+                payload: body,
+                receivedAt: now,
+              });
+              return {
+                duplicate: false as const,
+                action: 'superseded' as const,
+                enqueued: 0,
+                rolePanelAccess: false,
+                playerId: player.id,
+              };
+            }
+          }
+
+          const targetInput: VipTargetInput = {
+            player_id: body.player_id,
+            steam_id64: body.steam_id64,
+            role_id: body.role_id,
+            ...(shouldAssign ? {} : { purchase_id: body.purchase_id ?? null }),
+          };
+          const target = await checkVipLifecycleTarget(tx, targetInput, {
+            lockPlayer: false,
+            player,
+          });
+          if ('error' in target) return target;
+
+          const serverRows = await tx
+            .select({ id: servers.id })
+            .from(servers)
+            .where(isNull(servers.deletedAt));
+          if (serverRows.length === 0) return { error: 'no_target_servers' as const };
+          const serverIds = serverRows.map((server) => server.id);
+
+          const action: VipLifecycleAction = shouldAssign
+            ? 'assigned'
+            : player.roleId === body.role_id
+              ? 'revoked'
+              : 'ignored';
+
+          await tx.insert(vipLifecycleEvents).values({
             eventId: body.event_id,
             eventType: body.event_type,
             playerId: player.id,
             roleId: body.role_id,
             tier: body.tier ?? null,
             purchaseId: body.purchase_id ?? null,
+            revision: body.revision ?? null,
+            requestHash,
             action,
             payload: body,
             receivedAt: now,
             appliedAt: now,
-          })
-          .onConflictDoNothing()
-          .returning({ eventId: vipLifecycleEvents.eventId });
-        if (inserted.length === 0) {
-          return { duplicate: true as const, action };
-        }
+          });
 
-        if (action === 'assigned') {
-          await tx
-            .update(players)
-            .set({
-              roleId: body.role_id,
-              roleExpiresAt: expiresAt,
-              roleComment: vipLifecycleRoleComment(body.tier ?? null, body.purchase_id ?? null),
-              roleLifecycleEventId: body.event_id,
-              updatedAt: now,
-            })
-            .where(eq(players.id, player.id));
-        } else if (action === 'revoked') {
-          await tx
-            .update(players)
-            .set({
-              roleId: null,
-              roleExpiresAt: null,
-              roleComment: null,
-              roleLifecycleEventId: null,
-              updatedAt: now,
-            })
-            .where(eq(players.id, player.id));
-        }
-
-        const syncResult =
-          action === 'ignored'
-            ? { enqueued: 0 }
-            : await publishAdminsCfgSyncForAllServers(
-                tx,
-                app.redis,
-                {
-                  reason: `vip.lifecycle.${action}`,
-                  actor_player_id: null,
-                  enqueued_at: now.toISOString(),
-                  request_id: req.id,
-                },
-                serverIds,
+          if (body.revision !== undefined) {
+            await tx
+              .update(vipLifecycleEvents)
+              .set({ supersededByEventId: body.event_id })
+              .where(
+                and(
+                  eq(vipLifecycleEvents.playerId, player.id),
+                  isNotNull(vipLifecycleEvents.revision),
+                  isNull(vipLifecycleEvents.supersededByEventId),
+                  ne(vipLifecycleEvents.eventId, body.event_id),
+                ),
               );
+          }
 
-        await tx.insert(auditLog).values({
-          actorKind: 'system',
-          actorSystemLabel: 'vip-user-service',
-          actorIp: req.ip ?? null,
-          actionType: 'vip.lifecycle.apply',
-          targetType: 'player',
-          targetId: player.id,
-          beforeSnapshot: {
-            role_id: player.roleId,
-          },
-          afterSnapshot:
-            action === 'assigned'
-              ? {
-                  role_id: body.role_id,
-                  role_expires_at: expiresAt?.toISOString() ?? null,
-                  role_comment: vipLifecycleRoleComment(
-                    body.tier ?? null,
-                    body.purchase_id ?? null,
-                  ),
-                }
-              : action === 'revoked'
-                ? { role_id: null, role_expires_at: null, role_comment: null }
-                : { role_id: player.roleId },
-          context: {
-            event_id: body.event_id,
-            event_type: body.event_type,
-            purchase_id: body.purchase_id ?? null,
-            tier: body.tier ?? null,
-            request_id: req.id,
+          if (action === 'assigned') {
+            await tx
+              .update(players)
+              .set({
+                roleId: body.role_id,
+                roleExpiresAt: expiresAt,
+                roleComment: vipLifecycleRoleComment(body.tier ?? null, body.purchase_id ?? null),
+                roleLifecycleEventId: body.event_id,
+                updatedAt: now,
+              })
+              .where(eq(players.id, player.id));
+          } else if (action === 'revoked') {
+            await tx
+              .update(players)
+              .set({
+                roleId: null,
+                roleExpiresAt: null,
+                roleComment: null,
+                roleLifecycleEventId: null,
+                updatedAt: now,
+              })
+              .where(eq(players.id, player.id));
+          }
+
+          const syncResult =
+            action === 'ignored'
+              ? { enqueued: 0 }
+              : await publishAdminsCfgSyncForAllServers(
+                  tx,
+                  app.redis,
+                  {
+                    reason: `vip.lifecycle.${action}`,
+                    actor_player_id: null,
+                    enqueued_at: now.toISOString(),
+                    request_id: req.id,
+                  },
+                  serverIds,
+                );
+
+          await tx.insert(auditLog).values({
+            actorKind: 'system',
+            actorSystemLabel: 'vip-user-service',
+            actorIp: req.ip ?? null,
+            actionType: 'vip.lifecycle.apply',
+            targetType: 'player',
+            targetId: player.id,
+            beforeSnapshot: {
+              role_id: player.roleId,
+            },
+            afterSnapshot:
+              action === 'assigned'
+                ? {
+                    role_id: body.role_id,
+                    role_expires_at: expiresAt?.toISOString() ?? null,
+                    role_comment: vipLifecycleRoleComment(
+                      body.tier ?? null,
+                      body.purchase_id ?? null,
+                    ),
+                  }
+                : action === 'revoked'
+                  ? { role_id: null, role_expires_at: null, role_comment: null }
+                  : { role_id: player.roleId },
+            context: {
+              event_id: body.event_id,
+              event_type: body.event_type,
+              purchase_id: body.purchase_id ?? null,
+              tier: body.tier ?? null,
+              request_id: req.id,
+              action,
+            },
+            statusCode: 202,
+            rowHash: Buffer.from([]),
+          });
+
+          return {
+            duplicate: false as const,
             action,
-          },
-          statusCode: 202,
-          rowHash: Buffer.from([]),
+            enqueued: syncResult.enqueued,
+            rolePanelAccess: target.rolePanelAccess,
+            playerId: player.id,
+          };
+        })
+        .catch((error): { error: 'event_body_conflict' | 'revision_conflict' } => {
+          const constraint = uniqueViolationConstraint(error);
+          if (constraint === 'vip_lifecycle_events_pkey') {
+            return { error: 'event_body_conflict' };
+          }
+          if (constraint === 'vip_lifecycle_events_player_revision_key') {
+            return { error: 'revision_conflict' };
+          }
+          throw error;
         });
-
-        return {
-          duplicate: false as const,
-          action,
-          enqueued: syncResult.enqueued,
-          rolePanelAccess: target.rolePanelAccess,
-          playerId: player.id,
-        };
-      });
 
       if ('error' in result && result.error) {
         reply.code(targetErrorStatus(result.error));
@@ -393,7 +510,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
         return { ok: true, duplicate: true };
       }
 
-      invalidatePermissionCache(result.playerId);
+      if (result.action !== 'superseded') invalidatePermissionCache(result.playerId);
       if (
         result.action === 'revoked' ||
         (result.action === 'assigned' && !result.rolePanelAccess)

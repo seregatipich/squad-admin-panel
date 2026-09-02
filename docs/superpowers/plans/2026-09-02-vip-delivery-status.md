@@ -188,7 +188,7 @@ git commit -m "fix(api): serialize VIP role ownership"
 - Produces: nullable `revision`, `requestHash`, `supersededByEventId` и action `superseded`.
 - Produces: partial unique `vip_lifecycle_events_player_revision_key (player_id, revision)`.
 
-- [ ] **Шаг 1: Написать RED-тесты идемпотентности, гонок и перестановок**
+- [x] **Шаг 1: Написать RED-тесты идемпотентности, гонок и перестановок**
 
 Покрыть: одинаковый event/body; одинаковый event с изменённым expiry/tier;
 разные events с одной revision; конкурентные revisions одного игрока; порядки
@@ -196,14 +196,14 @@ git commit -m "fix(api): serialize VIP role ownership"
 Проверять HTTP body, одну итоговую роль/expiry, число аудитов/outbox и status
 проигравшего события `superseded`.
 
-- [ ] **Шаг 2: Подтвердить RED**
+- [x] **Шаг 2: Подтвердить RED**
 
 Run: `pnpm --filter @squad/api exec vitest run test/integration/vip-lifecycle.test.ts`
 
 Expected: повтор с изменённым телом ошибочно считается duplicate, ограничения
 revision и `superseded` отсутствуют.
 
-- [ ] **Шаг 3: Добавить совместимую миграцию и schema**
+- [x] **Шаг 3: Добавить совместимую миграцию и schema**
 
 `0108_vip_delivery_status.sql` добавляет nullable `revision integer`,
 `request_hash text`, `superseded_by_event_id text` и расширяет action CHECK
@@ -218,15 +218,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS vip_lifecycle_events_player_revision_key
 `superseded_by_event_id` ссылается на `vip_lifecycle_events(event_id)` через
 nullable FK. Старые строки остаются валидными без backfill.
 
-- [ ] **Шаг 4: Зафиксировать точную идемпотентность**
+- [x] **Шаг 4: Зафиксировать точную идемпотентность**
 
 Вычислять `request_hash = sha256(canonicalJson(validatedBody))`. После получения
 player lock повторно читать `event_id`: совпавший hash возвращает duplicate,
-отличный — `409 { error: 'event_id_conflict', event_id }`. Ошибку unique index
-`player+revision` переводить в
-`409 { error: 'revision_conflict', revision }`, не в 500.
+отличный — безопасный
+`409 { error: 'event_body_conflict', error_code: 'event_body_conflict' }` без
+эха идентификаторов. Ошибку unique index `player+revision` переводить в
+`409 { error: 'revision_conflict', error_code: 'revision_conflict' }`, не в 500.
+Для нового события семантику обязательного/будущего `expires_at` проверять после
+exact duplicate, но до revision conflict/superseded.
 
-- [ ] **Шаг 5: Применить глобальную revision игрока**
+- [x] **Шаг 5: Применить глобальную revision игрока**
 
 Под player lock выбрать максимальную ненулевую revision игрока. Меньшую
 incoming revision записать с `action=superseded` и ссылкой на победителя без
@@ -237,7 +240,7 @@ incoming revision записать с `action=superseded` и ссылкой на
 первой revision старое тело получает `409 { error: 'revision_required' }` и не
 может переиграть новую цепочку.
 
-- [ ] **Шаг 6: Подтвердить GREEN и миграцию**
+- [x] **Шаг 6: Подтвердить GREEN и миграцию**
 
 Run:
 
@@ -536,6 +539,12 @@ Expected: нулевой код всех команд; тяжёлый набор
 достижим из `dev`.
 
 - [ ] **Шаг 6: Выпустить в совместимом порядке**
+
+До выпуска устранить обязательный release-блокер: API-сервис в
+`compose.tk104.yml` должен явно получать `VIP_LIFECYCLE_WEBHOOK_SECRET` и
+`VIP_LIFECYCLE_REQUIRE_REVISION`; иначе production lifecycle endpoint отвечает
+503, несмотря на поддержку переменных в config и `.env.example`. Проверить
+отрендеренный compose без вывода значений секретов.
 
 Сначала panel API/workers с `VIP_LIFECYCLE_REQUIRE_REVISION=false`; затем сайт с
 revision, свежим совместимым ISO timestamp, обработкой 409 и status polling. После отсутствия

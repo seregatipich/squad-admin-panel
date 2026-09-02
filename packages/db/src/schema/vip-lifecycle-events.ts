@@ -1,5 +1,16 @@
 import { sql } from 'drizzle-orm';
-import { check, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  type AnyPgColumn,
+  check,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { players } from './players.js';
 import { roles } from './roles.js';
 
@@ -12,6 +23,12 @@ export const vipLifecycleEvents = pgTable(
     roleId: uuid('role_id').references(() => roles.id, { onDelete: 'set null' }),
     tier: text('tier'),
     purchaseId: text('purchase_id'),
+    revision: integer('revision'),
+    requestHash: text('request_hash'),
+    supersededByEventId: text('superseded_by_event_id').references(
+      (): AnyPgColumn => vipLifecycleEvents.eventId,
+      { onDelete: 'set null' },
+    ),
     action: text('action').notNull(),
     payload: jsonb('payload').notNull().default({}),
     receivedAt: timestamp('received_at', { withTimezone: true, mode: 'date' })
@@ -24,13 +41,16 @@ export const vipLifecycleEvents = pgTable(
     purchaseIdx: index('vip_lifecycle_events_purchase_idx')
       .on(table.purchaseId)
       .where(sql`purchase_id IS NOT NULL`),
+    playerRevisionKey: uniqueIndex('vip_lifecycle_events_player_revision_key')
+      .on(table.playerId, table.revision)
+      .where(sql`revision IS NOT NULL`),
     typeCheck: check(
       'vip_lifecycle_events_event_type_chk',
       sql`event_type IN ('vip.purchased','vip.extended','vip.expired','vip.refunded')`,
     ),
     actionCheck: check(
       'vip_lifecycle_events_action_chk',
-      sql`action IN ('assigned','revoked','ignored')`,
+      sql`action IN ('assigned','revoked','ignored','superseded')`,
     ),
   }),
 );
