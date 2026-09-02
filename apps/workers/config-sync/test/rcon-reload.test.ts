@@ -1,6 +1,6 @@
-import { rconCommandStream } from '@squad/shared-types';
+import { rconCommandResultKey, rconCommandStream } from '@squad/shared-types';
 import { describe, expect, it, vi } from 'vitest';
-import { requestAdminsCfgReload } from '../src/rcon-reload.js';
+import { confirmAdminsCfgReload, requestAdminsCfgReload } from '../src/rcon-reload.js';
 
 const SERVER_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 
@@ -90,5 +90,99 @@ describe('requestAdminsCfgReload', () => {
     expect(outcome).toBe('failed');
     expect(redis.xadd).toHaveBeenCalledOnce();
     expect(log.warn).toHaveBeenCalledOnce();
+  });
+});
+
+describe('confirmAdminsCfgReload', () => {
+  const OUTBOX_ID = '019d0000-0000-7000-8000-000000000123';
+  const REQUEST_ID = `admins-cfg-sync:${OUTBOX_ID}`;
+
+  function result(overrides: Record<string, unknown> = {}) {
+    return JSON.stringify({
+      ok: true,
+      server_id: SERVER_ID,
+      request_id: REQUEST_ID,
+      command: 'AdminReloadServerConfig',
+      response: 'Configuration reloaded',
+      completed_at: '2026-09-03T10:00:00.000Z',
+      duration_ms: 12,
+      ...overrides,
+    });
+  }
+
+  function redisWithResults(...values: Array<string | null>) {
+    return {
+      get: vi.fn().mockImplementation(() => Promise.resolve(values.shift() ?? null)),
+      xadd: vi.fn().mockResolvedValue('1-0'),
+    };
+  }
+
+  it('uses a deterministic request id and accepts only the exact valid result', async () => {
+    const redis = redisWithResults(null, result());
+
+    await expect(
+      confirmAdminsCfgReload(redis as never, SERVER_ID, OUTBOX_ID, makeLogger(), {
+        timeoutMs: 20,
+        pollIntervalMs: 1,
+      }),
+    ).resolves.toBe('confirmed');
+
+    expect(redis.get).toHaveBeenCalledWith(rconCommandResultKey(REQUEST_ID));
+    const args = redis.xadd.mock.calls[0] as string[];
+    expect(args[0]).toBe(rconCommandStream(SERVER_ID));
+    const request = JSON.parse(args[6] as string) as { request_id: string };
+    expect(request.request_id).toBe(REQUEST_ID);
+  });
+
+  it.each([
+    ['request id', { request_id: 'another-request' }],
+    ['server id', { server_id: 'ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb' }],
+    ['command', { command: 'AdminEndMatch' }],
+    ['schema', { duration_ms: -1 }],
+  ])('rejects a mismatched %s result', async (_label, overrides) => {
+    const redis = redisWithResults(null, result(overrides));
+    await expect(
+      confirmAdminsCfgReload(redis as never, SERVER_ID, OUTBOX_ID, makeLogger(), {
+        timeoutMs: 20,
+        pollIntervalMs: 1,
+      }),
+    ).resolves.toBe('invalid_result');
+  });
+
+  it('maps ok=false to rejected without exposing the raw error', async () => {
+    const redis = redisWithResults(null, result({ ok: false, error: 'secret output' }));
+    await expect(
+      confirmAdminsCfgReload(redis as never, SERVER_ID, OUTBOX_ID, makeLogger(), {
+        timeoutMs: 20,
+        pollIntervalMs: 1,
+      }),
+    ).resolves.toBe('rejected');
+  });
+
+  it('returns timeout while keeping the deterministic command retryable', async () => {
+    const redis = redisWithResults(null, null, null, null);
+    await expect(
+      confirmAdminsCfgReload(redis as never, SERVER_ID, OUTBOX_ID, makeLogger(), {
+        timeoutMs: 2,
+        pollIntervalMs: 1,
+      }),
+    ).resolves.toBe('timeout');
+    expect(redis.xadd).toHaveBeenCalledOnce();
+  });
+
+  it('reuses an existing exact result without enqueuing another command', async () => {
+    const redis = redisWithResults(result());
+    await expect(
+      confirmAdminsCfgReload(redis as never, SERVER_ID, OUTBOX_ID, makeLogger()),
+    ).resolves.toBe('confirmed');
+    expect(redis.xadd).not.toHaveBeenCalled();
+  });
+
+  it('maps enqueue failure to unavailable', async () => {
+    const redis = redisWithResults(null);
+    redis.xadd.mockRejectedValueOnce(new Error('redis unavailable'));
+    await expect(
+      confirmAdminsCfgReload(redis as never, SERVER_ID, OUTBOX_ID, makeLogger()),
+    ).resolves.toBe('unavailable');
   });
 });

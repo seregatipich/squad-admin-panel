@@ -2,7 +2,11 @@
 
 ## Purpose
 
-Synthesizes the **managed segment of `Admins.cfg`** on every controlled Squad server from the panel's role/player database, pushes it atomically through the host bridge, and detects drift if anyone edits the managed segment outside the panel. The worker is the single writer of the marker-fenced section between `//SQUAD-PANEL BEGIN` and `//SQUAD-PANEL END`; everything outside those markers is preserved verbatim. After every successful write it issues an RCON `AdminReloadServerConfig` (via worker-rcon) so permission changes take effect without a container restart.
+Worker строит управляемый сегмент `Admins.cfg` из БД и пишет его через bridge.
+Для каждой новой outbox-записи он устойчиво сохраняет результат по серверу:
+живой сервер требует точного подтверждения `AdminReloadServerConfig`, неживому
+достаточно готового файла. Старые сообщения без `_outbox_id` остаются
+совместимыми с прежним best-effort поведением.
 
 ## What it does NOT do
 
@@ -18,7 +22,8 @@ apps/workers/config-sync/
   src/
     index.ts        main loop: stream consumer + drift sweep
     syncer.ts       per-server reconcile (bridge round-trip, RCON reload, audit, status)
-    rcon-reload.ts  best-effort AdminReloadServerConfig enqueue onto worker-rcon
+    delivery.ts     outbox state, server-state checks, ACK/XDEL order
+    rcon-reload.ts  exact correlated and legacy best-effort RCON reload
     segment.ts      pure generator/parser/splicer for the managed segment
     db-snapshot.ts  read roles + players + role_squad_permissions for synth
     audit.ts        chained-hash audit_log append from the worker side
@@ -35,7 +40,7 @@ apps/workers/config-sync/
 - `@squad/db` + `drizzle-orm` — reads roles / role_squad_permissions / players.
 - `ioredis` — XREADGROUP consumer for `events:admins-cfg-sync:<server_id>` streams + status publishing + RCON reload enqueue.
 - `@squad/shared-config` — shared heartbeat / log-stream sink.
-- `@squad/shared-types` — `rconCommandRequestSchema` / `rconCommandStream` for the `AdminReloadServerConfig` enqueue.
+- `@squad/shared-types` — схемы запроса и результата `AdminReloadServerConfig`.
 - `uuid` — v7 `request_id` for the enqueued RCON command (byte-parity with sibling workers).
 
 ## Components that depend on it

@@ -193,6 +193,21 @@ describe('syncServerAdminsCfg', () => {
     expect(bridge.fileAtomicWrite).not.toHaveBeenCalled();
   });
 
+  it('actively writes a correlated delivery even when its durable reason says drift_check', async () => {
+    const bogusContent =
+      '//SQUAD-PANEL BEGIN — не редактировать вручную\r\nGroup=Old:kick\r\n//SQUAD-PANEL END';
+    const ctx = makeCtx({ content: bogusContent });
+    const result = await syncServerAdminsCfg(ctx, SERVER_ID, {
+      reason: 'drift_check',
+      actorPlayerId: null,
+      mode: 'active',
+    });
+    const bridge = ctx.bridge as ReturnType<typeof makeBridge>;
+
+    expect(result.state).toBe('wrote');
+    expect(bridge.fileAtomicWrite).toHaveBeenCalledOnce();
+  });
+
   it('writes on forceWrite=true even if hashes match', async () => {
     const err = new Error('no_such_file');
     (err as Error & { code: string }).code = 'no_such_file';
@@ -217,6 +232,22 @@ describe('syncServerAdminsCfg', () => {
   });
 
   describe('RCON AdminReloadServerConfig reload (SYNC-3 correction №1)', () => {
+    it('can defer reload to the correlated delivery confirmer', async () => {
+      const err = new Error('not_found') as Error & { code: string };
+      err.code = 'not_found';
+      const ctx = makeCtx(err);
+      const result = await syncServerAdminsCfg(ctx, SERVER_ID, {
+        reason: 'vip.lifecycle.assigned',
+        actorPlayerId: null,
+        requestReload: false,
+      });
+
+      expect(result.state).toBe('wrote');
+      expect(result.reload).toBeUndefined();
+      expect(reloadEnqueues(ctx)).toHaveLength(0);
+      expect(appendWorkerAuditMock.mock.calls.at(-1)?.[1].context).not.toHaveProperty('reload');
+    });
+
     it('enqueues exactly one reload after a not_found→write, returns wrote', async () => {
       const err = new Error('not_found') as Error & { code: string };
       err.code = 'not_found';

@@ -23,8 +23,16 @@ vi.mock('@squad/db', () => ({
   createDatabaseClient: vi.fn(() => ({
     select: selectMock,
   })),
+  getAdminsCfgSyncOutboxState: vi.fn(),
+  markAdminsCfgSyncApplied: vi.fn(),
+  markAdminsCfgSyncFailed: vi.fn(),
   relayAdminsCfgSyncOutbox: relayOutboxMock,
   servers: { id: 'id', deletedAt: 'deletedAt' },
+  vipLifecycleEvents: {
+    eventId: 'eventId',
+    action: 'action',
+    supersededByEventId: 'supersededByEventId',
+  },
 }));
 
 const redisMock = vi.hoisted(() => ({
@@ -41,6 +49,7 @@ vi.mock('ioredis', () => ({
     xreadgroup: redisMock.xreadgroup,
     xautoclaim: vi.fn().mockResolvedValue(['0-0', [], []]),
     xack: vi.fn().mockResolvedValue(1),
+    eval: vi.fn().mockResolvedValue([1, 1]),
   })),
 }));
 

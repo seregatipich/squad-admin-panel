@@ -1285,7 +1285,18 @@ Every outcome writes one `automation_runs` row and one `audit_log` row under `ac
 
 `clan-guard` enforces protected clan tags in two phases — `AdminWarn` plus a `moderation_actions` row, then a kick only after `gracePeriodSeconds` — with the warn lookup scoped `>= playerSessions.connectedAt` so the grace clock restarts each session, and a hard carve-out: a player whose role has `panelAccess` is **never kicked**, only re-warned. `role-expirer` clears up to 500 expired roles per tick, deletes the player's `sessions` rows plus `session:<id>` Redis keys and publishes `session.revoked` on the live bus so open tabs log out in ≤5 s; its VIP reminder tick fires the smallest crossed window from `economy_settings.vip_expiry_windows_days` and dedups via `ON CONFLICT DO NOTHING RETURNING` on `expiry_notifications`, so a renewal re-arms mechanically because `expires_at` is part of the key. `clan-priority-expirer` deliberately does **not** touch `clan_members.has_priority`, only `clans.priority_expiry_processed`, so extending a window restores priorities with no re-toggling.
 
-`config-sync` is the only consumer of the admins-cfg outbox; on a bridge `state: 'unreachable'` it deliberately **leaves the message unacked** (`index.ts:212-223`) with per-server backoff 5 s → 5 min. `event-partition` is a hand-written `pg_partman` replacement: monthly partitions on `events` (current + next, dropping beyond `EVENTS_RETENTION_MONTHS = 24`) and day partitions on `diagnostic_events` (−1…+2 days, 24 h retention), with the stale check relying on **lexicographic** name comparison that works only because names are zero-padded, and bounds computed in UTC on the documented assumption that production Postgres runs `TimeZone = 'UTC'`. `diag-flush` builds one multi-row parameterised INSERT with `ON CONFLICT (id, ts) DO NOTHING` and then a single `XACK` for all ids — insert-before-ack, so a crash mid-batch replays idempotently.
+`config-sync` — единственный consumer admins-cfg outbox. `delivery.ts` сначала
+сохраняет устойчивый итог в PostgreSQL; только затем Lua атомарно выполняет
+`XACK` и точный `XDEL`. Bridge/RCON ошибка остаётся unacked с безопасным кодом и
+попадает в reclaim; applied replay не трогает файл или RCON. `event-partition`
+is a hand-written `pg_partman` replacement: monthly partitions on `events`
+(current + next, dropping beyond `EVENTS_RETENTION_MONTHS = 24`) and day
+partitions on `diagnostic_events` (−1…+2 days, 24 h retention), with the stale
+check relying on **lexicographic** name comparison that works only because names
+are zero-padded, and bounds computed in UTC on the documented assumption that
+production Postgres runs `TimeZone = 'UTC'`. `diag-flush` builds one multi-row
+parameterised INSERT with `ON CONFLICT (id, ts) DO NOTHING` and then a single
+`XACK` for all ids — insert-before-ack, so a crash mid-batch replays idempotently.
 
 Two claims in the docs do not survive contact with the code: **the "cold archive of rows older than 90 days" does not exist** — `audit-archiver/src/index.ts:41-46` states verbatim that it defers the restic hash-chain export to Phase 1, and no archive table or retention query exists in `packages/db/src`. And the real backup is not the worker but a Compose service behind `profiles: ['backup']` running `pg_dump -Fc` + `redis-cli --rdb` on `0 3 * * *` with `--keep-daily 7 --keep-weekly 4 --keep-monthly 6`, guarded by a text-assertion regression test in `apps/workers/backup/test/compose-backup.test.ts`.
 
@@ -1805,7 +1816,7 @@ The intended fix is documented but unimplemented. `packages/db/sql/` holds ten i
 | `host:metrics` | Redis stream | `MAXLEN ~ 5760` (`metrics-pack.ts:13`) | metrics-sampler | silent eviction |
 | `container:metrics:<id>` | Redis stream | `MAXLEN ~ '2880'` — hardcoded literal (`sampler.ts:63`) | metrics-sampler | silent eviction |
 | RCON streams | Redis | `MAXLEN ~ 500` (e.g. `scheduler/src/deps.ts:60`) | producers | silent eviction |
-| cfg-sync streams | Redis + PG outbox | no relay-side `MAXLEN`; cleanup must be consumer-aware after `XACK`/`applied_at` | config-sync relay | bounded by a future confirmed-delivery cleanup policy |
+| cfg-sync streams | Redis + PG outbox | relay без `MAXLEN`; после `applied_at` Lua атомарно делает `XACK` и точный `XDEL`, failed/unacked не удаляется | config-sync relay/consumer | успешный хвост ограничен consumer-aware удалением; недоступный сервер сохраняет полный backlog |
 | `crashes:<serverId>` | Redis zset | exact 24 h `ZREMRANGEBYSCORE` (`plugins/status-reconciler.ts:241`) | API plugin | exact, score-based trim |
 | event dedup keys | Redis | `DEDUP_TTL_SECONDS = 86_400` (`shared-types/src/events.ts:292`) | ban-sync, discord | key expiry |
 | Squad game logs | bridge filesystem | `squadLogRetentionDays = 10` (`handlers.go:582`) | bridge sweep, driven hourly by log-ingest | file unlink; optional archive-before-delete per `archive_server_ids` |
@@ -1927,7 +1938,7 @@ Redis is the second primary datastore, not a cache. There is no central key regi
 
 | Key | Type | Producer | Consumer | TTL / MAXLEN | Authoritative? | What breaks if lost |
 |---|---|---|---|---|---|---|
-| `rcon:status:<id>` | string(JSON) | `rcon/src/supervisor.ts:174` | `routes/servers.ts:112,256`; `server-map.ts:47`; metrics-sampler; `config-sync/src/rcon-reload.ts:44` | `EX 300` | no (cache) | Server list shows no RCON state; `admins.cfg` reload skipped (gated on `state==='connected'`) |
+| `rcon:status:<id>` | string(JSON) | `rcon/src/supervisor.ts:174` | `routes/servers.ts:112,256`; `server-map.ts:47`; metrics-sampler; legacy `config-sync` path | `EX 300` | no (cache) | Список серверов теряет RCON state; новая outbox-доставка опирается на PostgreSQL `servers.status` и точный command result, не на этот кеш |
 | `rcon:roster:<id>` | string(JSON) | `supervisor.ts:199` | `routes/server-roster.ts:20`; `server-messaging.ts:152`; `report-actions.ts:268`; `lib/report-notify.ts:56` | `EX 90` | **yes** | Roster endpoint empty; in-game warn/kick targeting and report name-resolution lose their player list |
 | `rcon:squads:<id>` | string(JSON) | `supervisor.ts:229` | **no reader in `apps/api/src`** | `EX 90` | yes (write-only) | Nothing observable |
 | `a2s:status:<id>` | string(JSON) | `supervisor.ts:728` | `routes/servers.ts:130,273` | `EX 90` | no | Public map/player-count column blanks |
@@ -1935,7 +1946,7 @@ Redis is the second primary datastore, not a cache. There is no central key regi
 | `rcon:commands:<id>` | stream | `lib/rcon-worker-command.ts:54` + 6 workers | `rcon/src/commands.ts` | `MAXLEN ~ 500` | **yes** (in flight) | Queued kick/ban/broadcast commands dropped |
 | `rcon:command-result:<reqId>` | string | `rcon/src/commands.ts:94` | `lib/rcon-worker-command.ts:71` (deletes on read) | `EX 120` | **yes** (in flight) | Synchronous RCON calls time out with no result |
 | `events:server:<id>` / `events:global` / `events:dlq` | stream | `log-ingest/src/publish.ts:16`; ban-sync; API | `events.ts:294` groups | `MAXLEN ~ 10000` | **yes** (in flight) | Unconsumed domain events lost permanently; `events:dlq` has no reader |
-| `events:admins-cfg-sync:<id>` | stream | post-commit outbox relay | worker-config-sync | no `MAXLEN`; consumer-aware cleanup after durable apply is required | partially — pending rows remain in PG; already-relayed/unapplied rows still require Redis persistence/reclaim | Pending rows relay after recovery; applied state is completed in PG |
+| `events:admins-cfg-sync:<id>` | stream | post-commit outbox relay | worker-config-sync | без `MAXLEN`; durable success → атомарные `XACK` + точный `XDEL` | partially — pending rows remain in PG; already-relayed/unapplied rows require Redis persistence/reclaim | Pending rows relay/reclaim after recovery; applied replay only cleans its exact stream entry |
 | `dedup:<group>:<eventId>` | string | producers + consumers | same | `EX 86400` | dedup | Duplicate Discord notifications / duplicate ban applications on replay |
 | `panel:logs` | stream | `shared-config/src/log-stream-sink.ts:95` | `routes/logs.ts:61,77`; `lib/log-export.ts:40` | `MAXLEN ~ 100000` | **yes** | Log viewer and export empty |
 | `host:metrics` / `container:metrics:<id>` | stream | metrics-sampler | `routes/host.ts:78`; `routes/server-metrics.ts:39` | `MAXLEN 5760` / `~2880` | **yes** | ~48 h of host metric history gone |

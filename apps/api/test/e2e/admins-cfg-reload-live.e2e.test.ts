@@ -7,10 +7,7 @@
  * This drives the LIVE panel + LIVE config-sync worker + LIVE worker-rcon + a
  * LIVE Squad container: it force-syncs a running server (guaranteeing a write),
  * waits for the worker to publish `admins-cfg:status:<id> = in_sync`, and asserts
- * the resulting `admins_cfg.force_synced` audit row records `context.reload =
- * 'enqueued'` — i.e. the panel issued the reload. As a second, direct signal it
- * checks that an `AdminReloadServerConfig` request landed on the worker-rcon
- * command stream `rcon:commands:<id>`.
+ * the corresponding outbox row reaches durable `reload_outcome=confirmed`.
  *
  * Prerequisites (this is a tier-3 / run-deferred spec — `test/e2e/**` is excluded
  * from the default vitest run): docker compose stack up, at least one Squad server
@@ -23,8 +20,8 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { createDatabaseClient } from '@squad/db';
-import { auditLog, players, roles, servers, sessions } from '@squad/db/schema';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { adminsCfgSyncOutbox, players, roles, servers, sessions } from '@squad/db/schema';
+import { and, desc, eq, gte } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mintSessionToken } from '../../src/lib/sessions.js';
@@ -120,7 +117,7 @@ async function rconState(serverId: string): Promise<string | null> {
 }
 
 describe('config-sync fires AdminReloadServerConfig after Admins.cfg write (live)', () => {
-  it('force-sync writes the file then enqueues + records the RCON reload', async () => {
+  it('force-sync writes the file and durably confirms the RCON reload', async () => {
     const allServers = await db.select({ id: servers.id, status: servers.status }).from(servers);
     const running = allServers.find((s) => s.status === 'running' || s.status === 'starting');
     if (!running) {
@@ -138,6 +135,7 @@ describe('config-sync fires AdminReloadServerConfig after Admins.cfg write (live
 
     const streamKey = `rcon:commands:${running.id}`;
     const beforeLen = await redis.xlen(streamKey);
+    const requestedAt = new Date();
 
     const syncResp = await fetch(`${PANEL_URL}/api/v1/admins-cfg/sync?server_id=${running.id}`, {
       method: 'POST',
@@ -165,20 +163,32 @@ describe('config-sync fires AdminReloadServerConfig after Admins.cfg write (live
     }
     expect(synced, 'worker did not reach in_sync within 15s').toBe(true);
 
-    // Primary assertion — the audit row records the panel issued the reload.
-    const auditRows = await db
-      .select({ context: auditLog.context })
-      .from(auditLog)
-      .where(
-        and(
-          eq(auditLog.targetId, running.id),
-          inArray(auditLog.actionType, ['admins_cfg.force_synced', 'admins_cfg.synced']),
-        ),
-      )
-      .orderBy(desc(auditLog.id))
-      .limit(1);
-    const context = auditRows[0]?.context as { reload?: string } | undefined;
-    expect(context?.reload, JSON.stringify(context)).toBe('enqueued');
+    // Primary assertion — PostgreSQL, not the ephemeral Redis result, is the
+    // durable proof that the exact reload succeeded.
+    let delivery: { appliedAt: Date | null; reloadOutcome: string | null } | undefined;
+    for (let i = 0; i < 30; i++) {
+      const rows = await db
+        .select({
+          payload: adminsCfgSyncOutbox.payload,
+          appliedAt: adminsCfgSyncOutbox.appliedAt,
+          reloadOutcome: adminsCfgSyncOutbox.reloadOutcome,
+        })
+        .from(adminsCfgSyncOutbox)
+        .where(
+          and(
+            eq(adminsCfgSyncOutbox.serverId, running.id),
+            gte(adminsCfgSyncOutbox.createdAt, requestedAt),
+          ),
+        )
+        .orderBy(desc(adminsCfgSyncOutbox.createdAt));
+      delivery = rows.find((row) => (row.payload as { reason?: string }).reason === 'force_sync');
+      if (delivery?.appliedAt) break;
+      await sleep(500);
+    }
+    expect(delivery).toMatchObject({
+      appliedAt: expect.any(Date),
+      reloadOutcome: 'confirmed',
+    });
 
     // Secondary, direct signal — an AdminReloadServerConfig request hit the
     // worker-rcon stream (worker-rcon may already have consumed/trimmed it, so
@@ -186,7 +196,7 @@ describe('config-sync fires AdminReloadServerConfig after Admins.cfg write (live
     const afterLen = await redis.xlen(streamKey);
     if (afterLen <= beforeLen) {
       console.warn(
-        `rcon:commands stream length did not grow (${beforeLen}→${afterLen}) — worker-rcon likely already consumed the reload; audit context.reload='enqueued' remains authoritative`,
+        `rcon:commands stream length did not grow (${beforeLen}→${afterLen}) — worker-rcon likely already consumed the reload; PostgreSQL outbox confirmation remains authoritative`,
       );
     }
   }, 30_000);

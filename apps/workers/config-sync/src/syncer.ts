@@ -39,9 +39,8 @@ export interface SyncResult {
   groupsCount: number;
   adminsCount: number;
   error?: string;
-  /** Outcome of the post-write RCON `AdminReloadServerConfig` request. Present
-   *  only on the successful-write branch (`state: 'wrote'`); absent on the
-   *  no-write (`in_sync`/`drift`) and failure (`unreachable`) branches. */
+  /** Legacy best-effort RCON outcome. Correlated outbox delivery confirms RCON
+   *  in `delivery.ts`, so this is absent there even after a successful write. */
   reload?: AdminsCfgReloadOutcome;
 }
 
@@ -94,6 +93,10 @@ export interface SyncOptions {
   reason: string;
   actorPlayerId: string | null;
   forceWrite?: boolean;
+  /** Explicit delivery intent; omitted keeps compatibility with old drift events. */
+  mode?: 'active' | 'passive';
+  /** Correlated delivery waits for an exact RCON result outside the file syncer. */
+  requestReload?: boolean;
 }
 
 /**
@@ -176,7 +179,8 @@ export async function syncServerAdminsCfg(
   const newContent = spliceManagedSegment(original, generated.body);
 
   const hashesMatch = currentHash === generated.hash;
-  const isPassiveCheck = opts.reason === 'drift_check';
+  const isPassiveCheck =
+    opts.mode === 'passive' || (opts.mode === undefined && opts.reason === 'drift_check');
   // Passive sweeps detect drift but do NOT auto-correct — the spec
   // (§2.7.6) wants the operator to be alerted with a Force-sync button
   // rather than have the worker silently overwrite manual edits. Active
@@ -274,11 +278,11 @@ export async function syncServerAdminsCfg(
     admins_count: generated.adminsCount,
   });
 
-  // SYNC-3 correction №1: Squad does NOT passively re-read Admins.cfg — the
-  // panel must issue an RCON `AdminReloadServerConfig` so the freshly-written
-  // permissions take effect without a container restart. Best-effort and gated
-  // on a connected RCON listener; never blocks or fails the sync itself.
-  const reload = await requestAdminsCfgReload(redis, serverId, log);
+  // Legacy events request the original best-effort reload here. New outbox
+  // delivery defers it to delivery.ts, which waits for the exact result before
+  // persisting applied_at.
+  const reload =
+    opts.requestReload === false ? undefined : await requestAdminsCfgReload(redis, serverId, log);
 
   try {
     await appendWorkerAudit(db, {
@@ -292,7 +296,7 @@ export async function syncServerAdminsCfg(
         reason: opts.reason,
         groups_count: generated.groupsCount,
         admins_count: generated.adminsCount,
-        reload,
+        ...(reload ? { reload } : {}),
       },
     });
   } catch (err) {

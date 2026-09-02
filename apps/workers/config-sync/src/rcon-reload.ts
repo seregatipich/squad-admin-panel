@@ -1,4 +1,9 @@
-import { rconCommandRequestSchema, rconCommandStream } from '@squad/shared-types';
+import {
+  rconCommandRequestSchema,
+  rconCommandResultKey,
+  rconCommandResultSchema,
+  rconCommandStream,
+} from '@squad/shared-types';
 import type Redis from 'ioredis';
 import type { Logger } from 'pino';
 import { v7 as uuidv7 } from 'uuid';
@@ -12,6 +17,18 @@ const RCON_STREAM_MAXLEN = 500;
  * - `failed` — an error was caught while enqueuing (never thrown to the caller).
  */
 export type AdminsCfgReloadOutcome = 'enqueued' | 'skipped_rcon_disconnected' | 'failed';
+
+export type ConfirmedAdminsCfgReloadOutcome =
+  | 'confirmed'
+  | 'unavailable'
+  | 'rejected'
+  | 'timeout'
+  | 'invalid_result';
+
+export interface ConfirmAdminsCfgReloadOptions {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+}
 
 /**
  * Ask worker-rcon to run `AdminReloadServerConfig` on a server after the panel
@@ -75,5 +92,81 @@ export async function requestAdminsCfgReload(
       'admins.cfg RCON reload enqueue failed (non-fatal)',
     );
     return 'failed';
+  }
+}
+
+/**
+ * Enqueue and durably verify the reload for a correlated outbox row.
+ * Replays use the same request id and can reuse worker-rcon's cached result.
+ */
+export async function confirmAdminsCfgReload(
+  redis: Pick<Redis, 'get' | 'xadd'>,
+  serverId: string,
+  outboxId: string,
+  log: Logger,
+  opts: ConfirmAdminsCfgReloadOptions = {},
+): Promise<ConfirmedAdminsCfgReloadOutcome> {
+  const requestId = `admins-cfg-sync:${outboxId}`;
+  const resultKey = rconCommandResultKey(requestId);
+
+  const readResult = async (): Promise<ConfirmedAdminsCfgReloadOutcome | null> => {
+    const raw = await redis.get(resultKey);
+    if (!raw) return null;
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(raw);
+    } catch {
+      return 'invalid_result';
+    }
+    const parsed = rconCommandResultSchema.safeParse(parsedJson);
+    if (!parsed.success) return 'invalid_result';
+    const result = parsed.data;
+    if (
+      result.server_id !== serverId ||
+      result.request_id !== requestId ||
+      result.command !== 'AdminReloadServerConfig'
+    ) {
+      return 'invalid_result';
+    }
+    return result.ok ? 'confirmed' : 'rejected';
+  };
+
+  try {
+    const existing = await readResult();
+    if (existing) return existing;
+
+    const request = rconCommandRequestSchema.parse({
+      request_id: requestId,
+      command: 'AdminReloadServerConfig',
+      args: [],
+      actor_player_id: null,
+      enqueued_at: new Date().toISOString(),
+    });
+    await redis.xadd(
+      rconCommandStream(serverId),
+      'MAXLEN',
+      '~',
+      String(RCON_STREAM_MAXLEN),
+      '*',
+      'request',
+      JSON.stringify(request),
+    );
+
+    const timeoutMs = opts.timeoutMs ?? 4_000;
+    const pollIntervalMs = opts.pollIntervalMs ?? 100;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() <= deadline) {
+      const outcome = await readResult();
+      if (outcome) return outcome;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(1, Math.min(pollIntervalMs, remaining))),
+      );
+    }
+    return 'timeout';
+  } catch {
+    log.warn({ serverId, outboxId }, 'admins.cfg confirmed RCON reload unavailable');
+    return 'unavailable';
   }
 }

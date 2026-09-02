@@ -1,6 +1,8 @@
 # worker-config-sync — API surface
 
-The worker has **no inbound HTTP/RPC surface**. Its public boundary is a set of Redis stream contracts and one Redis status key contract that the API and UI rely on. It consumes the `events:admins-cfg-sync:<server_id>` streams and, after a successful write, produces onto the worker-rcon command stream (`rcon:commands:<server_id>`) — reading `rcon:status:<server_id>` to decide whether to.
+Worker не имеет входящего HTTP/RPC. Он читает `events:admins-cfg-sync:<server_id>`,
+а для новых outbox-сообщений подтверждает файл и точный результат worker-rcon,
+не используя старый `rcon:status` как источник lifecycle-решения.
 
 ## Inputs (Redis Streams) — what the worker consumes
 
@@ -20,14 +22,18 @@ interface AdminsCfgSyncEvent {
                                  // | 'player.role.assign' | 'player.role.unassign'
                                  // | 'role.member.add' | 'role.member.remove'
                                  // | 'force_sync' | 'drift_check' | 'unknown'
-  actor_steam_id64: string|null; // who triggered the mutation
+  actor_player_id: string|null;  // internal player id or null for system
   enqueued_at: string;           // ISO timestamp
   request_id?: string;
   forceWrite?: boolean;          // alternative to reason='force_sync'
+  _outbox_id?: string;           // stable UUID added by the post-commit relay
 }
 ```
 
-Consumer group: `config-sync`. The worker calls `XREADGROUP GROUP config-sync <consumer> COUNT 50 BLOCK 5000 STREAMS events:admins-cfg-sync:<id>...`. After successful sync (`state ∈ {wrote, in_sync}`), the message is `XACK`'d. After unreachable bridge or hard error, the message is **not** acked and the server's stream is paused on a per-server backoff (5s → 5min, exponential).
+Consumer group: `config-sync`. Новый `_outbox_id` связывает Redis-запись с
+PostgreSQL. Успех сначала получает `applied_at`, затем один Lua-скрипт выполняет
+`XACK` и точный `XDEL`. Ошибка остаётся unacked для reclaim; повреждённое или
+старое успешно обработанное сообщение тоже удаляется, чтобы ACKed-хвост не рос.
 
 A separate `XAUTOCLAIM` pass runs every `ADMINS_CFG_RECLAIM_INTERVAL_MS` (default 30s) per active server with `MIN-IDLE-TIME = ADMINS_CFG_RECLAIM_MIN_IDLE_MS` (default 60s) and a `COUNT 50` cap. It takes ownership of any messages stuck in another consumer's PEL — typically left behind by:
 - a previous worker process that crashed before XACK,
@@ -36,26 +42,29 @@ A separate `XAUTOCLAIM` pass runs every `ADMINS_CFG_RECLAIM_INTERVAL_MS` (defaul
 
 The reclaim pass is invoked once at boot (catches messages orphaned across restarts) and on the periodic interval. Reclaimed messages take the same code path as freshly-delivered ones — successful sync acks; unreachable leaves them in the (now this-consumer's) PEL for the next cycle.
 
-The API helper `publishAdminsCfgSyncForAllServers` in `apps/api/src/lib/admins-cfg-sync.ts` enqueues one entry into every active server's stream in a single Redis pipeline.
+API и mutation-workers пишут одну PostgreSQL outbox-строку на сервер. Только
+post-commit relay переносит её в Redis и добавляет `_outbox_id`.
 
 ## Outputs (Redis streams / keys) — what the worker writes
 
 ### `rcon:commands:<server_id>` (worker-rcon command stream)
 
-After **every successful `Admins.cfg` write** (not on the `in_sync`/`drift`/`unreachable` branches), the worker enqueues a single `AdminReloadServerConfig` command so Squad applies the new permissions without a container restart (SYNC-3 correction №1). The enqueue is done by `requestAdminsCfgReload` (`src/rcon-reload.ts`) and mirrors the payload shape used by the clan-guard / log-ingest / scheduler workers:
+Для нового outbox живого сервера worker отправляет команду даже при уже
+совпавшем хеше файла: совпадение байтов не доказывает, что Squad перечитал файл.
 
 ```
 XADD rcon:commands:<server_id> MAXLEN ~ 500 * request <json>
 ```
 
-where `<json>` is a `rconCommandRequestSchema` (`@squad/shared-types`) document `{ request_id: <uuidv7>, command: 'AdminReloadServerConfig', args: [], actor_player_id: null, enqueued_at }`.
+where `<json>` is a `rconCommandRequestSchema` document with deterministic
+`request_id = admins-cfg-sync:<outbox_id>` and
+`command = AdminReloadServerConfig`.
 
-The reload is **gated and best-effort**:
-
-- Reads `rcon:status:<server_id>` first; if the key is absent or `state !== 'connected'` the reload is **skipped** (no `XADD`) — worker-rcon replays the current config on its next connect, so nothing is lost.
-- It never throws. A Redis failure is caught, logged at warn, and reported as `failed`. A reload hiccup never rolls back the committed file write.
-
-The outcome is surfaced on `SyncResult.reload` and recorded in the `admins_cfg.synced` / `admins_cfg.force_synced` audit `context.reload` field (`'enqueued' | 'skipped_rcon_disconnected' | 'failed'`).
+Worker ждёт до 4 секунд и принимает только `rconCommandResultSchema` с точными
+`server_id`, `request_id`, `command=AdminReloadServerConfig` и `ok=true`.
+`rejected|timeout|invalid_result|unavailable` сохраняются как безопасный код в
+outbox, оставляют `applied_at=NULL` и не разрешают `XACK`/`XDEL`. Старые
+сообщения без `_outbox_id` сохраняют прежний best-effort режим.
 
 ### `admins-cfg:status:<server_id>`
 

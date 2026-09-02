@@ -64,7 +64,9 @@ redis-cli xinfo groups events:admins-cfg-sync:<server_id>
 redis-cli xpending events:admins-cfg-sync:<server_id> config-sync
 ```
 
-**Fix**: resolve the underlying error (bridge socket, DB connectivity); the worker will pick up the pending entries on its next read. If a stuck entry is malformed JSON, the worker logs `malformed admins-cfg-sync event` and `XACK`s it — that path is normally self-healing.
+**Fix**: устраните ошибку bridge, PostgreSQL или Redis; worker заберёт pending
+запись через reclaim. Повреждённое сообщение worker журналирует, затем атомарно
+выполняет `XACK` и точный `XDEL`, поэтому оно не остаётся вечным хвостом stream.
 
 ### Squad doesn't pick up new admins
 

@@ -31,25 +31,26 @@
         └──────────┘               └──────────────────┘               └──────────────┘
 ```
 
-After a successful `fileAtomicWrite`, the worker also `XADD`s an `AdminReloadServerConfig` command onto `rcon:commands:<server_id>` (consumed by worker-rcon) so Squad applies the new permissions immediately — see step-by-step below.
+Для каждого нового outbox-сообщения worker подтверждает не только файл, но и
+его применение с учётом свежего состояния сервера. Старый режим прямого
+best-effort RCON сохранён только для сообщений без `_outbox_id`.
 
 Step-by-step:
 
 1. The API or a mutation worker records the domain change and one `admins_cfg_sync_outbox` row per active-server snapshot in the same PostgreSQL transaction. Force-sync inserts one single-server row; server installation commits its final `running` transition and row atomically.
 2. A single-flight relay sees rows only after commit, performs bounded `XADD` calls with stable `_outbox_id`, then records `relayed_at`/`stream_id`. Failure leaves the row pending. The relay does not use `MAXLEN`; cleanup is allowed only after durable apply/`XACK`.
-3. The worker creates new consumer groups at `0`, so a row relayed before group creation is still visible. `XREADGROUP` returns the entries.
-4. `syncServerAdminsCfg(ctx, serverId, opts)` is invoked per entry:
+3. Worker создаёт новые consumer group с `0`, поэтому запись, опубликованная до создания группы, остаётся видимой. `XREADGROUP` возвращает `_outbox_id` вместе с исходным payload.
+4. `syncServerAdminsCfg(ctx, serverId, opts)` сверяет свежий снимок БД с файлом. Для нового outbox он не запускает старый best-effort RCON:
    - Publish `state: 'syncing'` to `admins-cfg:status:<server_id>`.
    - Snapshot DB: `roles` (with `role_squad_permissions`) + `players WHERE role_id IS NOT NULL` mapped to role names.
    - `buildManagedSegment(snapshot)` produces the deterministic byte body + sha256.
    - `bridge.fileRead({ path })` reads the current file; `findManagedSegment` extracts the existing managed slice.
-   - If hashes match and `forceWrite=false`, set status `in_sync` and **skip the write** (idempotency) — no reload is issued on this branch.
+   - Если хеши совпали и `forceWrite=false`, запись файла пропускается, но подтверждение RCON для живого сервера всё равно обязательно.
    - Otherwise `bridge.fileAtomicWrite({ path, content })` with the spliced body.
    - Update status to `in_sync` with the fresh hash, group/admin counts, and a timestamp.
-   - **Request an RCON `AdminReloadServerConfig`** via `requestAdminsCfgReload(redis, serverId, log)` (`src/rcon-reload.ts`) so the freshly-written permissions apply without a restart. This is gated on `rcon:status:<server_id>.state === 'connected'` and is strictly best-effort — it never throws and never rolls back the write. The outcome (`enqueued` | `skipped_rcon_disconnected` | `failed`) is captured on `SyncResult.reload`.
-   - Append an `admins_cfg.synced` (or `admins_cfg.force_synced`) row to `audit_log`, including the `reload` outcome in the row `context`.
-   - `XACK` the stream entry.
-5. **Squad does NOT passively re-read `Admins.cfg`** — the panel issues the RCON `AdminReloadServerConfig` above so the change takes effect immediately, without a container restart (SYNC-3 correction №1, `ai_docs/plans/2026-07-04-task-decomposition.md`). If no RCON listener is connected the reload is skipped; worker-rcon replays the current config on its next successful connect, and the periodic drift sweep keeps the file authoritative in the meantime.
+   - Append an `admins_cfg.synced` (or `admins_cfg.force_synced`) row to `audit_log`.
+5. После файловой операции worker дважды читает `servers.status`. Стабильно неживой сервер получает `file_ready_for_restart`. Для `running|starting` отправляется `AdminReloadServerConfig` с `request_id=admins-cfg-sync:<outbox_id>` и принимается только точный валидный `ok=true` результат. Переход `stopped -> running` включает RCON-ветку, а `running -> stopped` завершается как готовый файл.
+6. Успешный итог сначала сохраняется в PostgreSQL (`applied_at` и allowlisted `reload_outcome`). Затем Lua-скрипт атомарно выполняет `XACK` и точный `XDEL`. Уже applied replay и устойчивый lifecycle `superseded` пропускают файл/RCON и выполняют только очистку. Ошибка сохраняет безопасный код и оставляет запись в PEL без `XDEL`.
 
 ## Drift detection flow (every 5 min)
 
@@ -95,7 +96,7 @@ Spec §2.7.7 mandates that "при временной недоступности
 Together they guarantee:
 - A persistently-unreachable server's messages keep retrying every reclaim cycle until the bridge recovers.
 - A consumer that crashed mid-handle does not orphan messages; the next process picks them up at boot.
-- Unapplied backlog is not trimmed and can grow while a server remains unavailable or producers keep writing. Task5 must add consumer-aware cleanup after durable `applied_at` + `XACK` (and safe `XDEL`) together with operator monitoring; reclaim alone does not bound the PEL.
+- Неприменённый backlog не обрезается и может расти, пока сервер недоступен. После устойчивого успеха consumer атомарно делает `XACK` + точный `XDEL`; failed/unacked запись никогда не удаляется. Операторский контроль долгого PEL остаётся необходимым.
 
 ## Per-server lifecycle
 

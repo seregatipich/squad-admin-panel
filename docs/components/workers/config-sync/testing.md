@@ -34,13 +34,28 @@ Covers the deterministic generator, parser, and splicer in `src/segment.ts`:
 
 ### `rcon-reload.test.ts` — unit (pure, fake Redis)
 
-Covers `requestAdminsCfgReload` (`src/rcon-reload.ts`) in isolation:
+Покрывает старый `requestAdminsCfgReload` и новый
+`confirmAdminsCfgReload` в изоляции:
 
 | Test | What it verifies |
 |---|---|
 | connected RCON | exactly one `XADD` to `rcon:commands:<id>` whose `request` parses to `command: 'AdminReloadServerConfig', args: []`; returns `enqueued` |
 | status absent / `connecting` / `disconnected` / malformed JSON | no `XADD`, returns `skipped_rcon_disconnected`, never throws |
 | `xadd` rejects | returns `failed`, never throws, logs one warn |
+| correlated request | детерминированный `admins-cfg-sync:<outbox_id>` и только точный валидный `ok=true` |
+| mismatched/rejected/timeout | безопасные `invalid_result`, `rejected`, `timeout` без сырых ответов |
+
+### `delivery.test.ts` и `delivery.integration.test.ts`
+
+- переходы `stopped -> running` и `running -> stopped` проверяют два свежих
+  чтения состояния и обязательную RCON-ветку для живого итога;
+- crash/reclaim до результата, до `applied_at` и после `applied_at` не повторяет
+  уже подтверждённый файловый/RCON эффект;
+- настоящий PostgreSQL+Redis подтверждает порядок durable DB → атомарные
+  `XACK`/точный `XDEL`, сохранение failed/unacked записи и детерминированный
+  RCON round-trip;
+- `superseded`, `server_removed`, старые и повреждённые сообщения очищаются без
+  бесконечного ACKed-хвоста; failed/unacked никогда не удаляется.
 
 ### `syncer.test.ts` — unit (fake Redis/DB/bridge)
 
@@ -73,7 +88,10 @@ Spawns `dist/index.js` with a real Redis (DB 14) and a real Postgres test DB; ve
 
 ## Live e2e (run-deferred, tier-3)
 
-`apps/api/test/e2e/admins-cfg-reload-live.e2e.test.ts` proves SYNC-3 correction №1 end-to-end against the live stack: it force-syncs a running server, waits for `admins-cfg:status:<id> = in_sync`, and asserts the resulting `admins_cfg.force_synced` audit row records `context.reload = 'enqueued'` (with an `XLEN rcon:commands:<id>` growth check as corroboration). Like `config-reload-live.e2e.test.ts` it lives under `test/e2e/**`, which `apps/api/vitest.config.ts` excludes from the default run — it executes only in the CI tier-3 job. It **skips with a clear `console.warn`** when no server is `running` or `rcon:status:<id>.state !== 'connected'`.
+`apps/api/test/e2e/admins-cfg-reload-live.e2e.test.ts` выполняет force-sync живого
+сервера и требует устойчивый outbox-итог `reload_outcome=confirmed` с
+`applied_at`; длина RCON stream остаётся лишь вспомогательным сигналом. Тест
+run-deferred и требует настоящие panel, config-sync, worker-rcon и Squad.
 
 ## Integration coverage from API side
 

@@ -1,9 +1,57 @@
-import { asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import type { DatabaseClient } from './client.js';
 import { adminsCfgSyncOutbox } from './schema/admins-cfg-sync-outbox.js';
 import { servers } from './schema/servers.js';
 
 type EnqueueDb = Pick<DatabaseClient, 'select' | 'insert'>;
+
+const APPLIED_OUTCOMES = ['confirmed', 'file_ready_for_restart', 'server_removed'] as const;
+const FAILURE_CODES = ['unavailable', 'rejected', 'timeout', 'invalid_result'] as const;
+
+export type AdminsCfgAppliedOutcome = (typeof APPLIED_OUTCOMES)[number];
+export type AdminsCfgFailureCode = (typeof FAILURE_CODES)[number];
+
+type ApplicationDb = Pick<DatabaseClient, 'select' | 'update'>;
+
+/** Read the durable state used to make a redelivery idempotent. */
+export async function getAdminsCfgSyncOutboxState(db: ApplicationDb, id: string) {
+  const [row] = await db
+    .select()
+    .from(adminsCfgSyncOutbox)
+    .where(eq(adminsCfgSyncOutbox.id, id))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Persist a successful terminal result once; concurrent replays return the winner. */
+export async function markAdminsCfgSyncApplied(db: ApplicationDb, id: string, outcome: string) {
+  if (!(APPLIED_OUTCOMES as readonly string[]).includes(outcome)) {
+    throw new Error('invalid admins cfg sync applied outcome');
+  }
+  const [updated] = await db
+    .update(adminsCfgSyncOutbox)
+    .set({
+      appliedAt: new Date(),
+      reloadOutcome: outcome,
+      lastError: null,
+    })
+    .where(and(eq(adminsCfgSyncOutbox.id, id), isNull(adminsCfgSyncOutbox.appliedAt)))
+    .returning();
+  return updated ?? getAdminsCfgSyncOutboxState(db, id);
+}
+
+/** Persist a safe retryable failure code without exposing raw bridge/RCON errors. */
+export async function markAdminsCfgSyncFailed(db: ApplicationDb, id: string, code: string) {
+  if (!(FAILURE_CODES as readonly string[]).includes(code)) {
+    throw new Error('invalid admins cfg sync failure code');
+  }
+  const [updated] = await db
+    .update(adminsCfgSyncOutbox)
+    .set({ reloadOutcome: code, lastError: code })
+    .where(and(eq(adminsCfgSyncOutbox.id, id), isNull(adminsCfgSyncOutbox.appliedAt)))
+    .returning();
+  return updated ?? getAdminsCfgSyncOutboxState(db, id);
+}
 
 /** Insert one durable task per active server, or per explicit server snapshot. */
 export async function enqueueAdminsCfgSyncForAllServers(
@@ -65,8 +113,9 @@ type RelayDb = Pick<DatabaseClient, 'transaction'>;
  * published with `XADD`, and stamped `relayed_at` before the transaction
  * commits. Delivery is **at-least-once**: if the process dies after the `XADD`
  * but before commit, the rows stay pending and are re-published on the next
- * run — a duplicate stream entry that the worker's idempotent hash-compare
- * collapses to a no-op. A re-run over already-relayed rows publishes nothing
+ * run — a duplicate stream entry with the same `_outbox_id`. The worker either
+ * completes that durable row or, if already applied, only ACKs/deletes the
+ * duplicate without touching the file or RCON. A re-run over already-relayed rows publishes nothing
  * (they no longer match `relayed_at IS NULL`), so effects are never duplicated
  * by the relay itself.
  *

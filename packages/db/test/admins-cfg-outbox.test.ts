@@ -3,9 +3,15 @@ import { getTableColumns, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { v7 as uuidv7 } from 'uuid';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  getAdminsCfgSyncOutboxState,
+  markAdminsCfgSyncApplied,
+  markAdminsCfgSyncFailed,
+} from '../src/admins-cfg-outbox.js';
 import * as schema from '../src/schema/index.js';
-import { ADMINS_CFG_RELOAD_OUTCOMES, adminsCfgSyncOutbox } from '../src/schema/index.js';
+import { ADMINS_CFG_RELOAD_OUTCOMES, adminsCfgSyncOutbox, servers } from '../src/schema/index.js';
 import { createIsolatedPackageTestDatabase } from './helpers/isolated-database.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -14,11 +20,23 @@ const MIGRATIONS_FOLDER = fileURLToPath(new URL('../drizzle/', import.meta.url))
 
 let pgsql: ReturnType<typeof postgres>;
 let db: ReturnType<typeof drizzle<typeof schema>>;
+let serverId: string;
 
 beforeAll(() => {
   if (!DATABASE_URL) return;
   pgsql = postgres(DATABASE_URL);
   db = drizzle(pgsql, { schema });
+});
+
+beforeEach(async () => {
+  if (!DATABASE_URL) return;
+  await db.delete(adminsCfgSyncOutbox);
+  serverId = uuidv7();
+  await db.insert(servers).values({
+    id: serverId,
+    displayName: `outbox-apply-${serverId}`,
+    slug: `outbox-apply-${serverId}`,
+  });
 });
 
 afterAll(async () => {
@@ -118,4 +136,59 @@ describeIfDb('migration 0109 admins_cfg_sync_outbox delivery contract', () => {
       await isolated.drop();
     }
   }, 120_000);
+});
+
+describeIfDb('admins_cfg_sync_outbox application state', () => {
+  async function insertOutbox(): Promise<string> {
+    const [row] = await db
+      .insert(adminsCfgSyncOutbox)
+      .values({ serverId, payload: { reason: 'test' } })
+      .returning({ id: adminsCfgSyncOutbox.id });
+    if (!row) throw new Error('outbox fixture was not inserted');
+    return row.id;
+  }
+
+  it('atomically marks a pending row applied and keeps the first terminal outcome', async () => {
+    const id = await insertOutbox();
+
+    const [first, second] = await Promise.all([
+      markAdminsCfgSyncApplied(db, id, 'confirmed'),
+      markAdminsCfgSyncApplied(db, id, 'file_ready_for_restart'),
+    ]);
+    const stored = await getAdminsCfgSyncOutboxState(db, id);
+
+    expect(first?.appliedAt ?? second?.appliedAt).toBeInstanceOf(Date);
+    expect(stored?.appliedAt).toBeInstanceOf(Date);
+    expect(['confirmed', 'file_ready_for_restart']).toContain(stored?.reloadOutcome);
+    expect(first?.reloadOutcome).toBe(stored?.reloadOutcome);
+    expect(second?.reloadOutcome).toBe(stored?.reloadOutcome);
+    expect(stored?.lastError).toBeNull();
+  });
+
+  it('stores only an allowlisted failure and never clears an already applied row', async () => {
+    const id = await insertOutbox();
+
+    await expect(markAdminsCfgSyncFailed(db, id, 'raw bridge secret')).rejects.toThrow(
+      'invalid admins cfg sync failure code',
+    );
+    expect(await markAdminsCfgSyncFailed(db, id, 'timeout')).toMatchObject({
+      appliedAt: null,
+      lastError: 'timeout',
+      reloadOutcome: 'timeout',
+    });
+
+    const applied = await markAdminsCfgSyncApplied(db, id, 'confirmed');
+    expect(applied).toMatchObject({ lastError: null, reloadOutcome: 'confirmed' });
+    expect(await markAdminsCfgSyncFailed(db, id, 'rejected')).toMatchObject({
+      lastError: null,
+      reloadOutcome: 'confirmed',
+    });
+  });
+
+  it('rejects retry-only outcomes on the terminal helper', async () => {
+    const id = await insertOutbox();
+    await expect(markAdminsCfgSyncApplied(db, id, 'timeout')).rejects.toThrow(
+      'invalid admins cfg sync applied outcome',
+    );
+  });
 });

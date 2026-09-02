@@ -9,18 +9,14 @@ import { isNull } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
 import { sweepServerConfigDrift } from './config-drift.js';
+import {
+  ADMINS_CFG_SYNC_GROUP,
+  acknowledgeAndDeleteAdminsCfgEntry,
+  handleAdminsCfgSyncEntry,
+} from './delivery.js';
 import { syncServerAdminsCfg } from './syncer.js';
 
 const ADMINS_CFG_SYNC_STREAM_PREFIX = 'events:admins-cfg-sync:';
-const ADMINS_CFG_SYNC_GROUP = 'config-sync';
-
-interface ParsedEvent {
-  reason?: string;
-  actor_player_id?: string | null;
-  enqueued_at?: string;
-  request_id?: string;
-  forceWrite?: boolean;
-}
 
 const requiredEnv = (name: string): string => {
   const v = process.env[name];
@@ -130,6 +126,41 @@ async function main() {
     backoffByServer.set(serverId, { delayMs: next, nextAttemptAt: Date.now() + next });
   }
 
+  async function handleEntry(
+    serverId: string,
+    streamName: string,
+    streamId: string,
+    kv: string[],
+  ): Promise<void> {
+    const evIdx = kv.indexOf('event');
+    if (evIdx < 0 || evIdx + 1 >= kv.length) {
+      await acknowledgeAndDeleteAdminsCfgEntry(redis, streamName, streamId);
+      return;
+    }
+    let event: unknown;
+    try {
+      event = JSON.parse(kv[evIdx + 1] ?? '{}');
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message, streamId, serverId },
+        'malformed admins-cfg-sync event',
+      );
+      await acknowledgeAndDeleteAdminsCfgEntry(redis, streamName, streamId);
+      return;
+    }
+
+    const outcome = await handleAdminsCfgSyncEntry(ctx, {
+      serverId,
+      streamName,
+      streamId,
+      event,
+    });
+    recordOutcome(serverId, outcome === 'completed');
+    if (outcome === 'retry') {
+      log.warn({ serverId, streamId }, 'admins.cfg delivery left pending for retry');
+    }
+  }
+
   async function processStreamEvents(): Promise<void> {
     if (activeServerIds.size === 0) {
       await new Promise((r) => setTimeout(r, STREAM_BLOCK_MS));
@@ -189,52 +220,8 @@ async function main() {
     for (const [streamName, entries] of result) {
       const serverId = streamName.slice(ADMINS_CFG_SYNC_STREAM_PREFIX.length);
       for (const [streamId, kv] of entries) {
-        const evIdx = kv.indexOf('event');
-        if (evIdx < 0 || evIdx + 1 >= kv.length) {
-          await redis.xack(streamName, ADMINS_CFG_SYNC_GROUP, streamId);
-          continue;
-        }
-        let event: ParsedEvent;
         try {
-          event = JSON.parse(kv[evIdx + 1] ?? '{}') as ParsedEvent;
-        } catch (err) {
-          log.warn(
-            { err: (err as Error).message, streamId, serverId },
-            'malformed admins-cfg-sync event',
-          );
-          await redis.xack(streamName, ADMINS_CFG_SYNC_GROUP, streamId);
-          continue;
-        }
-        try {
-          const syncResult = await syncServerAdminsCfg(ctx, serverId, {
-            reason: event.reason ?? 'unknown',
-            actorPlayerId: event.actor_player_id ?? null,
-            forceWrite: event.reason === 'force_sync' || event.forceWrite === true,
-          });
-          recordOutcome(serverId, syncResult.state !== 'unreachable');
-          log.info(
-            {
-              serverId,
-              state: syncResult.state,
-              groups: syncResult.groupsCount,
-              admins: syncResult.adminsCount,
-              reason: event.reason,
-            },
-            'admins.cfg sync',
-          );
-          if (syncResult.state === 'unreachable') {
-            // Spec §2.7.7 — bridge error means the file did NOT get the
-            // change. Leave the message unacked so it is redelivered to
-            // some consumer (possibly us) after the per-server backoff
-            // window. The audit row is appended on the failure path so
-            // the operator has a trail.
-            log.warn(
-              { serverId, streamId, error: syncResult.error },
-              'admins.cfg unreachable — leaving event unacked for retry',
-            );
-            continue;
-          }
-          await redis.xack(streamName, ADMINS_CFG_SYNC_GROUP, streamId);
+          await handleEntry(serverId, streamName, streamId, kv);
         } catch (err) {
           log.error({ serverId, streamId, err: (err as Error).message }, 'admins.cfg sync failed');
           recordOutcome(serverId, false);
@@ -277,30 +264,8 @@ async function main() {
           'reclaimed pending admins-cfg-sync messages',
         );
         for (const [streamId, kv] of claimed) {
-          const evIdx = kv.indexOf('event');
-          if (evIdx < 0 || evIdx + 1 >= kv.length) {
-            await redis.xack(stream, ADMINS_CFG_SYNC_GROUP, streamId);
-            continue;
-          }
-          let event: ParsedEvent;
           try {
-            event = JSON.parse(kv[evIdx + 1] ?? '{}') as ParsedEvent;
-          } catch {
-            await redis.xack(stream, ADMINS_CFG_SYNC_GROUP, streamId);
-            continue;
-          }
-          try {
-            const syncResult = await syncServerAdminsCfg(ctx, serverId, {
-              reason: event.reason ?? 'unknown',
-              actorPlayerId: event.actor_player_id ?? null,
-              forceWrite: event.reason === 'force_sync' || event.forceWrite === true,
-            });
-            recordOutcome(serverId, syncResult.state !== 'unreachable');
-            if (syncResult.state === 'unreachable') {
-              // Stays in PEL; another reclaim cycle will retry.
-              continue;
-            }
-            await redis.xack(stream, ADMINS_CFG_SYNC_GROUP, streamId);
+            await handleEntry(serverId, stream, streamId, kv);
           } catch (err) {
             log.error(
               { serverId, streamId, err: (err as Error).message },
@@ -352,6 +317,7 @@ async function main() {
           reason: 'drift_check',
           actorPlayerId: null,
           forceWrite: false,
+          mode: 'passive',
         });
         recordOutcome(serverId, result.state !== 'unreachable');
         if (result.state === 'drift') {
