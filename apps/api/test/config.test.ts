@@ -40,6 +40,7 @@ describe('loadConfig', () => {
     expect(cfg.API_PORT).toBe(3000);
     expect(cfg.LOG_LEVEL).toBe('info');
     expect(cfg.BRIDGE_SOCKET).toBe('/run/panel-host-bridge/bridge.sock');
+    expect(cfg.VIP_LIFECYCLE_REQUIRE_REVISION).toBe(false);
   });
 
   it('respects overridden optional fields', async () => {
@@ -139,6 +140,17 @@ describe('loadConfig', () => {
     Object.assign(process.env, VALID_ENV, { BALANCER_WEBHOOK_SECRET: secret });
 
     expect(loadConfig().BALANCER_WEBHOOK_SECRET).toBe(secret);
+  });
+
+  it.each([
+    ['false', false],
+    ['true', true],
+  ])('parses VIP_LIFECYCLE_REQUIRE_REVISION=%s as %s', async (value, expected) => {
+    const loadConfig = await freshLoadConfig();
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, VALID_ENV, { VIP_LIFECYCLE_REQUIRE_REVISION: value });
+
+    expect(loadConfig().VIP_LIFECYCLE_REQUIRE_REVISION).toBe(expected);
   });
 
   it('accepts a complete BSS SSO client and an overlapping rotation secret', async () => {

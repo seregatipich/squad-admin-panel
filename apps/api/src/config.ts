@@ -70,6 +70,10 @@ const envSchema = z
     DISCORD_PUBLIC_KEY: z.string().optional(),
     GLITCHTIP_DSN: z.string().optional(),
     VIP_LIFECYCLE_WEBHOOK_SECRET: optionalSecret(32),
+    VIP_LIFECYCLE_REQUIRE_REVISION: z.preprocess(
+      (value) => (value === undefined || value === '' ? 'false' : value),
+      z.enum(['true', 'false']).transform((value) => value === 'true'),
+    ),
     BALANCER_WEBHOOK_SECRET: optionalSecret(32),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     MEDIA_STORAGE_DIR: z.string().default('./media'),

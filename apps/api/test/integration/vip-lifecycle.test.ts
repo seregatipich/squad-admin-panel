@@ -1,13 +1,11 @@
 import { createHmac } from 'node:crypto';
-import { auditLog, players, roles, servers } from '@squad/db/schema';
+import { auditLog, players, roles, servers, vipLifecycleEvents } from '@squad/db/schema';
 import { desc, eq } from 'drizzle-orm';
 import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildIntegrationApp, type IntegrationHarness, makeFakeBridge } from './harness.js';
 
 const SECRET = 'vip-lifecycle-test-secret-with-enough-entropy';
-const SIGNED_AT = '2026-07-06T05:00:00.000Z';
-
 let h: IntegrationHarness;
 let playerId: string;
 let roleId: string;
@@ -25,20 +23,21 @@ function canonicalJson(value: unknown): string {
     .join(',')}}`;
 }
 
-function sign(payload: unknown, timestamp = SIGNED_AT): string {
+function sign(payload: unknown, timestamp: string): string {
   return `sha256=${createHmac('sha256', SECRET)
     .update(`${timestamp}.${canonicalJson(payload)}`)
     .digest('hex')}`;
 }
 
-async function postLifecycle(payload: Record<string, unknown>, signature = sign(payload)) {
+async function postLifecycle(payload: Record<string, unknown>, signature?: string) {
+  const timestamp = new Date().toISOString();
   return h.app.inject({
     method: 'POST',
     url: '/api/v1/integrations/vip/lifecycle',
     headers: {
       'content-type': 'application/json',
-      'x-vip-timestamp': SIGNED_AT,
-      'x-vip-signature': signature,
+      'x-vip-timestamp': timestamp,
+      'x-vip-signature': signature ?? sign(payload, timestamp),
     },
     payload: JSON.stringify(payload),
   });
@@ -66,6 +65,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
   beforeEach(async () => {
     h = await buildIntegrationApp({ bridge: makeFakeBridge() });
     (h.app.config as Record<string, unknown>).VIP_LIFECYCLE_WEBHOOK_SECRET = SECRET;
+    (h.app.config as Record<string, unknown>).VIP_LIFECYCLE_REQUIRE_REVISION = false;
 
     roleId = uuidv7();
     serverId = uuidv7();
@@ -177,6 +177,83 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(await latestVipAudit()).toMatchObject({
       targetId: playerId,
     });
+  });
+
+  it('accepts optional revision and signed discord_id without using Discord identity', async () => {
+    const event = {
+      event_id: 'vip-purchase-compatible-contract-001',
+      event_type: 'vip.purchased',
+      steam_id64: '76561198000990001',
+      role_id: roleId,
+      tier: 'vip2',
+      purchase_id: 'purchase-compatible-contract-001',
+      expires_at: '2030-01-02T03:04:05.000Z',
+      revision: 1,
+      discord_id: '123456789012345678',
+    };
+
+    const res = await postLifecycle(event);
+
+    expect(res.statusCode).toBe(202);
+    const [stored] = await h.db
+      .select({ payload: vipLifecycleEvents.payload })
+      .from(vipLifecycleEvents)
+      .where(eq(vipLifecycleEvents.eventId, event.event_id));
+    expect(stored?.payload).toMatchObject({
+      revision: 1,
+      discord_id: '123456789012345678',
+    });
+  });
+
+  it('requires revision before a transaction when the compatibility flag is enabled', async () => {
+    (h.app.config as Record<string, unknown>).VIP_LIFECYCLE_REQUIRE_REVISION = true;
+    const event = {
+      event_id: 'vip-purchase-revision-required-001',
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'vip2',
+      purchase_id: 'purchase-revision-required-001',
+      expires_at: '2030-01-02T03:04:05.000Z',
+    };
+
+    const res = await postLifecycle(event);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'revision_required' });
+    const [player] = await h.db
+      .select({ roleId: players.roleId })
+      .from(players)
+      .where(eq(players.id, playerId));
+    expect(player?.roleId).toBeNull();
+    const stored = await h.db
+      .select({ eventId: vipLifecycleEvents.eventId })
+      .from(vipLifecycleEvents)
+      .where(eq(vipLifecycleEvents.eventId, event.event_id));
+    expect(stored).toHaveLength(0);
+  });
+
+  it.each([
+    ['revision', 0],
+    ['revision', 1.5],
+    ['discord_id', '1234567890123456'],
+    ['discord_id', '123456789012345678901'],
+    ['discord_id', '12345678901234567x'],
+  ])('rejects an invalid %s value', async (field, value) => {
+    const event = {
+      event_id: `vip-purchase-invalid-${field}-${String(value)}`,
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'vip2',
+      purchase_id: `purchase-invalid-${field}-${String(value)}`,
+      expires_at: '2030-01-02T03:04:05.000Z',
+      [field]: value,
+    };
+
+    const res = await postLifecycle(event);
+
+    expect(res.statusCode).toBe(400);
   });
 
   it('revokes only the matching VIP role on refund and is idempotent on retry', async () => {

@@ -28,6 +28,11 @@ const vipLifecycleBody = z
     tier: z.string().trim().min(1).max(64).nullable().optional(),
     purchase_id: z.string().trim().min(1).max(160).nullable().optional(),
     expires_at: z.string().datetime({ offset: true }).nullable().optional(),
+    revision: z.number().int().positive().optional(),
+    discord_id: z
+      .string()
+      .regex(/^\d{17,20}$/)
+      .optional(),
   })
   .superRefine((body, ctx) => {
     if (!body.player_id && !body.steam_id64) {
@@ -86,6 +91,10 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const body = req.body;
+      if (app.config.VIP_LIFECYCLE_REQUIRE_REVISION && body.revision === undefined) {
+        reply.code(400);
+        return { error: 'revision_required' };
+      }
       const shouldAssign = isAssignEvent(body.event_type);
       const expiresAt = body.expires_at ? new Date(body.expires_at) : null;
       if (shouldAssign && !expiresAt) {

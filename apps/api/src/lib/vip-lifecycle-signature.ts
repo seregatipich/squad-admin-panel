@@ -1,4 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { z } from 'zod';
+
+const timestampSchema = z.string().datetime({ offset: true });
+const SIGNATURE_WINDOW_MS = 300_000;
 
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -25,8 +29,17 @@ export function verifyVipLifecycleSignature(
   timestamp: string | undefined,
   signature: string | undefined,
   payload: unknown,
+  nowMs = Date.now(),
 ): boolean {
   if (!timestamp || !signature) return false;
+  if (!timestampSchema.safeParse(timestamp).success) return false;
+  const timestampMs = Date.parse(timestamp);
+  if (
+    !Number.isFinite(timestampMs) ||
+    !Number.isFinite(nowMs) ||
+    Math.abs(nowMs - timestampMs) > SIGNATURE_WINDOW_MS
+  )
+    return false;
   const expected = createVipLifecycleSignature(secret, timestamp, payload);
   const actualHex = signature.startsWith('sha256=') ? signature.slice('sha256='.length) : signature;
   const expectedHex = expected.slice('sha256='.length);
