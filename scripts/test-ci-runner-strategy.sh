@@ -64,34 +64,102 @@ deploy_groups=$(grep -Ec "^[[:space:]]*group:[[:space:]]*${RUNNER_GROUP}[[:space
   fail "production deploy no longer targets the '${RUNNER_GROUP}' runner group"
 
 go_block=$(job_block "$ci_workflow" go)
+printf '%s\n' "$go_block" | grep -Fq 'GOFLAGS: -buildvcs=false -modcacherw' ||
+  fail 'host Go commands may recreate read-only module cache directories'
 printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/setup-go@[0-9a-f]{40}' ||
   fail 'go job does not install Go through a SHA-pinned setup action'
 printf '%s\n' "$go_block" | grep -Fq 'cache: false' ||
   fail 'go job still restores an actions/cache archive into a persistent runner directory'
-printf '%s\n' "$go_block" | grep -Fq 'name: Настроить кеши Go точной попытки' ||
-  fail 'go job has no runner-side cache path setup step'
-printf '%s\n' "$go_block" | grep -Fq 'cache_root="${RUNNER_TEMP}/squad-admin-panel-go-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' ||
-  fail 'go cache root is not bound to the exact workflow attempt on the runner'
-for variable in GO_CACHE_ROOT GOCACHE GOMODCACHE; do
+printf '%s\n' "$go_block" | grep -Fq 'name: Очистить и настроить кеши Go' ||
+  fail 'go job has no runner-side cache reset and path setup step'
+printf '%s\n' "$go_block" | grep -Fq 'cache_root="${RUNNER_TEMP%/}/squad-admin-panel-go-cache"' ||
+  fail 'go cache root is not bound to the project inside RUNNER_TEMP'
+go_cache_setup_block=$(printf '%s\n' "$go_block" | sed -n '/name: Очистить и настроить кеши Go/,/uses: actions\/setup-go@/p')
+printf '%s\n' "$go_cache_setup_block" | grep -Fq '[[ -z "${RUNNER_TEMP:-}" ]]' ||
+  fail 'go cache pre-clean does not reject an unresolved RUNNER_TEMP'
+printf '%s\n' "$go_cache_setup_block" | grep -Fq 'find "${cache_root}" -xdev -type d -exec chmod u+w {} +' ||
+  fail 'go cache pre-clean cannot recover interrupted read-only module directories'
+printf '%s\n' "$go_cache_setup_block" | grep -Fq 'find "${cache_root}" -xdev -depth -delete' ||
+  fail 'go cache root is not emptied before a remote cache restore'
+if printf '%s\n' "$go_cache_setup_block" | grep -Eq 'rm[[:space:]]+-r'; then
+  fail 'go cache pre-clean uses recursive rm instead of an exact traversal'
+fi
+
+# Go без -modcacherw делает каталоги модулей 0555. Воспроизводим остаток
+# жёстко оборванной задачи и доказываем, что точный рецепт pre-clean удаляет
+# его, не полагаясь на успевший выполниться `go clean -modcache`.
+readonly_fixture_parent=$(mktemp -d)
+readonly_fixture_root="${readonly_fixture_parent}/squad-admin-panel-go-cache"
+cleanup_readonly_fixture() {
+  if [[ -e "${readonly_fixture_root}" || -L "${readonly_fixture_root}" ]]; then
+    if [[ -d "${readonly_fixture_root}" && ! -L "${readonly_fixture_root}" ]]; then
+      find "${readonly_fixture_root}" -xdev -type d -exec chmod u+w {} + 2>/dev/null || true
+    fi
+    find "${readonly_fixture_root}" -xdev -depth -delete 2>/dev/null || true
+  fi
+  rmdir "${readonly_fixture_parent}" 2>/dev/null || true
+}
+trap cleanup_readonly_fixture EXIT
+mkdir -p "${readonly_fixture_root}/modules/example"
+: > "${readonly_fixture_root}/modules/example/go.mod"
+chmod 0444 "${readonly_fixture_root}/modules/example/go.mod"
+chmod 0555 "${readonly_fixture_root}/modules/example" "${readonly_fixture_root}/modules"
+find "${readonly_fixture_root}" -xdev -type d -exec chmod u+w {} + ||
+  fail 'go cache pre-clean cannot make an interrupted module tree removable'
+find "${readonly_fixture_root}" -xdev -depth -delete ||
+  fail 'go cache pre-clean cannot delete an interrupted read-only module tree'
+[[ ! -e "${readonly_fixture_root}" ]] ||
+  fail 'go cache pre-clean left the interrupted module tree behind'
+rmdir "${readonly_fixture_parent}"
+trap - EXIT
+
+for variable in GO_CACHE_ROOT GOCACHE GOMODCACHE GOPATH GOBIN; do
   printf '%s\n' "$go_block" | grep -Fq "echo \"${variable}=" ||
     fail "go cache setup does not export ${variable} through GITHUB_ENV"
 done
 printf '%s\n' "$go_block" | grep -Fq '>> "${GITHUB_ENV}"' ||
   fail 'go cache paths are not passed to setup-go and later steps'
-if printf '%s\n' "$go_block" | grep -Fq '${{ runner.temp }}'; then
-  fail 'go job evaluates runner.temp before the runner-side setup step'
+printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/cache/restore@[0-9a-f]{40}' ||
+  fail 'go job does not restore its reusable cache through a SHA-pinned action'
+printf '%s\n' "$go_block" | grep -Fq 'id: go-cache-restore' ||
+  fail 'go cache restore has no stable id for the cache-hit guard'
+printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/cache/save@[0-9a-f]{40}' ||
+  fail 'go job does not save its reusable cache before local cleanup'
+remote_cache_path='${{ runner.temp }}/squad-admin-panel-go-cache'
+[ "$(printf '%s\n' "$go_block" | grep -Fc "$remote_cache_path")" -eq 2 ] ||
+  fail 'Go cache restore/save paths differ or are not stable between runs'
+cache_key='squad-admin-panel-go-${{ runner.os }}-${{ runner.arch }}-go1.25.13-govuln1.7.0-${{ hashFiles('"'"'apps/bridge/go.sum'"'"') }}'
+[ "$(printf '%s\n' "$go_block" | grep -Fc "$cache_key")" -eq 2 ] ||
+  fail 'Go cache restore/save keys differ or are not bound to tool and dependency versions'
+go_cache_save_block=$(printf '%s\n' "$go_block" | sed -n '/name: Сохранить переиспользуемый кеш Go/,/name: Удалить локальный кеш Go/p')
+printf '%s\n' "$go_cache_save_block" | grep -Fq "if: success() && steps.go-cache-restore.outputs.cache-hit != 'true'" ||
+  fail 'Go cache may be saved after a failed or partial scan'
+printf '%s\n' "$go_block" | grep -Fq 'go install golang.org/x/vuln/cmd/govulncheck@v1.7.0' ||
+  fail 'govulncheck is not pinned to the accepted release'
+printf '%s\n' "$go_block" | grep -Fq 'go version -m "${GOBIN}/govulncheck"' ||
+  fail 'a restored govulncheck binary is not verified through embedded Go module metadata'
+printf '%s\n' "$go_block" | grep -Fq 'golang.org/x/vuln[[:space:]]+v1\.7\.0' ||
+  fail 'govulncheck metadata verification does not require the pinned module release'
+if printf '%s\n' "$go_block" | grep -Fq 'govulncheck@latest'; then
+  fail 'govulncheck still changes implicitly between CI runs'
 fi
-printf '%s\n' "$go_block" | grep -Fq 'name: Удалить кеши Go точной попытки' ||
+printf '%s\n' "$go_block" | grep -Fq 'name: Удалить локальный кеш Go' ||
   fail 'go job has no exact cache cleanup step'
-go_cleanup_block=$(printf '%s\n' "$go_block" | sed -n '/name: Удалить кеши Go точной попытки/,$p')
+go_cleanup_block=$(printf '%s\n' "$go_block" | sed -n '/name: Удалить локальный кеш Go/,$p')
 printf '%s\n' "$go_cleanup_block" | grep -Fq 'if: always()' ||
   fail 'go cache cleanup is skipped after a failed check'
 printf '%s\n' "$go_cleanup_block" | grep -Fq 'go clean -cache -modcache' ||
   fail 'go job does not clean its exact build and module caches'
 printf '%s\n' "$go_cleanup_block" | grep -Fq '"${GO_CACHE_ROOT}" != "${expected_root}"' ||
-  fail 'go cache cleanup does not validate its exact run-scoped root'
-printf '%s\n' "$go_cleanup_block" | grep -Fq 'find "${GO_CACHE_ROOT}" -depth -delete' ||
-  fail 'go cache cleanup does not remove its exact run-scoped root'
+  fail 'go cache cleanup does not validate its exact project-scoped root'
+printf '%s\n' "$go_cleanup_block" | grep -Fq '"${GOPATH}" != "${GO_CACHE_ROOT}/workspace"' ||
+  fail 'go cache cleanup does not validate its isolated GOPATH'
+printf '%s\n' "$go_cleanup_block" | grep -Fq '"${GOBIN}" != "${GO_CACHE_ROOT}/bin"' ||
+  fail 'go cache cleanup does not validate its isolated GOBIN'
+printf '%s\n' "$go_cleanup_block" | grep -Fq 'find "${GO_CACHE_ROOT}" -xdev -type d -exec chmod u+w {} +' ||
+  fail 'go cache cleanup cannot recover read-only module directories'
+printf '%s\n' "$go_cleanup_block" | grep -Fq 'find "${GO_CACHE_ROOT}" -xdev -depth -delete' ||
+  fail 'go cache cleanup does not remove its exact project-scoped root'
 if printf '%s\n' "$go_cleanup_block" | grep -Eq 'rm[[:space:]]+-r'; then
   fail 'go cache cleanup uses recursive rm instead of a validated exact traversal'
 fi

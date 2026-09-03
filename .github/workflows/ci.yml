@@ -184,7 +184,7 @@ jobs:
       group: selfhost-group-1
     timeout-minutes: 15
     env:
-      GOFLAGS: -buildvcs=false
+      GOFLAGS: -buildvcs=false -modcacherw
     defaults:
       run:
         working-directory: apps/bridge
@@ -192,20 +192,43 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # setup-go/actions-cache распаковывал архив поверх общей домашней папки
       # постоянного раннера и на повторном запуске получал сотни
-      # `tar: Cannot open: File exists`. RUNNER_TEMP доступен только после
-      # назначения раннера, поэтому пути вычисляются здесь, а не в jobs.go.env.
-      - name: Настроить кеши Go точной попытки
+      # `tar: Cannot open: File exists`. Архив GitHub нельзя переносить между
+      # разными абсолютными путями, поэтому используем один точный каталог
+      # проекта в RUNNER_TEMP, очищая его и до restore, и после save.
+      - name: Очистить и настроить кеши Go
         run: |
-          cache_root="${RUNNER_TEMP}/squad-admin-panel-go-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [[ -z "${RUNNER_TEMP:-}" ]]; then
+            echo "RUNNER_TEMP не задан; точная очистка кеша Go невозможна." >&2
+            exit 1
+          fi
+          cache_root="${RUNNER_TEMP%/}/squad-admin-panel-go-cache"
+          if [[ -e "${cache_root}" || -L "${cache_root}" ]]; then
+            if [[ -d "${cache_root}" && ! -L "${cache_root}" ]]; then
+              find "${cache_root}" -xdev -type d -exec chmod u+w {} +
+            fi
+            find "${cache_root}" -xdev -depth -delete
+          fi
+          mkdir -p "${cache_root}"
           {
             echo "GO_CACHE_ROOT=${cache_root}"
             echo "GOCACHE=${cache_root}/build"
             echo "GOMODCACHE=${cache_root}/modules"
+            echo "GOPATH=${cache_root}/workspace"
+            echo "GOBIN=${cache_root}/bin"
           } >> "${GITHUB_ENV}"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.25.13'
+          # Сохранение setup-go выполняется post-шагом уже после нашей точной
+          # локальной очистки. Поэтому встроенный кеш остаётся выключенным, а
+          # раздельные restore/save ниже работают до удаления каталога проекта.
           cache: false
+      - name: Восстановить кеш Go в очищенный каталог
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: go-cache-restore
+        with:
+          path: ${{ runner.temp }}/squad-admin-panel-go-cache
+          key: squad-admin-panel-go-${{ runner.os }}-${{ runner.arch }}-go1.25.13-govuln1.7.0-${{ hashFiles('apps/bridge/go.sum') }}
       - run: go vet ./...
       # Только этот шаг уходит в контейнер, и только потому, что детектору гонок
       # нужен cgo, а компилятора C на машине нет. Вся задача в контейнере не
@@ -225,8 +248,12 @@ jobs:
             go test -race -count=1 ./...
       - name: govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          "$(go env GOPATH)/bin/govulncheck" ./...
+          if [[ ! -x "${GOBIN}/govulncheck" ]] ||
+             ! go version -m "${GOBIN}/govulncheck" | grep -Eq '[[:space:]]mod[[:space:]]+golang.org/x/vuln[[:space:]]+v1\.7\.0'; then
+            go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          fi
+          go version -m "${GOBIN}/govulncheck" | grep -Eq '[[:space:]]mod[[:space:]]+golang.org/x/vuln[[:space:]]+v1\.7\.0'
+          "${GOBIN}/govulncheck" ./...
       - name: build static binary
         run: |
           CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/panel-host-bridge ./cmd/panel-host-bridge
@@ -242,20 +269,31 @@ jobs:
             exit 1
           fi
           echo "panel-host-bridge статический"
-      - name: Удалить кеши Go точной попытки
+      - name: Сохранить переиспользуемый кеш Go
+        if: success() && steps.go-cache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/squad-admin-panel-go-cache
+          key: squad-admin-panel-go-${{ runner.os }}-${{ runner.arch }}-go1.25.13-govuln1.7.0-${{ hashFiles('apps/bridge/go.sum') }}
+      - name: Удалить локальный кеш Go
         if: always()
         run: |
-          expected_root="${RUNNER_TEMP}/squad-admin-panel-go-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          expected_root="${RUNNER_TEMP%/}/squad-admin-panel-go-cache"
           if [[ "${GO_CACHE_ROOT}" != "${expected_root}" ||
                 "${GOCACHE}" != "${GO_CACHE_ROOT}/build" ||
-                "${GOMODCACHE}" != "${GO_CACHE_ROOT}/modules" ]]; then
-            echo "Путь кеша Go вышел за каталог точной попытки workflow." >&2
+                "${GOMODCACHE}" != "${GO_CACHE_ROOT}/modules" ||
+                "${GOPATH}" != "${GO_CACHE_ROOT}/workspace" ||
+                "${GOBIN}" != "${GO_CACHE_ROOT}/bin" ]]; then
+            echo "Путь кеша Go вышел за точный каталог проекта в RUNNER_TEMP." >&2
             exit 1
           fi
           clean_status=0
           go clean -cache -modcache || clean_status=$?
-          if [[ -d "${GO_CACHE_ROOT}" ]]; then
-            find "${GO_CACHE_ROOT}" -depth -delete
+          if [[ -e "${GO_CACHE_ROOT}" || -L "${GO_CACHE_ROOT}" ]]; then
+            if [[ -d "${GO_CACHE_ROOT}" && ! -L "${GO_CACHE_ROOT}" ]]; then
+              find "${GO_CACHE_ROOT}" -xdev -type d -exec chmod u+w {} +
+            fi
+            find "${GO_CACHE_ROOT}" -xdev -depth -delete
           fi
           [[ ! -e "${GO_CACHE_ROOT}" ]]
           exit "${clean_status}"
