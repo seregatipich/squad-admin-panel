@@ -129,7 +129,7 @@ this reason, and they were removed when CI moved to disposable VMs (#286).
 GitHub Runner удаляет сервисные контейнеры командой `docker rm --force` без
 `--volumes`, поэтому на постоянной машине каждый запуск `node` раньше оставлял
 анонимные тома PostgreSQL и Redis. Теперь оба пути из `VOLUME` образов заранее
-перекрыты ограниченными `tmpfs`: 1 ГиБ для PostgreSQL и 128 МиБ для Redis.
+перекрыты ограниченными `tmpfs`: 4 ГиБ для PostgreSQL и 128 МиБ для Redis.
 Docker не создаёт анонимные тома, а временные данные исчезают вместе с
 контейнером даже при ошибке healthcheck или отмене задания. Общая очистка не
 применяется; точные параметры закреплены в `test-ci-runner-strategy.sh`.

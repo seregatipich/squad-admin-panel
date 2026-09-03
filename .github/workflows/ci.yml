@@ -94,7 +94,7 @@ jobs:
         ports:
           - 5432
         options: >-
-          --tmpfs /var/lib/postgresql/data:rw,size=1g
+          --tmpfs /var/lib/postgresql/data:rw,size=4g
           --health-cmd "pg_isready -U admin -d admin"
           --health-interval 10s
           --health-timeout 5s
