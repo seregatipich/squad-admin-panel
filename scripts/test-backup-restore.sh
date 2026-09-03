@@ -11,7 +11,8 @@
 # `-f` alone, since postgres/redis declare a VOLUME for their data dir and a
 # bare `-f` orphans it. The script asserts this itself (see the two
 # "leaked its anonymous volume" checks below) after a prior run silently
-# leaked ~7.5 GB on the former persistent verification runner.
+# leaked ~7.5 GB on the former persistent verification runner. The run-scoped
+# toolbox image is removed by the same EXIT trap.
 #
 # Usage: bash scripts/test-backup-restore.sh
 
@@ -24,7 +25,7 @@ SFX="infra8-$$-$RANDOM"
 NET="net-${SFX}"
 PG1="pg1-${SFX}"; PG2="pg2-${SFX}"
 RD1="rd1-${SFX}"; RD2="rd2-${SFX}"
-TOOL_IMG="squad-panel/restic:citest"
+TOOL_IMG="squad-panel/restic:citest-${SFX}"
 PG_IMG="postgres:16-alpine"
 RD_IMG="redis:7-alpine"
 TMP="$(mktemp -d)"
@@ -49,6 +50,7 @@ cleanup() {
   local code=$?
   docker rm -fv "$PG1" "$PG2" "$RD1" "$RD2" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
+  docker image rm --force "$TOOL_IMG" >/dev/null 2>&1 || true
   rm -rf "$TMP" >/dev/null 2>&1 || true
   return "$code"
 }
@@ -107,7 +109,12 @@ wait_redis() {
 
 # ── build the backup image ──────────────────────────────────────────────────
 step "Building the restic backup image (docker/restic.Dockerfile)"
-docker build -f docker/restic.Dockerfile -t "$TOOL_IMG" . >/dev/null || fail "image build failed"
+if [ -n "${CI_BUILDX_BUILDER:-}" ]; then
+  docker buildx build --builder "$CI_BUILDX_BUILDER" --load \
+    -f docker/restic.Dockerfile -t "$TOOL_IMG" . >/dev/null || fail "image build failed"
+else
+  docker build -f docker/restic.Dockerfile -t "$TOOL_IMG" . >/dev/null || fail "image build failed"
+fi
 ok "image $TOOL_IMG built"
 
 step "Creating isolated network"

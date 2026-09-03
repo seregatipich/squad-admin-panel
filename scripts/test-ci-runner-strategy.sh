@@ -76,4 +76,51 @@ branch_guard=$(job_block "$ci_workflow" branch-guard)
 printf '%s\n' "$branch_guard" | grep -Fq 'bash scripts/test-ci-runner-strategy.sh' ||
   fail 'branch-guard does not execute this regression test'
 
+docker_block=$(job_block "$ci_workflow" docker)
+printf '%s\n' "$docker_block" | grep -Fq 'CI_IMAGE_TAG: ci-${{ github.run_id }}-${{ github.run_attempt }}' ||
+  fail 'docker images are not bound to the exact workflow run'
+printf '%s\n' "$docker_block" | grep -Fq 'id: buildx' ||
+  fail 'docker job does not expose its isolated builder name'
+printf '%s\n' "$docker_block" | grep -Fq 'cleanup: true' ||
+  fail 'docker job does not remove its isolated builder cache'
+buildx_count=$(printf '%s\n' "$docker_block" | grep -Fc 'docker buildx build --builder "${{ steps.buildx.outputs.name }}" --load')
+[ "$buildx_count" -eq 5 ] ||
+  fail "docker job has $buildx_count isolated builds instead of 5"
+printf '%s\n' "$docker_block" | grep -Fq 'CI_BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}' ||
+  fail 'backup round-trip does not receive the isolated builder name'
+if printf '%s\n' "$docker_block" | grep -Eq 'run:[[:space:]]+docker build[[:space:]]'; then
+  fail 'docker job still writes intermediate cache into the persistent daemon builder'
+fi
+printf '%s\n' "$docker_block" | grep -Fq 'name: remove exact CI images' ||
+  fail 'docker job has no exact image cleanup step'
+printf '%s\n' "$docker_block" | grep -Fq 'if: always()' ||
+  fail 'docker image cleanup is skipped after a failed build'
+printf '%s\n' "$docker_block" | grep -Fq 'docker image rm --force' ||
+  fail 'docker job does not remove its exact images'
+cleanup_block=$(printf '%s\n' "$docker_block" | sed -n '/name: remove exact CI images/,$p')
+cleanup_tag_count=$(printf '%s\n' "$cleanup_block" | grep -Fc ':${CI_IMAGE_TAG}"')
+[ "$cleanup_tag_count" -eq 5 ] ||
+  fail "docker cleanup has $cleanup_tag_count run-scoped tags instead of 5"
+for image in \
+  squad-admin-panel/api \
+  squad-admin-panel/worker-log-ingest \
+  squad-admin-panel/worker-rcon \
+  squad-panel/rnsquadjs \
+  squad-admin-panel/web
+do
+  printf '%s\n' "$cleanup_block" | grep -Fq "\"${image}:\${CI_IMAGE_TAG}\"" ||
+    fail "docker cleanup omits ${image}"
+done
+if printf '%s\n' "$docker_block" | grep -Eq 'squad-(admin-panel|panel)/[^:[:space:]]+:ci([[:space:]".]|$)'; then
+  fail 'docker job still uses a shared :ci tag'
+fi
+
+backup_script="$repo_root/scripts/test-backup-restore.sh"
+grep -Fq 'TOOL_IMG="squad-panel/restic:citest-${SFX}"' "$backup_script" ||
+  fail 'backup round-trip toolbox image is not run-scoped'
+grep -Fq 'docker image rm --force "$TOOL_IMG"' "$backup_script" ||
+  fail 'backup round-trip does not remove its toolbox image on exit'
+grep -Fq 'docker buildx build --builder "$CI_BUILDX_BUILDER" --load' "$backup_script" ||
+  fail 'backup round-trip does not share the isolated CI builder'
+
 echo "test-ci-runner-strategy: OK — every ci and deploy job targets the '${RUNNER_GROUP}' runner group"
