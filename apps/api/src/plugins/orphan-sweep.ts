@@ -13,7 +13,8 @@ const BOOT_DELAY_MS = 30_000;
  * `servers` table, and runs `docker system prune -af` on a daily timer
  * so build cache + dangling images don't accumulate. Both operations go
  * through the bridge's existing allowlists, so a corrupted DB query
- * cannot broaden the blast radius.
+ * cannot broaden the blast radius. The prune is skipped (warn log, no
+ * audit row) on ticks where the bridge does not answer a ping.
  */
 export default fp(async (app) => {
   let orphanTimer: NodeJS.Timeout | null = null;
@@ -44,16 +45,28 @@ export default fp(async (app) => {
     }
   };
 
-  const runDockerPrune = () => {
+  // A scheduled prune that cannot even reach the bridge would only add a
+  // 502 audit row per API boot; the outage is already surfaced by the
+  // bridge heartbeat, so log and wait for the next tick instead.
+  const runDockerPrune = async () => {
+    try {
+      await app.bridge.ping();
+    } catch (err) {
+      app.log.warn(
+        { err: (err as Error).message },
+        'periodic docker prune skipped: bridge unreachable',
+      );
+      return;
+    }
     fireAutoPrune(app, 'periodic', null, null);
   };
 
   // Boot delay so the bridge connection is warm before the first sweep.
   const bootTimer = setTimeout(() => {
     void runOrphanSweep();
-    runDockerPrune();
+    void runDockerPrune();
     orphanTimer = setInterval(() => void runOrphanSweep(), SWEEP_INTERVAL_MS);
-    pruneTimer = setInterval(runDockerPrune, DOCKER_PRUNE_INTERVAL_MS);
+    pruneTimer = setInterval(() => void runDockerPrune(), DOCKER_PRUNE_INTERVAL_MS);
   }, BOOT_DELAY_MS);
 
   app.addHook('onClose', async () => {
