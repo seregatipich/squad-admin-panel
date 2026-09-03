@@ -126,6 +126,14 @@ volumes and workspaces are no longer discarded for you. Watch it: the previous
 persistent setup needed `prepare-runner`/`cleanup-runner` maintenance jobs for exactly
 this reason, and they were removed when CI moved to disposable VMs (#286).
 
+GitHub Runner удаляет сервисные контейнеры командой `docker rm --force` без
+`--volumes`, поэтому на постоянной машине каждый запуск `node` раньше оставлял
+анонимные тома PostgreSQL и Redis. Теперь оба пути из `VOLUME` образов заранее
+перекрыты ограниченными `tmpfs`: 1 ГиБ для PostgreSQL и 128 МиБ для Redis.
+Docker не создаёт анонимные тома, а временные данные исчезают вместе с
+контейнером даже при ошибке healthcheck или отмене задания. Общая очистка не
+применяется; точные параметры закреплены в `test-ci-runner-strategy.sh`.
+
 **Never run a whole job in a container on this runner.** The workspace is shared and
 persistent; a containerised job runs as `root`, so `actions/checkout` inside it writes
 the entire tree as root and the next job — running as the `runner` user — can neither

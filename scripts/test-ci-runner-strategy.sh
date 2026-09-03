@@ -76,6 +76,15 @@ branch_guard=$(job_block "$ci_workflow" branch-guard)
 printf '%s\n' "$branch_guard" | grep -Fq 'bash scripts/test-ci-runner-strategy.sh' ||
   fail 'branch-guard does not execute this regression test'
 
+node_block=$(job_block "$ci_workflow" node)
+printf '%s\n' "$node_block" | grep -Fq -- '--tmpfs /var/lib/postgresql/data:rw,size=1g' ||
+  fail 'Postgres service may leak its image-declared anonymous volume'
+printf '%s\n' "$node_block" | grep -Fq -- '--tmpfs /data:rw,size=128m' ||
+  fail 'Redis service may leak its image-declared anonymous volume'
+if printf '%s\n' "$node_block" | grep -Eq 'docker (system|volume|builder) prune'; then
+  fail 'node job contains a broad Docker cleanup'
+fi
+
 docker_block=$(job_block "$ci_workflow" docker)
 printf '%s\n' "$docker_block" | grep -Fq 'CI_IMAGE_TAG: ci-${{ github.run_id }}-${{ github.run_attempt }}' ||
   fail 'docker images are not bound to the exact workflow run'

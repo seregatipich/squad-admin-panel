@@ -94,6 +94,7 @@ jobs:
         ports:
           - 5432
         options: >-
+          --tmpfs /var/lib/postgresql/data:rw,size=1g
           --health-cmd "pg_isready -U admin -d admin"
           --health-interval 10s
           --health-timeout 5s
@@ -103,6 +104,7 @@ jobs:
         ports:
           - 6379
         options: >-
+          --tmpfs /data:rw,size=128m
           --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
