@@ -77,7 +77,7 @@ printf '%s\n' "$branch_guard" | grep -Fq 'bash scripts/test-ci-runner-strategy.s
   fail 'branch-guard does not execute this regression test'
 
 node_block=$(job_block "$ci_workflow" node)
-printf '%s\n' "$node_block" | grep -Fq -- '--tmpfs /var/lib/postgresql/data:rw,size=4g' ||
+printf '%s\n' "$node_block" | grep -Fq -- '--tmpfs /var/lib/postgresql/data:rw,size=1g' ||
   fail 'Postgres service may leak its image-declared anonymous volume'
 printf '%s\n' "$node_block" | grep -Fq -- '--tmpfs /data:rw,size=128m' ||
   fail 'Redis service may leak its image-declared anonymous volume'
