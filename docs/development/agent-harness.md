@@ -137,6 +137,15 @@ Docker не создаёт анонимные тома, а временные д
 очистка не применяется; точные параметры закреплены в
 `test-ci-runner-strategy.sh`.
 
+Для снижения локальной нагрузки перед `git push` можно задать
+`VITEST_MAX_FORKS=2`. Переменная включена в `globalPassThroughEnv` Turbo: она
+доходит до Vitest, но не меняет ключи кэша, поскольку влияет только на число
+одновременных процессов. Stryker также ограничен двумя процессами в своём
+конфигурационном файле, поэтому мутационная проверка не занимает все ядра
+рабочей машины. Предварительный шлюз одновременно запускает не больше двух
+затронутых пакетных тестов; для осознанной локальной настройки служит
+`PREPUSH_TURBO_CONCURRENCY`, значение по умолчанию — `2`.
+
 **Never run a whole job in a container on this runner.** The workspace is shared and
 persistent; a containerised job runs as `root`, so `actions/checkout` inside it writes
 the entire tree as root and the next job — running as the `runner` user — can neither
