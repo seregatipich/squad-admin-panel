@@ -138,6 +138,9 @@ interface DiskBreakdown {
 }
 
 const POLL_MS = 4000;
+// Журнал сокращает только UUID: восемь первых символов однозначно узнаются
+// в таблице, а `localhost`, `days:30` или `1` от усечения лишь теряют смысл.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const WORKER_STALE_MS = 15_000;
 const WORKER_OK_MS = 10_000;
 
@@ -1107,9 +1110,12 @@ function ActivityRow({ ev }: { ev: AuditRow }) {
   const locale = useIntlLocale();
   const severity = severityFromStatus(ev.status_code);
   const time = new Date(ev.created_at);
-  const targetLabel = ev.target_type
-    ? `${ev.target_type}${ev.target_id ? ` · ${ev.target_id.slice(0, 8)}` : ''}`
-    : '—';
+  const targetId = ev.target_id
+    ? UUID_RE.test(ev.target_id)
+      ? ev.target_id.slice(0, 8)
+      : ev.target_id
+    : null;
+  const targetLabel = ev.target_type ? `${ev.target_type}${targetId ? ` · ${targetId}` : ''}` : '—';
   // Без `interactive`: строка журнала никуда не ведёт, а этот флаг примитив
   // резервирует за строками со ссылкой в первой ячейке.
   return (

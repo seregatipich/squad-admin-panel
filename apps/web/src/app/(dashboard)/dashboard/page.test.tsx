@@ -353,6 +353,54 @@ describe('DashboardPage', () => {
   });
 
   /*
+   * Цель записи раньше всегда резалась до восьми символов: UUID это шло на
+   * пользу, а `host · localhost` превращалось в бессмысленное `host · localhos`.
+   */
+  it('shortens only UUID targets in the activity feed', async () => {
+    stubFetch({
+      '/api/v1/audit': {
+        body: {
+          items: [
+            {
+              id: 'a-host',
+              created_at: '2026-08-22T10:00:00.000Z',
+              actor_kind: 'system',
+              action_type: 'host.docker_prune',
+              target_type: 'host',
+              target_id: 'localhost',
+              status_code: 502,
+            },
+            {
+              id: 'a-uuid',
+              created_at: '2026-08-22T09:00:00.000Z',
+              actor_kind: 'system',
+              action_type: 'server.restart',
+              target_type: 'server',
+              target_id: 'c674f105-0824-42df-ac5e-8d043125766f',
+              status_code: 200,
+            },
+            {
+              id: 'a-days',
+              created_at: '2026-08-22T08:00:00.000Z',
+              actor_kind: 'steam',
+              action_type: 'settings.chat_flags.retention',
+              target_type: 'chat_flags',
+              target_id: 'days:30',
+              status_code: 200,
+            },
+          ],
+        },
+      },
+    });
+    await renderDashboard();
+
+    expect(screen.getByText('host · localhost')).toBeInTheDocument();
+    expect(screen.getByText('server · c674f105')).toBeInTheDocument();
+    expect(screen.getByText('chat_flags · days:30')).toBeInTheDocument();
+    expect(screen.queryByText('host · localhos')).not.toBeInTheDocument();
+  });
+
+  /*
    * Карточка серверов раньше стояла на `h-full` и вытягивалась под соседнюю
    * карточку хоста: три строки таблицы и триста пикселей пустоты под ними.
    */
