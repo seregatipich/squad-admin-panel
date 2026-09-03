@@ -109,7 +109,12 @@ wait_redis() {
 
 # ── build the backup image ──────────────────────────────────────────────────
 step "Building the restic backup image (docker/restic.Dockerfile)"
-docker build -f docker/restic.Dockerfile -t "$TOOL_IMG" . >/dev/null || fail "image build failed"
+if [ -n "${CI_BUILDX_BUILDER:-}" ]; then
+  docker buildx build --builder "$CI_BUILDX_BUILDER" --load \
+    -f docker/restic.Dockerfile -t "$TOOL_IMG" . >/dev/null || fail "image build failed"
+else
+  docker build -f docker/restic.Dockerfile -t "$TOOL_IMG" . >/dev/null || fail "image build failed"
+fi
 ok "image $TOOL_IMG built"
 
 step "Creating isolated network"
