@@ -900,7 +900,7 @@ describeIfDb('VIPSUB-5 self-service subscriptions', () => {
 
       expect(lifecycle.statusCode).toBe(202);
       expect(subscription.statusCode).toBe(409);
-      expect(subscription.json()).toMatchObject({ error: 'role_conflict' });
+      expect(subscription.json()).toMatchObject({ error: 'vip_lifecycle_owned' });
       expect(await storedSubscriptions(playerId)).toHaveLength(0);
       expect(
         await h.db

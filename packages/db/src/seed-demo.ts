@@ -55,9 +55,12 @@ async function main() {
       role_expires_at = NULL,
       role_comment = NULL,
       role_lifecycle_event_id = NULL
+    WHERE players.role_lifecycle_event_id IS NULL
     RETURNING id
   `;
-  if (!adminRows[0]) throw new Error('admin player upsert returned no row');
+  if (!adminRows[0]) {
+    throw new Error('vip_lifecycle_owned: demo admin role is owned by external VIP lifecycle');
+  }
   const adminId = adminRows[0].id as string;
 
   await sql`

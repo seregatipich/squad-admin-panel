@@ -382,10 +382,18 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
       const ownerId = ownerRow[0]?.id ?? null;
 
       const current = await app.db
-        .select({ roleId: players.roleId })
+        .select({ roleId: players.roleId, roleLifecycleEventId: players.roleLifecycleEventId })
         .from(players)
         .where(eq(players.id, playerId))
         .limit(1);
+      if (!current[0]) {
+        reply.code(404);
+        return { error: 'player_not_found' };
+      }
+      if (current[0].roleLifecycleEventId !== null) {
+        reply.code(409);
+        return { error: 'vip_lifecycle_owned' };
+      }
       const wasOwner = current[0]?.roleId === ownerId && ownerId !== null;
       const willBeOwner = newRoleId === ownerId && ownerId !== null;
 
@@ -400,8 +408,8 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
-      await app.db.transaction(async (tx) => {
-        await tx
+      const changed = await app.db.transaction(async (tx) => {
+        const [updated] = await tx
           .update(players)
           .set({
             roleId: newRoleId,
@@ -409,14 +417,21 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
             roleComment: newRoleId === null ? null : roleComment,
             roleLifecycleEventId: null,
           })
-          .where(eq(players.id, playerId));
+          .where(and(eq(players.id, playerId), isNull(players.roleLifecycleEventId)))
+          .returning({ id: players.id });
+        if (!updated) return false;
         await publishAdminsCfgSyncForAllServers(tx, {
           reason: newRoleId === null ? 'player.role.unassign' : 'player.role.assign',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
           request_id: req.id,
         });
+        return true;
       });
+      if (!changed) {
+        reply.code(409);
+        return { error: 'vip_lifecycle_owned' };
+      }
       invalidatePermissionCache(playerId);
       // DISCORD-5 (#152): published after the commit so worker-discord re-derives
       // this player's Discord roles within seconds. Best-effort — the worker's
@@ -453,13 +468,17 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
         .limit(1);
       const ownerId = ownerRow[0]?.id ?? null;
       const current = await app.db
-        .select({ roleId: players.roleId })
+        .select({ roleId: players.roleId, roleLifecycleEventId: players.roleLifecycleEventId })
         .from(players)
         .where(eq(players.id, playerId))
         .limit(1);
       if (current.length === 0) {
         reply.code(404);
         return { error: 'player_not_found' };
+      }
+      if (current[0]?.roleLifecycleEventId !== null) {
+        reply.code(409);
+        return { error: 'vip_lifecycle_owned' };
       }
       const wasOwner = current[0]?.roleId === ownerId && ownerId !== null;
       if (wasOwner) {
@@ -472,8 +491,8 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
           return { error: 'cannot_remove_last_owner' };
         }
       }
-      await app.db.transaction(async (tx) => {
-        await tx
+      const changed = await app.db.transaction(async (tx) => {
+        const [updated] = await tx
           .update(players)
           .set({
             roleId: null,
@@ -481,14 +500,21 @@ const playerRoutes: FastifyPluginAsync = async (app) => {
             roleComment: null,
             roleLifecycleEventId: null,
           })
-          .where(eq(players.id, playerId));
+          .where(and(eq(players.id, playerId), isNull(players.roleLifecycleEventId)))
+          .returning({ id: players.id });
+        if (!updated) return false;
         await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'player.role.unassign',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
           request_id: req.id,
         });
+        return true;
       });
+      if (!changed) {
+        reply.code(409);
+        return { error: 'vip_lifecycle_owned' };
+      }
       invalidatePermissionCache(playerId);
       await publishDiscordRoleSync(app.redis, playerId, 'player.role.unassign', app.log);
       await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);

@@ -5,5 +5,9 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/dist/**'],
     testTimeout: 40_000,
     setupFiles: ['../_test-shared/load-env.ts'],
+    fileParallelism: false,
+    globalSetup: ['./test/global-setup.ts'],
+    hookTimeout: 120_000,
+    sequence: { concurrent: false },
   },
 });

@@ -135,6 +135,18 @@ describe('runSubscriptionRenewalTick', () => {
     );
   });
 
+  it('expires the internal subscription when external lifecycle becomes the sole VIP writer', async () => {
+    const charge = vi.fn().mockResolvedValue({ status: 'vip_lifecycle_required' });
+    const deps = makeDeps({ dueSubscriptions: [due()], charge });
+
+    const result = await runSubscriptionRenewalTick(deps);
+
+    expect(result).toMatchObject({ renewed: 0, expired: 1 });
+    expect(deps.notifySubscriptionExpired).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'vip_lifecycle_required' }),
+    );
+  });
+
   it('keeps renewing the rest of the batch when one subscription fails', async () => {
     const charge = vi
       .fn()

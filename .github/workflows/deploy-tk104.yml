@@ -533,19 +533,39 @@ jobs:
               if [ "${#panel_expected_sha}" -ne 40 ]; then exit 1; fi
               case "${panel_expected_sha}" in (*[!0-9a-f]*) exit 1 ;; esac
               case "${release_dir_name}" in vip-revision-[0-9]*-[0-9]*) ;; *) exit 1 ;; esac
-              shared_secret="$(printf "%s" "${shared_secret_b64}" | base64 --decode)"
               app_dir="$HOME/apps/squad-admin-panel"
               release_dir="${app_dir}/.release/${release_dir_name}"
+              compose=(docker compose --project-name squad-admin-panel \
+                --project-directory "${app_dir}" --env-file "${app_dir}/.env.tk104" \
+                -f "${release_dir}/compose.tk104.yml")
+              if [ "${revision_mode}" = "true" ]; then
+                "${compose[@]}" exec -T \
+                  -e VIP_LIFECYCLE_FENCE_ACTION=enable \
+                  api node --enable-source-maps \
+                  dist/tools/audit-vip-lifecycle-ownership.js
+              fi
+              shared_secret="$(printf "%s" "${shared_secret_b64}" | base64 --decode)"
               printf "%s" "${shared_secret}" |
                 APP_DIR="${app_dir}" \
                 VIP_LIFECYCLE_REQUIRE_REVISION_DESIRED="${revision_mode}" \
                 bash "${release_dir}/scripts/configure-bss-sso-env.sh"
               expected_vip_secret="$(printf "%s" "${shared_secret}" | python3 -c \
                 "import hashlib,hmac,sys;print(hmac.new(sys.stdin.buffer.read(),b\"bss-vip-lifecycle-v1\",hashlib.sha256).hexdigest())")"
+              if [ "${revision_mode}" = "false" ]; then
+                "${compose[@]}" stop api
+                if ! VIP_LIFECYCLE_FENCE_ACTION=disable \
+                    "${compose[@]}" run --rm --no-deps -T \
+                    -e VIP_LIFECYCLE_FENCE_ACTION api node --enable-source-maps \
+                    dist/tools/audit-vip-lifecycle-ownership.js; then
+                  printf "%s" "${shared_secret}" |
+                    APP_DIR="${app_dir}" \
+                    VIP_LIFECYCLE_REQUIRE_REVISION_DESIRED=true \
+                    bash "${release_dir}/scripts/configure-bss-sso-env.sh"
+                  "${compose[@]}" up -d --no-deps api
+                  exit 1
+                fi
+              fi
               unset shared_secret shared_secret_b64
-              compose=(docker compose --project-name squad-admin-panel \
-                --project-directory "${app_dir}" --env-file "${app_dir}/.env.tk104" \
-                -f "${release_dir}/compose.tk104.yml")
               "${compose[@]}" up -d --no-deps api
               for _ in $(seq 1 40); do
                 current_api="$("${compose[@]}" ps -q api)"

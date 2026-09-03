@@ -1,7 +1,6 @@
 import {
   type AdminsCfgAppliedOutcome,
   type AdminsCfgFailureCode,
-  type DatabaseClient,
   getAdminsCfgSyncOutboxState,
   markAdminsCfgSyncApplied,
   markAdminsCfgSyncFailed,
@@ -12,7 +11,7 @@ import { eq } from 'drizzle-orm';
 import type Redis from 'ioredis';
 import { validate as isUuid } from 'uuid';
 import { confirmAdminsCfgReload } from './rcon-reload.js';
-import { type SyncContext, syncServerAdminsCfg } from './syncer.js';
+import { type AdminsCfgServerLease, type SyncContext, withAdminsCfgSyncLease } from './syncer.js';
 
 export const ADMINS_CFG_SYNC_GROUP = 'config-sync';
 
@@ -42,20 +41,24 @@ type OutboxState = Awaited<ReturnType<typeof getAdminsCfgSyncOutboxState>>;
 type ServerState = { status: string; deletedAt: Date | null } | null;
 
 export interface AdminsCfgDeliveryOperations {
-  getOutbox(db: DatabaseClient, id: string): Promise<OutboxState>;
-  isSuperseded(db: DatabaseClient, row: NonNullable<OutboxState>): Promise<boolean>;
+  getOutbox(db: AdminsCfgServerLease['db'], id: string): Promise<OutboxState>;
+  isSuperseded(db: AdminsCfgServerLease['db'], row: NonNullable<OutboxState>): Promise<boolean>;
   markApplied(
-    db: DatabaseClient,
+    db: AdminsCfgServerLease['db'],
     id: string,
     outcome: AdminsCfgAppliedOutcome,
   ): ReturnType<typeof markAdminsCfgSyncApplied>;
   markFailed(
-    db: DatabaseClient,
+    db: AdminsCfgServerLease['db'],
     id: string,
     code: AdminsCfgFailureCode,
   ): ReturnType<typeof markAdminsCfgSyncFailed>;
-  readServerState(db: DatabaseClient, serverId: string): Promise<ServerState>;
-  sync: typeof syncServerAdminsCfg;
+  readServerState(db: AdminsCfgServerLease['db'], serverId: string): Promise<ServerState>;
+  withServerLock<T>(
+    ctx: SyncContext,
+    serverId: string,
+    work: (lease: AdminsCfgServerLease) => Promise<T>,
+  ): Promise<T>;
   confirmReload: typeof confirmAdminsCfgReload;
 }
 
@@ -83,7 +86,7 @@ const defaultOperations: AdminsCfgDeliveryOperations = {
       .limit(1);
     return server ?? null;
   },
-  sync: syncServerAdminsCfg,
+  withServerLock: withAdminsCfgSyncLease,
   confirmReload: confirmAdminsCfgReload,
 };
 
@@ -122,14 +125,12 @@ export async function acknowledgeAndDeleteAdminsCfgEntry(
 }
 
 async function complete(
-  ctx: SyncContext,
-  entry: AdminsCfgStreamEntry,
+  db: AdminsCfgServerLease['db'],
   operations: AdminsCfgDeliveryOperations,
   outboxId: string,
   outcome: AdminsCfgAppliedOutcome,
 ): Promise<'completed'> {
-  await operations.markApplied(ctx.db, outboxId, outcome);
-  await acknowledgeAndDeleteAdminsCfgEntry(ctx.redis, entry.streamName, entry.streamId);
+  await operations.markApplied(db, outboxId, outcome);
   return 'completed';
 }
 
@@ -149,8 +150,10 @@ export async function handleAdminsCfgSyncEntry(
   const outboxId = event._outbox_id;
 
   if (!hasOutboxId) {
-    const result = await operations.sync(ctx, entry.serverId, syncParameters(event));
-    if (result.state === 'unreachable') return 'retry';
+    const outcome = await operations.withServerLock(ctx, entry.serverId, (lease) =>
+      lease.sync(syncParameters(event)),
+    );
+    if (outcome.state === 'unreachable') return 'retry';
     await acknowledgeAndDeleteAdminsCfgEntry(ctx.redis, entry.streamName, entry.streamId);
     return 'completed';
   }
@@ -161,58 +164,73 @@ export async function handleAdminsCfgSyncEntry(
     return 'completed';
   }
 
-  const outbox = await operations.getOutbox(ctx.db, outboxId);
-  if (!outbox || outbox.serverId !== entry.serverId) {
-    ctx.log.warn({ serverId: entry.serverId, streamId: entry.streamId }, 'invalid outbox link');
-    await acknowledgeAndDeleteAdminsCfgEntry(ctx.redis, entry.streamName, entry.streamId);
-    return 'completed';
-  }
-  if (outbox.appliedAt !== null || (await operations.isSuperseded(ctx.db, outbox))) {
-    await acknowledgeAndDeleteAdminsCfgEntry(ctx.redis, entry.streamName, entry.streamId);
-    return 'completed';
-  }
+  const outcome = await operations.withServerLock(ctx, entry.serverId, async (lease) => {
+    // This is intentionally the first durable read: it must happen only after
+    // the per-server fence is held, including for fresh, reclaimed and replayed
+    // entries.
+    const outbox = await operations.getOutbox(lease.db, outboxId);
+    if (!outbox || outbox.serverId !== entry.serverId) {
+      ctx.log.warn({ serverId: entry.serverId, streamId: entry.streamId }, 'invalid outbox link');
+      return 'completed' as const;
+    }
+    if (outbox.appliedAt !== null || (await operations.isSuperseded(lease.db, outbox))) {
+      return 'completed' as const;
+    }
 
-  const syncResult = await operations.sync(ctx, entry.serverId, {
-    ...syncParameters(outbox.payload),
-    mode: 'active',
-    requestReload: false,
+    const syncResult = await lease.sync({
+      ...syncParameters(outbox.payload),
+      mode: 'active',
+      requestReload: false,
+    });
+    if (syncResult.state === 'unreachable') {
+      await operations.markFailed(lease.db, outboxId, 'unavailable');
+      return 'retry' as const;
+    }
+
+    const firstState = await operations.readServerState(lease.db, entry.serverId);
+    if (isRemoved(firstState)) {
+      return complete(lease.db, operations, outboxId, 'server_removed');
+    }
+
+    let reloadConfirmed = false;
+    if (isLive(firstState)) {
+      const reload = await operations.confirmReload(ctx.redis, entry.serverId, outboxId, ctx.log);
+      if (reload !== 'confirmed') {
+        await operations.markFailed(lease.db, outboxId, reload);
+        return 'retry' as const;
+      }
+      reloadConfirmed = true;
+    }
+
+    let finalState = await operations.readServerState(lease.db, entry.serverId);
+    if (isRemoved(finalState)) {
+      return complete(lease.db, operations, outboxId, 'server_removed');
+    }
+
+    if (isLive(finalState) && !reloadConfirmed) {
+      const reload = await operations.confirmReload(ctx.redis, entry.serverId, outboxId, ctx.log);
+      if (reload !== 'confirmed') {
+        await operations.markFailed(lease.db, outboxId, reload);
+        return 'retry' as const;
+      }
+      finalState = await operations.readServerState(lease.db, entry.serverId);
+      if (isRemoved(finalState)) {
+        return complete(lease.db, operations, outboxId, 'server_removed');
+      }
+    }
+
+    return complete(
+      lease.db,
+      operations,
+      outboxId,
+      isLive(finalState) ? 'confirmed' : 'file_ready_for_restart',
+    );
   });
-  if (syncResult.state === 'unreachable') {
-    await operations.markFailed(ctx.db, outboxId, 'unavailable');
-    return 'retry';
+
+  if (outcome === 'completed') {
+    // The database transaction releases its advisory lock before Redis ACK;
+    // a crash in this gap replays only the already-durable terminal row.
+    await acknowledgeAndDeleteAdminsCfgEntry(ctx.redis, entry.streamName, entry.streamId);
   }
-
-  const firstState = await operations.readServerState(ctx.db, entry.serverId);
-  if (isRemoved(firstState)) return complete(ctx, entry, operations, outboxId, 'server_removed');
-
-  let reloadConfirmed = false;
-  if (isLive(firstState)) {
-    const reload = await operations.confirmReload(ctx.redis, entry.serverId, outboxId, ctx.log);
-    if (reload !== 'confirmed') {
-      await operations.markFailed(ctx.db, outboxId, reload);
-      return 'retry';
-    }
-    reloadConfirmed = true;
-  }
-
-  let finalState = await operations.readServerState(ctx.db, entry.serverId);
-  if (isRemoved(finalState)) return complete(ctx, entry, operations, outboxId, 'server_removed');
-
-  if (isLive(finalState) && !reloadConfirmed) {
-    const reload = await operations.confirmReload(ctx.redis, entry.serverId, outboxId, ctx.log);
-    if (reload !== 'confirmed') {
-      await operations.markFailed(ctx.db, outboxId, reload);
-      return 'retry';
-    }
-    finalState = await operations.readServerState(ctx.db, entry.serverId);
-    if (isRemoved(finalState)) return complete(ctx, entry, operations, outboxId, 'server_removed');
-  }
-
-  return complete(
-    ctx,
-    entry,
-    operations,
-    outboxId,
-    isLive(finalState) ? 'confirmed' : 'file_ready_for_restart',
-  );
+  return outcome;
 }

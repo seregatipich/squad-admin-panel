@@ -114,12 +114,23 @@ describeIfDb('migration 0109 admins_cfg_sync_outbox delivery contract', () => {
     const isolated = await createIsolatedPackageTestDatabase(DATABASE_URL, 'db_outbox_upgrade');
     const upgradeSql = postgres(isolated.url, { max: 1, onnotice: () => undefined });
     try {
+      await upgradeSql.unsafe(`
+        DROP TRIGGER IF EXISTS trg_players_vip_lifecycle_owner_guard ON players;
+        DROP TRIGGER IF EXISTS trg_vip_tiers_writer_fence_lock ON vip_tiers;
+        DROP TRIGGER IF EXISTS trg_roles_vip_lifecycle_safety_guard ON roles;
+        DROP TRIGGER IF EXISTS trg_vip_lifecycle_events_writer_fence_lock ON vip_lifecycle_events;
+        DROP TRIGGER IF EXISTS trg_panel_meta_vip_lifecycle_fence_lock ON panel_meta;
+        DROP TRIGGER IF EXISTS trg_panel_meta_vip_lifecycle_fence_delete ON panel_meta;
+        DROP FUNCTION IF EXISTS enforce_players_vip_lifecycle_owner();
+        DROP FUNCTION IF EXISTS lock_vip_lifecycle_writer_fence();
+        ALTER TABLE panel_meta DROP COLUMN IF EXISTS vip_lifecycle_strict;
+      `);
       await upgradeSql.unsafe('DROP INDEX IF EXISTS admins_cfg_sync_outbox_correlation_idx');
       await upgradeSql.unsafe(
         'ALTER TABLE admins_cfg_sync_outbox DROP COLUMN IF EXISTS correlation_id, DROP COLUMN IF EXISTS applied_at, DROP COLUMN IF EXISTS last_error, DROP COLUMN IF EXISTS reload_outcome',
       );
       await upgradeSql.unsafe(
-        'DELETE FROM drizzle.__drizzle_migrations WHERE id = (SELECT max(id) FROM drizzle.__drizzle_migrations)',
+        'DELETE FROM drizzle.__drizzle_migrations WHERE created_at > 1785853400000',
       );
 
       await migrate(drizzle(upgradeSql), { migrationsFolder: MIGRATIONS_FOLDER });

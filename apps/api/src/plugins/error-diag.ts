@@ -15,12 +15,12 @@ const MAX_CAUSE_CHAIN_DEPTH = 5;
  * the thrown object directly — walk the chain (see isUniqueViolation in
  * integrations-discord-role-mappings.ts for the same pattern).
  */
-function isLastOwnerViolation(err: unknown): boolean {
+function isConstraintViolation(err: unknown, constraintName: string): boolean {
   let current: unknown = err;
   for (let depth = 0; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; depth++) {
     if (typeof current === 'object') {
       const candidate = current as { code?: unknown; constraint_name?: unknown };
-      if (candidate.code === '23514' && candidate.constraint_name === 'players_last_owner_guard') {
+      if (candidate.code === '23514' && candidate.constraint_name === constraintName) {
         return true;
       }
     }
@@ -32,8 +32,16 @@ function isLastOwnerViolation(err: unknown): boolean {
 export const errorDiagPlugin = fp(
   async (app: FastifyInstance) => {
     app.setErrorHandler((err: FastifyError, req, reply) => {
-      if (isLastOwnerViolation(err)) {
+      if (isConstraintViolation(err, 'players_last_owner_guard')) {
         reply.code(409).send({ error: 'cannot_remove_last_owner' });
+        return;
+      }
+      if (isConstraintViolation(err, 'players_vip_lifecycle_owner_guard')) {
+        reply.code(409).send({ error: 'vip_lifecycle_required' });
+        return;
+      }
+      if (isConstraintViolation(err, 'vip_lifecycle_catalog_guard')) {
+        reply.code(409).send({ error: 'vip_lifecycle_owned' });
         return;
       }
       const replyStatus = reply.statusCode && reply.statusCode >= 400 ? reply.statusCode : 0;

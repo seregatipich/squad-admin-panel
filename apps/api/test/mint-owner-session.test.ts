@@ -10,6 +10,7 @@ import { type CreatedSchema, createIsolatedSchema } from './integration/isolated
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const NEW_PLAYER_STEAM_ID = '76561199925900001';
 const EXISTING_PLAYER_STEAM_ID = '76561199925900002';
+const LIFECYCLE_PLAYER_STEAM_ID = '76561199925900003';
 
 type SqlClient = ReturnType<typeof postgres>;
 
@@ -344,5 +345,82 @@ describe('mint-owner-session operator command', () => {
       role_comment: null,
       session_count: 1,
     });
+  });
+
+  it('refuses to recover Owner over a role owned by VIP lifecycle', async () => {
+    const eventId = `vip-mint-owner-fence-${randomUUID()}`;
+    const [player] = await sql<{ id: string }[]>`
+      INSERT INTO players (
+        steam_id64,
+        canonical_name,
+        canonical_name_normalized,
+        role_id,
+        role_expires_at,
+        role_comment
+      ) VALUES (
+        ${LIFECYCLE_PLAYER_STEAM_ID},
+        'Lifecycle-owned player',
+        'lifecycle-owned player',
+        ${ownerRoleId},
+        '2099-01-01T00:00:00.000Z',
+        'VIP vip2 purchase mint-owner-fence'
+      )
+      RETURNING id
+    `;
+    if (!player) throw new Error('failed to seed lifecycle-owned player');
+    await sql`
+      INSERT INTO vip_lifecycle_events (
+        event_id,
+        event_type,
+        player_id,
+        role_id,
+        tier,
+        purchase_id,
+        action,
+        payload,
+        applied_at
+      ) VALUES (
+        ${eventId},
+        'vip.purchased',
+        ${player.id},
+        ${ownerRoleId},
+        'vip2',
+        'mint-owner-fence',
+        'assigned',
+        ${sql.json({ expires_at: '2099-01-01T00:00:00.000Z' })},
+        now()
+      )
+    `;
+    await sql`
+      UPDATE players
+      SET role_lifecycle_event_id = ${eventId}
+      WHERE steam_id64 = ${LIFECYCLE_PLAYER_STEAM_ID}
+    `;
+
+    const result = runCli(
+      [
+        '--steam-id64',
+        LIFECYCLE_PLAYER_STEAM_ID,
+        '--confirm-steam-id64',
+        LIFECYCLE_PLAYER_STEAM_ID,
+        '--name',
+        'Recovered Owner',
+      ],
+      { ...process.env, DATABASE_URL: databaseUrl },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('vip_lifecycle_owned');
+    const [stored] = await sql<{ role_lifecycle_event_id: string | null; session_count: number }[]>`
+      SELECT
+        p.role_lifecycle_event_id,
+        count(s.id)::int AS session_count
+      FROM players p
+      LEFT JOIN sessions s ON s.player_id = p.id
+      WHERE p.steam_id64 = ${LIFECYCLE_PLAYER_STEAM_ID}
+      GROUP BY p.id
+    `;
+    expect(stored).toEqual({ role_lifecycle_event_id: eventId, session_count: 0 });
   });
 });

@@ -1,5 +1,5 @@
 import { panelMeta, players, roles } from '@squad/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -32,6 +32,12 @@ interface ImportResult {
   total_rows: number;
   imported: number;
   skipped: ImportSkippedRow[];
+}
+
+class VipLifecycleOwnedError extends Error {
+  constructor() {
+    super('vip_lifecycle_owned');
+  }
 }
 
 function actorFrom(req: FastifyRequest): AuditActor {
@@ -90,14 +96,19 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     whitelistRoleId: string,
     playerId: string,
     comment: string | null,
-  ): Promise<'assigned' | 'already_assigned' | 'player_not_found'> {
+  ): Promise<'assigned' | 'already_assigned' | 'player_not_found' | 'vip_lifecycle_owned'> {
     const playerRows = await app.db
-      .select({ id: players.id, roleId: players.roleId })
+      .select({
+        id: players.id,
+        roleId: players.roleId,
+        roleLifecycleEventId: players.roleLifecycleEventId,
+      })
       .from(players)
       .where(eq(players.id, playerId))
       .limit(1);
     const player = playerRows[0];
     if (!player) return 'player_not_found';
+    if (player.roleLifecycleEventId !== null) return 'vip_lifecycle_owned';
     if (player.roleId === whitelistRoleId && comment === null) return 'already_assigned';
 
     const roleRows = await app.db
@@ -105,8 +116,8 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
       .from(roles)
       .where(eq(roles.id, whitelistRoleId))
       .limit(1);
-    await app.db.transaction(async (tx) => {
-      await tx
+    const changed = await app.db.transaction(async (tx) => {
+      const [updated] = await tx
         .update(players)
         .set({
           roleId: whitelistRoleId,
@@ -114,14 +125,18 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
           roleComment: comment,
           roleLifecycleEventId: null,
         })
-        .where(eq(players.id, playerId));
+        .where(and(eq(players.id, playerId), isNull(players.roleLifecycleEventId)))
+        .returning({ id: players.id });
+      if (!updated) return false;
       await publishAdminsCfgSyncForAllServers(tx, {
         reason: 'whitelist.member.add',
         actor_player_id: req.user?.playerId ?? null,
         enqueued_at: new Date().toISOString(),
         request_id: req.id,
       });
+      return true;
     });
+    if (!changed) return 'vip_lifecycle_owned';
     invalidatePermissionCache(playerId);
     if (!roleRows[0]?.panelAccess) {
       await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
@@ -197,6 +212,10 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'player_not_found' };
       }
+      if (outcome === 'vip_lifecycle_owned') {
+        reply.code(409);
+        return { error: 'vip_lifecycle_owned' };
+      }
       if (outcome === 'already_assigned') {
         reply.code(200);
         return { ok: true, changed: false };
@@ -224,7 +243,11 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       const whitelistRoleId = await loadWhitelistRoleId();
       const playerRows = await app.db
-        .select({ id: players.id, roleId: players.roleId })
+        .select({
+          id: players.id,
+          roleId: players.roleId,
+          roleLifecycleEventId: players.roleLifecycleEventId,
+        })
         .from(players)
         .where(eq(players.id, req.params.playerId))
         .limit(1);
@@ -236,8 +259,12 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
       if (!whitelistRoleId || player.roleId !== whitelistRoleId) {
         return { ok: true, changed: false };
       }
-      await app.db.transaction(async (tx) => {
-        await tx
+      if (player.roleLifecycleEventId !== null) {
+        reply.code(409);
+        return { error: 'vip_lifecycle_owned' };
+      }
+      const changed = await app.db.transaction(async (tx) => {
+        const [updated] = await tx
           .update(players)
           .set({
             roleId: null,
@@ -245,14 +272,21 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
             roleComment: null,
             roleLifecycleEventId: null,
           })
-          .where(eq(players.id, player.id));
+          .where(and(eq(players.id, player.id), isNull(players.roleLifecycleEventId)))
+          .returning({ id: players.id });
+        if (!updated) return false;
         await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'whitelist.member.remove',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
           request_id: req.id,
         });
+        return true;
       });
+      if (!changed) {
+        reply.code(409);
+        return { error: 'vip_lifecycle_owned' };
+      }
       invalidatePermissionCache(player.id);
       await revokeAllForPlayer(app.db, app.redis, player.id, app.liveBus);
       await writeAuditEntry(app.db, {
@@ -280,12 +314,18 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'whitelist_role_not_configured' };
       }
+      const [whitelistRole] = await app.db
+        .select({ panelAccess: roles.panelAccess })
+        .from(roles)
+        .where(eq(roles.id, whitelistRoleId))
+        .limit(1);
       const lines = req.body.csv.split(/\r\n|\r|\n/).filter((line) => line.trim().length > 0);
       if (lines.length > IMPORT_MAX_ROWS) {
         reply.code(413);
         return { error: 'too_many_rows', max_rows: IMPORT_MAX_ROWS };
       }
       const result: ImportResult = { total_rows: lines.length, imported: 0, skipped: [] };
+      const assignments: Array<{ playerId: string; comment: string | null }> = [];
       for (const [index, raw] of lines.entries()) {
         const lineNumber = index + 1;
         const parsed = parseCsvRow(raw);
@@ -307,8 +347,70 @@ const whitelistRoutes: FastifyPluginAsync = async (app) => {
           result.skipped.push({ line: lineNumber, raw, reason: 'player_not_found' });
           continue;
         }
-        const outcome = await assignWhitelistRole(req, whitelistRoleId, player.id, parsed.comment);
-        if (outcome !== 'player_not_found') result.imported += 1;
+        assignments.push({ playerId: player.id, comment: parsed.comment });
+      }
+      const changedPlayerIds: string[] = [];
+      try {
+        await app.db.transaction(async (tx) => {
+          const locked =
+            assignments.length === 0
+              ? []
+              : await tx
+                  .select({
+                    id: players.id,
+                    roleId: players.roleId,
+                    marker: players.roleLifecycleEventId,
+                  })
+                  .from(players)
+                  .where(
+                    inArray(
+                      players.id,
+                      assignments.map((assignment) => assignment.playerId),
+                    ),
+                  )
+                  .orderBy(players.id)
+                  .for('update');
+          if (locked.some((player) => player.marker !== null)) {
+            throw new VipLifecycleOwnedError();
+          }
+          const lockedById = new Map(locked.map((player) => [player.id, player]));
+          for (const assignment of assignments) {
+            const current = lockedById.get(assignment.playerId);
+            if (!current) continue;
+            result.imported += 1;
+            if (current.roleId === whitelistRoleId && assignment.comment === null) continue;
+            const [updated] = await tx
+              .update(players)
+              .set({
+                roleId: whitelistRoleId,
+                roleExpiresAt: null,
+                roleComment: assignment.comment,
+                roleLifecycleEventId: null,
+              })
+              .where(and(eq(players.id, assignment.playerId), isNull(players.roleLifecycleEventId)))
+              .returning({ id: players.id });
+            if (!updated) throw new Error('whitelist import target changed after lock');
+            changedPlayerIds.push(updated.id);
+            await publishAdminsCfgSyncForAllServers(tx, {
+              reason: 'whitelist.member.add',
+              actor_player_id: req.user?.playerId ?? null,
+              enqueued_at: new Date().toISOString(),
+              request_id: req.id,
+            });
+          }
+        });
+      } catch (error) {
+        if (error instanceof VipLifecycleOwnedError) {
+          reply.code(409);
+          return { error: 'vip_lifecycle_owned' };
+        }
+        throw error;
+      }
+      for (const playerId of changedPlayerIds) {
+        invalidatePermissionCache(playerId);
+        if (!whitelistRole?.panelAccess) {
+          await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
+        }
       }
       await writeAuditEntry(app.db, {
         actor: actorFrom(req),

@@ -28,6 +28,8 @@ export type ConfirmedAdminsCfgReloadOutcome =
 export interface ConfirmAdminsCfgReloadOptions {
   timeoutMs?: number;
   pollIntervalMs?: number;
+  /** Deterministic injection for tests; production creates a fresh UUID. */
+  attemptId?: string;
 }
 
 /**
@@ -96,8 +98,9 @@ export async function requestAdminsCfgReload(
 }
 
 /**
- * Enqueue and durably verify the reload for a correlated outbox row.
- * Replays use the same request id and can reuse worker-rcon's cached result.
+ * Enqueue and durably verify the reload for one correlated delivery attempt.
+ * Every replay gets a new request id: accepting a cached result from a prior
+ * attempt could mark a newly rewritten file applied without reloading it.
  */
 export async function confirmAdminsCfgReload(
   redis: Pick<Redis, 'get' | 'xadd'>,
@@ -106,7 +109,7 @@ export async function confirmAdminsCfgReload(
   log: Logger,
   opts: ConfirmAdminsCfgReloadOptions = {},
 ): Promise<ConfirmedAdminsCfgReloadOutcome> {
-  const requestId = `admins-cfg-sync:${outboxId}`;
+  const requestId = `admins-cfg-sync:${outboxId}:${opts.attemptId ?? uuidv7()}`;
   const resultKey = rconCommandResultKey(requestId);
 
   const readResult = async (): Promise<ConfirmedAdminsCfgReloadOutcome | null> => {
@@ -132,9 +135,6 @@ export async function confirmAdminsCfgReload(
   };
 
   try {
-    const existing = await readResult();
-    if (existing) return existing;
-
     const request = rconCommandRequestSchema.parse({
       request_id: requestId,
       command: 'AdminReloadServerConfig',

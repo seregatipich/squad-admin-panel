@@ -1,5 +1,5 @@
 import { panelMeta, players, roles, whitelistApplications } from '@squad/db/schema';
-import { desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -386,7 +386,7 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
 
       // --- Approve --------------------------------------------------------
       const [applicant] = await app.db
-        .select({ id: players.id })
+        .select({ id: players.id, roleLifecycleEventId: players.roleLifecycleEventId })
         .from(players)
         .where(eq(players.steamId64, existing.steamId64))
         .limit(1);
@@ -397,6 +397,10 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
       if (applicant.id === reviewerPlayerId) {
         reply.code(403);
         return { error: 'self_approval_forbidden' };
+      }
+      if (applicant.roleLifecycleEventId !== null) {
+        reply.code(409);
+        return { error: 'vip_lifecycle_owned' };
       }
 
       const settings = await loadSettings();
@@ -433,8 +437,8 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
 
       const roleComment = req.body.review_note?.trim() || 'whitelist application';
 
-      await app.db.transaction(async (tx) => {
-        await tx
+      const approved = await app.db.transaction(async (tx) => {
+        const [updated] = await tx
           .update(players)
           .set({
             roleId: resolvedRoleId,
@@ -442,7 +446,9 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
             roleComment,
             roleLifecycleEventId: null,
           })
-          .where(eq(players.id, applicant.id));
+          .where(and(eq(players.id, applicant.id), isNull(players.roleLifecycleEventId)))
+          .returning({ id: players.id });
+        if (!updated) return false;
         await tx
           .update(whitelistApplications)
           .set({
@@ -460,7 +466,12 @@ const whitelistApplicationsRoutes: FastifyPluginAsync = async (app) => {
           enqueued_at: now.toISOString(),
           request_id: req.id,
         });
+        return true;
       });
+      if (!approved) {
+        reply.code(409);
+        return { error: 'vip_lifecycle_owned' };
+      }
 
       invalidatePermissionCache(applicant.id);
       if (!role.panelAccess) {

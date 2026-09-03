@@ -13,6 +13,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setIsolatedTestVipLifecycleStrict } from '../helpers/snapshot-restore.js';
 import { buildIntegrationApp, type IntegrationHarness, makeFakeBridge } from './harness.js';
 
 const SECRET = 'vip-lifecycle-test-secret-with-enough-entropy';
@@ -62,6 +63,10 @@ async function postPreflight(payload: Record<string, unknown>, signature?: strin
   return postSigned('/api/v1/integrations/vip/preflight', payload, signature);
 }
 
+async function postTierRole(payload: Record<string, unknown>, signature?: string) {
+  return postSigned('/api/v1/integrations/vip/tier-role', payload, signature);
+}
+
 async function postStatus(eventId: string, signature?: string) {
   return postSigned('/api/v1/integrations/vip/status', { event_id: eventId }, signature);
 }
@@ -101,6 +106,31 @@ async function waitForBlockedStatusOutboxRead(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     throw new Error('status did not wait for the outbox relation lock');
+  } finally {
+    await observer.end();
+  }
+}
+
+async function waitForBlockedVipLifecycleWrite(): Promise<void> {
+  const observer = postgres(h.app.config.DATABASE_URL, { max: 1, prepare: false });
+  const deadline = Date.now() + 5_000;
+  try {
+    while (Date.now() < deadline) {
+      const rows = await observer<{ waiting: number }[]>`
+        SELECT count(*)::int AS waiting
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND pid <> pg_backend_pid()
+          AND wait_event_type = 'Lock'
+          AND (
+            query ILIKE '%vip_lifecycle_events%'
+            OR query ILIKE '%vip-lifecycle-writer-fence%'
+          )
+      `;
+      if ((rows[0]?.waiting ?? 0) > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error('lifecycle write did not wait for the VIP writer fence');
   } finally {
     await observer.end();
   }
@@ -222,6 +252,26 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     });
   });
 
+  it('returns the authoritative UUID tier code for a stored legacy event', async () => {
+    const eventId = 'vip-status-legacy-tier';
+    await h.db.insert(vipLifecycleEvents).values({
+      eventId,
+      eventType: 'vip.purchased',
+      playerId,
+      roleId,
+      tier: 'legacy-tier-1',
+      purchaseId: 'purchase-status-legacy-tier',
+      action: 'assigned',
+      payload: { expires_at: '2030-01-02T03:04:05.000Z' },
+      appliedAt: new Date(),
+    });
+
+    const response = await postStatus(eventId);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ tier_code: tierId, state: 'accepted' });
+  });
+
   it('requires the same valid HMAC boundary for lifecycle status', async () => {
     const response = await postStatus('vip-status-auth', 'sha256=bad');
 
@@ -260,6 +310,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(accepted.json()).toEqual({
       ok: true,
       event_id: eventId,
+      tier_code: tierId,
       state: 'accepted',
       action: 'assigned',
       servers_total: 2,
@@ -277,6 +328,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(applying.json()).toEqual({
       ok: true,
       event_id: eventId,
+      tier_code: tierId,
       state: 'applying',
       action: 'assigned',
       servers_total: 2,
@@ -299,6 +351,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(partiallyApplied.json()).toEqual({
       ok: true,
       event_id: eventId,
+      tier_code: tierId,
       state: 'applying',
       action: 'assigned',
       servers_total: 2,
@@ -320,6 +373,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(applied.json()).toEqual({
       ok: true,
       event_id: eventId,
+      tier_code: tierId,
       state: 'applied',
       action: 'assigned',
       servers_total: 2,
@@ -366,6 +420,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(response.json()).toEqual({
       ok: true,
       event_id: eventId,
+      tier_code: tierId,
       state,
       action: 'assigned',
       servers_total: 1,
@@ -406,6 +461,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(response.json()).toEqual({
       ok: true,
       event_id: eventId,
+      tier_code: tierId,
       state: 'applying',
       action: 'assigned',
       servers_total: 1,
@@ -434,6 +490,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(response.json()).toEqual({
       ok: true,
       event_id: eventId,
+      tier_code: null,
       state: 'accepted',
       action: 'assigned',
       servers_total: 0,
@@ -461,6 +518,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(response.json()).toEqual({
       ok: true,
       event_id: 'vip-status-old',
+      tier_code: tierId,
       state: 'superseded',
       action: 'assigned',
       superseded_by_event_id: 'vip-status-winner',
@@ -528,6 +586,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(response.json()).toEqual({
       ok: true,
       event_id: oldEventId,
+      tier_code: tierId,
       state: 'superseded',
       action: 'assigned',
       superseded_by_event_id: winnerEventId,
@@ -622,7 +681,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     const duplicate = await postLifecycle(event);
 
     expect(duplicate.statusCode).toBe(200);
-    expect(duplicate.json()).toEqual({ ok: true, duplicate: true });
+    expect(duplicate.json()).toEqual({ ok: true, duplicate: true, tier_code: tierId });
     expect(await mutationCounts(event.event_id)).toEqual(counts);
   });
 
@@ -646,7 +705,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     const duplicate = await postLifecycle(event);
 
     expect(duplicate.statusCode).toBe(200);
-    expect(duplicate.json()).toEqual({ ok: true, duplicate: true });
+    expect(duplicate.json()).toEqual({ ok: true, duplicate: true, tier_code: tierId });
     expect(await mutationCounts(event.event_id)).toEqual(counts);
 
     const newExpiredEvent = await postLifecycle({
@@ -936,6 +995,41 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     });
   });
 
+  it('supersedes the legacy head when the first revisioned event arrives', async () => {
+    const legacy = {
+      event_id: 'vip-legacy-before-first-revision',
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'legacy-tier-1',
+      purchase_id: 'purchase-first-revision',
+      expires_at: '2030-01-02T03:04:05.000Z',
+    };
+    expect((await postLifecycle(legacy)).statusCode).toBe(202);
+
+    const revisioned = await postLifecycle({
+      ...legacy,
+      event_id: 'vip-first-revision',
+      tier: tierId,
+      expires_at: '2030-02-02T03:04:05.000Z',
+      revision: 1,
+    });
+
+    expect(revisioned.statusCode).toBe(202);
+    expect(
+      (
+        await h.db
+          .select({ supersededBy: vipLifecycleEvents.supersededByEventId })
+          .from(vipLifecycleEvents)
+          .where(eq(vipLifecycleEvents.eventId, legacy.event_id))
+      )[0]?.supersededBy,
+    ).toBe('vip-first-revision');
+    expect((await postStatus(legacy.event_id)).json()).toMatchObject({
+      state: 'superseded',
+      superseded_by_event_id: 'vip-first-revision',
+    });
+  });
+
   it('uses future expires_at on vip.refunded as desired state and lets the same purchase revoke after expiry', async () => {
     const eventType = 'vip.refunded';
     const suffix = 'refunded';
@@ -1036,7 +1130,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(tasks).toEqual([{ serverId }]);
   });
 
-  it('accepts signed preflight by stable external tier label without matching the editable tier name', async () => {
+  it('returns the authoritative tier code while legacy tier labels remain compatible', async () => {
     const payload = {
       steam_id64: '76561198000990001',
       role_id: roleId,
@@ -1048,10 +1142,330 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       ok: true,
+      tier_code: tierId,
       servers_total: 1,
       projection_owner: null,
       expires_at: null,
     });
+  });
+
+  it('exposes the exact signed tier-role mapping without player state, locks, or writes', async () => {
+    const transaction = vi.spyOn(h.app.db, 'transaction');
+    const before = await mutationCounts('vip-tier-role-read-only');
+
+    const response = await postTierRole({ role_id: roleId, tier: tierId });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, tier_code: tierId, role_id: roleId });
+    expect(transaction).not.toHaveBeenCalled();
+    expect(await mutationCounts('vip-tier-role-read-only')).toEqual(before);
+    transaction.mockRestore();
+  });
+
+  it('rejects a signed tier-role mismatch deterministically', async () => {
+    const response = await postTierRole({ role_id: roleId, tier: uuidv7() });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: 'tier_role_mismatch',
+      error_code: 'tier_role_mismatch',
+    });
+  });
+
+  it('returns role_not_vip for a signed role outside the active safe catalog', async () => {
+    const response = await postTierRole({ role_id: uuidv7(), tier: tierId });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'role_not_vip', error_code: 'role_not_vip' });
+  });
+
+  it('requires a valid HMAC signature for the tier-role mapping', async () => {
+    const response = await postTierRole({ role_id: roleId, tier: tierId }, 'sha256=bad');
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: 'invalid_signature' });
+  });
+
+  it('canonicalizes a relaxed lifecycle event and exposes its tier code in lifecycle and status', async () => {
+    const eventId = 'vip-tier-code-relaxed';
+    const response = await postLifecycle({
+      event_id: eventId,
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'legacy-tier-1',
+      purchase_id: 'purchase-tier-code-relaxed',
+      expires_at: '2030-01-02T03:04:05.000Z',
+      revision: 1,
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ tier_code: tierId });
+    expect(
+      (
+        await h.db
+          .select({ tier: vipLifecycleEvents.tier })
+          .from(vipLifecycleEvents)
+          .where(eq(vipLifecycleEvents.eventId, eventId))
+      )[0]?.tier,
+    ).toBe(tierId);
+    expect((await postStatus(eventId)).json()).toMatchObject({ tier_code: tierId });
+  });
+
+  it('keeps an accepted UUID tier code immutable after a later catalog remap', async () => {
+    const event = {
+      event_id: 'vip-tier-code-immutable-history',
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'legacy-tier-1',
+      purchase_id: 'purchase-tier-code-immutable-history',
+      expires_at: '2030-01-02T03:04:05.000Z',
+      revision: 1,
+    };
+    expect((await postLifecycle(event)).statusCode).toBe(202);
+
+    const replacementTierId = uuidv7();
+    await h.db.delete(vipTiers).where(eq(vipTiers.id, tierId));
+    await h.db.insert(vipTiers).values({
+      id: replacementTierId,
+      name: `Replacement VIP ${replacementTierId}`,
+      roleId,
+      isActive: true,
+    });
+
+    const duplicate = await postLifecycle(event);
+    const status = await postStatus(event.event_id);
+    expect(duplicate.statusCode).toBe(200);
+    expect(duplicate.json()).toMatchObject({ duplicate: true, tier_code: tierId });
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({ tier_code: tierId });
+  });
+
+  it('rechecks the tier mapping after a concurrent catalog change in relaxed mode', async () => {
+    const eventId = 'vip-tier-code-concurrent-catalog-change';
+    const before = await mutationCounts(eventId);
+    const blocker = postgres(h.app.config.DATABASE_URL, { max: 1, prepare: false });
+    let pendingResponse: ReturnType<typeof postLifecycle> | undefined;
+    try {
+      await blocker.begin(async (tx) => {
+        await tx`UPDATE vip_tiers SET is_active = false WHERE id = ${tierId}`;
+        pendingResponse = postLifecycle({
+          event_id: eventId,
+          event_type: 'vip.purchased',
+          player_id: playerId,
+          role_id: roleId,
+          tier: 'legacy-tier-1',
+          purchase_id: 'purchase-tier-code-concurrent-catalog-change',
+          expires_at: '2030-01-02T03:04:05.000Z',
+          revision: 1,
+        });
+        await waitForBlockedVipLifecycleWrite();
+      });
+      if (!pendingResponse) throw new Error('lifecycle request was not started');
+      const response = await pendingResponse;
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({ error: 'role_not_vip', error_code: 'role_not_vip' });
+      expect(await mutationCounts(eventId)).toEqual(before);
+    } finally {
+      await blocker.end();
+    }
+  });
+
+  it('rejects a tier-role mismatch in strict mode and accepts the authoritative tier code', async () => {
+    (h.app.config as Record<string, unknown>).VIP_LIFECYCLE_REQUIRE_REVISION = true;
+    await setIsolatedTestVipLifecycleStrict(h.db, true);
+    const badEventId = 'vip-tier-code-strict-mismatch';
+
+    const badPreflight = await postPreflight({
+      steam_id64: '76561198000990001',
+      role_id: roleId,
+      tier: 'legacy-tier-1',
+    });
+    expect(badPreflight.statusCode).toBe(409);
+    expect(badPreflight.json()).toEqual({
+      error: 'tier_role_mismatch',
+      error_code: 'tier_role_mismatch',
+    });
+
+    const mismatch = await postLifecycle({
+      event_id: badEventId,
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'legacy-tier-1',
+      purchase_id: 'purchase-tier-code-strict-mismatch',
+      expires_at: '2030-01-02T03:04:05.000Z',
+      revision: 1,
+    });
+    expect(mismatch.statusCode).toBe(409);
+    expect(mismatch.json()).toEqual({
+      error: 'tier_role_mismatch',
+      error_code: 'tier_role_mismatch',
+    });
+    expect(await mutationCounts(badEventId)).toEqual({ events: 0, audits: 0, outbox: 0 });
+
+    const goodPreflight = await postPreflight({
+      steam_id64: '76561198000990001',
+      role_id: roleId,
+      tier: tierId,
+    });
+    expect(goodPreflight.statusCode).toBe(200);
+    expect(goodPreflight.json()).toMatchObject({ ok: true, tier_code: tierId });
+
+    const goodEventId = 'vip-tier-code-strict-match';
+    const accepted = await postLifecycle({
+      event_id: goodEventId,
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: tierId,
+      purchase_id: 'purchase-tier-code-strict-match',
+      expires_at: '2030-01-02T03:04:05.000Z',
+      revision: 2,
+    });
+    expect(accepted.statusCode).toBe(202);
+    expect(accepted.json()).toMatchObject({ tier_code: tierId });
+    expect((await postStatus(goodEventId)).json()).toMatchObject({ tier_code: tierId });
+
+    const staleMismatchId = 'vip-tier-code-strict-stale-mismatch';
+    const beforeStaleMismatch = await mutationCounts(staleMismatchId);
+    const staleMismatch = await postLifecycle({
+      event_id: staleMismatchId,
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'legacy-tier-1',
+      purchase_id: 'purchase-tier-code-strict-stale-mismatch',
+      expires_at: '2030-01-01T03:04:05.000Z',
+      revision: 1,
+    });
+    expect(staleMismatch.statusCode).toBe(409);
+    expect(staleMismatch.json()).toEqual({
+      error: 'tier_role_mismatch',
+      error_code: 'tier_role_mismatch',
+    });
+    expect(await mutationCounts(staleMismatchId)).toEqual(beforeStaleMismatch);
+  });
+
+  it('keeps the durable revision fence when the running process is still in relaxed mode', async () => {
+    await setIsolatedTestVipLifecycleStrict(h.db, true);
+    const eventId = 'vip-durable-revision-fence';
+    const before = await mutationCounts(eventId);
+
+    const response = await postLifecycle({
+      event_id: eventId,
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: tierId,
+      purchase_id: 'purchase-durable-revision-fence',
+      expires_at: '2030-01-02T03:04:05.000Z',
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: 'revision_required',
+      error_code: 'revision_required',
+    });
+    expect(await mutationCounts(eventId)).toEqual(before);
+    expect(
+      (
+        await h.db
+          .select({ roleId: players.roleId, marker: players.roleLifecycleEventId })
+          .from(players)
+          .where(eq(players.id, playerId))
+      )[0],
+    ).toEqual({ roleId: null, marker: null });
+  });
+
+  it('uses the durable fence for exact tier-role validation before the process restarts', async () => {
+    await setIsolatedTestVipLifecycleStrict(h.db, true);
+    const eventId = 'vip-durable-tier-role-fence';
+    const before = await mutationCounts(eventId);
+
+    const preflight = await postPreflight({
+      steam_id64: '76561198000990001',
+      role_id: roleId,
+      tier: 'legacy-tier-1',
+    });
+    expect(preflight.statusCode).toBe(409);
+    expect(preflight.json()).toEqual({
+      error: 'tier_role_mismatch',
+      error_code: 'tier_role_mismatch',
+    });
+
+    const response = await postLifecycle({
+      event_id: eventId,
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: 'legacy-tier-1',
+      purchase_id: 'purchase-durable-tier-role-fence',
+      expires_at: '2030-01-02T03:04:05.000Z',
+      revision: 1,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: 'tier_role_mismatch',
+      error_code: 'tier_role_mismatch',
+    });
+    expect(await mutationCounts(eventId)).toEqual(before);
+  });
+
+  it('allows exact strict compensation and expiry to replace and revoke lifecycle ownership', async () => {
+    (h.app.config as Record<string, unknown>).VIP_LIFECYCLE_REQUIRE_REVISION = true;
+    await setIsolatedTestVipLifecycleStrict(h.db, true);
+    const purchaseId = 'purchase-strict-transition';
+
+    const purchased = await postLifecycle({
+      event_id: 'vip-strict-transition-purchased',
+      event_type: 'vip.purchased',
+      player_id: playerId,
+      role_id: roleId,
+      tier: tierId,
+      purchase_id: purchaseId,
+      expires_at: '2030-01-02T03:04:05.000Z',
+      revision: 1,
+    });
+    expect(purchased.statusCode).toBe(202);
+    expect(purchased.json()).toMatchObject({ action: 'assigned' });
+
+    const compensated = await postLifecycle({
+      event_id: 'vip-strict-transition-compensated',
+      event_type: 'vip.refunded',
+      player_id: playerId,
+      role_id: roleId,
+      tier: tierId,
+      purchase_id: purchaseId,
+      expires_at: '2030-02-02T03:04:05.000Z',
+      revision: 2,
+    });
+    expect(compensated.statusCode).toBe(202);
+    expect(compensated.json()).toMatchObject({ action: 'assigned' });
+
+    const expired = await postLifecycle({
+      event_id: 'vip-strict-transition-expired',
+      event_type: 'vip.expired',
+      player_id: playerId,
+      role_id: roleId,
+      tier: tierId,
+      purchase_id: purchaseId,
+      expires_at: '2030-02-02T03:04:05.000Z',
+      revision: 3,
+    });
+    expect(expired.statusCode).toBe(202);
+    expect(expired.json()).toMatchObject({ action: 'revoked' });
+    expect(
+      (
+        await h.db
+          .select({ roleId: players.roleId, marker: players.roleLifecycleEventId })
+          .from(players)
+          .where(eq(players.id, playerId))
+      )[0],
+    ).toEqual({ roleId: null, marker: null });
   });
 
   it('requires a valid signature for preflight', async () => {
@@ -1184,6 +1598,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     expect(preflight.statusCode).toBe(200);
     expect(preflight.json()).toEqual({
       ok: true,
+      tier_code: tierId,
       servers_total: 1,
       projection_owner: 'bss-store',
       expires_at: '2030-01-02T03:04:05.000Z',

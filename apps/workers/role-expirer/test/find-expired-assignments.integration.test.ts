@@ -133,6 +133,69 @@ describeIfDb('findExpiredAssignments against a real database', () => {
     }
   });
 
+  it('leaves an expired lifecycle-owned projection to the signed lifecycle writer', async () => {
+    if (!db) throw new Error('database not configured');
+    const playerId = randomUUID();
+    const steamId64 = 76561198914800000n + BigInt(randomInt(1, 1_000_000));
+    const eventId = `role-expirer-owned-${randomUUID()}`;
+    const assignment = {
+      playerId,
+      roleId: NORMAL_ROLE_ID,
+      roleExpiresAt: EXPIRED_AT,
+      roleComment: 'VIP tier_1 purchase purchase-owned',
+      roleLifecycleEventId: eventId,
+    };
+
+    try {
+      await db.insert(players).values({
+        id: playerId,
+        steamId64,
+        canonicalName: 'Истёкший внешний VIP',
+        canonicalNameNormalized: 'истёкший внешний vip',
+      });
+      await db.insert(vipLifecycleEvents).values({
+        eventId,
+        eventType: 'vip.purchased',
+        playerId,
+        roleId: NORMAL_ROLE_ID,
+        tier: 'tier_1',
+        purchaseId: 'purchase-owned',
+        action: 'assigned',
+        payload: { expires_at: EXPIRED_AT.toISOString() },
+        appliedAt: NOW,
+      });
+      await db
+        .update(players)
+        .set({
+          roleId: NORMAL_ROLE_ID,
+          roleExpiresAt: EXPIRED_AT,
+          roleComment: assignment.roleComment,
+          roleLifecycleEventId: eventId,
+        })
+        .where(eq(players.id, playerId));
+
+      expect(
+        (await findExpiredAssignments(db, NOW, 1000)).map((row) => row.playerId),
+      ).not.toContain(playerId);
+      expect(
+        await clearExpiredAssignments(db, [assignment], NOW, {
+          reason: 'player.role.expire',
+          actor_player_id: null,
+          enqueued_at: NOW.toISOString(),
+          request_id: 'owned-expiry-test',
+        }),
+      ).toEqual({ cleared: [], enqueued: 0 });
+      const [stored] = await db
+        .select({ roleId: players.roleId, marker: players.roleLifecycleEventId })
+        .from(players)
+        .where(eq(players.id, playerId));
+      expect(stored).toEqual({ roleId: NORMAL_ROLE_ID, marker: eventId });
+    } finally {
+      await db.delete(vipLifecycleEvents).where(eq(vipLifecycleEvents.eventId, eventId));
+      await db.delete(players).where(eq(players.steamId64, steamId64));
+    }
+  });
+
   it('commits role expiry with one outbox row per active server', async () => {
     if (!db) throw new Error('database not configured');
     const playerId = randomUUID();

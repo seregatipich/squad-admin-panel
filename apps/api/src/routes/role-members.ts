@@ -1,5 +1,5 @@
 import { players, roles } from '@squad/db/schema';
-import { and, asc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, eq, ilike, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -46,6 +46,12 @@ interface ImportRowError {
   line: number;
   steam_id64: string;
   reason: ImportErrorReason;
+}
+
+class VipLifecycleOwnedError extends Error {
+  constructor() {
+    super('vip_lifecycle_owned');
+  }
 }
 
 /**
@@ -176,7 +182,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       const rawComment = req.body.comment?.trim() ?? null;
       const comment = rawComment === '' ? null : rawComment;
       const player = await app.db
-        .select({ id: players.id })
+        .select({ id: players.id, roleLifecycleEventId: players.roleLifecycleEventId })
         .from(players)
         .where(eq(players.id, playerId))
         .limit(1);
@@ -184,8 +190,12 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'player_not_found' };
       }
-      await app.db.transaction(async (tx) => {
-        await tx
+      if (player[0]?.roleLifecycleEventId !== null) {
+        reply.code(409);
+        return { error: 'vip_lifecycle_owned' };
+      }
+      const changed = await app.db.transaction(async (tx) => {
+        const [updated] = await tx
           .update(players)
           .set({
             roleId: req.params.id,
@@ -193,14 +203,21 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
             roleComment: comment,
             roleLifecycleEventId: null,
           })
-          .where(eq(players.id, playerId));
+          .where(and(eq(players.id, playerId), isNull(players.roleLifecycleEventId)))
+          .returning({ id: players.id });
+        if (!updated) return false;
         await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'role.member.add',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
           request_id: req.id,
         });
+        return true;
       });
+      if (!changed) {
+        reply.code(409);
+        return { error: 'vip_lifecycle_owned' };
+      }
       invalidatePermissionCache(playerId);
       if (!role.panelAccess) {
         await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
@@ -248,7 +265,7 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
           return { error: 'cannot_remove_last_owner' };
         }
       }
-      const removed = await app.db.transaction(async (tx) => {
+      const outcome = await app.db.transaction(async (tx) => {
         const updated = await tx
           .update(players)
           .set({
@@ -257,18 +274,41 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
             roleExpiresAt: null,
             roleLifecycleEventId: null,
           })
-          .where(and(eq(players.id, playerId), eq(players.roleId, r.id)))
+          .where(
+            and(
+              eq(players.id, playerId),
+              eq(players.roleId, r.id),
+              isNull(players.roleLifecycleEventId),
+            ),
+          )
           .returning({ id: players.id });
-        if (updated.length === 0) return false;
+        if (updated.length === 0) {
+          const [owned] = await tx
+            .select({ id: players.id })
+            .from(players)
+            .where(
+              and(
+                eq(players.id, playerId),
+                eq(players.roleId, r.id),
+                isNotNull(players.roleLifecycleEventId),
+              ),
+            )
+            .limit(1);
+          return owned ? ('vip_lifecycle_owned' as const) : ('unchanged' as const);
+        }
         await publishAdminsCfgSyncForAllServers(tx, {
           reason: 'role.member.remove',
           actor_player_id: req.user?.playerId ?? null,
           enqueued_at: new Date().toISOString(),
           request_id: req.id,
         });
-        return true;
+        return 'removed' as const;
       });
-      if (!removed) return { ok: true };
+      if (outcome === 'vip_lifecycle_owned') {
+        reply.code(409);
+        return { error: 'vip_lifecycle_owned' };
+      }
+      if (outcome === 'unchanged') return { ok: true };
       invalidatePermissionCache(playerId);
       await revokeAllForPlayer(app.db, app.redis, playerId, app.liveBus);
       return { ok: true };
@@ -386,25 +426,52 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
         reply.code(422);
         return { error: 'validation_failed', errors, imported: 0 };
       }
-      await app.db.transaction(async (tx) => {
-        for (const a of assignments) {
-          await tx
-            .update(players)
-            .set({
-              roleId: req.params.id,
-              roleExpiresAt: null,
-              roleComment: a.comment,
-              roleLifecycleEventId: null,
-            })
-            .where(eq(players.id, a.playerId));
-        }
-        await publishAdminsCfgSyncForAllServers(tx, {
-          reason: 'role.member.import',
-          actor_player_id: req.user?.playerId ?? null,
-          enqueued_at: new Date().toISOString(),
-          request_id: req.id,
+      try {
+        await app.db.transaction(async (tx) => {
+          const locked =
+            assignments.length === 0
+              ? []
+              : await tx
+                  .select({ id: players.id, marker: players.roleLifecycleEventId })
+                  .from(players)
+                  .where(
+                    inArray(
+                      players.id,
+                      assignments.map((assignment) => assignment.playerId),
+                    ),
+                  )
+                  .orderBy(players.id)
+                  .for('update');
+          if (locked.some((player) => player.marker !== null)) {
+            throw new VipLifecycleOwnedError();
+          }
+          for (const a of assignments) {
+            const [updated] = await tx
+              .update(players)
+              .set({
+                roleId: req.params.id,
+                roleExpiresAt: null,
+                roleComment: a.comment,
+                roleLifecycleEventId: null,
+              })
+              .where(and(eq(players.id, a.playerId), isNull(players.roleLifecycleEventId)))
+              .returning({ id: players.id });
+            if (!updated) throw new Error('role import target changed after lock');
+          }
+          await publishAdminsCfgSyncForAllServers(tx, {
+            reason: 'role.member.import',
+            actor_player_id: req.user?.playerId ?? null,
+            enqueued_at: new Date().toISOString(),
+            request_id: req.id,
+          });
         });
-      });
+      } catch (error) {
+        if (error instanceof VipLifecycleOwnedError) {
+          reply.code(409);
+          return { error: 'vip_lifecycle_owned' };
+        }
+        throw error;
+      }
       for (const a of assignments) {
         invalidatePermissionCache(a.playerId);
         if (!role.panelAccess) await revokeAllForPlayer(app.db, app.redis, a.playerId);
@@ -503,25 +570,51 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       }
 
       let removedIds: string[] = [];
-      await app.db.transaction(async (tx) => {
-        const updated = await tx
-          .update(players)
-          .set({
-            roleId: null,
-            roleExpiresAt: null,
-            roleComment: null,
-            roleLifecycleEventId: null,
-          })
-          .where(and(eq(players.roleId, r.id), inArray(players.id, playerIds)))
-          .returning({ id: players.id });
-        removedIds = updated.map((u) => u.id);
-        await publishAdminsCfgSyncForAllServers(tx, {
-          reason: 'role.member.bulk_remove',
-          actor_player_id: req.user?.playerId ?? null,
-          enqueued_at: new Date().toISOString(),
-          request_id: req.id,
+      try {
+        await app.db.transaction(async (tx) => {
+          const locked = await tx
+            .select({ id: players.id, marker: players.roleLifecycleEventId })
+            .from(players)
+            .where(and(eq(players.roleId, r.id), inArray(players.id, playerIds)))
+            .orderBy(players.id)
+            .for('update');
+          if (locked.some((player) => player.marker !== null)) {
+            throw new VipLifecycleOwnedError();
+          }
+          const updated = await tx
+            .update(players)
+            .set({
+              roleId: null,
+              roleExpiresAt: null,
+              roleComment: null,
+              roleLifecycleEventId: null,
+            })
+            .where(
+              and(
+                eq(players.roleId, r.id),
+                inArray(players.id, playerIds),
+                isNull(players.roleLifecycleEventId),
+              ),
+            )
+            .returning({ id: players.id });
+          if (updated.length !== locked.length) {
+            throw new Error('bulk role removal targets changed after lock');
+          }
+          removedIds = updated.map((u) => u.id);
+          await publishAdminsCfgSyncForAllServers(tx, {
+            reason: 'role.member.bulk_remove',
+            actor_player_id: req.user?.playerId ?? null,
+            enqueued_at: new Date().toISOString(),
+            request_id: req.id,
+          });
         });
-      });
+      } catch (error) {
+        if (error instanceof VipLifecycleOwnedError) {
+          reply.code(409);
+          return { error: 'vip_lifecycle_owned' };
+        }
+        throw error;
+      }
       for (const id of removedIds) {
         invalidatePermissionCache(id);
         await revokeAllForPlayer(app.db, app.redis, id);
@@ -596,25 +689,51 @@ const roleMembersRoutes: FastifyPluginAsync = async (app) => {
       }
 
       let movedIds: string[] = [];
-      await app.db.transaction(async (tx) => {
-        const updated = await tx
-          .update(players)
-          .set({
-            roleId: targetRole.id,
-            roleExpiresAt: null,
-            roleComment: null,
-            roleLifecycleEventId: null,
-          })
-          .where(and(eq(players.roleId, src.id), inArray(players.id, playerIds)))
-          .returning({ id: players.id });
-        movedIds = updated.map((u) => u.id);
-        await publishAdminsCfgSyncForAllServers(tx, {
-          reason: 'role.member.move',
-          actor_player_id: req.user?.playerId ?? null,
-          enqueued_at: new Date().toISOString(),
-          request_id: req.id,
+      try {
+        await app.db.transaction(async (tx) => {
+          const locked = await tx
+            .select({ id: players.id, marker: players.roleLifecycleEventId })
+            .from(players)
+            .where(and(eq(players.roleId, src.id), inArray(players.id, playerIds)))
+            .orderBy(players.id)
+            .for('update');
+          if (locked.some((player) => player.marker !== null)) {
+            throw new VipLifecycleOwnedError();
+          }
+          const updated = await tx
+            .update(players)
+            .set({
+              roleId: targetRole.id,
+              roleExpiresAt: null,
+              roleComment: null,
+              roleLifecycleEventId: null,
+            })
+            .where(
+              and(
+                eq(players.roleId, src.id),
+                inArray(players.id, playerIds),
+                isNull(players.roleLifecycleEventId),
+              ),
+            )
+            .returning({ id: players.id });
+          if (updated.length !== locked.length) {
+            throw new Error('bulk role move targets changed after lock');
+          }
+          movedIds = updated.map((u) => u.id);
+          await publishAdminsCfgSyncForAllServers(tx, {
+            reason: 'role.member.move',
+            actor_player_id: req.user?.playerId ?? null,
+            enqueued_at: new Date().toISOString(),
+            request_id: req.id,
+          });
         });
-      });
+      } catch (error) {
+        if (error instanceof VipLifecycleOwnedError) {
+          reply.code(409);
+          return { error: 'vip_lifecycle_owned' };
+        }
+        throw error;
+      }
       for (const id of movedIds) {
         invalidatePermissionCache(id);
         if (!targetRole.panelAccess) await revokeAllForPlayer(app.db, app.redis, id);

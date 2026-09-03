@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { BridgeClient } from '@squad/bridge-client';
-import type { DatabaseClient } from '@squad/db';
+import {
+  type DatabaseClient,
+  protectAdminsCfgManagedSegment,
+  withAdminsCfgServerLock,
+} from '@squad/db';
 import { configVersions, servers } from '@squad/db/schema';
 import { ALLOWED_CONFIG_FILES, PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { and, asc, eq, isNotNull, like } from 'drizzle-orm';
@@ -70,28 +74,35 @@ export async function restoreConfigsFromArchive(
     }
     const path = `${destDir}/${filename}`;
     try {
-      await ctx.bridge.fileAtomicWrite({ path, content: backup.content });
+      const restoreFile = async (db: Pick<DatabaseClient, 'insert'>, content: string) => {
+        await ctx.bridge.fileAtomicWrite({ path, content });
+        const sha256 = createHash('sha256').update(content, 'utf8').digest();
+        return db
+          .insert(configVersions)
+          .values({
+            serverId: newServerId,
+            filename,
+            content,
+            sha256,
+            authorPlayerId: ctx.actorPlayerId,
+            authorLabel: ctx.actorLabel,
+            authorIp: ctx.actorIp,
+            message,
+          })
+          .returning({ id: configVersions.id });
+      };
+      const inserted =
+        filename === 'Admins.cfg'
+          ? await withAdminsCfgServerLock(ctx.db, newServerId, async (tx) =>
+              restoreFile(tx, await protectAdminsCfgManagedSegment(tx, backup.content)),
+            )
+          : await restoreFile(ctx.db, backup.content);
+      if (inserted[0]) {
+        result.config_version_ids.push(inserted[0].id);
+        result.files_restored++;
+      }
     } catch (err) {
       result.errors.push({ file: filename, error: (err as Error).message });
-      continue;
-    }
-    const sha256 = createHash('sha256').update(backup.content, 'utf8').digest();
-    const inserted = await ctx.db
-      .insert(configVersions)
-      .values({
-        serverId: newServerId,
-        filename,
-        content: backup.content,
-        sha256,
-        authorPlayerId: ctx.actorPlayerId,
-        authorLabel: ctx.actorLabel,
-        authorIp: ctx.actorIp,
-        message,
-      })
-      .returning({ id: configVersions.id });
-    if (inserted[0]) {
-      result.config_version_ids.push(inserted[0].id);
-      result.files_restored++;
     }
   }
   return result;

@@ -5,7 +5,14 @@ import { SESSION_COOKIE } from '../plugins/auth.js';
 
 export type AuthenticatedPlayerSessionResult =
   | { ok: true; scope: 'panel' | 'self_service' }
-  | { ok: false; error: 'identity_rejected' | 'identity_persist_failed' | 'owner_role_missing' };
+  | {
+      ok: false;
+      error:
+        | 'identity_rejected'
+        | 'identity_persist_failed'
+        | 'owner_role_missing'
+        | 'vip_lifecycle_owned';
+    };
 
 import type { BssIdentity } from './bss-sso.js';
 import { claimFirstOwner } from './first-owner.js';
@@ -55,6 +62,10 @@ export async function establishAuthenticatedPlayerSession(
     req.log.error('Owner role missing — system roles not seeded?');
     if (sendErrorResponse) reply.code(500).send({ error: 'owner_role_missing' });
     return { ok: false, error: 'owner_role_missing' };
+  }
+  if (claim === 'vip_lifecycle_owned') {
+    if (sendErrorResponse) reply.code(409).send({ error: 'vip_lifecycle_owned' });
+    return { ok: false, error: 'vip_lifecycle_owned' };
   }
 
   const permissions = await loadUserPermissions(app.db, playerId);
