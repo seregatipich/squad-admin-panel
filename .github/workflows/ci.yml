@@ -190,10 +190,22 @@ jobs:
         working-directory: apps/bridge
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # setup-go/actions-cache распаковывал архив поверх общей домашней папки
+      # постоянного раннера и на повторном запуске получал сотни
+      # `tar: Cannot open: File exists`. RUNNER_TEMP доступен только после
+      # назначения раннера, поэтому пути вычисляются здесь, а не в jobs.go.env.
+      - name: Настроить кеши Go точной попытки
+        run: |
+          cache_root="${RUNNER_TEMP}/squad-admin-panel-go-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          {
+            echo "GO_CACHE_ROOT=${cache_root}"
+            echo "GOCACHE=${cache_root}/build"
+            echo "GOMODCACHE=${cache_root}/modules"
+          } >> "${GITHUB_ENV}"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.25.13'
-          cache-dependency-path: apps/bridge/go.sum
+          cache: false
       - run: go vet ./...
       # Только этот шаг уходит в контейнер, и только потому, что детектору гонок
       # нужен cgo, а компилятора C на машине нет. Вся задача в контейнере не
@@ -230,6 +242,23 @@ jobs:
             exit 1
           fi
           echo "panel-host-bridge статический"
+      - name: Удалить кеши Go точной попытки
+        if: always()
+        run: |
+          expected_root="${RUNNER_TEMP}/squad-admin-panel-go-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [[ "${GO_CACHE_ROOT}" != "${expected_root}" ||
+                "${GOCACHE}" != "${GO_CACHE_ROOT}/build" ||
+                "${GOMODCACHE}" != "${GO_CACHE_ROOT}/modules" ]]; then
+            echo "Путь кеша Go вышел за каталог точной попытки workflow." >&2
+            exit 1
+          fi
+          clean_status=0
+          go clean -cache -modcache || clean_status=$?
+          if [[ -d "${GO_CACHE_ROOT}" ]]; then
+            find "${GO_CACHE_ROOT}" -depth -delete
+          fi
+          [[ ! -e "${GO_CACHE_ROOT}" ]]
+          exit "${clean_status}"
 
   docker:
     runs-on:

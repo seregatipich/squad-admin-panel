@@ -66,8 +66,38 @@ deploy_groups=$(grep -Ec "^[[:space:]]*group:[[:space:]]*${RUNNER_GROUP}[[:space
 go_block=$(job_block "$ci_workflow" go)
 printf '%s\n' "$go_block" | grep -Eq 'uses:[[:space:]]+actions/setup-go@[0-9a-f]{40}' ||
   fail 'go job does not install Go through a SHA-pinned setup action'
-printf '%s\n' "$go_block" | grep -Fq 'cache-dependency-path: apps/bridge/go.sum' ||
-  fail 'go cache does not use the bridge module dependency file'
+printf '%s\n' "$go_block" | grep -Fq 'cache: false' ||
+  fail 'go job still restores an actions/cache archive into a persistent runner directory'
+printf '%s\n' "$go_block" | grep -Fq 'name: Настроить кеши Go точной попытки' ||
+  fail 'go job has no runner-side cache path setup step'
+printf '%s\n' "$go_block" | grep -Fq 'cache_root="${RUNNER_TEMP}/squad-admin-panel-go-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' ||
+  fail 'go cache root is not bound to the exact workflow attempt on the runner'
+for variable in GO_CACHE_ROOT GOCACHE GOMODCACHE; do
+  printf '%s\n' "$go_block" | grep -Fq "echo \"${variable}=" ||
+    fail "go cache setup does not export ${variable} through GITHUB_ENV"
+done
+printf '%s\n' "$go_block" | grep -Fq '>> "${GITHUB_ENV}"' ||
+  fail 'go cache paths are not passed to setup-go and later steps'
+if printf '%s\n' "$go_block" | grep -Fq '${{ runner.temp }}'; then
+  fail 'go job evaluates runner.temp before the runner-side setup step'
+fi
+printf '%s\n' "$go_block" | grep -Fq 'name: Удалить кеши Go точной попытки' ||
+  fail 'go job has no exact cache cleanup step'
+go_cleanup_block=$(printf '%s\n' "$go_block" | sed -n '/name: Удалить кеши Go точной попытки/,$p')
+printf '%s\n' "$go_cleanup_block" | grep -Fq 'if: always()' ||
+  fail 'go cache cleanup is skipped after a failed check'
+printf '%s\n' "$go_cleanup_block" | grep -Fq 'go clean -cache -modcache' ||
+  fail 'go job does not clean its exact build and module caches'
+printf '%s\n' "$go_cleanup_block" | grep -Fq '"${GO_CACHE_ROOT}" != "${expected_root}"' ||
+  fail 'go cache cleanup does not validate its exact run-scoped root'
+printf '%s\n' "$go_cleanup_block" | grep -Fq 'find "${GO_CACHE_ROOT}" -depth -delete' ||
+  fail 'go cache cleanup does not remove its exact run-scoped root'
+if printf '%s\n' "$go_cleanup_block" | grep -Eq 'rm[[:space:]]+-r'; then
+  fail 'go cache cleanup uses recursive rm instead of a validated exact traversal'
+fi
+if printf '%s\n' "$go_block" | grep -Fq 'cache-dependency-path:'; then
+  fail 'go job still configures the conflicting setup-go dependency cache'
+fi
 
 grep -Fq 'cancel-in-progress: true' "$ci_workflow" ||
   fail 'superseded ci runs still queue behind each other on a single-machine group'
