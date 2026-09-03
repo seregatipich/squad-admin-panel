@@ -162,4 +162,15 @@ grep -Fq 'docker image rm --force "$TOOL_IMG"' "$backup_script" ||
 grep -Fq 'docker buildx build --builder "$CI_BUILDX_BUILDER" --load' "$backup_script" ||
   fail 'backup round-trip does not share the isolated CI builder'
 
+rnsquadjs_dockerfile="$repo_root/docker/rnsquadjs.Dockerfile"
+grep -Fq 'ARG YARN_VERSION=1.22.22' "$rnsquadjs_dockerfile" ||
+  fail 'RNSquadJS build does not pin the Yarn Classic version'
+grep -Fq 'corepack prepare "yarn@${YARN_VERSION}" --activate' "$rnsquadjs_dockerfile" ||
+  fail 'RNSquadJS build still lets Corepack resolve yarn/latest'
+grep -Fq 'test "$(yarn --version)" = "$YARN_VERSION"' "$rnsquadjs_dockerfile" ||
+  fail 'RNSquadJS build does not verify the activated Yarn version'
+if grep -Fq 'corepack enable && yarn install' "$rnsquadjs_dockerfile"; then
+  fail 'RNSquadJS build invokes Yarn before activating an exact release'
+fi
+
 echo "test-ci-runner-strategy: OK — every ci and deploy job targets the '${RUNNER_GROUP}' runner group"

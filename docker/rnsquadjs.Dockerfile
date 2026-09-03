@@ -9,16 +9,32 @@ ARG RNSQUADJS_REPO=https://github.com/lACTEPUKCl/RNSquadJS.git
 ARG RNSQUADJS_SHA=d76fb4a84bc64ae09b654d4dc17ab06ef308d295
 
 FROM node:22-bookworm-slim AS upstream
+ARG YARN_VERSION=1.22.22
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
+# В upstream есть lockfile Yarn v1, но нет поля packageManager. Без точной
+# активации Corepack запрашивает у npm yarn/latest при каждой холодной сборке,
+# а его короткий таймаут делал CI нестабильным. Повторяем только одну
+# неизменяемую версию с небольшими ограниченными паузами.
+RUN corepack enable \
+    && prepared=false \
+    && for delay in 0 2 5; do \
+         [ "$delay" = 0 ] || sleep "$delay"; \
+         if corepack prepare "yarn@${YARN_VERSION}" --activate; then \
+           prepared=true; \
+           break; \
+         fi; \
+       done \
+    && [ "$prepared" = true ] \
+    && test "$(yarn --version)" = "$YARN_VERSION"
 WORKDIR /src
 ARG RNSQUADJS_REPO
 ARG RNSQUADJS_SHA
 RUN git clone "$RNSQUADJS_REPO" . \
     && git checkout "$RNSQUADJS_SHA" \
     && git rev-parse HEAD > /UPSTREAM_SHA
-RUN corepack enable && yarn install --frozen-lockfile --network-timeout 600000
+RUN yarn install --frozen-lockfile --network-timeout 600000
 # ioredis/uuid are panelBridge runtime deps absent from upstream's manifest.
 # `yarn add` mutates upstream's package.json + lockfile, but that mutation is
 # confined to this image layer (the lockfile is never copied back into the repo).
