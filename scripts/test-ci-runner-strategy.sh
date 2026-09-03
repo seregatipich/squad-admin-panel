@@ -320,4 +320,76 @@ if grep -Fq 'corepack enable && yarn install' "$rnsquadjs_dockerfile"; then
   fail 'RNSquadJS build invokes Yarn before activating an exact release'
 fi
 
+grep -Fq 'yarn add ioredis@5.10.1 uuid@14.0.0 --exact --network-timeout 600000' \
+  "$rnsquadjs_dockerfile" ||
+  fail 'RNSquadJS panelBridge dependencies are not pinned exactly'
+grep -Fq 'for delay in 0 5 10; do' "$rnsquadjs_dockerfile" ||
+  fail 'RNSquadJS panelBridge dependency download has no bounded retry'
+grep -Fq '[ "$deps_installed" = true ]' "$rnsquadjs_dockerfile" ||
+  fail 'RNSquadJS panelBridge dependency retry can mask the final failure'
+
+rnsquad_deps_fixture=$(mktemp -d)
+cleanup_rnsquad_deps_fixture() {
+  find "$rnsquad_deps_fixture" -xdev -depth -delete 2>/dev/null || true
+}
+trap cleanup_rnsquad_deps_fixture EXIT
+printf '%s\n' \
+  '#!/bin/sh' \
+  'attempt=$(cat "$RNSQUAD_DEPS_ATTEMPTS_FILE")' \
+  'attempt=$((attempt + 1))' \
+  'printf "%s\n" "$attempt" > "$RNSQUAD_DEPS_ATTEMPTS_FILE"' \
+  'printf "%s\n" "$*" >> "$RNSQUAD_DEPS_ARGS_FILE"' \
+  '[ "$attempt" -eq "$RNSQUAD_DEPS_SUCCEED_ON" ]' \
+  > "$rnsquad_deps_fixture/yarn"
+printf '%s\n' \
+  '#!/bin/sh' \
+  'printf "%s\n" "$1" >> "$RNSQUAD_DEPS_DELAYS_FILE"' \
+  > "$rnsquad_deps_fixture/sleep"
+chmod +x "$rnsquad_deps_fixture/yarn" "$rnsquad_deps_fixture/sleep"
+rnsquad_deps_command=$(sed -n '/^RUN deps_installed=false/,/^# panelBridge sources/p' \
+  "$rnsquadjs_dockerfile" | sed '$d; 1s/^RUN //; s/[[:space:]]*\\$//' | tr '\n' ' ')
+[ -n "$rnsquad_deps_command" ] ||
+  fail 'RNSquadJS panelBridge dependency retry command cannot be extracted'
+
+assert_rnsquad_deps_retry() {
+  local succeed_on=$1
+  local expected_status=$2
+  local expected_attempts=$3
+  local expected_delays=$4
+  local status
+  local actual_attempts
+  local actual_delays
+  local unexpected_args
+  printf '0\n' > "$rnsquad_deps_fixture/attempts"
+  : > "$rnsquad_deps_fixture/args"
+  : > "$rnsquad_deps_fixture/delays"
+  PATH="$rnsquad_deps_fixture:$PATH" \
+    RNSQUAD_DEPS_SUCCEED_ON="$succeed_on" \
+    RNSQUAD_DEPS_ATTEMPTS_FILE="$rnsquad_deps_fixture/attempts" \
+    RNSQUAD_DEPS_ARGS_FILE="$rnsquad_deps_fixture/args" \
+    RNSQUAD_DEPS_DELAYS_FILE="$rnsquad_deps_fixture/delays" \
+    /bin/sh -c "$rnsquad_deps_command"
+  status=$?
+  actual_attempts=$(cat "$rnsquad_deps_fixture/attempts")
+  actual_delays=$(tr '\n' ',' < "$rnsquad_deps_fixture/delays")
+  unexpected_args=$(grep -Fvx \
+    'add ioredis@5.10.1 uuid@14.0.0 --exact --network-timeout 600000' \
+    "$rnsquad_deps_fixture/args" || true)
+  [ "$status" -eq "$expected_status" ] ||
+    fail "RNSquadJS dependency retry case $succeed_on returned $status instead of $expected_status"
+  [ "$actual_attempts" -eq "$expected_attempts" ] ||
+    fail "RNSquadJS dependency retry case $succeed_on made $actual_attempts attempt(s) instead of $expected_attempts"
+  [ "$actual_delays" = "$expected_delays" ] ||
+    fail "RNSquadJS dependency retry case $succeed_on used delays '$actual_delays' instead of '$expected_delays'"
+  [ -z "$unexpected_args" ] ||
+    fail "RNSquadJS dependency retry changed the pinned yarn arguments: $unexpected_args"
+}
+
+assert_rnsquad_deps_retry 1 0 1 ''
+assert_rnsquad_deps_retry 2 0 2 '5,'
+assert_rnsquad_deps_retry 3 0 3 '5,10,'
+assert_rnsquad_deps_retry 4 1 3 '5,10,'
+cleanup_rnsquad_deps_fixture
+trap - EXIT
+
 echo "test-ci-runner-strategy: OK — every ci and deploy job targets the '${RUNNER_GROUP}' runner group"
