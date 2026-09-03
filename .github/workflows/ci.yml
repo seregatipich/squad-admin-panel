@@ -234,20 +234,32 @@ jobs:
       group: selfhost-group-1
     needs: [node, go]
     timeout-minutes: 30
+    env:
+      CI_IMAGE_TAG: ci-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: build api image
-        run: docker build -f docker/api.Dockerfile -t squad-admin-panel/api:ci .
+        run: docker build -f docker/api.Dockerfile -t "squad-admin-panel/api:${CI_IMAGE_TAG}" .
       - name: verify api runtime database client
-        run: docker run --rm --entrypoint node squad-admin-panel/api:ci --input-type=module -e "await import('postgres')"
+        run: docker run --rm --entrypoint node "squad-admin-panel/api:${CI_IMAGE_TAG}" --input-type=module -e "await import('postgres')"
       - name: build worker-log-ingest image
-        run: docker build -f docker/worker.Dockerfile --build-arg WORKER=log-ingest -t squad-admin-panel/worker-log-ingest:ci .
+        run: docker build -f docker/worker.Dockerfile --build-arg WORKER=log-ingest -t "squad-admin-panel/worker-log-ingest:${CI_IMAGE_TAG}" .
       - name: build worker-rcon image
-        run: docker build -f docker/worker.Dockerfile --build-arg WORKER=rcon -t squad-admin-panel/worker-rcon:ci .
+        run: docker build -f docker/worker.Dockerfile --build-arg WORKER=rcon -t "squad-admin-panel/worker-rcon:${CI_IMAGE_TAG}" .
       - name: build rnsquadjs sidecar image
-        run: docker build -f docker/rnsquadjs.Dockerfile -t squad-panel/rnsquadjs:ci .
+        run: docker build -f docker/rnsquadjs.Dockerfile -t "squad-panel/rnsquadjs:${CI_IMAGE_TAG}" .
       - name: build web image
-        run: docker build -f docker/web.Dockerfile -t squad-admin-panel/web:ci .
+        run: docker build -f docker/web.Dockerfile -t "squad-admin-panel/web:${CI_IMAGE_TAG}" .
       - name: backup/restore round-trip (INFRA-8)
         run: bash scripts/test-backup-restore.sh
+      - name: remove exact CI images
+        if: always()
+        run: |
+          docker image rm --force \
+            "squad-admin-panel/api:${CI_IMAGE_TAG}" \
+            "squad-admin-panel/worker-log-ingest:${CI_IMAGE_TAG}" \
+            "squad-admin-panel/worker-rcon:${CI_IMAGE_TAG}" \
+            "squad-panel/rnsquadjs:${CI_IMAGE_TAG}" \
+            "squad-admin-panel/web:${CI_IMAGE_TAG}" \
+            >/dev/null 2>&1 || true

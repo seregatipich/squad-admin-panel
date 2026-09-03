@@ -76,4 +76,23 @@ branch_guard=$(job_block "$ci_workflow" branch-guard)
 printf '%s\n' "$branch_guard" | grep -Fq 'bash scripts/test-ci-runner-strategy.sh' ||
   fail 'branch-guard does not execute this regression test'
 
+docker_block=$(job_block "$ci_workflow" docker)
+printf '%s\n' "$docker_block" | grep -Fq 'CI_IMAGE_TAG: ci-${{ github.run_id }}-${{ github.run_attempt }}' ||
+  fail 'docker images are not bound to the exact workflow run'
+printf '%s\n' "$docker_block" | grep -Fq 'name: remove exact CI images' ||
+  fail 'docker job has no exact image cleanup step'
+printf '%s\n' "$docker_block" | grep -Fq 'if: always()' ||
+  fail 'docker image cleanup is skipped after a failed build'
+printf '%s\n' "$docker_block" | grep -Fq 'docker image rm --force' ||
+  fail 'docker job does not remove its exact images'
+if printf '%s\n' "$docker_block" | grep -Eq 'squad-(admin-panel|panel)/[^:[:space:]]+:ci([[:space:]".]|$)'; then
+  fail 'docker job still uses a shared :ci tag'
+fi
+
+backup_script="$repo_root/scripts/test-backup-restore.sh"
+grep -Fq 'TOOL_IMG="squad-panel/restic:citest-${SFX}"' "$backup_script" ||
+  fail 'backup round-trip toolbox image is not run-scoped'
+grep -Fq 'docker image rm --force "$TOOL_IMG"' "$backup_script" ||
+  fail 'backup round-trip does not remove its toolbox image on exit'
+
 echo "test-ci-runner-strategy: OK — every ci and deploy job targets the '${RUNNER_GROUP}' runner group"
