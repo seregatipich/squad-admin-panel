@@ -131,8 +131,11 @@ GitHub Runner удаляет сервисные контейнеры коман�
 анонимные тома PostgreSQL и Redis. Теперь оба пути из `VOLUME` образов заранее
 перекрыты ограниченными `tmpfs`: 1 ГиБ для PostgreSQL и 128 МиБ для Redis.
 Docker не создаёт анонимные тома, а временные данные исчезают вместе с
-контейнером даже при ошибке healthcheck или отмене задания. Общая очистка не
-применяется; точные параметры закреплены в `test-ci-runner-strategy.sh`.
+контейнером даже при ошибке healthcheck или отмене задания. Рабочая копия базы,
+создаваемая `worker-setup.ts` для каждого изолированного файла Vitest, удаляется
+его `afterAll`, поэтому копии не накапливаются до конца всего прогона. Общая
+очистка не применяется; точные параметры закреплены в
+`test-ci-runner-strategy.sh`.
 
 **Never run a whole job in a container on this runner.** The workspace is shared and
 persistent; a containerised job runs as `root`, so `actions/checkout` inside it writes

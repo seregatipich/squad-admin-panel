@@ -12,7 +12,8 @@ export default defineConfig({
     setupFiles: ['./test/integration/worker-setup.ts'],
     testTimeout: 10_000,
     hookTimeout: 120_000,
-    sequence: { concurrent: false },
+    isolate: true,
+    sequence: { concurrent: false, hooks: 'stack' },
     pool: 'forks',
     poolOptions: { forks: { maxForks, minForks: 1 } },
     coverage: {

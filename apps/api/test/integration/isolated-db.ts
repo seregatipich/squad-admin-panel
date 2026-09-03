@@ -245,21 +245,32 @@ export async function createIsolatedSchema(): Promise<CreatedSchema> {
   };
 }
 
-let workerResources: Promise<void> | null = null;
-
-/**
- * Per-worker isolation hook invoked by `worker-setup.ts` before any test in a
- * Vitest worker runs. Points the worker at its own cloned database and a
- * dedicated Redis logical DB so parallel workers never share mutable Postgres
- * or Redis state — preserving the serial suite's isolation while allowing files
- * to run in parallel across workers. Idempotent per worker process.
- */
-export function provisionWorkerResources(): Promise<void> {
-  if (!workerResources) workerResources = doProvisionWorkerResources();
-  return workerResources;
+interface WorkerResources {
+  drop(): Promise<void>;
 }
 
-async function doProvisionWorkerResources(): Promise<void> {
+let workerResources: Promise<WorkerResources> | null = null;
+
+/**
+ * File-isolation hook invoked by `worker-setup.ts` before a Vitest file runs.
+ * Vitest evaluates setupFiles in each isolated file context, so the matching
+ * afterAll hook must release this clone before that context disappears. Files
+ * running in parallel never share mutable Postgres or Redis state.
+ */
+export async function provisionWorkerResources(): Promise<void> {
+  if (!workerResources) workerResources = doProvisionWorkerResources();
+  await workerResources;
+}
+
+export async function releaseWorkerResources(): Promise<void> {
+  const resources = workerResources;
+  workerResources = null;
+  if (!resources) return;
+  await (await resources).drop();
+}
+
+async function doProvisionWorkerResources(): Promise<WorkerResources> {
+  const baseUrl = hostDbUrl();
   const workerId = Number(process.env.VITEST_WORKER_ID ?? '1');
 
   const redisUrl = new URL(hostRedisUrl());
@@ -279,6 +290,19 @@ async function doProvisionWorkerResources(): Promise<void> {
   const url = databaseUrl(name);
   process.env.DATABASE_URL = url;
   process.env.TEST_DATABASE_URL = url;
+
+  return {
+    async drop() {
+      const maintenanceUrl = new URL(baseUrl);
+      maintenanceUrl.pathname = '/postgres';
+      const admin = postgres(maintenanceUrl.toString(), { max: 1, onnotice: () => undefined });
+      try {
+        await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+      } finally {
+        await admin.end();
+      }
+    },
+  };
 }
 
 /**
