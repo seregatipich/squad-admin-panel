@@ -248,7 +248,7 @@ describe('configure-bss-sso-env.sh', () => {
     assert.doesNotMatch(provision, /restart|\bstop\b|\bup -d\b|deploy-tk104\.sh/i);
     assert.match(
       ci,
-      /docker run --rm --entrypoint node squad-admin-panel\/api:ci --input-type=module -e "await import\('postgres'\)"/,
+      /docker run --rm --entrypoint node "squad-admin-panel\/api:\$\{CI_IMAGE_TAG\}" --input-type=module -e "await import\('postgres'\)"/,
     );
   });
 
