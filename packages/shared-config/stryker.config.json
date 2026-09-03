@@ -1,6 +1,7 @@
 {
   "$schema": "https://unpkg.com/@stryker-mutator/core/schema/stryker-schema.json",
   "testRunner": "vitest",
+  "concurrency": 2,
   "plugins": ["@stryker-mutator/vitest-runner"],
   "reporters": ["clear-text", "html"],
   "mutate": ["src/**/*.ts", "!src/**/*.test.ts"],

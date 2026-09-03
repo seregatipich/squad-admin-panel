@@ -5,8 +5,19 @@
 // parallelism is safe. These invariants keep tests within a file sequential,
 // provision and release the file-level resources, sweep interrupted-run orphans,
 // and bound worker count so parallel clones do not exhaust Postgres connections.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import vitestConfig from '../vitest.config.js';
+
+const turboConfig = JSON.parse(
+  readFileSync(new URL('../../../turbo.json', import.meta.url), 'utf8'),
+) as { globalPassThroughEnv?: string[] };
+const strykerConfig = JSON.parse(
+  readFileSync(
+    new URL('../../../packages/shared-config/stryker.config.json', import.meta.url),
+    'utf8',
+  ),
+) as { concurrency?: number };
 
 const cfg = (
   vitestConfig as {
@@ -35,6 +46,14 @@ describe('vitest config invariants', () => {
     expect(typeof maxForks).toBe('number');
     expect(maxForks).toBeGreaterThan(0);
     expect(maxForks).toBeLessThanOrEqual(8);
+  });
+
+  it('forwards the local worker override through Turbo without changing cache keys', () => {
+    expect(turboConfig.globalPassThroughEnv).toContain('VITEST_MAX_FORKS');
+  });
+
+  it('bounds mutation workers on a shared development machine', () => {
+    expect(strykerConfig.concurrency).toBe(2);
   });
 
   it('provisions file-level isolation via setupFiles', () => {
