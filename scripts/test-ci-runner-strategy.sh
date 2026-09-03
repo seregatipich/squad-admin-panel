@@ -230,6 +230,85 @@ grep -Fq 'docker image rm --force "$TOOL_IMG"' "$backup_script" ||
 grep -Fq 'docker buildx build --builder "$CI_BUILDX_BUILDER" --load' "$backup_script" ||
   fail 'backup round-trip does not share the isolated CI builder'
 
+for node_dockerfile in \
+  "$repo_root/docker/api.Dockerfile" \
+  "$repo_root/docker/worker.Dockerfile" \
+  "$repo_root/docker/web.Dockerfile"
+do
+  corepack_block=$(sed -n '/^RUN corepack enable/,/^WORKDIR \/app$/p' "$node_dockerfile" | sed '$d')
+  grep -Fq 'ARG PNPM_VERSION=9.15.0' "$node_dockerfile" ||
+    fail "$(basename "$node_dockerfile") does not pin the pnpm version"
+  printf '%s\n' "$corepack_block" | grep -Fq 'for attempt in 1 2 3; do' ||
+    fail "$(basename "$node_dockerfile") does not retry the Corepack download"
+  printf '%s\n' "$corepack_block" | grep -Fq 'corepack prepare "pnpm@${PNPM_VERSION}" --activate' ||
+    fail "$(basename "$node_dockerfile") does not activate the exact pnpm release"
+  printf '%s\n' "$corepack_block" | grep -Fq 'test "$(pnpm --version)" = "$PNPM_VERSION"' ||
+    fail "$(basename "$node_dockerfile") does not verify the activated pnpm version"
+  printf '%s\n' "$corepack_block" | grep -Fq 'test "$attempt" -eq 3 || sleep "$((attempt * 5))"' ||
+    fail "$(basename "$node_dockerfile") does not use bounded 5/10 second backoff"
+  printf '%s\n' "$corepack_block" | tail -n 1 | grep -Fxq '    exit 1' ||
+    fail "$(basename "$node_dockerfile") masks the third Corepack failure"
+done
+
+corepack_fixture=$(mktemp -d)
+cleanup_corepack_fixture() {
+  find "$corepack_fixture" -xdev -depth -delete 2>/dev/null || true
+}
+trap cleanup_corepack_fixture EXIT
+printf '%s\n' \
+  '#!/bin/sh' \
+  'if [ "$1" = enable ]; then exit 0; fi' \
+  'attempt=$(cat "$COREPACK_ATTEMPTS_FILE")' \
+  'attempt=$((attempt + 1))' \
+  'printf "%s\n" "$attempt" > "$COREPACK_ATTEMPTS_FILE"' \
+  '[ "$attempt" -eq "$COREPACK_SUCCEED_ON" ]' \
+  > "$corepack_fixture/corepack"
+printf '%s\n' \
+  '#!/bin/sh' \
+  'printf "%s\n" "9.15.0"' \
+  > "$corepack_fixture/pnpm"
+printf '%s\n' \
+  '#!/bin/sh' \
+  'printf "%s\n" "$1" >> "$COREPACK_DELAYS_FILE"' \
+  > "$corepack_fixture/sleep"
+chmod +x "$corepack_fixture/corepack" "$corepack_fixture/pnpm" "$corepack_fixture/sleep"
+corepack_command=$(sed -n '/^RUN corepack enable/,/^WORKDIR \/app$/p' \
+  "$repo_root/docker/api.Dockerfile" | sed '$d; 1s/^RUN //; s/[[:space:]]*\\$//')
+
+assert_corepack_retry() {
+  local succeed_on=$1
+  local expected_status=$2
+  local expected_attempts=$3
+  local expected_delays=$4
+  local status
+  local actual_attempts
+  local actual_delays
+  printf '0\n' > "$corepack_fixture/attempts"
+  : > "$corepack_fixture/delays"
+  PATH="$corepack_fixture:$PATH" \
+    PNPM_VERSION=9.15.0 \
+    COREPACK_SUCCEED_ON="$succeed_on" \
+    COREPACK_ATTEMPTS_FILE="$corepack_fixture/attempts" \
+    COREPACK_DELAYS_FILE="$corepack_fixture/delays" \
+    /bin/sh -c "$corepack_command"
+  status=$?
+  actual_attempts=$(cat "$corepack_fixture/attempts")
+  actual_delays=$(tr '\n' ',' < "$corepack_fixture/delays")
+  [ "$status" -eq "$expected_status" ] ||
+    fail "Corepack retry case $succeed_on returned $status instead of $expected_status"
+  [ "$actual_attempts" -eq "$expected_attempts" ] ||
+    fail "Corepack retry case $succeed_on made $actual_attempts attempt(s) instead of $expected_attempts"
+  [ "$actual_delays" = "$expected_delays" ] ||
+    fail "Corepack retry case $succeed_on used delays '$actual_delays' instead of '$expected_delays'"
+}
+
+assert_corepack_retry 1 0 1 ''
+assert_corepack_retry 2 0 2 '5,'
+assert_corepack_retry 3 0 3 '5,10,'
+assert_corepack_retry 4 1 3 '5,10,'
+cleanup_corepack_fixture
+trap - EXIT
+
 rnsquadjs_dockerfile="$repo_root/docker/rnsquadjs.Dockerfile"
 grep -Fq 'ARG YARN_VERSION=1.22.22' "$rnsquadjs_dockerfile" ||
   fail 'RNSquadJS build does not pin the Yarn Classic version'
