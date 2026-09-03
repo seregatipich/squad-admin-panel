@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { appendWorkerAudit } from '../src/audit.js';
+import { appendWorkerAuditInTransaction } from '../src/audit.js';
 import { buildManagedSegment, spliceManagedSegment } from '../src/segment.js';
 import {
   ADMINS_CFG_STATUS_KEY_PREFIX,
@@ -11,8 +11,11 @@ import {
 // The `admins_cfg.synced` audit row is appended via `appendWorkerAudit`; mock
 // it so its `context` object can be inspected without a live DB. The mutating
 // paths still run — only the row persistence is replaced by a spy.
-vi.mock('../src/audit.js', () => ({ appendWorkerAudit: vi.fn().mockResolvedValue(undefined) }));
-const appendWorkerAuditMock = vi.mocked(appendWorkerAudit);
+vi.mock('../src/audit.js', () => ({
+  appendWorkerAudit: vi.fn().mockResolvedValue(undefined),
+  appendWorkerAuditInTransaction: vi.fn().mockResolvedValue(undefined),
+}));
+const appendWorkerAuditMock = vi.mocked(appendWorkerAuditInTransaction);
 
 const SERVER_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 
@@ -61,7 +64,7 @@ function makeRedis(opts: RedisFakeOptions = {}) {
 }
 
 function makeTx(lastRowHash: string | null) {
-  const executeMock = vi.fn().mockResolvedValue(undefined);
+  const executeMock = vi.fn().mockResolvedValue([]);
   const selectMock = {
     select: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),
@@ -75,9 +78,7 @@ function makeDb() {
   const tx = makeTx(null);
   return {
     execute: vi.fn().mockResolvedValue([]),
-    transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<void>) => {
-      await fn(tx);
-    }),
+    transaction: vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx)),
   } as never;
 }
 

@@ -46,6 +46,7 @@ function setup(statuses: Array<string | null> = ['running', 'running']) {
     const status = statuses.shift() ?? null;
     return status ? { status, deletedAt: null } : null;
   });
+  const lockedDb = {} as never;
   const operations: AdminsCfgDeliveryOperations = {
     getOutbox: vi.fn().mockImplementation(async () => row),
     isSuperseded: vi.fn().mockResolvedValue(false),
@@ -58,7 +59,12 @@ function setup(statuses: Array<string | null> = ['running', 'running']) {
       return row;
     }),
     readServerState,
-    sync,
+    withServerLock: vi.fn().mockImplementation(async (_ctx, _serverId, work) =>
+      work({
+        db: lockedDb,
+        sync,
+      }),
+    ),
     confirmReload,
   };
   const ctx = {
@@ -86,7 +92,7 @@ describe('correlated Admins.cfg delivery', () => {
 
     await expect(handleAdminsCfgSyncEntry(t.ctx, t.entry, t.operations)).resolves.toBe('completed');
 
-    expect(t.sync).toHaveBeenCalledWith(t.ctx, SERVER_ID, {
+    expect(t.sync).toHaveBeenCalledWith({
       reason: 'vip.lifecycle.assigned',
       actorPlayerId: null,
       forceWrite: false,
@@ -132,7 +138,7 @@ describe('correlated Admins.cfg delivery', () => {
 
     await handleAdminsCfgSyncEntry(t.ctx, entry, t.operations);
 
-    expect(t.sync).toHaveBeenCalledWith(t.ctx, SERVER_ID, {
+    expect(t.sync).toHaveBeenCalledWith({
       reason: 'force_sync',
       actorPlayerId: 'durable-actor',
       forceWrite: true,
@@ -273,7 +279,7 @@ describe('correlated Admins.cfg delivery', () => {
 
     await handleAdminsCfgSyncEntry(t.ctx, legacyEntry, t.operations);
 
-    expect(t.sync).toHaveBeenCalledWith(t.ctx, SERVER_ID, {
+    expect(t.sync).toHaveBeenCalledWith({
       reason: 'role.update',
       actorPlayerId: null,
       forceWrite: false,

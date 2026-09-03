@@ -1,8 +1,14 @@
 import type { BridgeClient } from '@squad/bridge-client';
-import type { DatabaseClient } from '@squad/db';
+import {
+  type AdminsCfgSyncTransaction,
+  type DatabaseClient,
+  isVipLifecycleStrict,
+  stripAdminsCfgManagedAuthority,
+  withAdminsCfgServerLock,
+} from '@squad/db';
 import type Redis from 'ioredis';
 import type { Logger } from 'pino';
-import { appendWorkerAudit } from './audit.js';
+import { type AuditEntry, appendWorkerAuditInTransaction } from './audit.js';
 import { snapshotRolesAndAdmins } from './db-snapshot.js';
 import { type AdminsCfgReloadOutcome, requestAdminsCfgReload } from './rcon-reload.js';
 import {
@@ -89,6 +95,13 @@ export interface SyncContext {
   log: Logger;
 }
 
+type LockedSyncContext = Omit<SyncContext, 'db'> & { db: AdminsCfgSyncTransaction };
+
+export interface AdminsCfgServerLease {
+  db: AdminsCfgSyncTransaction;
+  sync(opts: SyncOptions): Promise<SyncResult>;
+}
+
 export interface SyncOptions {
   reason: string;
   actorPlayerId: string | null;
@@ -106,8 +119,8 @@ export interface SyncOptions {
  * (or forceWrite=true). Publishes status to Redis. On success, appends
  * audit_log row `admins_cfg.synced` (or `admins_cfg.force_synced`).
  */
-export async function syncServerAdminsCfg(
-  ctx: SyncContext,
+async function syncServerAdminsCfgLocked(
+  ctx: LockedSyncContext,
   serverId: string,
   opts: SyncOptions,
 ): Promise<SyncResult> {
@@ -122,6 +135,7 @@ export async function syncServerAdminsCfg(
 
   const snapshot = await snapshotRolesAndAdmins(db);
   const generated = buildManagedSegment(snapshot);
+  const strict = await isVipLifecycleStrict(db);
 
   let original: string;
   try {
@@ -176,9 +190,12 @@ export async function syncServerAdminsCfg(
 
   const located = findManagedSegment(original);
   const currentHash = located ? hashSegment(located.segment) : null;
-  const newContent = spliceManagedSegment(original, generated.body);
+  const unmanagedContent = strict ? stripAdminsCfgManagedAuthority(original) : original;
+  const newContent = spliceManagedSegment(unmanagedContent, generated.body);
 
   const hashesMatch = currentHash === generated.hash;
+  const authorityDrift = strict && newContent !== original;
+  const hasDrift = !hashesMatch || authorityDrift;
   const isPassiveCheck =
     opts.mode === 'passive' || (opts.mode === undefined && opts.reason === 'drift_check');
   // Passive sweeps detect drift but do NOT auto-correct — the spec
@@ -186,10 +203,10 @@ export async function syncServerAdminsCfg(
   // rather than have the worker silently overwrite manual edits. Active
   // mutations (role.update, player.role.assign, …) and explicit
   // force_sync requests still write.
-  const needsWrite = opts.forceWrite || (!isPassiveCheck && !hashesMatch);
+  const needsWrite = opts.forceWrite || (!isPassiveCheck && hasDrift);
 
   if (!needsWrite) {
-    if (!hashesMatch && located !== null) {
+    if (hasDrift) {
       // Drift — file's managed segment diverges from the DB. Surface it
       // in the UI banner; do not write.
       await publishStatus(redis, serverId, {
@@ -285,7 +302,7 @@ export async function syncServerAdminsCfg(
     opts.requestReload === false ? undefined : await requestAdminsCfgReload(redis, serverId, log);
 
   try {
-    await appendWorkerAudit(db, {
+    await appendWorkerAuditInTransaction(db, {
       actorPlayerId: opts.actorPlayerId,
       actionType: opts.forceWrite ? 'admins_cfg.force_synced' : 'admins_cfg.synced',
       targetType: 'server',
@@ -315,14 +332,42 @@ export async function syncServerAdminsCfg(
 }
 
 async function safeAppendAudit(
-  db: DatabaseClient,
+  db: AdminsCfgSyncTransaction,
   log: Logger,
   serverId: string,
-  entry: Parameters<typeof appendWorkerAudit>[1],
+  entry: AuditEntry,
 ): Promise<void> {
   try {
-    await appendWorkerAudit(db, entry);
+    await appendWorkerAuditInTransaction(db, entry);
   } catch (err) {
     log.error({ serverId, err: (err as Error).message }, 'audit append failed (non-fatal)');
   }
+}
+
+/**
+ * Hold the cross-process, per-server fence for every Admins.cfg observation and
+ * side effect. The transaction deliberately remains open across bridge/RCON
+ * I/O: releasing it before the atomic write or durable terminal state would
+ * let a reclaimed or newer delivery publish an older snapshot last.
+ */
+export async function withAdminsCfgSyncLease<T>(
+  ctx: SyncContext,
+  serverId: string,
+  work: (lease: AdminsCfgServerLease) => Promise<T>,
+): Promise<T> {
+  return withAdminsCfgServerLock(ctx.db, serverId, async (tx) => {
+    const lockedCtx: LockedSyncContext = { ...ctx, db: tx };
+    return work({
+      db: tx,
+      sync: (opts) => syncServerAdminsCfgLocked(lockedCtx, serverId, opts),
+    });
+  });
+}
+
+export async function syncServerAdminsCfg(
+  ctx: SyncContext,
+  serverId: string,
+  opts: SyncOptions,
+): Promise<SyncResult> {
+  return withAdminsCfgSyncLease(ctx, serverId, (lease) => lease.sync(opts));
 }

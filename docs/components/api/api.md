@@ -65,11 +65,12 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
+| POST | `/api/v1/integrations/vip/tier-role` | Проверка точной пары `{ role_id, tier }` для release gate без игрока и записи. | только HMAC |
 | POST | `/api/v1/integrations/vip/preflight` | Подписанная проверка игрока, VIP-роли, владельца текущего назначения и непустого снимка серверов до покупки. | только HMAC |
 | POST | `/api/v1/integrations/vip/lifecycle` | Подписанное назначение, продление, истечение или возврат VIP-роли от `vip-user-service`. | только HMAC |
 | POST | `/api/v1/integrations/vip/status` | Подписанное агрегированное состояние доставки принятого события по `{ event_id }`. | только HMAC |
 
-Все три маршрута выключены без `VIP_LIFECYCLE_WEBHOOK_SECRET` и используют
+Все четыре маршрута выключены без `VIP_LIFECYCLE_WEBHOOK_SECRET` и используют
 одни заголовки:
 
 - `x-vip-timestamp`: ISO 8601 с часовым поясом в окне ±300 секунд от времени
@@ -81,6 +82,14 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 Дата вне окна, дата без часового пояса, неверный формат и неверная подпись
 одинаково возвращают `401 { "error": "invalid_signature" }`.
 
+`tier` в строгом контракте — UUID строки `vip_tiers.id`, а не отображаемое имя.
+Read-only `tier-role` принимает только UUID и возвращает точное
+`200 { "ok": true, "tier_code": "<vip_tiers.id>", "role_id": "<roles.id>" }`.
+Неактивная, небезопасная или неоднозначная роль даёт `404 role_not_vip`, а
+несовпавший UUID — `409 tier_role_mismatch`. До cutover preflight и lifecycle
+ещё принимают прежнюю строковую метку, но в ответе и сохранённом событии всегда
+возвращают авторитетный `tier_code`; после durable cutover требуется точный UUID.
+
 Lifecycle принимает:
 
 ```json
@@ -89,7 +98,7 @@ Lifecycle принимает:
   "event_type": "vip.purchased",
   "player_id": "0190abcd-0000-7000-8000-000000000001",
   "role_id": "0190abcd-0000-7000-8000-000000000002",
-  "tier": "vip2",
+  "tier": "0190abcd-0000-7000-8000-000000000003",
   "purchase_id": "purchase-123",
   "expires_at": "2030-01-02T03:04:05.000Z",
   "revision": 17
@@ -111,6 +120,11 @@ Lifecycle принимает:
 `superseded`; поздняя меньшая revision сразу записывается с таким действием и
 не меняет роль или outbox.
 
+Preflight, lifecycle (включая идемпотентный повтор) и status возвращают
+`tier_code`. Это авторитетный UUID `vip_tiers.id`, который producer сохраняет
+в операции доставки; смена внешней конфигурации не должна менять повторяемое
+тело уже созданной операции.
+
 Preflight и lifecycle не перезаписывают ручную роль или активную внутреннюю
 `vip_subscriptions`. Конфликты владельца возвращаются безопасными кодами
 `role_conflict`, `manual_role_conflict` или `vip_subscription_conflict`; пустой
@@ -124,6 +138,7 @@ Status принимает `{ "event_id": "purchase-123" }`. Неизвестно
 {
   "ok": true,
   "event_id": "purchase-123",
+  "tier_code": "0190abcd-0000-7000-8000-000000000003",
   "state": "applying",
   "action": "assigned",
   "servers_total": 2,

@@ -154,6 +154,7 @@ describe('audit coverage (TZ §17.12 CI guard)', () => {
   it('mutating-verb routes with audit: false are limited to explicit machine-integration exceptions', async () => {
     const routes = await collectRoutes();
     const allowlist = new Set([
+      '/api/v1/integrations/vip/tier-role',
       '/api/v1/integrations/vip/preflight',
       '/api/v1/integrations/vip/status',
       '/api/v1/integrations/vip/lifecycle',

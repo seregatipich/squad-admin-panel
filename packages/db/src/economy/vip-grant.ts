@@ -1,8 +1,10 @@
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { DatabaseClient } from '../client.js';
 import { type BonusTransactionRow, bonusTransactions } from '../schema/bonus-transactions.js';
+import { panelMeta } from '../schema/panel-meta.js';
 import { players } from '../schema/players.js';
 import { vipLifecycleEvents } from '../schema/vip-lifecycle-events.js';
+import { vipTiers } from '../schema/vip-tiers.js';
 
 const DAY_MS = 86_400_000;
 
@@ -41,6 +43,7 @@ export type VipGrantPlan =
       roleExpiresAt: Date;
     }
   | { status: 'insufficient_balance'; balance: number }
+  | { status: 'vip_lifecycle_owned' }
   | { status: 'role_conflict' }
   | { status: 'role_permanent' };
 
@@ -64,7 +67,7 @@ export function planVipGrant(
 ): VipGrantPlan {
   const nextBalance = state.balance - tier.price;
   if (nextBalance < 0) return { status: 'insufficient_balance', balance: state.balance };
-  if (state.externalLifecycleOwner) return { status: 'role_conflict' };
+  if (state.externalLifecycleOwner) return { status: 'vip_lifecycle_owned' };
 
   const sameRole = state.roleId === tier.roleId;
   if (state.roleId !== null && !sameRole) return { status: 'role_conflict' };
@@ -97,9 +100,80 @@ export interface VipLifecycleOwner {
   expiresAt: Date;
 }
 
+interface VipLifecycleOwnerEvent {
+  eventId: string;
+  roleId: string | null;
+  action: string;
+  revision: number | null;
+  purchaseId: string | null;
+  tier: string | null;
+  payload: unknown;
+  receivedAt: Date;
+}
+
 export function vipLifecycleRoleComment(tier: string | null, purchaseId: string | null): string {
   const purchase = purchaseId ? ` purchase ${purchaseId}` : '';
   return `VIP ${tier ?? 'vip'}${purchase}`;
+}
+
+function ownerFromEvent(
+  event: VipLifecycleOwnerEvent,
+  player: VipLifecycleProjection,
+  expectedPurchaseId?: string | null,
+): VipLifecycleOwner | null {
+  if (expectedPurchaseId !== undefined && event.purchaseId !== expectedPurchaseId) return null;
+  const payload = event.payload as { expires_at?: unknown };
+  if (typeof payload.expires_at !== 'string') return null;
+  const expiresAt = new Date(payload.expires_at);
+  if (
+    !Number.isFinite(expiresAt.getTime()) ||
+    expiresAt.getTime() !== player.roleExpiresAt?.getTime() ||
+    vipLifecycleRoleComment(event.tier, event.purchaseId) !== player.roleComment
+  ) {
+    return null;
+  }
+  return { purchaseId: event.purchaseId, expiresAt };
+}
+
+async function findCurrentVipLifecycleEvent(
+  tx: Pick<DatabaseClient, 'select'>,
+  playerId: string,
+): Promise<VipLifecycleOwnerEvent | null> {
+  const events = await tx
+    .select({
+      eventId: vipLifecycleEvents.eventId,
+      roleId: vipLifecycleEvents.roleId,
+      action: vipLifecycleEvents.action,
+      revision: vipLifecycleEvents.revision,
+      purchaseId: vipLifecycleEvents.purchaseId,
+      tier: vipLifecycleEvents.tier,
+      payload: vipLifecycleEvents.payload,
+      receivedAt: vipLifecycleEvents.receivedAt,
+    })
+    .from(vipLifecycleEvents)
+    .where(
+      and(
+        eq(vipLifecycleEvents.playerId, playerId),
+        isNotNull(vipLifecycleEvents.appliedAt),
+        isNull(vipLifecycleEvents.supersededByEventId),
+      ),
+    )
+    .orderBy(
+      desc(sql`${vipLifecycleEvents.revision} IS NOT NULL`),
+      desc(vipLifecycleEvents.revision),
+      desc(vipLifecycleEvents.receivedAt),
+    )
+    .limit(2);
+  const current = events[0];
+  if (!current) return null;
+  if (
+    current.revision === null &&
+    events[1]?.revision === null &&
+    events[1].receivedAt.getTime() === current.receivedAt.getTime()
+  ) {
+    return null;
+  }
+  return current;
 }
 
 /** Returns evidence only while the player projection points at its exact external grant. */
@@ -109,37 +183,27 @@ export async function findVipLifecycleOwner(
   expectedPurchaseId?: string | null,
 ): Promise<VipLifecycleOwner | null> {
   if (!player.roleId || !player.roleExpiresAt || !player.roleLifecycleEventId) return null;
-  const [event] = await tx
-    .select({
-      purchaseId: vipLifecycleEvents.purchaseId,
-      tier: vipLifecycleEvents.tier,
-      payload: vipLifecycleEvents.payload,
-    })
-    .from(vipLifecycleEvents)
-    .where(
-      and(
-        eq(vipLifecycleEvents.playerId, player.id),
-        eq(vipLifecycleEvents.eventId, player.roleLifecycleEventId),
-        eq(vipLifecycleEvents.roleId, player.roleId),
-        eq(vipLifecycleEvents.action, 'assigned'),
-        isNotNull(vipLifecycleEvents.appliedAt),
-      ),
-    )
-    .limit(1);
-  if (!event || (expectedPurchaseId !== undefined && event.purchaseId !== expectedPurchaseId)) {
-    return null;
-  }
-  const payload = event.payload as { expires_at?: unknown };
-  if (typeof payload.expires_at !== 'string') return null;
-  const expiresAt = new Date(payload.expires_at);
+  const event = await findCurrentVipLifecycleEvent(tx, player.id);
   if (
-    !Number.isFinite(expiresAt.getTime()) ||
-    expiresAt.getTime() !== player.roleExpiresAt.getTime() ||
-    vipLifecycleRoleComment(event.tier, event.purchaseId) !== player.roleComment
+    !event ||
+    event.eventId !== player.roleLifecycleEventId ||
+    event.roleId !== player.roleId ||
+    event.action !== 'assigned'
   ) {
     return null;
   }
-  return { purchaseId: event.purchaseId, expiresAt };
+  return ownerFromEvent(event, player, expectedPurchaseId);
+}
+
+/** Finds an exact external projection whose current event marker was lost. */
+export async function findCurrentVipLifecycleAssignment(
+  tx: Pick<DatabaseClient, 'select'>,
+  player: VipLifecycleProjection,
+): Promise<VipLifecycleOwner | null> {
+  if (!player.roleId || !player.roleExpiresAt) return null;
+  const event = await findCurrentVipLifecycleEvent(tx, player.id);
+  if (!event || event.roleId !== player.roleId || event.action !== 'assigned') return null;
+  return ownerFromEvent(event, player);
 }
 
 /**
@@ -179,6 +243,8 @@ export type ApplyVipGrantResult =
     }
   | { status: 'player_not_found' }
   | { status: 'insufficient_balance'; balance: number }
+  | { status: 'vip_lifecycle_owned' }
+  | { status: 'vip_lifecycle_required' }
   | { status: 'role_conflict' }
   | { status: 'role_permanent' };
 
@@ -218,13 +284,34 @@ export async function applyVipGrant(
   const current = locked[0];
   if (!current) return { status: 'player_not_found' };
 
-  const externalLifecycleOwner = await findVipLifecycleOwner(tx, current);
+  const [strictFence] = await tx
+    .select({ enabled: panelMeta.vipLifecycleStrict })
+    .from(panelMeta)
+    .innerJoin(vipTiers, eq(vipTiers.roleId, input.tier.roleId))
+    .where(and(eq(panelMeta.id, 1), eq(panelMeta.vipLifecycleStrict, true)))
+    .limit(1);
+  if (strictFence) return { status: 'vip_lifecycle_required' };
+
   const plan = planVipGrant(
-    { ...current, externalLifecycleOwner: externalLifecycleOwner !== null },
+    { ...current, externalLifecycleOwner: current.roleLifecycleEventId !== null },
     input.tier,
     now,
   );
   if (plan.status !== 'ok') return plan;
+
+  const [updated] = await tx
+    .update(players)
+    .set({
+      bonusBalance: plan.nextBalance,
+      roleId: plan.roleId,
+      roleExpiresAt: plan.roleExpiresAt,
+      roleComment: null,
+      roleLifecycleEventId: null,
+      updatedAt: now,
+    })
+    .where(and(eq(players.id, input.playerId), isNull(players.roleLifecycleEventId)))
+    .returning({ id: players.id });
+  if (!updated) return { status: 'vip_lifecycle_owned' };
 
   let transaction: BonusTransactionRow | null = null;
   if (plan.price !== 0) {
@@ -243,18 +330,6 @@ export async function applyVipGrant(
     if (!transaction) throw new Error('bonus_transactions insert returned no row');
   }
 
-  await tx
-    .update(players)
-    .set({
-      bonusBalance: plan.nextBalance,
-      roleId: plan.roleId,
-      roleExpiresAt: plan.roleExpiresAt,
-      roleComment: null,
-      roleLifecycleEventId: null,
-      updatedAt: now,
-    })
-    .where(eq(players.id, input.playerId));
-
   return {
     status: 'ok',
     balance: plan.nextBalance,
@@ -262,4 +337,24 @@ export async function applyVipGrant(
     roleExpiresAt: plan.roleExpiresAt,
     transaction,
   };
+}
+
+/** Matches the durable writer-fence violation through Drizzle's cause chain. */
+export function isVipLifecycleFenceViolation(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; current != null && depth < 5; depth++) {
+    if (typeof current === 'object') {
+      const candidate = current as { code?: unknown; constraint_name?: unknown };
+      if (
+        candidate.code === '23514' &&
+        candidate.constraint_name === 'players_vip_lifecycle_owner_guard'
+      ) {
+        return true;
+      }
+      current = (current as { cause?: unknown }).cause;
+      continue;
+    }
+    break;
+  }
+  return false;
 }

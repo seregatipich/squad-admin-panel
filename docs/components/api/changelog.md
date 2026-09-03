@@ -1,5 +1,19 @@
 # `api` — changelog
 
+## 2026-09-03 — Durable-ограждение владельца VIP и точный tier mapping
+
+### Added
+
+- Read-only `POST /api/v1/integrations/vip/tier-role` под тем же HMAC проверяет точную UUID-пару `vip_tiers.id`↔`role_id` без игрока, записи и блокировки. Preflight, lifecycle и status возвращают авторитетный `tier_code`; строгий режим отклоняет несовпадение как `409 tier_role_mismatch`.
+- `audit-vip-lifecycle-ownership` проверяет все доказуемые lifecycle-проекции через `findVipLifecycleOwner`, не усыновляет ручные роли и не выводит идентификаторы игроков. Потерянный marker находится даже после удаления tier mapping; superseded, неоднозначный или небезопасный mapping считается конфликтом.
+
+### Changed
+
+- `vip-revision-cutover` под одним advisory lock атомарно выполняет аудит и включает durable-флаг PostgreSQL до смены env и перезапуска. Обычный запуск с relaxed env не снимает уже включённое ограждение; отключение доступно только отдельной rollback-команде после остановки API.
+- Startup и cutover сверяют точный SHA-256/метаданные DB-функций и полные trigger definitions; удалённое, выключенное, перепривязанное или изменённое ограждение блокирует HTTP-startup fail-closed.
+- Все обычные API/worker/raw-SQL пути назначения роли используют CAS по lifecycle marker. DB-trigger запрещает назначение роли из `vip_tiers`, прямое снятие/замену внешней проекции и заранее подготовленное событие из другой транзакции. Изменение tier/role-семантики, которое сделало бы действующего владельца неснимаемым, также блокируется.
+- Все writer-пути панели для `Admins.cfg` сериализованы общим PostgreSQL lock до точного RCON-подтверждения и durable `applied_at`; replay использует новый RCON `request_id`. В strict-режиме редактор и restore сохраняют только неуправляемую часть файла, а канонический `Admin=`/`Group=` блок всегда восстанавливается из БД. Cutover ждёт уже начатый relaxed writer. Внешние writer-ы вроде `squadbot2` должны быть отключены или ограждены отдельно до открытия продаж.
+
 ## 2026-09-02 — Строгая post-commit доставка Admins.cfg
 
 ### Changed

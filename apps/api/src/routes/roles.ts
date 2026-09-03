@@ -1,7 +1,7 @@
 import type { DatabaseClient } from '@squad/db';
 import { players, rolePermissions, roleSquadPermissions, roles, vipTiers } from '@squad/db/schema';
 import { isRoleColor, isSquadPermissionKey, SQUAD_PERMISSIONS } from '@squad/shared-config';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { v7 as uuidv7 } from 'uuid';
@@ -313,13 +313,18 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         reply.code(409);
         return { error: 'role_referenced_by_vip_tier' };
       }
-      // role_permissions/role_squad_permissions cascade; players.role_id is
-      // SET NULL via FK. We invalidate per-role cache *first* so outstanding
-      // requests see the new (NULL) effective role on next lookup.
-      await invalidatePermissionCacheForRole(app.db, req.params.id);
       try {
-        await app.db.transaction(async (tx) => {
-          await tx
+        const deletion = await app.db.transaction(async (tx) => {
+          const locked = await tx
+            .select({ id: players.id, marker: players.roleLifecycleEventId })
+            .from(players)
+            .where(eq(players.roleId, req.params.id))
+            .orderBy(players.id)
+            .for('update');
+          if (locked.some((player) => player.marker !== null)) {
+            return 'vip_lifecycle_owned' as const;
+          }
+          const updated = await tx
             .update(players)
             .set({
               roleId: null,
@@ -327,7 +332,11 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
               roleComment: null,
               roleLifecycleEventId: null,
             })
-            .where(eq(players.roleId, req.params.id));
+            .where(and(eq(players.roleId, req.params.id), isNull(players.roleLifecycleEventId)))
+            .returning({ id: players.id });
+          if (updated.length !== locked.length) {
+            throw new Error('role deletion targets changed after lock');
+          }
           await tx.delete(roles).where(eq(roles.id, req.params.id));
           await publishAdminsCfgSyncForAllServers(tx, {
             reason: 'role.delete',
@@ -335,7 +344,12 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
             enqueued_at: new Date().toISOString(),
             request_id: req.id,
           });
+          return 'deleted' as const;
         });
+        if (deletion === 'vip_lifecycle_owned') {
+          reply.code(409);
+          return { error: 'vip_lifecycle_owned' };
+        }
       } catch (err) {
         // Backstop for any other ON DELETE RESTRICT referrer added in future:
         // a foreign-key violation maps to a clean 409, never a 500.
@@ -348,6 +362,7 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
         }
         throw err;
       }
+      await invalidatePermissionCacheForRole(app.db, req.params.id);
       // Players who lost their role no longer have panel_access; sweep
       // caches because we don't know exactly which sessions remain valid.
       invalidateAllPermissionCaches();
@@ -358,4 +373,3 @@ const rolesRoutes: FastifyPluginAsync = async (app) => {
 
 export default rolesRoutes;
 void rolePermissions;
-void and;

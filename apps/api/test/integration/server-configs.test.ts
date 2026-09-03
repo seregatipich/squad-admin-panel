@@ -1,8 +1,10 @@
 import { createServer as createNetServer, type Socket } from 'node:net';
+import { withAdminsCfgServerLock } from '@squad/db';
 import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import { PANEL_CONFIGS_ROOT } from '@squad/shared-config';
 import { and, eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setIsolatedTestVipLifecycleStrict } from '../helpers/snapshot-restore.js';
 import {
   assertAuditRow,
   buildIntegrationApp,
@@ -375,6 +377,105 @@ describe('PUT /api/v1/servers/:id/configs/:name gates reload on hot_reload (CFG-
 });
 
 describe('PUT /api/v1/servers/:id/configs/:name', () => {
+  it('rebuilds the managed Admins.cfg segment from DB after the durable cutover', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    await setIsolatedTestVipLifecycleStrict(h.db, true);
+    const staleEos = 'stale-eos-must-not-return';
+    const duplicateEos = 'duplicate-eos-must-not-return';
+    const bareEos = 'bare-eos-must-not-return';
+
+    const response = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+      payload: {
+        content: [
+          '//SQUAD-PANEL BEGIN',
+          `Admin=${staleEos}:VIP`,
+          '//SQUAD-PANEL END',
+          `Admin=${bareEos}:VIP`,
+          'Group=InjectedVip:reserve',
+          '//SQUAD-PANEL BEGIN',
+          `Admin=${duplicateEos}:VIP`,
+          '// orphan marker without an end',
+          'Manual=preserved',
+        ].join('\n'),
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const disk = h.bridge.files
+      .get(`${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/Admins.cfg`)
+      ?.toString();
+    expect(disk).toContain('Manual=preserved');
+    expect(disk).not.toContain(staleEos);
+    expect(disk).not.toContain(duplicateEos);
+    expect(disk).not.toContain(bareEos);
+    expect(disk).not.toContain('Group=InjectedVip');
+    expect(disk?.match(/\/\/SQUAD-PANEL BEGIN/g)).toHaveLength(1);
+    expect(disk?.match(/\/\/SQUAD-PANEL END/g)).toHaveLength(1);
+    const [version] = await h.db
+      .select({ content: configVersions.content })
+      .from(configVersions)
+      .where(and(eq(configVersions.serverId, id), eq(configVersions.filename, 'Admins.cfg')));
+    expect(version?.content).toBe(disk);
+  });
+
+  it('serializes a stale Admins.cfg PUT behind the same server fence as delivery', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    await setIsolatedTestVipLifecycleStrict(h.db, true);
+    const path = `${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/Admins.cfg`;
+    const staleEos = 'stale-api-writer-must-not-return';
+
+    let releaseDelivery!: () => void;
+    let reportDeliveryLocked!: () => void;
+    let reportApiWrite!: () => void;
+    const deliveryLocked = new Promise<void>((resolve) => {
+      reportDeliveryLocked = resolve;
+    });
+    const apiWriteEntered = new Promise<void>((resolve) => {
+      reportApiWrite = resolve;
+    });
+    const deliveryRelease = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    const originalAtomicWrite = h.bridge.fileAtomicWrite;
+    h.bridge.fileAtomicWrite = vi.fn(async (params) => {
+      reportApiWrite();
+      return originalAtomicWrite(params);
+    });
+
+    const delivery = withAdminsCfgServerLock(h.db, id, async () => {
+      h.bridge.files.set(path, Buffer.from('// projection after refund\n'));
+      reportDeliveryLocked();
+      await deliveryRelease;
+    });
+    await deliveryLocked;
+
+    const stalePut = h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+      payload: { content: `Admin=${staleEos}:VIP\nManual=stale editor` },
+    });
+    const wroteBeforeDeliveryCommit = await Promise.race([
+      apiWriteEntered.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 250)),
+    ]);
+    releaseDelivery();
+
+    const [, response] = await Promise.all([delivery, stalePut]);
+    expect(wroteBeforeDeliveryCommit).toBe(false);
+    expect(response.statusCode).toBe(200);
+    const disk = h.bridge.files.get(path)?.toString();
+    expect(disk).toContain('Manual=stale editor');
+    expect(disk).not.toContain(staleEos);
+    expect(disk?.match(/\/\/SQUAD-PANEL BEGIN/g)).toHaveLength(1);
+    expect(disk?.match(/\/\/SQUAD-PANEL END/g)).toHaveLength(1);
+  });
+
   it('writes a new version, persists sha, invokes bridge atomic write, writes audit row', async () => {
     const cookie = await login();
     const id = await createServer(cookie);
@@ -568,6 +669,43 @@ describe('GET /api/v1/servers/:id/configs/:name/history + :vid + /diff + /blame'
 });
 
 describe('POST /api/v1/servers/:id/configs/:name/restore/:vid', () => {
+  it('cannot restore an obsolete managed Admins.cfg projection after cutover', async () => {
+    const cookie = await login();
+    const id = await createServer(cookie);
+    const staleEos = 'stale-restore-eos';
+    const bareEos = 'stale-restore-bare-eos';
+    const old = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+      payload: {
+        content: `//SQUAD-PANEL BEGIN\nAdmin=${staleEos}:VIP\n//SQUAD-PANEL END\nAdmin=${bareEos}:VIP\nManual=old`,
+      },
+    });
+    await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg`,
+      headers: { cookie },
+      payload: { content: 'Manual=current' },
+    });
+    await setIsolatedTestVipLifecycleStrict(h.db, true);
+
+    const response = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/${id}/configs/Admins.cfg/restore/${old.json<{ version_id: string }>().version_id}`,
+      headers: { cookie },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    const disk = h.bridge.files
+      .get(`${PANEL_CONFIGS_ROOT}/${id}/ServerConfig/Admins.cfg`)
+      ?.toString();
+    expect(disk).toContain('Manual=old');
+    expect(disk).not.toContain(staleEos);
+    expect(disk).not.toContain(bareEos);
+  });
+
   it('creates a new version with the restored content and writes a restore audit row', async () => {
     const cookie = await login();
     const id = await createServer(cookie);

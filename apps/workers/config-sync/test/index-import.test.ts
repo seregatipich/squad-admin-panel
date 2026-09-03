@@ -9,6 +9,9 @@ const mockLogger = vi.hoisted(() => ({
   error: vi.fn(),
 }));
 const relayOutboxMock = vi.hoisted(() => vi.fn());
+const syncMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ state: 'in_sync', groupsCount: 0, adminsCount: 0 }),
+);
 let releaseStalledRelay: (() => void) | undefined;
 
 let selectedServers: Array<{ id: string }> = [];
@@ -87,9 +90,13 @@ vi.mock('pino', () => {
 });
 
 vi.mock('../src/syncer.js', () => ({
-  syncServerAdminsCfg: vi
-    .fn()
-    .mockResolvedValue({ state: 'in_sync', groupsCount: 0, adminsCount: 0 }),
+  syncServerAdminsCfg: syncMock,
+  withAdminsCfgSyncLease: vi.fn(async (ctx, serverId, work) =>
+    work({
+      db: ctx.db,
+      sync: (opts: unknown) => syncMock(ctx, serverId, opts),
+    }),
+  ),
 }));
 
 let exitSpy: ReturnType<typeof vi.spyOn>;

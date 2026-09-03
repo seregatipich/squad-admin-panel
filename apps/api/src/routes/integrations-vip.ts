@@ -3,6 +3,7 @@ import { findVipLifecycleOwner, type VipGrantExecutor, vipLifecycleRoleComment }
 import {
   adminsCfgSyncOutbox,
   auditLog,
+  panelMeta,
   players,
   roles,
   servers,
@@ -61,6 +62,11 @@ const vipPreflightBody = z.object({
   tier: z.string().trim().min(1).max(64),
 });
 
+const vipTierRoleBody = z.object({
+  role_id: z.string().uuid(),
+  tier: z.string().uuid(),
+});
+
 const vipStatusBody = z.object({
   event_id: z.string().trim().min(1).max(160),
 });
@@ -83,6 +89,7 @@ type VipTargetError =
   | 'player_not_found'
   | 'player_eos_missing'
   | 'role_not_vip'
+  | 'tier_role_mismatch'
   | 'role_conflict'
   | 'manual_role_conflict'
   | 'vip_subscription_conflict';
@@ -91,7 +98,13 @@ type VipTargetInput = {
   player_id?: string;
   steam_id64?: string;
   role_id: string;
+  tier?: string | null;
   purchase_id?: string | null;
+};
+
+type ResolvedVipLifecycleTier = {
+  tierCode: string;
+  rolePanelAccess: boolean;
 };
 
 type VipTargetPlayer = {
@@ -108,10 +121,58 @@ type VipTargetResult =
   | { error: VipTargetError }
   | {
       player: VipTargetPlayer;
+      tierCode: string;
       rolePanelAccess: boolean;
       projectionOwner: 'bss-store' | null;
       expiresAt: Date | null;
     };
+
+async function resolveVipLifecycleTier(
+  tx: VipGrantExecutor,
+  roleId: string,
+): Promise<ResolvedVipLifecycleTier | null> {
+  const tiers = await tx
+    .select({
+      tierCode: vipTiers.id,
+      rolePanelAccess: roles.panelAccess,
+      roleIsSystem: roles.isSystemRole,
+    })
+    .from(vipTiers)
+    .innerJoin(roles, eq(roles.id, vipTiers.roleId))
+    .where(and(eq(vipTiers.roleId, roleId), eq(vipTiers.isActive, true)))
+    .limit(2);
+  const tier = tiers[0];
+  if (!tier || tiers.length !== 1 || tier.roleIsSystem || tier.rolePanelAccess) return null;
+  return { tierCode: tier.tierCode, rolePanelAccess: tier.rolePanelAccess };
+}
+
+async function requiresExactVipTierCode(tx: VipGrantExecutor, configured: boolean) {
+  if (configured) return true;
+  const [state] = await tx
+    .select({ enabled: panelMeta.vipLifecycleStrict })
+    .from(panelMeta)
+    .where(eq(panelMeta.id, 1))
+    .limit(1);
+  return state?.enabled === true;
+}
+
+function authoritativeVipTierCode() {
+  return sql<string | null>`case
+    when ${vipLifecycleEvents.tier} is null then null
+    when ${vipLifecycleEvents.tier} ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      then ${vipLifecycleEvents.tier}
+    else coalesce((
+      select min(tier.id::text)
+        from ${vipTiers} tier
+        join ${roles} role on role.id = tier.role_id
+       where tier.role_id = ${vipLifecycleEvents.roleId}
+         and tier.is_active = true
+         and role.is_system_role = false
+         and role.panel_access = false
+      having count(*) = 1
+    ), ${vipLifecycleEvents.tier})
+  end`;
+}
 
 async function selectVipLifecyclePlayer(
   tx: VipGrantExecutor,
@@ -145,24 +206,21 @@ async function selectVipLifecyclePlayer(
 export async function checkVipLifecycleTarget(
   tx: VipGrantExecutor,
   input: VipTargetInput,
-  options: { lockPlayer: boolean; player?: VipTargetPlayer },
+  options: {
+    lockPlayer: boolean;
+    player?: VipTargetPlayer;
+    resolvedTier?: ResolvedVipLifecycleTier;
+    requireTierCode?: boolean;
+  },
 ): Promise<VipTargetResult> {
   const player = options.player ?? (await selectVipLifecyclePlayer(tx, input, options.lockPlayer));
   if (!player) return { error: 'player_not_found' };
   if (!player.eosId?.trim()) return { error: 'player_eos_missing' };
 
-  const tiers = await tx
-    .select({
-      rolePanelAccess: roles.panelAccess,
-      roleIsSystem: roles.isSystemRole,
-    })
-    .from(vipTiers)
-    .innerJoin(roles, eq(roles.id, vipTiers.roleId))
-    .where(and(eq(vipTiers.roleId, input.role_id), eq(vipTiers.isActive, true)))
-    .limit(2);
-  const tier = tiers[0];
-  if (!tier || tiers.length !== 1 || tier.roleIsSystem || tier.rolePanelAccess) {
-    return { error: 'role_not_vip' };
+  const tier = options.resolvedTier ?? (await resolveVipLifecycleTier(tx, input.role_id));
+  if (!tier) return { error: 'role_not_vip' };
+  if (options.requireTierCode && input.tier !== tier.tierCode) {
+    return { error: 'tier_role_mismatch' };
   }
 
   const [subscription] = await tx
@@ -182,6 +240,7 @@ export async function checkVipLifecycleTarget(
 
   return {
     player,
+    tierCode: tier.tierCode,
     rolePanelAccess: tier.rolePanelAccess,
     projectionOwner: projectionOwner ? 'bss-store' : null,
     expiresAt: projectionOwner?.expiresAt ?? null,
@@ -204,11 +263,11 @@ function targetErrorStatus(error: VipLifecycleError): number {
   return 409;
 }
 
-function uniqueViolationConstraint(error: unknown): string | null {
+function violationConstraint(error: unknown, code: string): string | null {
   let current: unknown = error;
   for (let depth = 0; current && depth < 6; depth += 1) {
     const candidate = current as { code?: string; constraint_name?: string; cause?: unknown };
-    if (candidate.code === '23505') return candidate.constraint_name ?? '';
+    if (candidate.code === code) return candidate.constraint_name ?? '';
     current = candidate.cause;
   }
   return null;
@@ -216,6 +275,38 @@ function uniqueViolationConstraint(error: unknown): string | null {
 
 const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
+
+  fast.post(
+    '/api/v1/integrations/vip/tier-role',
+    {
+      schema: { body: vipTierRoleBody },
+      config: { audit: false, public: true },
+    },
+    async (req, reply) => {
+      const secret = app.config.VIP_LIFECYCLE_WEBHOOK_SECRET;
+      if (!secret) {
+        reply.code(503);
+        return { error: 'vip_lifecycle_webhook_disabled' };
+      }
+      const timestamp = headerValue(req.headers['x-vip-timestamp']);
+      const signature = headerValue(req.headers['x-vip-signature']);
+      if (!verifyVipLifecycleSignature(secret, timestamp, signature, req.body)) {
+        reply.code(401);
+        return { error: 'invalid_signature' };
+      }
+
+      const tier = await resolveVipLifecycleTier(app.db, req.body.role_id);
+      if (!tier) {
+        reply.code(404);
+        return { error: 'role_not_vip', error_code: 'role_not_vip' };
+      }
+      if (req.body.tier !== tier.tierCode) {
+        reply.code(409);
+        return { error: 'tier_role_mismatch', error_code: 'tier_role_mismatch' };
+      }
+      return { ok: true, tier_code: tier.tierCode, role_id: req.body.role_id };
+    },
+  );
 
   fast.post(
     '/api/v1/integrations/vip/preflight',
@@ -237,7 +328,14 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const result = await app.db.transaction(async (tx) => {
-        const target = await checkVipLifecycleTarget(tx, req.body, { lockPlayer: false });
+        const requireTierCode = await requiresExactVipTierCode(
+          tx,
+          app.config.VIP_LIFECYCLE_REQUIRE_REVISION,
+        );
+        const target = await checkVipLifecycleTarget(tx, req.body, {
+          lockPlayer: false,
+          requireTierCode,
+        });
         if ('error' in target) return target;
         const serverIds = await tx
           .select({ id: servers.id })
@@ -252,6 +350,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
       }
       return {
         ok: true,
+        tier_code: result.target.tierCode,
         servers_total: result.serversTotal,
         projection_owner: result.target.projectionOwner,
         expires_at: result.target.expiresAt?.toISOString() ?? null,
@@ -285,6 +384,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
       const [status] = await app.db
         .select({
           action: vipLifecycleEvents.action,
+          tierCode: authoritativeVipTierCode(),
           supersededByEventId: vipLifecycleEvents.supersededByEventId,
           serversTotal: sql<number>`count(${adminsCfgSyncOutbox.id})::integer`,
           serversApplied: sql<number>`count(${adminsCfgSyncOutbox.appliedAt})::integer`,
@@ -314,6 +414,8 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
         .groupBy(
           vipLifecycleEvents.eventId,
           vipLifecycleEvents.action,
+          vipLifecycleEvents.roleId,
+          vipLifecycleEvents.tier,
           vipLifecycleEvents.supersededByEventId,
         )
         .limit(1);
@@ -326,6 +428,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
         return {
           ok: true,
           event_id: req.body.event_id,
+          tier_code: status.tierCode,
           state: 'superseded' as const,
           action: status.action,
           ...(status.supersededByEventId
@@ -353,6 +456,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
       return {
         ok: true,
         event_id: req.body.event_id,
+        tier_code: status.tierCode,
         state,
         action: status.action,
         servers_total: status.serversTotal,
@@ -405,6 +509,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
             .select({
               payload: vipLifecycleEvents.payload,
               requestHash: vipLifecycleEvents.requestHash,
+              tierCode: authoritativeVipTierCode(),
             })
             .from(vipLifecycleEvents)
             .where(eq(vipLifecycleEvents.eventId, body.event_id))
@@ -414,13 +519,29 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
               existingEvent.requestHash ??
               createHash('sha256').update(canonicalJson(existingEvent.payload)).digest('hex');
             return existingHash === requestHash
-              ? { duplicate: true as const }
+              ? { duplicate: true as const, tierCode: existingEvent.tierCode }
               : { error: 'event_body_conflict' as const };
           }
 
           if (assignEvent) {
             if (!expiresAt) return { error: 'expires_at_required' as const };
             if (expiresAt <= now) return { error: 'role_expiry_must_be_future' as const };
+          }
+
+          await tx.execute(
+            sql`SELECT pg_advisory_xact_lock(hashtextextended('vip-lifecycle-writer-fence', 0))`,
+          );
+          const requireTierCode = await requiresExactVipTierCode(
+            tx,
+            app.config.VIP_LIFECYCLE_REQUIRE_REVISION,
+          );
+          if (requireTierCode && body.revision === undefined) {
+            return { error: 'revision_required' as const };
+          }
+          const resolvedTier = await resolveVipLifecycleTier(tx, body.role_id);
+          if (!resolvedTier) return { error: 'role_not_vip' as const };
+          if (requireTierCode && body.tier !== resolvedTier.tierCode) {
+            return { error: 'tier_role_mismatch' as const };
           }
 
           const [currentRevision] = await tx
@@ -448,7 +569,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
                 eventType: body.event_type,
                 playerId: player.id,
                 roleId: body.role_id,
-                tier: body.tier ?? null,
+                tier: resolvedTier.tierCode,
                 purchaseId: body.purchase_id ?? null,
                 revision: body.revision,
                 requestHash,
@@ -461,6 +582,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
                 duplicate: false as const,
                 action: 'superseded' as const,
                 enqueued: 0,
+                tierCode: resolvedTier.tierCode,
                 rolePanelAccess: false,
                 playerId: player.id,
               };
@@ -471,11 +593,14 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
             player_id: body.player_id,
             steam_id64: body.steam_id64,
             role_id: body.role_id,
+            tier: body.tier,
             ...(shouldAssign ? {} : { purchase_id: body.purchase_id ?? null }),
           };
           const target = await checkVipLifecycleTarget(tx, targetInput, {
             lockPlayer: false,
             player,
+            resolvedTier,
+            requireTierCode,
           });
           if ('error' in target) return target;
 
@@ -497,7 +622,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
             eventType: body.event_type,
             playerId: player.id,
             roleId: body.role_id,
-            tier: body.tier ?? null,
+            tier: target.tierCode,
             purchaseId: body.purchase_id ?? null,
             revision: body.revision ?? null,
             requestHash,
@@ -514,7 +639,6 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
               .where(
                 and(
                   eq(vipLifecycleEvents.playerId, player.id),
-                  isNotNull(vipLifecycleEvents.revision),
                   isNull(vipLifecycleEvents.supersededByEventId),
                   ne(vipLifecycleEvents.eventId, body.event_id),
                 ),
@@ -527,7 +651,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
               .set({
                 roleId: body.role_id,
                 roleExpiresAt: expiresAt,
-                roleComment: vipLifecycleRoleComment(body.tier ?? null, body.purchase_id ?? null),
+                roleComment: vipLifecycleRoleComment(target.tierCode, body.purchase_id ?? null),
                 roleLifecycleEventId: body.event_id,
                 updatedAt: now,
               })
@@ -573,7 +697,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
                     role_id: body.role_id,
                     role_expires_at: expiresAt?.toISOString() ?? null,
                     role_comment: vipLifecycleRoleComment(
-                      body.tier ?? null,
+                      target.tierCode,
                       body.purchase_id ?? null,
                     ),
                   }
@@ -584,7 +708,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
               event_id: body.event_id,
               event_type: body.event_type,
               purchase_id: body.purchase_id ?? null,
-              tier: body.tier ?? null,
+              tier: target.tierCode,
               request_id: req.id,
               action,
             },
@@ -596,20 +720,30 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
             duplicate: false as const,
             action,
             enqueued: syncResult.enqueued,
+            tierCode: target.tierCode,
             rolePanelAccess: target.rolePanelAccess,
             playerId: player.id,
           };
         })
-        .catch((error): { error: 'event_body_conflict' | 'revision_conflict' } => {
-          const constraint = uniqueViolationConstraint(error);
-          if (constraint === 'vip_lifecycle_events_pkey') {
-            return { error: 'event_body_conflict' };
-          }
-          if (constraint === 'vip_lifecycle_events_player_revision_key') {
-            return { error: 'revision_conflict' };
-          }
-          throw error;
-        });
+        .catch(
+          (
+            error,
+          ): {
+            error: 'event_body_conflict' | 'revision_conflict' | 'revision_required';
+          } => {
+            const constraint = violationConstraint(error, '23505');
+            if (constraint === 'vip_lifecycle_events_pkey') {
+              return { error: 'event_body_conflict' };
+            }
+            if (constraint === 'vip_lifecycle_events_player_revision_key') {
+              return { error: 'revision_conflict' };
+            }
+            if (violationConstraint(error, '23514') === 'vip_lifecycle_event_strict_guard') {
+              return { error: 'revision_required' };
+            }
+            throw error;
+          },
+        );
 
       if ('error' in result && result.error) {
         reply.code(targetErrorStatus(result.error));
@@ -618,7 +752,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
 
       if (result.duplicate) {
         reply.code(200);
-        return { ok: true, duplicate: true };
+        return { ok: true, duplicate: true, tier_code: result.tierCode };
       }
 
       if (result.action !== 'superseded') invalidatePermissionCache(result.playerId);
@@ -635,6 +769,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
         duplicate: false,
         action: result.action,
         enqueued: result.enqueued,
+        tier_code: result.tierCode,
       };
     },
   );

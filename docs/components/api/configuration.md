@@ -12,7 +12,7 @@
 | `APP_ENCRYPTION_KEY` | yes | — | all | 32-byte base64. AES-256-GCM key for `server_credentials.*_encrypted`. | yes |
 | `SESSION_SECRET` | yes | — | all | Cookie-signing secret. | yes |
 | `VIP_LIFECYCLE_WEBHOOK_SECRET` | нет | — | все | Общий HMAC-ключ для выключенных по умолчанию VIP preflight, lifecycle и status. Timestamp каждого запроса обязан попасть в окно ±300 секунд. | да |
-| `VIP_LIFECYCLE_REQUIRE_REVISION` | нет | `false` | все | После совместимого выпуска сайта требует положительную `revision` в lifecycle. До этого старый producer разрешён только пока у игрока нет revision-истории. | нет |
+| `VIP_LIFECYCLE_REQUIRE_REVISION` | нет | `false` | все | Желаемый режим запуска: после совместимого выпуска сайта требует положительную `revision` и точный UUID `vip_tiers.id` в `tier`. Durable-флаг PostgreSQL не снимается значением `false`; для отката нужна отдельная операторская команда. | нет |
 | `BALANCER_WEBHOOK_SECRET` | no | — | all | HMAC secret for the disabled-by-default team-balancer proposal endpoint. Shared with the SquadJS balancer exporter. Ingestion only — the panel never executes a team change. | yes |
 | `STEAM_API_KEY` | no | — | all | Steam Web API key for persona/avatar enrichment. Without it, persona falls back to `Player <last 4 of steam_id64>`. Get from https://steamcommunity.com/dev/apikey | yes |
 | `SESSION_TTL_SECONDS` | no | `21600` (6 h) | all | Sliding session lifetime in seconds. | no |
@@ -29,13 +29,23 @@ Inside the container the API binds `0.0.0.0:3000`. Caddy proxies `/api/*` and th
 
 1. Выпустить миграции, API и `worker-config-sync` с
    `VIP_LIFECYCLE_REQUIRE_REVISION=false`.
-2. Выпустить сайт, который передаёт revision, формирует свежий подписанный
-   timestamp, обрабатывает оба конфликта `event_body_conflict` и
-   `revision_conflict` и опрашивает status после `202`.
-3. После подтверждённого отсутствия запросов без revision включить
-   `VIP_LIFECYCLE_REQUIRE_REVISION=true` и повторить подписанный smoke.
+2. Выпустить сайт, который проверяет точную пару UUID tier↔role через
+   `/api/v1/integrations/vip/tier-role`, сохраняет возвращённый `tier_code` в
+   операции доставки, передаёт положительную revision, обрабатывает конфликты
+   `event_body_conflict`, `revision_conflict` и `tier_role_mismatch` и опрашивает
+   status после `202`.
+3. Ручным `vip-revision-cutover` включить строгий режим. Команда под единым
+   advisory lock проверяет ownership и атомарно ставит
+   `panel_meta.vip_lifecycle_strict=true`, после чего перезапускает API с
+   `VIP_LIFECYCLE_REQUIRE_REVISION=true` и выполняет подписанный smoke.
 
-Откат сайта безопасен только пока флаг остаётся `false`.
+Запуск с env=`false` при уже включённом durable-флаге завершается ошибкой и не
+ослабляет границу. Снятие разрешено только явной rollback-веткой cutover после
+остановки API. Откат сайта безопасен только после этой контролируемой операции.
+Каждый запуск API и cutover-аудит fail-closed сверяют точный состав DB-fence:
+владельца, язык, режим и SHA-256 тела обеих функций, а также таблицу,
+события, колонки, функцию и `ENABLED` каждого trigger. Удалённое, выключенное,
+перепривязанное или изменённое ограждение блокирует запуск до открытия HTTP.
 
 ## Plugin tunables
 

@@ -81,6 +81,22 @@ export async function resetSetupState(
     .where(eq(panelMeta.id, 1));
 }
 
+/** Sets the whitelist role only in a per-test isolated database harness. */
+export async function setIsolatedTestWhitelistRole(
+  db: DatabaseClient,
+  whitelistRoleId: string,
+): Promise<void> {
+  await db.update(panelMeta).set({ whitelistRoleId }).where(eq(panelMeta.id, 1));
+}
+
+/** Toggles the durable VIP writer fence only in a per-test isolated database. */
+export async function setIsolatedTestVipLifecycleStrict(
+  db: DatabaseClient,
+  vipLifecycleStrict: boolean,
+): Promise<void> {
+  await db.update(panelMeta).set({ vipLifecycleStrict }).where(eq(panelMeta.id, 1));
+}
+
 export const TEST_STEAM_BASE = 76561197999000000n;
 export function testSteamId(suffix: number): bigint {
   if (suffix < 0 || suffix > 999999) {

@@ -134,9 +134,12 @@ export async function mintOwnerSession(input: MintOwnerSessionInput): Promise<st
           role_comment = NULL,
           role_lifecycle_event_id = NULL,
           updated_at = now()
+        WHERE players.role_lifecycle_event_id IS NULL
         RETURNING id
       `;
-      if (!player) throw new Error('database did not return the promoted player');
+      if (!player) {
+        throw new Error('vip_lifecycle_owned: player role is owned by external VIP lifecycle');
+      }
 
       await transaction`
         UPDATE panel_meta

@@ -3,9 +3,16 @@ import {
   markAdminsCfgSyncApplied,
   relayAdminsCfgSyncOutbox,
 } from '@squad/db';
-import { adminsCfgSyncOutbox, servers, vipLifecycleEvents } from '@squad/db/schema';
+import {
+  adminsCfgSyncOutbox,
+  panelMeta,
+  players,
+  roles,
+  servers,
+  vipLifecycleEvents,
+} from '@squad/db/schema';
 import { rconCommandResultKey } from '@squad/shared-types';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -93,8 +100,23 @@ async function relayedEntry(correlationId?: string) {
   };
 }
 
-async function seedConfirmedResult(outboxId: string) {
-  const requestId = `admins-cfg-sync:${outboxId}`;
+async function respondToNextReload(outboxId: string, overrides: Record<string, unknown> = {}) {
+  const stream = `rcon:commands:${serverId}`;
+  let requestId: string | null = null;
+  for (let attempt = 0; attempt < 1_000 && !requestId; attempt++) {
+    const entries = await redis.xrange(stream, '-', '+');
+    for (const [, fields] of entries) {
+      const requestIndex = fields.indexOf('request');
+      if (requestIndex < 0) continue;
+      const request = JSON.parse(fields[requestIndex + 1] ?? '{}') as { request_id?: string };
+      if (request.request_id?.startsWith(`admins-cfg-sync:${outboxId}:`)) {
+        requestId = request.request_id;
+        break;
+      }
+    }
+    if (!requestId) await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  if (!requestId) throw new Error('reload request was not enqueued');
   await redis.set(
     ownRedisKey(rconCommandResultKey(requestId)),
     JSON.stringify({
@@ -105,8 +127,10 @@ async function seedConfirmedResult(outboxId: string) {
       response: 'ok',
       completed_at: new Date().toISOString(),
       duration_ms: 1,
+      ...overrides,
     }),
   );
+  return requestId;
 }
 
 describeIfInfra('config-sync durable delivery with PostgreSQL and Redis', () => {
@@ -144,12 +168,13 @@ describeIfInfra('config-sync durable delivery with PostgreSQL and Redis', () => 
 
   it('persists confirmation before atomically ACKing and deleting the exact entry', async () => {
     const { outboxId, entry } = await relayedEntry('evt-confirmed');
-    await seedConfirmedResult(outboxId);
     const fakeBridge = bridge();
+    const responder = respondToNextReload(outboxId);
 
     await expect(
       handleAdminsCfgSyncEntry({ db, redis, bridge: fakeBridge, log: logger() }, entry),
     ).resolves.toBe('completed');
+    await responder;
 
     const [stored] = await db
       .select({
@@ -171,7 +196,6 @@ describeIfInfra('config-sync durable delivery with PostgreSQL and Redis', () => 
 
   it('round-trips the deterministic reload request and exact result through Redis', async () => {
     const outboxId = uuidv7();
-    const requestId = `admins-cfg-sync:${outboxId}`;
     const confirmation = confirmAdminsCfgReload(redis, serverId, outboxId, logger(), {
       timeoutMs: 2_000,
       pollIntervalMs: 5,
@@ -186,10 +210,11 @@ describeIfInfra('config-sync durable delivery with PostgreSQL and Redis', () => 
       if (!request) await new Promise((resolve) => setTimeout(resolve, 5));
     }
     expect(request).toMatchObject({
-      request_id: requestId,
       command: 'AdminReloadServerConfig',
       args: [],
     });
+    const requestId = request?.request_id as string;
+    expect(requestId).toMatch(new RegExp(`^admins-cfg-sync:${outboxId}:`));
 
     await redis.set(
       ownRedisKey(rconCommandResultKey(requestId)),
@@ -220,22 +245,12 @@ describeIfInfra('config-sync durable delivery with PostgreSQL and Redis', () => 
 
   it('keeps an invalid RCON result durable but unacked for reclaim', async () => {
     const { outboxId, entry } = await relayedEntry('evt-invalid');
-    const requestId = `admins-cfg-sync:${outboxId}`;
-    await redis.set(
-      ownRedisKey(rconCommandResultKey(requestId)),
-      JSON.stringify({
-        ok: true,
-        server_id: uuidv7(),
-        request_id: requestId,
-        command: 'AdminReloadServerConfig',
-        completed_at: new Date().toISOString(),
-        duration_ms: 1,
-      }),
-    );
+    const responder = respondToNextReload(outboxId, { server_id: uuidv7() });
 
     await expect(
       handleAdminsCfgSyncEntry({ db, redis, bridge: bridge(), log: logger() }, entry),
     ).resolves.toBe('retry');
+    await responder;
 
     const [stored] = await db
       .select()
@@ -307,5 +322,115 @@ describeIfInfra('config-sync durable delivery with PostgreSQL and Redis', () => 
       .from(adminsCfgSyncOutbox)
       .where(eq(adminsCfgSyncOutbox.id, outboxId));
     expect(stored?.appliedAt).toBeNull();
+  });
+
+  it('serializes concurrent deliveries through the final atomic write per server', async () => {
+    await db.update(servers).set({ status: 'stopped' }).where(eq(servers.id, serverId));
+    const roleId = uuidv7();
+    const playerId = uuidv7();
+    const eosId = `race-${uuidv7().replaceAll('-', '')}`;
+    await db.insert(roles).values({ id: roleId, name: `race-${roleId}` });
+    await db.insert(players).values({
+      id: playerId,
+      canonicalName: 'Config sync race',
+      canonicalNameNormalized: 'config sync race',
+      eosId,
+      roleId,
+    });
+
+    let fileContent = '';
+    let writeCount = 0;
+    let releaseFirstWrite!: () => void;
+    let reportFirstWrite!: () => void;
+    let reportSecondWrite!: () => void;
+    const firstWriteEntered = new Promise<void>((resolve) => {
+      reportFirstWrite = resolve;
+    });
+    const secondWriteEntered = new Promise<void>((resolve) => {
+      reportSecondWrite = resolve;
+    });
+    const firstWriteRelease = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    const racedBridge = {
+      fileRead: vi.fn().mockImplementation(async () => ({ content: fileContent })),
+      fileAtomicWrite: vi.fn().mockImplementation(async ({ content }: { content: string }) => {
+        writeCount += 1;
+        if (writeCount === 1) {
+          reportFirstWrite();
+          await firstWriteRelease;
+        } else if (writeCount === 2) {
+          reportSecondWrite();
+        }
+        fileContent = content;
+        return { written: true };
+      }),
+    } as never;
+
+    const first = await relayedEntry();
+    const firstDelivery = handleAdminsCfgSyncEntry(
+      { db, redis, bridge: racedBridge, log: logger() },
+      first.entry,
+    );
+    await firstWriteEntered;
+
+    await db.update(players).set({ roleId: null }).where(eq(players.id, playerId));
+    const second = await relayedEntry();
+    const secondDelivery = handleAdminsCfgSyncEntry(
+      { db, redis, bridge: racedBridge, log: logger() },
+      second.entry,
+    );
+
+    const secondWroteBeforeRelease = await Promise.race([
+      secondWriteEntered.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 1_000)),
+    ]);
+    releaseFirstWrite();
+    await Promise.all([firstDelivery, secondDelivery]);
+
+    expect(secondWroteBeforeRelease).toBe(false);
+    expect(fileContent).not.toContain(eosId);
+  });
+
+  it('removes duplicate markers and authority lines outside the managed segment in strict mode', async () => {
+    await db.update(servers).set({ status: 'stopped' }).where(eq(servers.id, serverId));
+    await db.update(panelMeta).set({ vipLifecycleStrict: true }).where(eq(panelMeta.id, 1));
+    const staleEos = `stale-${uuidv7()}`;
+    const bareEos = `bare-${uuidv7()}`;
+    let fileContent = [
+      '//SQUAD-PANEL BEGIN',
+      `Admin=${staleEos}:VIP`,
+      '//SQUAD-PANEL END',
+      `Admin=${bareEos}:VIP`,
+      'Group=InjectedVip:reserve',
+      '//SQUAD-PANEL BEGIN',
+      `Admin=duplicate-${staleEos}:VIP`,
+      '// orphan marker',
+      'Manual=preserved',
+    ].join('\n');
+    const fakeBridge = {
+      fileRead: vi.fn().mockImplementation(async () => ({ content: fileContent })),
+      fileAtomicWrite: vi.fn().mockImplementation(async ({ content }: { content: string }) => {
+        fileContent = content;
+        return { written: true };
+      }),
+    } as never;
+
+    try {
+      const { entry } = await relayedEntry();
+      await handleAdminsCfgSyncEntry({ db, redis, bridge: fakeBridge, log: logger() }, entry);
+
+      expect(fileContent).toContain('Manual=preserved');
+      expect(fileContent).not.toContain(staleEos);
+      expect(fileContent).not.toContain(bareEos);
+      expect(fileContent).not.toContain('Group=InjectedVip');
+      expect(fileContent.match(/\/\/SQUAD-PANEL BEGIN/g)).toHaveLength(1);
+      expect(fileContent.match(/\/\/SQUAD-PANEL END/g)).toHaveLength(1);
+    } finally {
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT set_config('squad.vip_lifecycle_fence_rollback', 'on', true)`);
+        await tx.update(panelMeta).set({ vipLifecycleStrict: false }).where(eq(panelMeta.id, 1));
+      });
+    }
   });
 });

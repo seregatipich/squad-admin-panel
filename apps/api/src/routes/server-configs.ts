@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto';
+import {
+  type DatabaseClient,
+  protectAdminsCfgManagedSegment,
+  withAdminsCfgServerLock,
+} from '@squad/db';
 import { configVersions, players, serverCredentials, servers } from '@squad/db/schema';
 import {
   ALLOWED_CONFIG_FILES,
@@ -777,8 +782,47 @@ export async function writeVersion(
   authorIp: string | null,
   opts?: { force?: boolean },
 ) {
+  if (name === 'Admins.cfg') {
+    return withAdminsCfgServerLock(app.db, serverId, async (tx) =>
+      persistVersion(
+        app,
+        tx,
+        serverId,
+        name,
+        await protectAdminsCfgManagedSegment(tx, content),
+        message,
+        authorPlayerId,
+        authorIp,
+        opts,
+      ),
+    );
+  }
+  return persistVersion(
+    app,
+    app.db,
+    serverId,
+    name,
+    content,
+    message,
+    authorPlayerId,
+    authorIp,
+    opts,
+  );
+}
+
+async function persistVersion(
+  app: FastifyInstance,
+  db: Pick<DatabaseClient, 'select' | 'insert'>,
+  serverId: string,
+  name: AllowedConfigFile,
+  content: string,
+  message: string | null,
+  authorPlayerId: string | null,
+  authorIp: string | null,
+  opts?: { force?: boolean },
+) {
   // read previous for parent_version_id linkage (best-effort)
-  const prev = await app.db
+  const prev = await db
     .select({ id: configVersions.id, sha: configVersions.sha256 })
     .from(configVersions)
     .where(and(eq(configVersions.serverId, serverId), eq(configVersions.filename, name)))
@@ -824,7 +868,7 @@ export async function writeVersion(
     };
   }
   await app.bridge.fileAtomicWrite({ path: configPath(serverId, name), content });
-  const inserted = await app.db
+  const inserted = await db
     .insert(configVersions)
     .values({
       serverId,

@@ -172,6 +172,19 @@ describe('configure-bss-sso-env.sh', () => {
     assert.match(section, /VIP_LIFECYCLE_REQUIRE_REVISION_DESIRED/);
     assert.match(section, /bash "\$\{release_dir\}\/scripts\/configure-bss-sso-env\.sh"/);
     assert.match(section, /--project-name squad-admin-panel/);
+    assert.match(section, /dist\/tools\/audit-vip-lifecycle-ownership\.js/);
+    assert.match(
+      section,
+      /if \[ "\$\{revision_mode\}" = "true" \]; then[\s\S]*VIP_LIFECYCLE_FENCE_ACTION=enable[\s\S]*audit-vip-lifecycle-ownership\.js[\s\S]*fi/,
+    );
+    assert.match(
+      section,
+      /if \[ "\$\{revision_mode\}" = "false" \]; then[\s\S]*stop api[\s\S]*VIP_LIFECYCLE_FENCE_ACTION=disable[\s\S]*run --rm --no-deps -T[\s\S]*audit-vip-lifecycle-ownership\.js[\s\S]*fi/,
+    );
+    assert.match(
+      section,
+      /if ! VIP_LIFECYCLE_FENCE_ACTION=disable[\s\S]*audit-vip-lifecycle-ownership\.js; then[\s\S]*VIP_LIFECYCLE_REQUIRE_REVISION_DESIRED=true[\s\S]*configure-bss-sso-env\.sh[\s\S]*up -d --no-deps api[\s\S]*exit 1[\s\S]*fi/,
+    );
     assert.match(section, /"\$\{compose\[@\]\}" up -d --no-deps api/);
     assert.doesNotMatch(section, /docker ps --filter label=com\.docker\.compose\.service=api/);
     assert.match(section, /integrations\/vip\/preflight/);
@@ -187,11 +200,28 @@ describe('configure-bss-sso-env.sh', () => {
     const encoding = section.indexOf('encoded_secret="$(');
     const previousModeRead = section.indexOf('previous_revision_mode="$(');
     const productionMatch = section.indexOf('BSS_SSO_ENV_VERIFY_ONLY=true');
+    const ownershipAudit = section.indexOf('dist/tools/audit-vip-lifecycle-ownership.js');
     const mutation = section.indexOf(`change_revision_mode "\${VIP_REVISION_MODE}"`);
     assert.ok(validation >= 0 && encoding > validation && previousModeRead > validation);
-    assert.ok(productionMatch > validation && mutation > productionMatch);
+    assert.ok(
+      productionMatch > validation && ownershipAudit > productionMatch && mutation > ownershipAudit,
+    );
     assert.match(section, /\$\{#BSS_SSO_SHARED_SECRET\} > 512/);
     assert.match(section, /BSS_SSO_SHARED_SECRET.*\[:space:\]/);
+
+    const changeMode = section.slice(section.indexOf('change_revision_mode()'));
+    const environmentMutation = changeMode.indexOf('VIP_LIFECYCLE_REQUIRE_REVISION_DESIRED');
+    const stopBeforeDisable = changeMode.indexOf(`"\${compose[@]}" stop api`);
+    const explicitDisable = changeMode.indexOf('VIP_LIFECYCLE_FENCE_ACTION=disable');
+    const rollbackEnvironment = changeMode.indexOf('VIP_LIFECYCLE_REQUIRE_REVISION_DESIRED=true');
+    const apiRestart = changeMode.indexOf(`"\${compose[@]}" up -d --no-deps api`);
+    assert.ok(
+      environmentMutation >= 0 &&
+        stopBeforeDisable > environmentMutation &&
+        explicitDisable > stopBeforeDisable &&
+        rollbackEnvironment > explicitDisable &&
+        apiRestart > rollbackEnvironment,
+    );
   });
 
   it('provisions the site read token only for the exact dev SHA without restarting services', () => {

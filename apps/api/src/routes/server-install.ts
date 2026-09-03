@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
-import type { DatabaseClient } from '@squad/db';
+import {
+  type DatabaseClient,
+  protectAdminsCfgManagedSegment,
+  withAdminsCfgServerLock,
+} from '@squad/db';
 import { configVersions, serverCredentials, serverSettings, servers } from '@squad/db/schema';
 import type { Diag } from '@squad/diag';
 import {
@@ -119,21 +123,30 @@ async function seedConfigs(
     } else if (file === 'Server.cfg') {
       content = rewriteServerCfg(content, displayName);
     }
-    await app.bridge.fileAtomicWrite({ path: `${destDir}/${file}`, content });
-    // Create the initial config_versions row so History / Blame / Diff
-    // are meaningful from day one. author_user_id=NULL means "system"
-    // (installer, not a logged-in user). Next human PUT becomes v2.
-    await app.db.insert(configVersions).values({
-      serverId,
-      filename: file,
-      content,
-      sha256: createHash('sha256').update(content).digest(),
-      parentVersionId: null,
-      authorPlayerId: null,
-      authorLabel: 'system',
-      authorIp: null,
-      message: `initial install — SteamCMD depot ${file === 'Rcon.cfg' || file === 'Server.cfg' ? '+ panel rewrite' : 'default'}`,
-    });
+    const seedFile = async (db: Pick<DatabaseClient, 'insert'>, protectedContent: string) => {
+      await app.bridge.fileAtomicWrite({ path: `${destDir}/${file}`, content: protectedContent });
+      // Create the initial config_versions row so History / Blame / Diff
+      // are meaningful from day one. author_user_id=NULL means "system"
+      // (installer, not a logged-in user). Next human PUT becomes v2.
+      await db.insert(configVersions).values({
+        serverId,
+        filename: file,
+        content: protectedContent,
+        sha256: createHash('sha256').update(protectedContent).digest(),
+        parentVersionId: null,
+        authorPlayerId: null,
+        authorLabel: 'system',
+        authorIp: null,
+        message: `initial install — SteamCMD depot ${file === 'Rcon.cfg' || file === 'Server.cfg' ? '+ panel rewrite' : 'default'}`,
+      });
+    };
+    if (file === 'Admins.cfg') {
+      await withAdminsCfgServerLock(app.db, serverId, async (tx) =>
+        seedFile(tx, await protectAdminsCfgManagedSegment(tx, content)),
+      );
+    } else {
+      await seedFile(app.db, content);
+    }
   }
   sink({
     ts: new Date().toISOString(),
