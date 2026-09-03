@@ -256,10 +256,12 @@ jobs:
       - name: remove exact CI images
         if: always()
         run: |
-          docker image rm --force \
+          for image in \
             "squad-admin-panel/api:${CI_IMAGE_TAG}" \
             "squad-admin-panel/worker-log-ingest:${CI_IMAGE_TAG}" \
             "squad-admin-panel/worker-rcon:${CI_IMAGE_TAG}" \
             "squad-panel/rnsquadjs:${CI_IMAGE_TAG}" \
-            "squad-admin-panel/web:${CI_IMAGE_TAG}" \
-            >/dev/null 2>&1 || true
+            "squad-admin-panel/web:${CI_IMAGE_TAG}"
+          do
+            docker image rm --force "${image}" >/dev/null 2>&1 || true
+          done
