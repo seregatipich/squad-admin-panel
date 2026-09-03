@@ -39,7 +39,18 @@ RUN yarn install --frozen-lockfile --network-timeout 600000
 # `yarn add` mutates upstream's package.json + lockfile, but that mutation is
 # confined to this image layer (the lockfile is never copied back into the repo).
 # Versions are exact so rebuilds resolve the same graph the plugin was tested with.
-RUN yarn add ioredis@5.10.1 uuid@14.0.0 --exact --network-timeout 600000
+# Yarn already retries individual HTTP requests, but the registry may still drop
+# the TLS connection after those retries. Repeat only this idempotent exact add,
+# with bounded pauses, and fail the layer after the third unsuccessful attempt.
+RUN deps_installed=false \
+    && for delay in 0 5 10; do \
+         [ "$delay" = 0 ] || sleep "$delay"; \
+         if yarn add ioredis@5.10.1 uuid@14.0.0 --exact --network-timeout 600000; then \
+           deps_installed=true; \
+           break; \
+         fi; \
+       done \
+    && [ "$deps_installed" = true ]
 # panelBridge sources compile inside upstream's tree. Their relative imports are
 # extensionless to match upstream's moduleResolution:node so rollup resolves them.
 COPY docker/rnsquadjs/plugins/panelBridge/src/ src/plugins/panelBridge/
