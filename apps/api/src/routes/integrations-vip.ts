@@ -62,10 +62,15 @@ const vipPreflightBody = z.object({
   tier: z.string().trim().min(1).max(64),
 });
 
-const vipTierRoleBody = z.object({
-  role_id: z.string().uuid(),
-  tier: z.string().uuid().optional(),
-});
+const vipTierRoleBody = z
+  .object({
+    role_id: z.string().uuid().optional(),
+    tier: z.string().uuid().optional(),
+  })
+  .refine((body) => body.role_id !== undefined || body.tier === undefined, {
+    message: 'role_id is required when tier is provided',
+    path: ['role_id'],
+  });
 
 const vipStatusBody = z.object({
   event_id: z.string().trim().min(1).max(160),
@@ -103,6 +108,7 @@ type VipTargetInput = {
 };
 
 type ResolvedVipLifecycleTier = {
+  roleId: string;
   tierCode: string;
   rolePanelAccess: boolean;
 };
@@ -133,6 +139,7 @@ async function resolveVipLifecycleTier(
 ): Promise<ResolvedVipLifecycleTier | null> {
   const tiers = await tx
     .select({
+      roleId: vipTiers.roleId,
       tierCode: vipTiers.id,
       rolePanelAccess: roles.panelAccess,
       roleIsSystem: roles.isSystemRole,
@@ -143,7 +150,29 @@ async function resolveVipLifecycleTier(
     .limit(2);
   const tier = tiers[0];
   if (!tier || tiers.length !== 1 || tier.roleIsSystem || tier.rolePanelAccess) return null;
-  return { tierCode: tier.tierCode, rolePanelAccess: tier.rolePanelAccess };
+  return {
+    roleId: tier.roleId,
+    tierCode: tier.tierCode,
+    rolePanelAccess: tier.rolePanelAccess,
+  };
+}
+
+async function discoverSoleVipLifecycleTier(
+  tx: VipGrantExecutor,
+): Promise<ResolvedVipLifecycleTier | null> {
+  const tiers = await tx
+    .select({
+      roleId: vipTiers.roleId,
+      tierCode: vipTiers.id,
+      rolePanelAccess: roles.panelAccess,
+    })
+    .from(vipTiers)
+    .innerJoin(roles, eq(roles.id, vipTiers.roleId))
+    .where(
+      and(eq(vipTiers.isActive, true), eq(roles.isSystemRole, false), eq(roles.panelAccess, false)),
+    )
+    .limit(2);
+  return tiers.length === 1 ? (tiers[0] ?? null) : null;
 }
 
 async function requiresExactVipTierCode(tx: VipGrantExecutor, configured: boolean) {
@@ -295,16 +324,19 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'invalid_signature' };
       }
 
-      const tier = await resolveVipLifecycleTier(app.db, req.body.role_id);
+      const tier = req.body.role_id
+        ? await resolveVipLifecycleTier(app.db, req.body.role_id)
+        : await discoverSoleVipLifecycleTier(app.db);
       if (!tier) {
-        reply.code(404);
-        return { error: 'role_not_vip', error_code: 'role_not_vip' };
+        const error = req.body.role_id ? 'role_not_vip' : 'vip_binding_not_unique';
+        reply.code(req.body.role_id ? 404 : 409);
+        return { error, error_code: error };
       }
       if (req.body.tier !== undefined && req.body.tier !== tier.tierCode) {
         reply.code(409);
         return { error: 'tier_role_mismatch', error_code: 'tier_role_mismatch' };
       }
-      return { ok: true, tier_code: tier.tierCode, role_id: req.body.role_id };
+      return { ok: true, tier_code: tier.tierCode, role_id: tier.roleId };
     },
   );
 
