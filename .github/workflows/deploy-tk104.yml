@@ -369,7 +369,7 @@ jobs:
           signature="$({
             printf '%s\n' "${timestamp}"
             printf '%s' "${BSS_SSO_SHARED_SECRET}"
-          } | python -c '
+          } | python3 -c '
           import hashlib, hmac, sys
           timestamp = sys.stdin.readline().rstrip("\n")
           shared = sys.stdin.read()
@@ -430,7 +430,7 @@ jobs:
           signature="$({
             printf '%s\n' "${timestamp}"
             printf '%s' "${BSS_SSO_SHARED_SECRET}"
-          } | python -c '
+          } | python3 -c '
           import hashlib, hmac, sys
           timestamp = sys.stdin.readline().rstrip("\n")
           shared = sys.stdin.read()

@@ -46,6 +46,8 @@ describe('provision-site-vip-tier', () => {
     assert.match(section, /\.version == \$revision/);
     assert.match(section, /\.role_id == \$expected_role/);
     assert.match(section, /\.tier_code == \$expected_tier/);
+    assert.equal((section.match(/\| python3 -c '/g) ?? []).length, 2);
+    assert.doesNotMatch(section, /\| python -c '/);
     assert.ok(
       section.indexOf('Verify exact deployed panel and signed contract') <
         section.indexOf('Provision the sole safe site VIP tier'),
