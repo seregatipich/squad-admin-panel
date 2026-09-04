@@ -673,6 +673,13 @@
       "when": 1788380000000,
       "tag": "0110_vip_lifecycle_writer_fence",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1788472800000,
+      "tag": "0111_site_vip_binding_guard",
+      "breakpoints": true
     }
   ]
 }

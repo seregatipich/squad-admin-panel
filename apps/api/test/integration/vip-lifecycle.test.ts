@@ -3,6 +3,7 @@ import {
   adminsCfgSyncOutbox,
   auditLog,
   players,
+  roleSquadPermissions,
   roles,
   servers,
   vipLifecycleEvents,
@@ -177,7 +178,13 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     (h.app.config as Record<string, unknown>).VIP_LIFECYCLE_WEBHOOK_SECRET = SECRET;
     (h.app.config as Record<string, unknown>).VIP_LIFECYCLE_REQUIRE_REVISION = false;
 
-    roleId = uuidv7();
+    const [queuePriorityRole] = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.name, 'QueuePriority'))
+      .limit(1);
+    roleId = queuePriorityRole?.id ?? '';
+    expect(roleId).not.toBe('');
     serverId = uuidv7();
     const playerRows = await h.db
       .insert(players)
@@ -189,17 +196,10 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
       })
       .returning({ id: players.id });
     playerId = playerRows[0]?.id ?? '';
-    await h.db.insert(roles).values({
-      id: roleId,
-      name: `VIP Tier 2 ${Date.now()}`,
-      color: '#DAA520',
-      isSystemRole: false,
-      panelAccess: false,
-    });
     tierId = uuidv7();
     await h.db.insert(vipTiers).values({
       id: tierId,
-      name: `VIP Bronze ${Date.now()}`,
+      name: 'BSS VIP',
       roleId,
       isActive: true,
     });
@@ -1188,7 +1188,7 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     transaction.mockRestore();
   });
 
-  it('rejects role-free discovery when more than one safe VIP binding is active', async () => {
+  it('ignores unrelated active panel tiers during site binding discovery', async () => {
     const anotherRoleId = uuidv7();
     await h.db.insert(roles).values({
       id: anotherRoleId,
@@ -1207,12 +1207,41 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
 
     const response = await postTierRole({});
 
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, tier_code: tierId, role_id: roleId });
+    expect(await mutationCounts('vip-tier-binding-ambiguous-read-only')).toEqual(before);
+  });
+
+  it('does not expose an internal purchasable tier as the site binding', async () => {
+    await h.db.update(vipTiers).set({ isActive: false }).where(eq(vipTiers.id, tierId));
+    const internalRoleId = uuidv7();
+    await h.db.insert(roles).values({
+      id: internalRoleId,
+      name: `Internal VIP ${Date.now()}`,
+      color: '#DAA520',
+      isSystemRole: false,
+      panelAccess: false,
+    });
+    await h.db.insert(roleSquadPermissions).values({
+      roleId: internalRoleId,
+      squadPermissionKey: 'reserve',
+    });
+    await h.db.insert(vipTiers).values({
+      id: uuidv7(),
+      name: `Internal shop tier ${Date.now()}`,
+      roleId: internalRoleId,
+      defaultDays: 30,
+      priceBonuses: 100,
+      isActive: true,
+    });
+
+    const response = await postTierRole({});
+
     expect(response.statusCode).toBe(409);
     expect(response.json()).toEqual({
       error: 'vip_binding_not_unique',
       error_code: 'vip_binding_not_unique',
     });
-    expect(await mutationCounts('vip-tier-binding-ambiguous-read-only')).toEqual(before);
   });
 
   it('rejects a signed tier-role mismatch deterministically', async () => {
@@ -1535,7 +1564,6 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     ['missing EOS', 'player_eos_missing', 409],
     ['inactive VIP tier', 'role_not_vip', 403],
     ['role outside the VIP catalog', 'role_not_vip', 403],
-    ['ambiguous active VIP tier', 'role_not_vip', 403],
     ['system role', 'role_not_vip', 403],
     ['role with panel access', 'role_not_vip', 403],
     ['different current role', 'role_conflict', 409],
@@ -1551,17 +1579,20 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
         await h.db.update(vipTiers).set({ isActive: false }).where(eq(vipTiers.id, tierId));
       } else if (scenario === 'role outside the VIP catalog') {
         await h.db.delete(vipTiers).where(eq(vipTiers.id, tierId));
-      } else if (scenario === 'ambiguous active VIP tier') {
-        await h.db.insert(vipTiers).values({
-          id: uuidv7(),
-          name: `VIP Bronze duplicate ${Date.now()}`,
-          roleId,
-          isActive: true,
-        });
       } else if (scenario === 'system role') {
-        await h.db.update(roles).set({ isSystemRole: true }).where(eq(roles.id, roleId));
+        await h.db.execute(sql`ALTER TABLE roles DISABLE TRIGGER trg_roles_site_vip_safety_guard`);
+        try {
+          await h.db.update(roles).set({ isSystemRole: true }).where(eq(roles.id, roleId));
+        } finally {
+          await h.db.execute(sql`ALTER TABLE roles ENABLE TRIGGER trg_roles_site_vip_safety_guard`);
+        }
       } else if (scenario === 'role with panel access') {
-        await h.db.update(roles).set({ panelAccess: true }).where(eq(roles.id, roleId));
+        await h.db.execute(sql`ALTER TABLE roles DISABLE TRIGGER trg_roles_site_vip_safety_guard`);
+        try {
+          await h.db.update(roles).set({ panelAccess: true }).where(eq(roles.id, roleId));
+        } finally {
+          await h.db.execute(sql`ALTER TABLE roles ENABLE TRIGGER trg_roles_site_vip_safety_guard`);
+        }
       } else if (scenario === 'different current role') {
         const otherRoleId = uuidv7();
         await h.db.insert(roles).values({ id: otherRoleId, name: `Other ${Date.now()}` });

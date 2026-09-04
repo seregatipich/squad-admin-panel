@@ -11,7 +11,7 @@ import {
   vipSubscriptions,
   vipTiers,
 } from '@squad/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gte, lt } from 'drizzle-orm';
 import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -44,6 +44,7 @@ let panelRoleId: string;
 let otherRoleId: string;
 let econOnlyRoleId: string;
 let raceRoleId: string;
+let externalRaceRoleId: string;
 let serverId: string;
 
 let tierId: string;
@@ -52,6 +53,7 @@ let panelTierId: string;
 let unpricedTierId: string;
 let inactiveTierId: string;
 let raceTierId: string;
+let externalRaceTierId: string;
 
 let steamCursor = 985010;
 
@@ -337,7 +339,8 @@ async function countSuccessfulAudit(action: string, playerId: string): Promise<n
       and(
         eq(auditLog.actionType, action),
         eq(auditLog.targetId, playerId),
-        eq(auditLog.statusCode, 201),
+        gte(auditLog.statusCode, 200),
+        lt(auditLog.statusCode, 300),
       ),
     );
   return rows.length;
@@ -382,6 +385,13 @@ beforeAll(async () => {
     },
     { id: raceRoleId, name: 'SubsExternalRaceVip', panelAccess: false },
   ]);
+  const [siteVipRole] = await h.db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(eq(roles.name, 'QueuePriority'))
+    .limit(1);
+  if (!siteVipRole) throw new Error('provisioned QueuePriority role is missing');
+  externalRaceRoleId = siteVipRole.id;
 
   const insertTier = async (values: {
     name: string;
@@ -446,6 +456,13 @@ beforeAll(async () => {
     defaultDays: TIER_DAYS,
     priceBonuses: TIER_PRICE,
     sortOrder: 60,
+  });
+  externalRaceTierId = await insertTier({
+    name: 'BSS VIP',
+    roleId: externalRaceRoleId,
+    defaultDays: null,
+    priceBonuses: null,
+    sortOrder: 70,
   });
 }, 90_000);
 
@@ -873,8 +890,8 @@ describeIfDb('VIPSUB-5 self-service subscriptions', () => {
             event_id: eventId,
             event_type: 'vip.purchased',
             player_id: playerId,
-            role_id: raceRoleId,
-            tier: 'tier_1',
+            role_id: externalRaceRoleId,
+            tier: externalRaceTierId,
             purchase_id: `external-race-${iteration}`,
             expires_at: '2030-01-02T03:04:05.000Z',
           });
@@ -911,12 +928,13 @@ describeIfDb('VIPSUB-5 self-service subscriptions', () => {
           ),
       ).toHaveLength(0);
       expect(await countSuccessfulAudit('me.subscription.create', playerId)).toBe(0);
+      expect(await countSuccessfulAudit('vip.lifecycle.apply', playerId)).toBe(1);
       expect(await countOutboxReason('vip.lifecycle.assigned')).toBe(outboxBefore + 1);
       expect(await countOutboxReason('player.role.assign')).toBe(loserOutboxBefore);
       expect(await h.redis.xlen(`${ADMINS_CFG_SYNC_STREAM_PREFIX}${serverId}`)).toBe(redisBefore);
       expect(await storedPlayer(playerId)).toMatchObject({
         balance: 500,
-        roleId: raceRoleId,
+        roleId: externalRaceRoleId,
         roleLifecycleEventId: eventId,
       });
     }
@@ -951,8 +969,8 @@ describeIfDb('VIPSUB-5 self-service subscriptions', () => {
             event_id: eventId,
             event_type: 'vip.purchased',
             player_id: playerId,
-            role_id: raceRoleId,
-            tier: 'tier_1',
+            role_id: externalRaceRoleId,
+            tier: externalRaceTierId,
             purchase_id: `external-race-${iteration}`,
             expires_at: '2030-01-02T03:04:05.000Z',
           }).then((response) => {

@@ -145,6 +145,32 @@ describe('http error diag emits', () => {
     expect(captured.find((event) => event.kind === 'http.5xx')).toBeUndefined();
   });
 
+  it.each([
+    'site_vip_binding_safety_guard',
+    'site_vip_binding_duplicate_role_guard',
+    'site_vip_role_safety_guard',
+    'site_vip_role_permissions_guard',
+  ])('maps protected site VIP constraint %s to a stable 409 response', async (constraint) => {
+    const { app, captured } = await buildApp();
+
+    app.route({
+      method: 'POST',
+      url: '/__test/site-vip-guard',
+      handler: async () => {
+        const driverError = Object.assign(new Error('site_vip_binding_protected'), {
+          code: '23514',
+          constraint_name: constraint,
+        });
+        throw new Error('transaction failed', { cause: driverError });
+      },
+    });
+
+    const response = await app.inject({ method: 'POST', url: '/__test/site-vip-guard' });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'site_vip_binding_protected' });
+    expect(captured.find((event) => event.kind === 'http.5xx')).toBeUndefined();
+  });
+
   it('truncates the stack to 2000 characters', async () => {
     const { app, captured } = await buildApp();
 

@@ -423,6 +423,85 @@ describeIfDb('ограждение внешнего VIP lifecycle от обыч�
     ).toBe(true);
   });
 
+  it('rejects a late panel tier on the protected site VIP role', async () => {
+    const [siteRole] = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.name, 'QueuePriority'))
+      .limit(1);
+    expect(siteRole).toBeDefined();
+    if (!siteRole) return;
+
+    const siteTierId = uuidv7();
+    await h.db.insert(vipTiers).values({
+      id: siteTierId,
+      name: 'BSS VIP',
+      roleId: siteRole.id,
+      defaultDays: null,
+      priceBonuses: null,
+      isActive: true,
+    });
+
+    const response = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/vip-tiers',
+      headers: { cookie },
+      payload: {
+        name: `Panel duplicate ${uuidv7()}`,
+        role_id: siteRole.id,
+        default_days: 30,
+        price_bonuses: 100,
+        is_active: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'site_vip_binding_protected' });
+    expect(
+      await h.db
+        .select({ id: vipTiers.id })
+        .from(vipTiers)
+        .where(and(eq(vipTiers.roleId, siteRole.id), eq(vipTiers.isActive, true))),
+    ).toEqual([{ id: siteTierId }]);
+  });
+
+  it('returns 409 when the protected site VIP role is expanded', async () => {
+    const [siteRole] = await h.db
+      .select({ id: roles.id })
+      .from(roles)
+      .where(eq(roles.name, 'QueuePriority'))
+      .limit(1);
+    expect(siteRole).toBeDefined();
+    if (!siteRole) return;
+
+    await h.db.insert(vipTiers).values({
+      id: uuidv7(),
+      name: 'BSS VIP',
+      roleId: siteRole.id,
+      defaultDays: null,
+      priceBonuses: null,
+      isActive: true,
+    });
+
+    const response = await h.app.inject({
+      method: 'PUT',
+      url: `/api/v1/roles/${siteRole.id}`,
+      headers: { cookie },
+      payload: { panel_access: true },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: 'site_vip_binding_protected' });
+    expect(
+      (
+        await h.db
+          .select({ panelAccess: roles.panelAccess })
+          .from(roles)
+          .where(eq(roles.id, siteRole.id))
+      )[0]?.panelAccess,
+    ).toBe(false);
+  });
+
   it('returns 409 when a lifecycle role is given panel access after cutover', async () => {
     const playerId = await seedPlayer(PLAYER_A);
     const tierId = await makeVipRole(sourceRoleId);
