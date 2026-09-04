@@ -5,6 +5,7 @@ import {
   auditLog,
   panelMeta,
   players,
+  roleSquadPermissions,
   roles,
   servers,
   vipLifecycleEvents,
@@ -143,13 +144,30 @@ async function resolveVipLifecycleTier(
       tierCode: vipTiers.id,
       rolePanelAccess: roles.panelAccess,
       roleIsSystem: roles.isSystemRole,
+      squadPermissionKey: roleSquadPermissions.squadPermissionKey,
     })
     .from(vipTiers)
     .innerJoin(roles, eq(roles.id, vipTiers.roleId))
-    .where(and(eq(vipTiers.roleId, roleId), eq(vipTiers.isActive, true)))
+    .innerJoin(roleSquadPermissions, eq(roleSquadPermissions.roleId, vipTiers.roleId))
+    .where(
+      and(
+        eq(vipTiers.roleId, roleId),
+        eq(vipTiers.name, 'BSS VIP'),
+        eq(vipTiers.isActive, true),
+        isNull(vipTiers.defaultDays),
+        isNull(vipTiers.priceBonuses),
+      ),
+    )
     .limit(2);
   const tier = tiers[0];
-  if (!tier || tiers.length !== 1 || tier.roleIsSystem || tier.rolePanelAccess) return null;
+  if (
+    !tier ||
+    tiers.length !== 1 ||
+    tier.roleIsSystem ||
+    tier.rolePanelAccess ||
+    tier.squadPermissionKey !== 'reserve'
+  )
+    return null;
   return {
     roleId: tier.roleId,
     tierCode: tier.tierCode,
@@ -165,14 +183,26 @@ async function discoverSoleVipLifecycleTier(
       roleId: vipTiers.roleId,
       tierCode: vipTiers.id,
       rolePanelAccess: roles.panelAccess,
+      squadPermissionKey: roleSquadPermissions.squadPermissionKey,
     })
     .from(vipTiers)
     .innerJoin(roles, eq(roles.id, vipTiers.roleId))
+    .innerJoin(roleSquadPermissions, eq(roleSquadPermissions.roleId, vipTiers.roleId))
     .where(
-      and(eq(vipTiers.isActive, true), eq(roles.isSystemRole, false), eq(roles.panelAccess, false)),
+      and(
+        eq(vipTiers.name, 'BSS VIP'),
+        eq(vipTiers.isActive, true),
+        isNull(vipTiers.defaultDays),
+        isNull(vipTiers.priceBonuses),
+        eq(roles.name, 'QueuePriority'),
+        eq(roles.isSystemRole, false),
+        eq(roles.panelAccess, false),
+      ),
     )
     .limit(2);
-  return tiers.length === 1 ? (tiers[0] ?? null) : null;
+  return tiers.length === 1 && tiers[0]?.squadPermissionKey === 'reserve'
+    ? (tiers[0] ?? null)
+    : null;
 }
 
 async function requiresExactVipTierCode(tx: VipGrantExecutor, configured: boolean) {

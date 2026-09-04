@@ -14,6 +14,10 @@ const WORKFLOW = readFileSync(
   path.join(REPOSITORY_ROOT, '.github/workflows/deploy-tk104.yml'),
   'utf8',
 );
+const SCRIPT = readFileSync(
+  path.join(REPOSITORY_ROOT, 'scripts/provision-site-vip-tier.mjs'),
+  'utf8',
+);
 const databases: Array<{ drop: () => Promise<void> }> = [];
 
 async function database() {
@@ -39,7 +43,15 @@ describe('provision-site-vip-tier', () => {
     assert.match(section, /StrictHostKeyChecking=yes/);
     assert.match(section, /BSS_PROVISION_SITE_VIP_TIER_RUN=1/);
     assert.match(section, /api\/v1\/integrations\/vip\/tier-role/);
+    assert.match(section, /\.version == \$revision/);
+    assert.match(section, /\.role_id == \$expected_role/);
+    assert.match(section, /\.tier_code == \$expected_tier/);
+    assert.ok(
+      section.indexOf('Verify exact deployed panel and signed contract') <
+        section.indexOf('Provision the sole safe site VIP tier'),
+    );
     assert.doesNotMatch(section, /ssh-keyscan|accept-new/);
+    assert.match(SCRIPT, /const LOCK_NAME = 'vip-lifecycle-writer-fence'/);
   });
 
   it('связывает сайт только со штатной ролью QueuePriority без второго магазина', async () => {
@@ -111,6 +123,73 @@ describe('provision-site-vip-tier', () => {
       assert.deepEqual(second, { ...first, status: 'unchanged' });
       assert.equal(tiers, 1);
       assert.equal(audits, 1);
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it('не принимает тариф внутреннего магазина как привязку сайта', async () => {
+    const sql = await database();
+    try {
+      const [role] = await sql`SELECT id FROM roles WHERE name = 'QueuePriority'`;
+      await sql`
+        INSERT INTO vip_tiers (
+          id, name, role_id, default_days, price_bonuses, is_active
+        ) VALUES (
+          ${randomUUID()}, 'Внутренний VIP', ${role.id}, 30, 100, true
+        )
+      `;
+
+      await assert.rejects(
+        () => provisionSiteVipTier(sql),
+        /активный VIP-тариф уже использует другую роль или назначение/i,
+      );
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it('после привязки база не позволяет расширить серверные права VIP-роли', async () => {
+    const sql = await database();
+    try {
+      const result = await provisionSiteVipTier(sql);
+
+      await assert.rejects(
+        () => sql`
+          INSERT INTO role_squad_permissions (role_id, squad_permission_key)
+          VALUES (${result.roleId}, 'ban')
+        `,
+        /site_vip_role_permissions_locked/i,
+      );
+      await assert.rejects(
+        () => sql`
+          DELETE FROM role_squad_permissions
+          WHERE role_id = ${result.roleId} AND squad_permission_key = 'reserve'
+        `,
+        /site_vip_role_permissions_locked/i,
+      );
+      await assert.rejects(
+        () => sql`UPDATE roles SET panel_access = true WHERE id = ${result.roleId}`,
+        /site_vip_role_unsafe/i,
+      );
+      await assert.rejects(
+        () => sql`
+          UPDATE vip_tiers
+          SET default_days = 30, price_bonuses = 100
+          WHERE id = ${result.tierCode}
+        `,
+        /site_vip_binding_unsafe/i,
+      );
+      await assert.rejects(
+        () => sql`UPDATE vip_tiers SET name = 'Обход' WHERE id = ${result.tierCode}`,
+        /site_vip_binding_unsafe/i,
+      );
+      const permissions = await sql`
+        SELECT squad_permission_key
+        FROM role_squad_permissions
+        WHERE role_id = ${result.roleId}
+      `;
+      assert.deepEqual([...permissions], [{ squad_permission_key: 'reserve' }]);
     } finally {
       await sql.end();
     }

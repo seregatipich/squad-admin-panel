@@ -4,7 +4,7 @@ import path from 'node:path';
 
 const ROLE_NAME = 'QueuePriority';
 const TIER_NAME = 'BSS VIP';
-const LOCK_NAME = 'provision-site-vip-tier';
+const LOCK_NAME = 'vip-lifecycle-writer-fence';
 
 export async function provisionSiteVipTier(sql) {
   return sql.begin(async (transaction) => {
@@ -40,7 +40,14 @@ export async function provisionSiteVipTier(sql) {
     }
 
     const active = await transaction`
-      SELECT tier.id, tier.role_id, role.panel_access, role.is_system_role
+      SELECT
+        tier.id,
+        tier.name,
+        tier.role_id,
+        tier.default_days,
+        tier.price_bonuses,
+        role.panel_access,
+        role.is_system_role
       FROM vip_tiers tier
       JOIN roles role ON role.id = tier.role_id
       WHERE tier.is_active = true
@@ -53,10 +60,13 @@ export async function provisionSiteVipTier(sql) {
       if (
         active.length !== 1 ||
         current.role_id !== role.id ||
+        current.name !== TIER_NAME ||
+        current.default_days !== null ||
+        current.price_bonuses !== null ||
         current.panel_access !== false ||
         current.is_system_role !== false
       ) {
-        throw new Error('Активный VIP-тариф уже использует другую роль.');
+        throw new Error('Активный VIP-тариф уже использует другую роль или назначение.');
       }
       return { status: 'unchanged', roleId: role.id, tierCode: current.id };
     }
@@ -146,7 +156,7 @@ if (process.env.BSS_PROVISION_SITE_VIP_TIER_RUN === '1') {
       'DATABASE_URL не задан.',
       'Требуется ровно одна штатная роль QueuePriority.',
       'Роль QueuePriority небезопасна для автоматической привязки.',
-      'Активный VIP-тариф уже использует другую роль.',
+      'Активный VIP-тариф уже использует другую роль или назначение.',
       'Выключенная VIP-привязка требует решения владельца.',
     ]);
     const message =

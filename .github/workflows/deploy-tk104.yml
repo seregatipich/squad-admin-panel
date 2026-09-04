@@ -353,14 +353,65 @@ jobs:
           printf '%s\n' "${TK104_DEPLOY_KEY}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
 
+      - name: Verify exact deployed panel and signed contract
+        env:
+          BSS_SSO_SHARED_SECRET: ${{ secrets.BSS_SSO_SHARED_SECRET }}
+        run: |
+          health="$(curl --fail --silent --show-error --max-time 15 \
+            https://tk104.duckdns.org/health)"
+          jq -e --arg revision "${GITHUB_SHA}" \
+            '.status == "ok" and .version == $revision' <<<"${health}" >/dev/null
+          if [[ -z "${BSS_SSO_SHARED_SECRET}" ]]; then
+            echo "Required BSS SSO secret is missing." >&2
+            exit 1
+          fi
+          timestamp="$(date --utc +%Y-%m-%dT%H:%M:%SZ)"
+          signature="$({
+            printf '%s\n' "${timestamp}"
+            printf '%s' "${BSS_SSO_SHARED_SECRET}"
+          } | python -c '
+          import hashlib, hmac, sys
+          timestamp = sys.stdin.readline().rstrip("\n")
+          shared = sys.stdin.read()
+          if not 32 <= len(shared) <= 512 or any(character.isspace() for character in shared):
+              raise SystemExit("shared_secret_invalid")
+          secret = hmac.new(shared.encode(), b"bss-vip-lifecycle-v1", hashlib.sha256).hexdigest()
+          print(hmac.new(secret.encode(), f"{timestamp}.{{}}".encode(), hashlib.sha256).hexdigest())
+          ')"
+          response_file="${RUNNER_TEMP}/site-vip-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          trap 'rm -f "${response_file}"' EXIT
+          code="$(curl --silent --show-error --output "${response_file}" --write-out '%{http_code}' \
+            --max-time 15 --request POST \
+            --header 'accept: application/json' \
+            --header 'content-type: application/json' \
+            --header "x-vip-timestamp: ${timestamp}" \
+            --header "x-vip-signature: sha256=${signature}" \
+            --data '{}' \
+            https://tk104.duckdns.org/api/v1/integrations/vip/tier-role)"
+          case "${code}" in
+            200) jq -e '.ok == true' "${response_file}" >/dev/null ;;
+            409) jq -e '.error == "vip_binding_not_unique"' "${response_file}" >/dev/null ;;
+            *) echo "Signed VIP contract preflight failed with HTTP ${code}." >&2; exit 1 ;;
+          esac
+
       - name: Provision the sole safe site VIP tier
         run: |
-          sed -n '1,$p' scripts/provision-site-vip-tier.mjs | \
+          provision_result="$(sed -n '1,$p' scripts/provision-site-vip-tier.mjs | \
             ssh -i ~/.ssh/id_deploy \
               -o UserKnownHostsFile="${RUNNER_TEMP}/tk104_known_hosts" \
               -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
               seregatipich@tk104.duckdns.org \
-              'set -euo pipefail; export BSS_PROVISION_SITE_VIP_TIER_RUN=1; cd "$HOME/apps/squad-admin-panel"; docker compose --env-file .env.tk104 -f compose.tk104.yml exec -T -e BSS_PROVISION_SITE_VIP_TIER_RUN api node --input-type=module'
+              'set -euo pipefail; export BSS_PROVISION_SITE_VIP_TIER_RUN=1; cd "$HOME/apps/squad-admin-panel"; docker compose --env-file .env.tk104 -f compose.tk104.yml exec -T -e BSS_PROVISION_SITE_VIP_TIER_RUN api node --input-type=module')"
+          jq -e '
+            (.status == "changed" or .status == "unchanged") and
+            (.roleId | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) and
+            (.tierCode | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))
+          ' <<<"${provision_result}" >/dev/null
+          umask 077
+          {
+            jq -r '.roleId' <<<"${provision_result}"
+            jq -r '.tierCode' <<<"${provision_result}"
+          } > "${RUNNER_TEMP}/site-vip-binding-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
       - name: Verify signed production binding
         env:
@@ -370,6 +421,11 @@ jobs:
             echo "Required BSS SSO secret is missing." >&2
             exit 1
           fi
+          binding_file="${RUNNER_TEMP}/site-vip-binding-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          {
+            IFS= read -r expected_role
+            IFS= read -r expected_tier
+          } < "${binding_file}"
           timestamp="$(date --utc +%Y-%m-%dT%H:%M:%SZ)"
           signature="$({
             printf '%s\n' "${timestamp}"
@@ -391,10 +447,10 @@ jobs:
             --header "x-vip-signature: sha256=${signature}" \
             --data '{}' \
             https://tk104.duckdns.org/api/v1/integrations/vip/tier-role)"
-          jq -e '
+          jq -e --arg expected_role "${expected_role}" --arg expected_tier "${expected_tier}" '
             .ok == true and
-            (.role_id | test("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
-            (.tier_code | test("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"))
+            .role_id == $expected_role and
+            .tier_code == $expected_tier
           ' <<<"${response}" >/dev/null
 
       - name: Verify panel remains ready
@@ -407,7 +463,9 @@ jobs:
 
       - name: Remove SSH deploy key
         if: always()
-        run: rm -f ~/.ssh/id_deploy "${RUNNER_TEMP}/tk104_known_hosts"
+        run: >-
+          rm -f ~/.ssh/id_deploy "${RUNNER_TEMP}/tk104_known_hosts"
+          "${RUNNER_TEMP}/site-vip-binding-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
   revoke-sessions-for-sso-cutover:
     if: >-
