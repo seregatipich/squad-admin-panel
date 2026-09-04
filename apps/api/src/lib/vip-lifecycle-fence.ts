@@ -71,7 +71,7 @@ interface FenceTriggerRow extends Record<string, unknown> {
 const EXPECTED_FENCE_FUNCTION_HASHES = new Map([
   [
     'enforce_site_vip_binding_safety',
-    '79b62e79a1444d3d4cea019061b7aa7ca185847ce084480644b27524a500fb0f',
+    '8443f54205a59eb6548daab1af2c156f77ef13a216d587a5a999a5091c402916',
   ],
   [
     'enforce_players_vip_lifecycle_owner',

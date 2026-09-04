@@ -13,6 +13,18 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('vip-lifecycle-writer-fence', 0));
 
   IF TG_TABLE_NAME = 'vip_tiers' THEN
+    IF NEW.is_active = true AND EXISTS (
+      SELECT 1
+        FROM vip_tiers tier
+       WHERE tier.role_id = NEW.role_id
+         AND tier.is_active = true
+         AND tier.id <> NEW.id
+         AND (tier.name = 'BSS VIP' OR NEW.name = 'BSS VIP')
+    ) THEN
+      RAISE EXCEPTION 'site_vip_binding_duplicate_role'
+        USING ERRCODE = '23514', CONSTRAINT = 'site_vip_binding_duplicate_role_guard';
+    END IF;
+
     IF NEW.is_active = true AND (
       NEW.name = 'BSS VIP' OR
       (TG_OP = 'UPDATE' AND OLD.name = 'BSS VIP' AND OLD.is_active = true)

@@ -184,6 +184,16 @@ describe('provision-site-vip-tier', () => {
         () => sql`UPDATE vip_tiers SET name = 'Обход' WHERE id = ${result.tierCode}`,
         /site_vip_binding_unsafe/i,
       );
+      await assert.rejects(
+        () => sql`
+          INSERT INTO vip_tiers (
+            id, name, role_id, default_days, price_bonuses, is_active
+          ) VALUES (
+            ${randomUUID()}, 'Panel duplicate', ${result.roleId}, 30, 100, true
+          )
+        `,
+        /site_vip_binding_duplicate_role/i,
+      );
       const permissions = await sql`
         SELECT squad_permission_key
         FROM role_squad_permissions
