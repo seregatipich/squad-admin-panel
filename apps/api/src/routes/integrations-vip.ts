@@ -64,7 +64,7 @@ const vipPreflightBody = z.object({
 
 const vipTierRoleBody = z.object({
   role_id: z.string().uuid(),
-  tier: z.string().uuid(),
+  tier: z.string().uuid().optional(),
 });
 
 const vipStatusBody = z.object({
@@ -300,7 +300,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'role_not_vip', error_code: 'role_not_vip' };
       }
-      if (req.body.tier !== tier.tierCode) {
+      if (req.body.tier !== undefined && req.body.tier !== tier.tierCode) {
         reply.code(409);
         return { error: 'tier_role_mismatch', error_code: 'tier_role_mismatch' };
       }

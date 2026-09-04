@@ -65,7 +65,7 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 
 | Method | Path | Purpose | Permissions |
 |---|---|---|---|
-| POST | `/api/v1/integrations/vip/tier-role` | Проверка точной пары `{ role_id, tier }` для release gate без игрока и записи. | только HMAC |
+| POST | `/api/v1/integrations/vip/tier-role` | Получение авторитетного `tier_code` по `{ role_id }`; необязательный `tier` проверяет точную пару без игрока и записи. | только HMAC |
 | POST | `/api/v1/integrations/vip/preflight` | Подписанная проверка игрока, VIP-роли, владельца текущего назначения и непустого снимка серверов до покупки. | только HMAC |
 | POST | `/api/v1/integrations/vip/lifecycle` | Подписанное назначение, продление, истечение или возврат VIP-роли от `vip-user-service`. | только HMAC |
 | POST | `/api/v1/integrations/vip/status` | Подписанное агрегированное состояние доставки принятого события по `{ event_id }`. | только HMAC |
@@ -83,10 +83,11 @@ Removed surfaces (no longer exist): `POST /api/v1/auth/login`, `POST /api/v1/me/
 одинаково возвращают `401 { "error": "invalid_signature" }`.
 
 `tier` в строгом контракте — UUID строки `vip_tiers.id`, а не отображаемое имя.
-Read-only `tier-role` принимает только UUID и возвращает точное
+Read-only `tier-role` принимает `role_id` и необязательный UUID `tier`, затем возвращает точное
 `200 { "ok": true, "tier_code": "<vip_tiers.id>", "role_id": "<roles.id>" }`.
-Неактивная, небезопасная или неоднозначная роль даёт `404 role_not_vip`, а
-несовпавший UUID — `409 tier_role_mismatch`. До cutover preflight и lifecycle
+Без `tier` маршрут служит подписанным источником авторитетного кода для выпуска
+producer. Неактивная, небезопасная или неоднозначная роль даёт `404 role_not_vip`, а
+переданный несовпавший UUID — `409 tier_role_mismatch`. До cutover preflight и lifecycle
 ещё принимают прежнюю строковую метку, но в ответе и сохранённом событии всегда
 возвращают авторитетный `tier_code`; после durable cutover требуется точный UUID.
 

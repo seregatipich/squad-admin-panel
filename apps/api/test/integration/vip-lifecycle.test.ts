@@ -1162,6 +1162,19 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     transaction.mockRestore();
   });
 
+  it('discovers the authoritative tier code from a signed role-only request', async () => {
+    const transaction = vi.spyOn(h.app.db, 'transaction');
+    const before = await mutationCounts('vip-tier-role-discovery-read-only');
+
+    const response = await postTierRole({ role_id: roleId });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, tier_code: tierId, role_id: roleId });
+    expect(transaction).not.toHaveBeenCalled();
+    expect(await mutationCounts('vip-tier-role-discovery-read-only')).toEqual(before);
+    transaction.mockRestore();
+  });
+
   it('rejects a signed tier-role mismatch deterministically', async () => {
     const response = await postTierRole({ role_id: roleId, tier: uuidv7() });
 

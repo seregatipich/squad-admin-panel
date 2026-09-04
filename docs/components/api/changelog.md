@@ -4,7 +4,7 @@
 
 ### Added
 
-- Read-only `POST /api/v1/integrations/vip/tier-role` под тем же HMAC проверяет точную UUID-пару `vip_tiers.id`↔`role_id` без игрока, записи и блокировки. Preflight, lifecycle и status возвращают авторитетный `tier_code`; строгий режим отклоняет несовпадение как `409 tier_role_mismatch`.
+- Read-only `POST /api/v1/integrations/vip/tier-role` под тем же HMAC возвращает авторитетный `vip_tiers.id` по `role_id` без игрока, записи и блокировки; необязательный переданный `tier` дополнительно проверяет точную UUID-пару. Preflight, lifecycle и status возвращают тот же `tier_code`; строгий режим отклоняет несовпадение как `409 tier_role_mismatch`.
 - `audit-vip-lifecycle-ownership` проверяет все доказуемые lifecycle-проекции через `findVipLifecycleOwner`, не усыновляет ручные роли и не выводит идентификаторы игроков. Потерянный marker находится даже после удаления tier mapping; superseded, неоднозначный или небезопасный mapping считается конфликтом.
 
 ### Changed
