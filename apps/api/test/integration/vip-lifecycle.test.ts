@@ -1175,6 +1175,46 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     transaction.mockRestore();
   });
 
+  it('discovers the sole safe active VIP binding without a configured role id', async () => {
+    const transaction = vi.spyOn(h.app.db, 'transaction');
+    const before = await mutationCounts('vip-tier-binding-discovery-read-only');
+
+    const response = await postTierRole({});
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, tier_code: tierId, role_id: roleId });
+    expect(transaction).not.toHaveBeenCalled();
+    expect(await mutationCounts('vip-tier-binding-discovery-read-only')).toEqual(before);
+    transaction.mockRestore();
+  });
+
+  it('rejects role-free discovery when more than one safe VIP binding is active', async () => {
+    const anotherRoleId = uuidv7();
+    await h.db.insert(roles).values({
+      id: anotherRoleId,
+      name: `VIP Ambiguous ${Date.now()}`,
+      color: '#DAA520',
+      isSystemRole: false,
+      panelAccess: false,
+    });
+    await h.db.insert(vipTiers).values({
+      id: uuidv7(),
+      name: `VIP Ambiguous Tier ${Date.now()}`,
+      roleId: anotherRoleId,
+      isActive: true,
+    });
+    const before = await mutationCounts('vip-tier-binding-ambiguous-read-only');
+
+    const response = await postTierRole({});
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: 'vip_binding_not_unique',
+      error_code: 'vip_binding_not_unique',
+    });
+    expect(await mutationCounts('vip-tier-binding-ambiguous-read-only')).toEqual(before);
+  });
+
   it('rejects a signed tier-role mismatch deterministically', async () => {
     const response = await postTierRole({ role_id: roleId, tier: uuidv7() });
 
