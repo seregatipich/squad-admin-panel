@@ -39,16 +39,21 @@ describe('аудит владельца активных VIP-назначени�
   });
 
   async function createVipRole() {
-    const roleId = randomUUID();
-    await sql`
-      INSERT INTO roles (id, name)
-      VALUES (${roleId}, ${`VIP audit ${roleId}`})
+    const [binding] = await sql<{ role_id: string }[]>`
+      SELECT role.id AS role_id
+      FROM roles role
+      JOIN role_squad_permissions permission ON permission.role_id = role.id
+      WHERE role.name = 'QueuePriority'
+        AND role.panel_access = false
+        AND role.is_system_role = false
+        AND permission.squad_permission_key = 'reserve'
     `;
+    if (!binding) throw new Error('provisioned QueuePriority role is missing');
     await sql`
-      INSERT INTO vip_tiers (id, name, role_id, default_days, is_active)
-      VALUES (${randomUUID()}, ${`VIP tier ${roleId}`}, ${roleId}, 30, true)
+      INSERT INTO vip_tiers (id, name, role_id, default_days, price_bonuses, is_active)
+      VALUES (${randomUUID()}, 'BSS VIP', ${binding.role_id}, NULL, NULL, true)
     `;
-    return roleId;
+    return binding.role_id;
   }
 
   async function createPlayer(roleId: string, expiresAt: Date, steamId64: bigint) {

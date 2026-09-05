@@ -10,11 +10,12 @@
 
 ### Added
 
-- Read-only `POST /api/v1/integrations/vip/tier-role` под тем же HMAC проверяет точную UUID-пару `vip_tiers.id`↔`role_id` без игрока, записи и блокировки. Preflight, lifecycle и status возвращают авторитетный `tier_code`; строгий режим отклоняет несовпадение как `409 tier_role_mismatch`.
+- Read-only `POST /api/v1/integrations/vip/tier-role` под тем же HMAC возвращает авторитетный `vip_tiers.id` по `role_id` без игрока, записи и блокировки; необязательный переданный `tier` дополнительно проверяет точную UUID-пару. Preflight, lifecycle и status возвращают тот же `tier_code`; строгий режим отклоняет несовпадение как `409 tier_role_mismatch`.
 - `audit-vip-lifecycle-ownership` проверяет все доказуемые lifecycle-проекции через `findVipLifecycleOwner`, не усыновляет ручные роли и не выводит идентификаторы игроков. Потерянный marker находится даже после удаления tier mapping; superseded, неоднозначный или небезопасный mapping считается конфликтом.
 
 ### Changed
 
+- Пустой подписанный запрос к `tier-role` теперь возвращает единственную активную безопасную связку роли и уровня для первичной настройки producer; ноль или несколько подходящих связок закрываются с `409 vip_binding_not_unique` без записи в БД.
 - `vip-revision-cutover` под одним advisory lock атомарно выполняет аудит и включает durable-флаг PostgreSQL до смены env и перезапуска. Обычный запуск с relaxed env не снимает уже включённое ограждение; отключение доступно только отдельной rollback-команде после остановки API.
 - Startup и cutover сверяют точный SHA-256/метаданные DB-функций и полные trigger definitions; удалённое, выключенное, перепривязанное или изменённое ограждение блокирует HTTP-startup fail-closed.
 - Все обычные API/worker/raw-SQL пути назначения роли используют CAS по lifecycle marker. DB-trigger запрещает назначение роли из `vip_tiers`, прямое снятие/замену внешней проекции и заранее подготовленное событие из другой транзакции. Изменение tier/role-семантики, которое сделало бы действующего владельца неснимаемым, также блокируется.

@@ -75,7 +75,7 @@ describe('configure-bss-sso-env.sh', () => {
     assert.doesNotMatch(workflow, /ssh-keyscan|StrictHostKeyChecking=accept-new/);
     assert.equal(
       (workflow.match(/name: Configure pinned SSH trust and deploy key/g) ?? []).length,
-      5,
+      6,
     );
 
     for (const [section, expectedConnections] of [
@@ -141,9 +141,9 @@ describe('configure-bss-sso-env.sh', () => {
     assert.match(cutover, /revoke-sessions-for-sso-cutover\.js/);
     assert.match(cutover, /--confirm-all-sessions/);
     assert.match(cutover, /name: External health check\n\s+if: always\(\)/);
-    assert.ok((workflow.match(/name: Remove SSH deploy key/g) ?? []).length === 5);
-    assert.equal((workflow.match(/^\s+runs-on:/gmu) ?? []).length, 5);
-    assert.equal((workflow.match(/runs-on:\n\s+group: selfhost-group-1/g) ?? []).length, 5);
+    assert.ok((workflow.match(/name: Remove SSH deploy key/g) ?? []).length === 6);
+    assert.equal((workflow.match(/^\s+runs-on:/gmu) ?? []).length, 6);
+    assert.equal((workflow.match(/runs-on:\n\s+group: selfhost-group-1/g) ?? []).length, 6);
   });
 
   it('changes strict VIP revision mode only for exact deployed panel and site revisions', () => {

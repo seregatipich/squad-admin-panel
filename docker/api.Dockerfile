@@ -1,7 +1,16 @@
 FROM node:22-bookworm-slim AS base
+ARG PNPM_VERSION=9.15.0
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
-RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+RUN corepack enable && \
+    for attempt in 1 2 3; do \
+      if corepack prepare "pnpm@${PNPM_VERSION}" --activate && \
+         test "$(pnpm --version)" = "$PNPM_VERSION"; then \
+        exit 0; \
+      fi; \
+      test "$attempt" -eq 3 || sleep "$((attempt * 5))"; \
+    done; \
+    exit 1
 WORKDIR /app
 
 FROM base AS deps

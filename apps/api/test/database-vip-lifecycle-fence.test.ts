@@ -140,6 +140,16 @@ describe('startup-ограждение VIP lifecycle', () => {
     expect(await persistedState()).toBe(false);
   });
 
+  it('refuses startup when the site VIP permission guard is missing', async () => {
+    await sql`
+      DROP TRIGGER trg_role_squad_permissions_site_vip_guard
+      ON role_squad_permissions
+    `;
+
+    await expectStartupIntegrityFailure(false);
+    expect(await persistedState()).toBe(false);
+  });
+
   it('refuses startup when a trigger name is rebound to another function', async () => {
     await sql.unsafe(`
       CREATE FUNCTION vip_lifecycle_noop_trigger()

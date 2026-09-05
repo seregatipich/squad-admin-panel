@@ -13,6 +13,7 @@
     "APP_ENCRYPTION_KEY",
     "PANEL_BRIDGE_SOCKET"
   ],
+  "globalPassThroughEnv": ["VITEST_MAX_FORKS"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

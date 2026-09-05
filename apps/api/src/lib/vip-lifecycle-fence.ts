@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseClient } from '@squad/db';
 import { findCurrentVipLifecycleAssignment, findVipLifecycleOwner } from '@squad/db';
-import { panelMeta, players, roles, vipLifecycleEvents, vipTiers } from '@squad/db/schema';
+import {
+  panelMeta,
+  players,
+  roleSquadPermissions,
+  roles,
+  vipLifecycleEvents,
+  vipTiers,
+} from '@squad/db/schema';
 import { and, eq, gt, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 
 export interface VipOwnershipAuditResult {
@@ -63,6 +70,10 @@ interface FenceTriggerRow extends Record<string, unknown> {
 
 const EXPECTED_FENCE_FUNCTION_HASHES = new Map([
   [
+    'enforce_site_vip_binding_safety',
+    '8443f54205a59eb6548daab1af2c156f77ef13a216d587a5a999a5091c402916',
+  ],
+  [
     'enforce_players_vip_lifecycle_owner',
     '35b132da3d8525d8e468f6a260512599f99eb5ed23f83de121893ce1d96a79de',
   ],
@@ -73,6 +84,14 @@ const EXPECTED_FENCE_FUNCTION_HASHES = new Map([
 ]);
 
 const EXPECTED_FENCE_TRIGGER_DEFINITIONS = new Map([
+  [
+    'trg_role_squad_permissions_site_vip_guard',
+    'CREATE TRIGGER trg_role_squad_permissions_site_vip_guard BEFORE INSERT OR DELETE OR UPDATE ON role_squad_permissions FOR EACH ROW EXECUTE FUNCTION enforce_site_vip_binding_safety()',
+  ],
+  [
+    'trg_roles_site_vip_safety_guard',
+    'CREATE TRIGGER trg_roles_site_vip_safety_guard BEFORE UPDATE OF name, panel_access, is_system_role ON roles FOR EACH ROW EXECUTE FUNCTION enforce_site_vip_binding_safety()',
+  ],
   [
     'trg_panel_meta_vip_lifecycle_fence_delete',
     'CREATE TRIGGER trg_panel_meta_vip_lifecycle_fence_delete BEFORE DELETE ON panel_meta FOR EACH ROW EXECUTE FUNCTION lock_vip_lifecycle_writer_fence()',
@@ -97,15 +116,22 @@ const EXPECTED_FENCE_TRIGGER_DEFINITIONS = new Map([
     'trg_vip_tiers_writer_fence_lock',
     'CREATE TRIGGER trg_vip_tiers_writer_fence_lock BEFORE INSERT OR DELETE OR UPDATE ON vip_tiers FOR EACH ROW EXECUTE FUNCTION lock_vip_lifecycle_writer_fence()',
   ],
+  [
+    'trg_vip_tiers_site_binding_guard',
+    'CREATE TRIGGER trg_vip_tiers_site_binding_guard BEFORE INSERT OR UPDATE OF name, role_id, default_days, price_bonuses, is_active ON vip_tiers FOR EACH ROW EXECUTE FUNCTION enforce_site_vip_binding_safety()',
+  ],
 ]);
 
 const EXPECTED_FENCE_TRIGGER_FUNCTIONS = new Map([
+  ['trg_role_squad_permissions_site_vip_guard', 'enforce_site_vip_binding_safety'],
+  ['trg_roles_site_vip_safety_guard', 'enforce_site_vip_binding_safety'],
   ['trg_panel_meta_vip_lifecycle_fence_delete', 'lock_vip_lifecycle_writer_fence'],
   ['trg_panel_meta_vip_lifecycle_fence_lock', 'lock_vip_lifecycle_writer_fence'],
   ['trg_players_vip_lifecycle_owner_guard', 'enforce_players_vip_lifecycle_owner'],
   ['trg_roles_vip_lifecycle_safety_guard', 'lock_vip_lifecycle_writer_fence'],
   ['trg_vip_lifecycle_events_writer_fence_lock', 'lock_vip_lifecycle_writer_fence'],
   ['trg_vip_tiers_writer_fence_lock', 'lock_vip_lifecycle_writer_fence'],
+  ['trg_vip_tiers_site_binding_guard', 'enforce_site_vip_binding_safety'],
 ]);
 
 function sha256(value: string): string {
@@ -167,6 +193,7 @@ async function assertVipLifecycleFenceIntegrity(tx: FenceTransaction): Promise<v
     JOIN pg_catalog.pg_language language ON language.oid = proc.prolang
     WHERE namespace.nspname = 'public'
       AND proc.proname IN (
+        'enforce_site_vip_binding_safety',
         'lock_vip_lifecycle_writer_fence',
         'enforce_players_vip_lifecycle_owner'
       )
@@ -193,7 +220,10 @@ async function assertVipLifecycleFenceIntegrity(tx: FenceTransaction): Promise<v
       ON function_namespace.oid = trigger_function.pronamespace
     WHERE namespace.nspname = 'public'
       AND trigger.tgname IN (
+        'trg_role_squad_permissions_site_vip_guard',
+        'trg_roles_site_vip_safety_guard',
         'trg_players_vip_lifecycle_owner_guard',
+        'trg_vip_tiers_site_binding_guard',
         'trg_vip_tiers_writer_fence_lock',
         'trg_roles_vip_lifecycle_safety_guard',
         'trg_vip_lifecycle_events_writer_fence_lock',
@@ -268,11 +298,17 @@ async function inspectOwnership(
   const activeTierMappings = await tx
     .select({
       roleId: vipTiers.roleId,
+      tierName: vipTiers.name,
+      defaultDays: vipTiers.defaultDays,
+      priceBonuses: vipTiers.priceBonuses,
+      roleName: roles.name,
       panelAccess: roles.panelAccess,
       isSystemRole: roles.isSystemRole,
+      squadPermissionKey: roleSquadPermissions.squadPermissionKey,
     })
     .from(vipTiers)
     .innerJoin(roles, eq(roles.id, vipTiers.roleId))
+    .innerJoin(roleSquadPermissions, eq(roleSquadPermissions.roleId, vipTiers.roleId))
     .where(eq(vipTiers.isActive, true));
   const mappingsByRole = new Map<string, typeof activeTierMappings>();
   for (const mapping of activeTierMappings) {
@@ -284,7 +320,14 @@ async function inspectOwnership(
     [...mappingsByRole.entries()]
       .filter(
         ([, mappings]) =>
-          mappings.length === 1 && !mappings[0]?.panelAccess && !mappings[0]?.isSystemRole,
+          mappings.length === 1 &&
+          mappings[0]?.tierName === 'BSS VIP' &&
+          mappings[0]?.defaultDays === null &&
+          mappings[0]?.priceBonuses === null &&
+          mappings[0]?.roleName === 'QueuePriority' &&
+          !mappings[0]?.panelAccess &&
+          !mappings[0]?.isSystemRole &&
+          mappings[0]?.squadPermissionKey === 'reserve',
       )
       .map(([roleId]) => roleId),
   );

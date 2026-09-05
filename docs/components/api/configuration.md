@@ -29,8 +29,9 @@ Inside the container the API binds `0.0.0.0:3000`. Caddy proxies `/api/*` and th
 
 1. Выпустить миграции, API и `worker-config-sync` с
    `VIP_LIFECYCLE_REQUIRE_REVISION=false`.
-2. Выпустить сайт, который проверяет точную пару UUID tier↔role через
-   `/api/v1/integrations/vip/tier-role`, сохраняет возвращённый `tier_code` в
+2. Выпустить сайт, который получает единственную безопасную пару UUID tier↔role либо проверяет
+   уже настроенную пару через `/api/v1/integrations/vip/tier-role`, сохраняет возвращённые
+   `role_id` и `tier_code` в
    операции доставки, передаёт положительную revision, обрабатывает конфликты
    `event_body_conflict`, `revision_conflict` и `tier_role_mismatch` и опрашивает
    status после `202`.

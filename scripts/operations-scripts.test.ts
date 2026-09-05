@@ -198,6 +198,35 @@ describe('operation script static contracts', () => {
     ]);
   });
 
+  it('limits affected package tests to two simultaneous Turbo tasks by default', () => {
+    const { root, script } = copyScript('scripts/pre-push-checklist.sh');
+    const shims = shimDirectory();
+    const log = path.join(root, 'commands.log');
+    executable(
+      path.join(shims, 'git'),
+      `if [[ "$*" == 'rev-parse --show-toplevel' ]]; then printf '%s\\n' ${JSON.stringify(root)}; exit 0; fi; exit 1`,
+    );
+    loggingShim(shims, 'gitleaks');
+    loggingShim(shims, 'pnpm');
+
+    const result = run('/bin/bash', [script], {
+      cwd: root,
+      env: {
+        OPS_LOG: log,
+        PATH: `${shims}:/usr/bin:/bin`,
+        DATABASE_URL: 'postgres://isolated-test-database',
+        TEST_DATABASE_URL: 'postgres://isolated-test-database',
+        FULL: '0',
+        SKIP_BUILD: '1',
+      },
+    });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.ok(
+      logLines(log).includes('pnpm|turbo|run|test|--concurrency=2|--filter=...[origin/dev]'),
+    );
+  });
+
   it('blocks pre-push when an operation script contract fails', () => {
     const { root, script } = copyScript('scripts/pre-push-checklist.sh');
     const shims = shimDirectory();

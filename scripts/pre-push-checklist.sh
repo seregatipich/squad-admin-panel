@@ -94,7 +94,8 @@ if [ -n "${DATABASE_URL:-}" ]; then
   if [ "${FULL:-0}" = "1" ]; then
     run_step "tests (full coverage)" pnpm test:cov
   else
-    run_step "tests (affected since origin/dev)" pnpm turbo run test --filter='...[origin/dev]'
+    run_step "tests (affected since origin/dev)" pnpm turbo run test \
+      --concurrency="${PREPUSH_TURBO_CONCURRENCY:-2}" --filter='...[origin/dev]'
   fi
 else
   printf '\n\033[31m✗ [checklist] tests — no DATABASE_URL and could not auto-provision\033[0m\n'
