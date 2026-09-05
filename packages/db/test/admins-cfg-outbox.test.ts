@@ -6,6 +6,7 @@ import postgres from 'postgres';
 import { v7 as uuidv7 } from 'uuid';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  enqueueAdminsCfgSyncForAllServers,
   getAdminsCfgSyncOutboxState,
   markAdminsCfgSyncApplied,
   markAdminsCfgSyncFailed,
@@ -201,5 +202,33 @@ describeIfDb('admins_cfg_sync_outbox application state', () => {
     await expect(markAdminsCfgSyncApplied(db, id, 'timeout')).rejects.toThrow(
       'invalid admins cfg sync applied outcome',
     );
+  });
+});
+
+describeIfDb('enqueueAdminsCfgSyncForAllServers and external servers', () => {
+  it('fans out only to panel-hosted (container) servers', async () => {
+    const externalId = uuidv7();
+    await db.insert(servers).values({
+      id: externalId,
+      displayName: `outbox-external-${externalId}`,
+      slug: `outbox-external-${externalId}`,
+      status: 'running',
+      runtime: 'external',
+    });
+    try {
+      const { enqueued } = await db.transaction((tx) =>
+        enqueueAdminsCfgSyncForAllServers(tx, { reason: 'test.external-skip' }),
+      );
+      const rows = await db
+        .select({ serverId: adminsCfgSyncOutbox.serverId })
+        .from(adminsCfgSyncOutbox);
+      const targets = new Set(rows.map((r) => r.serverId));
+      expect(enqueued).toBe(rows.length);
+      expect(targets.has(serverId)).toBe(true);
+      expect(targets.has(externalId)).toBe(false);
+    } finally {
+      await db.delete(adminsCfgSyncOutbox);
+      await db.delete(servers).where(sql`id = ${externalId}::uuid`);
+    }
   });
 });

@@ -13,6 +13,7 @@
 - Маршруты, которым нужен контейнер, дерево конфигов или bridge (`start`/`stop`/`restart`/`force-stop`/`install`/`update`/`reconcile`, `/configs/*`, `/rotation`, `/metrics`, `/logs/files`, `/rnsquadjs`, смена портов через `PUT /settings`), отвечают 409 `external_server` до любого обращения к bridge. `DELETE` внешнего сервера — обычный soft-delete без резервной копии конфигов.
 - Status-reconciler, worker-log-ingest, worker-config-sync, разнос outbox `Admins.cfg` и профили ротации планировщика игнорируют `runtime='external'`: у такого сервера нет `squad-<id>`, и без фильтра reconciler переводил бы его в `stopped` через 4 секунды после создания, а config-sync поднимал бы вечный `unreachable`.
 - Проверка коллизий портов при создании контейнерного сервера больше не учитывает внешние строки — они живут на другом хосте.
+- VIP lifecycle (`preflight`/`lifecycle`) считает целями доставки только контейнерные серверы: внешний сервер не входит в `servers_total` и не получает строк outbox. Восстановление внешнего сервера из архива (`POST /servers/archive/:id/restore`) отвечает 409 `external_server` — его заново подключают через `POST /servers/external`.
 
 ## 2026-09-03 — Durable-ограждение владельца VIP и точный tier mapping
 

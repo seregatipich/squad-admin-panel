@@ -399,10 +399,12 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
           requireTierCode,
         });
         if ('error' in target) return target;
+        // Delivery targets are the servers whose Admins.cfg the panel writes;
+        // an external server (runtime='external') has no such file here.
         const serverIds = await tx
           .select({ id: servers.id })
           .from(servers)
-          .where(isNull(servers.deletedAt));
+          .where(and(isNull(servers.deletedAt), eq(servers.runtime, 'container')));
         if (serverIds.length === 0) return { error: 'no_target_servers' as const };
         return { target, serversTotal: serverIds.length };
       });
@@ -669,7 +671,7 @@ const integrationsVipRoutes: FastifyPluginAsync = async (app) => {
           const serverRows = await tx
             .select({ id: servers.id })
             .from(servers)
-            .where(isNull(servers.deletedAt));
+            .where(and(isNull(servers.deletedAt), eq(servers.runtime, 'container')));
           if (serverRows.length === 0) return { error: 'no_target_servers' as const };
           const serverIds = serverRows.map((server) => server.id);
 

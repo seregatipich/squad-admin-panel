@@ -1779,6 +1779,30 @@ describeIfDb('VIP lifecycle integration endpoint', () => {
     ).toBeNull();
   });
 
+  it('does not count an external server as an Admins.cfg delivery target', async () => {
+    // An external server (runtime='external') has no Admins.cfg under the
+    // panel's config tree, so it is neither in servers_total nor in the outbox.
+    const externalId = uuidv7();
+    await h.db.insert(servers).values({
+      id: externalId,
+      displayName: 'External squad',
+      slug: `vip-external-${Date.now()}`,
+      status: 'running',
+      runtime: 'external',
+    });
+    const preflightBody = {
+      steam_id64: '76561198000990001',
+      role_id: roleId,
+      tier: 'tier_1',
+    };
+    expect((await postPreflight(preflightBody)).json()).toMatchObject({ servers_total: 1 });
+
+    await h.db.update(servers).set({ deletedAt: new Date() }).where(eq(servers.id, serverId));
+    const res = await postPreflight(preflightBody);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'no_target_servers' });
+  });
+
   it('assigns a signed VIP purchase by steam_id64 when producer does not know panel player_id', async () => {
     const event = {
       event_id: 'vip-purchase-by-steam-001',

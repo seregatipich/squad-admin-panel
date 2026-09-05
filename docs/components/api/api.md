@@ -131,8 +131,10 @@ Preflight, lifecycle (включая идемпотентный повтор) и
 Preflight и lifecycle не перезаписывают ручную роль или активную внутреннюю
 `vip_subscriptions`. Конфликты владельца возвращаются безопасными кодами
 `role_conflict`, `manual_role_conflict` или `vip_subscription_conflict`; пустой
-снимок целей — `no_target_servers`. Панель повторяет эти проверки и получает
-снимок серверов заново внутри lifecycle-транзакции.
+снимок целей — `no_target_servers`. В снимок входят только контейнерные серверы
+(`runtime='container'`): внешний сервер (`runtime='external'`) не получает
+`Admins.cfg` от панели и в `servers_total` не считается. Панель повторяет эти
+проверки и получает снимок серверов заново внутри lifecycle-транзакции.
 
 Status принимает `{ "event_id": "purchase-123" }`. Неизвестное событие даёт
 `404 event_not_found`; успешный ответ имеет вид:

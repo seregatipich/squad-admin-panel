@@ -8,6 +8,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { z } from 'zod';
 import { encrypt, serialize } from '../lib/crypto.js';
 import { restoreConfigsFromArchive } from '../lib/server-restore.js';
+import { isExternalRuntime } from '../lib/server-runtime.js';
 
 const idParam = z.object({ id: z.string().uuid() });
 const idAndFilename = z.object({
@@ -218,6 +219,16 @@ const archiveRoutes: FastifyPluginAsync = async (app) => {
       if (!archive) {
         reply.code(404);
         return { error: 'not_found' };
+      }
+      // An external archive has no config backup and its ports describe a
+      // remote host: "restoring" it would mint a container row pointing at
+      // nothing. Re-attach it through POST /api/v1/servers/external instead.
+      if (isExternalRuntime(archive.runtime)) {
+        reply.code(409);
+        return {
+          error: 'external_server',
+          message: 'An external server is re-attached via POST /api/v1/servers/external.',
+        };
       }
 
       const slug = req.body.slug;

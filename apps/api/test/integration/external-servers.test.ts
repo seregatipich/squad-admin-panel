@@ -494,3 +494,30 @@ describe('DELETE /api/v1/servers/:id for an external server', () => {
     expect(vi.mocked(relaunchSidecar)).not.toHaveBeenCalled();
   });
 });
+
+describe('archive restore of an external server', () => {
+  it('answers 409 external_server instead of minting a container row from remote ports', async () => {
+    const cookie = await loginAsOwner(h);
+    const { id } = await createExternal(cookie);
+    const del = await h.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/servers/${id}`,
+      headers: { cookie },
+    });
+    expect(del.statusCode).toBe(200);
+
+    const restore = await h.app.inject({
+      method: 'POST',
+      url: `/api/v1/servers/archive/${id}/restore`,
+      headers: { cookie },
+      payload: { slug: 'raas-1-again' },
+    });
+    expect(restore.statusCode).toBe(409);
+    expect(restore.json()).toMatchObject({ error: 'external_server' });
+    const rows = await h.db
+      .select({ id: servers.id })
+      .from(servers)
+      .where(eq(servers.slug, 'raas-1-again'));
+    expect(rows).toHaveLength(0);
+  });
+});
