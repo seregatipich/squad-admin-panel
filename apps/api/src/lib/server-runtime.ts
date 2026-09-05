@@ -39,11 +39,21 @@ export function containerOnlyPreHandler(app: Pick<FastifyInstance, 'db'>) {
   return async function containerOnly(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const id = (req.params as { id?: unknown } | undefined)?.id;
     if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)) return;
-    const row = await app.db.query.servers.findFirst({
-      where: and(eq(servers.id, id), isNull(servers.deletedAt)),
-      columns: { runtime: true },
-    });
-    if (row && isExternalRuntime(row.runtime as ServerRuntime)) {
+    let runtime: string | undefined;
+    try {
+      const row = await app.db.query.servers.findFirst({
+        where: and(eq(servers.id, id), isNull(servers.deletedAt)),
+        columns: { runtime: true },
+      });
+      runtime = row?.runtime;
+    } catch (err) {
+      // The guard is a courtesy 409, not an authorization boundary: when the
+      // lookup itself fails the handler runs and surfaces the real error on
+      // its own path (and a WebSocket handshake is not turned into a 500).
+      req.log.warn({ err: (err as Error).message, id }, 'runtime guard lookup failed');
+      return;
+    }
+    if (isExternalRuntime(runtime as ServerRuntime)) {
       reply.code(409).send(EXTERNAL_SERVER_ERROR);
     }
   };
