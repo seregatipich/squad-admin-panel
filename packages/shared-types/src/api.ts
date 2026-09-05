@@ -83,6 +83,65 @@ export const serverCreateInput = z
   );
 export type ServerCreateInput = z.infer<typeof serverCreateInput>;
 
+/**
+ * Where a server row's process lives. `container` — a Squad container the
+ * panel installs and runs on its own host through the bridge; `external` — a
+ * Squad instance hosted elsewhere that the panel only reaches over RCON/A2S
+ * (no bridge, no container lifecycle, no config files).
+ */
+export const serverRuntime = z.enum(['container', 'external']);
+export type ServerRuntime = z.infer<typeof serverRuntime>;
+
+/** Hostname or IP literal the panel dials for RCON/A2S — no scheme, no port, no spaces. */
+export const rconHostString = z
+  .string()
+  .trim()
+  .min(1)
+  .max(253)
+  .regex(/^[A-Za-z0-9.:\-[\]]+$/, 'host must be a hostname, IPv4 or IPv6 literal');
+
+/**
+ * Body of `POST /api/v1/servers/external` — registers an already-running
+ * Squad server that the panel does not host. The RCON password is the one
+ * configured in that server's `Rcon.cfg`; the panel stores it encrypted and
+ * never returns it. `query_port` feeds the A2S probe, `game_port` only the
+ * `steam://connect` join link.
+ */
+export const externalServerCreateInput = z
+  .object({
+    display_name: z.string().min(1).max(120),
+    slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
+    description: z.string().max(500).nullable().optional(),
+    rcon_host: rconHostString,
+    rcon_port: z.number().int().min(1).max(65_535),
+    rcon_password: z.string().min(1).max(200),
+    query_port: z.number().int().min(1).max(65_535),
+    game_port: z.number().int().min(1).max(65_535).default(7787),
+    max_players: z.number().int().min(1).max(100).default(100),
+  })
+  .strict();
+export type ExternalServerCreateInput = z.infer<typeof externalServerCreateInput>;
+
+/**
+ * Body of `PUT /api/v1/servers/:id/external-connection` — every field is
+ * optional, but at least one must be present. An omitted `rcon_password`
+ * keeps the stored secret.
+ */
+export const externalServerConnectionUpdate = z
+  .object({
+    rcon_host: rconHostString.optional(),
+    rcon_port: z.number().int().min(1).max(65_535).optional(),
+    rcon_password: z.string().min(1).max(200).optional(),
+    query_port: z.number().int().min(1).max(65_535).optional(),
+    game_port: z.number().int().min(1).max(65_535).optional(),
+    max_players: z.number().int().min(1).max(100).optional(),
+  })
+  .strict()
+  .refine((d) => Object.values(d).some((v) => v !== undefined), {
+    message: 'at least one connection field is required',
+  });
+export type ExternalServerConnectionUpdate = z.infer<typeof externalServerConnectionUpdate>;
+
 export const serverRow = z
   .object({
     id: uuidString,

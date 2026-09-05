@@ -4,6 +4,20 @@ All schema changes are recorded here in reverse chronological order, keyed by mi
 
 ---
 
+## 2026-09-05
+
+### External servers — `servers_runtime_enum` widened (migration 0112)
+
+**Files:** `packages/db/drizzle/0112_server_runtime_external.sql`, `packages/db/src/schema/servers.ts`, `packages/db/src/admins-cfg-outbox.ts`, `packages/db/test/migrations.regression.test.ts`
+
+`servers.runtime` may now be `'external'` besides `'container'`. An external row describes a Squad instance the panel does not host: `server_credentials.rcon_host` is non-NULL (the escape hatch that column always reserved) and the panel reaches it only over RCON/A2S. No column is added; the CHECK constraint is dropped and recreated with the wider set, so existing rows and the old value are untouched (additive, safe to promote).
+
+#### Changed
+
+- `enqueueAdminsCfgSyncForAllServers` fans out only to `runtime='container'` rows — an external server has no `Admins.cfg` under the panel's config tree.
+
+---
+
 ## 2026-07-27
 
 ### DISCORD-5 — discord_role_mappings (migration 0099)

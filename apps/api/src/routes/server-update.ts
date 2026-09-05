@@ -4,11 +4,15 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { publishDepotProgressDone, publishDepotProgressLine } from '../lib/depot-progress.js';
+import { containerOnlyPreHandler } from '../lib/server-runtime.js';
 
 const idParams = z.object({ id: z.string().uuid() });
 
 const serverUpdateRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
+  // Every `:id` in this plugin is a server id; an external server has no
+  // container/config tree here, so refuse up front with 409 external_server.
+  fast.addHook('preHandler', containerOnlyPreHandler(app));
 
   fast.post(
     '/api/v1/servers/:id/update',

@@ -539,3 +539,90 @@ describe('RconSupervisor command queue', () => {
     }
   }, 5000);
 });
+
+describe('RconSupervisor redial on changed connection parameters', () => {
+  function makeAuthCountingServer(): Promise<{
+    server: Server;
+    port: number;
+    auths: () => number;
+  }> {
+    let auths = 0;
+    return new Promise((resolve) => {
+      const server = createServer((socket: Socket) => {
+        const stream = new RconPacketStream();
+        socket.on('data', (chunk: Buffer) => {
+          for (const packet of stream.push(chunk)) {
+            if (packet.type === SERVERDATA_AUTH) {
+              auths++;
+              socket.write(
+                encodePacket({ id: packet.id, type: SERVERDATA_RESPONSE_VALUE, body: '' }),
+              );
+              socket.write(
+                encodePacket({ id: packet.id, type: SERVERDATA_AUTH_RESPONSE, body: '' }),
+              );
+            } else if (packet.type === SERVERDATA_EXECCOMMAND) {
+              socket.write(
+                encodePacket({ id: packet.id, type: SERVERDATA_RESPONSE_VALUE, body: '' }),
+              );
+            }
+          }
+        });
+      });
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address() as AddressInfo;
+        resolve({ server, port: addr.port, auths: () => auths });
+      });
+    });
+  }
+
+  async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate() && Date.now() < deadline) await sleep(20);
+    expect(predicate()).toBe(true);
+  }
+
+  it('replaces the per-server supervisor when host/port/password change, and only then', async () => {
+    // An operator edited an external server's RCON endpoint through
+    // PUT /external-connection; the next reconcile must dial the new one
+    // instead of keeping the old socket alive until the worker restarts.
+    const first = await makeAuthCountingServer();
+    const second = await makeAuthCountingServer();
+    const diag = { emit: vi.fn().mockResolvedValue(undefined) };
+    const supervisor = new RconSupervisor({
+      db: makeDb(),
+      redis: makeRedis(),
+      log: makeLogger(),
+      diag: diag as never,
+      pollIntervalMs: 10_000,
+    });
+    const base: Target = { ...target, serverId: 'srv-redial', port: first.port };
+    try {
+      await supervisor.reconcile([base]);
+      await waitFor(() => first.auths() >= 1);
+
+      // A tickrate/seed-threshold tweak is not a redial.
+      await supervisor.reconcile([{ ...base, tickrate: 60, seedLiveAt: 40 }]);
+      expect(supervisor.size()).toBe(1);
+      expect(second.auths()).toBe(0);
+      expect(
+        diag.emit.mock.calls.some(
+          (call) => (call[0] as { payload?: { redialed?: string[] } }).payload?.redialed?.length,
+        ),
+      ).toBe(false);
+
+      await supervisor.reconcile([{ ...base, port: second.port, password: 'rotated' }]);
+      await waitFor(() => second.auths() >= 1);
+      expect(supervisor.size()).toBe(1);
+      const redial = diag.emit.mock.calls
+        .map(
+          (call) => call[0] as { kind: string; payload: { redialed?: string[]; added?: string[] } },
+        )
+        .find((ev) => ev.kind === 'rcon.targets.changed' && ev.payload.redialed?.length);
+      expect(redial?.payload).toMatchObject({ redialed: ['srv-redial'], added: [], total: 1 });
+    } finally {
+      await supervisor.stop();
+      await closeServer(first.server);
+      await closeServer(second.server);
+    }
+  });
+});

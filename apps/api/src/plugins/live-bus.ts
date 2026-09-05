@@ -18,7 +18,8 @@ export type LiveEvent =
           | 'restart'
           | 'force_stop'
           | 'crash_detected'
-          | 'crash_loop';
+          | 'crash_loop'
+          | 'external';
       };
     }
   | {

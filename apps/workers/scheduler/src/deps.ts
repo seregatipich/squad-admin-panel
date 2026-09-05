@@ -246,7 +246,9 @@ export async function loadRotationProfiles(db: DatabaseClient): Promise<Rotation
     })
     .from(rotationProfiles)
     .innerJoin(servers, eq(servers.id, rotationProfiles.serverId))
-    .where(isNull(servers.deletedAt));
+    // Profiles are applied by rewriting LayerRotation.cfg through the bridge,
+    // which only exists for panel-hosted (container) servers.
+    .where(and(isNull(servers.deletedAt), eq(servers.runtime, 'container')));
   return rows;
 }
 
@@ -697,7 +699,19 @@ export function createScheduledTaskDeps(
     loadEnabledTasks: () => loadEnabledScheduledTasks(db),
     isDepotUpdating: () => isDepotUpdating(redis),
     sendRconCommand: (input) => sendRconCommand(redis, input),
-    restartServer: (serverId) => restartServerContainer(bridge, serverId),
+    restartServer: async (serverId) => {
+      // A scheduled restart drives the panel's own container; an external
+      // server's process is not ours to bounce, so the run is recorded as
+      // failed instead of silently touching a non-existent container.
+      const row = await db.query.servers.findFirst({
+        where: eq(servers.id, serverId),
+        columns: { runtime: true },
+      });
+      if (row?.runtime === 'external') {
+        throw new Error(`server ${serverId} is external: restart is not available`);
+      }
+      await restartServerContainer(bridge, serverId);
+    },
     setLastExecutedAt: (taskId, executedAt) =>
       setScheduledTaskLastExecutedAt(db, taskId, executedAt),
     advanceRotationIndex: (taskId, nextIndex) =>

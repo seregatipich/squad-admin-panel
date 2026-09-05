@@ -13,12 +13,14 @@ import ServerSectionLayout from './layout';
 
 const SERVER_ID = 'srv-1';
 
-function stubServerFetch(displayName = 'Squad EU #1') {
+function stubServerFetch(displayName = 'Squad EU #1', runtime = 'container') {
   vi.stubGlobal(
     'fetch',
     vi.fn(async () =>
       Promise.resolve(
-        new Response(JSON.stringify({ server: { display_name: displayName } }), { status: 200 }),
+        new Response(JSON.stringify({ server: { display_name: displayName, runtime } }), {
+          status: 200,
+        }),
       ),
     ),
   );
@@ -123,5 +125,40 @@ describe('ServerSectionLayout', () => {
     await renderLayout();
 
     expect(screen.getByRole('link', { name: 'Обзор' })).toHaveAttribute('aria-current', 'page');
+  });
+});
+
+describe('ServerSectionLayout — внешний сервер', () => {
+  it('прячет файловые и контейнерные подразделы и помечает сервер бейджем', async () => {
+    // У внешнего сервера нет конфигов, ротации и контейнера — API отвечает на
+    // эти маршруты 409, поэтому вкладок быть не должно.
+    stubServerFetch('RAAS/AAS #1', 'external');
+    await renderLayout();
+    await waitFor(() => expect(screen.getByText('внешний')).toBeInTheDocument());
+
+    const nav = screen.getByRole('navigation', { name: 'Разделы сервера' });
+    const labels = Array.from(nav.querySelectorAll('a')).map((a) => a.textContent);
+    expect(labels).toEqual([
+      'Обзор',
+      'Голосование за карту',
+      'Сид-календарь',
+      'Планировщик',
+      'События',
+      'Боевой лог',
+      'Настройки',
+    ]);
+  });
+
+  it('у контейнерного сервера показывает все подразделы и не вешает бейдж', async () => {
+    stubServerFetch('Squad EU #1', 'container');
+    await renderLayout();
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Squad EU #1'),
+    );
+    const nav = screen.getByRole('navigation', { name: 'Разделы сервера' });
+    const labels = Array.from(nav.querySelectorAll('a')).map((a) => a.textContent);
+    expect(labels).toContain('Конфиги');
+    expect(labels).toContain('Мониторинг');
+    expect(screen.queryByText('внешний')).not.toBeInTheDocument();
   });
 });

@@ -21,6 +21,13 @@ export const servers = pgTable(
     slug: text('slug').notNull(),
     description: text('description'),
     status: text('status').notNull().default('pending'),
+    /**
+     * `container` — hosted by the panel (bridge-managed Docker container on
+     * this host); `external` — hosted elsewhere, reached only over RCON/A2S
+     * via `server_credentials.rcon_host`. External rows are excluded from
+     * every container-bound path (status reconciler, log tailing, config
+     * sync, install/start/stop) and stay `running` for as long as they exist.
+     */
     runtime: text('runtime').notNull().default('container'),
     containerId: text('container_id'),
     tags: text('tags').array().notNull().default([]),
@@ -55,7 +62,7 @@ export const servers = pgTable(
       'servers_status_enum',
       sql`status IN ('pending','installing','ready','starting','running','stopping','stopped','failed')`,
     ),
-    runtimeCheck: check('servers_runtime_enum', sql`runtime IN ('container')`),
+    runtimeCheck: check('servers_runtime_enum', sql`runtime IN ('container','external')`),
   }),
 );
 

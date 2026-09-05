@@ -12,6 +12,7 @@ import {
   spliceManagedSegment,
   validateLayerName,
 } from '../lib/rotation-segment.js';
+import { containerOnlyPreHandler } from '../lib/server-runtime.js';
 import { writeVersion } from './server-configs.js';
 
 const idParams = z.object({ id: z.string().uuid() });
@@ -44,6 +45,9 @@ interface CatalogInfo {
  */
 const serverRotationRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
+  // Every `:id` in this plugin is a server id; an external server has no
+  // container/config tree here, so refuse up front with 409 external_server.
+  fast.addHook('preHandler', containerOnlyPreHandler(app));
 
   fast.get(
     '/api/v1/servers/:id/rotation',

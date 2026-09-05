@@ -2,7 +2,13 @@
 
 import { usePathname } from 'next/navigation';
 import { use, useEffect, useState } from 'react';
-import { PageContainer, PageHeader, SegmentedNav, type SegmentedNavItem } from '@/components/ui';
+import {
+  Badge,
+  PageContainer,
+  PageHeader,
+  SegmentedNav,
+  type SegmentedNavItem,
+} from '@/components/ui';
 
 /**
  * Подразделы сервера слева направо: сначала то, на что оператор смотрит во
@@ -26,11 +32,24 @@ const SECTIONS: ReadonlyArray<{ path: string; label: string }> = [
   { path: '/settings', label: 'Настройки' },
 ];
 
+/**
+ * Подразделы, которые есть только у сервера, размещённого на хосте панели:
+ * файлы конфигов, ротация (пишет LayerRotation.cfg) и метрики контейнера.
+ * У внешнего сервера (runtime=external) нет ни файлов, ни контейнера — API
+ * отвечает на эти маршруты 409, поэтому вкладки не показываются вовсе.
+ */
+const CONTAINER_ONLY_PATHS = new Set([
+  '/configs',
+  '/rotation',
+  '/rotation-calendar',
+  '/monitoring',
+]);
+
 /** Пока имя не пришло, заголовок не должен быть пустым. */
 const FALLBACK_TITLE = 'Сервер';
 
 interface ServerNameResponse {
-  server: { display_name: string };
+  server: { display_name: string; runtime?: string };
 }
 
 /**
@@ -63,6 +82,7 @@ export default function ServerSectionLayout({
   const { id } = use(params);
   const pathname = usePathname();
   const [name, setName] = useState<string | null>(null);
+  const [runtime, setRuntime] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,7 +94,10 @@ export default function ServerSectionLayout({
         });
         if (!response.ok || cancelled) return;
         const body = (await response.json()) as ServerNameResponse;
-        if (!cancelled) setName(body.server.display_name);
+        if (!cancelled) {
+          setName(body.server.display_name);
+          setRuntime(body.server.runtime ?? 'container');
+        }
       } catch {
         // Имя — украшение шапки: содержимое подраздела грузится независимо и
         // само сообщит об ошибке запроса.
@@ -85,7 +108,10 @@ export default function ServerSectionLayout({
     };
   }, [id]);
 
-  const items: SegmentedNavItem[] = SECTIONS.map((section) => ({
+  const isExternal = runtime === 'external';
+  const items: SegmentedNavItem[] = SECTIONS.filter(
+    (section) => !isExternal || !CONTAINER_ONLY_PATHS.has(section.path),
+  ).map((section) => ({
     href: `/servers/${id}${section.path}`,
     label: section.label,
   }));
@@ -100,7 +126,16 @@ export default function ServerSectionLayout({
           title={name ?? FALLBACK_TITLE}
           backHref="/servers"
           backLabel="Все серверы"
-          meta={<span className="font-mono">{id}</span>}
+          meta={
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="font-mono">{id}</span>
+              {isExternal ? (
+                <Badge tone="accent" size="sm" title="Размещён вне панели; управление через RCON">
+                  внешний
+                </Badge>
+              ) : null}
+            </span>
+          }
         />
         <SegmentedNav items={items} pathname={pathname} ariaLabel="Разделы сервера" />
       </div>

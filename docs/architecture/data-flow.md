@@ -6,6 +6,7 @@
 |---|---|
 | Operator browser | `https://${APP_DOMAIN}/` → Caddy → `web` (Next.js) for HTML, `web → api` for HTTP/WebSocket |
 | Squad game server | `docker logs -f squad-{uuid}` (parsed by `worker-log-ingest`) and TCP `127.0.0.1:{rcon_port}` (polled by `worker-rcon`) |
+| External Squad server (`runtime='external'`) | TCP `{rcon_host}:{rcon_port}` and UDP A2S `{rcon_host}:{query_port}` (both `worker-rcon`); no log stream — the panel has no access to that host's `SquadGame.log` |
 | Steam CDN | Read-only `depot_update` via `bridge` into the `squad-depot` named volume |
 
 ## Storage

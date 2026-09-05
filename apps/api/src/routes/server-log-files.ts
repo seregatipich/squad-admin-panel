@@ -3,6 +3,7 @@ import { PANEL_SAVED_ROOT } from '@squad/shared-config';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { containerOnlyPreHandler } from '../lib/server-runtime.js';
 
 /**
  * Browse and download the on-disk Squad server log files for a server.
@@ -39,6 +40,9 @@ function logsDir(serverId: string): string {
 
 const serverLogFilesRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
+  // Every `:id` in this plugin is a server id; an external server has no
+  // container/config tree here, so refuse up front with 409 external_server.
+  fast.addHook('preHandler', containerOnlyPreHandler(app));
 
   fast.get(
     '/api/v1/servers/:id/logs/files',

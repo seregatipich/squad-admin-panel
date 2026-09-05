@@ -22,6 +22,7 @@ import { type AdminsCfgSyncEvent, publishAdminsCfgSyncForServer } from '../lib/a
 import { writeAuditEntry } from '../lib/audit.js';
 import { decryptString, deserialize } from '../lib/crypto.js';
 import { buildSidecarEnv, writeSidecarConfig } from '../lib/rnsquadjs.js';
+import { containerOnlyPreHandler } from '../lib/server-runtime.js';
 
 const paramsSchema = z.object({ id: z.string().uuid() });
 
@@ -384,6 +385,9 @@ export function rewriteServerCfg(existing: string, displayName: string): string 
 
 const serverInstallRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
+  // Every `:id` in this plugin is a server id; an external server has no
+  // container/config tree here, so refuse up front with 409 external_server.
+  fast.addHook('preHandler', containerOnlyPreHandler(app));
 
   fast.post(
     '/api/v1/servers/:id/install',

@@ -6,7 +6,7 @@ Tails `docker logs -f squad-{uuid}` for every running Squad container via the ho
 
 ## Responsibilities
 
-- Reconcile the set of active log tails against live DB rows every 15 s.
+- Reconcile the set of active log tails against live DB rows every 15 s. Only `runtime='container'` rows qualify — an external server (`runtime='external'`) has no `squad-<id>` container on this host and is never tailed.
 - Open a `container_logs_follow` stream per running server via `BridgeClient`.
 - Parse each stdout line with `LogIngestor` (category dispatch + regex matching).
 - Publish events to `events:server:{serverId}` with client-side best-effort dedup.

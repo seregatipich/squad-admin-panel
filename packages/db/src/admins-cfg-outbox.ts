@@ -53,7 +53,12 @@ export async function markAdminsCfgSyncFailed(db: ApplicationDb, id: string, cod
   return updated ?? getAdminsCfgSyncOutboxState(db, id);
 }
 
-/** Insert one durable task per active server, or per explicit server snapshot. */
+/**
+ * Insert one durable task per active panel-hosted server, or per explicit
+ * server snapshot. External servers (`runtime='external'`) are skipped: their
+ * `Admins.cfg` is not under the panel's config tree, so there is nothing the
+ * config-sync worker could write.
+ */
 export async function enqueueAdminsCfgSyncForAllServers(
   db: EnqueueDb,
   payload: unknown,
@@ -62,7 +67,10 @@ export async function enqueueAdminsCfgSyncForAllServers(
 ): Promise<{ enqueued: number }> {
   const targets = serverIds
     ? serverIds.map((id) => ({ id }))
-    : await db.select({ id: servers.id }).from(servers).where(isNull(servers.deletedAt));
+    : await db
+        .select({ id: servers.id })
+        .from(servers)
+        .where(and(isNull(servers.deletedAt), eq(servers.runtime, 'container')));
   if (targets.length === 0) return { enqueued: 0 };
 
   const inserted = await db

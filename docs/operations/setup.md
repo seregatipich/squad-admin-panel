@@ -99,6 +99,17 @@ curl -skI https://${APP_DOMAIN}/api/docs       # API docs UI responds
 3. After `depot_update` finishes, the wizard seeds 19 cfg files, opens UFW rules, and starts the container.
 4. The dashboard's RCON status indicator turns green within ~30 s of the container reaching `running`.
 
+## Connecting an existing Squad server (external)
+
+A server the panel does not host — running on another machine, possibly managed by another tool — can be attached over RCON only.
+
+1. On the server's host, read `Rcon.cfg` (`Port=` and `Password=`) and note the A2S query port from the launch line (`QueryPort=`, default 27165).
+2. Make sure the host allows TCP connections to the RCON port **from the panel's public IP** (Squad servers usually firewall RCON; `worker-rcon` runs with `network_mode: host`, so the panel host's own address is the source). UDP to the query port is optional but powers the A2S visibility check.
+3. In the panel open **Серверы → Добавить сервер → Подключить существующий**, enter the name, RCON host/port/password and ports, and submit. The row appears immediately as `работает` with the badge «внешний»; RCON goes green within ~15–30 s (`worker-rcon` reconcile 15 s + first poll).
+4. To change the address or rotate the password later: **Сервер → Настройки → RCON-подключение**.
+
+What you get over RCON alone: live players, squads and teams, queue, current and next layer, A2S visibility, seeding state, and every RCON admin action (kick, ban, warn, broadcast, change/set next layer, disband/remove from squad, force team). What stays empty until that host's `SquadGame.log` is available to the panel: combat log, match history, chat lines, connect/disconnect events with IPs, and everything derived from them (dossiers, leaderboards, alt detection). Container controls (start/stop/restart, game update, config editor, rotation files, monitoring, log files) are hidden — the API answers 409 `external_server` for them.
+
 ## Updating the panel itself
 
 ```bash

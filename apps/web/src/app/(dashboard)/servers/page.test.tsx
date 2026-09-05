@@ -14,7 +14,12 @@ vi.mock('@/lib/use-live-bus', () => ({ useLiveSubscription: vi.fn() }));
 
 import ServersPage from './page';
 
-function makeServer(overrides: { id: string; display_name: string; tags: string[] }) {
+function makeServer(overrides: {
+  id: string;
+  display_name: string;
+  tags: string[];
+  runtime?: string;
+}) {
   return {
     slug: overrides.display_name.toLowerCase().replace(/\s+/g, '-'),
     status: 'running',
@@ -115,7 +120,7 @@ describe('ServersPage', () => {
 
     const title = await screen.findByText('Серверов пока нет');
     expect(title.closest('[data-variant]')).toHaveAttribute('data-variant', 'initial');
-    expect(screen.getAllByRole('link', { name: 'Установить новый' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'Добавить сервер' }).length).toBeGreaterThan(0);
   });
 
   it('фильтр без совпадений даёт отдельное пустое состояние и сброс', async () => {
@@ -153,5 +158,21 @@ describe('ServersPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
     });
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/servers', expect.anything());
+  });
+});
+
+describe('ServersPage — внешний сервер', () => {
+  it('помечает внешний сервер бейджем и не предлагает ему пуск/стоп', async () => {
+    mockServersFetch([
+      makeServer({ id: 'srv-ext', display_name: 'RAAS/AAS #1', tags: [], runtime: 'external' }),
+      makeServer({ id: 'srv-loc', display_name: 'Local Box', tags: [], runtime: 'container' }),
+    ]);
+    await renderPage();
+    await screen.findByRole('link', { name: 'RAAS/AAS #1' });
+
+    expect(screen.getAllByText('внешний')).toHaveLength(1);
+    // Одна строка с кнопками жизненного цикла — контейнерная; у внешней только «Открыть».
+    expect(screen.getAllByRole('button', { name: 'Пуск' })).toHaveLength(1);
+    expect(screen.getAllByRole('link', { name: 'Открыть' })).toHaveLength(2);
   });
 });

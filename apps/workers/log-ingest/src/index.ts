@@ -267,6 +267,8 @@ async function main() {
   }, diag);
 
   async function reconcile() {
+    // External servers (runtime='external') have no `squad-<id>` container on
+    // this host; their logs are not reachable from here.
     const rows = await db
       .select({
         id: servers.id,
@@ -274,7 +276,8 @@ async function main() {
         beaconPort: serverSettings.beaconPort,
       })
       .from(servers)
-      .innerJoin(serverSettings, eq(servers.id, serverSettings.serverId));
+      .innerJoin(serverSettings, eq(servers.id, serverSettings.serverId))
+      .where(eq(servers.runtime, 'container'));
     const wanted = rows
       .filter((r) => r.status === 'running' || r.status === 'starting')
       .map((r) => ({ serverId: r.id, beaconPort: r.beaconPort }));

@@ -5,7 +5,7 @@ import {
   redisSinkStream,
   startHeartbeat,
 } from '@squad/shared-config';
-import { isNull } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import Redis from 'ioredis';
 import pino, { multistream } from 'pino';
 import { sweepServerConfigDrift } from './config-drift.js';
@@ -100,7 +100,12 @@ async function main() {
   const ctx = { db, redis, bridge, log };
 
   async function refreshServerList(): Promise<void> {
-    const rows = await db.select({ id: servers.id }).from(servers).where(isNull(servers.deletedAt));
+    // External servers have no Admins.cfg under the panel's config tree; a
+    // push there would only ever end in `unreachable` and a SYNC-5 alert.
+    const rows = await db
+      .select({ id: servers.id })
+      .from(servers)
+      .where(and(isNull(servers.deletedAt), eq(servers.runtime, 'container')));
     const next = new Set(rows.map((r) => r.id));
     for (const id of next) {
       if (!activeServerIds.has(id)) {

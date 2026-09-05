@@ -51,6 +51,16 @@ export interface SupervisorOptions {
   geoLookup?: GeoLookup | null;
 }
 
+/** True when the parameters that pick the TCP/UDP endpoint or the AUTH secret differ. */
+function connectionChanged(a: Target, b: Target): boolean {
+  return (
+    a.host !== b.host ||
+    a.port !== b.port ||
+    a.password !== b.password ||
+    a.queryPort !== b.queryPort
+  );
+}
+
 export class RconSupervisor {
   private readonly targets = new Map<string, Target>();
   private readonly supervisors = new Map<string, PerServerSupervisor>();
@@ -61,12 +71,23 @@ export class RconSupervisor {
     const incoming = new Map(targets.map((t) => [t.serverId, t]));
     const added: string[] = [];
     const removed: string[] = [];
+    const redialed: string[] = [];
     for (const [id, t] of incoming) {
+      const previous = this.targets.get(id);
+      if (this.supervisors.has(id) && previous && connectionChanged(previous, t)) {
+        // The operator repointed the server (host/port/password edit on an
+        // external server, or a rotated Rcon.cfg). The running supervisor
+        // holds the old dial parameters, so replace it rather than let it
+        // retry a dead endpoint until the next worker restart.
+        await this.supervisors.get(id)?.stop();
+        this.supervisors.delete(id);
+        redialed.push(id);
+      }
       if (!this.supervisors.has(id)) {
         const sup = new PerServerSupervisor(t, this.opts);
         this.supervisors.set(id, sup);
         this.targets.set(id, t);
-        added.push(id);
+        if (!redialed.includes(id)) added.push(id);
         sup.start();
       } else {
         this.targets.set(id, t);
@@ -80,15 +101,15 @@ export class RconSupervisor {
         removed.push(id);
       }
     }
-    if ((added.length || removed.length) && this.opts.diag) {
+    if ((added.length || removed.length || redialed.length) && this.opts.diag) {
       const total = this.supervisors.size;
       this.opts.diag
         .emit({
           component: 'worker-rcon',
           kind: 'rcon.targets.changed',
           severity: 'info',
-          message: `targets changed: +${added.length}, -${removed.length}, total=${total}`,
-          payload: { added, removed, total },
+          message: `targets changed: +${added.length}, -${removed.length}, ~${redialed.length}, total=${total}`,
+          payload: { added, removed, redialed, total },
         })
         .catch(() => undefined);
     }
