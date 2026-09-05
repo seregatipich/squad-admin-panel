@@ -10,6 +10,7 @@ Worker строит управляемый сегмент `Admins.cfg` из БД
 
 ## What it does NOT do
 
+- Does not touch external servers (`servers.runtime='external'`): they are excluded from the active server list and from the outbox fan-out (`enqueueAdminsCfgSyncForAllServers`), because their `Admins.cfg` is not under the panel's config tree — a push would only ever end in `unreachable`.
 - Does not parse Admins.cfg back into the database. Manual edits inside the markers are flagged as drift; the operator decides whether to force-sync (overwriting them) or copy them by hand into the UI.
 - Does not touch any other `.cfg` file (Server.cfg, MapRotation.cfg, etc.) — the editor at `/servers/:id/configs` owns those.
 - Does not push to a Git remote (that was the prior P2 stub plan; superseded — config history lives in `config_versions`).

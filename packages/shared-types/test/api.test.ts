@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   auditEntry,
   bridgeStatus,
+  externalServerConnectionUpdate,
+  externalServerCreateInput,
   hostInfo,
   hostMetrics,
   paginated,
   playerRow,
   serverCreateInput,
   serverRow,
+  serverRuntime,
   serverStatus,
   uuidString,
 } from '../src/api.js';
@@ -419,5 +422,81 @@ describe('paginated', () => {
         page_size: 25,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('serverRuntime', () => {
+  it('accepts the two hosting modes and nothing else', () => {
+    expect(serverRuntime.safeParse('container').success).toBe(true);
+    expect(serverRuntime.safeParse('external').success).toBe(true);
+    expect(serverRuntime.safeParse('systemd').success).toBe(false);
+  });
+});
+
+describe('externalServerCreateInput', () => {
+  const minimal = {
+    display_name: 'RAAS/AAS #1',
+    slug: 'raas-1',
+    rcon_host: '203.0.113.10',
+    rcon_port: 21_114,
+    rcon_password: 's3cret',
+    query_port: 27_165,
+  };
+
+  it('accepts a minimal input and applies defaults', () => {
+    const parsed = externalServerCreateInput.parse(minimal);
+    expect(parsed.game_port).toBe(7787);
+    expect(parsed.max_players).toBe(100);
+    expect(parsed.rcon_host).toBe('203.0.113.10');
+  });
+
+  it('accepts a hostname and an IPv6 literal as rcon_host', () => {
+    expect(
+      externalServerCreateInput.safeParse({ ...minimal, rcon_host: 'squad.example.org' }).success,
+    ).toBe(true);
+    expect(
+      externalServerCreateInput.safeParse({ ...minimal, rcon_host: '[2001:db8::1]' }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a host with a scheme, port suffix or whitespace', () => {
+    for (const rcon_host of ['tcp://1.2.3.4', 'host name', '', ' ']) {
+      expect(externalServerCreateInput.safeParse({ ...minimal, rcon_host }).success).toBe(false);
+    }
+  });
+
+  it('requires the RCON password — there is no container to generate one for', () => {
+    const { rcon_password: _omitted, ...withoutPassword } = minimal;
+    expect(externalServerCreateInput.safeParse(withoutPassword).success).toBe(false);
+    expect(externalServerCreateInput.safeParse({ ...minimal, rcon_password: '' }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects container-only knobs (strict object)', () => {
+    expect(externalServerCreateInput.safeParse({ ...minimal, beacon_port: 15_000 }).success).toBe(
+      false,
+    );
+    expect(externalServerCreateInput.safeParse({ ...minimal, cpu_affinity: '0-3' }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe('externalServerConnectionUpdate', () => {
+  it('accepts a partial update and keeps the password optional', () => {
+    expect(externalServerConnectionUpdate.safeParse({ rcon_port: 21_115 }).success).toBe(true);
+    expect(
+      externalServerConnectionUpdate.safeParse({ rcon_host: '198.51.100.7', rcon_password: 'x' })
+        .success,
+    ).toBe(true);
+  });
+
+  it('rejects an empty body — nothing to change', () => {
+    expect(externalServerConnectionUpdate.safeParse({}).success).toBe(false);
+  });
+
+  it('rejects unknown fields', () => {
+    expect(externalServerConnectionUpdate.safeParse({ slug: 'x' }).success).toBe(false);
   });
 });

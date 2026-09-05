@@ -68,130 +68,142 @@ export async function softDeleteServer(
     errors: [],
   };
 
-  const configsDir = `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig`;
-  type Backed = { filename: string; content: string; sha256: Buffer };
-  const backed: Backed[] = [];
-  let allMissing = true;
-  for (const file of ALLOWED_CONFIG_FILES) {
-    try {
-      const { content } = await ctx.bridge.fileRead({ path: `${configsDir}/${file}` });
-      const sha256 = createHash('sha256').update(content, 'utf8').digest();
-      backed.push({ filename: file, content, sha256 });
-      allMissing = false;
-    } catch (err) {
-      const msg = (err as Error).message;
-      if (!/no such file or directory/i.test(msg)) {
-        // Bridge actually failed (permissions, transport, etc.) — not a
-        // never-installed signal. Keep the existing safety net.
-        allMissing = false;
-      }
-      ctx.log.warn(
-        { err: msg, file, serverId },
-        'server-delete: config read failed (will not be backed up)',
-      );
-    }
-  }
-  // never-installed fast path: install was interrupted before seedConfigs
-  // ran (status='failed'), so /var/lib/squad-panel/configs/<uuid> does not
-  // exist. There is nothing to back up — proceed with the rest of the
-  // teardown so the orphan row can be soft-deleted.
-  if (backed.length === 0 && !allMissing) {
-    throw new Error(
-      `cannot delete server ${serverId}: no config files could be backed up (read 0/${ALLOWED_CONFIG_FILES.length}); bridge errors look like a transport issue, not a missing configs dir`,
-    );
-  }
-  if (backed.length === 0) {
-    ctx.log.info(
-      { serverId },
-      'server-delete: configs dir missing — never-installed server, skipping backup',
-    );
-  }
+  // An external server (runtime='external') has nothing on this host: no
+  // config tree to back up, no container, no data dirs, no UFW rules. Only
+  // the row, its outbox and its Redis sync queue are torn down.
+  const target = await ctx.db.query.servers.findFirst({
+    where: eq(servers.id, serverId),
+    columns: { runtime: true },
+  });
+  const external = target?.runtime === 'external';
+  if (external) result.files_attempted = 0;
 
   let backupMarkerId: string | null = null;
-  if (backed.length > 0) {
-    await ctx.db.transaction(async (tx) => {
-      const message = `deletion-backup-marker ${new Date().toISOString()}`;
-      const inserts = await tx
-        .insert(configVersions)
-        .values(
-          backed.map((b) => ({
-            serverId,
-            filename: b.filename,
-            content: b.content,
-            sha256: b.sha256,
-            authorPlayerId: ctx.actorPlayerId,
-            authorLabel: ctx.actorLabel,
-            authorIp: ctx.actorIp,
-            message,
-          })),
-        )
-        .returning({ id: configVersions.id });
-      if (inserts.length > 0) backupMarkerId = inserts[0]?.id ?? null;
-    });
-  }
-  result.backup_marker_id = backupMarkerId;
-  result.files_backed_up = backed.length;
-
-  const containerN = `squad-${serverId}`;
-  try {
-    await ctx.bridge.containerStop({ name: containerN, timeout_sec: 30 });
-  } catch (err) {
-    const msg = (err as Error).message;
-    if (!NOT_FOUND_RE.test(msg)) {
-      result.errors.push({ phase: 'container_stop', error: msg });
-    }
-  }
-  try {
-    await ctx.bridge.containerRm({ name: containerN });
-    result.container_removed = true;
-  } catch (err) {
-    const msg = (err as Error).message;
-    if (NOT_FOUND_RE.test(msg)) {
-      result.container_removed = true;
-    } else {
-      result.errors.push({ phase: 'container_rm', error: msg });
-    }
-  }
-
-  // Tear down the RNSquadJS sidecar symmetrically. It is best-effort: a
-  // missing or never-launched sidecar must not block the server deletion.
-  await ctx.bridge.containerRm({ name: sidecarContainerName(serverId) }).catch(() => {});
-
-  try {
-    const r = await ctx.bridge.directoryDelete({ path: `${PANEL_CONFIGS_ROOT}/${serverId}` });
-    result.configs_dir_removed = r.removed;
-  } catch (err) {
-    result.errors.push({ phase: 'configs_dir_delete', error: (err as Error).message });
-  }
-  try {
-    const r = await ctx.bridge.directoryDelete({ path: `${PANEL_SAVED_ROOT}/${serverId}` });
-    result.saved_dir_removed = r.removed;
-  } catch (err) {
-    result.errors.push({ phase: 'saved_dir_delete', error: (err as Error).message });
-  }
-
-  const settings = await ctx.db.query.serverSettings.findFirst({
-    where: eq(serverSettings.serverId, serverId),
-  });
-  if (settings) {
-    const shortId = serverId.slice(0, 8);
-    const rules: Array<{ port: number; proto: 'udp' | 'tcp'; comment: string }> = [
-      { port: settings.gamePort, proto: 'udp', comment: `squad-game-${shortId}` },
-      { port: settings.queryPort, proto: 'udp', comment: `squad-query-${shortId}` },
-      { port: settings.beaconPort, proto: 'udp', comment: `squad-beacon-${shortId}` },
-      { port: settings.rconPort, proto: 'tcp', comment: `squad-rcon-${shortId}` },
-    ];
-    for (const r of rules) {
+  if (!external) {
+    const configsDir = `${PANEL_CONFIGS_ROOT}/${serverId}/ServerConfig`;
+    type Backed = { filename: string; content: string; sha256: Buffer };
+    const backed: Backed[] = [];
+    let allMissing = true;
+    for (const file of ALLOWED_CONFIG_FILES) {
       try {
-        await ctx.bridge.ufwRule({
-          action: 'remove',
-          port: r.port,
-          proto: r.proto,
-          comment: r.comment,
-        });
-        result.ufw_rules_removed++;
+        const { content } = await ctx.bridge.fileRead({ path: `${configsDir}/${file}` });
+        const sha256 = createHash('sha256').update(content, 'utf8').digest();
+        backed.push({ filename: file, content, sha256 });
+        allMissing = false;
       } catch (err) {
-        result.errors.push({ phase: `ufw_${r.proto}_${r.port}`, error: (err as Error).message });
+        const msg = (err as Error).message;
+        if (!/no such file or directory/i.test(msg)) {
+          // Bridge actually failed (permissions, transport, etc.) — not a
+          // never-installed signal. Keep the existing safety net.
+          allMissing = false;
+        }
+        ctx.log.warn(
+          { err: msg, file, serverId },
+          'server-delete: config read failed (will not be backed up)',
+        );
+      }
+    }
+    // never-installed fast path: install was interrupted before seedConfigs
+    // ran (status='failed'), so /var/lib/squad-panel/configs/<uuid> does not
+    // exist. There is nothing to back up — proceed with the rest of the
+    // teardown so the orphan row can be soft-deleted.
+    if (backed.length === 0 && !allMissing) {
+      throw new Error(
+        `cannot delete server ${serverId}: no config files could be backed up (read 0/${ALLOWED_CONFIG_FILES.length}); bridge errors look like a transport issue, not a missing configs dir`,
+      );
+    }
+    if (backed.length === 0) {
+      ctx.log.info(
+        { serverId },
+        'server-delete: configs dir missing — never-installed server, skipping backup',
+      );
+    }
+
+    if (backed.length > 0) {
+      await ctx.db.transaction(async (tx) => {
+        const message = `deletion-backup-marker ${new Date().toISOString()}`;
+        const inserts = await tx
+          .insert(configVersions)
+          .values(
+            backed.map((b) => ({
+              serverId,
+              filename: b.filename,
+              content: b.content,
+              sha256: b.sha256,
+              authorPlayerId: ctx.actorPlayerId,
+              authorLabel: ctx.actorLabel,
+              authorIp: ctx.actorIp,
+              message,
+            })),
+          )
+          .returning({ id: configVersions.id });
+        if (inserts.length > 0) backupMarkerId = inserts[0]?.id ?? null;
+      });
+    }
+    result.backup_marker_id = backupMarkerId;
+    result.files_backed_up = backed.length;
+
+    const containerN = `squad-${serverId}`;
+    try {
+      await ctx.bridge.containerStop({ name: containerN, timeout_sec: 30 });
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (!NOT_FOUND_RE.test(msg)) {
+        result.errors.push({ phase: 'container_stop', error: msg });
+      }
+    }
+    try {
+      await ctx.bridge.containerRm({ name: containerN });
+      result.container_removed = true;
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (NOT_FOUND_RE.test(msg)) {
+        result.container_removed = true;
+      } else {
+        result.errors.push({ phase: 'container_rm', error: msg });
+      }
+    }
+
+    // Tear down the RNSquadJS sidecar symmetrically. It is best-effort: a
+    // missing or never-launched sidecar must not block the server deletion.
+    await ctx.bridge.containerRm({ name: sidecarContainerName(serverId) }).catch(() => {});
+
+    try {
+      const r = await ctx.bridge.directoryDelete({ path: `${PANEL_CONFIGS_ROOT}/${serverId}` });
+      result.configs_dir_removed = r.removed;
+    } catch (err) {
+      result.errors.push({ phase: 'configs_dir_delete', error: (err as Error).message });
+    }
+    try {
+      const r = await ctx.bridge.directoryDelete({ path: `${PANEL_SAVED_ROOT}/${serverId}` });
+      result.saved_dir_removed = r.removed;
+    } catch (err) {
+      result.errors.push({ phase: 'saved_dir_delete', error: (err as Error).message });
+    }
+
+    const settings = await ctx.db.query.serverSettings.findFirst({
+      where: eq(serverSettings.serverId, serverId),
+    });
+    if (settings) {
+      const shortId = serverId.slice(0, 8);
+      const rules: Array<{ port: number; proto: 'udp' | 'tcp'; comment: string }> = [
+        { port: settings.gamePort, proto: 'udp', comment: `squad-game-${shortId}` },
+        { port: settings.queryPort, proto: 'udp', comment: `squad-query-${shortId}` },
+        { port: settings.beaconPort, proto: 'udp', comment: `squad-beacon-${shortId}` },
+        { port: settings.rconPort, proto: 'tcp', comment: `squad-rcon-${shortId}` },
+      ];
+      for (const r of rules) {
+        try {
+          await ctx.bridge.ufwRule({
+            action: 'remove',
+            port: r.port,
+            proto: r.proto,
+            comment: r.comment,
+          });
+          result.ufw_rules_removed++;
+        } catch (err) {
+          result.errors.push({ phase: `ufw_${r.proto}_${r.port}`, error: (err as Error).message });
+        }
       }
     }
   }

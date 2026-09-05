@@ -42,6 +42,8 @@ interface Server {
   last_poll_at: string | null;
   tags?: string[];
   seeding: SeedingSummary | null;
+  /** `external` — размещён вне панели, управляется только по RCON. */
+  runtime?: string;
 }
 
 interface ServersResponse {
@@ -290,7 +292,7 @@ export default function ServersPage() {
         actions={
           <ButtonLink href="/servers/new" variant="primary">
             <PlusIcon />
-            Установить новый
+            Добавить сервер
           </ButtonLink>
         }
       />
@@ -342,10 +344,10 @@ export default function ServersPage() {
           ) : (
             <EmptyState
               title="Серверов пока нет"
-              description="Установите первый Squad-сервер — он появится в этом списке."
+              description="Установите первый Squad-сервер или подключите уже работающий по RCON — он появится в этом списке."
               action={
                 <ButtonLink href="/servers/new" variant="primary">
-                  Установить новый
+                  Добавить сервер
                 </ButtonLink>
               }
             />
@@ -381,7 +383,18 @@ export default function ServersPage() {
                     >
                       {row.display_name}
                     </Link>
-                    <div className="font-mono text-2xs text-ink-3">{row.slug}</div>
+                    <div className="flex flex-wrap items-center gap-2 font-mono text-2xs text-ink-3">
+                      {row.slug}
+                      {row.runtime === 'external' ? (
+                        <Badge
+                          tone="accent"
+                          size="sm"
+                          title="Размещён вне панели; управление через RCON"
+                        >
+                          внешний
+                        </Badge>
+                      ) : null}
+                    </div>
                     {(row.tags ?? []).length > 0 && (
                       <div className="mt-1 flex flex-wrap gap-1">
                         {(row.tags ?? []).map((tag) => (
@@ -420,12 +433,20 @@ export default function ServersPage() {
                     {row.last_poll_at ? (formatClock(row.last_poll_at, locale) ?? '—') : '—'}
                   </Td>
                   <Td>
-                    <ActionButtons
-                      status={row.status}
-                      id={row.id}
-                      actingKey={actingId}
-                      run={runAction}
-                    />
+                    {row.runtime === 'external' ? (
+                      // Жизненный цикл внешнего сервера панели не принадлежит —
+                      // кнопок пуска и остановки у него нет.
+                      <ButtonLink href={`/servers/${row.id}`} size="sm" variant="plain">
+                        Открыть
+                      </ButtonLink>
+                    ) : (
+                      <ActionButtons
+                        status={row.status}
+                        id={row.id}
+                        actingKey={actingId}
+                        run={runAction}
+                      />
+                    )}
                   </Td>
                 </TableRow>
               ))}

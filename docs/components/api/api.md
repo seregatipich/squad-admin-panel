@@ -131,8 +131,10 @@ Preflight, lifecycle (включая идемпотентный повтор) и
 Preflight и lifecycle не перезаписывают ручную роль или активную внутреннюю
 `vip_subscriptions`. Конфликты владельца возвращаются безопасными кодами
 `role_conflict`, `manual_role_conflict` или `vip_subscription_conflict`; пустой
-снимок целей — `no_target_servers`. Панель повторяет эти проверки и получает
-снимок серверов заново внутри lifecycle-транзакции.
+снимок целей — `no_target_servers`. В снимок входят только контейнерные серверы
+(`runtime='container'`): внешний сервер (`runtime='external'`) не получает
+`Admins.cfg` от панели и в `servers_total` не считается. Панель повторяет эти
+проверки и получает снимок серверов заново внутри lifecycle-транзакции.
 
 Status принимает `{ "event_id": "purchase-123" }`. Неизвестное событие даёт
 `404 event_not_found`; успешный ответ имеет вид:
@@ -249,7 +251,9 @@ Ownership boundary: SquadJS owns the planner, the ELO/history weighting and any 
 |---|---|---|---|
 | GET | `/api/v1/servers` | List + per-server `rcon_state` / `player_count` / `last_poll_at` from Redis. | `server:view` |
 | POST | `/api/v1/servers` | Create row in `pending`. Allocates ports, generates RCON password, encrypts and stores. | `server:create` |
-| GET | `/api/v1/servers/:id` | Full detail: settings, RCON status, container inspect+stats, host info. | `server:view` |
+| POST | `/api/v1/servers/external` | Register a Squad server the panel does **not** host (`runtime='external'`). Body: `{ display_name, slug, description?, rcon_host, rcon_port, rcon_password, query_port, game_port?=7787, max_players?=100 }`. Stores the given password encrypted with `rcon_host` pinned in `server_credentials`, writes `server_settings` with the remote ports (`install_path=''`, `beacon_port=15000` placeholder), and creates the row already in `running` — external servers have no lifecycle of their own and stay `running` so worker-rcon polls them. No bridge call, no install. Skips the port-collision check (other host). 409 `slug_in_use` on an active duplicate slug. Audit `server.create_external`. Returns 201 `{ id, status:'running', runtime:'external' }`. | `server:install` |
+| PUT | `/api/v1/servers/:id/external-connection` | Repoint an external server: `{ rcon_host?, rcon_port?, rcon_password?, query_port?, game_port?, max_players? }` (at least one). An omitted `rcon_password` keeps the stored secret. worker-rcon replaces the per-server supervisor on its next reconcile (≤15 s) when host/port/password change. 409 `not_external_server` for a panel-hosted row (use `PUT /settings`). Audit `server.update_external_connection`. Returns the effective connection (never the password). | `server:edit_settings` |
+| GET | `/api/v1/servers/:id` | Full detail: settings, RCON status, container inspect+stats, host info. For an external server no bridge call is made: `container` is `null`, `host.address` is the RCON host and `connection: { rcon_host, rcon_port }` is set (`null` for container rows). | `server:view` |
 | DELETE | `/api/v1/servers/:id` | **Soft-delete + backup orchestrator**. Phase 1 reads every allowed `.cfg` via `bridge.fileRead` and inserts one `config_versions` row per file with `message = 'deletion-backup-marker <iso>'`. If 0 files were read the route returns 500 `delete_failed` and leaves the server alive. Phase 2-4 are best-effort: `container_stop` (30 s) + `container_rm`, `directory_delete` on `configs/{uuid}` and `saved/{uuid}`, `ufw_rule remove` × 4 (game/query/beacon/rcon). Phase 5 sets `servers.deleted_at = now()`, `deleted_by_steam_id64 = <actor>`, `deletion_backup_marker_id = <first-row-id>`. Audit row written by the route (`server.delete`). On success emits a `server.deleted` LiveEvent. Response: `{ ok, backup_marker_id, files_backed_up, files_attempted, container_removed, configs_dir_removed, saved_dir_removed, ufw_rules_removed, errors[] }`. Repeating the call on an already-soft-deleted server returns 404. | `server:delete` |
 | POST | `/api/v1/servers/:id/start` | If container exists → `container_start`; otherwise `container_run`. | `server:start` |
 | POST | `/api/v1/servers/:id/stop` | Sets `servers.status='stopping'` and emits `server.status` LiveEvent **before** the RCON sequence so the UI updates instantly and a process crash mid-stop leaves a state the reconciler can resolve. Then worker-rcon queued `AdminBroadcast` when connected, direct RCON fallback only if the command was not accepted → 15 s wait → worker-rcon queued `AdminEndMatch` or direct fallback → `container_stop` (60 s grace). | `server:stop` |
@@ -263,6 +267,10 @@ Ownership boundary: SquadJS owns the planner, the ELO/history weighting and any 
 | POST | `/api/v1/servers/:id/seed-call` | Emits `seed.call_sent`, materializes AUTO-3 alerts for subscribed players, and fans out to DISCORD-2. Limited to once per server per two hours. Requires `chat` or `manageserver`. | session + `chat`/`manageserver` |
 | GET | `/api/v1/seed-subscriptions` | Lists the current player’s per-server `email`/`webpush` seed subscriptions. | panel access |
 | PUT | `/api/v1/servers/:id/seed-subscription` | Idempotently enables or disables one seed notification channel for the current player and server. | panel access |
+
+### External servers and container-only routes
+
+Every route that needs a container, the config tree or the host bridge answers **409 `external_server`** for a `runtime='external'` row, before any bridge call: `start`, `stop`, `restart`, `force-stop`, `install` (+ progress/ws), `update`, `reconcile`, everything under `/configs`, `/rotation`, `/metrics`, `/logs/files`, `/rnsquadjs`, and a port change through `PUT /settings` (non-port settings such as `chat_commands_enabled`/`rules_text`/`max_players` still save). RCON-driven routes (players, roster, map, messaging, moderation, seed call, scheduled tasks) work unchanged. `DELETE` soft-deletes the row without a config backup (`files_attempted: 0`) and without touching the bridge. The status reconciler ignores external rows entirely, so they never flip to `stopped`.
 
 ## Server archive (soft-deleted servers)
 

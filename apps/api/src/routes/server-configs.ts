@@ -22,6 +22,7 @@ import { LICENSE_KEY_MASK, LICENSE_PLACEHOLDER } from '../lib/license-cfg.js';
 import { resolveRconHost } from '../lib/rcon-host.js';
 import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
+import { containerOnlyPreHandler } from '../lib/server-runtime.js';
 import { depotConfigDir, rewriteRconCfg, rewriteServerCfg } from './server-install.js';
 
 const idParams = z.object({ id: z.string().uuid() });
@@ -58,6 +59,9 @@ function hex(b: Buffer | Uint8Array | null): string | null {
 
 const serverConfigRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
+  // Every `:id` in this plugin is a server id; an external server has no
+  // container/config tree here, so refuse up front with 409 external_server.
+  fast.addHook('preHandler', containerOnlyPreHandler(app));
 
   // --------- list of files with behaviour class + current sha -----------
   fast.get(

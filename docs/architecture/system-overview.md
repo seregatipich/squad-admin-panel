@@ -7,7 +7,7 @@
 | `api` | `apps/api` | HTTP REST + WebSocket. Auth, RBAC, route handlers, audit logging, status reconciliation, install orchestration. |
 | `web` | `apps/web` | Next.js 15 + React 19 dashboard. Server components for auth gates, client components for polling. UI is in Russian. |
 | `bridge` | `apps/bridge` | Go daemon, only privileged component. 25 whitelisted RPC methods. Composes `docker run` from structured params; never accepts raw flags. |
-| `worker-rcon` | `apps/workers/rcon` | Connects to each running server's RCON port (`127.0.0.1:<rcon_port>`), polls `ListPlayers` every 30 s and `ShowServerInfo` every 90 s, publishes `rcon.players_polled` events to Redis. |
+| `worker-rcon` | `apps/workers/rcon` | Connects to each running server's RCON port (`127.0.0.1:<rcon_port>` for panel-hosted containers, `server_credentials.rcon_host:<rcon_port>` for external servers), polls `ListPlayers` every 30 s and `ShowServerInfo` every 90 s, publishes `rcon.players_polled` events to Redis. |
 | `worker-log-ingest` | `apps/workers/log-ingest` | Tails `docker logs -f squad-{uuid}` via the bridge, regex-parses `SquadGame.log` lines, emits `EventEnvelope` to `events:server:{id}`, and asks the bridge to sweep expired rotated Squad logs. |
 | `worker-audit-archiver` | `apps/workers/audit-archiver` | Cold-archives `audit_log` rows older than 90 days. |
 | `worker-event-partition` | `apps/workers/event-partition` | Monthly partition rotation for the `events` table. |
@@ -34,6 +34,15 @@
    - Calls `bridge.container_run` with the structured spec; the bridge composes `docker run -d --network host --user 1001:1001 --read-only -v squad-depot:/squad:ro -v .../configs:/squad/SquadGame/ServerConfig:rw -v .../saved:/squad/SquadGame/Saved:rw squad-server:latest`.
 4. `plugins/status-reconciler.ts` polls `container_inspect` every 4 s and flips `servers.status` to `running` when the container is up.
 5. `worker-rcon` notices the running server, AUTHs, starts polling.
+
+### Connect an existing (external) Squad server
+
+A server hosted elsewhere — another box, another panel — can be attached over RCON alone (`servers.runtime='external'`).
+
+1. Owner/Senior Admin picks «Подключить существующий» at `/servers/new` and enters the RCON host/port/password plus the A2S query port.
+2. `POST /api/v1/servers/external` → rows in `servers` (`status='running'`, `runtime='external'`), `server_settings` (remote ports, empty `install_path`) and `server_credentials` (`rcon_host` set, password encrypted). No bridge call.
+3. `worker-rcon` picks the row up on its next 15 s reconcile, dials `rcon_host:rcon_port`, and from then on the server behaves like any other for players/squads/map/queue polling, A2S, chat commands and every RCON-driven admin action (kick, ban, warn, broadcast, layer change).
+4. Everything that needs the host is off for it: the status reconciler skips it (it would otherwise see no container and mark it `stopped`), log ingest does not tail it, config sync never pushes `Admins.cfg` to it, and the container/config/rotation/metrics routes answer 409 `external_server`. Log-derived data (combat events, match history, chat lines, connect IPs) therefore stays empty until a log source for that host exists.
 
 ### Edit a config
 

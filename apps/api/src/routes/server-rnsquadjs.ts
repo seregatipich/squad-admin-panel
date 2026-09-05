@@ -5,6 +5,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { buildSidecarEnv, sidecarContainerName, writeSidecarConfig } from '../lib/rnsquadjs.js';
+import { containerOnlyPreHandler } from '../lib/server-runtime.js';
 
 const paramsSchema = z.object({ id: z.string().uuid() });
 const bodySchema = z.object({ mode: z.enum(['production', 'shadow']) });
@@ -68,6 +69,9 @@ function parseHeartbeat(raw: string | null | undefined): SidecarStatus | null {
 
 const serverRnsquadjsRoutes: FastifyPluginAsync = async (app) => {
   const fast = app.withTypeProvider<ZodTypeProvider>();
+  // Every `:id` in this plugin is a server id; an external server has no
+  // container/config tree here, so refuse up front with 409 external_server.
+  fast.addHook('preHandler', containerOnlyPreHandler(app));
 
   // Shares its URL with the cutover POST below; Fastify routes on method+URL,
   // so the two never collide.

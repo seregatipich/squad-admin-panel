@@ -240,3 +240,64 @@ describe('ServerDetailPage', () => {
     await waitFor(() => expect(deleteCalls(fetchMock)).toBe(1));
   });
 });
+
+describe('ServerDetailPage — внешний сервер', () => {
+  function externalFixture() {
+    return {
+      ...serverResponseFixture('running'),
+      server: { ...serverResponseFixture('running').server, runtime: 'external' },
+      settings: {
+        server_id: SERVER_ID,
+        game_port: 7787,
+        query_port: 27165,
+        beacon_port: 15000,
+        rcon_port: 21114,
+        max_players: 100,
+        tickrate: 50,
+        multihome: '0.0.0.0',
+        install_path: '',
+      },
+      host: { address: '203.0.113.10', hostname: '203.0.113.10' },
+      connection: { rcon_host: '203.0.113.10', rcon_port: 21114 },
+    };
+  }
+
+  it('прячет управление контейнером и лог, показывает адрес RCON', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === `/api/v1/servers/${SERVER_ID}`) {
+          return { ok: true, json: async () => externalFixture() } as Response;
+        }
+        if (url === '/api/v1/me') {
+          return {
+            ok: true,
+            json: async () => ({ squad_permissions: [], permissions: [] }),
+          } as Response;
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+    // Никакого WebSocket к docker logs у внешнего сервера быть не должно.
+    const wsCtor = vi.fn();
+    vi.stubGlobal('WebSocket', wsCtor);
+
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <ServerDetailPage params={Promise.resolve({ id: SERVER_ID })} />
+        </Suspense>,
+      );
+    });
+
+    expect(await screen.findByText(/Внешний сервер: запуск и остановка/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Старт' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Стоп' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Рестарт' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Обновить игру' })).not.toBeInTheDocument();
+    expect(screen.queryByText('CPU')).not.toBeInTheDocument();
+    expect(screen.getByText('203.0.113.10:21114')).toBeInTheDocument();
+    expect(screen.queryByText('Порт маяка')).not.toBeInTheDocument();
+    expect(wsCtor).not.toHaveBeenCalled();
+  });
+});

@@ -1,5 +1,20 @@
 # `api` — changelog
 
+## 2026-09-05 — Внешние серверы: подключение по RCON без установки
+
+### Added
+
+- `POST /api/v1/servers/external` регистрирует Squad-сервер, который панель не размещает (`servers.runtime='external'`): сохраняет `rcon_host`, порт и зашифрованный пароль RCON, порты A2S/игры, и сразу создаёт строку в `running` — worker-rcon подхватывает её на ближайшем reconcile и начинает опрос игроков, отрядов, карты и очереди. Установка, bridge и проверка коллизий портов не выполняются.
+- `PUT /api/v1/servers/:id/external-connection` меняет адрес, порты и пароль внешнего сервера; пропущенный пароль сохраняет прежний. Для контейнерного сервера — 409 `not_external_server`.
+- В ответе `GET /api/v1/servers/:id` для внешнего сервера появилось поле `connection: { rcon_host, rcon_port }`; `host.address` равен адресу RCON, `container` всегда `null`.
+
+### Changed
+
+- Маршруты, которым нужен контейнер, дерево конфигов или bridge (`start`/`stop`/`restart`/`force-stop`/`install`/`update`/`reconcile`, `/configs/*`, `/rotation`, `/metrics`, `/logs/files`, `/rnsquadjs`, смена портов через `PUT /settings`), отвечают 409 `external_server` до любого обращения к bridge. `DELETE` внешнего сервера — обычный soft-delete без резервной копии конфигов.
+- Status-reconciler, worker-log-ingest, worker-config-sync, разнос outbox `Admins.cfg` и профили ротации планировщика игнорируют `runtime='external'`: у такого сервера нет `squad-<id>`, и без фильтра reconciler переводил бы его в `stopped` через 4 секунды после создания, а config-sync поднимал бы вечный `unreachable`.
+- Проверка коллизий портов при создании контейнерного сервера больше не учитывает внешние строки — они живут на другом хосте.
+- VIP lifecycle (`preflight`/`lifecycle`) считает целями доставки только контейнерные серверы: внешний сервер не входит в `servers_total` и не получает строк outbox. Восстановление внешнего сервера из архива (`POST /servers/archive/:id/restore`) отвечает 409 `external_server` — его заново подключают через `POST /servers/external`.
+
 ## 2026-09-03 — Плановый docker prune молчит, пока bridge недоступен
 
 ### Changed

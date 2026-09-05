@@ -76,6 +76,18 @@ interface ServerInfo {
   status: string;
   display_name: string;
   tags: string[];
+  /** `external` — размещён вне панели; управляется только по RCON. */
+  runtime: string;
+  connection: { rcon_host: string | null; rcon_port: number | null } | null;
+}
+
+/** Черновик правок RCON-подключения внешнего сервера; пустой пароль = не менять. */
+interface ConnectionDraft {
+  rcon_host?: string;
+  rcon_port?: number;
+  rcon_password?: string;
+  query_port?: number;
+  game_port?: number;
 }
 
 interface LicenseState {
@@ -112,6 +124,10 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const [seedingBusy, setSeedingBusy] = useState(false);
   const [seedingSaved, setSeedingSaved] = useState(false);
   const [seedingErr, setSeedingErr] = useState<string | null>(null);
+  const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft>({});
+  const [connectionBusy, setConnectionBusy] = useState(false);
+  const [connectionSaved, setConnectionSaved] = useState(false);
+  const [connectionErr, setConnectionErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -122,6 +138,8 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         status: data.server.status,
         display_name: data.server.display_name,
         tags: data.server.tags ?? [],
+        runtime: data.server.runtime ?? 'container',
+        connection: data.connection ?? null,
       });
       setTags(data.server.tags ?? []);
       const lic = (data.server.license ?? null) as LicenseState | null;
@@ -221,6 +239,51 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     }
   }
 
+  async function saveConnection() {
+    setConnectionBusy(true);
+    setConnectionErr(null);
+    try {
+      const res = await fetch(`/api/v1/servers/${id}/external-connection`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(connectionDraft),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`);
+      }
+      const updated = (await res.json()) as {
+        rcon_host: string | null;
+        rcon_port: number | null;
+        query_port: number | null;
+        game_port: number | null;
+      };
+      setServerInfo((prev) =>
+        prev
+          ? { ...prev, connection: { rcon_host: updated.rcon_host, rcon_port: updated.rcon_port } }
+          : prev,
+      );
+      setSettings((prev) =>
+        prev
+          ? {
+              ...prev,
+              rcon_port: updated.rcon_port ?? prev.rcon_port,
+              query_port: updated.query_port ?? prev.query_port,
+              game_port: updated.game_port ?? prev.game_port,
+            }
+          : prev,
+      );
+      setConnectionDraft({});
+      setConnectionSaved(true);
+      setTimeout(() => setConnectionSaved(false), 2000);
+    } catch (e) {
+      setConnectionErr((e as Error).message);
+    } finally {
+      setConnectionBusy(false);
+    }
+  }
+
   async function saveSeedingSettings() {
     setSeedingBusy(true);
     setSeedingErr(null);
@@ -314,6 +377,8 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     draft[key] !== undefined ? draft[key] : settings[key];
 
   const dirty = Object.keys(draft).length > 0;
+  const external = serverInfo?.runtime === 'external';
+  const connectionDirty = Object.keys(connectionDraft).length > 0;
 
   return (
     <PageContainer width="reading">
@@ -341,34 +406,162 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         </div>
       </GroupedList>
 
-      <GroupedList
-        title="Сеть"
-        footnote={
-          isRunning
-            ? 'Порты меняются только на остановленном сервере — остановите его, чтобы поля стали доступны.'
-            : 'Порты применяются при следующем запуске сервера.'
-        }
-      >
-        {PORT_FIELDS.map(([key, label]) => (
-          <GroupedRow
-            key={key}
-            label={label}
-            control={
-              <div className="w-28">
-                <TextInput
-                  type="number"
-                  aria-label={label}
-                  value={val(key) as number}
-                  onChange={(e) => setField(key, Number(e.target.value))}
-                  disabled={!!isRunning}
-                  min={1024}
-                  max={65535}
-                />
-              </div>
-            }
-          />
-        ))}
-      </GroupedList>
+      {external ? (
+        <div className="space-y-3">
+          {connectionErr ? <InlineBanner tone="crit" title={connectionErr} /> : null}
+          {connectionSaved ? <InlineBanner tone="good" title="Подключение сохранено" /> : null}
+          <GroupedList
+            title="RCON-подключение"
+            footnote="Внешний сервер: панель не управляет его процессом, а подключается по этим параметрам. worker-rcon переподключится в течение 15 секунд после сохранения."
+          >
+            <GroupedRow
+              label="Адрес RCON"
+              description="Имя хоста или IP"
+              control={
+                <div className="w-56">
+                  <TextInput
+                    aria-label="Адрес RCON"
+                    value={connectionDraft.rcon_host ?? serverInfo?.connection?.rcon_host ?? ''}
+                    onChange={(e) => {
+                      setConnectionDraft((prev) => ({ ...prev, rcon_host: e.target.value.trim() }));
+                      setConnectionSaved(false);
+                    }}
+                    autoComplete="off"
+                  />
+                </div>
+              }
+            />
+            <GroupedRow
+              label="Порт RCON"
+              description="TCP"
+              control={
+                <div className="w-28">
+                  <TextInput
+                    type="number"
+                    aria-label="Порт RCON"
+                    value={connectionDraft.rcon_port ?? settings.rcon_port}
+                    onChange={(e) => {
+                      setConnectionDraft((prev) => ({
+                        ...prev,
+                        rcon_port: Number(e.target.value),
+                      }));
+                      setConnectionSaved(false);
+                    }}
+                    min={1}
+                    max={65535}
+                  />
+                </div>
+              }
+            />
+            <GroupedRow
+              label="Пароль RCON"
+              description="Пустое поле — оставить сохранённый"
+              control={
+                <div className="w-56">
+                  <TextInput
+                    type="password"
+                    aria-label="Пароль RCON"
+                    value={connectionDraft.rcon_password ?? ''}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setConnectionDraft((prev) => {
+                        const { rcon_password: _drop, ...rest } = prev;
+                        return next === '' ? rest : { ...rest, rcon_password: next };
+                      });
+                      setConnectionSaved(false);
+                    }}
+                    autoComplete="new-password"
+                    placeholder="••••••••  (сохранён)"
+                  />
+                </div>
+              }
+            />
+            <GroupedRow
+              label="Порт запросов"
+              description="UDP, A2S"
+              control={
+                <div className="w-28">
+                  <TextInput
+                    type="number"
+                    aria-label="Порт запросов"
+                    value={connectionDraft.query_port ?? settings.query_port}
+                    onChange={(e) => {
+                      setConnectionDraft((prev) => ({
+                        ...prev,
+                        query_port: Number(e.target.value),
+                      }));
+                      setConnectionSaved(false);
+                    }}
+                    min={1}
+                    max={65535}
+                  />
+                </div>
+              }
+            />
+            <GroupedRow
+              label="Игровой порт"
+              description="UDP"
+              control={
+                <div className="w-28">
+                  <TextInput
+                    type="number"
+                    aria-label="Игровой порт"
+                    value={connectionDraft.game_port ?? settings.game_port}
+                    onChange={(e) => {
+                      setConnectionDraft((prev) => ({
+                        ...prev,
+                        game_port: Number(e.target.value),
+                      }));
+                      setConnectionSaved(false);
+                    }}
+                    min={1}
+                    max={65535}
+                  />
+                </div>
+              }
+            />
+          </GroupedList>
+          <div className="flex justify-end">
+            <Button
+              variant="primary"
+              disabled={!connectionDirty}
+              loading={connectionBusy}
+              onClick={saveConnection}
+            >
+              Сохранить подключение
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <GroupedList
+          title="Сеть"
+          footnote={
+            isRunning
+              ? 'Порты меняются только на остановленном сервере — остановите его, чтобы поля стали доступны.'
+              : 'Порты применяются при следующем запуске сервера.'
+          }
+        >
+          {PORT_FIELDS.map(([key, label]) => (
+            <GroupedRow
+              key={key}
+              label={label}
+              control={
+                <div className="w-28">
+                  <TextInput
+                    type="number"
+                    aria-label={label}
+                    value={val(key) as number}
+                    onChange={(e) => setField(key, Number(e.target.value))}
+                    disabled={!!isRunning}
+                    min={1024}
+                    max={65535}
+                  />
+                </div>
+              }
+            />
+          ))}
+        </GroupedList>
+      )}
 
       <GroupedList title="Игра">
         <GroupedRow
@@ -470,21 +663,23 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         </GroupedList>
       ) : null}
 
-      <GroupedList
-        title="Архив логов"
-        footnote="Перед удалением по 10-дневному retention ротированный SquadGame*.log копируется в restic-бэкап (хранение 7д/4н/6м). По умолчанию отключено."
-      >
-        <GroupedRow
-          label="Архивировать в backup перед удалением"
-          control={
-            <Switch
-              checked={val('archive_logs_to_backup') as boolean}
-              onChange={(next) => setField('archive_logs_to_backup', next)}
-              label="Архивировать в backup перед удалением"
-            />
-          }
-        />
-      </GroupedList>
+      {external ? null : (
+        <GroupedList
+          title="Архив логов"
+          footnote="Перед удалением по 10-дневному retention ротированный SquadGame*.log копируется в restic-бэкап (хранение 7д/4н/6м). По умолчанию отключено."
+        >
+          <GroupedRow
+            label="Архивировать в backup перед удалением"
+            control={
+              <Switch
+                checked={val('archive_logs_to_backup') as boolean}
+                onChange={(next) => setField('archive_logs_to_backup', next)}
+                label="Архивировать в backup перед удалением"
+              />
+            }
+          />
+        </GroupedList>
+      )}
 
       {canManageServer ? (
         <div className="space-y-3">
@@ -552,113 +747,117 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         </div>
       ) : null}
 
-      <GroupedList title="Ресурсы" footnote="Применяется при следующем запуске.">
-        {RESOURCE_FIELDS.map(([key, label, min]) => (
+      {external ? null : (
+        <GroupedList title="Ресурсы" footnote="Применяется при следующем запуске.">
+          {RESOURCE_FIELDS.map(([key, label, min]) => (
+            <GroupedRow
+              key={key}
+              label={label}
+              control={
+                <div className="w-32">
+                  <TextInput
+                    type="number"
+                    aria-label={label}
+                    value={(val(key) as number | null) ?? ''}
+                    onChange={(e) =>
+                      setField(key, e.target.value === '' ? null : Number(e.target.value))
+                    }
+                    min={min}
+                    placeholder="Нет лимита"
+                  />
+                </div>
+              }
+            />
+          ))}
           <GroupedRow
-            key={key}
-            label={label}
+            label="Привязка к ядрам (CPU affinity)"
             control={
               <div className="w-32">
                 <TextInput
-                  type="number"
-                  aria-label={label}
-                  value={(val(key) as number | null) ?? ''}
+                  aria-label="Привязка к ядрам (CPU affinity)"
+                  value={(val('cpu_affinity') as string | null) ?? ''}
                   onChange={(e) =>
-                    setField(key, e.target.value === '' ? null : Number(e.target.value))
+                    setField('cpu_affinity', e.target.value === '' ? null : e.target.value)
                   }
-                  min={min}
-                  placeholder="Нет лимита"
-                />
-              </div>
-            }
-          />
-        ))}
-        <GroupedRow
-          label="Привязка к ядрам (CPU affinity)"
-          control={
-            <div className="w-32">
-              <TextInput
-                aria-label="Привязка к ядрам (CPU affinity)"
-                value={(val('cpu_affinity') as string | null) ?? ''}
-                onChange={(e) =>
-                  setField('cpu_affinity', e.target.value === '' ? null : e.target.value)
-                }
-                placeholder="Нет ограничения"
-              />
-            </div>
-          }
-        />
-      </GroupedList>
-
-      <div className="space-y-3">
-        <GroupedList
-          title="Лицензия"
-          footnote={
-            licenseRestartRequired(
-              license?.updated_at ?? null,
-              container?.running ?? false,
-              container?.started_at ?? null,
-            )
-              ? 'Лицензия сохранена и применится после перезапуска сервера.'
-              : license?.configured
-                ? 'Лицензия привязана и применена.'
-                : 'License.cfg записывается панелью; применяется после перезапуска сервера.'
-          }
-        >
-          {licenseRestartRequired(
-            license?.updated_at ?? null,
-            container?.running ?? false,
-            container?.started_at ?? null,
-          ) ? (
-            <GroupedRow
-              label="Нужен перезапуск"
-              description="Лицензия сохранена и применится после перезапуска сервера"
-              control={<Badge tone="warn">рестарт</Badge>}
-            />
-          ) : null}
-          <GroupedRow
-            label="ID лицензии"
-            control={
-              <div className="w-56">
-                <TextInput
-                  aria-label="ID лицензии"
-                  value={licenseId}
-                  onChange={(e) => setLicenseId(e.target.value)}
-                  placeholder="Не указан"
-                />
-              </div>
-            }
-          />
-          <GroupedRow
-            label="Ключ лицензии"
-            control={
-              <div className="w-56">
-                <TextInput
-                  type="password"
-                  aria-label="Ключ лицензии"
-                  value={licenseKey}
-                  onChange={(e) => setLicenseKey(e.target.value)}
-                  placeholder={license?.configured ? '••••••••  (сохранён)' : 'Не указан'}
+                  placeholder="Нет ограничения"
                 />
               </div>
             }
           />
         </GroupedList>
-        <div className="flex justify-end gap-2">
-          {/* Отвязка обратима — лицензию можно привязать снова, поэтому кнопка
-              вторичная, а не критическая (§5). */}
-          <Button disabled={busy} onClick={detachLicense}>
-            Отвязать
-          </Button>
-          <Button
-            variant="primary"
-            disabled={!licenseId || (!licenseKey && !license?.configured) || busy}
-            onClick={saveLicense}
+      )}
+
+      {external ? null : (
+        <div className="space-y-3">
+          <GroupedList
+            title="Лицензия"
+            footnote={
+              licenseRestartRequired(
+                license?.updated_at ?? null,
+                container?.running ?? false,
+                container?.started_at ?? null,
+              )
+                ? 'Лицензия сохранена и применится после перезапуска сервера.'
+                : license?.configured
+                  ? 'Лицензия привязана и применена.'
+                  : 'License.cfg записывается панелью; применяется после перезапуска сервера.'
+            }
           >
-            Привязать
-          </Button>
+            {licenseRestartRequired(
+              license?.updated_at ?? null,
+              container?.running ?? false,
+              container?.started_at ?? null,
+            ) ? (
+              <GroupedRow
+                label="Нужен перезапуск"
+                description="Лицензия сохранена и применится после перезапуска сервера"
+                control={<Badge tone="warn">рестарт</Badge>}
+              />
+            ) : null}
+            <GroupedRow
+              label="ID лицензии"
+              control={
+                <div className="w-56">
+                  <TextInput
+                    aria-label="ID лицензии"
+                    value={licenseId}
+                    onChange={(e) => setLicenseId(e.target.value)}
+                    placeholder="Не указан"
+                  />
+                </div>
+              }
+            />
+            <GroupedRow
+              label="Ключ лицензии"
+              control={
+                <div className="w-56">
+                  <TextInput
+                    type="password"
+                    aria-label="Ключ лицензии"
+                    value={licenseKey}
+                    onChange={(e) => setLicenseKey(e.target.value)}
+                    placeholder={license?.configured ? '••••••••  (сохранён)' : 'Не указан'}
+                  />
+                </div>
+              }
+            />
+          </GroupedList>
+          <div className="flex justify-end gap-2">
+            {/* Отвязка обратима — лицензию можно привязать снова, поэтому кнопка
+              вторичная, а не критическая (§5). */}
+            <Button disabled={busy} onClick={detachLicense}>
+              Отвязать
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!licenseId || (!licenseKey && !license?.configured) || busy}
+              onClick={saveLicense}
+            >
+              Привязать
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="flex justify-end">
         <Button variant="primary" disabled={!dirty} loading={busy} onClick={saveSettings}>

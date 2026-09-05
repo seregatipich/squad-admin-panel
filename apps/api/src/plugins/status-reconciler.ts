@@ -349,11 +349,18 @@ export default fp(async (app) => {
     inFlight = true;
     const t0 = Date.now();
     try {
+      // Only panel-hosted rows are owned by docker. An external server has no
+      // container here: inspecting `squad-<id>` would answer not_found and
+      // flip a healthy remote server to `stopped`, dropping it from worker-rcon.
       const rows = await app.db
         .select({ id: servers.id, status: servers.status })
         .from(servers)
         .where(
-          and(inArray(servers.status, Array.from(TRANSIENT_STATES)), isNull(servers.deletedAt)),
+          and(
+            inArray(servers.status, Array.from(TRANSIENT_STATES)),
+            isNull(servers.deletedAt),
+            eq(servers.runtime, 'container'),
+          ),
         );
       tickState.lastInspected = rows.length;
       // Trim per-server bridge-failure counters for rows that are no longer
@@ -443,7 +450,11 @@ export default fp(async (app) => {
 
   async function reconcileOnce(serverId: string) {
     const row = await app.db.query.servers.findFirst({
-      where: and(eq(servers.id, serverId), isNull(servers.deletedAt)),
+      where: and(
+        eq(servers.id, serverId),
+        isNull(servers.deletedAt),
+        eq(servers.runtime, 'container'),
+      ),
       columns: { id: true, status: true },
     });
     if (!row) return null;
@@ -544,7 +555,13 @@ export default fp(async (app) => {
     const transientCount = await app.db
       .select({ id: servers.id })
       .from(servers)
-      .where(and(inArray(servers.status, Array.from(TRANSIENT_STATES)), isNull(servers.deletedAt)));
+      .where(
+        and(
+          inArray(servers.status, Array.from(TRANSIENT_STATES)),
+          isNull(servers.deletedAt),
+          eq(servers.runtime, 'container'),
+        ),
+      );
     app.log.info(
       { rows: transientCount.length, intervalMs: RECONCILE_INTERVAL_MS },
       'reconciler: ready — running initial recovery tick',

@@ -4,6 +4,8 @@
 
 Maintains authenticated Valve-RCON connections to every Squad server whose DB status is `starting` or `running`. Polls player, squad, map, and server-info data on a fixed interval, persists player results to Postgres, and publishes events and status keys to Redis.
 
+The dial target is `resolveRconHost(server_credentials.rcon_host)`: `NULL` (panel-hosted container) resolves to `RCON_HOST_DEFAULT` / `127.0.0.1`, a non-NULL value (external server, `servers.runtime='external'`) is used verbatim for both RCON and the A2S query. When a reconcile sees a target whose host, port, password or query port changed (e.g. after `PUT /api/v1/servers/:id/external-connection`), the per-server supervisor is stopped and recreated so the new endpoint is dialled at once; the `rcon.targets.changed` diag event lists those ids under `redialed`.
+
 ## Responsibilities
 
 - Reconcile the set of RCON targets against live DB rows every 15 s.

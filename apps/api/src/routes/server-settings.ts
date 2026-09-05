@@ -6,6 +6,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { encrypt, serialize } from '../lib/crypto.js';
 import { syncLicenseCfg } from '../lib/license-cfg.js';
+import { isExternalRuntime } from '../lib/server-runtime.js';
 
 const idParam = z.object({ id: z.string().uuid() });
 
@@ -81,6 +82,16 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
 
       const hasPortChange = Object.keys(portChange).length > 0;
 
+      // --- guard: an external server's ports describe a remote host and are
+      // edited through PUT /external-connection (no UFW, no container) ---
+      if (hasPortChange && isExternalRuntime(server.runtime)) {
+        reply.code(409);
+        return {
+          error: 'external_server',
+          message: 'Ports of an external server are changed via PUT /external-connection.',
+        };
+      }
+
       // --- guard: ports only changeable when server is not running ---
       if (hasPortChange && !PORT_CHANGEABLE_STATUSES.has(server.status)) {
         reply.code(409);
@@ -120,6 +131,7 @@ const serverSettingsRoutes: FastifyPluginAsync = async (app) => {
             and(
               ne(serverSettings.serverId, id),
               isNull(servers.deletedAt),
+              eq(servers.runtime, 'container'),
               or(
                 ...changedPortValues.map((p) =>
                   or(

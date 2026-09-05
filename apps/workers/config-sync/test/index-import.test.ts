@@ -79,6 +79,8 @@ vi.mock('@squad/shared-config', async (importOriginal) => {
 });
 
 vi.mock('drizzle-orm', () => ({
+  and: vi.fn(() => ({})),
+  eq: vi.fn(() => ({})),
   isNull: vi.fn(() => ({})),
   sql: vi.fn(() => ({})),
 }));

@@ -6,7 +6,11 @@ import {
   PANEL_SAVED_ROOT,
   SERVER_IMAGE,
 } from '@squad/shared-config';
-import { serverCreateInput } from '@squad/shared-types';
+import {
+  externalServerConnectionUpdate,
+  externalServerCreateInput,
+  serverCreateInput,
+} from '@squad/shared-types';
 import { and, eq, isNull, or } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -20,6 +24,7 @@ import { rconSendOnce } from '../lib/rcon-send.js';
 import { sendRconCommandViaWorker } from '../lib/rcon-worker-command.js';
 import { relaunchSidecar, sidecarContainerName } from '../lib/rnsquadjs.js';
 import { softDeleteServer } from '../lib/server-delete.js';
+import { isExternalRuntime, rejectExternalServer } from '../lib/server-runtime.js';
 
 const serverIdParams = z.object({ id: z.string().uuid() });
 
@@ -166,6 +171,9 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         .where(
           and(
             isNull(servers.deletedAt),
+            // External servers live on other hosts: their ports never collide
+            // with a container bound on this one.
+            eq(servers.runtime, 'container'),
             or(
               ...requestedPorts.map((p) =>
                 or(
@@ -233,6 +241,150 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  /**
+   * Registers a Squad server the panel does not host. Nothing is installed
+   * and no bridge call is made: the row is born `running` with
+   * `runtime='external'`, and worker-rcon dials `rcon_host:rcon_port` on its
+   * next reconcile (≤15 s). Container-bound routes answer 409
+   * `external_server` for it; deletion is a plain soft-delete.
+   */
+  fast.post(
+    '/api/v1/servers/external',
+    {
+      config: {
+        permissions: ['server:install'],
+        audit: { action: 'server.create_external', resource: 'server' },
+      },
+      schema: { body: externalServerCreateInput },
+    },
+    async (req, reply) => {
+      const id = uuidv7();
+      const body = req.body;
+      try {
+        await app.db.transaction(async (tx) => {
+          await tx.insert(servers).values({
+            id,
+            displayName: body.display_name,
+            slug: body.slug,
+            description: body.description ?? null,
+            // Lifecycle belongs to whoever hosts the process; for the panel an
+            // external server is up for as long as the row exists, which is
+            // exactly the state worker-rcon keys its polling on.
+            status: 'running',
+            runtime: 'external',
+          });
+          await tx.insert(serverSettings).values({
+            serverId: id,
+            // No install tree on this host; the column is NOT NULL.
+            installPath: '',
+            gamePort: body.game_port,
+            queryPort: body.query_port,
+            // The beacon port is a container launch argument the panel never
+            // uses for an external server; Squad's default keeps the row valid.
+            beaconPort: 15_000,
+            rconPort: body.rcon_port,
+            maxPlayers: body.max_players,
+          });
+          await tx.insert(serverCredentials).values({
+            serverId: id,
+            rconHost: body.rcon_host,
+            rconPort: body.rcon_port,
+            rconPasswordEncrypted: serialize(encrypt(app.encryptionKey, body.rcon_password)),
+          });
+        });
+      } catch (err) {
+        // Drizzle wraps the driver error in DrizzleQueryError; the Postgres
+        // SQLSTATE lives on `cause` there and on the error itself elsewhere.
+        const code =
+          (err as { code?: string }).code ?? (err as { cause?: { code?: string } }).cause?.code;
+        if (code === '23505') {
+          reply.code(409);
+          return { error: 'slug_in_use', message: 'An active server already uses this slug.' };
+        }
+        throw err;
+      }
+      app.liveBus?.publish({
+        type: 'server.status',
+        ts: new Date().toISOString(),
+        data: { server_id: id, status: 'running', source: 'external' },
+      });
+      reply.code(201);
+      return { id, status: 'running', runtime: 'external' };
+    },
+  );
+
+  /**
+   * Edits how the panel reaches an external server. Ports of panel-hosted
+   * servers go through `PUT /settings` (they also drive UFW and the container
+   * launch), so a container row is refused here with 409 `not_external_server`.
+   * The stored password is replaced only when `rcon_password` is present.
+   */
+  fast.put(
+    '/api/v1/servers/:id/external-connection',
+    {
+      config: {
+        permissions: ['server:edit_settings'],
+        audit: { action: 'server.update_external_connection', resource: 'server' },
+      },
+      schema: { params: serverIdParams, body: externalServerConnectionUpdate },
+    },
+    async (req, reply) => {
+      const row = await app.db.query.servers.findFirst({
+        where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
+      });
+      if (!row) {
+        reply.code(404);
+        return { error: 'not_found' };
+      }
+      if (!isExternalRuntime(row.runtime)) {
+        reply.code(409);
+        return {
+          error: 'not_external_server',
+          message: 'Connection settings apply only to external servers.',
+        };
+      }
+      const body = req.body;
+      await app.db.transaction(async (tx) => {
+        const creds: Partial<typeof serverCredentials.$inferInsert> = {};
+        if (body.rcon_host !== undefined) creds.rconHost = body.rcon_host;
+        if (body.rcon_port !== undefined) creds.rconPort = body.rcon_port;
+        if (body.rcon_password !== undefined) {
+          creds.rconPasswordEncrypted = serialize(encrypt(app.encryptionKey, body.rcon_password));
+        }
+        if (Object.keys(creds).length > 0) {
+          await tx
+            .update(serverCredentials)
+            .set(creds)
+            .where(eq(serverCredentials.serverId, row.id));
+        }
+        const settings: Partial<typeof serverSettings.$inferInsert> = {};
+        if (body.rcon_port !== undefined) settings.rconPort = body.rcon_port;
+        if (body.query_port !== undefined) settings.queryPort = body.query_port;
+        if (body.game_port !== undefined) settings.gamePort = body.game_port;
+        if (body.max_players !== undefined) settings.maxPlayers = body.max_players;
+        if (Object.keys(settings).length > 0) {
+          await tx.update(serverSettings).set(settings).where(eq(serverSettings.serverId, row.id));
+        }
+        await tx.update(servers).set({ updatedAt: new Date() }).where(eq(servers.id, row.id));
+      });
+      const [creds, settings] = await Promise.all([
+        app.db.query.serverCredentials.findFirst({
+          where: eq(serverCredentials.serverId, row.id),
+        }),
+        app.db.query.serverSettings.findFirst({ where: eq(serverSettings.serverId, row.id) }),
+      ]);
+      return {
+        id: row.id,
+        rcon_host: creds?.rconHost ?? null,
+        rcon_port: creds?.rconPort ?? null,
+        query_port: settings?.queryPort ?? null,
+        game_port: settings?.gamePort ?? null,
+        max_players: settings?.maxPlayers ?? null,
+        password_updated: body.rcon_password !== undefined,
+      };
+    },
+  );
+
   fast.get(
     '/api/v1/servers/:id',
     {
@@ -273,14 +425,22 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       const a2sRaw = await app.redis.get(`a2s:status:${row.id}`);
       const a2s_status: unknown = a2sRaw ? (JSON.parse(a2sRaw) as unknown) : null;
 
+      const external = isExternalRuntime(row.runtime);
       const name = containerName(row.id);
-      const [inspect, host] = await Promise.all([
-        app.bridge.containerInspect({ name }).catch((err) => {
-          app.log.warn({ err: (err as Error).message, name }, 'containerInspect failed');
-          return null;
-        }),
-        getHostAddress(),
-      ]);
+      // An external server has no container on this host: skip both bridge
+      // round-trips and report its RCON host as the address instead.
+      const [inspect, host] = external
+        ? [
+            null,
+            credsRow?.rconHost ? { address: credsRow.rconHost, hostname: credsRow.rconHost } : null,
+          ]
+        : await Promise.all([
+            app.bridge.containerInspect({ name }).catch((err) => {
+              app.log.warn({ err: (err as Error).message, name }, 'containerInspect failed');
+              return null;
+            }),
+            getHostAddress(),
+          ]);
 
       const isAlive = !!inspect && inspect.state !== 'not_found' && inspect.running;
       const stats = isAlive
@@ -367,6 +527,9 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         a2s_status,
         container,
         host,
+        connection: external
+          ? { rcon_host: credsRow?.rconHost ?? null, rcon_port: credsRow?.rconPort ?? null }
+          : null,
         crash_history,
         crash_loop,
         seeding,
@@ -391,6 +554,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+      if (isExternalRuntime(s.runtime)) return rejectExternalServer(reply);
       const settings = await app.db.query.serverSettings.findFirst({
         where: eq(serverSettings.serverId, s.id),
       });
@@ -512,6 +676,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+      if (isExternalRuntime(s.runtime)) return rejectExternalServer(reply);
 
       const settings = await app.db.query.serverSettings.findFirst({
         where: eq(serverSettings.serverId, s.id),
@@ -771,6 +936,7 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
         reply.code(404);
         return { error: 'not_found' };
       }
+      if (isExternalRuntime(s.runtime)) return rejectExternalServer(reply);
       const name = containerName(s.id);
       await app.db
         .update(servers)
@@ -806,6 +972,11 @@ const serverRoutes: FastifyPluginAsync = async (app) => {
       schema: { params: serverIdParams },
     },
     async (req, reply) => {
+      const target = await app.db.query.servers.findFirst({
+        where: and(eq(servers.id, req.params.id), isNull(servers.deletedAt)),
+        columns: { runtime: true },
+      });
+      if (target && isExternalRuntime(target.runtime)) return rejectExternalServer(reply);
       try {
         const result = await app.statusReconciler.reconcileOnce(req.params.id);
         if (!result) {

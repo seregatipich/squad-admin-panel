@@ -48,6 +48,8 @@ interface ServerRow {
   display_name: string;
   slug: string;
   status: string;
+  /** `external` — размещён вне панели: нет контейнера, логов и конфигов, только RCON/A2S. */
+  runtime?: string;
   created_at: string;
   updated_at: string;
 }
@@ -108,6 +110,8 @@ interface ServerResponse {
   rcon_status: RconStatus;
   container: ContainerRuntime | null;
   host: HostInfo | null;
+  /** Только у внешнего сервера: куда панель ходит по RCON. */
+  connection?: { rcon_host: string | null; rcon_port: number | null } | null;
   a2s_status?: A2sStatus | null;
   crash_loop?: boolean;
   crash_count?: number;
@@ -252,8 +256,11 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   useLiveSubscription('server.status', onLiveStatus);
 
   const currentStatus = data?.server.status ?? null;
+  const isExternal = data?.server.runtime === 'external';
+  // У внешнего сервера нет контейнера, а значит и потока docker logs.
   const logsEnabled =
-    currentStatus === 'running' || currentStatus === 'starting' || currentStatus === 'stopping';
+    !isExternal &&
+    (currentStatus === 'running' || currentStatus === 'starting' || currentStatus === 'stopping');
 
   useEffect(() => {
     if (!logsEnabled) {
@@ -408,7 +415,8 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         const text = await r.text();
         setErr(`${name} failed: HTTP ${r.status} ${text}`);
       } else if (name === 'delete') {
-        router.push(`/servers/archive/${id}`);
+        // У внешнего сервера нет резервной копии конфигов — в архиве смотреть нечего.
+        router.push(isExternal ? '/servers' : `/servers/archive/${id}`);
         return;
       }
       await refresh();
@@ -449,6 +457,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
   }
 
   const { server, settings, rcon_status, container, host } = data;
+  const external = server.runtime === 'external';
   const canStart = server.status !== 'running' && server.status !== 'starting';
   const canStop = server.status === 'running' || server.status === 'starting';
   const startedAt = container?.running ? container.started_at : null;
@@ -508,69 +517,76 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         <CardFooter>
           {/* Опасное действие отодвинуто в правый край и не соседствует с
               «Рестартом»: промах мышью не должен стоить сервера. */}
-          <div className="mr-auto flex flex-wrap items-center gap-2">
-            <Button
-              variant="primary"
-              onClick={() => action('start')}
-              disabled={!canStart || !!acting}
-              loading={acting === 'start'}
-            >
-              Старт
-            </Button>
-            <div className="flex items-center gap-1">
+          {external ? (
+            <p className="mr-auto text-xs text-ink-3">
+              Внешний сервер: запуск и остановка выполняются на его хосте, панель управляет им по
+              RCON.
+            </p>
+          ) : (
+            <div className="mr-auto flex flex-wrap items-center gap-2">
               <Button
-                onClick={() => action('stop')}
-                disabled={!canStop || !!acting}
-                loading={acting === 'stop'}
+                variant="primary"
+                onClick={() => action('start')}
+                disabled={!canStart || !!acting}
+                loading={acting === 'start'}
               >
-                Стоп
+                Старт
               </Button>
-              <IconButton
-                icon={<ChevronDownIcon />}
-                label="Принудительная остановка"
+              <div className="flex items-center gap-1">
+                <Button
+                  onClick={() => action('stop')}
+                  disabled={!canStop || !!acting}
+                  loading={acting === 'stop'}
+                >
+                  Стоп
+                </Button>
+                <IconButton
+                  icon={<ChevronDownIcon />}
+                  label="Принудительная остановка"
+                  disabled={!canStop || !!acting}
+                  onClick={() => setForceStopOpen(true)}
+                />
+              </div>
+              <Button
+                onClick={() => action('restart')}
                 disabled={!canStop || !!acting}
-                onClick={() => setForceStopOpen(true)}
-              />
+                loading={acting === 'restart'}
+              >
+                Рестарт
+              </Button>
+              {server.status === 'stopped' || updateRunning ? (
+                <Button
+                  onClick={async () => {
+                    if (updateRunning) {
+                      setUpdateModalOpen(true);
+                      return;
+                    }
+                    setActing('update');
+                    try {
+                      const r = await fetch(`/api/v1/servers/${id}/update`, {
+                        method: 'POST',
+                        credentials: 'include',
+                      });
+                      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                      setUpdateRunning(true);
+                      setUpdateModalOpen(true);
+                    } catch (e) {
+                      setErr((e as Error).message);
+                    } finally {
+                      setActing(null);
+                    }
+                  }}
+                  disabled={acting !== null}
+                >
+                  {acting === 'update'
+                    ? 'Запуск обновления...'
+                    : updateRunning
+                      ? 'Обновление... (открыть лог)'
+                      : 'Обновить игру'}
+                </Button>
+              ) : null}
             </div>
-            <Button
-              onClick={() => action('restart')}
-              disabled={!canStop || !!acting}
-              loading={acting === 'restart'}
-            >
-              Рестарт
-            </Button>
-            {server.status === 'stopped' || updateRunning ? (
-              <Button
-                onClick={async () => {
-                  if (updateRunning) {
-                    setUpdateModalOpen(true);
-                    return;
-                  }
-                  setActing('update');
-                  try {
-                    const r = await fetch(`/api/v1/servers/${id}/update`, {
-                      method: 'POST',
-                      credentials: 'include',
-                    });
-                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                    setUpdateRunning(true);
-                    setUpdateModalOpen(true);
-                  } catch (e) {
-                    setErr((e as Error).message);
-                  } finally {
-                    setActing(null);
-                  }
-                }}
-                disabled={acting !== null}
-              >
-                {acting === 'update'
-                  ? 'Запуск обновления...'
-                  : updateRunning
-                    ? 'Обновление... (открыть лог)'
-                    : 'Обновить игру'}
-              </Button>
-            ) : null}
-          </div>
+          )}
           <Menu
             trigger={{ label: 'Опасная зона' }}
             open={dangerMenuOpen}
@@ -580,7 +596,7 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
               {
                 kind: 'action',
                 label: 'Удалить сервер',
-                hint: 'Файлы на диске будут стёрты',
+                hint: external ? 'Сервер будет убран из панели' : 'Файлы на диске будут стёрты',
                 tone: 'destructive',
                 disabled: !!acting,
                 onSelect: () => setDeleteOpen(true),
@@ -619,21 +635,44 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
               : 'Целевой тикрейт (фактический появится в ServerInfo)'
           }
         />
-        <StatTile
-          label="CPU"
-          value={container?.cpu_percent != null ? `${container.cpu_percent.toFixed(1)}%` : '—'}
-          hint="Нагрузка контейнера Squad"
-        />
-        <StatTile
-          label="RAM"
-          value={
-            container?.mem_used_bytes != null
-              ? formatBytes(container.mem_used_bytes) +
-                (container.mem_limit_bytes ? ` / ${formatBytes(container.mem_limit_bytes)}` : '')
-              : '—'
-          }
-          hint="Потребление памяти контейнером"
-        />
+        {external ? (
+          <>
+            <StatTile
+              label="RCON"
+              value={
+                data.connection?.rcon_host
+                  ? `${data.connection.rcon_host}:${data.connection.rcon_port ?? '—'}`
+                  : '—'
+              }
+              hint="Адрес внешнего сервера, к которому подключена панель"
+            />
+            <StatTile
+              label="Опрос A2S"
+              value={settings ? `UDP ${settings.query_port}` : '—'}
+              hint="Порт запросов для проверки видимости сервера"
+            />
+          </>
+        ) : (
+          <>
+            <StatTile
+              label="CPU"
+              value={container?.cpu_percent != null ? `${container.cpu_percent.toFixed(1)}%` : '—'}
+              hint="Нагрузка контейнера Squad"
+            />
+            <StatTile
+              label="RAM"
+              value={
+                container?.mem_used_bytes != null
+                  ? formatBytes(container.mem_used_bytes) +
+                    (container.mem_limit_bytes
+                      ? ` / ${formatBytes(container.mem_limit_bytes)}`
+                      : '')
+                  : '—'
+              }
+              hint="Потребление памяти контейнером"
+            />
+          </>
+        )}
       </CardGrid>
 
       <MapWidget serverId={server.id} canChangeMap={canChangeMap} />
@@ -656,7 +695,11 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
       {/* 4. Служебное: адрес и порты читают один раз при настройке. */}
       <GroupedList
         title="Подключение"
-        footnote="Адрес и порты задаются при установке сервера и меняются в его настройках."
+        footnote={
+          external
+            ? 'Адрес, порты и пароль RCON внешнего сервера меняются в его настройках.'
+            : 'Адрес и порты задаются при установке сервера и меняются в его настройках.'
+        }
       >
         {settings ? (
           <>
@@ -674,11 +717,13 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
               description="UDP"
               control={<span className="font-mono">{settings.query_port}</span>}
             />
-            <GroupedRow
-              label="Порт маяка"
-              description="UDP"
-              control={<span className="font-mono">{settings.beacon_port}</span>}
-            />
+            {external ? null : (
+              <GroupedRow
+                label="Порт маяка"
+                description="UDP"
+                control={<span className="font-mono">{settings.beacon_port}</span>}
+              />
+            )}
             <GroupedRow
               label="Порт RCON"
               description="TCP"
@@ -695,31 +740,35 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         )}
       </GroupedList>
 
-      <LogConsole
-        lines={logs}
-        height="32rem"
-        title="Лог контейнера (docker logs)"
-        live={logsLive}
-        errorBanner={
-          logsError && logsEnabled
-            ? {
-                code: logsError.code,
-                reason: logsError.reason,
-                retryInMs: logsError.retryInMs,
-                onRetry: () => reconnectNowRef.current?.(),
-              }
-            : null
-        }
-        emptyText={
-          !logsEnabled
-            ? `Сервер в состоянии «${statusView.label}» — контейнер ещё не создан. Запустите установку, чтобы журнал появился.`
-            : server.status === 'running' || server.status === 'starting'
-              ? 'Подключение к логу контейнера…'
-              : 'Сервер остановлен — здесь будут последние 200 строк после запуска.'
-        }
-      />
+      {external ? null : (
+        <>
+          <LogConsole
+            lines={logs}
+            height="32rem"
+            title="Лог контейнера (docker logs)"
+            live={logsLive}
+            errorBanner={
+              logsError && logsEnabled
+                ? {
+                    code: logsError.code,
+                    reason: logsError.reason,
+                    retryInMs: logsError.retryInMs,
+                    onRetry: () => reconnectNowRef.current?.(),
+                  }
+                : null
+            }
+            emptyText={
+              !logsEnabled
+                ? `Сервер в состоянии «${statusView.label}» — контейнер ещё не создан. Запустите установку, чтобы журнал появился.`
+                : server.status === 'running' || server.status === 'starting'
+                  ? 'Подключение к логу контейнера…'
+                  : 'Сервер остановлен — здесь будут последние 200 строк после запуска.'
+            }
+          />
 
-      <ServerLogFiles serverId={id} canDownload={canDownloadLogs} />
+          <ServerLogFiles serverId={id} canDownload={canDownloadLogs} />
+        </>
+      )}
 
       <UpdateProgressModal
         open={updateModalOpen}
@@ -752,7 +801,11 @@ export default function ServerDetail({ params }: { params: Promise<{ id: string 
         open={deleteOpen}
         onClose={() => setDeleteOpen(false)}
         title="Удалить сервер"
-        body="Файлы сервера на диске будут стёрты. Резервная копия .cfg останется в архиве серверов."
+        body={
+          external
+            ? 'Сервер будет убран из панели: опрос RCON остановится, история игроков останется. На хосте самого сервера ничего не изменится.'
+            : 'Файлы сервера на диске будут стёрты. Резервная копия .cfg останется в архиве серверов.'
+        }
         confirmLabel="Удалить сервер"
         cancelLabel="Отмена"
         tone="destructive"
