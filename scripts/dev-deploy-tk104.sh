@@ -75,7 +75,9 @@ echo "==> Rebuilding '${TARGET}' on tk104"
 ssh -o StrictHostKeyChecking=yes -o ConnectTimeout=20 "$SSH_TARGET" \
   "set -euo pipefail; cd '${REMOTE_DIR}'; export APP_VERSION='${version}'; ${REMOTE_CMD}"
 
-echo "==> External health probe"
+# `/health` is served by the api container, so it keeps reporting whatever the
+# api was built from — a web-only deploy deliberately does not change it.
+echo "==> External health probe (reports the api's revision)"
 curl -fsS https://tk104.duckdns.org/health --max-time 20
 echo
-echo "==> Done. tk104 is serving ${version} — not a released revision."
+echo "==> Done. tk104 runs ${version} in '${TARGET}' — not a released revision."

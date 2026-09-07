@@ -284,9 +284,10 @@ CONFIRM_FULL_DEPLOY=deploy scripts/dev-deploy-tk104.sh full
 
 It ships the **working tree**, uncommitted changes included, so what tk104
 serves afterwards is not a released revision: the stamp it sets is
-`dev-<short sha>` (plus `-dirty`), which `/health` reports where a released
-deploy reports a 40-hex commit SHA — that difference is how you tell the two
-apart. `.env*`, `data/` and build output are excluded exactly as in the
+`dev-<short sha>` (plus `-dirty`) where a released deploy stamps a 40-hex
+commit SHA. `/health` is served by the api container and reports that stamp
+only for the `api` and `full` targets — a web-only deploy deliberately leaves
+the api, and therefore `/health`, on the last released revision. `.env*`, `data/` and build output are excluded exactly as in the
 workflow, so host secrets and state survive. The `full` target runs
 `scripts/deploy-tk104.sh`, which applies migrations from unreviewed code to the
 production database, and therefore refuses to start without
