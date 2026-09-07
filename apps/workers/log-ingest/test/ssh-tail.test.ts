@@ -1,9 +1,11 @@
 import { generateKeyPairSync, timingSafeEqual } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { Server, utils } from 'ssh2';
+import ssh2 from 'ssh2';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hostKeyFingerprint, tailCommand, tailSshLog } from '../src/ssh-tail.js';
+
+const { Server, utils } = ssh2;
 
 function makeLogger() {
   return {

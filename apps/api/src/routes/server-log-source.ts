@@ -9,10 +9,15 @@ import {
 import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { utils as sshUtils } from 'ssh2';
+import ssh2 from 'ssh2';
 import { z } from 'zod';
 import { encrypt, serialize } from '../lib/crypto.js';
 import { isExternalRuntime } from '../lib/server-runtime.js';
+
+// ssh2 is CommonJS: under real Node ESM (the production `node dist/index.js`)
+// only the default import is guaranteed, and `utils` in particular is not a
+// statically detectable named export — the api crash-looped on that once.
+const sshUtils = ssh2.utils;
 
 const idParam = z.object({ id: z.string().uuid() });
 
